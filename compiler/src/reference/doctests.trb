@@ -1,0 +1,232 @@
+/**
+ * The doc tests of `torb doc --check`: every example under `# Examples` of a documented construct is type checked as a
+ * script next to the file it documents, and every one that is a program is built natively and run. An example that
+ * says what it prints with `// prints` comments is held to that output; every other one is held to running to its end.
+ *
+ * The machinery is the one `torb docs source` and `torb docs check` already use: [SourceExample] gives an example the
+ * context of its file, [typeCheckExamples] checks all of them in one run of the front end, and [runSnippets] builds
+ * every example that runs into **one** program with one C compile, cut back into one output per example by marker
+ * lines. A finding names the construct the example belongs to.
+ *
+ * # Related
+ *
+ * - [ExampleKind] - which examples are run, which only type checked, and which not looked at.
+ */
+
+use IoError from "std/fs"
+use SourceTree from "../project/source-tree"
+use parentPath, pathName from "../project/path"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use pathsOfModules from "../ir/lower/lower"
+use DocumentationProblem, linesOf from "../documentation/markdown"
+use ExampleKind from "../documentation/comments"
+use SourceExample, exampleSyntaxProblems, typeCheckExamples, needsChecker from "../documentation/source-examples"
+use exampleContextOf from "../documentation/source"
+use Snippet, SnippetKind, expectedOutputOf from "../documentation/snippets"
+use NativeOptions, refusalsOf, refusalsOfModules, runSnippets from "../documentation/native"
+use Reference, DocumentedModule, DocumentedItem, DocumentedExample from "./model"
+
+/** One example, with the construct it documents, as a finding names it. */
+public type DocumentationTest {
+  example: SourceExample
+  /** `Option.map`, or the module for an example of a module comment */
+  owner: String
+}
+
+/** What the doc tests found, and how many examples there were of each kind. */
+public type DocumentationTestReport {
+  problems: List<DocumentationProblem>
+  /** Every example that was type checked */
+  checked: Int
+  /** Every example that was built and run */
+  ran: Int
+  /** The examples marked `// skip`, with their reasons, as `path:line: reason` */
+  skipped: List<String>
+}
+
+/**
+ * Every example of the reference as a doc test: the ones of the module comments and of every construct, members
+ * included. The script of an example goes next to the file it documents, so it resolves that file's imports.
+ */
+public fn documentationTestsOf(reference: Reference, checked: Checked): List<DocumentationTest> {
+  var tests: List<DocumentationTest> = []
+  for package in reference.packages {
+    for module in package.modules {
+      const found = checked.program.graph.modules.find({ _.shownPath == module.path })
+      const source = match found {
+        Some(it) => it
+        None => {
+          continue
+        }
+      }
+      const context = exampleContextOf source.file, source.source, source.path
+      const name = (pathName(source.path).withoutSuffix(".trb") ?? pathName(source.path))
+      const directory = parentPath source.path
+      for example in module.examples {
+        addTest tests, module.name, example, module, context, directory, name
+      }
+      for item in module.items {
+        addItemTests tests, item, module, context, directory, name
+      }
+    }
+  }
+  tests
+}
+
+fn addItemTests(
+  var tests: List<DocumentationTest>,
+  item: DocumentedItem,
+  module: DocumentedModule,
+  context: String,
+  directory: String,
+  name: String,
+) {
+  for example in item.examples {
+    addTest tests, item.anchor, example, module, context, directory, name
+  }
+  for member in item.members {
+    addItemTests tests, member, module, context, directory, name
+  }
+}
+
+fn addTest(
+  var tests: List<DocumentationTest>,
+  owner: String,
+  example: DocumentedExample,
+  module: DocumentedModule,
+  context: String,
+  directory: String,
+  name: String,
+) {
+  const number = tests.length() + 1
+  const script = "{directory}/{name}-doc-test-{number}.trb"
+  const found = SourceExample module.path, example.line, example.kind, example.text, example.reason, context, script
+  tests.append DocumentationTest(found, owner)
+}
+
+/**
+ * Runs the doc tests: the syntax and the canon of every example, one type check of all of them, and one native program
+ * of every example that is a program. `roots` are the paths the reference was read from, and `building` says where the
+ * C runtime is: `None` stops at the type check.
+ */
+public fn runDocumentationTests(
+  tree: SourceTree,
+  roots: List<String>,
+  tests: List<DocumentationTest>,
+  building: NativeOptions?,
+): Result<DocumentationTestReport, IoError> {
+  const examples = tests.map({ _.example }).toList()
+  var problems = exampleSyntaxProblems examples
+  var skipped: List<String> = []
+  for example in examples {
+    if example.kind == ExampleKind.Skipped {
+      skipped.append "{example.path}:{example.line}: {example.reason}"
+    }
+  }
+  const wanted = examples.filter({ needsChecker _.kind }).toList()
+  if wanted.isEmpty() {
+    return Ok DocumentationTestReport(owned(problems, tests), 0, 0, skipped)
+  }
+  var workspace = tree
+  for example in wanted {
+    workspace = workspace.withFile example.module, "{example.context}\n\n{example.text}"
+  }
+  const runs = building.isSome()
+  const typed = typeCheckExamples workspace, roots, wanted, runs
+  problems.appendAll typed.problems
+  var ran = 0
+  if const Some(options) = building {
+    const found = problems
+    const runnable = wanted.filter({ _.kind == ExampleKind.Program && !hasProblem(found, _) }).toList()
+    ran = runnable.length()
+    problems.appendAll(runExamples(typed.checked, runnable, options)?)
+  }
+  Ok DocumentationTestReport(owned(problems, tests), wanted.length(), ran, skipped)
+}
+
+/** Whether a finding stands inside the lines of this example already. */
+fn hasProblem(problems: List<DocumentationProblem>, example: SourceExample): Bool {
+  const last = example.line + linesOf(example.text).length()
+  problems.any({ _.path == example.path && _.line >= example.line && _.line < last })
+}
+
+/**
+ * Every example that is not refused becomes one entry of one native program. A finding of the native back end that
+ * speaks of a `trb run` block is about an example here, and says so.
+ */
+fn runExamples(
+  checked: Checked,
+  examples: List<SourceExample>,
+  options: NativeOptions,
+): Result<List<DocumentationProblem>, IoError> {
+  const paths = pathsOfModules checked
+  var problems: List<DocumentationProblem> = []
+  var found: List<(example: SourceExample, module: ModuleId)> = []
+  for example in examples {
+    if const Some(module) = checked.program.graph.moduleAt(example.module) {
+      found.append((example: example, module: module))
+    }
+  }
+  // One lowering of all of them answers almost always; only where it refuses is every example asked on its own
+  const isRefused = !refusalsOfModules(checked, paths, found.map({ _.module }).toList(), false).isEmpty()
+  var runnable: List<Snippet> = []
+  var modules: List<ModuleId> = []
+  for entry in found {
+    const example = entry.example
+    const module = entry.module
+    const refused = if isRefused { refusalsOf checked, paths, module, false } else { [] }
+    if !refused.isEmpty() {
+      const said = refused.joined separator: " | "
+      problems.append DocumentationProblem(example.path, example.line, "The native back end cannot build this example: {said}")
+      continue
+    }
+    runnable.append snippetOf(example)
+    modules.append module
+  }
+  if runnable.isEmpty() {
+    return Ok problems
+  }
+  for problem in runSnippets(checked, paths, runnable, modules, options)? {
+    const message = problem.message.replace("This `trb run` block", "This example").replace("a block before it", "an example before it")
+    problems.append problem.copy(message: message)
+  }
+  Ok problems
+}
+
+/** An example as the native half of `docs check` takes a block: its output compared only where it says what it is. */
+fn snippetOf(example: SourceExample): Snippet {
+  const expected = expectedOutputOf example.text
+  Snippet(
+    example.path,
+    example.line,
+    example.line,
+    SnippetKind.Running,
+    example.text,
+    [],
+    expected,
+    example.module,
+    "",
+    "stable",
+    false,
+    comparesOutput: !expected.isEmpty(),
+  )
+}
+
+/** Every finding with the construct its example documents in front of it. */
+fn owned(problems: List<DocumentationProblem>, tests: List<DocumentationTest>): List<DocumentationProblem> {
+  var found: List<DocumentationProblem> = []
+  for problem in problems {
+    const owner = tests.find({ isInside problem, _.example })
+    match owner {
+      Some(test) => found.append problem.copy(message: "the example of `{test.owner}`: {problem.message}")
+      None => found.append problem
+    }
+  }
+  found
+}
+
+fn isInside(problem: DocumentationProblem, example: SourceExample): Bool {
+  const last = example.line + linesOf(example.text).length()
+  problem.path == example.path && problem.line >= example.line && problem.line < last
+}

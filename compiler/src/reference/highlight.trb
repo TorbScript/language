@@ -1,0 +1,124 @@
+/**
+ * TorbScript as HTML, coloured at generation time: the lexer says what is a keyword, a literal or a comment, and the
+ * resolver behind `torb highlight` says what every name is - a type, a case, a parameter, a method - so a page colours
+ * a name the way the editor does, with no script in the browser.
+ *
+ * Every piece becomes a `<span class="t-...">` whose class is the token kind: `t-keyword`, `t-string`, `t-number`,
+ * `t-comment`, and the kinds of the editor's semantic tokens (`t-type`, `t-enumMember`, `t-function`, `t-method`,
+ * `t-parameter`, `t-variable`, `t-property`, ...). The stylesheet of the site gives them their colours.
+ *
+ * # Related
+ *
+ * - [highlightedCode] - one piece of code as HTML.
+ */
+
+use SourceText from "../syntax/source"
+use TokenKind from "../syntax/token"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use resolveFile from "../highlight/resolve"
+
+/** A range of the code with the class it is shown with. `rank` decides between two ranges that start together. */
+type Mark {
+  start: Int
+  end: Int
+  style: String
+  rank: Int
+}
+
+/**
+ * The code as HTML, escaped and coloured, without the `<pre>` around it. Code that does not parse is coloured as far
+ * as the lexer and the resolver get, and the rest is plain text: a fragment or a signature still reads well.
+ *
+ * # Examples
+ *
+ *     print highlightedCode("const answer = 42")
+ */
+public fn highlightedCode(code: String): String {
+  const source = SourceText.of code
+  var marks: List<Mark> = []
+  for token in resolveFile(parse(source).file) {
+    marks.append Mark(token.span.start, token.span.end, token.kind, 0)
+  }
+  var after = 0
+  for token in lex(source).tokens {
+    addComments marks, code, after, token.span.start
+    after = after.max token.span.end
+    if const Some(style) = styleOf(token.kind) {
+      marks.append Mark(token.span.start, token.span.end, style, 1)
+    }
+    // A name the resolver could not place, in a signature or a fragment: its first letter says whether it is a type
+    if token.kind == TokenKind.Identifier {
+      const first = code.sliceBytes(token.span.start, token.span.end).chars().first() ?? 'a'
+      if first.isLetter() && first == first.toUpperCase() {
+        marks.append Mark(token.span.start, token.span.end, "type", 2)
+      }
+    }
+  }
+  addComments marks, code, after, code.byteLength()
+  marks.sort({ (_.start, _.rank) })
+  var pieces: List<String> = []
+  var cursor = 0
+  for mark in marks {
+    if mark.start < cursor || mark.end <= mark.start || mark.end > code.byteLength() {
+      continue
+    }
+    pieces.append escapedHtml(code.sliceBytes(cursor, mark.start))
+    pieces.append "<span class=\"t-{mark.style}\">{escapedHtml(code.sliceBytes(mark.start, mark.end))}</span>"
+    cursor = mark.end
+  }
+  pieces.append escapedHtml(code.sliceBytes(cursor, code.byteLength()))
+  pieces.joined separator: ""
+}
+
+/** The class of a token the resolver does not name: a keyword or a literal. */
+fn styleOf(kind: TokenKind): String? {
+  match kind {
+    .Reserved(_) => Some "keyword"
+    .IntegerLiteral | .FloatLiteral => Some "number"
+    .CharLiteral(_) | .TextLiteral(_) => Some "string"
+    _ => None
+  }
+}
+
+/** The comments between two tokens: a comment can stand nowhere else, so a `//` in a string is never one. */
+fn addComments(var marks: List<Mark>, code: String, start: Int, stop: Int) {
+  if start >= stop {
+    return
+  }
+  const gap = code.sliceBytes start, stop
+  var offset = start
+  var opened = -1
+  var isLine = false
+  var previous = ' '
+  for character in gap.chars() {
+    if opened < 0 {
+      if previous == '/' && (character == '/' || character == '*') {
+        opened = offset - 1
+        isLine = character == '/'
+        previous = ' '
+        offset = offset + character.byteLength()
+        continue
+      }
+    } else if isLine && character == '\n' {
+      marks.append Mark(opened, offset, "comment", 1)
+      opened = -1
+    } else if !isLine && previous == '*' && character == '/' {
+      marks.append Mark(opened, offset + 1, "comment", 1)
+      opened = -1
+      previous = ' '
+      offset = offset + 1
+      continue
+    }
+    previous = character
+    offset = offset + character.byteLength()
+  }
+  if opened >= 0 {
+    marks.append Mark(opened, stop, "comment", 1)
+  }
+}
+
+/** The text with the four characters HTML reads as markup written as references. */
+public fn escapedHtml(text: String): String {
+  text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}

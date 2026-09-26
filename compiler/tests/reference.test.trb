@@ -1,0 +1,302 @@
+/**
+ * The tests of `torb doc`: the model of a small package with one construct of every kind, the links of its doc
+ * comments - resolved, and one broken - and the site built from it, in memory and on disk.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use Directories from "std/os"
+use Path from "std/path"
+use check from "../src/semantics/check"
+use Reference, DocumentedItem, DocumentedModule, ItemKind, referenceOf from "../src/reference/model"
+use siteFiles, writeSite, searchEntries, referenceJson, urlFrom from "../src/reference/site"
+use highlightedCode from "../src/reference/highlight"
+use markdownHtml from "../src/reference/render"
+use workspaceWith from "./harness"
+
+/** The entry module of the fixture: it exports the constructs of `shapes.trb`, and its comment links two of them. */
+const entryModule = raw"""
+  /** A package with one construct of every kind: see [Shape] and [Shape.area]. */
+
+  public use Shape, Area, Point, Handler, origin, describe from "./shapes"
+  """
+
+const shapesModule = raw"""
+  /** Shapes, and what can be said about them. */
+
+  /** Something with an area. */
+  public trait Area {
+    /** The area, in square units. */
+    fn area(): Float
+  }
+
+  /** A shape in the plane: see [Area] and [Point.x]. */
+  public type Shape with Area {
+    /** A circle around the origin. */
+    case Circle(/** Always positive */ radius: Float)
+    /** A square. */
+    case Square(side: Float)
+
+    /** The unit circle. */
+    static unit = Shape.Circle(1.0)
+
+    /** The area of a [Shape.Circle] or a square. */
+    fn area(): Float {
+      match self {
+        .Circle(radius) => 3.0 * radius * radius
+        .Square(side) => side * side
+      }
+    }
+  }
+
+  /** A point on the grid. */
+  public type Point {
+    /** The horizontal position. */
+    x: Int
+    var y: Int = 0
+    private var visits: Int = 0
+  }
+
+  /** What handles a shape. */
+  public type Handler = (shape: Shape) => String
+
+  /** Where everything starts. */
+  public const origin: Int = 0
+
+  /** Describes a shape, as [Missing] would. */
+  public fn describe(
+    /** The shape to describe */
+    shape: Shape,
+  ): String {
+    "a shape of area {shape.area()}"
+  }
+
+  /** Adds [Point.doubled] to every point. */
+  extend Point {
+    /** The point with both coordinates doubled. */
+    fn doubled(): Point {
+      Point(x * 2, y: y * 2)
+    }
+  }
+
+  fn helper(): Int {
+    1
+  }
+  """
+
+fn fixture(): Reference {
+  const files = [
+    "app/project.trb": "name = \"acme/app\"\n\nbuild \{\n  input = \"src/lib.trb\"\n\}\n",
+    "app/src/lib.trb": entryModule,
+    "app/src/shapes.trb": shapesModule,
+  ]
+  referenceOf check(workspaceWith(files), ["app"])
+}
+
+/** The one module of the fixture that declares something. */
+fn shapes(reference: Reference): DocumentedModule {
+  reference.packages[0].modules[0]
+}
+
+/** The item of the fixture with this anchor, members included. */
+fn itemAt(reference: Reference, anchor: String): DocumentedItem {
+  const found = reference.everyItem().find({ _.item.anchor == anchor })
+  found.expect("an item `{anchor}`").item
+}
+
+fn anchors(reference: Reference): List<String> {
+  reference.everyItem().map({ _.item.anchor }).toList()
+}
+
+/** A link of an item as `target -> page#anchor`, or `target -> (no page)`. */
+fn linksOf(item: DocumentedItem): List<String> {
+  var shown: List<String> = []
+  for link in item.links {
+    const place = if link.page.isEmpty() { "(no page)" } else { "{link.page}#{link.anchor}" }
+    shown.append "{link.target} -> {place}"
+  }
+  shown
+}
+
+group "the model" {
+  test "one package, and one page per module that declares something public" {
+    const reference = fixture()
+    assert(reference.packages.length() == 1)
+    const package = reference.packages[0]
+    assert(package.name == "acme/app")
+    assert(package.page == "acme/app/index.html")
+    assert(package.summary == "A package with one construct of every kind: see [Shape] and [Shape.area].")
+    assert(package.modules.map({ _.name }).toList() == ["acme/app/shapes"])
+    assert(shapes(reference).page == "acme/app/shapes.html")
+    assert(shapes(reference).doc == "Shapes, and what can be said about them.")
+  }
+
+  test "every kind of construct, its members, and nothing that is private or not public" {
+    const expected = [
+      "Area",
+      "Area.area",
+      "Shape",
+      "Shape.Circle",
+      "Shape.Square",
+      "Shape.unit",
+      "Shape.area",
+      "Point",
+      "Point.x",
+      "Point.y",
+      "Handler",
+      "origin",
+      "describe",
+      "extend-Point",
+      "Point.doubled",
+    ]
+    assert(anchors(fixture()) == expected)
+  }
+
+  test "the kinds" {
+    const reference = fixture()
+    assert(itemAt(reference, "Area").kind == ItemKind.Trait)
+    assert(itemAt(reference, "Shape.Circle").kind == ItemKind.Case)
+    assert(itemAt(reference, "Shape.unit").kind == ItemKind.Constant)
+    assert(itemAt(reference, "Point.x").kind == ItemKind.Field)
+    assert(itemAt(reference, "Handler").kind == ItemKind.Alias)
+    assert(itemAt(reference, "extend-Point").kind == ItemKind.Extension)
+    assert(itemAt(reference, "Point.doubled").kind == ItemKind.Function)
+  }
+
+  test "a signature is the source's text on one line, without its body, its comments and `public`" {
+    const reference = fixture()
+    assert(itemAt(reference, "Shape").signature == "type Shape with Area")
+    assert(itemAt(reference, "Shape.Circle").signature == "case Circle(radius: Float)")
+    assert(itemAt(reference, "Shape.unit").signature == "static unit = Shape.Circle(1.0)")
+    assert(itemAt(reference, "Shape.area").signature == "fn area(): Float")
+    assert(itemAt(reference, "Point.y").signature == "var y: Int = 0")
+    assert(itemAt(reference, "Handler").signature == "type Handler = (shape: Shape) => String")
+    assert(itemAt(reference, "origin").signature == "const origin: Int = 0")
+    assert(itemAt(reference, "describe").signature == "fn describe(shape: Shape): String")
+    assert(itemAt(reference, "extend-Point").signature == "extend Point")
+  }
+
+  test "the doc comment of a construct, of its parameters and of the fields of a case" {
+    const reference = fixture()
+    assert(itemAt(reference, "Area.area").doc == "The area, in square units.")
+    assert(itemAt(reference, "describe").parameters.map({ "{_.name}: {_.doc}" }).toList() == ["shape: The shape to describe"])
+    assert(itemAt(reference, "Shape.Circle").parameters.map({ _.name }).toList() == ["radius"])
+    assert(!itemAt(reference, "Point.y").isDocumented())
+  }
+
+  test "what is missing a doc comment is counted" {
+    const found = fixture().missingDocumentation()
+    assert(found.required == 15)
+    assert(found.missing.map({ _.item.anchor }).toList() == ["Point.y"])
+  }
+}
+
+group "the links" {
+  test "a type, a member of another type, and a case resolve to their anchors" {
+    const reference = fixture()
+    const page = "acme/app/shapes.html"
+    assert(linksOf(itemAt(reference, "Shape")) == ["Area -> {page}#Area", "Point.x -> {page}#Point.x"])
+    assert(linksOf(itemAt(reference, "Shape.area")) == ["Shape.Circle -> {page}#Shape.Circle"])
+  }
+
+  test "a member an `extend` adds resolves to the extension" {
+    const reference = fixture()
+    assert(linksOf(itemAt(reference, "extend-Point")) == ["Point.doubled -> acme/app/shapes.html#Point.doubled"])
+  }
+
+  test "the links of the entry module's comment go from the package's index" {
+    const package = fixture().packages[0]
+    const shown = package.links.map({ "{_.target} -> {_.page}#{_.anchor}" }).toList()
+    assert(shown == ["Shape -> acme/app/shapes.html#Shape", "Shape.area -> acme/app/shapes.html#Shape.area"])
+  }
+
+  test "a link that resolves to nothing is a problem at its line" {
+    const problems = fixture().problems.map({ _.show() }).toList()
+    const note = "`[Missing]` does not resolve here. Name what this file declares, imports or gets from the prelude"
+    assert(problems == ["app/src/shapes.trb:42: {note}"])
+  }
+}
+
+group "the site" {
+  test "an index, a page per package and module, the search and the model" {
+    const files = siteFiles fixture()
+    var paths = files.keys().toList()
+    paths.sort({ _ })
+    const expected = [
+      "acme/app/index.html",
+      "acme/app/shapes.html",
+      "index.html",
+      "reference.json",
+      "search-index.js",
+      "search-index.json",
+      "search.js",
+      "style.css",
+    ]
+    assert(paths == expected)
+  }
+
+  test "a module page has an anchor per construct and its links point at them" {
+    const page = siteFiles(fixture()).get("acme/app/shapes.html") ?? ""
+    assert page.contains("<section class=\"item\" id=\"Shape.area\">")
+    assert page.contains("<section class=\"item\" id=\"Point.doubled\">")
+    assert page.contains("<a href=\"#Area\"><code>Area</code></a>")
+    assert page.contains("<a href=\"#Shape.Circle\"><code>Shape.Circle</code></a>")
+    assert page.contains("<span class=\"kind\">extend</span> <a href=\"#extend-Point\"><code>Point</code></a>")
+    assert page.contains("href=\"../../style.css\"")
+    assert(!page.contains("helper"))
+  }
+
+  test "a broken link is shown as its author wrote it" {
+    const page = siteFiles(fixture()).get("acme/app/shapes.html") ?? ""
+    assert page.contains("as [Missing] would")
+  }
+
+  test "the search has every construct with its page" {
+    const entries = searchEntries fixture()
+    const found = entries.find({ _.name == "Shape.area" }).expect("the entry of `Shape.area`")
+    assert(found.url == "acme/app/shapes.html#Shape.area")
+    assert(found.kind == "fn")
+    assert(found.summary == "The area of a [Shape.Circle] or a square.")
+  }
+
+  test "the JSON has the shape's version and every package" {
+    const json = referenceJson fixture()
+    assert json.startsWith("\{\"format\":1,\"packages\":[\{\"name\":\"acme/app\"")
+  }
+
+  test "written to disk, the files are there" {
+    const directory = Directories.temporary().joined(Path.from("torb-doc-test")).show()
+    const written = writeSite(directory, fixture()).expect("the site written")
+    assert(written == 8)
+    const page = File.readText("{directory}/acme/app/shapes.html").expect("the module page")
+    assert page.contains("id=\"extend-Point\"")
+    const index = File.readText("{directory}/index.html").expect("the index")
+    assert index.contains("<a href=\"acme/app/index.html\"><code>acme/app</code></a>")
+  }
+
+  test "a URL goes up to the root and down to the page, or is an anchor alone on the same page" {
+    assert(urlFrom("std/core/option.html", "std/text/lib.html", "String") == "../../std/text/lib.html#String")
+    assert(urlFrom("std/core/option.html", "std/core/option.html", "Option.map") == "#Option.map")
+    assert(urlFrom("index.html", "std/core/index.html", "") == "std/core/index.html")
+  }
+}
+
+group "rendering" {
+  test "code is coloured by what the lexer and the resolver say" {
+    const html = highlightedCode "const answer = 42 // the answer"
+    assert html.contains("<span class=\"t-keyword\">const</span>")
+    assert html.contains("<span class=\"t-number\">42</span>")
+    assert html.contains("<span class=\"t-comment\">// the answer</span>")
+  }
+
+  test "a link of a comment becomes a link, or code where it has no page" {
+    const html = markdownHtml "See [Option] and [List].", ["Option": "option.html#Option", "List": ""]
+    assert(html == "<p>See <a href=\"option.html#Option\"><code>Option</code></a> and <code>List</code>.</p>\n")
+  }
+
+  test "the marker of an example is not shown" {
+    const html = markdownHtml "    // check\n    print 1\n", [:]
+    assert(!html.contains("check"))
+    assert html.contains("print")
+  }
+}

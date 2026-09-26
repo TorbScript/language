@@ -42,6 +42,7 @@ use runHighlight from "./highlight/command"
 use documentationOptionsOf, printDocumentationUsage from "./documentation/command"
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
+use docOptionsOf, runDoc, printDocUsage from "./reference/command"
 use canonUsage, canonOptionsOf, runCanon from "./canon/command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 
@@ -94,6 +95,7 @@ fn printUsage() {
   printError "                         --stdin: read the source from standard input instead of a file"
 
   printError "  torb canon <path>...   Write sources in the canon of the formatter (`torb canon --help`)"
+  printDocUsage()
   printDocumentationUsage()
 }
 
@@ -712,6 +714,16 @@ match Process.arguments() {
     const paths = if given.isEmpty() { ["."] } else { given }
     if printIr(paths, onlyStatistics, withOwnership, asBytecode)? > 0 {
       Process.exit 1
+    }
+  }
+  ["doc", ...more] => {
+    const options = match docOptionsOf(more) {
+      Some(found) => found
+      None => Process.exit 2
+    }
+    const code = runDoc(options)?
+    if code != 0 {
+      Process.exit code
     }
   }
   ["docs", "check", ...more] => {

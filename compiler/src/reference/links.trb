@@ -1,0 +1,232 @@
+/**
+ * The links of the doc comments, resolved against the checked program: `[Option]` is the symbol `Option` names in the
+ * file the comment stands in, and `[Option.map]` is a member of that symbol - declared in the type, added by an
+ * `extend` anywhere in the program, or declared by one of the traits it comes `with`.
+ *
+ * A link that resolves to a construct of the site becomes a [ResolvedLink] to its page and anchor. One that resolves to
+ * something without a page - a package that is not documented, a construct that is not public - is kept without a page,
+ * and a page shows it as code. Only a link that resolves to nothing at all is a problem, with the line it stands on.
+ * The rules are the ones `torb docs source` judges a link by, so the two commands agree on what is broken.
+ *
+ * # Related
+ *
+ * - [resolveLinks] - the pass over every doc comment of the reference.
+ */
+
+use Span from "../syntax/source"
+use Member, TypeReference from "../syntax/ast"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use SymbolId, SymbolKind from "../semantics/symbols"
+use DocumentationProblem from "../documentation/markdown"
+use linksOf from "../documentation/comments"
+use bindingNames from "../documentation/source-scope"
+use DocumentedPackage, DocumentedModule, DocumentedItem, ResolvedLink, PendingLinks, Location from "./model"
+
+/** The packages with the links of every doc comment filled in, and the links that resolve to nothing. */
+public type ResolvedReference {
+  packages: List<DocumentedPackage>
+  problems: List<DocumentationProblem>
+}
+
+/** What one link resolves to. */
+type LinkResolution {
+  case Found(link: ResolvedLink)
+  case Broken(message: String)
+}
+
+/**
+ * Resolves every link of every doc comment that was read, and puts the answers into the items they belong to.
+ * `locations` says where each construct of the site is, by its symbol, and each member by its owner's symbol.
+ */
+public fn resolveLinks(
+  checked: Checked,
+  packages: List<DocumentedPackage>,
+  pending: List<PendingLinks>,
+  locations: Map<String, Location>,
+): ResolvedReference {
+  const members = memberTableOf checked
+  var byComment: Map<String, List<ResolvedLink>> = [:]
+  var problems: List<DocumentationProblem> = []
+  for waiting in pending {
+    var links: List<ResolvedLink> = []
+    for link in linksOf(waiting.block) {
+      match resolveLink(checked, members, locations, waiting.module, link.target) {
+        .Found(resolved) => {
+          if !links.any({ _.target == resolved.target }) {
+            links.append resolved
+          }
+        }
+        .Broken(message) => problems.append DocumentationProblem(waiting.path, link.line, message)
+      }
+    }
+    byComment.set "{waiting.page}#{waiting.anchor}", links
+  }
+  const comments = byComment
+  var resolved: List<DocumentedPackage> = []
+  for package in packages {
+    var modules: List<DocumentedModule> = []
+    for module in package.modules {
+      const items = module.items.map({ withLinks _, module.page, comments }).toList()
+      const links = comments.get("{module.page}#") ?? []
+      modules.append module.copy(links: links, items: items)
+    }
+    const packageLinks = comments.get("{package.page}#") ?? []
+    resolved.append package.copy(links: packageLinks, modules: modules)
+  }
+  ResolvedReference resolved, problems
+}
+
+fn withLinks(item: DocumentedItem, page: String, byComment: Map<String, List<ResolvedLink>>): DocumentedItem {
+  const members = item.members.map({ withLinks _, page, byComment }).toList()
+  const links = byComment.get("{page}#{item.anchor}") ?? []
+  item.copy links: links, members: members
+}
+
+/**
+ * The members every type and trait of the program can be asked for, by the symbol of its owner, and the traits it
+ * comes `with`. Built over every module and not only the documented ones: a link to a member of `std/core` from
+ * another package is judged as well.
+ */
+type MemberTable {
+  names: Map<Int, List<String>>
+  traits: Map<Int, List<Int>>
+}
+
+fn memberTableOf(checked: Checked): MemberTable {
+  var names: Map<Int, List<String>> = [:]
+  var traits: Map<Int, List<Int>> = [:]
+  for module in checked.program.graph.modules {
+    var declared: Map<Int, SymbolId> = [:]
+    for definition in checked.program.definitions[module.id.value] {
+      declared.set definition.span.start, definition.symbol
+    }
+    const resolutions = checked.resolutions[module.id.value]
+    for statement in module.file.statements {
+      const declaration = match statement.kind {
+        .Declare(found) => found
+        _ => {
+          continue
+        }
+      }
+      match declaration.kind {
+        .Type(found) => {
+          if const Some(owner) = declared.get(found.name.span.start) {
+            addNames names, owner.value, memberNames(found.members)
+            addTraits traits, owner.value, found.traits.map({ _.capability }).toList(), resolutions
+          }
+        }
+        .Trait(found) => {
+          if const Some(owner) = declared.get(found.name.span.start) {
+            addNames names, owner.value, memberNames(found.members)
+            addTraits traits, owner.value, found.supertraits, resolutions
+          }
+        }
+        .Extend(found) => {
+          if const Some(owner) = symbolOf(found.target, resolutions) {
+            addNames names, owner.value, memberNames(found.members)
+            addTraits traits, owner.value, found.traits, resolutions
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  MemberTable names, traits
+}
+
+fn addNames(var names: Map<Int, List<String>>, owner: Int, found: List<String>) {
+  var known = names.get(owner) ?? []
+  known.appendAll found
+  names.set owner, known
+}
+
+fn addTraits(var traits: Map<Int, List<Int>>, owner: Int, references: List<TypeReference>, resolutions: Map<Span, SymbolId>) {
+  var known = traits.get(owner) ?? []
+  for reference in references {
+    if const Some(symbol) = symbolOf(reference, resolutions) {
+      known.append symbol.value
+    }
+  }
+  traits.set owner, known
+}
+
+/** The symbol a type reference names, as the checker resolved it: the last name of its path. */
+fn symbolOf(reference: TypeReference, resolutions: Map<Span, SymbolId>): SymbolId? {
+  match reference.kind {
+    .Named(path, _) => resolutions.get path[path.length() - 1].span
+    .Optional(inner) => symbolOf inner, resolutions
+    _ => None
+  }
+}
+
+fn memberNames(members: List<Member>): List<String> {
+  var names: List<String> = []
+  for member in members {
+    match member.kind {
+      .Field(field) => names.append field.name.text
+      .Constant(binding) => names.appendAll bindingNames(binding.pattern)
+      .Function(function) => names.append function.name.text
+      .Case(declared) => names.append declared.name.text
+    }
+  }
+  names
+}
+
+/** A name the way the checker looks it up in a file: its own scope, the prelude of its package, the builtins. */
+fn lookUpName(checked: Checked, module: ModuleId, name: String): SymbolId? {
+  if const Some(found) = checked.program.lookUp(module, name) {
+    return Some found
+  }
+  checked.program.preludeOf(module).get(name)
+}
+
+fn resolveLink(
+  checked: Checked,
+  members: MemberTable,
+  locations: Map<String, Location>,
+  module: ModuleId,
+  target: String,
+): LinkResolution {
+  const parts = target.split "."
+  const head = parts[0]
+  const symbol = match lookUpName(checked, module, head) {
+    Some(found) => found
+    None => {
+      const note = "`[{target}]` does not resolve here. Name what this file declares, imports or gets from the prelude"
+      return LinkResolution.Broken note
+    }
+  }
+  if parts.length() == 1 {
+    return LinkResolution.Found linkTo(target, locations.get("{symbol.value}"))
+  }
+  // What stands behind a `use * as` alias resolves in another package, and is not judged
+  if const .Namespace(_) = checked.program.symbols.at(symbol).kind {
+    return LinkResolution.Found ResolvedLink(target, "", "")
+  }
+  const member = parts[1]
+  var owners = [symbol.value]
+  owners.appendAll(members.traits.get(symbol.value) ?? [])
+  for owner in owners {
+    if const Some(location) = locations.get("{owner}.{member}") {
+      return LinkResolution.Found linkTo(target, Some(location))
+    }
+  }
+  for owner in owners {
+    if (members.names.get(owner) ?? []).contains(member) {
+      return LinkResolution.Found ResolvedLink(target, "", "")
+    }
+  }
+  // A name whose declaration was not read is not judged: a builtin, or a type parameter
+  if members.names.containsKey(symbol.value) {
+    return LinkResolution.Broken "`[{target}]`: `{head}` has no member `{member}`"
+  }
+  LinkResolution.Found ResolvedLink(target, "", "")
+}
+
+fn linkTo(target: String, location: Location?): ResolvedLink {
+  match location {
+    Some(found) => ResolvedLink target, found.page, found.anchor
+    None => ResolvedLink target, "", ""
+  }
+}

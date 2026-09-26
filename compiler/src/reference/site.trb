@@ -1,0 +1,627 @@
+/**
+ * The static site of a [Reference]: an index of the packages, an index per package, one page per module, a search
+ * index, and the whole model as JSON. It is plain files - no request leaves the page, the search is a script over a
+ * generated index, light and dark come from the stylesheet's custom properties - so it can be opened from disk or
+ * served by any static host.
+ *
+ * [siteFiles] is a pure function from the model to the files, which is what a test asks; [writeSite] writes them.
+ *
+ * # Related
+ *
+ * - [referenceJson] - the model as the language server and the registry read it.
+ * - [markdownHtml] - how a doc comment becomes HTML.
+ */
+
+use File, IoError from "std/fs"
+use Json from "std/json"
+use joinPath, parentPath from "../project/path"
+use DocumentedPackage, DocumentedModule, DocumentedItem, ItemKind, ItemSection, ResolvedLink, Reference from "./model"
+use markdownHtml from "./render"
+use highlightedCode, escapedHtml from "./highlight"
+
+/** The model as JSON, with the version of its shape, so a reader can tell a newer one. */
+public type ReferenceIndex {
+  /** Raised whenever a field changes meaning or goes away */
+  format: Int
+  packages: List<DocumentedPackage>
+}
+
+/** One entry of the search: what a result shows and where it goes. */
+public type SearchEntry {
+  /** `Option.map` */
+  name: String
+  kind: String
+  /** The module the construct is declared in */
+  module: String
+  /** The page and the anchor, relative to the root of the site */
+  url: String
+  summary: String
+}
+
+/** The version of the JSON's shape that [referenceJson] writes. */
+public const referenceFormat = 1
+
+/** The whole model as one JSON document: what `torb doc --json` prints and `reference.json` holds. */
+public fn referenceJson(reference: Reference): String {
+  Json().encode(ReferenceIndex(referenceFormat, reference.packages))
+}
+
+/** Every entry of the search, top-level constructs and members alike. */
+public fn searchEntries(reference: Reference): List<SearchEntry> {
+  var entries: List<SearchEntry> = []
+  for entry in reference.everyItem() {
+    const url = "{entry.module.page}#{entry.item.anchor}"
+    const name = if entry.item.kind == ItemKind.Extension { "extend {entry.item.name}" } else { entry.item.anchor }
+    entries.append SearchEntry(name, entry.item.kind.word(), entry.module.name, url, entry.item.summary)
+  }
+  entries
+}
+
+/** Every file of the site, by its path relative to the root of the site. */
+public fn siteFiles(reference: Reference): Map<String, String> {
+  var files: Map<String, String> = [:]
+  files.set "index.html", rootPage(reference)
+  files.set "style.css", stylesheet
+  files.set "search.js", searchScript
+  const entries = Json().encode(searchEntries(reference))
+  files.set "search-index.json", entries
+  files.set "search-index.js", "const searchIndex = {entries};\n"
+  files.set "reference.json", referenceJson(reference)
+  for package in reference.packages {
+    files.set package.page, packagePage(package)
+    for module in package.modules {
+      files.set module.page, modulePage(package, module)
+    }
+  }
+  files
+}
+
+/** Writes the site into `directory`, creating it and every folder below it. Answers with the number of files. */
+public fn writeSite(directory: String, reference: Reference): Result<Int, IoError> {
+  const files = siteFiles reference
+  var created: List<String> = []
+  for (path, text) in files {
+    const target = joinPath directory, path
+    const folder = parentPath target
+    if !created.contains(folder) {
+      File.createDirectory(folder)?
+      created.append folder
+    }
+    File.writeText(target, text)?
+  }
+  Ok files.length()
+}
+
+/** `../../` for `std/core/option.html`: the way from a page back to the root of the site. */
+public fn rootOf(page: String): String {
+  var prefix = ""
+  for character in page.chars() {
+    if character == '/' {
+      prefix = "{prefix}../"
+    }
+  }
+  prefix
+}
+
+/** The URL of a place of the site as a page links to it: an anchor alone on the same page. */
+public fn urlFrom(page: String, target: String, anchor: String): String {
+  const fragment = if anchor.isEmpty() { "" } else { "#{anchor}" }
+  if target == page {
+    return if fragment.isEmpty() { "#" } else { fragment }
+  }
+  "{rootOf(page)}{target}{fragment}"
+}
+
+/** The links of one comment as [markdownHtml] takes them, from the page they are shown on. */
+fn linkTargets(page: String, links: List<ResolvedLink>): Map<String, String> {
+  var targets: Map<String, String> = [:]
+  for link in links {
+    const url = if link.page.isEmpty() { "" } else { urlFrom page, link.page, link.anchor }
+    targets.set link.target, url
+  }
+  targets
+}
+
+/** The frame every page shares: the stylesheet, the search, the way back to the index. */
+fn pageOf(page: String, title: String, body: String): String {
+  const root = rootOf page
+  const head = [
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "<head>",
+    "<meta charset=\"utf-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+    "<title>{escapedHtml(title)}</title>",
+    "<link rel=\"stylesheet\" href=\"{root}style.css\">",
+    "<script src=\"{root}search-index.js\" defer></script>",
+    "<script src=\"{root}search.js\" defer></script>",
+    "</head>",
+    "<body data-root=\"{root}\">",
+    "<header>",
+    "<a class=\"home\" href=\"{root}index.html\">Reference</a>",
+    "<input id=\"search\" type=\"search\" placeholder=\"Search\" aria-label=\"Search the reference\" autocomplete=\"off\">",
+    "</header>",
+    "<ul id=\"results\" hidden></ul>",
+    "<main>",
+  ]
+  const tail = ["</main>", "</body>", "</html>", ""]
+  "{head.joined(separator: "\n")}\n{body}\n{tail.joined(separator: "\n")}"
+}
+
+fn rootPage(reference: Reference): String {
+  var body: List<String> = ["<h1>Reference</h1>", "<ul class=\"listing\">"]
+  for package in reference.packages {
+    const link = "<a href=\"{package.page}\"><code>{escapedHtml(package.name)}</code></a>"
+    body.append "<li>{link}<span class=\"summary\">{inlineSummary(package.summary)}</span></li>"
+  }
+  body.append "</ul>"
+  pageOf "index.html", "Reference", body.joined(separator: "\n")
+}
+
+fn packagePage(package: DocumentedPackage): String {
+  const page = package.page
+  var body: List<String> = [
+    "<nav class=\"crumbs\"><a href=\"{rootOf(page)}index.html\">Reference</a></nav>",
+    "<h1><code>{escapedHtml(package.name)}</code></h1>",
+  ]
+  if !package.doc.isEmpty() {
+    body.append "<div class=\"doc\">{markdownHtml(package.doc, linkTargets(page, package.links))}</div>"
+  }
+  body.append "<h2>Modules</h2>"
+  body.append "<ul class=\"listing\">"
+  for module in package.modules {
+    const link = "<a href=\"{urlFrom(page, module.page, "")}\"><code>{escapedHtml(module.name)}</code></a>"
+    body.append "<li>{link}<span class=\"summary\">{inlineSummary(module.summary)}</span></li>"
+  }
+  body.append "</ul>"
+  var items: List<(module: DocumentedModule, item: DocumentedItem)> = []
+  for module in package.modules {
+    for item in module.items {
+      items.append((module: module, item: item))
+    }
+  }
+  items.sort({ _.item.name.toLowerCase() })
+  body.append "<h2>Everything</h2>"
+  body.append "<ul class=\"listing\">"
+  for entry in items {
+    const url = urlFrom page, entry.module.page, entry.item.anchor
+    const kind = "<span class=\"kind\">{entry.item.kind.word()}</span>"
+    const link = "<a href=\"{url}\"><code>{escapedHtml(shownName(entry.item))}</code></a>"
+    body.append "<li>{kind} {link}<span class=\"summary\">{inlineSummary(entry.item.summary)}</span></li>"
+  }
+  body.append "</ul>"
+  pageOf page, package.name, body.joined(separator: "\n")
+}
+
+fn modulePage(package: DocumentedPackage, module: DocumentedModule): String {
+  const page = module.page
+  var body: List<String> = [
+    "<nav class=\"crumbs\"><a href=\"{rootOf(page)}index.html\">Reference</a> / <a href=\"{urlFrom(page, package.page, "")}\">{escapedHtml(package.name)}</a></nav>",
+    "<h1><code>{escapedHtml(module.name)}</code></h1>",
+    "<p class=\"file\">{escapedHtml(module.path)}</p>",
+  ]
+  const links = linkTargets page, module.links
+  if !module.doc.isEmpty() {
+    body.append "<div class=\"doc\">{markdownHtml(module.doc, links)}</div>"
+  }
+  body.append sectionsHtml(module.sections, links, 2)
+  body.append "<nav class=\"contents\" aria-label=\"Contents\"><ul>"
+  for item in module.items {
+    const kind = "<span class=\"kind\">{item.kind.word()}</span>"
+    body.append "<li>{kind} <a href=\"#{item.anchor}\"><code>{escapedHtml(shownName(item))}</code></a></li>"
+  }
+  body.append "</ul></nav>"
+  for item in module.items {
+    body.append itemHtml(page, item, 2)
+  }
+  pageOf page, module.name, body.joined(separator: "\n")
+}
+
+/** One construct, and its members one heading level below it. */
+fn itemHtml(page: String, item: DocumentedItem, level: Int): String {
+  const links = linkTargets page, item.links
+  const anchor = escapedHtml item.anchor
+  var pieces: List<String> = [
+    "<section class=\"item\" id=\"{anchor}\">",
+    "<h{level}><span class=\"kind\">{item.kind.word()}</span> <a class=\"anchor\" href=\"#{anchor}\">{escapedHtml(shownName(item))}</a></h{level}>",
+    "<pre class=\"signature\"><code>{highlightedCode(item.signature)}</code></pre>",
+  ]
+  if !item.doc.isEmpty() {
+    pieces.append "<div class=\"doc\">{markdownHtml(item.doc, links)}</div>"
+  } else if item.isRequired {
+    pieces.append "<p class=\"undocumented\">Not documented.</p>"
+  }
+  if !item.parameters.isEmpty() {
+    pieces.append "<dl class=\"parameters\">"
+    for parameter in item.parameters {
+      pieces.append "<dt><code>{escapedHtml(parameter.name)}</code></dt>"
+      pieces.append "<dd>{markdownHtml(parameter.doc, links)}</dd>"
+    }
+    pieces.append "</dl>"
+  }
+  pieces.append sectionsHtml(item.sections, links, level + 1)
+  if !item.members.isEmpty() {
+    pieces.append "<div class=\"members\">"
+    for member in item.members {
+      pieces.append itemHtml(page, member, (level + 1).min(6))
+    }
+    pieces.append "</div>"
+  }
+  pieces.append "</section>"
+  pieces.joined separator: "\n"
+}
+
+fn sectionsHtml(sections: List<ItemSection>, links: Map<String, String>, level: Int): String {
+  var pieces: List<String> = []
+  const heading = level.min 6
+  for section in sections {
+    pieces.append "<h{heading} class=\"section\">{escapedHtml(section.heading)}</h{heading}>"
+    pieces.append "<div class=\"doc\">{markdownHtml(section.text, links)}</div>"
+  }
+  pieces.joined separator: "\n"
+}
+
+/**
+ * How a list and a heading name a construct: its name, and for an `extend` what its header says after the keyword -
+ * `Option<Value> with Show` - so two extensions of one type can be told apart. The type parameters of the `extend`
+ * itself are left out: they say what the header uses, and the header says it again.
+ */
+fn shownName(item: DocumentedItem): String {
+  if item.kind != ItemKind.Extension {
+    return item.name
+  }
+  const header = item.signature.withoutPrefix("extend") ?? item.signature
+  var depth = 0
+  var offset = 0
+  for character in header.chars() {
+    if character == '<' {
+      depth = depth + 1
+    } else if character == '>' {
+      depth = depth - 1
+    } else if character == ' ' && depth == 0 {
+      return header.sliceBytes(offset + 1, header.byteLength())
+    }
+    offset = offset + character.byteLength()
+  }
+  item.name
+}
+
+/** A summary inside a list: its Markdown without the paragraph around it. */
+fn inlineSummary(summary: String): String {
+  if summary.isEmpty() {
+    return ""
+  }
+  const html = markdownHtml(summary, [:]).trim()
+  const inner = html.withoutPrefix("<p>") ?? html
+  inner.withoutSuffix("</p>") ?? inner
+}
+
+/**
+ * The stylesheet of every page. The colours are custom properties, set twice: for light, and for a reader whose system
+ * asks for dark.
+ */
+const stylesheet = raw"""
+  :root {
+    --background: #ffffff;
+    --surface: #f5f6f8;
+    --text: #1d1f23;
+    --muted: #5f6570;
+    --border: #dde0e5;
+    --link: #1f5fbf;
+    --keyword: #8a3ab9;
+    --type: #0f7069;
+    --function: #2b58c4;
+    --string: #a14a12;
+    --number: #9a5b00;
+    --comment: #6b7280;
+    --case: #7a4d00;
+    --parameter: #444a55;
+    color-scheme: light dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: #16181c;
+      --surface: #1f2228;
+      --text: #e4e6ea;
+      --muted: #9aa1ad;
+      --border: #30343c;
+      --link: #7fb0ff;
+      --keyword: #d09cf0;
+      --type: #5fd0c4;
+      --function: #8db4ff;
+      --string: #f0a878;
+      --number: #f2c46b;
+      --comment: #8a919c;
+      --case: #e8b86a;
+      --parameter: #c8ccd4;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  header .home {
+    font-weight: 600;
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  #search {
+    flex: 1;
+    min-width: 0;
+    max-width: 28rem;
+    padding: 6px 10px;
+    font: inherit;
+    color: var(--text);
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  #results {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 8px 16px;
+    list-style: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #results li {
+    padding: 4px 0;
+  }
+
+  main {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: 8px 16px 64px;
+  }
+
+  a {
+    color: var(--link);
+  }
+
+  code,
+  pre {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 0.92em;
+  }
+
+  pre {
+    padding: 10px 12px;
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  h1 code {
+    font-size: 0.9em;
+  }
+
+  .crumbs,
+  .file,
+  .summary,
+  .kind,
+  .undocumented {
+    color: var(--muted);
+  }
+
+  .file {
+    margin-top: -8px;
+    font-size: 0.9em;
+  }
+
+  .kind {
+    font-size: 0.8em;
+    font-weight: 500;
+  }
+
+  .summary::before {
+    content: " - ";
+  }
+
+  .summary:empty::before {
+    content: "";
+  }
+
+  .listing {
+    padding-left: 1.2em;
+  }
+
+  .listing li {
+    margin: 4px 0;
+  }
+
+  .contents ul {
+    columns: 14rem;
+    padding-left: 1.2em;
+  }
+
+  .item {
+    margin: 28px 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  .members {
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 2px solid var(--border);
+  }
+
+  .members .item {
+    margin: 18px 0;
+    border-top: none;
+  }
+
+  .anchor {
+    color: var(--text);
+    text-decoration: none;
+  }
+
+  .section {
+    margin-bottom: 4px;
+    font-size: 1em;
+  }
+
+  .parameters dt {
+    margin-top: 6px;
+  }
+
+  .parameters dd {
+    margin-left: 16px;
+  }
+
+  .parameters dd p {
+    margin: 0;
+  }
+
+  table {
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+  }
+
+  th,
+  td {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+  }
+
+  .t-keyword {
+    color: var(--keyword);
+  }
+
+  .t-type,
+  .t-interface,
+  .t-typeParameter,
+  .t-namespace {
+    color: var(--type);
+  }
+
+  .t-function,
+  .t-method {
+    color: var(--function);
+  }
+
+  .t-string {
+    color: var(--string);
+  }
+
+  .t-number {
+    color: var(--number);
+  }
+
+  .t-comment {
+    color: var(--comment);
+    font-style: italic;
+  }
+
+  .t-enumMember {
+    color: var(--case);
+  }
+
+  .t-parameter {
+    color: var(--parameter);
+  }
+
+  @media (max-width: 40rem) {
+    body {
+      font-size: 15px;
+    }
+
+    header {
+      gap: 10px;
+    }
+
+    .members {
+      margin-left: 4px;
+      padding-left: 8px;
+    }
+  }
+  """
+
+/**
+ * The search: a filter over `searchIndex` as the reader types, best matches first - the name itself, then a name that
+ * starts with the query, then one that contains it.
+ */
+const searchScript = raw"""
+  "use strict";
+  (function () {
+    const input = document.getElementById("search");
+    const results = document.getElementById("results");
+    const root = document.body.dataset.root || "";
+    if (!input || !results || typeof searchIndex === "undefined") {
+      return;
+    }
+    function rank(entry, query) {
+      const name = entry.name.toLowerCase();
+      const last = name.slice(name.lastIndexOf(".") + 1);
+      if (name === query || last === query) {
+        return 0;
+      }
+      if (name.startsWith(query) || last.startsWith(query)) {
+        return 1;
+      }
+      return name.includes(query) ? 2 : 3;
+    }
+    function show() {
+      const query = input.value.trim().toLowerCase();
+      results.textContent = "";
+      if (query === "") {
+        results.hidden = true;
+        return;
+      }
+      const found = searchIndex
+        .map((entry) => ({ entry: entry, rank: rank(entry, query) }))
+        .filter((candidate) => candidate.rank < 3)
+        .sort((left, right) => left.rank - right.rank || left.entry.name.length - right.entry.name.length)
+        .slice(0, 40);
+      for (const candidate of found) {
+        const item = document.createElement("li");
+        const link = document.createElement("a");
+        link.href = root + candidate.entry.url;
+        const code = document.createElement("code");
+        code.textContent = candidate.entry.name;
+        link.appendChild(code);
+        const kind = document.createElement("span");
+        kind.className = "kind";
+        kind.textContent = candidate.entry.kind + " ";
+        item.appendChild(kind);
+        item.appendChild(link);
+        const summary = document.createElement("span");
+        summary.className = "summary";
+        summary.textContent = candidate.entry.summary;
+        item.appendChild(summary);
+        results.appendChild(item);
+      }
+      if (found.length === 0) {
+        const item = document.createElement("li");
+        item.textContent = "Nothing found.";
+        results.appendChild(item);
+      }
+      results.hidden = false;
+    }
+    input.addEventListener("input", show);
+  })();
+  """

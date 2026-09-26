@@ -1,0 +1,758 @@
+/**
+ * The model behind `torb doc`: every package that was asked for, its modules, and the public constructs of each with
+ * their signatures, doc comments and links. One model has three readers - the HTML site, the doc tests and the JSON
+ * index a language server's hover and the registry read - so all three say the same thing about a construct.
+ *
+ * The model is read out of a [Checked] program and not out of a second parse: the syntax trees are the ones the checker
+ * holds, which names a package exports is the entry module's scope, and a link resolves the way a name at that place
+ * resolves for the checker ([resolveLinks]). What a construct's signature says is the source's own text, token by
+ * token, so it reads the way its author wrote it.
+ *
+ * # Related
+ *
+ * - [DocumentedItem] - one construct, with its members.
+ * - [referenceOf] - the walk that builds the model.
+ */
+
+use Span, SourceText, LineIndex from "../syntax/source"
+use Token, TokenKind from "../syntax/token"
+use lex from "../syntax/lexer"
+use Declaration, Member, Field, Parameter, Visibility, TypeReference, Block from "../syntax/ast"
+use joinPath, isInside, normalizePath from "../project/path"
+use Package from "../project/workspace"
+use Checked from "../semantics/check"
+use Module, ModuleId from "../semantics/module"
+use SymbolId, Definition from "../semantics/symbols"
+use DocumentationProblem from "../documentation/markdown"
+use DocumentationBlock, CommentLine, documentationBlocks, startsFile, sectionsOf, firstSentence from "../documentation/comments"
+use examplesOf, ExampleKind from "../documentation/comments"
+use resolveLinks from "./links"
+use bindingNames from "../documentation/source-scope"
+
+/** What a documented construct is. The word each one shows is what the source writes in front of its name. */
+public type ItemKind {
+  case Type
+  case Trait
+  /** `type Handler = ...` */
+  case Alias
+  case Function
+  case Constant
+  case Case
+  case Field
+  /** `extend Target { ... }`: the members it adds are its members */
+  case Extension
+
+  /** The word a page and the search index show next to the name. */
+  fn word(): String {
+    match self {
+      .Type => "type"
+      .Trait => "trait"
+      .Alias => "alias"
+      .Function => "fn"
+      .Constant => "const"
+      .Case => "case"
+      .Field => "field"
+      .Extension => "extend"
+    }
+  }
+}
+
+/** One heading of a doc comment below its first paragraphs, `# Panics` or `# Examples`, with the Markdown under it. */
+public type ItemSection {
+  heading: String
+  text: String
+}
+
+/** One parameter of a function or one field of a case that carries a doc comment of its own. */
+public type DocumentedParameter {
+  name: String
+  doc: String
+}
+
+/** One example of a doc comment: the code below `# Examples`, as the doc tests run it and a page shows it. */
+public type DocumentedExample {
+  /** The line of the file the code starts on */
+  line: Int
+  kind: ExampleKind
+  text: String
+  /** The reason of a `// skip` */
+  reason: String
+}
+
+/**
+ * A link of a doc comment, resolved. `page` is empty where the link names something that exists but has no page of
+ * this site - a construct of a package that was not documented, or one that is not public - and a page shows it as
+ * code without a link.
+ */
+public type ResolvedLink {
+  target: String
+  /** The page of the site, relative to its root: `std/core/option.html` */
+  page: String
+  /** The anchor on that page: `Option.map` */
+  anchor: String
+}
+
+/** One public construct of a module, with everything a page, a hover and a doc test say about it. */
+public type DocumentedItem {
+  kind: ItemKind
+  name: String
+  /** Unique on its page: `Option`, `Option.map`, `Option.Some` */
+  anchor: String
+  /** The declaration the way the source writes it, without its body and its comments, on one line */
+  signature: String
+  /** The first sentence of the doc comment, as the index and the search show it */
+  summary: String
+  /** The doc comment above its first heading, Markdown */
+  doc: String
+  sections: List<ItemSection>
+  parameters: List<DocumentedParameter>
+  examples: List<DocumentedExample>
+  links: List<ResolvedLink>
+  members: List<DocumentedItem>
+  /** The line of the file the declaration starts on */
+  line: Int
+  /** Whether the standard of `compiler/CONTRIBUTING.md` asks for a doc comment here */
+  isRequired: Bool
+
+  /** Whether it has a doc comment of its own. */
+  fn isDocumented(): Bool {
+    !doc.isEmpty() || !sections.isEmpty()
+  }
+}
+
+/** One file of a package that declares at least one public construct. */
+public type DocumentedModule {
+  /** `std/core/option`: the package and the file, without `src/` and without the extension */
+  name: String
+  /** The file, as a message shows it */
+  path: String
+  /** The page of the site, relative to its root */
+  page: String
+  /** The module comment above its first heading, Markdown */
+  doc: String
+  summary: String
+  sections: List<ItemSection>
+  examples: List<DocumentedExample>
+  links: List<ResolvedLink>
+  items: List<DocumentedItem>
+}
+
+/** One package: its entry module's comment, and one module per file that declares something public. */
+public type DocumentedPackage {
+  name: String
+  /** The index page of the package, relative to the root of the site */
+  page: String
+  /** The module comment of the entry module, above its first heading */
+  doc: String
+  summary: String
+  /** The links of that comment, from the index page of the package */
+  links: List<ResolvedLink>
+  modules: List<DocumentedModule>
+}
+
+/** What `torb doc` read: the packages, and every link of their doc comments that resolves to nothing. */
+public type Reference {
+  packages: List<DocumentedPackage>
+  problems: List<DocumentationProblem>
+
+  /** Every item of every module, members included, with the module it stands in. */
+  fn everyItem(): List<(module: DocumentedModule, item: DocumentedItem)> {
+    var found: List<(module: DocumentedModule, item: DocumentedItem)> = []
+    for package in packages {
+      for module in package.modules {
+        for item in module.items {
+          addItem found, module, item
+        }
+      }
+    }
+    found
+  }
+
+  /** How many constructs the standard asks a doc comment of, and how many of them have none. */
+  fn missingDocumentation(): (required: Int, missing: List<(module: DocumentedModule, item: DocumentedItem)>) {
+    var required = 0
+    var missing: List<(module: DocumentedModule, item: DocumentedItem)> = []
+    for entry in everyItem() {
+      if !entry.item.isRequired {
+        continue
+      }
+      required = required + 1
+      if !entry.item.isDocumented() {
+        missing.append entry
+      }
+    }
+    (required: required, missing: missing)
+  }
+}
+
+fn addItem(var found: List<(module: DocumentedModule, item: DocumentedItem)>, module: DocumentedModule, item: DocumentedItem) {
+  found.append((module: module, item: item))
+  for member in item.members {
+    addItem found, module, member
+  }
+}
+
+/**
+ * The model of every package the checked paths belong to: the modules of the program that were asked for, grouped by
+ * package, without their tests. A package with an entry module that exports names is documented by what it exports;
+ * one whose entry exports nothing, an application, by every `public` declaration of its files.
+ */
+public fn referenceOf(checked: Checked): Reference {
+  var packageIndexes: List<Int> = []
+  for id in checked.requested {
+    const module = checked.program.graph.at id
+    if !packageIndexes.contains(module.package) {
+      packageIndexes.append module.package
+    }
+  }
+  var builder = ReferenceBuilder checked
+  var packages: List<DocumentedPackage> = []
+  for index in packageIndexes {
+    packages.append builder.package(index)
+  }
+  packages.sort({ _.name })
+  const resolved = resolveLinks checked, packages, builder.pending, builder.locations
+  Reference resolved.packages, resolved.problems
+}
+
+/** Where a construct of the site is: its page and its anchor. */
+public type Location {
+  page: String
+  anchor: String
+}
+
+/**
+ * A doc comment's links, waiting for every page to exist: a link can name a construct of a module that is read after
+ * the one it stands in.
+ */
+public type PendingLinks {
+  module: ModuleId
+  path: String
+  /** The anchor of the item, or empty for the module comment */
+  anchor: String
+  block: DocumentationBlock
+  /** The page the comment is shown on */
+  page: String
+}
+
+type ReferenceBuilder {
+  checked: Checked
+  var pending: List<PendingLinks> = []
+  /** Every documented construct by its symbol, `"12"`, and every member by its owner's, `"12.map"` */
+  var locations: Map<String, Location> = [:]
+
+  var fn package(index: Int): DocumentedPackage {
+    const package = checked.program.workspace.packages[index]
+    const name = packageNameOf package
+    const entry = checked.program.graph.moduleAt joinPath(package.directory, package.manifest.buildInput)
+    const exported = exportedSymbols entry
+    var modules: List<DocumentedModule> = []
+    var doc = ""
+    var summary = ""
+    for module in checked.program.graph.modules {
+      if module.package != index || !isDocumentedFile(package, module) {
+        continue
+      }
+      const read = readModule name, package, module, exported
+      if entry == Some(module.id) {
+        doc = read.doc
+        summary = read.summary
+        // The entry's module comment is the package's too, and its links go from the index page of the package
+        if const Some(comment) = pending.find({ _.page == read.page && _.anchor.isEmpty() }) {
+          pending.append comment.copy(page: "{name}/index.html")
+        }
+      }
+      if !read.items.isEmpty() {
+        modules.append read
+      }
+    }
+    modules.sort({ _.name })
+    DocumentedPackage name, "{name}/index.html", doc, summary, [], modules
+  }
+
+  /** The names the entry module exports, or `None` where it exports nothing and every `public` declaration counts. */
+  fn exportedSymbols(entry: ModuleId?): Set<Int>? {
+    const id = entry?
+    const names = checked.program.scopes[id.value].exported
+    if names.isEmpty() {
+      return None
+    }
+    var found: Set<Int> = Set.of()
+    for (_, symbol) in names {
+      found.insert symbol.value
+    }
+    Some found
+  }
+
+  var fn readModule(packageName: String, package: Package, module: Module, exported: Set<Int>?): DocumentedModule {
+    const slug = moduleSlug package, module.path
+    const page = "{packageName}/{slug}.html"
+    const definitions = checked.program.definitions[module.id.value]
+    const resolutions = checked.resolutions[module.id.value]
+    var reader = ModuleReader.of module, definitions, resolutions, exported, page
+    var items: List<DocumentedItem> = []
+    for statement in module.file.statements {
+      if const .Declare(declaration) = statement.kind {
+        if const Some(item) = reader.declaration(declaration) {
+          items.append item
+        }
+      }
+    }
+    const comment = reader.moduleComment()
+    const parts = partsOf comment
+    for waiting in reader.pending {
+      pending.append waiting
+    }
+    for (key, location) in reader.locations {
+      locations.set key, location
+    }
+    if const Some(block) = comment {
+      pending.append PendingLinks(module.id, module.shownPath, "", block, page)
+    }
+    const name = "{packageName}/{slug.replace(".", "/")}"
+    DocumentedModule(
+      name,
+      module.shownPath,
+      page,
+      parts.doc,
+      parts.summary,
+      parts.sections,
+      parts.examples,
+      [],
+      items,
+    )
+  }
+}
+
+/** How a package is named on its pages: its `owner/name`, or `package` for a script that belongs to no project. */
+fn packageNameOf(package: Package): String {
+  if package.name.isEmpty() {
+    "package"
+  } else {
+    package.name
+  }
+}
+
+/** A file of the package that a user of it reads: not a test, and not the manifest. */
+fn isDocumentedFile(package: Package, module: Module): Bool {
+  if module.receiver.isSome() {
+    return false
+  }
+  if module.path.endsWith(".test.trb") {
+    return false
+  }
+  const tests = package.manifest.testInput
+  if !tests.isEmpty() && !package.directory.isEmpty() && isInside(module.path, joinPath(package.directory, tests)) {
+    return false
+  }
+  true
+}
+
+/** `option` for `std/core/src/option.trb`, `unicode.tables` for `src/unicode/tables.trb`: the page name of a file. */
+public fn moduleSlug(package: Package, path: String): String {
+  var relative = normalizePath path
+  if !package.directory.isEmpty() {
+    relative = relative.withoutPrefix("{normalizePath(package.directory)}/") ?? relative
+  }
+  relative = relative.withoutPrefix("src/") ?? relative
+  relative = relative.withoutSuffix(".trb") ?? relative
+  relative.replace "/", "."
+}
+
+/** The parts of a doc comment a page shows in different places. */
+type CommentParts {
+  doc: String
+  summary: String
+  sections: List<ItemSection>
+  examples: List<DocumentedExample>
+}
+
+fn partsOf(block: DocumentationBlock?): CommentParts {
+  const found = match block {
+    Some(it) => it
+    None => {
+      return CommentParts "", "", [], []
+    }
+  }
+  const split = sectionsOf found
+  const doc = trimmedText split.summary
+  var sections: List<ItemSection> = []
+  var examples: List<DocumentedExample> = []
+  for section in split.sections {
+    sections.append ItemSection(section.heading, trimmedText(section.lines))
+    if section.heading == "Examples" && section.level == 1 {
+      for example in examplesOf(section).examples {
+        examples.append DocumentedExample(example.line, example.kind, example.text, example.reason)
+      }
+    }
+  }
+  CommentParts doc, sentenceOf(firstSentence(split)), sections, examples
+}
+
+/** The first sentence with the period `firstSentence` leaves out. */
+fn sentenceOf(words: String): String {
+  if words.isEmpty() || words.endsWith(".") || words.endsWith("?") || words.endsWith("!") || words.endsWith(":") {
+    return words
+  }
+  "{words}."
+}
+
+/** The lines as one text, without the blank lines around it. */
+fn trimmedText(lines: List<CommentLine>): String {
+  var texts = lines.map({ _.text }).toList()
+  while !texts.isEmpty() && texts[0].isBlank() {
+    texts.removeAt 0
+  }
+  while !texts.isEmpty() && texts[texts.length() - 1].isBlank() {
+    texts.removeAt(texts.length() - 1)
+  }
+  texts.joined separator: "\n"
+}
+
+/** Everything one module needs while its declarations are read: its tokens, its doc comments and what it exports. */
+type ModuleReader {
+  module: Module
+  /** The symbol of every name this module declares, by the start of the name */
+  definitions: Map<Int, SymbolId>
+  resolutions: Map<Span, SymbolId>
+  exported: Set<Int>?
+  page: String
+  tokens: List<Token>
+  blocks: List<DocumentationBlock>
+  lines: LineIndex
+  /** Where the module comment starts, or `-1` */
+  moduleStart: Int
+  var anchors: Set<String> = []
+  var pending: List<PendingLinks> = []
+  var locations: Map<String, Location> = [:]
+
+  static fn of(
+    module: Module,
+    definitions: List<Definition>,
+    resolutions: Map<Span, SymbolId>,
+    exported: Set<Int>?,
+    page: String,
+  ): ModuleReader {
+    const lexed = lex module.source
+    const lines = LineIndex.of module.source.text
+    const blocks = documentationBlocks module.source, lines, lexed.docs
+    var byStart: Map<Int, SymbolId> = [:]
+    for definition in definitions {
+      byStart.set definition.span.start, definition.symbol
+    }
+    const start = match blocks.first() {
+      Some(first) => if startsFile(module.source, first.span.start) { first.span.start } else { -1 }
+      None => -1
+    }
+    Self module, byStart, resolutions, exported, page, lexed.tokens, blocks, lines, start
+  }
+
+  fn moduleComment(): DocumentationBlock? {
+    if moduleStart < 0 {
+      return None
+    }
+    blocks.first()
+  }
+
+  /** Whether a top-level declaration named at this span is part of the reference. */
+  fn isIncluded(name: Span, visibility: Visibility): Bool {
+    match exported {
+      Some(names) => match definitions.get(name.start) {
+        Some(symbol) => names.contains symbol.value
+        None => false
+      }
+      None => visibility == Visibility.Public
+    }
+  }
+
+  var fn declaration(declaration: Declaration): DocumentedItem? {
+    const span = declaration.span
+    const visibility = declaration.modifiers.visibility
+    match declaration.kind {
+      .Function(function) => {
+        if !isIncluded(function.name.span, visibility) {
+          return None
+        }
+        const end = bodyStart function.body, span.end
+        const parameters = parametersOf function.parameters
+        const found = item ItemKind.Function, function.name.text, "", span, end, parameters, [], true
+        Some located(found, function.name.span)
+      }
+      .Type(declared) => {
+        if !isIncluded(declared.name.span, visibility) {
+          return None
+        }
+        const name = declared.name.text
+        const members = membersOf declared.members, name, true
+        const header = headerEnd declared.name.span.end, span.end
+        Some located(item(ItemKind.Type, name, "", span, header, [], members, true), declared.name.span)
+      }
+      .Trait(declared) => {
+        if !isIncluded(declared.name.span, visibility) {
+          return None
+        }
+        const name = declared.name.text
+        const members = membersOf declared.members, name, true
+        const header = headerEnd declared.name.span.end, span.end
+        Some located(item(ItemKind.Trait, name, "", span, header, [], members, true), declared.name.span)
+      }
+      .Alias(declared) => {
+        if !isIncluded(declared.name.span, visibility) {
+          return None
+        }
+        Some located(item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], true), declared.name.span)
+      }
+      .Constant(binding) => {
+        const names = bindingNames binding.pattern
+        const name = names.first() ?? ""
+        if !isIncluded(binding.pattern.span, visibility) {
+          return None
+        }
+        Some located(item(ItemKind.Constant, name, "", span, span.end, [], [], true), binding.pattern.span)
+      }
+      .Extend(extension) => {
+        const target = typeNameOf extension.target
+        const isAsked = extension.traits.isEmpty()
+        const members = membersOf extension.members, target, isAsked
+        if members.isEmpty() {
+          return None
+        }
+        const header = headerEnd extension.target.span.end, span.end
+        const found = item ItemKind.Extension, target, "", span, header, [], members, true
+        if const Some(owner) = targetSymbol(extension.target) {
+          locateMembers found, owner
+        }
+        Some found
+      }
+      .Use(_) => None
+      .Foreign(_) => None
+    }
+  }
+
+  /** Records where a top-level item and its members are, for the links that name them. */
+  var fn located(found: DocumentedItem, name: Span): DocumentedItem {
+    if const Some(symbol) = definitions.get(name.start) {
+      locations.set "{symbol.value}", Location(page, found.anchor)
+      locateMembers found, symbol
+    }
+    found
+  }
+
+  var fn locateMembers(found: DocumentedItem, owner: SymbolId) {
+    for member in found.members {
+      const key = "{owner.value}.{member.name}"
+      if !locations.containsKey(key) {
+        locations.set key, Location(page, member.anchor)
+      }
+    }
+  }
+
+  /** The symbol an `extend` target names, as the checker resolved it. */
+  fn targetSymbol(target: TypeReference): SymbolId? {
+    match target.kind {
+      .Named(path, _) => resolutions.get path[path.length() - 1].span
+      .Optional(inner) => targetSymbol inner
+      _ => None
+    }
+  }
+
+  /**
+   * The members of a type, a trait or an `extend` that a user can reach: everything that is not `private`. The members
+   * of an `extend ... with Trait` implement the trait, and the trait is where they are documented, so the standard
+   * asks no comment of them.
+   */
+  var fn membersOf(members: List<Member>, owner: String, isAsked: Bool): List<DocumentedItem> {
+    var found: List<DocumentedItem> = []
+    for member in members {
+      if member.modifiers.visibility == Visibility.Private {
+        continue
+      }
+      const span = member.span
+      match member.kind {
+        .Field(field) => {
+          found.append item(ItemKind.Field, field.name.text, owner, span, span.end, [], [], isAsked)
+        }
+        .Case(declared) => {
+          const parameters = fieldsOf declared.fields
+          found.append item(ItemKind.Case, declared.name.text, owner, span, span.end, parameters, [], isAsked)
+        }
+        .Function(function) => {
+          const end = bodyStart function.body, span.end
+          const parameters = parametersOf function.parameters
+          found.append item(ItemKind.Function, function.name.text, owner, span, end, parameters, [], isAsked)
+        }
+        .Constant(binding) => {
+          const name = bindingNames(binding.pattern).first() ?? ""
+          found.append item(ItemKind.Constant, name, owner, span, span.end, [], [], isAsked)
+        }
+      }
+    }
+    found
+  }
+
+  /** One item: its signature out of the tokens, its doc comment out of the block in front of it, its anchor. */
+  var fn item(
+    kind: ItemKind,
+    name: String,
+    owner: String,
+    span: Span,
+    end: Int,
+    parameters: List<DocumentedParameter>,
+    members: List<DocumentedItem>,
+    isRequired: Bool,
+  ): DocumentedItem {
+    const block = blockBefore span.start
+    const parts = partsOf block
+    const wanted = if kind == ItemKind.Extension {
+      "extend-{name}"
+    } else if owner.isEmpty() {
+      name
+    } else {
+      "{owner}.{name}"
+    }
+    const anchor = uniqueAnchor wanted
+    if const Some(found) = block {
+      pending.append PendingLinks(module.id, module.shownPath, anchor, found, page)
+    }
+    const signature = signatureOf tokens, module.source.text, span.start, end, kind
+    const line = lines.lineAndColumn(span.start).line
+    DocumentedItem(
+      kind,
+      name,
+      anchor,
+      signature,
+      parts.summary,
+      parts.doc,
+      parts.sections,
+      parameters,
+      parts.examples,
+      [],
+      members,
+      line,
+      isRequired,
+    )
+  }
+
+  /** `name`, or `name-2` where an overload of an `extend` of another instantiation took it already. */
+  var fn uniqueAnchor(wanted: String): String {
+    var anchor = wanted
+    var number = 2
+    while anchors.contains(anchor) {
+      anchor = "{wanted}-{number}"
+      number = number + 1
+    }
+    anchors.insert anchor
+    anchor
+  }
+
+  /**
+   * The doc comment of a construct: the last one that ends in front of it with nothing but whitespace between. The
+   * module comment belongs to the file, so the first declaration of a file without imports does not borrow it.
+   */
+  fn blockBefore(start: Int): DocumentationBlock? {
+    var found: DocumentationBlock? = None
+    for block in blocks {
+      if block.span.end <= start {
+        found = Some block
+      }
+    }
+    const block = found?
+    if block.span.start == moduleStart {
+      return None
+    }
+    if !module.source.text.sliceBytes(block.span.end, start).isBlank() {
+      return None
+    }
+    Some block
+  }
+
+  /** Where the header of a type, a trait or an `extend` ends: at the `{` of its members. */
+  fn headerEnd(after: Int, end: Int): Int {
+    for token in tokens {
+      if token.span.start >= after && token.kind == TokenKind.BraceOpen {
+        return token.span.start.min end
+      }
+    }
+    end
+  }
+}
+
+fn bodyStart(body: Block?, end: Int): Int {
+  match body {
+    Some(found) => found.span.start
+    None => end
+  }
+}
+
+/** The parameters that carry a doc comment of their own. The receiver has none to carry. */
+fn parametersOf(parameters: List<Parameter>): List<DocumentedParameter> {
+  var found: List<DocumentedParameter> = []
+  for parameter in parameters {
+    if const Some(doc) = parameter.doc {
+      if !parameter.name.text.isEmpty() {
+        found.append DocumentedParameter(parameter.name.text, doc.trim())
+      }
+    }
+  }
+  found
+}
+
+fn fieldsOf(fields: List<Field>): List<DocumentedParameter> {
+  var found: List<DocumentedParameter> = []
+  for field in fields {
+    if const Some(doc) = field.doc {
+      found.append DocumentedParameter(field.name.text, doc.trim())
+    }
+  }
+  found
+}
+
+/** The name an `extend` target names, without its type arguments. */
+fn typeNameOf(reference: TypeReference): String {
+  match reference.kind {
+    .Named(path, _) => path[path.length() - 1].text
+    .Optional(inner) => typeNameOf inner
+    _ => ""
+  }
+}
+
+/**
+ * A declaration the way the source writes it, from its first token to `end`, on one line: the tokens joined with one
+ * space where the source had whitespace or a comment between them, so a doc comment of a parameter and the line breaks
+ * of a long parameter list are gone. `public` is left out - everything a reference shows is public - and so is the
+ * value of a constant whose initializer does not fit a line.
+ */
+public fn signatureOf(tokens: List<Token>, text: String, start: Int, end: Int, kind: ItemKind): String {
+  var pieces: List<String> = []
+  var previousEnd = -1
+  var previous = ""
+  for token in tokens {
+    if token.span.start < start || token.span.end > end {
+      continue
+    }
+    if token.kind == TokenKind.Newline || token.kind == TokenKind.EndOfFile {
+      continue
+    }
+    const piece = text.sliceBytes token.span.start, token.span.end
+    const isClosing = piece == ")" || piece == "]"
+    if isClosing && previous == "," {
+      pieces.removeAt(pieces.length() - 1)
+    }
+    const isSpaced = previousEnd >= 0 && token.span.start > previousEnd
+    const isAfterOpening = previous == "(" || previous == "["
+    if isSpaced && !isAfterOpening && !isClosing {
+      pieces.append " "
+    }
+    pieces.append piece
+    previousEnd = token.span.end
+    previous = piece
+  }
+  var signature = pieces.joined separator: ""
+  signature = signature.withoutPrefix("public ") ?? signature
+  if kind == ItemKind.Constant && signature.byteLength() > 100 {
+    if const Some(at) = signature.byteOffsetOf(" = ") {
+      signature = signature.sliceBytes 0, at
+    }
+  }
+  signature
+}

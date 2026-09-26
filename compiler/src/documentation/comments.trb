@@ -257,8 +257,14 @@ fn sentenceEnd(text: String): Int? {
 
 /** How much of an example the tool can say something about. The spelling mirrors the markers of a documentation page. */
 public type ExampleKind {
-  /** The whole thing: it parses, it is in the canon and it type checks */
+  /** The whole thing: it parses, it is in the canon, it type checks, and `torb doc --check` runs it */
   case Program
+  /**
+   * `// check`: it parses, it is in the canon and it type checks, and it is not run - an example that reads standard
+   * input, starts a process, ends the program or panics on purpose shows how, and a doc test would only wait or stop
+   * there; so does one the native back end cannot build yet
+   */
+  case Checked
   /** `// fragment`: a signature or a shape, so only the lexer can judge it */
   case Fragment
   /** `// skip <reason>`: nothing is checked, and the reason is counted in the report */
@@ -325,6 +331,10 @@ fn addExample(block: List<CommentLine>, var examples: List<Example>) {
   const marker = kept[0].text.trim()
   if marker == "// fragment" {
     examples.append Example(kept[0].line, ExampleKind.Fragment, text, "")
+    return
+  }
+  if marker == "// check" {
+    examples.append Example(kept[0].line, ExampleKind.Checked, text, "")
     return
   }
   if const Some(skipped) = marker.withoutPrefix("// skip") {

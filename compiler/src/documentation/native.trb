@@ -150,7 +150,21 @@ fn moduleOf(checked: Checked, snippet: Snippet): ModuleId? {
  * needs to be asked anything at all.
  */
 public fn refusalsOf(checked: Checked, paths: List<String>, module: ModuleId, seedsEverything: Bool): List<String> {
-  var lowering = lowerWorkspace checked.checker, paths, [module], seedsEverything, hostTarget()
+  refusalsOfModules checked, paths, [module], seedsEverything
+}
+
+/**
+ * [refusalsOf] for several blocks lowered together: one lowering instead of one per block, which is what asks a
+ * hundred blocks in seconds. Empty when none of them is refused; where one is, the blocks are asked one by one to say
+ * which.
+ */
+public fn refusalsOfModules(
+  checked: Checked,
+  paths: List<String>,
+  modules: List<ModuleId>,
+  seedsEverything: Bool,
+): List<String> {
+  var lowering = lowerWorkspace checked.checker, paths, modules, seedsEverything, hostTarget()
   insertOwnership lowering.program
   var found: List<String> = []
   for problem in lowering.problems {
@@ -174,8 +188,13 @@ public fn refusalsOf(checked: Checked, paths: List<String>, module: ModuleId, se
   if !found.isEmpty() {
     return found
   }
-  const name = entryNameOf lowering, module
-  const entries = if hasFunction(lowering, name) { [ProgramEntry(name)] } else { [] }
+  var entries: List<ProgramEntry> = []
+  for module in modules {
+    const name = entryNameOf lowering, module
+    if hasFunction(lowering, name) {
+      entries.append ProgramEntry(name)
+    }
+  }
   emitProgram(lowering.program, entries).unsupported
 }
 
@@ -188,7 +207,11 @@ public fn markerOf(snippet: Snippet): String {
   "=== torb docs check: {snippet.name}"
 }
 
-fn runSnippets(
+/**
+ * Builds the `trb run` blocks into one program, runs it, and compares what each block printed with what it says it
+ * prints. `modules` are the modules of the blocks, in the order of `runnable`; none of them may be refused.
+ */
+public fn runSnippets(
   checked: Checked,
   paths: List<String>,
   runnable: List<Snippet>,
@@ -330,7 +353,7 @@ public fn outputProblems(snippets: List<Snippet>, output: String, exitCode: Int)
       problems.append DocumentationProblem(snippet.path, snippet.line, note)
       continue
     }
-    if piece != snippet.expectedOutput {
+    if snippet.comparesOutput && piece != snippet.expectedOutput {
       const expected = shownLines snippet.expectedOutput
       const note = "This `trb run` block printed {printed}, and its `// prints` comments say {expected}"
       problems.append DocumentationProblem(snippet.path, snippet.line, note)

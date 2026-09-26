@@ -1,0 +1,181 @@
+/**
+ * `torb doc [path] [--output <dir>] [--json] [--check] [--no-run]`: the reference of a package, from its public API and
+ * its doc comments.
+ *
+ * - Without a flag it writes the static site into `--output` (default `build/doc`) and reports every link that
+ *   resolves to nothing, without failing on it.
+ * - `--json` prints the model as one JSON document instead, which is what a language server's hover and the registry
+ *   read, and writes nothing.
+ * - `--check` writes nothing and fails on a broken link and on a failing doc test: every example of a documented
+ *   construct is type checked, and every one that is a program is built natively and run. `--no-run` stops at the type
+ *   check, which is what a machine without a C compiler, and a registry that runs none of a package's code, can do.
+ *   The constructs of `std/` without a doc comment are counted and listed, and do not fail the check (yet).
+ *
+ * # Related
+ *
+ * - [referenceOf] - the model all three outputs are made from.
+ * - [siteFiles] - the site.
+ * - [runDocumentationTests] - the doc tests.
+ */
+
+use File, IoError from "std/fs"
+use Environment from "std/os"
+use readSourceTree, absolutePaths from "../project/read"
+use findRuntime from "../project/toolchain"
+use check from "../semantics/check"
+use counted from "../cli/render"
+use DocumentationProblem from "../documentation/markdown"
+use NativeOptions from "../documentation/native"
+use Reference, referenceOf from "./model"
+use writeSite, referenceJson from "./site"
+use documentationTestsOf, runDocumentationTests from "./doctests"
+
+/** How `torb doc` was called. */
+public type DocOptions {
+  /** The packages, workspaces or files to document. Empty is the current directory */
+  paths: List<String>
+  /** Where the site goes */
+  output: String
+  /** `--json`: print the model instead of writing the site */
+  printsJson: Bool
+  /** `--check`: judge the links and run the doc tests, and write nothing */
+  onlyCheck: Bool
+  /** `--no-run`: type check the examples of `--check` without building and running them */
+  withoutRunning: Bool
+}
+
+/** Reads `torb doc`'s arguments, or says what is wrong with them and answers `None`. */
+public fn docOptionsOf(arguments: List<String>): DocOptions? {
+  var paths: List<String> = []
+  var output = "build/doc"
+  var printsJson = false
+  var onlyCheck = false
+  var withoutRunning = false
+  var wantsOutput = false
+  for argument in arguments {
+    if wantsOutput {
+      output = argument
+      wantsOutput = false
+      continue
+    }
+    match argument {
+      "--output" => {
+        wantsOutput = true
+      }
+      "--json" => {
+        printsJson = true
+      }
+      "--check" => {
+        onlyCheck = true
+      }
+      "--no-run" => {
+        withoutRunning = true
+      }
+      _ => {
+        if argument.startsWith("--") {
+          printError "torb doc: `{argument}` is not a flag of this command"
+          printDocUsage()
+          return None
+        }
+        paths.append argument
+      }
+    }
+  }
+  if wantsOutput {
+    printError "torb doc: `--output` needs a directory behind it"
+    return None
+  }
+  Some DocOptions(paths, output, printsJson, onlyCheck, withoutRunning)
+}
+
+/** The `torb doc` block of `torb --help`. */
+public fn printDocUsage() {
+  printError "  torb doc [path]...     The reference of a package: its public API and doc comments as a static site"
+  printError "                         --output <dir>: where the site goes (default: build/doc)"
+  printError "                         --json: print the model as JSON instead, for an editor or a registry"
+  printError "                         --check: fail on a broken link or a failing doc test, and write nothing"
+  printError "                         --no-run: with --check, type check the examples without running them"
+}
+
+/** `torb doc`. Answers with the exit code. */
+public fn runDoc(options: DocOptions): Result<Int, IoError> {
+  const paths = if options.paths.isEmpty() { ["."] } else { options.paths }
+  const tree = readSourceTree(paths)?
+  const roots = absolutePaths(paths)?
+  const checked = check tree, roots
+  if checked.files.isEmpty() {
+    printError "error: {paths.joined(separator: ", ")} holds no package to document"
+    return Ok 1
+  }
+  var compileErrors = 0
+  for file in checked.files {
+    compileErrors = compileErrors + file.diagnostics.length()
+  }
+  if compileErrors > 0 {
+    printError "error: {counted(compileErrors, "problem")} in the checked files. `torb check` says what they are"
+    return Ok 1
+  }
+  const reference = referenceOf checked
+  if options.printsJson {
+    print referenceJson(reference)
+    return Ok 0
+  }
+  if !options.onlyCheck {
+    for problem in sorted(reference.problems) {
+      printError "warning: {problem.show()}"
+    }
+    const written = writeSite(options.output, reference)?
+    const modules = reference.packages.map({ _.modules.length() }).sum()
+    const packages = counted reference.packages.length(), "package"
+    print "{packages}, {counted(modules, "module")}: wrote {counted(written, "file")} to {options.output}"
+    return Ok 0
+  }
+  var problems = reference.problems
+  const tests = documentationTestsOf reference, checked
+  const building = if options.withoutRunning { None } else { Some nativeOptionsOf(paths) }
+  const report = runDocumentationTests(tree, roots, tests, building)?
+  problems.appendAll report.problems
+  for problem in sorted(problems) {
+    printError problem.show()
+  }
+  reportMissing reference
+  for skipped in report.skipped {
+    print "skipped: {skipped}"
+  }
+  const summary = "{counted(reference.everyItem().length(), "construct")}, {counted(report.checked, "example")} checked, {report.ran} run"
+  if !problems.isEmpty() {
+    printError ""
+    printError "{counted(problems.length(), "problem")}; {summary}"
+    return Ok 1
+  }
+  print "{summary}, no problems"
+  Ok 0
+}
+
+fn sorted(problems: List<DocumentationProblem>): List<DocumentationProblem> {
+  var found = problems
+  found.sort({ (_.path, _.line, _.message) })
+  found
+}
+
+/**
+ * The constructs the standard asks a doc comment of and that have none, counted. They do not fail the check: `std/`
+ * has too many of them for that today, and the count is what shows the way there.
+ */
+fn reportMissing(reference: Reference) {
+  const found = reference.missingDocumentation()
+  if found.required == 0 {
+    return
+  }
+  print "{found.missing.length()} of {counted(found.required, "public construct")} have no doc comment"
+}
+
+/**
+ * Where the doc tests are built: the C runtime is `$TORB_RUNTIME`, or the toolchain's own, and the program goes to
+ * `build/doc-tests` in the working directory.
+ */
+fn nativeOptionsOf(paths: List<String>): NativeOptions {
+  const given = Environment.get("TORB_RUNTIME") ?? ""
+  const runtime = if given.isEmpty() { findRuntime(paths) ?? "runtime" } else { given }
+  NativeOptions runtime, "build/doc-tests"
+}

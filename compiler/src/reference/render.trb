@@ -1,0 +1,116 @@
+/**
+ * The Markdown of a doc comment as HTML: `std/markdown` renders it, every `[Name]` of the comment becomes a link to the
+ * page and anchor it resolved to - or code, where it names something without a page - and every TorbScript code block
+ * is coloured by [highlightedCode].
+ *
+ * # Related
+ *
+ * - [markdownHtml] - one comment as HTML.
+ */
+
+use Markdown, MarkdownDocument, htmlOf from "std/markdown"
+use highlightedCode, escapedHtml from "./highlight"
+
+/**
+ * The HTML of one doc comment. `links` maps every link target of the comment to the URL it goes to from the page the
+ * HTML is written into; an empty URL shows the name as code without a link.
+ *
+ * # Examples
+ *
+ *     print markdownHtml("Wraps an [Option].", ["Option": "option.html#Option"])
+ */
+public fn markdownHtml(text: String, links: Map<String, String>): String {
+  const document = Markdown().parse(withLinks(text, links))
+  var pieces: List<String> = []
+  for block in document.blocks {
+    if const .CodeBlock(info, code, _) = block.content {
+      const language = info.split(" ").first() ?? ""
+      if language.isEmpty() || language == "trb" {
+        pieces.append "<pre class=\"code\"><code>{highlightedCode(withoutMarker(code))}</code></pre>\n"
+        continue
+      }
+      pieces.append "<pre class=\"code\"><code>{escapedHtml(code)}</code></pre>\n"
+      continue
+    }
+    pieces.append htmlOf(MarkdownDocument([block]))
+  }
+  pieces.joined separator: ""
+}
+
+/**
+ * The first line of an example says how it is checked - `// fragment`, `// skip <reason>`, `// check` - which is for
+ * the tools and not for the reader.
+ */
+fn withoutMarker(code: String): String {
+  const lines = code.split "\n"
+  const first = (lines.first() ?? "").trim()
+  const isMarker = first == "// fragment" || first == "// check" || first.startsWith("// skip")
+  if !isMarker {
+    return code
+  }
+  lines[1..lines.length()].joined separator: "\n"
+}
+
+/**
+ * The comment with every link written the way Markdown links: `` [`Option`](option.html#Option) ``. Code blocks and code
+ * spans are left alone, and so is a Markdown link that names its own target.
+ */
+fn withLinks(text: String, links: Map<String, String>): String {
+  var lines: List<String> = []
+  var isFenced = false
+  for line in text.split("\n") {
+    if line.trim().startsWith("```") {
+      isFenced = !isFenced
+      lines.append line
+      continue
+    }
+    if isFenced || line.startsWith("    ") || line.startsWith("\t") {
+      lines.append line
+      continue
+    }
+    lines.append linkedLine(line, links)
+  }
+  lines.joined separator: "\n"
+}
+
+fn linkedLine(line: String, links: Map<String, String>): String {
+  const characters = line.chars().toList()
+  var pieces: List<String> = []
+  var index = 0
+  var isCode = false
+  while index < characters.length() {
+    const character = characters[index]
+    if character == '`' {
+      isCode = !isCode
+    }
+    if isCode || character != '[' {
+      pieces.append String.from([character])
+      index = index + 1
+      continue
+    }
+    var stop = index + 1
+    while stop < characters.length() && characters[stop] != ']' {
+      stop = stop + 1
+    }
+    if stop >= characters.length() {
+      pieces.append String.from([character])
+      index = index + 1
+      continue
+    }
+    const target = String.from characters[(index + 1)..stop]
+    const isInline = characters.get(stop + 1) == Some('(') || characters.get(stop + 1) == Some('[')
+    if isInline || !links.containsKey(target) {
+      pieces.append String.from([character])
+      index = index + 1
+      continue
+    }
+    const url = links.get(target) ?? ""
+    if url.isEmpty() {
+      pieces.append "`{target}`"
+    } else {
+      pieces.append "[`{target}`]({url})"
+    }
+    index = stop + 1
+  }
+  pieces.joined separator: ""
+}

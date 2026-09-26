@@ -396,19 +396,24 @@ fn fenceProblems(read: ReadSource, block: DocumentationBlock): List<Documentatio
  * therefore invisible in its own examples - which is also why the standard asks for no comment on one.
  */
 fn contextOf(read: ReadSource): String {
+  exampleContextOf read.file, read.source, read.module
+}
+
+/** [contextOf] for a file the checker already parsed: `module` is its path in the source tree. */
+public fn exampleContextOf(file: SourceFile, source: SourceText, module: String): String {
   var lines: List<String> = []
-  for statement in read.file.statements {
+  for statement in file.statements {
     if const .Declare(declaration) = statement.kind {
       if const .Use(_) = declaration.kind {
-        lines.append withoutPublic(read.source.text.sliceBytes(declaration.span.start, declaration.span.end))
+        lines.append withoutPublic(source.text.sliceBytes(declaration.span.start, declaration.span.end))
       }
     }
   }
-  const imported = importedNames read.file
-  const own = publicNames(read.file).filter({ !imported.contains(_) }).toList()
-  if !own.isEmpty() && !hasTopLevelCode(read.file) {
+  const imported = importedNames file
+  const own = publicNames(file).filter({ !imported.contains(_) }).toList()
+  if !own.isEmpty() && !hasTopLevelCode(file) {
     const names = own.joined separator: ", "
-    lines.append "use {names} from \"./{moduleName(read.module)}\""
+    lines.append "use {names} from \"./{moduleName(module)}\""
   }
   lines.joined separator: "\n"
 }
