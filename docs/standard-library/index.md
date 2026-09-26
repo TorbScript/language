@@ -38,7 +38,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/encoding](encoding.md)** - Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
 - **[std/expression](expression.md)** - Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - **[std/task](task.md)** - Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
-- **[std/parallel](parallel.md)** - parallel() and Parallel, a pipeline whose stages run on the workers of the pool with the results in input order, in scope through the prelude.
+- **[std/parallel](parallel.md)** - parallel() on anything that can be iterated, Parallel, a pipeline whose fused stages run on the workers of the pool with the results in input order, and Cut, the collections that cut themselves.
 - **[std/console](console.md)** - print and printError, the two functions that write to the standard streams.
 - **[std/linear](linear.md)** - Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - **[std/geometry](geometry.md)** - The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.

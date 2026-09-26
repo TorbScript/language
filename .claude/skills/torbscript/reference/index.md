@@ -288,7 +288,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/network.md` - **std/network** (package): Name resolution and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - over the address values of std/ip, which it re-exports.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - `standard-library/os.md` - **std/os** (package, draft): Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
-- `standard-library/parallel.md` - **std/parallel** (package): parallel() and Parallel, a pipeline whose stages run on the workers of the pool with the results in input order, in scope through the prelude.
+- `standard-library/parallel.md` - **std/parallel** (package): parallel() on anything that can be iterated, Parallel, a pipeline whose fused stages run on the workers of the pool with the results in input order, and Cut, the collections that cut themselves.
 - `standard-library/path.md` - **std/path** (package): Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - `standard-library/process.md` - **std/process** (package): Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.

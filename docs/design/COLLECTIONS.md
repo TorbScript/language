@@ -907,7 +907,7 @@ the ECS columns, and nothing else in this document does.
 that document owns it.
 
 **Gap 8. `Merge<Item, Output>`** — [CONCURRENCY](CONCURRENCY.md) section 5. It arrives with `parallel()` and it needs
-`Map.merge` to be gone first, which is slice C4.
+`Map.merge` to be gone first, which is slice C4. *Built 2026-09-26, with `parallel()`'s `collect` (CONCURRENCY section 14, slice B).*
 
 **Gap 9. `for` over a concrete collection** — [PERFORMANCE](PERFORMANCE.md) findings 2 and 5, rounds P5, P6 and P11.
 Section 3.6 says what this family owes them: an iterator that is an inline record.

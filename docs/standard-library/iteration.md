@@ -10,6 +10,7 @@ keywords:
   - Iterator
   - Stage
   - Accumulator
+  - Merge
   - pipeline
 source:
   - std/iteration/src/lib.trb
@@ -29,7 +30,7 @@ already in scope through the prelude.
 
 ```trb fragment
 use Iterator, Iterate, Length from "std/iteration"
-use Accumulator, ListAccumulator, collector, into, listing from "std/iteration"
+use Accumulator, Merge, ListAccumulator, collector, mergingCollector, into, listing from "std/iteration"
 use counting, summing, groupingBy, joining from "std/iteration"
 use Stage, mapping, filtering, taking from "std/iteration"
 use concatenated from "std/iteration"
@@ -127,9 +128,10 @@ public trait Accumulator<Item, Output> {
   fn isDone(): Bool
 }
 
-public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
+public type ListAccumulator<Item> with Merge<Item, List<Item>> {
   var fn add(value: Item)
   fn finish(): List<Item>
+  fn merge(first: List<Item>, second: List<Item>): List<Item>
 }
 ```
 
@@ -147,18 +149,60 @@ A collection is not one; an accumulator that gathers into a collection is a type
 call. `collector(initial, finish:, step:)` writes one the functional way, as a fold with a final step:
 
 ```trb fragment
-public fn counting<Item>(): Accumulator<Item, Int>
-public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Accumulator<Item, Total>
+public fn counting<Item>(): Merge<Item, Int>
+public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Merge<Item, Total>
 public fn averaging<Item>(value: Transform<Item, Float>): Accumulator<Item, Float?>
-public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?>
-public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?>
-public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String>
-public fn partitioningBy<Item>(predicate: Predicate<Item>): Accumulator<Item, (List<Item>, List<Item>)>
+public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Merge<Item, Item?>
+public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Merge<Item, Item?>
+public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Merge<String, String>
+public fn partitioningBy<Item>(predicate: Predicate<Item>): Merge<Item, (List<Item>, List<Item>)>
 public fn groupingBy<Item, Key: Hash>(key: Transform<Item, Key>): Grouping<Item, Key>
 ```
 
 `groupingBy` answers a `Grouping`, which has its own `then(downstream)` for a different one per group:
 `employees.collect(groupingBy { _.department }.then(averaging { _.salary }))`.
+
+### Merge
+
+```trb fragment
+public trait Merge<Item, Output> with Accumulator<Item, Output> {
+  fn merge(first: Output, second: Output): Output
+}
+
+public fn mergingCollector<Item, State, Output>(
+  initial: State,
+  finish: (State) => Output,
+  merge: (Output, Output) => Output,
+  step: (State, Item) => State,
+): Merge<Item, Output>
+```
+
+Two partial results of one accumulator, joined: what lets an accumulator run over pieces of its input -
+[`parallel()`](parallel.md)'s chunks, a divide-and-conquer fold - and still answer what one run over the whole input
+answers. The contract is three lines: `merge` is **associative**; it is called **in the order of the pieces**, left to
+right, so it need not be commutative; and it is **never called with the output of a piece that received no value** -
+such a piece is skipped, and an input without any value takes `finish()` instead. It joins two outputs and not two
+accumulators, because two trait-typed accumulators need not have the same type.
+
+| Collector | `merge` |
+|---|---|
+| `listing()` | concatenation |
+| `counting()`, `summing(value:)` | `+` |
+| `minBy(key:)`, `maxBy(key:)` | the second piece's value only where its key is smaller (larger): the earlier of two equal keys stays |
+| `joining(separator:, prefix:, suffix:)` | the first piece's suffix and the second piece's prefix come off, the separator goes between |
+| `partitioningBy(predicate:)` | both lists concatenated |
+| `groupingBy(key:)` | the lists of a key concatenated, the keys in the order of first sight |
+| `averaging(value:)`, `into<Target>()`, `then(downstream)` | none: the count is gone, the target is anybody's, the downstream is any `Accumulator` |
+
+`mergingCollector` is `collector` with a merge. An average merges once its output keeps what the merge needs:
+
+```trb check
+const averaged = mergingCollector((0.0, 0), finish: { _ }, merge: { first, second =>
+  (first.0 + second.0, first.1 + second.1)
+}) { state, value: Float => (state.0 + value, state.1 + 1) }
+const total = [1.0, 2.0, 6.0].collect(averaged)
+print(total.0 / Float.from(total.1))
+```
 
 ### Staged and Queueing
 

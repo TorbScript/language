@@ -7,8 +7,10 @@ and A2 and the `std/task` surface of section 10. **The worker pool of 7.7 is bui
 real threads, a heap and a scheduler per worker, the stealing of unstarted tasks, wake-ups, channels and cancellation
 across workers, `Workers.count`, and `parallel()` in the prelude running its chunks on the pool - slices E and H, and
 the environment half of D, the copy of a value that cannot move as it is ("The copy at the crossing"), and the blocking
-pool with `offload` and `Workers.blocking` ("The blocking pool, as built"). The manifest setting, `Merge`, borrowing
-(`Plain`, `Window`, `windows`) are not built (section 14). **The IO poller is built for sockets** (slice G,
+pool with `offload` and `Workers.blocking` ("The blocking pool, as built"). **Slices B and C are built since
+2026-09-26**: `Merge` and the collectors that have one, and `parallel()` on every `Iterate`, with the stages of a
+pipeline fused into one pass per chunk and `Cut` for the collections that cut themselves (section 16, "`parallel()`").
+The manifest setting and borrowing (`Plain`, `Window`, `windows`) are not built (section 14). **The IO poller is built for sockets** (slice G,
 `docs/design/NETWORK.md` section 2): `runtime/io.c` with IOCP, epoll and kqueue, one IO thread of the process rather
 than a poller per worker, for the reasons that record gives. **Files, the standard streams and child processes wait on
 the blocking pool** (`runtime/stream.c`, STREAMS.md section 14): no platform's poller takes all three. **Since 2026-09-23 `await()` answers
@@ -1132,8 +1134,10 @@ it to place a *message* in an inbox and copy at first run, so that an unstarted 
 in `SandboxCapabilities.limits` with a default of 1. Three places, one number.
 
 **11. A generic member through a trait-typed value.** `Parallel.map<Output>` needs the same witness-table entry
-`Stage.onto<Final>` and `Decoder.sequence<Output>` need, which the C back end does not have (STREAMS section 14,
-point 6). It is not a cost of this design and it blocks `Parallel` from compiling until it exists.
+`Stage.onto<Final>` and `Decoder.sequence<Output>` need, which the C back end did not have (STREAMS section 14,
+point 6). *Built: a member with type parameters of its own gets one slot per list of arguments the program calls it
+with, in every table of its trait (`ir/witness.trb`, `genericSlotOf`), and the fused `Parallel` of section 16 is
+written on it - its private `Plan<Item>` has `mapped<Output>` and `run<Result>`.*
 
 **12. A profiler counter for the copy.** Section 6 says a chunk is borrowed or copied and that the difference is not
 observable in the language. It has to be observable *somewhere*, or nobody can find the pipeline that copies. One
@@ -1196,14 +1200,22 @@ real timer rather than only its type - driven by hand-written state machines in 
   has to be rewritten after it.
 - **Slice B — `Merge` and the collectors.** Pure `std/iteration`, no runtime and no back end. Gate: a test per
   collector asserting `merge(a, b)` equals the sequential run over the concatenation, including the empty-chunk rule.
-  *Not built: `std/iteration` has no `Merge`, so `Parallel` has no `collect` and no `minBy` yet.*
+  *Built (2026-09-26): `Merge` and `mergingCollector` in `std/iteration`, a merge for `listing`, `counting`,
+  `summing`, `minBy`, `maxBy`, `joining`, `partitioningBy` and `groupingBy`, and the gate as
+  `std/iteration/tests/merge.test.trb` - every border of an input, and three pieces in both groupings. The rule is
+  read one step wider than section 5 writes it: a chunk is never empty, but the stages before `collect` can leave one
+  without an item, and that chunk is skipped as well, or `joining(prefix:, suffix:)` would put a separator next to
+  nothing. `into<Target>()` and `then(downstream)` have no merge: the target is anybody's type and the downstream any
+  `Accumulator`.*
 - **Slice C — `Parallel` and `parallel()`, running sequentially.** With one worker a region is a loop over the chunks
   in order, so the whole vocabulary, the chunk arithmetic and the terminal `Task` land here and are *testable* here.
   Gate: `parallel()` and the sequential pipeline agree on every collector, and a `Float` sum is byte-identical across
   the back ends. This is the slice that de-risks 7.7, because the semantics are pinned before the threads exist.
   *Built together with slice E, on the threads directly (`std/parallel`, section 16): `map`, `filter`, `filterMap`,
-  `toList`, `count`, `sum`, `find`, `forEach`, the chunk arithmetic of section 4 and the terminal `Task`, with
-  `parallel` an extension of `List` in the prelude.*
+  `toList`, `collect`, `count`, `sum`, `minBy`, `maxBy`, `find`, `forEach`, the chunk arithmetic of section 4 and
+  the terminal `Task`, with `parallel` an extension of every `Iterate` in the prelude (since 2026-09-26; before, of
+  `List` only). `flatMap` is not built: a stage that turns one item into many is no step of the fused pipeline, and
+  nothing has asked for it.*
 - **Slice D — gaps 10 and 12.** The manifest setting, the environment variables, the sandbox limit, `Workers.count()`
   answering 1. Gate: every `project.trb` of the repository still reads, and `TORB_WORKERS=1` is a no-op.
   *Built: `TORB_WORKERS` and `TORB_BLOCKING` (each refused with exit code 2 where it is not a whole number from 1
@@ -1218,8 +1230,9 @@ real timer rather than only its type - driven by hand-written state machines in 
   at `workers: 1`, `workers: 2` and `workers: Workers.count()`, for every collector, on a machine with at least four
   cores; and the live-block counter is zero after each.
   *Built: every stage of a pipeline is a fork-join of chunk tasks an idle worker may take, at most `workers` of them
-  running at once, read back in input order (`tests/conformance/parallel-ordered.trb`, run with four workers and with
-  one, and `benchmarks/parallel.sh`). The stages of one pipeline are not fused into one pass yet (section 16).*
+  running at once, read back in input order (`tests/conformance/parallel-ordered.trb` and `parallel-sources.trb`, run
+  with four workers and with one, and `benchmarks/parallel.sh`). The stages of one pipeline are fused into one pass
+  (section 16).*
 - **Slice F — `Plain`, `Window`, `windows`** (gaps 4, 5, 6). Gate: a data-parallel scale over a million `Float`s with
   zero copies (the counter of gap 12 at zero), zero live blocks, and the same output as the sequential loop.
   *Not built.*
@@ -1643,20 +1656,39 @@ the exiting worker completes its task as cancelled and keeps running its own que
 ends where it is, and the main thread drains the pool and leaves with the code - so the leak report of such an exit is
 as exact as one on the main thread.
 
-**`parallel()`** is `std/parallel`, TorbScript over task functions, and in the prelude as `Parallel` and `List.parallel`.
-`parallel` extends `List` rather than every `Iterate` - an extension of a trait reached on a type that implements a
-*different* trait needs the receiver converted between the two trait-typed values, which the lowering does not do yet -
-so a range is written `(0..rows).toList().parallel()`. The input is cut by section 4's arithmetic, every chunk becomes a
-task of a chunk function (a task *function*, because the checker's `spawn` rule refuses a capture of a generic type), and
-the chunks are `ArrayList`s: a `List<Item>` value is a trait-typed object, whose payload no test can prove may move, while
-an `ArrayList` of plain items with a storage of its own passes `torb_list_may_move`. At most `workers:` chunks run at
-once, the outputs are read back in input order, and every stage is a fork-join of its own: the stages of one pipeline
-are not fused into one pass, which needs a generic member through the pipeline value. Measured with
+**`parallel()`** is `std/parallel`, TorbScript over task functions, and in the prelude as `Parallel`,
+`Iterate.parallel`, `Cut.parallel` and `List.parallel`. Since 2026-09-26 it is there on every `Iterate`, and three
+changes of the compiler made that possible: the receiver of a member of an `extend` whose target is a trait is coerced
+to that trait-typed value (`ir/lower/call.trb`, `receiverOfTraitExtension`: a `Range`, a `Set` or a pipeline is boxed
+or narrowed, where the lowering had handed the value over as it was); of two extensions that bring one member the more
+specific one is the answer (`semantics/checker/member.trb`, `isMoreSpecificExtension`: the receiver's own type before a
+trait, a trait before one every value of it has); and `self` or a constructor of a generic type's own body coerces to a
+trait it implements (`matchPattern` bound none of the implementation's parameters where the target was the very same
+type). A call reaches the most specific of the three: a `List`, an `Array` and a `Range<Int>` are a `Cut` - the length
+and `cut(range)`, which answers a piece of a type of its own - and are cut without being read, a range arithmetically;
+anything else is read into an `ArrayList` once and its slices are the pieces. `List` keeps an extension of its own,
+because a value of the `List` trait cannot be narrowed to a `Cut`: `Cut` is implemented *for* `List` and is no
+supertrait of it, so no table of a list holds it.
+
+The pieces are cut by section 4's arithmetic, and the pipeline is **fused**: a private `Plan<Item>` holds the pieces and
+one step per item - `(value: Source) => Item?`, `None` where a stage dropped the item - and `map`, `filter` and
+`filterMap` each wrap one closure around it (a generic member through the trait-typed plan, gap 11). A terminal runs
+every piece once as a task of a chunk function (a task *function*, because the checker's `spawn` rule refuses a capture
+of a generic type): the step over each item of the piece, and the terminal's own reduction over what was kept - the
+items for `toList`, a count, a sum, at most one item for `find`, `minBy` and `maxBy`. So a chunk crosses as its piece -
+an `ArrayList` of plain items passes `torb_list_may_move`, a `Range<Int>` is a plain record - plus one closure whose
+environment holds nothing but other shared closures. At most `workers:` chunks run at once, the results are read back in
+input order, and `find` starts no further chunk once the results before it, read in order, hold a match. `collect` runs
+the stages on the workers and the accumulator on the caller's worker, chunk by chunk, joined with its `merge`: an
+`Accumulator` is a trait-typed value, whose payload is erased and which therefore never crosses. Measured with
 `benchmarks/parallel.sh` on 16 logical processors (`parallel-map.trb`: the Collatz steps of two million numbers,
 summed; whole process, fastest of five): 632 ms with one worker, 377 ms with two, 275 with four, 205 with eight, 167 with
 sixteen - 3.8x, with the building of the list, the cutting into chunks and the start of the process in every number.
 Inside the program the map itself takes 476 ms sequentially and 95 ms with sixteen workers (5.0x), 39 ms of which the
 same pipeline spends on a trivial map: the cutting, the copies into and out of the chunks and the final sum.
+After the fusing (2026-09-26) the same binary takes 692 ms with one worker and 194 with sixteen - one stage has nothing
+to fuse - and the same pipeline over the range itself, `(1..=size).parallel()`, which cuts arithmetically and builds no
+list, 600 ms with one worker, 216 with four and 132 with sixteen (4.5x).
 
 **Determinism.** With one worker the pool is the single scheduler of 7.3, order for order, and the conformance suite
 runs every program with `TORB_WORKERS=1` unless a `<program>.workers` file names more; such a program runs a second time
@@ -1713,9 +1745,9 @@ this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupte
   processes wait on the blocking pool (STREAMS.md section 14), which every platform allows; a pipe of a POSIX child is
   the one of them epoll and kqueue could take, and the second code path waits until it is measured. The whole-file
   calls of `std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
-- **`Merge`, `collect` and `minBy`** on `Parallel` (slice B), and **`Plain`, `Window`, `windows`** (slice F).
-- **The fusing of the stages of a pipeline.** (The copy of a closure's environment and of a variant with a counted case
-  is built, "The copy at the crossing".)
+- **`Plain`, `Window`, `windows`** (slice F), and `flatMap` on `Parallel`.
+- **An accumulator that runs on the workers**: `collect` accumulates on the caller's worker, chunk by chunk, because an
+  `Accumulator` is a trait-typed value, whose payload is erased and which the copy at the crossing does not walk.
 - **The measurements of section 9** and the skewed-cost benchmark; the pool counts resumes and thefts
   (`torb_pool_statistics_now`), nothing prints a histogram.
 - **A race detector**: there is no `-fsanitize=thread` for Windows targets, so the pool was verified by its tests run
