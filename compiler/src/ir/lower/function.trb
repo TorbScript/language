@@ -81,6 +81,15 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   }
   var builder = newFunction name, Some(symbol), signature, "body"
   setBlockLocation builder, BlockId(0), Some(location)
+  // A parameter of type `Never` has no value to arrive with, so nothing ever runs this body: `described<Never>` is
+  // called only from code that is unreachable itself. The body would ask for what `Never` does not have - a `Show`
+  // of it, a layout - so the instance is its one `unreachable` block
+  if hasNeverParameter(lowering, signature) {
+    finishBlock lowering, builder, Terminator.Unreachable
+    lowering.program.functions.set identifier.value, builder.function
+    lowering.lowered = lowering.lowered + 1
+    return
+  }
   declareParameterSlots lowering, symbol, declaration
   lowerBody lowering, builder, body, signature.result
   if !lowering.isSupported {
@@ -89,6 +98,16 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   }
   lowering.program.functions.set identifier.value, builder.function
   lowering.lowered = lowering.lowered + 1
+}
+
+/** Whether a value of one of the parameters can never exist, which makes a call of the function unreachable. */
+fn hasNeverParameter(lowering: Lowering, signature: IrSignature): Bool {
+  for parameter in signature.parameters {
+    if isNeverType(lowering, parameter.annotation) {
+      return true
+    }
+  }
+  false
 }
 
 /** Whether the declaration writes `Task<...>` as its result, which is what makes its body the body of a task. */

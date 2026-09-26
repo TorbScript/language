@@ -1,0 +1,36 @@
+/**
+ * **A generic function instantiated with `Never` builds.** A value of `Never` never exists, so a function one of whose
+ * parameters is a `Never` is never called, and its instance is one `unreachable` block - its body would ask for what
+ * `Never` does not have, like the `Show` that `described` interpolates with. A call whose only argument is a `Never`
+ * infers `Never` for the parameter nothing else decides.
+ */
+
+fn described<Value: Show>(value: Value): String {
+  "value {value}"
+}
+
+fn wrapped<Value>(value: Value): List<Value> {
+  [value]
+}
+
+/** Nothing ever calls it, and `described(nothing)` is `described<Never>`. */
+fn absurd(nothing: Never): String {
+  described nothing
+}
+
+fn stopped(): Never {
+  panic "stopped"
+}
+
+/** The branch that is taken never reaches the call after the `Never`. */
+fn pick(flag: Bool): String {
+  if flag {
+    return described stopped()
+  }
+  "not taken"
+}
+
+const absurdities: List<(Never) => String> = [absurd, described, { nothing => described nothing }]
+print absurdities.length()
+print wrapped(1), described(3)
+print pick(false)

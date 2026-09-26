@@ -3278,6 +3278,10 @@ fn conversionType(
  */
 public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: Span): Bool {
   if checker.absorbs(found) || checker.isBroken(expected) {
+    // `Never` fits and decides nothing, except for a variable nothing else decides either (`fallsBackToNever`)
+    if found == checker.neverType && !checker.isBroken(expected) {
+      const _ = unify checker, found, expected
+    }
     return true
   }
   // Unification is the exact step: it solves the variables of this statement and nothing else

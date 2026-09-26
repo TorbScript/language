@@ -251,6 +251,23 @@ public fn closeInference(var checker: Checker) {
   checker.hasVariables = false
 }
 
+/** A `Never` met by an open variable that has no fallback yet: `Never` becomes its fallback. */
+fn fallsBackToNever(var checker: Checker, never: TypeId, other: TypeId): Bool {
+  if never != checker.neverType {
+    return false
+  }
+  const variable = match openVariableOf(checker, other) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if checker.variables[variable.value].fallback.isNone() {
+    checker.fallBackTo variable, never
+  }
+  true
+}
+
 /** The message for every variable that is still open at the end of the statement that made it. */
 fn settleVariables(var checker: Checker, start: Int) {
   var index = start
@@ -526,6 +543,12 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
     return true
   }
   if checker.absorbs(one) || checker.absorbs(other) {
+    // `Never` fits everywhere and decides nothing - except where nothing else decides the variable either: then the value
+    // that never arrives is all the statement says about it, so `described(nothing)` with `nothing: Never` is
+    // `described<Never>`. A fallback and not a solution, so `[fail(), 1]` is still a `List<Int64>`
+    if fallsBackToNever(checker, one, other) || fallsBackToNever(checker, other, one) {
+      return true
+    }
     // A variable that meets something broken is never solved, and its "Cannot infer" would be a second message about
     // what was reported where it broke
     if const Some(variable) = openVariableOf(checker, one) {
