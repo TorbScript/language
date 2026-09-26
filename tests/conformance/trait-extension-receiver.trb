@@ -1,0 +1,110 @@
+/**
+ * A member of an `extend` whose target is a trait takes its receiver as a value of that trait, so whatever implements
+ * the trait is handed over as one: a record is boxed with its table, a value of another trait is narrowed to the table
+ * of the supertrait it carries. Of two extensions that bring the same member, the more specific one answers - the
+ * extension of the receiver's own type before one of a trait, and the extension of a trait before one of its
+ * supertrait - whatever order they are written in. And a generic type's own `self`, or a value its body constructs of
+ * itself, becomes a value of a trait the type implements where one is asked for.
+ */
+
+trait Shape {
+  fn area(): Int
+}
+
+trait Polygon with Shape {
+  fn corners(): Int
+}
+
+extend Shape {
+  fn describe(): String {
+    "a shape of area {area()}"
+  }
+}
+
+extend Polygon {
+  fn describe(): String {
+    "a polygon with {corners()} corners and area {area()}"
+  }
+}
+
+type Circle with Shape {
+  radius: Int
+
+  fn area(): Int {
+    3 * radius * radius
+  }
+}
+
+type Square with Polygon {
+  side: Int
+
+  fn area(): Int {
+    side * side
+  }
+
+  fn corners(): Int {
+    4
+  }
+}
+
+type Triangle with Polygon {
+  base: Int
+  height: Int
+
+  fn area(): Int {
+    base * height / 2
+  }
+
+  fn corners(): Int {
+    3
+  }
+}
+
+extend Triangle {
+  fn describe(): String {
+    "a triangle of area {area()}"
+  }
+}
+
+extend<Item> Iterate<Item> {
+  fn counted(): Int {
+    var total = 0
+    for _ in self {
+      total = total + 1
+    }
+    total
+  }
+}
+
+/** A box that hands itself on as a `Shape`, from the body of a generic type. */
+type Crate<Item> with Shape {
+  item: Item
+  size: Int
+
+  fn area(): Int {
+    size * size
+  }
+
+  fn asShape(): Shape {
+    self
+  }
+
+  fn grown(): Shape {
+    Crate(item, size + 1)
+  }
+}
+
+print Circle(2).describe()
+print Square(3).describe()
+print Triangle(4, 3).describe()
+const polygon: Polygon = Square 5
+print polygon.describe()
+const shape: Shape = Square 6
+print shape.describe()
+
+const numbers: Set<Int> = [1, 2, 3]
+print "{(0..10).counted()} {[1, 2, 3].counted()} {numbers.counted()} {"abc".chars().counted()}"
+print "{[1, 2, 3, 4].map({ _ * 2 }).filter({ _ > 2 }).counted()}"
+
+const crate = Crate "apples", 2
+print "{crate.asShape().area()} {crate.grown().area()} {crate.grown().describe()}"

@@ -575,6 +575,23 @@ fn extensionOf(checker: Checker, symbol: SymbolId): Int? {
 }
 
 /**
+ * The target of the `extend` a member is written in, where that target is a **trait** and the `extend` implements
+ * nothing: `Iterate<Item>` for the `parallel` of `extend<Item> Iterate<Item>`. Such a member takes its receiver as a
+ * value of that trait, which is what a call on any implementer of it has to hand over.
+ */
+public fn traitExtensionTargetOf(checker: Checker, symbol: SymbolId): TypeId? {
+  const index = extensionOf(checker, symbol)?
+  const implementation = checker.implementations.all[index]
+  if implementation.capability.isSome() {
+    return None
+  }
+  if const .Traits(_) = checker.types.form(implementation.target) {
+    return Some implementation.target
+  }
+  None
+}
+
+/**
  * Whether the target of an `extend` is its head over nothing but distinct parameters of its own - `List<Item>`,
  * `Pair<First, Second>`, `Point` - so that the type arguments of an instance say everything about it. A target with a
  * concrete argument (`Holder<Int>`) is named in full instead.

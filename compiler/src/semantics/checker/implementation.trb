@@ -812,6 +812,9 @@ fn matchPattern(
     }
   }
   if pattern == concrete {
+    if !generics.isEmpty() {
+      bindOwnParameters checker, pattern, generics, mapping
+    }
     return true
   }
   match checker.types.form(pattern) {
@@ -875,6 +878,49 @@ fn matchPattern(
       matchPattern checker, form.result, other.result, generics, mapping
     }
     _ => false
+  }
+}
+
+/**
+ * A pattern that is the concrete type itself still binds the parameters it mentions - each to itself. That is the case
+ * inside the body of a generic type: `Box<Item>` is matched against `type Box<Item> with Plan`, whose target is the very
+ * same interned type, and without the binding `Item` would stay open and the implementation would not apply - so
+ * `self`, or a `Box(item)` of the body, handed on as a `Plan` became a trait-typed value nobody built.
+ */
+fn bindOwnParameters(
+  var checker: Checker,
+  pattern: TypeId,
+  generics: List<ParameterId>,
+  var mapping: Map<ParameterId, TypeId>,
+) {
+  match checker.types.form(pattern) {
+    .Parameter(parameter) => {
+      if generics.contains(parameter) && !mapping.containsKey(parameter) {
+        mapping.set parameter, pattern
+      }
+    }
+    .Nominal(_, arguments) => {
+      for argument in arguments {
+        bindOwnParameters checker, argument, generics, mapping
+      }
+    }
+    .Traits(bounds) => {
+      for bound in bounds {
+        bindOwnParameters checker, bound, generics, mapping
+      }
+    }
+    .Tuple(fields) => {
+      for field in fields {
+        bindOwnParameters checker, field.annotation, generics, mapping
+      }
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        bindOwnParameters checker, parameter.annotation, generics, mapping
+      }
+      bindOwnParameters checker, form.result, generics, mapping
+    }
+    _ => {}
   }
 }
 
@@ -2602,6 +2648,15 @@ fn isProvidedOtherwise(var checker: Checker, index: Int, bound: TypeId): Bool {
     Some(found) => found
     None => {
       return true
+    }
+  }
+  // `extend<Item> List<Item> with Cut<Item, ArrayList<Item>>`, where `Cut` requires `Iterate<Item>`: the target is a
+  // trait that requires `Iterate<Item>` itself, so every value the implementation applies to has it
+  if const .Traits(bounds) = checker.types.form(implementation.target) {
+    for own in bounds {
+      if sameType(checker.types, own, bound) || isSupertraitOfBound(checker, own, bound, implementation.target) {
+        return true
+      }
     }
   }
   derivableMembers(checker, implementation.target, capability, Some(bound)).isSome()

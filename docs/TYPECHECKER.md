@@ -466,7 +466,12 @@ gap 4 decided it.)
 Shadowing: a nested scope may shadow, the same scope may not redeclare ("`x` is declared twice in this scope").
 Shadowing a prelude name is allowed. An implicit parameter name from a function type that would shadow a visible name
 is an error. Two visible extensions that bring the same member for the same type are an error _at the use_, with the
-two modules named and `as` offered as the fix.
+two modules named and `as` offered as the fix - unless one is more specific than the other, which then answers: an
+extension of the receiver's own type before one of a trait it implements, and an extension of a trait before one of a
+trait every value of the first has (a supertrait, or one implemented for it). That is how `extend<Item> Iterate<Item>`
+gives every iterable a `parallel()` while `extend<Item> List<Item>` and `extend<Item, Piece> Cut<Item, Piece>` give lists
+and ranges their own (`semantics/checker/member.trb`, `isMoreSpecificExtension`). The receiver of a member of an
+extension of a trait is a value of that trait, so the lowering boxes or narrows whatever it is reached on.
 
 A name that is not found gets the best available note: a member of an outer receiver ("`count` is a field of
 `Report`; only the innermost receiver is implicit"), a case written bare ("A case is written `.Circle` or

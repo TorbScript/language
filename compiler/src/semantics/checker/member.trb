@@ -10,8 +10,8 @@
  * 6. the generated members: `copy`, and the members of a derived implementation
  *
  * Steps 3 and 4 are the `extend` visibility rule of the concept, and two visible extensions that bring the same member
- * for the same type are an ambiguity error *at the use* - which is why the lookup collects candidates instead of
- * stopping at the first hit.
+ * for the same type are an ambiguity error *at the use*, unless one is more specific than the other - which is why the
+ * lookup collects candidates instead of stopping at the first hit.
  */
 
 use Span from "../../syntax/source"
@@ -27,7 +27,7 @@ use substitute, substituteFunction, substituteBounds, sameType, hasVariable from
 use resolveTrait, resolveBound, traitsOf, traitArgumentsOf, isSupertraitOfBound from "./implementation"
 use requiresTraitName, isNamedHere from "./implementation"
 use inherentExtensionsOf, extensionMemberOf, mappingOfImplementation, buildImplementations from "./implementation"
-use importPathOf, hasParameter, isConcrete from "./implementation"
+use importPathOf, hasParameter, isConcrete, targetShapeOf from "./implementation"
 use requireVisibleMember from "./declaration"
 
 /**
@@ -278,8 +278,8 @@ fn nominalMember(
  */
 fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
   const extensions = inherentExtensionsOf checker, receiver
-  var found: Candidate? = None
-  var first: ModuleId? = None
+  var best = -1
+  var bestMember: SymbolId? = None
   var second: ModuleId? = None
   for index in extensions {
     const member = match extensionMemberOf(checker, index, receiver, name) {
@@ -289,25 +289,60 @@ fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStati
       }
     }
     const module = checker.implementations.all[index].module
-    if found.isSome() {
-      if first != Some(module) {
+    if best >= 0 {
+      // The more specific of two extensions is the answer and no ambiguity: see `isMoreSpecificExtension`
+      if isMoreSpecificExtension(checker, index, best) {
+        best = index
+        bestMember = Some member
+        second = None
+      } else if !isMoreSpecificExtension(checker, best, index) && checker.implementations.all[best].module != module {
         second = Some module
       }
       continue
     }
-    const mapping = mappingOfImplementation checker, index, receiver
-    const own = mapping.length()
-    first = Some module
-    found = Some(
-      memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct).copy(module: Some(module))
-    )
+    best = index
+    bestMember = Some member
   }
+  const member = bestMember?
+  const module = checker.implementations.all[best].module
   if const Some(other) = second {
     if const Some(span) = at {
-      reportAmbiguousExtension(checker, name, first ?? other, other, span)
+      reportAmbiguousExtension checker, name, module, other, span
     }
   }
-  found
+  const mapping = mappingOfImplementation checker, best, receiver
+  const own = mapping.length()
+  Some memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct).copy(module: Some(module))
+}
+
+/**
+ * Whether one `extend` that brings a member is more specific than another that brings the same name: an extension of
+ * the receiver's own type beats one of a trait it implements, and an extension of a trait beats one of a trait that
+ * every value of the first one has - a supertrait, or a trait implemented for it. So
+ * `extend<Item> Iterate<Item> { fn parallel() }` is what every iterable gets, and an `extend<Item> List<Item>` or an
+ * `extend<Item, Piece> Cut<Item, Piece>` beside it is what a list or a collection that cuts itself gets instead - the
+ * rule `ownOfTwo` states for two implementations of one trait.
+ */
+fn isMoreSpecificExtension(var checker: Checker, candidate: Int, other: Int): Bool {
+  const candidateTarget = checker.implementations.all[candidate].target
+  const otherTarget = checker.implementations.all[other].target
+  match (targetShapeOf(checker, candidateTarget), targetShapeOf(checker, otherTarget)) {
+    (.Concrete(_), .Bounded(_)) => true
+    (.Bounded(_), .Bounded(base)) => impliesTrait checker, candidateTarget, base
+    _ => false
+  }
+}
+
+/** Whether every value of a trait type has another trait too: a supertrait of it, or one implemented for it. */
+fn impliesTrait(var checker: Checker, target: TypeId, capability: SymbolId): Bool {
+  for bound in traitsOf(checker, target) {
+    if const .Nominal(symbol, _) = checker.types.form(bound) {
+      if symbol == capability {
+        return true
+      }
+    }
+  }
+  false
 }
 
 fn reportAmbiguousExtension(var checker: Checker, name: String, first: ModuleId, second: ModuleId, at: Span) {

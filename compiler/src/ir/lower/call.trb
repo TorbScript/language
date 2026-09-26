@@ -47,6 +47,8 @@ use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot, constantSlo
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember, dispatchedOn, preludeType, lowerTraitValue, boundsOfTraitValue from "./generic"
+use objectTypeOf from "./generic"
+use traitExtensionTargetOf from "../instantiate"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
 use isAssertion, lowerAssertion from "./quote"
@@ -239,14 +241,20 @@ fn lowerCallable(
       places.append Some(path.reference)
       taken.appendAll path.taken
     } else {
-      const receiver = match receiverSlot(lowering, builder, callee) {
+      const reached = match receiverSlot(lowering, builder, callee) {
         Some(found) => found
         None => {
           const what = "a receiver the back end cannot reach"
           return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      operands.append receiver
+      const coerced = match receiverOfTraitExtension(lowering, builder, reached, dispatched, receiver, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      operands.append coerced
       places.append None
     }
   }
@@ -262,6 +270,49 @@ fn lowerCallable(
   const result = lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
   putBackElements lowering, builder, taken
   result
+}
+
+/**
+ * The receiver of a member of an `extend` whose target is a **trait** - `extend<Item> Iterate<Item> { fn parallel() }` -
+ * as the trait-typed value that member takes. Its `self` is a value of the trait, so a `Range<Int>`, a `Set<Int>` or a
+ * `List<Int>` it is reached on is boxed with its table, or narrowed to the table of the supertrait it carries, exactly as
+ * an argument is coerced where the parameter names the trait. A receiver that already is that trait-typed value, and
+ * every other member, goes in as it is.
+ */
+fn receiverOfTraitExtension(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  slot: Slot,
+  dispatched: Dispatched,
+  receiver: TypeId?,
+  at: Span,
+): Slot? {
+  const written = match receiver {
+    Some(found) => found
+    None => {
+      return Some slot
+    }
+  }
+  const target = match traitExtensionTargetOf(lowering.checker, dispatched.member) {
+    Some(found) => found
+    None => {
+      return Some slot
+    }
+  }
+  const wanted = substituted lowering, substitute(lowering.checker.types, target, dispatched.mapping)
+  const source = substituted lowering, written
+  if wanted == source {
+    return Some slot
+  }
+  const bounds = boundsOfTraitValue lowering, wanted
+  if bounds.isEmpty() {
+    return Some slot
+  }
+  const boxed = addTemporary builder, objectTypeOf(lowering, bounds)
+  if !lowerTraitValue(lowering, builder, boxed, slot, bounds, source, at) {
+    return None
+  }
+  Some boxed
 }
 
 /**
