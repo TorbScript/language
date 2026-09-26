@@ -1,0 +1,108 @@
+/**
+ * The contract of `Merge` for every collector of `std/iteration` that has one (docs/design/CONCURRENCY.md section 5,
+ * slice B): the output of one run over the first piece of an input, merged with the output of one run over the rest,
+ * is the output of one run over the whole input - for every place the input is cut at, as long as neither piece is
+ * empty, because a piece that received no value is never merged.
+ */
+
+use test, group from "std/test"
+use Merge, counting, summing, minBy, maxBy, joining, partitioningBy, groupingBy, listing, mergingCollector from "std/iteration"
+
+/** Whether cutting `items` anywhere and merging the two runs answers what one run over all of them answers. */
+fn mergesEverywhere<Item, Output: Equals>(collector: Merge<Item, Output>, items: List<Item>): Bool {
+  const whole = items.collect collector
+  for border in 1..items.length() {
+    const first = items.slice(0..border).collect(collector)
+    const second = items.slice(border..items.length()).collect(collector)
+    if collector.merge(first, second) != whole {
+      return false
+    }
+  }
+  true
+}
+
+/** Whether three pieces merge to the same output whichever two are merged first. */
+fn mergesAssociatively<Item, Output: Equals>(collector: Merge<Item, Output>, first: List<Item>, second: List<Item>, third: List<Item>): Bool {
+  const one = first.collect collector
+  const two = second.collect collector
+  const three = third.collect collector
+  collector.merge(collector.merge(one, two), three) == collector.merge(one, collector.merge(two, three))
+}
+
+const numbers = [5, 3, 8, 3, 9, 1, 8, 2]
+const words = ["pear", "fig", "plum", "kiwi", "date"]
+
+group "the merge of a collector is one run over the concatenation" {
+  test "listing concatenates" {
+    assert mergesEverywhere(listing<Int>(), numbers)
+    assert mergesAssociatively(listing<Int>(), [1], [2, 3], [4])
+  }
+
+  test "counting adds the counts" {
+    assert mergesEverywhere(counting<Int>(), numbers)
+    assert(counting<Int>().merge(2, 3) == 5)
+  }
+
+  test "summing adds the sums" {
+    assert mergesEverywhere(summing { value: Int => value * 2 }, numbers)
+    assert mergesAssociatively(summing { value: Int => value }, [1, 2], [3], [4, 5])
+  }
+
+  test "minBy keeps the earlier of two equal keys across the border" {
+    const byTens = minBy { value: Int => value / 10 }
+    const everywhere = mergesEverywhere byTens, [15, 12, 31, 17, 11]
+    const merged = byTens.merge Some(15), Some(12)
+    assert everywhere
+    assert(merged == Some(15))
+    assert mergesEverywhere(minBy { value: Int => value }, numbers)
+  }
+
+  test "maxBy keeps the earlier of two equal keys across the border" {
+    const byTens = maxBy { value: Int => value / 10 }
+    const everywhere = mergesEverywhere byTens, [15, 32, 31, 17, 38]
+    const merged = byTens.merge Some(32), Some(38)
+    assert everywhere
+    assert(merged == Some(32))
+    assert mergesEverywhere(maxBy { value: Int => value }, numbers)
+  }
+
+  test "joining strips the suffix and the prefix and puts the separator between" {
+    assert mergesEverywhere(joining(), words)
+    assert mergesEverywhere(joining(", "), words)
+    assert mergesEverywhere(joining(separator: " | ", prefix: "<<", suffix: ">>"), words)
+    assert mergesAssociatively(joining(separator: "-", prefix: "[", suffix: "]"), ["a"], ["b", "c"], ["d"])
+    assert(joining(separator: ", ", prefix: "[", suffix: "]").merge("[a, b]", "[c]") == "[a, b, c]")
+  }
+
+  test "partitioningBy concatenates both lists" {
+    const everywhere = mergesEverywhere(partitioningBy { value: Int => value % 2 == 0 }, numbers)
+    assert everywhere
+  }
+
+  test "groupingBy concatenates the lists of a key and keeps the order of first sight" {
+    const byLength = groupingBy { word: String => word.byteLength() }
+    const everywhere = mergesEverywhere byLength, words
+    assert everywhere
+    const merged = byLength.merge(["fig"].collect(byLength), ["pear", "ox", "plum"].collect(byLength))
+    assert(merged.keys().toList() == [3, 4, 2])
+    assert(merged[4] == ["pear", "plum"])
+  }
+
+  test "mergingCollector merges with the closure it was given" {
+    const averaged = mergingCollector((0, 0), finish: { _ }, merge: { first, second =>
+      (first.0 + second.0, first.1 + second.1)
+    }) { state, value: Int => (state.0 + value, state.1 + 1) }
+    const everywhere = mergesEverywhere averaged, numbers
+    const total = numbers.collect averaged
+    assert everywhere
+    assert(total == (39, 8))
+  }
+}
+
+group "a collector with a merge is still an accumulator" {
+  test "the sequential terminals take it as they took it before" {
+    assert(numbers.collect(counting()) == 8)
+    assert(words.collect(joining(", ")) == "pear, fig, plum, kiwi, date")
+    assert(numbers.collect(groupingBy { value: Int => value % 2 }.then(counting())) == [1: 5, 0: 3])
+  }
+}

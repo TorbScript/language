@@ -73,6 +73,38 @@ public trait Accumulator<Item, Output> {
   }
 }
 
+/**
+ * Two partial results of one accumulator, joined: what lets an accumulator run over pieces of its input - the chunks of
+ * `parallel()`, a divide-and-conquer fold, a map-reduce over the parts of a file - and still answer what one run over the
+ * whole input answers.
+ *
+ * The contract is three lines. **`merge` is associative**: `merge(merge(a, b), c)` is `merge(a, merge(b, c))`. It need
+ * not be commutative, because **it is called in the order of the pieces**, left to right. And **it is never called with
+ * the output of a piece that received no value**: such a piece is skipped, and an input without any value takes the
+ * accumulator's own `finish()` instead. That third line is what makes `joining(separator:, prefix:, suffix:)` mergeable
+ * at all - without it every merge would have to decide whether a separator belongs between two pieces one of which is
+ * not there.
+ *
+ * It joins two **outputs** and not two accumulators: two trait-typed accumulators need not have the same type, and the
+ * output is what comes back from wherever a piece ran anyway. A collector whose output lost what a merge would need -
+ * [averaging], whose count is gone once it divided - has none; the shape of the workaround is a [mergingCollector] whose
+ * output keeps it.
+ *
+ * # Examples
+ *
+ *     const counter = counting<Int>()
+ *     print counter.merge([1, 2].collect(counter), [3].collect(counter))
+ *
+ * # Related
+ *
+ * - [mergingCollector] - a fold with a final step and a merge, the way to write one.
+ * - [Accumulator] - what it adds the merge to.
+ */
+public trait Merge<Item, Output> with Accumulator<Item, Output> {
+  /** The output of the pieces before and the output of the piece after them, joined. */
+  fn merge(first: Output, second: Output): Output
+}
+
 // --- Collecting into collections ------------------------------------------------------------------
 
 /**
@@ -93,8 +125,8 @@ public fn into<Target: From<Iterate<Item>>, Item>(): Accumulator<Item, Target> {
   IntoAccumulator<Item, Target>()
 }
 
-/** Shorthand for `ListAccumulator<Item>()`, which is what a pipeline ends in most often. */
-public fn listing<Item>(): Accumulator<Item, List<Item>> {
+/** Shorthand for `ListAccumulator<Item>()`, which is what a pipeline ends in most often. Two lists merge by concatenation. */
+public fn listing<Item>(): Merge<Item, List<Item>> {
   ListAccumulator<Item>()
 }
 
@@ -106,7 +138,7 @@ public fn listing<Item>(): Accumulator<Item, List<Item>> {
  *
  *     print [3, 1, 2].collect(ListAccumulator<Int>())
  */
-public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
+public type ListAccumulator<Item> with Merge<Item, List<Item>> {
   private var items: List<Item> = []
 
   /** Appends to the list that is being gathered. */
@@ -117,6 +149,11 @@ public type ListAccumulator<Item> with Accumulator<Item, List<Item>> {
   /** The list, as it stands after the last `add`. */
   fn finish(): List<Item> {
     items
+  }
+
+  /** The two lists one after the other. */
+  fn merge(first: List<Item>, second: List<Item>): List<Item> {
+    first.appendedAll second
   }
 }
 
@@ -164,16 +201,59 @@ type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
   }
 }
 
-// --- Aggregates ------------------------------------------------------------------------------------------
-
-/** How many values there are. */
-public fn counting<Item>(): Accumulator<Item, Int> {
-  collector(0, finish: { _ }) { count, _ => count + 1 }
+/**
+ * [collector] with a [Merge]: `merge` joins the outputs of two pieces of the input, in their order, and is never handed
+ * the output of a piece that received no value. It has to be associative, so that the answer does not depend on where
+ * the pieces were cut.
+ *
+ * An average merges once its output keeps the count:
+ *
+ *     const averaged = mergingCollector((0.0, 0), finish: { _ }, merge: { first, second =>
+ *       (first.0 + second.0, first.1 + second.1)
+ *     }) { state, value: Float => (state.0 + value, state.1 + 1) }
+ *     const total = [1.0, 2.0, 6.0].collect(averaged)
+ *     print(total.0 / Float.from(total.1))
+ */
+public fn mergingCollector<Item, State, Output>(
+  initial: State,
+  finish: (State) => Output,
+  merge: (Output, Output) => Output,
+  step: (State, Item) => State,
+): Merge<Item, Output> {
+  MergingFoldAccumulator initial, step, finish, merge
 }
 
-/** Every value, added together, starting from zero. */
-public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Accumulator<Item, Total> {
-  collector(Total.from(0), finish: { _ }) { sum, item => sum + value(item) }
+type MergingFoldAccumulator<Item, State, Output> with Merge<Item, Output> {
+  var state: State
+  step: (State, Item) => State
+  complete: (State) => Output
+  combine: (Output, Output) => Output
+
+  var fn add(value: Item) {
+    state = step(state, value)
+  }
+
+  fn finish(): Output {
+    complete(state)
+  }
+
+  fn merge(first: Output, second: Output): Output {
+    combine(first, second)
+  }
+}
+
+// --- Aggregates ------------------------------------------------------------------------------------------
+
+/** How many values there are. Two counts merge by `+`. */
+public fn counting<Item>(): Merge<Item, Int> {
+  mergingCollector(0, finish: { _ }, merge: { first, second => first + second }) { count, _ => count + 1 }
+}
+
+/** Every value, added together, starting from zero. Two sums merge by `+`. */
+public fn summing<Item, Total: Add & From<Int>>(value: Transform<Item, Total>): Merge<Item, Total> {
+  mergingCollector(Total.from(0), finish: { _ }, merge: { first, second => first + second }) { sum, item =>
+    sum + value(item)
+  }
 }
 
 /** `None` for an empty pipeline. */
@@ -183,25 +263,41 @@ public fn averaging<Item>(value: Transform<Item, Float>): Accumulator<Item, Floa
   }
 }
 
-/** The value with the smallest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?> {
+/**
+ * The value with the smallest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys, and so does
+ * its merge: the second piece's value wins only with a smaller key.
+ */
+public fn minBy<Item, Key: Compare>(key: Transform<Item, Key>): Merge<Item, Item?> {
   const initial: Item? = None
-  collector(initial, finish: { _ }) { best, item =>
+  const earlier = { best: Item?, item: Item =>
     match best {
       Some(current) if key(current).compare(key(item)) != .Greater => best
       _ => Some item
     }
   }
+  mergingCollector(initial, finish: { _ }, merge: { first, second => keptOf first, second, earlier }, step: earlier)
 }
 
-/** The value with the largest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
-public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item, Item?> {
+/**
+ * The value with the largest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys, and so does
+ * its merge: the second piece's value wins only with a larger key.
+ */
+public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Merge<Item, Item?> {
   const initial: Item? = None
-  collector(initial, finish: { _ }) { best, item =>
+  const earlier = { best: Item?, item: Item =>
     match best {
       Some(current) if key(current).compare(key(item)) != .Less => best
       _ => Some item
     }
+  }
+  mergingCollector(initial, finish: { _ }, merge: { first, second => keptOf first, second, earlier }, step: earlier)
+}
+
+/** The merge of [minBy] and [maxBy]: the second piece's value, stepped into the first piece's best. */
+fn keptOf<Item>(first: Item?, second: Item?, step: (Item?, Item) => Item?): Item? {
+  match second {
+    Some(item) => step first, item
+    None => first
   }
 }
 
@@ -211,19 +307,36 @@ public fn maxBy<Item, Key: Compare>(key: Transform<Item, Key>): Accumulator<Item
  * It buffers the pieces and concatenates once at the end, for the reason `concatenated` gives: a `String` is a value, so
  * appending to one copies everything that is already in it.
  */
-public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Accumulator<String, String> {
+public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Merge<String, String> {
   const initial: List<String> = []
-  collector(initial, finish: { parts => prefix + concatenated(parts, separator) + suffix }) { parts, part =>
+  const finish = { parts: List<String> => prefix + concatenated(parts, separator) + suffix }
+  const merge = { first: String, second: String => joinedPieces first, second, separator, prefix, suffix }
+  mergingCollector initial, finish: finish, merge: merge { parts, part =>
     parts.appended part
   }
 }
 
-/** `(matching, rest)` */
-public fn partitioningBy<Item>(predicate: Predicate<Item>): Accumulator<Item, (List<Item>, List<Item>)> {
+/**
+ * The merge of [joining]: the suffix of the first piece and the prefix of the second one come off, the separator goes
+ * between them, and the whole is wrapped once. Neither piece is empty, so the separator always belongs there.
+ */
+fn joinedPieces(first: String, second: String, separator: String, prefix: String, suffix: String): String {
+  const head = first.sliceBytes(0, first.byteLength() - suffix.byteLength())
+  const tail = second.sliceBytes prefix.byteLength(), second.byteLength()
+  head + separator + tail
+}
+
+/** `(matching, rest)`. Two pairs merge list by list. */
+public fn partitioningBy<Item>(predicate: Predicate<Item>): Merge<Item, (List<Item>, List<Item>)> {
   const initial: (List<Item>, List<Item>) = ([], [])
-  collector(initial, finish: { _ }) { lists, item =>
+  mergingCollector(initial, finish: { _ }, merge: { mergedPairs _, _2 }) { lists, item =>
     if predicate(item) { (lists.0.appended(item), lists.1) } else { (lists.0, lists.1.appended(item)) }
   }
+}
+
+/** The merge of [partitioningBy]: the matching lists concatenated, and the rest. */
+fn mergedPairs<Item>(first: (List<Item>, List<Item>), second: (List<Item>, List<Item>)): (List<Item>, List<Item>) {
+  (first.0.appendedAll(second.0), first.1.appendedAll(second.1))
 }
 
 // --- Grouping, with a downstream collector per group -----------------------------------------------------------
@@ -240,8 +353,12 @@ public fn groupingBy<Item, Key: Hash>(key: Transform<Item, Key>): Grouping<Item,
 /**
  * The result of [groupingBy] before a downstream accumulator is chosen: an `Accumulator` on its own, into
  * `Map<Key, List<Item>>`, and the place `then(downstream)` sits to collect each group differently.
+ *
+ * Two maps of it merge key by key: the lists of a key both pieces saw are concatenated, and a key only the second piece
+ * saw comes after the first piece's keys - the order of first sight a single run has. What `then(downstream)` answers
+ * has no merge, because the downstream it keeps is an `Accumulator` and not necessarily one with a [Merge].
  */
-public type Grouping<Item, Key: Hash> with Accumulator<Item, Map<Key, List<Item>>> {
+public type Grouping<Item, Key: Hash> with Merge<Item, Map<Key, List<Item>>> {
   /** Picks the group a value belongs to. */
   key: Transform<Item, Key>
   private var lists: GroupingAccumulator<Item, Key, List<Item>>
@@ -254,6 +371,19 @@ public type Grouping<Item, Key: Hash> with Accumulator<Item, Map<Key, List<Item>
   /** A `List` per key, in the order the keys were first seen. */
   fn finish(): Map<Key, List<Item>> {
     lists.finish()
+  }
+
+  /** The groups of the second map appended to those of the first one, key by key. */
+  fn merge(first: Map<Key, List<Item>>, second: Map<Key, List<Item>>): Map<Key, List<Item>> {
+    var merged = first
+    for entry in second {
+      if merged.containsKey(entry.key) {
+        merged[entry.key].appendAll(entry.value)
+      } else {
+        merged[entry.key] = entry.value
+      }
+    }
+    merged
   }
 
   /** Runs `downstream` once per group instead of collecting each one into a `List`. */

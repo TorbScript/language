@@ -1,0 +1,48 @@
+/**
+ * `parallel()` on every kind of input answers what the sequential pipeline answers, in input order: a `Range` cut
+ * arithmetically, a `List` and an `Array` cut into lists, and a `Set`, a `Map`, the characters of a `String` and a
+ * pipeline read into a list once and then cut. The stages of one pipeline run in one pass per chunk, and `collect` joins
+ * the chunks with the collector's `merge`. The program runs with four workers and again with one
+ * (`parallel-sources.workers`) and prints the same bytes both times, because the chunk borders depend on the length of
+ * the input alone.
+ */
+
+fn collatz(start: Int): Int {
+  var steps = 0
+  var value = start
+  while value != 1 {
+    value = if value.remainder(2) == 0 { value / 2 } else { 3 * value + 1 }
+    steps = steps + 1
+  }
+  steps
+}
+
+const range = 1..200000
+const fused = range.parallel().map({ collatz _ }).filter({ _ > 100 }).sum().await()
+print "range: {fused}, the same as the sequential pipeline: {fused == range.map({ collatz _ }).filter({ _ > 100 }).sum()}"
+
+const inclusive = (0..=20).parallel(chunk: Some(3)).map({ _ * _ }).toList().await()
+print "an inclusive range in order: {inclusive}"
+
+const array: Array<Int, 6> = [6, 5, 4, 3, 2, 1]
+print "array: {array.parallel().map({ _ * 10 }).toList().await()}"
+
+const numbers: Set<Int> = [8, 3, 5, 13, 21, 1, 2]
+print "set: {numbers.parallel().filter({ _ % 2 == 1 }).toList().await()}"
+
+const ages = ["Ada": 36, "Alan": 41, "Grace": 45, "Edsger": 72]
+const elders = ages.parallel().filter({ _.value > 40 }).map({ "{_.key} {_.value}" }).toList().await()
+print "map: {elders}"
+
+const text = "one thing going faster"
+print "characters: {text.chars().parallel().filter({ _ != ' ' }).count().await()} letters"
+
+const squares = (1..).map({ _ * _ }).take(20)
+print "pipeline: {squares.parallel().filterMap({ if _ % 2 == 0 { Some(_ / 2) } else { None } }).toList().await()}"
+
+const words = (1..=30).map({ "w{_}" }).toList()
+print "collect: {words.parallel().filter({ _.endsWith "0" }).collect(joining(separator: ", ", prefix: "[", suffix: "]")).await()}"
+const grouped = words.parallel().collect(groupingBy { word: String => word.byteLength() }).await()
+print "grouped: {grouped.map({ "{_.key}: {_.value.length()}" }).toList()}"
+print "minBy: {words.parallel().minBy({ collatz(_.byteLength() + 5) }).await() ?? "none"}"
+print "find: {range.parallel().find({ collatz(_) > 300 }).await() ?? 0}"

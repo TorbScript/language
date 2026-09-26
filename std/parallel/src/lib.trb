@@ -1,40 +1,50 @@
 /**
- * One thing going faster: [Parallel], a pipeline whose stages run on the workers of the pool, and the `parallel()` that
- * starts one from anything that can be iterated.
+ * One thing going faster: [Parallel], a pipeline whose stages run on the workers of the pool, the `parallel()` that
+ * starts one from anything that can be iterated, and [Cut], what a collection implements to be cut into chunks without
+ * being copied first.
  *
- *     const squares = (0..1000).toList().parallel().map({ _ * _ }).toList().await()
+ *     const squares = (0..1000).parallel().map({ _ * _ }).toList().await()
  *     print squares.length()
  *
- * The words are the ones of the sequential pipeline - `map`, `filter`, `filterMap`, `toList`, `count`, `sum`, `find`,
- * `forEach` - and a terminal answers a `Task`, because the work runs while the caller's worker is free to do something
- * else. Results arrive in input order, always: the input is cut into chunks whose borders depend on its length alone (at
- * most 64 of them), every chunk runs as a task an idle worker may take, and the chunks are read back in order. So the
- * answer never depends on the number of workers, the load of the machine or which chunk finished first
- * (docs/design/CONCURRENCY.md section 4).
+ * The words are the ones of the sequential pipeline - `map`, `filter`, `filterMap`, `collect`, `toList`, `count`, `sum`,
+ * `minBy`, `maxBy`, `find`, `forEach` - and a terminal answers a `Task`, because the work runs while the caller's worker
+ * is free to do something else. Results arrive in input order, always: the input is cut into chunks whose borders depend
+ * on its length alone (at most 64 of them), every chunk runs as a task an idle worker may take, and the chunks are read
+ * back in order. So the answer never depends on the number of workers, the load of the machine or which chunk finished
+ * first (docs/design/CONCURRENCY.md section 4).
+ *
+ * **Where the chunks come from.** A [Cut] cuts itself: a `List` and an `Array` into lists of their items, a `Range` of
+ * integers arithmetically into smaller ranges - `(0..1000000).parallel()` never builds a list of a million numbers.
+ * Everything else that can be iterated - a `Set`, a `Map`, the characters of a `String`, a pipeline, a type of the
+ * program's own - is read once into a list, which is then cut the same way. Either way the borders are the same function
+ * of the length, so the answer is too.
+ *
+ * **One pass per chunk.** The stages of a pipeline are fused: `map` followed by `filter` runs every chunk once, item by
+ * item through both closures, and builds no list between them. What a chunk hands back is what the terminal keeps of
+ * it - its items for `toList`, a number for `count` and `sum`, at most one item for `find`, `minBy` and `maxBy`.
  *
  * # Pitfalls
  *
- * - A chunk moves to another worker only where its items and the closures of the pipeline may cross one: plain items
- *   (`Int`, `Float`, a record of those) as they are, `String`s, lists and records of those as a copy made when the
- *   chunk's task starts, and closures that capture nothing counted. A pipeline with a closure that captures a `String`
- *   or a list, or over `shared type` objects, runs its chunks on the caller's worker, one after the other - the same
- *   answer, without the speed-up (docs/design/CONCURRENCY.md section 16, "The copy at the crossing").
+ * - A chunk moves to another worker only where its piece and the closures of the pipeline may cross one: plain items
+ *   (`Int`, `Float`, a range, a record of those) as they are, `String`s, lists, variants and records of those as a copy
+ *   made when the chunk's task starts, and so is the environment of a closure that captures them. A pipeline over
+ *   `shared type` objects, or with a closure that captures one, a `var` or a trait-typed value, runs its chunks on the
+ *   caller's worker, one after the other - the same answer, without the speed-up (docs/design/CONCURRENCY.md section 16,
+ *   "The copy at the crossing").
+ * - `collect` runs the stages on the workers and the accumulator on the caller's worker, one chunk after the other,
+ *   joining the chunks' outputs with the accumulator's `merge`: an accumulator is a trait-typed value, which cannot
+ *   cross to another worker yet.
  * - Cancelling the task a terminal answers stops every chunk at its next suspension point or loop turn.
- *
- * # Open
- *
- * - Every stage is a fork-join of its own: `map` followed by `filter` runs the chunks twice, and the chunks the first
- *   stage produced are copied into the second. Fusing the stages of one pipeline into one pass needs a generic member
- *   through the pipeline value, which the C back end does not have yet.
- * - `collect` with a `Merge` and `minBy` are not here yet: the `Merge` trait of the design is not in `std/iteration`.
  *
  * # Related
  *
  * - [Workers.count] - how many workers the pool has, which is what `workers:` defaults to.
+ * - [Merge] - what `collect` needs of an accumulator.
  * - [spawn] - one task, where `parallel()` is many of the same.
  */
 
 use Workers from "std/task"
+use Merge from "std/iteration"
 
 /**
  * How many chunks the input is cut into where `chunk:` does not say: enough to balance the machines that exist, few
@@ -44,45 +54,189 @@ use Workers from "std/task"
 const defaultChunkCount = 64
 
 /**
- * A pipeline whose stages run on several workers, with the results in input order. Made by `parallel()` on anything
- * that can be iterated; nothing runs until a terminal - `toList`, `count`, `sum`, `find`, `forEach` - is called, and
- * the terminal answers a `Task`.
+ * A collection that cuts itself into pieces without being read first: its length, and the piece of it the positions of
+ * a range cover. `parallel()` cuts one into chunks by its length alone; anything else is read into a list first.
+ *
+ * `Piece` is whatever carries a part of the collection best - a `List` and an `Array` answer an `ArrayList` of the items,
+ * which a worker may take as it is, and a `Range` of integers answers a smaller range, so cutting it costs two additions.
+ * What a chunk crosses to another worker as is the piece, which is why it is a type of its own rather than `Self`.
  *
  * # Examples
  *
- *     const total = (1..=100).toList().parallel().map({ _ * 2 }).sum().await()
+ *     type Stretch with Cut<Int, Range<Int>> {
+ *       first: Int
+ *       count: Int
+ *
+ *       fn iterate(): Iterator<Int> {
+ *         (first..(first + count)).iterate()
+ *       }
+ *
+ *       fn length(): Int {
+ *         count
+ *       }
+ *
+ *       fn cut(range: Range<Int>): Range<Int> {
+ *         (first + range.start)..(first + range.end)
+ *       }
+ *     }
+ *
+ *     print Stretch(5, 10).parallel().sum().await()
+ *
+ * # Pitfalls
+ *
+ * - The piece has to hold the same items, in the same order, as iterating the collection over those positions: the
+ *   answer of `parallel()` is the sequential one only if cutting and iterating agree.
+ */
+public trait Cut<Item, Piece: Iterate<Item>> with Iterate<Item>, Length {
+  /** The items at the positions `range` covers, as a piece of their own. `range` lies within `0..length()`. */
+  fn cut(range: Range<Int>): Piece
+}
+
+/** A list cuts into lists of its items: a piece holds nothing the list holds, so a worker may take it as it is. */
+extend<Item> List<Item> with Cut<Item, ArrayList<Item>> {
+  fn cut(range: Range<Int>): ArrayList<Item> {
+    piecePicked range, { self[_] }
+  }
+}
+
+/** An array cuts into lists of its items, the way a list does. */
+extend<Item, const Size: Int> Array<Item, Size> with Cut<Item, ArrayList<Item>> {
+  fn cut(range: Range<Int>): ArrayList<Item> {
+    piecePicked range, { self[_] }
+  }
+}
+
+/** A range of integers cuts into smaller ranges: position `index` is the value `start + index`. */
+extend Range<Int> with Cut<Int, Range<Int>> {
+  fn cut(range: Range<Int>): Range<Int> {
+    (start + range.start)..(start + range.end)
+  }
+}
+
+/** The items at the positions of `range`, read one at a time. */
+fn piecePicked<Item>(range: Range<Int>, at: (position: Int) => Item): ArrayList<Item> {
+  var piece: ArrayList<Item> = ArrayList.withCapacity range.length()
+  for position in range {
+    piece.append at(position)
+  }
+  piece
+}
+
+/** Spreads a pipeline over the workers: anything that can be iterated. */
+extend<Item> Iterate<Item> {
+  /**
+   * This pipeline, spread over the workers: its items are read into a list once, which is cut into `chunk` pieces (at
+   * most 64 where it is `None`, and never more than there are items), and at most `workers` of them run at the same
+   * time. The borders depend on the number of items and on `chunk` alone, never on `workers`, so neither does the answer.
+   *
+   * # Examples
+   *
+   *     const letters: Set<String> = ["a", "bb", "ccc"]
+   *     print letters.parallel(workers: 2).map({ _.byteLength() }).sum().await()
+   */
+  fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item> {
+    const items = ArrayList.from self
+    spread piecesOf(items.length(), chunk, { items.slice _ }), workers
+  }
+}
+
+/** Spreads a collection that cuts itself over the workers, without reading it first. */
+extend<Item, Piece: Iterate<Item>> Cut<Item, Piece> {
+  /**
+   * This collection, spread over the workers: it is cut into `chunk` pieces (at most 64 where it is `None`, and never
+   * more than it has items), and at most `workers` of them run at the same time. The borders depend on `length()` and
+   * `chunk` alone, never on `workers`, so neither does the answer.
+   *
+   * # Examples
+   *
+   *     print (1..=100).parallel(workers: 2).map({ _ * 2 }).sum().await()
+   */
+  fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item> {
+    spread piecesOf(length(), chunk, { cut _ }), workers
+  }
+}
+
+/**
+ * Spreads a list over the workers. A list is a [Cut], and this is that `parallel()` again: a value of the `List` trait
+ * cannot be handed over as a value of `Cut` - `Cut` is implemented for `List` and is no supertrait of it, so no table a
+ * list carries holds it - so it calls its own `cut` instead.
+ */
+extend<Item> List<Item> {
+  /**
+   * This list, spread over the workers: the items are cut into `chunk` pieces (at most 64 where it is `None`, and never
+   * more than there are items), and at most `workers` of them run at the same time. The borders depend on the number of
+   * items and on `chunk` alone, never on `workers`, so neither does the answer.
+   *
+   * # Examples
+   *
+   *     const lengths = ["a", "bb", "ccc"].parallel(workers: 2).map({ _.byteLength() }).toList().await()
+   *     print lengths
+   */
+  fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item> {
+    spread piecesOf(length(), chunk, { cut _ }), workers
+  }
+}
+
+/**
+ * The pieces of an input of `length` items: `count` of them where there are that many items, fewer where there are not,
+ * and none of an empty input. Piece `index` covers `[index * length / count, (index + 1) * length / count)`.
+ */
+fn piecesOf<Piece>(length: Int, chunk: Int?, cut: (range: Range<Int>) => Piece): ArrayList<Piece> {
+  var count = chunk ?? defaultChunkCount
+  if count < 1 {
+    count = 1
+  }
+  if count > length {
+    count = length
+  }
+  var pieces: ArrayList<Piece> = ArrayList.withCapacity count
+  for index in 0..count {
+    pieces.append cut((index * length / count)..((index + 1) * length / count))
+  }
+  pieces
+}
+
+/** A pipeline over `pieces` that has no stage yet, with at most `workers` chunks at a time. */
+fn spread<Piece: Iterate<Item>, Item>(pieces: ArrayList<Piece>, workers: Int): Parallel<Item> {
+  const bound = if workers < 1 { 1 } else { workers }
+  const start: (value: Item) => Item? = { Some _ }
+  Parallel bound, Spread(pieces, start)
+}
+
+/**
+ * A pipeline whose stages run on several workers, with the results in input order. Made by `parallel()` on anything
+ * that can be iterated; nothing runs until a terminal - `toList`, `collect`, `count`, `sum`, `minBy`, `maxBy`, `find`,
+ * `forEach` - is called, and the terminal answers a `Task`. The stages before it run in one pass per chunk.
+ *
+ * # Examples
+ *
+ *     const total = (1..=100).parallel().map({ _ * 2 }).sum().await()
  *     print total
  */
 public type Parallel<Item> {
   /** How many chunks run at the same time: `workers:` of `parallel()`. It moves no border. */
   private limit: Int
-  /** Runs the pipeline up to here and answers the output of every chunk, in input order. */
-  private run: () => Task<ArrayList<ArrayList<Item>>>
+  /** The pieces and the stages fused into one step per item. */
+  private plan: Plan<Item>
 
   /** Every item through `transform`, the chunks on the workers. */
   fn map<Output>(transform: Transform<Item, Output>): Parallel<Output> {
-    const previous = run
-    const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { mapped _, transform }).await() })
+    Parallel limit, plan.mapped(transform)
   }
 
   /** The items for which `predicate` answers `true`, in their order. */
   fn filter(predicate: Predicate<Item>): Parallel<Item> {
-    const previous = run
-    const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { filtered _, predicate }).await() })
+    Parallel limit, plan.filtered(predicate)
   }
 
   /** Every item through `transform`, keeping the values that are there. */
   fn filterMap<Output>(transform: Transform<Item, Output?>): Parallel<Output> {
-    const previous = run
-    const bound = limit
-    Parallel(bound, { spreadAfter(previous(), bound, { filterMapped _, transform }).await() })
+    Parallel limit, plan.filterMapped(transform)
   }
 
   /** Every item, in input order. */
   fn toList(): Task<List<Item>> {
-    const chunks = run().await()
+    const chunks = plan.run(limit, { _ }, undecided, None).await()
     var items: List<Item> = []
     for chunk in chunks {
       items.appendAll chunk
@@ -90,12 +244,46 @@ public type Parallel<Item> {
     items
   }
 
+  /**
+   * The items pushed into `collector`: a copy of it per chunk that received an item, in input order, and the chunks'
+   * outputs joined left to right with its `merge`. A pipeline without any item answers the collector's own `finish()`,
+   * and `merge` never sees the output of a chunk the stages left empty (the contract of [Merge]). The stages run on the
+   * workers; the collector runs on the caller's worker.
+   *
+   * # Examples
+   *
+   *     const words = ["pear", "fig", "plum"]
+   *     print words.parallel().map({ _.byteLength() }).collect(counting()).await()
+   */
+  fn collect<Output>(collector: Merge<Item, Output>): Task<Output> {
+    const chunks = plan.run(limit, { _ }, undecided, None).await()
+    var total: Output? = None
+    for chunk in chunks {
+      if chunk.length() == 0 {
+        continue
+      }
+      var accumulator = collector
+      for item in chunk {
+        accumulator.add item
+        if accumulator.isDone() {
+          break
+        }
+      }
+      const output = accumulator.finish()
+      total = match total {
+        Some(before) => Some collector.merge(before, output)
+        None => Some output
+      }
+    }
+    total ?? collector.finish()
+  }
+
   /** How many items come out of the pipeline. */
   fn count(): Task<Int> {
-    const chunks = run().await()
+    const counts = plan.run(limit, { _.length() }, undecided, None).await()
     var total = 0
-    for chunk in chunks {
-      total = total + chunk.length()
+    for count in counts {
+      total = total + count
     }
     total
   }
@@ -105,23 +293,42 @@ public type Parallel<Item> {
    * same number on every machine, and not the same number as the sequential `sum()`, which adds in another order.
    */
   fn sum(): Task<Item> where Item: Add & From<Int> {
-    const previous = run
-    const chunks = spreadAfter(previous(), limit, { summed _ }).await()
+    const sums = plan.run(limit, { summed _ }, undecided, None).await()
     var total = Item.from 0
-    for chunk in chunks {
-      for value in chunk {
-        total = total + value
-      }
+    for value in sums {
+      total = total + value
     }
     total
   }
 
-  /** The first item in input order for which `predicate` answers `true`, or `None`. */
+  /** The item with the smallest key, or `None`. Of two equal keys the earlier one in input order, as `minBy` answers. */
+  fn minBy<Key: Compare>(key: Transform<Item, Key>): Task<Item?> {
+    const bests = plan.run(limit, { smallest _, key }, undecided, None).await()
+    var best: Item? = None
+    for candidate in bests {
+      best = earlierOrSmaller best, candidate, key
+    }
+    best
+  }
+
+  /** The item with the largest key, or `None`. Of two equal keys the earlier one in input order, as `maxBy` answers. */
+  fn maxBy<Key: Compare>(key: Transform<Item, Key>): Task<Item?> {
+    const bests = plan.run(limit, { largest _, key }, undecided, None).await()
+    var best: Item? = None
+    for candidate in bests {
+      best = earlierOrLarger best, candidate, key
+    }
+    best
+  }
+
+  /**
+   * The first item in input order for which `predicate` answers `true`, or `None`. A chunk stops at its first match, and
+   * no further chunk is started once every chunk before it has answered and one of them found one.
+   */
   fn find(predicate: Predicate<Item>): Task<Item?> {
-    const previous = run
-    const chunks = spreadAfter(previous(), limit, { found _, predicate }).await()
-    for chunk in chunks {
-      if const Some(value) = chunk.first() {
+    const firsts = plan.filtered(predicate).run(limit, { _.first() }, { _.isSome() }, Some(1)).await()
+    for first in firsts {
+      if const Some(value) = first {
         return Some value
       }
     }
@@ -130,158 +337,187 @@ public type Parallel<Item> {
 
   /** Runs `body` for every item, the chunks on the workers. The order in which items of two chunks run is the machine's. */
   fn forEach(body: Action<Item>): Task<Void> {
-    const previous = run
-    const _ = spreadAfter(previous(), limit, { visited _, body }).await()
+    const _ = plan.run(limit, { visited _, body }, undecided, None).await()
   }
 }
 
-/** Spreads a pipeline over the workers. */
-extend<Item> List<Item> {
+/**
+ * The part of a [Parallel] that knows where the items come from: the pieces, and every stage so far fused into one step
+ * per item. A trait, so that the type of the pieces stays out of `Parallel<Item>`.
+ */
+trait Plan<Item> {
+  /** The same pieces, with `transform` after the step. */
+  fn mapped<Output>(transform: Transform<Item, Output>): Plan<Output>
+
+  /** The same pieces, with `predicate` after the step. */
+  fn filtered(predicate: Predicate<Item>): Plan<Item>
+
+  /** The same pieces, with `transform` after the step and its `None`s dropped. */
+  fn filterMapped<Output>(transform: Transform<Item, Output?>): Plan<Output>
+
   /**
-   * This pipeline, spread over the workers: the items are cut into `chunk` pieces (at most 64 where it is `None`, and
-   * never more than there are items), and at most `workers` of them run at the same time. The borders depend on the
-   * number of items and on `chunk` alone, never on `workers`, so neither does the answer.
-   *
-   * # Examples
-   *
-   *     const lengths = ["a", "bb", "ccc"].parallel(workers: 2).map({ _.byteLength() }).toList().await()
-   *     print lengths
+   * Runs every piece as a task, at most `limit` at a time: the step over each of its items, at most `most` items kept,
+   * and `reduce` over what was kept. Answers the chunks' results in input order. No further piece is started once the
+   * results so far, read in order, include one `isDecided` accepts.
    */
-  fn parallel(workers: Int = Workers.count(), chunk: Int? = None): Parallel<Item> {
-    const pieces = piecesOf(self, chunk ?? defaultChunkCount)
-    const bound = if workers < 1 { 1 } else { workers }
-    Parallel(bound, { pieces })
-  }
+  fn run<Result>(
+    limit: Int,
+    reduce: (items: ArrayList<Item>) => Result,
+    isDecided: (result: Result) => Bool,
+    most: Int?,
+  ): Task<ArrayList<Result>>
 }
 
 /**
- * The chunks of `items`: `count` of them where there are that many items, fewer where there are not, and none of an empty
- * input. Chunk `index` covers `[index * length / count, (index + 1) * length / count)`.
+ * The one [Plan]: pieces of `Source` items, and `step`, the stages so far - `None` for an item a stage dropped. A stage
+ * adds one closure around `step`; nothing else is copied.
  */
-fn piecesOf<Item>(items: List<Item>, count: Int): ArrayList<ArrayList<Item>> {
-  const length = items.length()
-  var chunks = if count < 1 { 1 } else { count }
-  if chunks > length {
-    chunks = length
-  }
-  var pieces: ArrayList<ArrayList<Item>> = empty()
-  for index in 0..chunks {
-    var piece: ArrayList<Item> = ArrayList.withCapacity((index + 1) * length / chunks - index * length / chunks)
-    for position in (index * length / chunks)..((index + 1) * length / chunks) {
-      piece.append items[position]
-    }
-    pieces.append piece
-  }
-  pieces
-}
+type Spread<Piece: Iterate<Source>, Source, Item> with Plan<Item> {
+  pieces: ArrayList<Piece>
+  step: (value: Source) => Item?
 
-/**
- * One stage: waits for the chunks of the stage before, then runs `work` on every chunk as a task of its own, at most
- * `limit` at a time, and answers their outputs in input order. Each chunk is handed to its task as a fresh list that
- * nothing else holds, which is what lets an idle worker take the task and the list with it.
- */
-fn spreadAfter<Source, Output>(
-  before: Task<ArrayList<ArrayList<Source>>>,
-  limit: Int,
-  work: (chunk: ArrayList<Source>) => ArrayList<Output>,
-): Task<ArrayList<ArrayList<Output>>> {
-  const chunks = before.await()
-  var running: ArrayList<Task<ArrayList<Output>>> = empty()
-  var outputs: ArrayList<ArrayList<Output>> = empty()
-  for chunk in chunks {
-    if running.length() >= limit {
-      if const Some(oldest) = running.removeAt(0) {
-        outputs.append oldest.await()
+  fn mapped<Output>(transform: Transform<Item, Output>): Plan<Output> {
+    const before = step
+    const next: (value: Source) => Output? = { value =>
+      match before(value) {
+        Some(item) => Some transform(item)
+        None => None
       }
     }
-    running.append chunkTask(copied(chunk), work)
+    Spread pieces, next
   }
-  for task in running {
-    outputs.append task.await()
+
+  fn filtered(predicate: Predicate<Item>): Plan<Item> {
+    const before = step
+    const next: (value: Source) => Item? = { value =>
+      match before(value) {
+        Some(item) => if predicate(item) { Some item } else { None }
+        None => None
+      }
+    }
+    Spread pieces, next
   }
-  outputs
+
+  fn filterMapped<Output>(transform: Transform<Item, Output?>): Plan<Output> {
+    const before = step
+    const next: (value: Source) => Output? = { value =>
+      match before(value) {
+        Some(item) => transform item
+        None => None
+      }
+    }
+    Spread pieces, next
+  }
+
+  fn run<Result>(
+    limit: Int,
+    reduce: (items: ArrayList<Item>) => Result,
+    isDecided: (result: Result) => Bool,
+    most: Int?,
+  ): Task<ArrayList<Result>> {
+    const fused = step
+    const work = { piece: Piece => reduce kept(piece, fused, most) }
+    var running: ArrayList<Task<Result>> = ArrayList.withCapacity limit
+    var results: ArrayList<Result> = ArrayList.withCapacity pieces.length()
+    var isOver = false
+    for piece in pieces {
+      if running.length() >= limit {
+        if const Some(oldest) = running.removeAt(0) {
+          const result = oldest.await()
+          isOver = isDecided result
+          results.append result
+        }
+      }
+      if isOver {
+        break
+      }
+      running.append chunkTask(piece, work)
+    }
+    for task in running {
+      results.append task.await()
+    }
+    results
+  }
 }
 
 /**
- * One chunk as a task. The chunk is its parameter, so it moves into the frame, and the runtime lets an idle worker take
- * the task where the chunk and `work` may cross one.
+ * One chunk as a task. The piece is its parameter, so it moves into the frame, and the runtime lets an idle worker take
+ * the task where the piece and `work` may cross one.
  */
-fn chunkTask<Source, Output>(chunk: ArrayList<Source>, work: (chunk: ArrayList<Source>) => ArrayList<Output>): Task<ArrayList<Output>> {
-  work chunk
+fn chunkTask<Piece, Result>(piece: Piece, work: (piece: Piece) => Result): Task<Result> {
+  work piece
 }
 
-/**
- * A list with a storage of its own and the same items: `compact` copies a storage somebody else holds too, in one move of
- * the bytes, so nothing but the copy holds it.
- */
-fn copied<Item>(items: ArrayList<Item>): ArrayList<Item> {
-  var copy = items
-  copy.compact()
-  copy
-}
-
-fn mapped<Item, Output>(chunk: ArrayList<Item>, transform: Transform<Item, Output>): ArrayList<Output> {
-  var outputs: ArrayList<Output> = empty()
-  for item in chunk {
-    outputs.append transform(item)
-  }
-  outputs
-}
-
-fn filtered<Item>(chunk: ArrayList<Item>, predicate: Predicate<Item>): ArrayList<Item> {
-  var kept: ArrayList<Item> = empty()
-  for item in chunk {
-    if predicate(item) {
-      kept.append item
+/** The items of one piece that come out of the step, in order, and no more than `most` of them. */
+fn kept<Piece: Iterate<Source>, Source, Item>(piece: Piece, step: (value: Source) => Item?, most: Int?): ArrayList<Item> {
+  var items: ArrayList<Item> = ArrayList.withCapacity 0
+  for value in piece {
+    if const Some(item) = step(value) {
+      items.append item
+      if const Some(bound) = most {
+        if items.length() >= bound {
+          break
+        }
+      }
     }
   }
-  kept
+  items
 }
 
-fn filterMapped<Item, Output>(chunk: ArrayList<Item>, transform: Transform<Item, Output?>): ArrayList<Output> {
-  var outputs: ArrayList<Output> = empty()
-  for item in chunk {
-    if const Some(output) = transform(item) {
-      outputs.append output
-    }
-  }
-  outputs
+/** The `isDecided` of a terminal that needs every chunk. */
+fn undecided<Result>(_result: Result): Bool {
+  false
 }
 
-/** The sum of one chunk, as a list of one value: every stage answers lists, and an empty chunk is never made. */
-fn summed<Item>(chunk: ArrayList<Item>): ArrayList<Item> where Item: Add & From<Int> {
+/** The sum of one chunk's items. */
+fn summed<Item>(items: ArrayList<Item>): Item where Item: Add & From<Int> {
   var total = Item.from 0
-  for item in chunk {
+  for item in items {
     total = total + item
   }
-  single total
+  total
 }
 
-/** The first match of one chunk, as a list of none or one. */
-fn found<Item>(chunk: ArrayList<Item>, predicate: Predicate<Item>): ArrayList<Item> {
-  for item in chunk {
-    if predicate(item) {
-      return single item
-    }
+/** The item of one chunk with the smallest key, the first of equal ones. */
+fn smallest<Item, Key: Compare>(items: ArrayList<Item>, key: Transform<Item, Key>): Item? {
+  var best: Item? = None
+  for item in items {
+    best = earlierOrSmaller best, Some(item), key
   }
-  empty()
+  best
 }
 
-fn visited<Item>(chunk: ArrayList<Item>, body: Action<Item>): ArrayList<Bool> {
-  for item in chunk {
+/** The item of one chunk with the largest key, the first of equal ones. */
+fn largest<Item, Key: Compare>(items: ArrayList<Item>, key: Transform<Item, Key>): Item? {
+  var best: Item? = None
+  for item in items {
+    best = earlierOrLarger best, Some(item), key
+  }
+  best
+}
+
+/** `candidate` where it has a smaller key than `best`, `best` otherwise: the earlier of two equal keys stays. */
+fn earlierOrSmaller<Item, Key: Compare>(best: Item?, candidate: Item?, key: Transform<Item, Key>): Item? {
+  match (best, candidate) {
+    (Some(current), Some(item)) => if key(item) < key(current) { candidate } else { best }
+    (None, _) => candidate
+    (_, None) => best
+  }
+}
+
+/** `candidate` where it has a larger key than `best`, `best` otherwise: the earlier of two equal keys stays. */
+fn earlierOrLarger<Item, Key: Compare>(best: Item?, candidate: Item?, key: Transform<Item, Key>): Item? {
+  match (best, candidate) {
+    (Some(current), Some(item)) => if key(item) > key(current) { candidate } else { best }
+    (None, _) => candidate
+    (_, None) => best
+  }
+}
+
+/** Runs `body` for every item of one chunk. */
+fn visited<Item>(items: ArrayList<Item>, body: Action<Item>): Bool {
+  for item in items {
     body item
   }
-  empty()
-}
-
-/** An empty list of the internal shape: every stage answers `ArrayList`s, whose storage is what may move to a worker. */
-fn empty<Item>(): ArrayList<Item> {
-  ArrayList.withCapacity 0
-}
-
-/** A list of one value. */
-fn single<Item>(value: Item): ArrayList<Item> {
-  var list: ArrayList<Item> = ArrayList.withCapacity 1
-  list.append value
-  list
+  true
 }

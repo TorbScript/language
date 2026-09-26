@@ -1,0 +1,224 @@
+/**
+ * `parallel()` answers what the sequential pipeline answers, in input order, on every source: a `Range` and a `List`,
+ * which cut themselves, and a `Set`, a `Map`, the characters of a `String`, a pipeline and types of the program's own,
+ * which are read into a list first unless they are a `Cut`. Answers are asked with one worker, with four and with the
+ * default, because the chunk borders depend on the length alone. The stages are fused, `collect` joins the chunks with
+ * the collector's `merge` and never merges a chunk the stages left empty.
+ *
+ * A test body is no task and cannot `await()`, so every pipeline runs at the top of the file, where the file's own task
+ * can wait for it, and the tests compare what came out. Each one is small: a top-level value of a test file is built
+ * once for the file and once more for every function that reads it.
+ */
+
+use test, group from "std/test"
+use counting, summing, joining, listing, groupingBy, minBy, maxBy from "std/iteration"
+use Cut from "../src/lib"
+
+/** `count` numbers from `first` on, cut into ranges: position `index` holds `first + index`. */
+type Stretch with Cut<Int, Range<Int>> {
+  first: Int
+  count: Int
+
+  fn iterate(): Iterator<Int> {
+    (first..(first + count)).iterate()
+  }
+
+  fn length(): Int {
+    count
+  }
+
+  fn cut(range: Range<Int>): Range<Int> {
+    (first + range.start)..(first + range.end)
+  }
+}
+
+/** Numbers from 1 to `count`, handed out one at a time: an `Iterate` that is no collection. */
+type Counter with Iterate<Int> {
+  count: Int
+
+  fn iterate(): Iterator<Int> {
+    (1..=count).iterate()
+  }
+}
+
+/** Steps of the Collatz sequence from `start` down to 1: work whose cost differs from item to item. */
+fn collatz(start: Int): Int {
+  var steps = 0
+  var value = start
+  while value != 1 {
+    value = if value % 2 == 0 { value / 2 } else { 3 * value + 1 }
+    steps = steps + 1
+  }
+  steps
+}
+
+// --- A range cuts itself
+
+const rangeExpected = (1..5000).map({ collatz _ }).filter({ _ > 20 }).sum()
+const rangeAlone = (1..5000).parallel(workers: 1).map({ collatz _ }).filter({ _ > 20 }).sum().await()
+const rangeFour = (1..5000).parallel(workers: 4).map({ collatz _ }).filter({ _ > 20 }).sum().await()
+const rangeEverywhere = (1..5000).parallel().map({ collatz _ }).filter({ _ > 20 }).sum().await()
+const inclusive = (0..=100).parallel(chunk: Some(7)).map({ _ * 3 }).toList().await()
+const shortRange = (10..20).parallel(workers: 4).toList().await()
+const emptyCount = (5..5).parallel().count().await()
+const emptyJoined = (5..5).parallel().map({ "{_}" }).collect(joining(prefix: "[", suffix: "]")).await()
+
+// --- A list, an array and a type of the program's own cut themselves
+
+const words = ["one", "two", "three", "four", "five", "six"]
+const wordLengths = words.parallel(workers: 4, chunk: Some(4)).map({ _.byteLength() }).toList().await()
+const fourLetters = words.parallel().filter({ _.byteLength() == 4 }).toList().await()
+const digits: Array<Int, 6> = [3, 1, 4, 1, 5, 9]
+const doubledDigits = digits.parallel(workers: 4, chunk: Some(4)).map({ _ * 2 }).toList().await()
+const stretch = Stretch 5, 10
+const stretchItems = stretch.parallel(workers: 4, chunk: Some(3)).toList().await()
+const stretchSum = stretch.parallel().map({ _ * 2 }).sum().await()
+
+// --- Everything else is read into a list first
+
+const primes: Set<Int> = [2, 3, 5, 7, 11, 13]
+const doubledPrimes = primes.parallel(workers: 4).map({ _ * 2 }).toList().await()
+const primeSum = primes.parallel(workers: 1).sum().await()
+const ages = ["Ada": 36, "Alan": 41, "Grace": 45]
+const elders = ages.parallel(workers: 4).filter({ _.value > 40 }).map({ _.key }).toList().await()
+const text = "parallel pipelines"
+const letterCount = text.chars().parallel(workers: 4).filter({ _ == 'l' }).count().await()
+const letters = text.chars().parallel(chunk: Some(5)).toList().await()
+const squares = (1..).map({ _ * _ }).take(50)
+const oddSquares = squares.parallel(workers: 4).filter({ _ % 2 == 1 }).toList().await()
+const counted = Counter(100).parallel(workers: 4).sum().await()
+
+// --- The stages are fused and the terminals agree with their sequential counterparts
+
+const stagesExpected = (1..2000).map({ _ * 3 }).filter({ _ % 2 == 0 }).filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { None } })
+const stagesSpread = (1..2000).parallel(workers: 4).map({ _ * 3 }).filter({ _ % 2 == 0 })
+const stages = stagesSpread.filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { None } }).toList().await()
+const firstLong = (1..10000).parallel(workers: 4).find({ collatz(_) > 200 }).await()
+const noMatch = (1..100).parallel().find({ _ > 1000 }).await()
+const fruits = ["kiwi", "fig", "pear", "date", "yam", "plum"]
+const shortest = fruits.parallel(workers: 4, chunk: Some(3)).minBy({ _.byteLength() }).await()
+const longest = fruits.parallel(workers: 4, chunk: Some(3)).maxBy({ _.byteLength() }).await()
+const shortestAlone = fruits.parallel(workers: 1).minBy({ _.byteLength() }).await()
+const longestAlone = fruits.parallel(workers: 1).maxBy({ _.byteLength() }).await()
+const thirds = (0..1000).parallel(workers: 4).filter({ _ % 3 == 0 }).count().await()
+const fractions = (1..=5000).map({ 1.0 / Float.from(_) }).toList()
+const fractionsAlone = fractions.parallel(workers: 1).sum().await()
+const fractionsFour = fractions.parallel(workers: 4).sum().await()
+
+// --- collect merges the chunks in order
+
+const names = (1..=40).map({ "w{_}" }).toList()
+const listed = names.parallel(workers: 4).collect(listing()).await()
+const nameCount = names.parallel(workers: 4).collect(counting()).await()
+const nameBytes = names.parallel().map({ _.byteLength() }).collect(summing { value: Int => value }).await()
+const joined = names.parallel(workers: 4).collect(joining(", ")).await()
+const grouped = names.parallel(chunk: Some(6)).collect(groupingBy { name: String => name.byteLength() }).await()
+const bracketed = (1..=64).toList().parallel(chunk: Some(8)).filter({ _ % 20 == 0 }).map({ "{_}" })
+const bracketedJoined = bracketed.collect(joining(separator: ", ", prefix: "[", suffix: "]")).await()
+const nothing: List<Int> = []
+const nothingCounted = nothing.parallel().collect(counting()).await()
+const nothingJoined = (1..=10).parallel().filter({ _ > 10 }).map({ "{_}" }).collect(joining(prefix: "<", suffix: ">")).await()
+
+group "a range cuts itself" {
+  test "map, filter and sum agree with the sequential pipeline" {
+    assert(rangeAlone == rangeExpected)
+    assert(rangeFour == rangeExpected)
+    assert(rangeEverywhere == rangeExpected)
+  }
+
+  test "toList keeps the input order, an inclusive range included" {
+    assert(inclusive == (0..=100).map({ _ * 3 }).toList())
+    assert(shortRange == (10..20).toList())
+  }
+
+  test "an empty range makes no chunk" {
+    assert(emptyCount == 0)
+    assert(emptyJoined == "[]")
+  }
+}
+
+group "a list, an array and a type of the program's own cut themselves" {
+  test "a list" {
+    assert(wordLengths == [3, 3, 5, 4, 4, 3])
+    assert(fourLetters == ["four", "five"])
+  }
+
+  test "an array" {
+    assert(doubledDigits == [6, 2, 8, 2, 10, 18])
+  }
+
+  test "a Cut of the program" {
+    assert(stretch.cut(0..3).toList() == [5, 6, 7])
+    assert(stretchItems == stretch.toList())
+    assert(stretchSum == 190)
+  }
+}
+
+group "everything else is read into a list first" {
+  test "a set" {
+    assert(doubledPrimes == primes.map({ _ * 2 }).toList())
+    assert(primeSum == 41)
+  }
+
+  test "a map, entry by entry" {
+    assert(elders == ["Alan", "Grace"])
+  }
+
+  test "the characters of a string" {
+    assert(letterCount == 4)
+    assert(letters == text.chars().toList())
+  }
+
+  test "a pipeline" {
+    assert(oddSquares == squares.filter({ _ % 2 == 1 }).toList())
+  }
+
+  test "an Iterate of the program" {
+    assert(counted == 5050)
+  }
+}
+
+group "the stages are fused and the terminals agree with their sequential counterparts" {
+  test "map, filter and filterMap in one pass" {
+    assert(stages == stagesExpected.toList())
+  }
+
+  test "find answers the first match in input order" {
+    assert(firstLong == (1..10000).find({ collatz(_) > 200 }))
+    assert(noMatch == None)
+  }
+
+  test "minBy and maxBy keep the earlier of equal keys" {
+    assert(shortest == Some("fig"))
+    assert(longest == Some("kiwi"))
+    assert(shortestAlone == fruits.collect(minBy { fruit: String => fruit.byteLength() }))
+    assert(longestAlone == fruits.collect(maxBy { fruit: String => fruit.byteLength() }))
+  }
+
+  test "count" {
+    assert(thirds == 334)
+  }
+
+  test "a Float sum is the same with one worker and four" {
+    assert(fractionsAlone == fractionsFour)
+  }
+}
+
+group "collect merges the chunks in order" {
+  test "every collector with a merge agrees with the sequential collect" {
+    assert(listed == names)
+    assert(nameCount == 40)
+    assert(nameBytes == 111)
+    assert(joined == names.collect(joining(", ")))
+    assert(grouped == names.collect(groupingBy { name: String => name.byteLength() }))
+  }
+
+  test "a chunk the stages left empty is never merged" {
+    assert(bracketedJoined == "[20, 40, 60]")
+  }
+
+  test "an input without any item answers the collector's own finish" {
+    assert(nothingCounted == 0)
+    assert(nothingJoined == "<>")
+  }
+}
