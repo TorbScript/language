@@ -145,3 +145,73 @@ jobs:
           for archive in dist/torb-seed-*.tar.gz; do
             sh tools/publish-seed.sh "$archive"
           done
+
+  publish-packages:
+    name: package manager channels (docs/design/RELEASE.md section 5)
+    needs: [check, gates, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The same environment as `publish`: required reviewers already approved the release itself before this runs
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Render Formula/torb.rb and bucket/torb.json from SHA256SUMS
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: sh tools/render-package-manifests.sh "$VERSION" "$REPOSITORY" dist rendered
+      # Each of the three below needs a fine-grained token limited to the one repository it pushes to or opens a pull
+      # request against (docs/contributing/releasing.md, "one-time setup"). The `secrets` context cannot be read in a
+      # step's `if:` (GitHub Actions), so each step is always run and skips itself, in its own script, where its
+      # token is empty - a channel nobody has set up yet never holds back the release itself.
+      - name: Push Formula/torb.rb to TorbScript/homebrew-tap
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN is not set - skipping"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:$TOKEN@github.com/TorbScript/homebrew-tap" tap
+          cp rendered/Formula/torb.rb tap/Formula/torb.rb
+          cd tap
+          git -c user.name="torbscript-release" -c user.email="release@torb.dev" commit -am "torb $VERSION" || exit 0
+          git push
+      - name: Push bucket/torb.json to TorbScript/scoop-bucket
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "SCOOP_BUCKET_TOKEN is not set - skipping"
+            exit 0
+          fi
+          git clone --depth 1 "https://x-access-token:$TOKEN@github.com/TorbScript/scoop-bucket" bucket
+          mkdir -p bucket/bucket
+          cp rendered/bucket/torb.json bucket/bucket/torb.json
+          cd bucket
+          git -c user.name="torbscript-release" -c user.email="release@torb.dev" commit -am "torb $VERSION" || exit 0
+          git push
+      - name: A winget pull request via wingetcreate
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "WINGET_TOKEN is not set - skipping"
+            exit 0
+          fi
+          dotnet tool install --global wingetcreate
+          wingetcreate update TorbScript.Torb --version "$VERSION" \
+            --urls "https://github.com/$REPOSITORY/releases/download/v$VERSION/torb-$VERSION-windows-x64.zip" \
+            --submit --token "$TOKEN"

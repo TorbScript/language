@@ -1,0 +1,41 @@
+// Rendered by tools/render-package-manifests.sh into Formula/torb.rb of TorbScript/homebrew-tap (docs/design/RELEASE.md
+// section 5, "Homebrew on Linux, Nix, an AUR package"). {{PLACEHOLDERS}} are substituted from a release's SHA256SUMS;
+// nothing here is evaluated by torb itself, so the .template extension keeps `torb check .` from trying to.
+class Torb < Formula
+  desc "TorbScript toolchain: a functional-first language with value semantics"
+  homepage "https://torb.dev"
+  version "{{VERSION}}"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/torb-{{VERSION}}-macos-arm64.tar.gz"
+      sha256 "{{SHA256_MACOS_ARM64}}"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/torb-{{VERSION}}-linux-x64.tar.gz"
+      sha256 "{{SHA256_LINUX_X64}}"
+    end
+    on_arm do
+      url "https://github.com/{{REPOSITORY}}/releases/download/v{{VERSION}}/torb-{{VERSION}}-linux-arm64.tar.gz"
+      sha256 "{{SHA256_LINUX_ARM64}}"
+    end
+  end
+
+  # std/ and runtime/ sit beside bin/torb, in the keg's own prefix - the layout `torb` walks up from itself to find
+  # (compiler/src/project/toolchain.trb), so nothing is symlinked into share/.
+  def install
+    bin.install "bin/torb"
+    prefix.install "std"
+    prefix.install "runtime"
+  end
+
+  test do
+    # `torb --version` does not exist yet (tools/refresh-seed.sh); a scratch program is the toolchain's own smoke test
+    (testpath/"hello.trb").write "print \"hello\"\n"
+    assert_match "hello", shell_output("#{bin}/torb run #{testpath}/hello.trb")
+  end
+end
