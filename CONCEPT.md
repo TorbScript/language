@@ -2637,7 +2637,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **`loop { ... }` is the endless loop, and `while true` is an error.** "Never ends" becomes a property of the syntax
   instead of a property of a condition the checker has to recognise as a literal, which is what the special case in the
   checker was. Without a `break` its type is `Never`, with one `Void`; no `break value`, which can be added later without
-  a break. `torb canon --rule loops` rewrites the old spelling.
+  a break. `torb format` rewrites the old spelling (the canon's rule `loops`).
 - **An operator is a trait exactly when it is a method call**, so `a ?? b` is `OrElse.orElse` and the trait is
   `public trait OrElse<Value>` in `std/core`, in the prelude, implemented by `Option` and `Result`. `?.` and `?` stay
   what they are: the first would need `Self<Output>`, the second leaves the enclosing function. Rust's `Try` has been

@@ -54,7 +54,7 @@ the one mechanism behind every configuration block. See [Builders and DSLs](lang
 ### Canon
 
 The one formatting a program is written in - most visibly that a call is a [command call](#command-call) wherever the
-grammar allows it. `torb canon` writes it and `torb canon --check` reports what is not in it. See
+grammar allows it. `torb format` writes it and `torb format --check` reports what is not in it. See
 [Command calls](language/syntax/command-calls.md).
 
 ### Capability
@@ -417,9 +417,9 @@ The result of an operation that can fail, `Ok(value)` or `Fail(error)`. The post
 
 ### Safety net
 
-What keeps [`torb canon`](tooling/torb-canon.md) from changing what a program means: an edit is applied on its own
-and the file is parsed again, and it is dropped and reported unless the tree that comes back is the one from before
-with every span and call style erased.
+What keeps [`torb format`](tooling/torb-format.md) from changing what a program means: an edit of the canon is applied
+on its own and the file is parsed again, and it is dropped and reported unless the tree that comes back is the one from
+before with every span and call style erased - and the layout of a whole file is checked the same way.
 
 ### Sandbox
 

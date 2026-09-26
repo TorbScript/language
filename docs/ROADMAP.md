@@ -42,10 +42,15 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
 
 **Goal: the tools a user expects around a language that is meant to be used.**
 
-- **`torb format`** replaces `torb canon`, which enforces the canon today and says it is temporary
-  ([tooling/torb-format.md](tooling/torb-format.md)).
-- **`torb lint`**, with `--fix` as the migration tool for every breaking change before 1.0 and for every deprecation
-  after it. The rules named so far are on [tooling/torb-lint.md](tooling/torb-lint.md).
+- **`torb format`** - **built**: every rule of the canon, then indentation, spaces and blank lines, over the syntax
+  tree with the safety net of the canon; `format --check` is the tier A gate, and `torb canon` is a deprecated alias of
+  it. **Left:** where a long line breaks - the formatter keeps every line break between two tokens and holds no width
+  yet ([tooling/torb-format.md](tooling/torb-format.md)).
+- **`torb lint`** - **built**, with `--fix` as the migration tool for every breaking change before 1.0 and for every
+  deprecation after it: the rules `self-name`, `question-field`, `unread-binding` and `labeled-literal`. **Left:** a
+  place in the manifest to choose rules (only `--rule`/`--skip` today), the rules named and not built (a closure that
+  only passes its parameter on, a case the expected type names, a `deprecated` field), and the sweeps of `self-name` and
+  `question-field` over the repository ([tooling/torb-lint.md](tooling/torb-lint.md)).
 - **The language server is the compiler**: `check` incremental per file, and the checker's tables answer hover,
   go to definition, completion and diagnostics. Its semantic tokens replace `torb highlight`, and a lint fix is its
   quick fix. The VS Code extension in `.vscode/extensions/torbscript` gets the client.

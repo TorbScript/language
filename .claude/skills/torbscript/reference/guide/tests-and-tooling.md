@@ -10,7 +10,7 @@ keywords:
   - test
   - assert
   - torb check
-  - torb canon
+  - torb format
 source:
   - CONCEPT.md#toolchain
   - std/test/src/lib.trb
@@ -62,12 +62,13 @@ a false positive of it is a bug in the checker, never a reason to change a corre
 
 ## Formatting
 
-`torb canon` writes the formatter canon over the syntax tree - a call becomes a command wherever the grammar allows it
-and gets parentheses everywhere else - and `--check` reports the files that are not in it without writing anything:
+`torb format` writes the one layout of the language over the syntax tree - a call becomes a command wherever the grammar
+allows it and gets parentheses everywhere else, two spaces per level, one space around an operator - and `--check`
+reports the files that are not in it without writing anything:
 
 ```console
-$ torb canon --check examples/tour
-0 of 14 files would change: 0 calls to commands, 0 calls to parentheses, 0 strings indented, 0 case patterns
+$ torb format --check examples/tour
+0 of 14 files would change
 ```
 
 A change is done when both commands are green. See [Verify your work](../tooling/verifying-your-work.md) for the full

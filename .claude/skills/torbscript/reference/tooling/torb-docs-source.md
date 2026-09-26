@@ -142,6 +142,6 @@ the examples.
 
 - The docs commands - `docs check`, `index`, `skill` and `bundle`, the gate of the pages.
 - [Doc comments](../language/syntax/doc-comments.md) - what `/** */` attaches to, and the headings it carries.
-- [torb canon](torb-canon.md) - the canon that an example is held to.
+- [torb canon](torb-canon.md) - the rules of the canon that an example is held to.
 - [Verify your work](verifying-your-work.md) - where the gates of the repository sit.
 

@@ -16,7 +16,7 @@ source:
   - examples/tour/src
 ---
 
-Every form the language has, with its exact spelling. Each line is the canonical form: it is what `torb canon` writes and
+Every form the language has, with its exact spelling. Each line is the canonical form: it is what `torb format` writes and
 what the compiler accepts.
 
 ## Example

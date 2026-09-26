@@ -17,7 +17,7 @@ source:
 ---
 
 Both `print("hello")` and `print "hello"` parse. Which one to write is decided rather than left open: a call is a command
-wherever the grammar allows it. `torb canon --check` reports every file that disagrees, so this is the shape of every
+wherever the grammar allows it. `torb format --check` reports every file that disagrees, so this is the shape of every
 snippet in this documentation and of every line in the repository.
 
 ## Example
@@ -156,7 +156,7 @@ Then the rest of the rules:
 
 ## What this is not
 
-**It is not a style option.** `torb canon` writes both rules over the syntax tree and `torb canon --check` reports the
+**It is not a style option.** `torb format` writes both rules over the syntax tree and `torb format --check` reports the
 files that are not in the canon. The repository is in it, and every `trb` block of this documentation is checked against
 it.
 
@@ -169,7 +169,7 @@ print "hello, {role}"
 print("hello")
 ```
 
-The second form parses and means the same thing. It is still wrong, because `torb canon` rewrites it and the check fails
+The second form parses and means the same thing. It is still wrong, because `torb format` rewrites it and the check fails
 until it is rewritten.
 
 **A command is not a new call syntax with different semantics.** `f a, b` and `f(a, b)` produce the same syntax tree apart

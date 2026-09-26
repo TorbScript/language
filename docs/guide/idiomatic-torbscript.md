@@ -55,7 +55,7 @@ the calls, the types and the error handling all in the one form the language pic
 - [`Into` comes from `From`](#conversions)
 - [An operating system branch is a `match`](#operating-system)
 - [A collection is walked with `for` or a pipeline](#loops-and-pipelines)
-- [`torb canon` decides the layout](#canon)
+- [`torb format` decides the layout](#format)
 - [Habits from other languages](#habits)
 
 ## Names are written out {#names}
@@ -608,17 +608,17 @@ Why: nothing in a pipeline runs until the terminal operation pulls, so stages co
 collections. See [Iterating](../language/collections-and-iteration/iterating.md) and
 [Pipelines](../language/collections-and-iteration/pipelines.md).
 
-## `torb canon` decides the layout {#canon}
+## `torb format` decides the layout {#format}
 
-**Where the language allows two spellings, `torb canon` picks one, and the canon is what a file is written in.** Run it
+**Where the language allows two spellings, `torb format` picks one, and its layout is what a file is written in.** Run it
 before committing, and let `--check` fail a build that is not in it.
 
 ```console
-torb canon src
-torb canon --check src
+torb format src
+torb format --check src
 ```
 
-Why: a style that is decided once is never discussed again. See [torb canon](../tooling/torb-canon.md) and
+Why: a style that is decided once is never discussed again. See [torb format](../tooling/torb-format.md) and
 [Verify your work](../tooling/verifying-your-work.md).
 
 ## Habits from other languages {#habits}

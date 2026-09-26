@@ -322,14 +322,14 @@ because the failure is not ignorance but the habits of a language it does know.
 | `tooling/torb-run.md` | torb run | Running a project and a single file | `compiler/src/main.trb` |
 | `tooling/torb-build.md` | torb build | The C back end, the flags, the output | `compiler/src/cli/build.trb` |
 | `tooling/torb-test.md` | torb test | Where tests live and how they run | `std/test` |
-| `tooling/torb-canon.md` | torb canon | The canon, the rules it can write, and every rule of the canon in one place | `compiler/src/canon/command.trb` |
+| `tooling/torb-canon.md` | torb canon | The deprecated command, and every rule of the canon in one place | `compiler/src/canon/command.trb` |
 | `tooling/project-trb.md` | project.trb | Every field of the manifest | `std/project` |
 | `tooling/project-lock-trb.md` | project.lock.trb | What is pinned, and who may write it | `CONCEPT.md#packages-and-the-supply-chain` |
 | `tooling/torb-doc.md` | torb doc | Documentation from doc comments | `CONCEPT.md#toolchain` |
-| `tooling/torb-format.md` | torb format | The formatter that takes over from `canon` | `CONCEPT.md#formatter-canon` |
-| `tooling/torb-lint.md` | torb lint | The naming and style rules | `CONCEPT.md#toolchain` |
+| `tooling/torb-format.md` | torb format | The formatter: the canon, then the layout | `compiler/src/format/command.trb` |
+| `tooling/torb-lint.md` | torb lint | The rules of style, their ids and their fixes | `compiler/src/lint/command.trb` |
 
-`torb doc`, `torb format`, `torb lint` and `torb repl` are `status: planned`.
+`torb doc` is `status: planned`.
 
 ## Consequences
 

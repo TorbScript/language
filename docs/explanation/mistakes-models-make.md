@@ -55,7 +55,7 @@ print numbers.map({ _ * 2 }).toList()
 print("hello")
 ```
 
-Both parse. The second is wrong because `torb canon` rewrites it and `torb canon --check` fails until it is rewritten. A
+Both parse. The second is wrong because `torb format` rewrites it and `torb format --check` fails until it is rewritten. A
 call is a command in command position - the start of a statement, the right of `=`, after `return`, after `=>` - when the
 callee is a path, it has at least one argument whose first token is not `(`, `[`, `-`, `!` or `.`, no argument has an
 operator at its top level, and the arguments are on one line.
@@ -630,10 +630,10 @@ Do not trust the list. Run the compiler, from the repository root:
 
 ```console
 torb check <path>
-torb canon --check <path>
+torb format --check <path>
 ```
 
-`check` answers `no problems` or points at the line. `canon --check` reports every file that is not in the formatter canon,
+`check` answers `no problems` or points at the line. `format --check` reports every file that is not in the formatter canon,
 which is where mistake 1 shows up. See [Verify your work](../tooling/verifying-your-work.md).
 
 ## Related

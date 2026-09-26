@@ -1,13 +1,14 @@
 ---
 title: Verify your work
-summary: The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.
+summary: The commands that decide whether TorbScript you wrote is correct and in the layout of the formatter, in the order to run them.
 kind: tooling
 status: stable
 order: 20
 skill: verify
 keywords:
   - check
-  - canon
+  - format
+  - lint
   - test
   - gate
   - verify
@@ -17,7 +18,7 @@ source:
 ---
 
 Never hand over TorbScript you have not run through the compiler. The language has a type checker, an exhaustiveness
-check, a dead-change check and a formatter canon, and all four of them answer in seconds. A snippet that looks right and
+check, a dead-change check and a formatter, and all four of them answer in seconds. A snippet that looks right and
 was not checked is the most expensive thing you can produce.
 
 ## Synopsis
@@ -28,8 +29,9 @@ All of these run from the repository root, with the `torb` that `sh tools/bootst
 torb check <path>                   Type check: "no problems", or a line and a caret
 torb check --statistics <path>      Every expression has a type: "0 deferred"
 torb parse <path>                   Syntax only, recursively
-torb canon --check <path>           Is it in the formatter canon?
-torb canon <path>                   ...write it
+torb format --check <path>          Is it in the layout of the formatter?
+torb format <path>                  ...write it
+torb lint <path>                    The rules of style the checker leaves alone
 torb test --native compiler/tests   The TorbScript tests of the compiler
 torb docs check docs                The documentation gate
 ```
@@ -40,9 +42,9 @@ torb docs check docs                The documentation gate
 
 1. **`check`** first. It resolves every name and types every expression, so it finds the mistakes that matter: an
    undeclared name, a wrong type, a non-exhaustive `match`, a change that cannot be seen, a `var` that is missing.
-2. **`canon --check`** second. It reports every file whose call form or multi-line string is not in the canon. Run plain
-   `canon` to write it rather than fixing it by hand - it edits over the syntax tree and re-parses, so it cannot change what
-   a program means.
+2. **`format --check`** second. It reports every file whose call form, indentation, spaces or blank lines are not in the
+   layout. Run plain `format` to write it rather than fixing it by hand - it edits over the syntax tree and re-parses, so
+   it cannot change what a program means.
 3. **`test`** last, when there are tests. One process per file, as many at a time as the machine has cores.
 
 A change is done when all three are green **and** `check` still answers `no problems` over the whole repository. A false
@@ -55,7 +57,8 @@ positive of the checker is a bug in the checker.
 | `parse` | A semicolon, an unclosed brace, a command call in the wrong position, a `{` where a block was meant |
 | `check` | An undeclared name, a wrong type, a missing `var`, a non-exhaustive `match`, an unreachable arm, a dead change, a discarded result, a visibility violation |
 | `check --statistics` | Expressions that have no type yet, reported as `deferred`. The number has to be 0 |
-| `canon --check` | A parenthesized call that should be a command, a command that should have parentheses, a multi-line string that is not indented |
+| `format --check` | A parenthesized call that should be a command, a command that should have parentheses, a multi-line string that is not indented, a line indented wrong, a missing or extra space, a second blank line |
+| `lint` | The own name of a type instead of `Self`, a `Bool` field named as a question, an unread binding, an unlabeled literal option |
 | `test` | Everything a test asserts, including the exact text of a diagnostic |
 | `docs check` | A page of `docs/` whose front matter, sections, links, headings or code blocks are wrong |
 
@@ -99,7 +102,8 @@ $ torb check .
 255 files, no problems
 $ torb check --statistics .
 149982 of 149982 expressions typed (100%), 0 deferred
-$ torb canon --check .
+$ torb format --check .
+0 of 761 files would change
 $ torb test --native compiler/tests
 ```
 
@@ -132,7 +136,7 @@ It builds `build/release/torb` where that is missing or older than the compiler 
 ## Related
 
 - [The torb command](the-torb-command.md) - every subcommand and its flags.
-- [Command calls](../language/syntax/command-calls.md) - the canon that `canon --check` decides.
+- [Command calls](../language/syntax/command-calls.md) - the rule of the canon `format --check` decides first.
 - [What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md) - what to look for before
   running anything.
 - [The toolchain](index.md) - the other pages about the commands.

@@ -19,7 +19,7 @@ on something that looks like a style question.
 
 ## The decision
 
-**A call is written as a command wherever the grammar allows it, and with parentheses everywhere else.** `torb canon`
+**A call is written as a command wherever the grammar allows it, and with parentheses everywhere else.** `torb format`
 decides this on every file and there is no option to turn it around.
 
 - A command call is legal only in command position: the start of a statement, the right side of `=`, after `return`,
@@ -68,7 +68,7 @@ layered on top.
 **Because deciding it once removes a decision from every call site.** Leaving the choice to the author, as most
 languages that allow both do, means a codebase mixes `print(x)` and `print x` for no reason a reader can find, and a
 model trained on other conventions reproduces whichever one it saw more often. The canon removes the question: there
-is exactly one way to write a call with one argument and no operator in it, and `torb canon --check` finds the rest.
+is exactly one way to write a call with one argument and no operator in it, and `torb format --check` finds the rest.
 
 **Because "commands do not nest" keeps the one hard case decidable.** A command's own arguments are ordinary
 expressions, so `print describe(numbers)` is legal and `print describe numbers` is not - if it were, a reader (and the

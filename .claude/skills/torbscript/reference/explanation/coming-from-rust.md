@@ -164,7 +164,7 @@ which a file would change meaning because a dependency gained a case.
 This is the difference a Rust programmer notices last and gets wrong most often. `Ok value`, `print "hello"`,
 `return Fail problem`, `names.map Role`. Parentheses appear where the grammar needs them: a nested call, no arguments, an
 operator at the top level of an argument, several lines, and the head of an `if`, `for`, `while` or `match`. It is not a
-style option - `torb canon --check` reports every file that disagrees.
+style option - `torb format --check` reports every file that disagrees.
 
 ### `impl` becomes `with` or `extend`
 

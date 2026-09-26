@@ -1,82 +1,151 @@
 ---
 title: torb lint
-summary: torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
+summary: torb lint reports the rules of style the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal - each with its id and, where it is certain, a fix.
 kind: tooling
-status: planned
+status: stable
 order: 130
 keywords:
   - torb lint
-  - naming
-  - style
   - lint --fix
+  - self-name
+  - question-field
+  - unread-binding
+  - labeled-literal
 source:
-  - CONCEPT.md#toolchain
+  - compiler/src/lint/command.trb
+  - compiler/src/lint/finding.trb
   - compiler/CONTRIBUTING.md
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
-
-A program with an abbreviated name or a `Bool` field named as a question type checks exactly as well as one that
-follows [the conventions of a name](../language/syntax/naming.md) - nothing today tells the two apart.
+`lint` is the linter of `torb`: the rules a program can break and still type check, because they are about how it is
+written and not about what it means. Every finding names its rule, and a rule that knows the fix for certain carries it,
+so `torb lint --fix` is also how a change of a convention migrates the code that follows the old one.
 
 ## Synopsis
 
 ```text
-torb lint [path]...   The naming and style rules the compiler does not care about (planned; no command line decided yet)
+torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...
+
+Rules (every one runs unless --rule picks some):
+  self-name        Inside a `type` or an `extend`, its own name is written `Self` (fix)
+  question-field   A `Bool` field is an adjective or a participle, not a question that starts with `is`
+  unread-binding   A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)
+  labeled-literal  `true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)
+
+  --fix         Write every fix a rule is certain of, then lint again and report what is left
+  --rule <id>   Run this rule (repeatable); without it every rule runs
+  --skip <id>   Leave this rule out (repeatable)
 ```
 
 ## What it does
 
-### What it is specified to check
+A path is a file or a directory (default: the current directory), and a directory is read the way
+[`torb format`](torb-format.md) reads one: every `.trb` file below it, without hidden directories, `build`
+directories and the files that are broken on purpose. A file that does not parse is named and skipped.
 
-`torb lint` is named next to `torb format` as the tool for what the type checker deliberately leaves alone: naming
-conventions rather than rules the checker enforces. The compiler's own style guide is the clearest example of the
-kind of thing it is for, because the codebase already names one lint before the tool exists: a literal `true`,
-`false` or `None` passed to a parameter that is *declared* as `Bool` or as an optional should be labeled
-(`hasCapacity: false`, not a bare `false`) everywhere except the two cases a reader can tell without the label - and
-telling those two cases apart today is a person's judgement, with the fix left for a future lint.
+A finding is printed the way [`torb check`](torb-check.md) prints a diagnostic, with `warning` in front, and with the
+id of its rule under it:
 
-### The rules named so far
+```console
+$ torb lint --rule self-name std/geometry
+warning: `Box<Scalar>` is the type this is declared in: write `Self`
+  --> std/geometry/src/box.trb:37:71
+   |
+37 |   static fn between(first: Vector3<Scalar>, second: Vector3<Scalar>): Box<Scalar> {
+   |                                                                       ^^^^^^^^^^^
+   = rule `self-name`
+   = `torb lint --fix` writes the fix
 
-Each of these needs the types the checker works out, which is why none of them is a rule of `torb canon`, and each
-comes with a fix:
+...
+49 findings in 11 of 15 files (self-name 49)
+```
 
-- **A labeled literal**: `true`, `false` or `None` passed to a parameter declared as `Bool` or as an optional carries
-  the parameter's label, unless it is the call's only argument or the parameter's type is a type parameter.
-- **A closure that only passes its parameter on** is the function's name: `items.map(stripMargin)` rather than
-  `items.map { stripMargin(_) }`.
-- **A case whose type the expected type already names** is written with the dot: `.SwitchCase(path, edges)` rather
-  than `DecisionNode.SwitchCase(path, edges)` as the argument of a `DecisionNode` parameter.
-- **A binding of an irrefutable pattern that is never read** is written `_`.
-- **A field marked `deprecated`** in favour of a method is rewritten at every use (`.x` to `.x()`), which is how a
-  field becomes a method without breaking its callers.
+### The rules
 
-### What exists today
+**`self-name`**: inside a `type` or an `extend`, the type's own name is written `Self` (the owner, 2026-09-26). It finds
+the name where `Self` means exactly the same type and nowhere else: in a written type whose type arguments are the
+type's own parameters in their order (`Box<Other>` inside `type Box<Item>` is another type and stays), in an expression
+of a type without parameters (`Point(0, 0)`, `Point.origin`, `Shape.Circle`), and `Box<Item>(...)` with exactly its own
+parameters - a bare `Box(...)` inside a generic type may build another instance, so it stays. A pattern has no `Self`,
+so `Shape.Circle(radius)` becomes `.Circle(radius)` there. A method with a type parameter named like one of the type's
+own is left alone, and a `trait` is not looked into.
 
-Nothing checks this. `torb check` resolves and types every one of these calls without objecting to an unlabeled
-`false` or an abbreviated name, because neither is a type error - see
-[Naming](../language/syntax/naming.md) for which of them the parser and the checker do
-enforce today, and which are a convention only a person or, eventually, `torb lint` follows.
+**`question-field`**: a `Bool` field is an adjective or a participle (`inclusive`, `shared`, `exported`), and a
+question that is computed is a method (`isEmpty()`) - see [Naming](../language/syntax/naming.md). A field of a type or
+of a case whose type is `Bool` and whose name is `is` followed by a capital letter is found. It has no fix: the better
+word is a person's choice, and a rename has to reach every use.
+
+**`unread-binding`**: a name that an irrefutable pattern binds and that nothing reads is written `_` - a `const` inside
+a body, what `for` binds, and the parameters of a closure. The refutable positions are the checker's, where the same
+thing is an error. Without name resolution the rule stays on the safe side: a name counts as read when it occurs as a
+word anywhere in the text it could be read in, so a comment, a string and a name bound again all count. A name that
+starts with `_`, a `var`, a `using`, a binding at the top level of a file and the parameters of a function (which are
+the labels of its calls) are left alone.
+
+Its fix needs the checker. A value that may hold something with a `close()` is released at the end of its block, and
+`_` would release it at once, so `close()` would run earlier (see
+DESTRUCTORS.md, 2a). The fix is only offered where the checker says the value is plain:
+a number, a `Bool`, a `Char`, a `String`, `Void`, a literal type, and a tuple, an `Option`, a `Result`, a range or a
+collection of the prelude made of them. Anywhere else the finding comes without a fix and names `using` as the other
+way to write a binding that is only there to be closed at the end of its block.
+
+**`labeled-literal`**: `true`, `false` or `None` passed to a parameter that is declared as `Bool` or as an optional
+carries the parameter's label (`hasCapacity: false`), except in a call with a single argument and where the parameter's
+type is a type parameter - there the literal is the data, not an option. This is the one rule that needs the checker,
+so a run with it checks the projects of the paths first, and a file the checker has a problem with gets no finding of
+it. The fix writes the label only where every argument behind the literal is labeled already or is a trailing closure;
+anywhere else the call has to be reordered, which is a person's choice.
 
 ```trb check
 fn listEntries(entries: Int, kind: String, hasCapacity: Bool = true): Int {
   entries
 }
 
-print listEntries(3, "ArrayList", false)
+print listEntries(3, "ArrayList", hasCapacity: false)
 ```
 
-The call above type checks exactly as it would with the label written (`hasCapacity: false`); nothing today prefers
-one over the other.
+### `--fix`
+
+Every fix of every finding is applied, a fix that overlaps one taken before it is left out, and a file whose fixed text
+does not parse is fixed one fix at a time, keeping only the ones that parse. Then the whole lint runs again and reports
+what is left: the findings without a fix, and whatever a fix could not reach. What `--fix` wrote still has to pass
+`torb check` - a fix is certain about the rule, and the checker is the one that is certain about the program.
+
+### Exit codes
+
+`0` when nothing was found, `1` when something was (after `--fix`: when something is left), `2` for an argument `lint`
+does not recognize.
+
+### What is not decided
+
+- **Where a project chooses its rules.** PROJECT.md has no setting for them, so `--rule` and
+  `--skip` on the command line are the one way to choose today.
+- **The rules named and not built.** A closure that only passes its parameter on (`items.map { stripMargin(_) }` for
+  `items.map(stripMargin)`) is only certain where the callee takes exactly that one parameter, which needs the checker's
+  answer about defaults, labels and `var` parameters. A case whose type the expected type already names
+  (`.SwitchCase(path)` for `DecisionNode.SwitchCase(path)`) needs the expected type of every argument. A field marked
+  `deprecated` in favour of a method needs the marker, which the language does not have yet.
 
 ## Examples
 
-None: there is no command line to run yet.
+The standard library and the compiler, where three rules are not migrated yet: `self-name` (the decision of
+2026-09-26 is swept separately), `question-field` (about 60 of the compiler's fields are named after keywords, and each
+needs its own word) and `labeled-literal` (773 of its findings have a fix, the others need a call reordered):
+
+```console
+$ torb lint std compiler/src
+...
+2135 findings in 188 of 380 files (self-name 973, question-field 100, labeled-literal 1062)
+```
+
+Every fix of the repository applied at once still type checks: `torb lint --fix` over a copy of the whole checkout,
+then `torb check .`, answers `no problems`.
 
 ## Related
 
-- [Naming](../language/syntax/naming.md) - which rules are conventions and which the parser and the checker
-  enforce.
-- [torb format](torb-format.md) - the other stage-8 tool, for layout instead of naming.
-- [The torb command](the-torb-command.md) - every subcommand, and which are still planned.
+- [Naming](../language/syntax/naming.md) - which rules of a name the parser and the checker enforce, and which are
+  conventions `torb lint` reports.
+- [torb format](torb-format.md) - the other milestone 8 tool, for layout instead of naming.
+- [torb check](torb-check.md) - the errors, in the same format.
+- [The torb command](the-torb-command.md) - every subcommand.
 

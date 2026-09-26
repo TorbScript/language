@@ -2,8 +2,9 @@
 
 The compiler is written in TorbScript and **compiles itself**: `sh tools/bootstrap.sh` builds `torb` from a seed and
 then builds it again with itself. A C compiler is the one external tool a checkout needs; everything above it - the
-front end, the checker, the lowering, the emitter, the driver, `canon` (`compiler/src/canon/`) and `highlight`
-(`compiler/src/highlight/`) - is TorbScript compiled by TorbScript.
+front end, the checker, the lowering, the emitter, the driver, `format` (`compiler/src/format/`, over the canon of
+`compiler/src/canon/`), `lint` (`compiler/src/lint/`) and `highlight` (`compiler/src/highlight/`) - is TorbScript
+compiled by TorbScript.
 
 These are the rules of the code base and its traps.
 
@@ -28,8 +29,9 @@ torb run scratch.trb                                    # Run it in the VM, whic
 torb run --native scratch.trb                           # Build it into build/run/dev/ and run it (profile dev)
 torb build --profile dev path/to/main.trb               # A binary with -O1 instead of -O2 (default: release)
 sh runtime/build.sh                                     # The C runtime and its tests ($TORB_CC, clang, gcc, cc)
-torb canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops .
-torb canon std compiler examples tests                  # ...write it (a minute)
+torb format --check .                                   # Is every file in the layout of the formatter?
+torb format .                                           # ...write it (a minute)
+torb lint std compiler/src                              # The rules of style the checker leaves alone
 torb docs source std compiler examples                  # The doc comments (not a gate yet)
 torb docs source --panics std                           # ...except its `# Panics` rule, which is one
 torb docs check docs                                    # The documentation: schema, links, every snippet
@@ -207,13 +209,14 @@ reaches no file at all is an error, never "0 files, no problems".
   `const`/`var`, a module constant (there is no `MAX_SIZE` spelling - write `maxSize`), a module alias.
 - **A binding of a refutable pattern has to be read.** In an arm of a `match`, in an `if const`/`if var` and in a
   `while const`, a name the guard or the body never reads is an error: write `_`, or `_name` to keep the name as
-  documentation. `torb canon --rule unused-bindings` does the mechanical half of a sweep.
+  documentation. `torb format` does the mechanical half of a sweep (the canon's rule `unused-bindings`).
 - **The formatter canon** (CONCEPT, "Formatter Canon"): a call is a command wherever the grammar allows it -
   `Ok value`, `return Fail problem`, `const role = Role name`, `names.map Role` - and has parentheses everywhere
   else: nested (`Ok Some(x)`), without arguments (`list.length()`), with an operator at the top level of an argument
   (`assert(sum == 3)`), over several lines, and in the head of an `if`, `for`, `while` or `match`. A multi-line `"""`
-  is indented two spaces deeper than the line it starts on, closing quotes aligned with the content. `torb canon`
-  (above) writes both, over the syntax tree; milestone 8's `torb format` takes over from it.
+  is indented two spaces deeper than the line it starts on, closing quotes aligned with the content. `torb format`
+  (above) writes both over the syntax tree, and then the layout: two spaces per level, one space around an operator,
+  at most one blank line in a row.
 - Doc comments follow **the documentation standard** below. Block comments do not nest: never write a slash-star or a
   star-slash inside of a comment (not even in a glob).
 - Small values plus free functions that take a `var` parameter (`var parser: Parser`, `var checker: Checker`,
@@ -225,21 +228,22 @@ reaches no file at all is an error, never "0 files, no problems".
   `is...` fields stay as they are for now:** about 60 of them at 135 places are named after keywords (`isVar`,
   `isStatic`, `isPublic`, `isNative`, `isShared`, `isConst` - `var: Bool` is not a name), so each one needs its own
   decision (another word, or better a type instead of a flag: `Visibility` exists). That runs after the fixpoint,
-  with the method conversion and a checked rename instead of a text replacement.
+  with the method conversion and a checked rename instead of a text replacement; until then `torb lint`'s rule
+  `question-field` lists them.
 - Cases: `.Case` in patterns, `Type.Case` in an expression where no expected type says which type is meant. An
   **imported** case needs nothing in front of it, in an expression and in a pattern (`Some(found) =>`, `None =>`); a
   pattern name that starts with a lowercase letter binds, an uppercase one never does. Positional arguments come before
   named ones.
 - Prefer the short form where the expected type says which type is meant: `addNode(graph, .SwitchCase(path))` for a
   parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`.
-- **A literal that sets an option is labeled.** `true`, `false` and `None` have no name of their own, so where one is
+- **A literal that sets an option is labeled** (`torb lint`'s rule `labeled-literal`, with its fix). `true`, `false` and `None` have no name of their own, so where one is
   passed to a parameter that is *declared* as `Bool` or as an optional, the label is the only thing that says what it
   means: `listEntries entries, "ArrayList", hasCapacity: false`, never `listEntries entries, "ArrayList", false`. Two
   cases need none: a call with a single argument (`setEnabled(true)`, `assert(false)` - the function's name says it),
   and a literal that is the *data* and not an option, which is the case exactly when the parameter's declared type is a
   type parameter (`flags.set key, true`, `Some(true)`, `list.append(None)`). Labeled arguments follow the positional ones,
   so options are declared last. The same goes for a number literal whose meaning the call does not show
-  (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half will be a lint with a fix.
+  (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half is the lint.
 - **A capsule's field is named for its storage, never for the accessor's word, because a field and a method never
   share a name.** A type whose constructor is closed from outside - a `private` field without a default - reads
   through accessors. One stored field is named `value`, its unit or meaning said in the field's doc comment

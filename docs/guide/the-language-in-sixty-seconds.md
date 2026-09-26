@@ -130,7 +130,7 @@ members to a type that already exists. See [Traits](../language/traits/traits.md
 `Ok value`, `print "hello"`, `return Fail problem`, `names.map Role`. Parentheses appear where the grammar needs them:
 nested calls (`Ok Some(x)`), no arguments (`list.length()`), an operator at the top level of an argument
 (`assert(sum == 3)`), several lines, and the head of an `if`, `for`, `while` or `match`. This is not a preference, it is
-the formatter canon and `torb canon --check` enforces it. See
+the formatter canon and `torb format --check` enforces it. See
 [Command calls](../language/syntax/command-calls.md).
 
 Statements end at the end of the line. There are no semicolons, and two statements never share a line.

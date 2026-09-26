@@ -145,7 +145,7 @@ $ torb check .
 ## Related
 
 - [The torb command](the-torb-command.md) - every subcommand in one table.
-- [Verify your work](verifying-your-work.md) - where `check` sits among `canon` and `test`.
+- [Verify your work](verifying-your-work.md) - where `check` sits among `format` and `test`.
 - [torb build](torb-build.md) - what runs after `check` succeeds.
 - [torb run](torb-run.md) - running a program instead of only checking it.
 

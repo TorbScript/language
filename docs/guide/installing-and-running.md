@@ -151,11 +151,12 @@ The two commands you will run most often:
 ```console
 $ torb check .
 144 files, no problems
-$ torb canon --check .
+$ torb format --check .
+0 of 144 files would change
 ```
 
-`check` type checks everything and answers `no problems` or points at a line. `canon` writes the formatter canon over
-the syntax tree, and `--check` reports the files that are not in it. See
+`check` type checks everything and answers `no problems` or points at a line. `format` writes the one layout of the
+language over the syntax tree, and `--check` reports the files that are not in it. See
 [Verify your work](../tooling/verifying-your-work.md) for the full list.
 
 ## Next

@@ -11,6 +11,8 @@ keywords:
   - run
   - repl
   - test
+  - format
+  - lint
   - canon
   - highlight
 source:
@@ -18,6 +20,8 @@ source:
   - compiler/src/highlight/command.trb
   - compiler/src/cli/run.trb
   - compiler/src/cli/repl.trb
+  - compiler/src/format/command.trb
+  - compiler/src/lint/command.trb
   - CONCEPT.md#toolchain
 ---
 
@@ -40,7 +44,9 @@ torb natives --header  Write torb_natives.h and machine_natives.c from the manif
 torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM
 torb docs <command>    Check, index, and derive the documentation
 torb doc [path]...     The reference of a package: its public API and doc comments as a static site
-torb canon [path]...   Write the formatter canon over the syntax tree
+torb format [path]...  Write sources in the layout of the language; --check only reports
+torb lint [path]...    The rules of style the checker leaves alone; --fix writes their fixes
+torb canon [path]...   Deprecated: runs torb format
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
 ```
 
@@ -50,7 +56,7 @@ run from the repository root:
 ```console
 torb check .
 torb test --native compiler/tests
-torb canon --check .
+torb format --check .
 ```
 
 ## What it does
@@ -123,22 +129,37 @@ from. A name it cannot place gets **no token**, never a guess, so the grammar's 
 The command never fails: a file with syntax errors is colored as far as it parsed, a file that cannot be read prints an
 empty list, and the only exit code is `0`.
 
-### `canon`
+### `format`
 
-Writes the formatter canon over the syntax tree, never with a regular expression: a call becomes a command wherever the
-grammar allows it and gets parentheses everywhere else, and a multi-line `"""` string is indented. Every edit is applied on
-its own and the file is parsed again; it only stays if the tree is the one from before with every span and call style
-erased, so a run cannot change what a program means.
+Writes the one layout of the language over the syntax tree, never with a regular expression: first every rule of the
+formatter canon - a call becomes a command wherever the grammar allows it and gets parentheses everywhere else, a
+multi-line `"""` string is indented, and the three rules that rewrite a small form of the tree - then indentation, the
+spaces between tokens and blank lines. Line breaks between tokens, comments and each file's line endings are kept. Every
+edit and every layout is parsed again and only stays if the tree is the one from before with every span and call style
+erased, so a run cannot change what a program means ([torb format](torb-format.md)).
 
 | Flag | What it does |
 |------|--------------|
-| `--check` | Report the files that are not in the canon, and write nothing |
-| `--rule calls` | Only the call form |
-| `--rule strings` | Only the indentation of multi-line strings |
-| `--rule imported-case-patterns` | `.None` becomes `None`. Has to be asked for |
-| `--rule unused-bindings` | A binding of a refutable pattern that nobody reads becomes `_`. Has to be asked for |
+| `--check` | Report the files that are not in the layout, write nothing, and leave with 1 if there is one |
 
-`canon` is temporary. Milestone 8's `torb format` enforces the same canon and takes over from it.
+### `lint`
+
+Reports the rules of style the type checker leaves alone, each finding in the format of `check` with `warning` in
+front and the id of its rule under it: the own name of a type where `Self` means the same (`self-name`), a `Bool` field
+named as a question (`question-field`), a binding of an irrefutable pattern that nothing reads (`unread-binding`), and
+`true`, `false` or `None` for a `Bool` or an optional without its label (`labeled-literal`, which runs the checker)
+([torb lint](torb-lint.md)).
+
+| Flag | What it does |
+|------|--------------|
+| `--fix` | Write every fix a rule is certain of, then lint again and report what is left |
+| `--rule <id>` | Run this rule; without it every rule runs |
+| `--skip <id>` | Leave this rule out |
+
+### `canon`
+
+Deprecated: `torb canon` prints a warning and runs `torb format` with the same paths and `--check`; `--rule` is accepted
+and ignored, because `format` runs every rule of the canon ([torb canon](torb-canon.md)).
 
 ### `test`
 
@@ -186,8 +207,6 @@ These are in the design and not in the binary. A page about one of them carries 
 
 | Command | What it will do |
 |---------|-----------------|
-| `torb format` | The formatter, taking over from `canon` |
-| `torb lint` | The naming and style rules the compiler does not care about |
 | `torb add`, `remove`, `update`, `audit` | The package manager and the advisory database |
 
 ## Examples
@@ -216,6 +235,7 @@ wrote ../build/dev/scratch.exe
 - [Verify your work](verifying-your-work.md) - the commands to run before you are done.
 - [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
-  [torb test](torb-test.md), [torb canon](torb-canon.md), [torb doc](torb-doc.md) - one page per command, in depth.
-- [Command calls](../language/syntax/command-calls.md) - the canon that `canon` enforces.
+  [torb test](torb-test.md), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb doc](torb-doc.md) - one
+  page per command, in depth.
+- [Command calls](../language/syntax/command-calls.md) - the rule of the canon that `format` writes first.
 - [The docs commands](../contributing/checks.md) - the four `docs` subcommands.
