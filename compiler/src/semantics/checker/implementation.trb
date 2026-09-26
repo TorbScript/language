@@ -2025,7 +2025,8 @@ fn checkTraitPromise(var checker: Checker, index: Int) {
     }
   }
   if const .Trait = checker.symbolAt(head).kind {
-    const shape = checker.typeSignature typeSignatureOf(checker, head)
+    const identifier = typeSignatureOf checker, head
+    const shape = checker.typeSignature identifier
     if !shape.bounds.isEmpty() {
       return
     }
@@ -2507,7 +2508,8 @@ fn checkRequirements(
     match providerOf(checker, index, name) {
       Some(provider) => {
         // A `native fn` the type declares is the runtime's to implement, so the manifest has to name it
-        if isNative && !checker.signature(signatureOf(checker, provider)).hasBody {
+        const identifier = signatureOf checker, provider
+        if isNative && !checker.signature(identifier).hasBody {
           if !hasManifestRow(checker, rows, target, name) {
             reportMissingRow checker, index, bound, name
           }
@@ -2546,7 +2548,8 @@ public fn isConstantSymbol(checker: Checker, symbol: SymbolId): Bool {
 /** A `native type`: what the runtime provides, in the implementation of its own `with` list and in an `extend` of it. */
 fn isNativeTarget(var checker: Checker, target: TypeId): Bool {
   if const .Nominal(symbol, _) = checker.types.form(target) {
-    return checker.typeSignature(typeSignatureOf(checker, symbol)).isNative
+    const identifier = typeSignatureOf checker, symbol
+    return checker.typeSignature(identifier).isNative
   }
   false
 }
@@ -2810,7 +2813,8 @@ fn reportMismatch(
   provider: SymbolId,
   mapping: Map<ParameterId, TypeId>,
 ) {
-  const required = checker.signature signatureOf(checker, member)
+  const identifier = signatureOf checker, member
+  const required = checker.signature identifier
   const requiredOwn = ownGenericsOf checker, required
   const implementation = checker.implementations.all[index]
   const target = checker.describe implementation.target

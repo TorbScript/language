@@ -394,7 +394,8 @@ fn traitMembersOf(var checker: Checker, symbol: SymbolId, bound: TypeId): List<S
     }
     if !traits.contains(implemented) {
       traits.append implemented
-      const shape = checker.typeSignature typeSignatureOf(checker, implemented)
+      const identifier = typeSignatureOf checker, implemented
+      const shape = checker.typeSignature identifier
       if const Some(own) = shape.members.get(name) {
         addWithBody checker, members, own
       }
@@ -418,7 +419,8 @@ fn addWithBody(var checker: Checker, var members: List<SymbolId>, member: Symbol
   if members.contains(member) || !isFunctionSymbol(checker, member) {
     return
   }
-  if checker.signature(signatureOf(checker, member)).hasBody || isNativeMember(checker, member) {
+  const identifier = signatureOf checker, member
+  if checker.signature(identifier).hasBody || isNativeMember(checker, member) {
     members.append member
   }
 }
@@ -448,7 +450,8 @@ fn extendsTrait(var checker: Checker, capability: SymbolId, wanted: SymbolId, de
   if !isTraitSymbol(checker, capability) {
     return false
   }
-  const shape = checker.typeSignature typeSignatureOf(checker, capability)
+  const identifier = typeSignatureOf checker, capability
+  const shape = checker.typeSignature identifier
   for supertrait in shape.traits {
     if const Some(head) = headOf(checker, supertrait.capability) {
       if extendsTrait(checker, head, wanted, depth + 1) {
@@ -491,7 +494,8 @@ fn keepsThrough(var checker: Checker, callees: Callees, position: Int): Bool {
 }
 
 fn keepsParameter(var checker: Checker, member: SymbolId, position: Int): Bool {
-  const signature = checker.signature signatureOf(checker, member)
+  const identifier = signatureOf checker, member
+  const signature = checker.signature identifier
   const parameter = match signature.form.parameters.get(position) {
     Some(found) => found
     None => {
@@ -527,7 +531,8 @@ fn crossesThrough(var checker: Checker, callees: Callees, position: Int): Bool {
 }
 
 fn crossesParameter(var checker: Checker, member: SymbolId, position: Int): Bool {
-  const signature = checker.signature signatureOf(checker, member)
+  const identifier = signatureOf checker, member
+  const signature = checker.signature identifier
   const parameter = match signature.form.parameters.get(position) {
     Some(found) => found
     None => {

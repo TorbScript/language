@@ -65,7 +65,8 @@ public fn checkCloseImplementer(var checker: Checker, index: Int) {
     }
   }
   if const .Type = checker.symbolAt(target).kind {
-    if checker.typeSignature(typeSignatureOf(checker, target)).isShared {
+    const identifier = typeSignatureOf checker, target
+    if checker.typeSignature(identifier).isShared {
       return
     }
     const name = checker.symbolAt(target).name
@@ -155,7 +156,8 @@ fn addWithSupertraits(var checker: Checker, var found: Set<Int>, capability: Sym
   }
   found.insert capability.value
   if const .Trait = checker.symbolAt(capability).kind {
-    const shape = checker.typeSignature typeSignatureOf(checker, capability)
+    const identifier = typeSignatureOf checker, capability
+    const shape = checker.typeSignature identifier
     for supertrait in shape.traits {
       if const Some(head) = headSymbolOf(checker, supertrait.capability) {
         addWithSupertraits(checker, found, head, depth + 1)
@@ -173,7 +175,8 @@ fn comesWithClose(var checker: Checker, capability: SymbolId, close: SymbolId, d
     return false
   }
   if const .Trait = checker.symbolAt(capability).kind {
-    const shape = checker.typeSignature typeSignatureOf(checker, capability)
+    const identifier = typeSignatureOf checker, capability
+    const shape = checker.typeSignature identifier
     for supertrait in shape.traits {
       if const Some(head) = headSymbolOf(checker, supertrait.capability) {
         if comesWithClose(checker, head, close, depth + 1) {
@@ -226,11 +229,13 @@ public fn isCloseMember(var checker: Checker, symbol: SymbolId): Bool {
     return false
   }
   if const .Function = checker.symbolAt(symbol).kind {
-    const required = checker.typeSignature(typeSignatureOf(checker, close)).members.get("close")
+    const shape = typeSignatureOf checker, close
+    const required = checker.typeSignature(shape).members.get("close")
     if required == Some(symbol) {
       return true
     }
-    const signature = checker.signature signatureOf(checker, symbol)
+    const identifier = signatureOf checker, symbol
+    const signature = checker.signature identifier
     if !signature.takesSelf || !signature.form.parameters.isEmpty() {
       return false
     }
@@ -480,7 +485,8 @@ fn argumentFlow(var checker: Checker, call: Expression, callee: Expression): Flo
     .Callable(symbol, _, _) => {
       const kind = checker.symbolAt(symbol).kind
       if const .Function = kind {
-        const signature = checker.signature signatureOf(checker, symbol)
+        const identifier = signatureOf checker, symbol
+        const signature = checker.signature identifier
         if !signature.takesSelf {
           return Flow.Stays
         }
