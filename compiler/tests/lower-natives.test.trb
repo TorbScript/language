@@ -244,3 +244,28 @@ group "the C of a wrapper" {
     assert shown.contains("  s4 = (T_std_x2f_prelude_types_Option__Int64)\{ .tag = 0, .payload = \{ .v0 = \{ s2 \} \} \};")
   }
 }
+
+group "a native type with two implementations of one trait" {
+  /**
+   * `Float64` comes `with Power` and the runtime answers its `power`, while `extend Float64 with Power<Int64>` writes one
+   * in TorbScript. The written member belongs to the implementation it is written in: `value ** 0.5` is the runtime's
+   * power by a float and `value ** 3` the power by a whole number, and neither is the other.
+   */
+  test "each operator reaches the member of its own implementation" {
+    const source = raw"""
+      fn root(value: Float): Float {
+        value ** 0.5
+      }
+
+      fn cube(value: Float): Float {
+        value ** 3
+      }
+      """
+    assert(unsupportedIn(source) == [])
+    const root = irOf source, "t_acme_x2f_app_main_root"
+    assert root.contains("%2 = call t_std_x2f_prelude_types_Power_power__Float64_Float64_Float64(%0 borrowed, %1 borrowed)")
+    const cube = irOf source, "t_acme_x2f_app_main_cube"
+    const written = "t_std_x2f_prelude_types_Float64_Power_x3c_Int64_x2c__x20_Float64_x3e__power"
+    assert cube.contains("%2 = call {written}(%0 borrowed, %1 borrowed)")
+  }
+}

@@ -2688,6 +2688,9 @@ fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
   const candidates = checker.implementations.declaredFor head
   const extensions = checker.implementations.inherentOf head
   for other in candidates {
+    if isSiblingOf(checker, index, other) {
+      continue
+    }
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
       return Some member
     }
@@ -2702,6 +2705,9 @@ fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
   // `equals` that `Hash with Equals` requires. Those targets are a trait type, so they are in `open` and not in `byHead`
   const open = checker.implementations.open
   for other in open {
+    if isSiblingOf(checker, index, other) {
+      continue
+    }
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
       return Some member
     }
@@ -2713,6 +2719,27 @@ fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
     }
   }
   None
+}
+
+/**
+ * Whether another implementation implements the **same trait** with other arguments: `Float64` comes `with Power` from
+ * the runtime, which writes no member, and `extend Float64 with Power<Int64>` writes `power(exponent: Int64)`. That member
+ * is the other implementation's own and never the member of this one, although the name and the count of parameters
+ * agree - reading it as one sent `2.0 ** 0.5` to the power by a whole number.
+ */
+fn isSiblingOf(var checker: Checker, index: Int, other: Int): Bool {
+  if index == other {
+    return false
+  }
+  const own = checker.implementations.all[index].capability
+  const found = checker.implementations.all[other].capability
+  if const Some(first) = own {
+    if const Some(second) = found {
+      const capability = headSymbolOf checker, first
+      return capability.isSome() && capability == headSymbolOf(checker, second)
+    }
+  }
+  false
 }
 
 /**

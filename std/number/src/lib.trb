@@ -459,8 +459,11 @@ extend Float32 {
     self == self && !isInfinite()
   }
 }
-/** A 64-bit floating-point number, and the type of a decimal literal. */
-public native type Float64 with Signed {}
+/**
+ * A 64-bit floating-point number, and the type of a decimal literal. `x ** y` is C's `pow`, so IEEE-754 through and
+ * through - `(-8.0) ** (1.0 / 3.0)` is `nan`, and nothing panics; the power by a whole number is `Power<Int64>` below.
+ */
+public native type Float64 with Signed, Power {}
 
 /**
  * Exact base-10 arithmetic. Decimal literals adapt to it: `const price: Decimal = 19.99`
@@ -636,16 +639,6 @@ extend Float64 with Real {
   fn degreesOfRadians(): Float64 {
     self * 57.29577951308232
   }
-}
-
-/**
- * `x ** y`: C's `pow`, so IEEE-754 through and through - `(-8.0) ** (1.0 / 3.0)` is `nan`, and nothing panics.
- *
- * It is a declared member and not a runtime row behind the `with` list of `Float64`, because the power by an `Int` below
- * is a member of the same name: the two implementations of `Power` are told apart by their members.
- */
-extend Float64 with Power {
-  native fn power(exponent: Float64): Float64
 }
 
 /**
