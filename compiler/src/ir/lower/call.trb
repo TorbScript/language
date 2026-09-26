@@ -336,6 +336,11 @@ public fn lowerDispatched(
   places: List<Reference?>,
   annotation: IrTypeId,
 ): Slot {
+  // An operand did not return - `take(fail())` - so the call is never made, and its callee is not instantiated for it:
+  // an instance nothing calls is a `static` function the C compiler refuses
+  if lowering.isDiverged {
+    return abandonedSlot lowering, builder, destination
+  }
   const member = dispatched.member
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
@@ -1879,6 +1884,10 @@ public fn lowerOperator(
   operand: TypeId? = None,
   memberName: String = "",
 ): Slot {
+  // An operand did not return (`1 + fail()`), so the operator is never applied (`lowerDispatched` says why)
+  if lowering.isDiverged {
+    return abandonedSlot lowering, builder, destination
+  }
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, at) {
     Some(found) => found

@@ -27,7 +27,7 @@ use substitute from "../../semantics/checker/unify"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
 use unsupportedMessage from "../unsupported"
-use FunctionBuilder, terminate, switchTo from "../build"
+use FunctionBuilder, terminate, seal, switchTo from "../build"
 
 /** One construct the lowering does not translate yet, with where it was first seen and how often it blocked a function. */
 public type Unsupported {
@@ -729,9 +729,17 @@ fn conversionSourceOf(lowering: Lowering, signature: Signature): String {
 /**
  * Terminates the current block. Everything after it in the same block is unreachable, which is what `isDiverged`
  * says - a lowering that kept emitting there would build a block nothing reaches, and the verifier rejects one.
+ *
+ * `Unreachable` **seals** the block: it is what a panic and a call of a `Never` function end in, and such a call may
+ * stand deep inside an expression - `take(fail())`, `1 + fail()`, `Point(fail(), 1)` - whose other parts do not ask
+ * `isDiverged` before they write their instruction. Sealed, the block drops what they write.
  */
 public fn finishBlock(var lowering: Lowering, var builder: FunctionBuilder, terminator: Terminator) {
-  terminate builder, terminator
+  if const .Unreachable = terminator {
+    seal builder
+  } else {
+    terminate builder, terminator
+  }
   lowering.isDiverged = true
 }
 

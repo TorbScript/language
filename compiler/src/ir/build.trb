@@ -17,6 +17,12 @@ public type FunctionBuilder {
   var function: IrFunction
   /** The block `emit` appends to. */
   var current: BlockId = BlockId 0
+  /**
+   * The blocks a construct that does not return has ended ([seal]), by index. Control never gets past their end, so
+   * whatever the construct around the diverging one still writes - the call `take(fail())` makes once its argument is
+   * "computed", the `+` of `1 + fail()`, the `return` around either - is dropped rather than appended after the end.
+   */
+  var sealed: Set<Int> = []
 
   fn currentBlock(): BlockId {
     current
@@ -89,13 +95,31 @@ public fn openBlock(var builder: FunctionBuilder, label: String, at: LocationId?
 /** Appends an instruction to the current block, after everything already emitted into it. */
 public fn emit(var builder: FunctionBuilder, instruction: Instruction) {
   const index = builder.current.value
+  if builder.sealed.contains(index) {
+    return
+  }
   builder.function.blocks[index].instructions.append(instruction)
 }
 
-/** Replaces the terminator of the current block. A block has exactly one, so this is not an append. */
+/**
+ * Replaces the terminator of the current block. A block has exactly one, so this is not an append. A sealed block keeps
+ * its `Unreachable`.
+ */
 public fn terminate(var builder: FunctionBuilder, terminator: Terminator) {
   const index = builder.current.value
+  if builder.sealed.contains(index) {
+    return
+  }
   builder.function.blocks[index].terminator = terminator
+}
+
+/**
+ * Ends the current block with `Unreachable` for good: a construct that does not return - a panic, a call of a `Never`
+ * function - was just written into it, and nothing written into it afterwards could run.
+ */
+public fn seal(var builder: FunctionBuilder) {
+  terminate builder, Terminator.Unreachable
+  builder.sealed.insert builder.current.value
 }
 
 /** Terminates a block that is not the current one: the head of a loop, once its body is known. */

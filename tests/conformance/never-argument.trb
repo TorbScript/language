@@ -1,0 +1,61 @@
+/**
+ * A call of a `Never` function inside an operand: `take(fail())`, `1 + fail()`, `Point(fail(), 1)`, `[1, fail()]` and
+ * `"a{fail()}"`. The operand does not return, so the construct around it is never completed - nothing after it runs,
+ * and the program still builds.
+ */
+
+fn fail(): Never {
+  panic "stopped"
+}
+
+fn take(value: Int): Int {
+  value + 1
+}
+
+type Point {
+  x: Int
+  y: Int
+}
+
+fn taken(flag: Bool): Int {
+  if flag {
+    return take fail()
+  }
+  2
+}
+
+fn sum(flag: Bool): Int {
+  if flag {
+    return 1 + fail()
+  }
+  3
+}
+
+fn built(flag: Bool): Point {
+  if flag {
+    return Point fail(), 1
+  }
+  Point 4, 5
+}
+
+fn listed(flag: Bool): List<Int> {
+  if flag {
+    return [1, fail()]
+  }
+  [6]
+}
+
+fn shown(flag: Bool): String {
+  if flag {
+    return "a{fail()}"
+  }
+  "seven"
+}
+
+print taken(false)
+print sum(false)
+print built(false)
+print listed(false)
+print shown(false)
+print take(fail())
+print "never printed"
