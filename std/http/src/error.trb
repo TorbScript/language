@@ -78,6 +78,11 @@ public type HttpError with Show, Error {
     Self kind: .Incomplete
   }
 
+  /** A [Client] was redirected more than `limit` times for one request, which its redirect policy allows. */
+  static fn tooManyRedirects(limit: Int): HttpError {
+    Self kind: .TooManyRedirects(limit)
+  }
+
   /** Whether the server did not respond in time. */
   fn isTimeout(): Bool {
     match kind {
@@ -142,6 +147,7 @@ public type HttpError with Show, Error {
       .Unsupported(message) => "not supported: {message}"
       .UnsupportedVersion(version) => "HTTP version `{version}` is not supported"
       .Incomplete => "the connection ended in the middle of a message"
+      .TooManyRedirects(limit) => "more than {limit} redirects for one request"
     }
   }
 
@@ -169,6 +175,7 @@ type HttpErrorKind {
   case Unsupported(message: String)
   case UnsupportedVersion(version: String)
   case Incomplete
+  case TooManyRedirects(limit: Int)
 }
 
 /** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */

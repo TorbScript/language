@@ -2,13 +2,13 @@
 
 **Status: partly implemented** — decided on 2026-09-23, the owner's three questions answered on 2026-09-24 (section
 14). Slices 1 to 6 are in (section 11): the IO core of the runtime (`runtime/io.c`, IOCP in `runtime/os/iocp.c`,
-epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP, UDP and name resolution, `std/network` over it, an
-HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1.3 over mbedTLS 3.6 in `std/tls`, with `https`
-in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were written
-against their manuals, checked for syntax and types against stub headers, and are built for the first time by the
-Linux and macOS jobs of CI. UDP (slice 5) was built on Windows and its runtime tests run on Linux in a container as
-well; kqueue has not run it. The connection pool, the sandbox's network grant, HTTP/2 and HTTP/3 are later slices, each
-with its reason below.
+epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP, UDP and name resolution, `std/network` over
+it, an HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1.3 over mbedTLS 3.6 in `std/tls`, with
+`https` in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were
+written against their manuals, checked for syntax and types against stub headers, and are built for the first time by
+the Linux and macOS jobs of CI. UDP (slice 5) was built on Windows and its runtime tests run on Linux in a container as
+well; kqueue has not run it. The client's connection pool (slice 7) is in. The sandbox's network grant, HTTP/2 and
+HTTP/3 are later slices, each with its reason below.
 
 This is the record of how a TorbScript program talks to another machine: which packages there are and what each one
 owns, how a socket meets the task scheduler of `docs/design/CONCURRENCY.md`, which TLS implementation the language
@@ -53,7 +53,7 @@ prelude.**
 |---|---|---|
 | `std/network` | `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress`, `resolve`, `TcpListener`, `TcpStream`, `UdpSocket`, `NetworkError` | `std/stream`, `std/task` |
 | `std/tls` (slice 6) | `TlsStream`, `TlsSettings`, the trust store | `std/network` |
-| `std/http` | `Method`, `Status`, `Headers`, `Request`, `Response`, `Body`, `HttpError`, the HTTP/1.1 parser and writer, the client (`get`, `post`, `send`), the server (`Server`) | `std/network`, `std/json`, `std/stream` |
+| `std/http` | `Method`, `Status`, `Headers`, `Request`, `Response`, `Body`, `HttpError`, the HTTP/1.1 parser and writer, the client (`get`, `post`, `send`, `Client`), the server (`Server`) | `std/network`, `std/json`, `std/stream` |
 
 - **The name is `std/network`, not `std/net`.** Names are full words in this language (a type is `Workers`, not
   `Wrkrs`; a case is `Version4`, not `V4`), and `docs/design/OS.md` section 5.5 already put the address types into a
@@ -468,17 +468,80 @@ public fn send(
 
 - **The one-liners come first**, as `std/http` decided before (`fetch` and Bun's lesson): `http.get(url).await()?`
   then `response.body.text().await()?`. Streaming is the same `Body`: a response of any size is read chunk by chunk.
-- **Slice 3 opens one connection per request** and sends `Connection: close`. A pool of kept-alive connections per
-  origin is slice 7, and it is a `Client` value (`Client(maximumConnections:, timeout:)`) whose `get` is the free
-  function's, so a program that needs the pool changes one line. It is not in slice 3 because a pooled connection is a
-  shared object that crosses requests, which want to be tasks of their own - the confinement question of section 4
-  again, answered there by a connection task and a channel per request.
-- **No redirects are followed and no status is a failure.** A `404` is a `Response` whose `status` says so; a program
-  that wants a failure writes `response.status.isSuccess()`. A redirect policy is a `Client` setting, because a client
-  that follows `Location` across origins sends the request somewhere its author did not name.
+- **The free functions open one connection per request** and send `Connection: close`. A pool of kept-alive
+  connections per origin is a `Client` (slice 7) whose `get` is the free function's, so a program that needs the pool
+  changes one line (section 7, "The client's pool, as built").
+- **The free functions follow no redirect, and no status is a failure.** A `404` is a `Response` whose `status` says
+  so; a program that wants a failure writes `response.status.isSuccess()`. A redirect policy is a `Client` setting,
+  because a client that follows `Location` across origins sends the request somewhere its author did not name.
 - **`https` is the same request over TLS** since slice 6 (section 5), on port 443 by default; `send(..., tls:)` takes the
   `TlsSettings` of a program that trusts a root of its own. Any scheme but `http` and `https` is an `HttpError`.
 - **A timeout is `within`**, as for every task: `http.get(url).within(10.seconds())`.
+
+### The client's pool, as built (slice 7)
+
+```trb fragment
+public shared type Client {
+  maximumConnections: Int = 6
+  timeout: Duration? = None
+  redirects: RedirectPolicy = RedirectPolicy.SameHost(10)
+  tls: TlsSettings = TlsSettings()
+  fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+  fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+  fn send(method: Method, url: Uri, headers: Headers = Headers(), body: Body = Body.empty()): Task<Result<Response, HttpError>>
+}
+public type RedirectPolicy {
+  case Never
+  case SameHost(limit: Int)
+  case AnyHost(limit: Int)
+}
+```
+
+- **A `Client` is a `shared type` with its settings as fields**, built with its constructor - `Client(maximumConnections:
+  4, timeout: Some(10.seconds()))` - and its pool made by the first request, because a field's default is a constant and
+  an object is none. It is an object, so it stays with the task that made it (CONCURRENCY section 1): every request of
+  one client runs on that task's worker, and the pool needs no lock - tasks of one worker change it only between two
+  waits. That is the answer to the confinement question slice 3 left open, and it is the simple one: a connection task
+  with a channel per request (the shape HTTP/2 needs, section 12) is not needed for HTTP/1.1, where a connection carries
+  one request at a time anyway.
+- **The pool is per origin** (scheme, host in lower case, port), because a connection is reusable exactly for its
+  origin. **`maximumConnections` counts per origin** and defaults to 6, what browsers open to one origin and what servers
+  expect of one client. A request beyond it waits, in order, on a channel of its own, and a slot is handed to it by
+  dropping that channel's writing end - so giving a slot back starts no task and waits for nothing, which matters
+  because it happens in the release of a response, possibly inside a task that is being cancelled (a task started there
+  would be cancelled with it, and the slot lost). A request cancelled while it waits takes no slot, or passes on the one
+  it was handed; the lease of a request that fails or is cancelled anywhere gives its slot back when it is released.
+  Idle connections are taken newest first.
+- **A connection goes back when its response's body was read to its end**, on a connection that may carry another
+  request: HTTP/1.1 without `Connection: close`, a body framed by a length or chunks (not by the end of the connection),
+  and nothing buffered beyond it. **A response released before its end closes its connection** (the body's `close()`,
+  which the release runs): reading the rest of a body nobody wants only to reuse the connection can cost more than a new
+  one, and a slow or endless body would hold the slot. Either way the slot is free again.
+- **A stale connection is sent once more.** A server may close a kept-alive connection while it is idle; a request that
+  finds its reused connection closed before any byte of a response - the write fails, or the head reads the end of the
+  stream - is sent again over a new connection where its body is empty. A body that was a stream is gone, and the
+  failure is the answer: the retry of a request with a body is a later refinement that needs a body that can be read
+  twice.
+- **`timeout` is `None` by default**, as for the free functions: a timeout is `within`. Where it is set it limits each
+  request up to the head of its response, redirects included, and answers `HttpError.timeout()`.
+- **The redirect policy: `SameHost(10)` for a `Client`, `Never` for the free functions** (the owner's rule of this
+  section for the free functions; the `Client` default decided with slice 7). Same host rather than same origin, because
+  the most common redirect is `http` to `https` of one host, which a same-origin rule would refuse; same host rather than
+  any host, because a program that named a host is then answered by that host and its credentials go nowhere else - the
+  concern above. `AnyHost(limit)` follows everywhere and drops `Authorization`, `Cookie` and `Proxy-Authorization` where
+  the host changes, as browsers and Go do. No policy follows `https` to `http`. `303`, and `301` or `302` after a `POST`,
+  become a `GET` without a body (and without `Content-Type`), as browsers do; `307` and `308` keep the method and the
+  body, and are answered as they are where the body was a stream that cannot be sent again. What is left of a redirect's
+  own body is read, up to 64 KiB, so its connection goes back to the pool. More than the limit is
+  `HttpError.tooManyRedirects(limit)`.
+- **The free `get`, `post` and `send` stay one connection per request** and do not delegate to a default client: a
+  default client would be one object for every task of the program, which confinement forbids, and a module constant
+  cannot be an object. They share the request writer, the head reader and the body framing with the `Client`
+  (`client.trb`), so the two cannot drift.
+- **Verified** by `tests/conformance/http-client-pool.trb` over loopback, natively and in the VM: two requests of one
+  client arrive over one connection (the server sees one remote port), the free functions open one each, a response
+  released unread gives its connection up, one connection allowed makes the second request wait for the first body, and
+  every rule of the redirect policy above.
 
 ## 8. The server
 
@@ -614,7 +677,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 4 | `std/http`: messages, the HTTP/1.1 parser and writer, the server and the client (one connection per request); parser tests; conformance over loopback | **Done** |
 | 5 | UDP: `UdpSocket` with bind, send, receive, connect and its peer, over IOCP, epoll and kqueue (section 4, "UDP, as built") | **Done** on Windows and Linux; kqueue written, not run |
 | 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | **Done** (Windows' verifier; macOS verifies against its bundle until the Security framework step) |
-| 7 | The client's connection pool and redirect policy (`Client`) | Open |
+| 7 | The client's connection pool and redirect policy (`Client`, section 7) | **Done** |
 | 8 | Serving on every worker: several accept loops on one listening socket | Open |
 | 9 | A poller per worker, if a benchmark asks for it | Open |
 | 10 | The sandbox's network grant, with the VM's tasks | Open |

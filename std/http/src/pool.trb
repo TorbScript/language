@@ -1,0 +1,455 @@
+/**
+ * The client that keeps connections: a [Client] holds a pool of kept-alive connections per origin, at most
+ * `maximumConnections` of them open to one origin at a time, and follows redirects as its [RedirectPolicy] allows
+ * (docs/design/NETWORK.md section 7, slice 7).
+ *
+ * A pooled connection goes back to its pool when the body of its response was read to its end, and is closed when the
+ * response is released before that: reading the rest of a body nobody wants only to reuse its connection costs more than
+ * a new one. A request waits for a connection where the origin has `maximumConnections` in use.
+ */
+
+use Duration from "std/time"
+use ChannelSink from "std/task"
+use TlsSettings from "std/tls"
+use UriReference from "std/uri"
+use Source, Bytes from "std/stream"
+use Body, Headers, Method, Response, Status from "./message"
+use Connection from "./connection"
+use Destination, destinationOf, openConnection, writeRequest, readHead, bodyOf from "./client"
+use HttpError from "./error"
+
+/**
+ * What a [Client] does with a redirect - a `301`, `302`, `303`, `307` or `308` with a `Location` field. A redirect that
+ * is not followed is the response the program gets, as it is from the free functions, which follow none.
+ *
+ * Whatever the policy, a redirect from `https` to `http` is never followed - the request and everything it carries
+ * would cross the network in the clear - and neither is one that would have to send a body again that was a stream:
+ * `307` and `308` keep the method and the body, and a body is read once. `301`, `302` and `303` turn a `POST` into a
+ * `GET` without a body, as every browser does; `303` turns every method but `HEAD` into one.
+ */
+public type RedirectPolicy with Show, Equals {
+  /** None is followed: the redirect is the response. */
+  case Never
+  /**
+   * Redirects to the same host - any port and scheme, `http` to `https` included - are followed, at most `limit` of
+   * them for one request; one to another host is the response. The default of a [Client]: a program that named a host
+   * gets answers from that host.
+   */
+  case SameHost(limit: Int)
+  /**
+   * Redirects to any host are followed, at most `limit` of them. Where the host changes, `Authorization`, `Cookie` and
+   * `Proxy-Authorization` are not sent on: the credentials a program gave one host are not handed to another.
+   */
+  case AnyHost(limit: Int)
+
+  fn show(): String {
+    match self {
+      .Never => "never"
+      .SameHost(limit) => "to the same host, at most {limit}"
+      .AnyHost(limit) => "to any host, at most {limit}"
+    }
+  }
+}
+
+/**
+ * An HTTP client that keeps its connections alive between requests, one pool per origin, and follows redirects. Its
+ * `get`, `post` and `send` are the free functions', so a program that wants the pool changes one line:
+ *
+ *     const client = Client(maximumConnections: 4, timeout: Some(10.seconds()))
+ *     var first = client.get(api.joined("users/1")).await()?
+ *     const user = first.body.text().await()?
+ *     var second = client.get(api.joined("users/2")).await()?    // the same connection, if the server kept it
+ *
+ * A `Client` is a `shared type`: its pool is one set of connections that every request of the client draws from, and
+ * like every object it stays with the task that made it - the requests of one client run on that task's worker.
+ */
+public shared type Client {
+  /** How many connections to one origin may be open at once; a request beyond waits for one to come back. */
+  maximumConnections: Int = 6
+  /**
+   * How long a request may take until its response's head arrived - connecting, sending and waiting, redirects
+   * included - or `None` for no limit of the client's. Reading the body is the program's, which limits it with `within`.
+   */
+  timeout: Duration? = None
+  /** Which redirects are followed. */
+  redirects: RedirectPolicy = RedirectPolicy.SameHost 10
+  /** What an `https` connection trusts: the platform's roots, and the ones given here. */
+  tls: TlsSettings = TlsSettings()
+  /** The connections, per origin: made by the first request, so that a `Client` is built with its constructor. */
+  private var pool: Pool? = None
+
+  /** A `GET` of `url`: [Client.send] with the method. */
+  fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+    send(Method.Get, url, headers: headers).await()
+  }
+
+  /** A `POST` of `body` to `url`: [Client.send] with the method. */
+  fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+    send(Method.Post, url, headers: headers, body: body).await()
+  }
+
+  /**
+   * A request of any method, over a kept-alive connection to the origin of `url` where one is idle and over a new one
+   * where none is, following redirects as [Client.redirects] allows. A kept-alive connection the server closed while it
+   * was idle is noticed when the request finds it closed before any byte of a response arrived, and a request without a
+   * body is then sent once more over a new connection.
+   *
+   * # Errors
+   *
+   * - [HttpError] `timeout` where [Client.timeout] passed, and every failure of the free `send`.
+   * - [HttpError] `tooManyRedirects` after more redirects than the policy's limit.
+   */
+  fn send(
+    method: Method,
+    url: Uri,
+    headers: Headers = Headers(),
+    body: Body = Body.empty(),
+  ): Task<Result<Response, HttpError>> {
+    match timeout {
+      Some(limit) => {
+        var exchanging = following method, url, headers, body
+        match exchanging.within(limit).await() {
+          Ok(result) => result
+          Fail(_) => Fail HttpError.timeout()
+        }
+      }
+      None => following(method, url, headers, body).await()
+    }
+  }
+
+  /** The request, and the redirects after it the policy allows. */
+  private fn following(method: Method, url: Uri, headers: Headers, body: Body): Task<Result<Response, HttpError>> {
+    var current = url
+    var asking = method
+    var fields = headers
+    var sending = body
+    var followed = 0
+    loop {
+      var response = exchange(asking, current, fields, sending).await()?
+      const code = response.status.code()
+      const location = response.headers.get "Location"
+      if !(code == 301 || code == 302 || code == 303 || code == 307 || code == 308) || location.isNone() {
+        return Ok response
+      }
+      const limit = match redirects {
+        .Never => {
+          return Ok response
+        }
+        .SameHost(most) => most
+        .AnyHost(most) => most
+      }
+      const next = match UriReference.tryFrom(location ?? "") {
+        Ok(reference) => reference.resolved against: current
+        Fail(_) => {
+          return Ok response
+        }
+      }
+      const sameHost = hostOf(next) == hostOf(current)
+      const downgrade = current.scheme() == "https" && next.scheme() != "https"
+      if downgrade || (!sameHost && redirects == RedirectPolicy.SameHost(limit)) {
+        return Ok response
+      }
+      // 303 asks for a GET; 301 and 302 turn a POST into one, as browsers do; 307 and 308 repeat the request as it was
+      const becomesGet = (code == 303 && asking != Method.Head) || ((code == 301 || code == 302) && asking == Method.Post)
+      if !becomesGet && sending.length() != Some(0) {
+        // The body was a stream that is gone now: the redirect is the answer
+        return Ok response
+      }
+      if followed >= limit {
+        return Fail HttpError.tooManyRedirects(limit)
+      }
+      // What is left of the redirect's own body is read, up to a limit, so its connection can go back to the pool
+      const _ = response.body.bytes(limit: 65536).await()
+      if becomesGet {
+        asking = Method.Get
+        sending = Body.empty()
+        fields.remove "Content-Type"
+      }
+      if !sameHost {
+        fields.remove "Authorization"
+        fields.remove "Cookie"
+        fields.remove "Proxy-Authorization"
+      }
+      current = next
+      followed = followed + 1
+    }
+  }
+
+  /** One request and the head of its response, over a pooled connection, retried once where that one was stale. */
+  private fn exchange(method: Method, url: Uri, headers: Headers, body: Body): Task<Result<Response, HttpError>> {
+    const destination = destinationOf(url)?
+    const origin = destination.origin()
+    var connections = match pool {
+      Some(made) => made
+      None => {
+        const made = Pool()
+        pool = Some made
+        made
+      }
+    }
+    var slots = connections.slotsOf origin, maximumConnections
+    slots.acquire().await()
+    var lease = Lease connections, slots, origin
+    match connections.takeIdle(origin) {
+      Some(idle) => {
+        match attempt(idle, destination, method, headers, body, lease).await() {
+          Ok(response) => {
+            return Ok response
+          }
+          Fail(problem) => {
+            // A connection the server closed while it was idle: sent again over a new one, where nothing is lost by it
+            if body.length() != Some(0) {
+              lease.discard()
+              return Fail problem
+            }
+          }
+        }
+      }
+      None => {}
+    }
+    const fresh = match openConnection(destination, tls).await() {
+      Ok(opened) => opened
+      Fail(problem) => {
+        lease.discard()
+        return Fail problem
+      }
+    }
+    match attempt(fresh, destination, method, headers, body, lease).await() {
+      Ok(response) => Ok response
+      Fail(problem) => {
+        lease.discard()
+        Fail problem
+      }
+    }
+  }
+}
+
+/** Writes the request over `connection` and reads the head of the response; its body goes back to the pool at its end. */
+fn attempt(
+  connection: Connection,
+  destination: Destination,
+  method: Method,
+  headers: Headers,
+  body: Body,
+  lease: Lease,
+): Task<Result<Response, HttpError>> {
+  writeRequest(connection, method, destination, headers, body, false).await()?
+  const head = readHead(connection, method).await()?
+  lease.connection = Some connection
+  lease.reusable = head.keepsConnection()
+  const inner = bodyOf connection, head.framing
+  const length = inner.length()
+  if length == Some(0) {
+    // Nothing to read: the connection is free at once
+    lease.giveBack()
+    return Ok Response(head.status, head.headers, Body.empty())
+  }
+  var reading = PooledBody inner, lease
+  Ok Response(head.status, head.headers, Body.of(reading, length: length))
+}
+
+/** The host of a URI, in lower case, for comparing where a redirect goes. */
+fn hostOf(url: Uri): String {
+  match url.authority() {
+    Some(authority) => authority.host.show().toLowerCase()
+    None => ""
+  }
+}
+
+// --- the pool ---------------------------------------------------------------------------------------------------------
+
+/** The connections of a client: the idle ones of every origin, and how many of each origin are in use. */
+shared type Pool {
+  var idle: List<Idle> = []
+  var origins: List<Slots> = []
+
+  /** An idle connection to `origin`, taken out of the pool; `None` where none is idle. The newest first. */
+  var fn takeIdle(origin: String): Connection? {
+    var index = idle.length() - 1
+    while index >= 0 {
+      if idle[index].origin == origin {
+        const found = idle[index].connection
+        idle = idle.removedAt index
+        return Some found
+      }
+      index = index - 1
+    }
+    None
+  }
+
+  /** Keeps `connection` for the next request to `origin`. */
+  var fn keep(origin: String, connection: Connection) {
+    idle.append Idle(origin, connection)
+  }
+
+  /** The slots of `origin`, made with `maximum` of them the first time it is asked for. */
+  var fn slotsOf(origin: String, maximum: Int): Slots {
+    for known in origins {
+      if known.origin == origin {
+        return known
+      }
+    }
+    const made = Slots.of origin, maximum
+    origins.append made
+    made
+  }
+}
+
+/** A connection that waits in the pool for the next request to its origin. */
+shared type Idle {
+  origin: String
+  connection: Connection
+}
+
+/**
+ * How many connections to one origin may be open: a count of the free slots, and the requests that wait for one, oldest
+ * first. A request that waits holds the reading end of a channel of its own; a slot is handed to it by dropping the
+ * writing end, whose release ends the stream - so giving a slot back waits for nothing and starts no task. That matters:
+ * a slot is given back by the release of a response, which may run in a task that is being cancelled, and a task
+ * started there would be cancelled with it.
+ */
+shared type Slots {
+  origin: String
+  maximum: Int
+  private var available: Int
+  private var waiting: List<Waiter> = []
+
+  static fn of(origin: String, maximum: Int): Slots {
+    const count = if maximum < 1 { 1 } else { maximum }
+    Slots origin, count, count
+  }
+
+  /** Waits for a free slot and takes it. A request cancelled while it waits takes none, or passes on the one it got. */
+  var fn acquire(): Task<Void> {
+    if available > 0 {
+      available = available - 1
+      return
+    }
+    const signal = Channel<Int>()
+    var reading = signal.source()
+    const waiter = Waiter Some(signal.sink())
+    waiting.append waiter
+    using _abandon = Abandon self, waiter
+    const _ = reading.next().await()
+    waiter.done = true
+  }
+
+  /** Gives a slot back: to the oldest request that still waits, or to the free ones. */
+  var fn release() {
+    while !waiting.isEmpty() {
+      const first = waiting[0]
+      waiting = waiting.removedAt 0
+      if !first.abandoned {
+        first.handed = true
+        // The last reference to the writing end goes: its release ends the stream the request waits on
+        first.signal = None
+        return
+      }
+    }
+    available = available + 1
+  }
+}
+
+/** A request that waits for a slot: the writing end of its channel, and what became of it. */
+shared type Waiter {
+  var signal: ChannelSink<Int>?
+  /** A slot was handed to it. */
+  var handed: Bool = false
+  /** It stopped waiting without one: its task was cancelled. */
+  var abandoned: Bool = false
+  /** It took the slot it was handed. */
+  var done: Bool = false
+}
+
+/** What a cancellation of a waiting request leaves right: the slot it was handed goes on, and it is waited for no more. */
+shared type Abandon with Close {
+  slots: Slots
+  waiter: Waiter
+
+  var fn close() {
+    if waiter.done {
+      return
+    }
+    if waiter.handed {
+      var passing = slots
+      passing.release()
+      return
+    }
+    waiter.abandoned = true
+  }
+}
+
+/**
+ * One request's hold on a slot of its origin, and on the connection once it has one: given back to the pool when the
+ * response's body was read to its end on a connection that may carry another request, discarded otherwise. Exactly one
+ * of the two happens, however often either is asked for - and the release of the lease discards it where neither did,
+ * so a request that is cancelled or fails anywhere gives its slot back.
+ */
+shared type Lease with Close {
+  pool: Pool
+  slots: Slots
+  origin: String
+  var connection: Connection? = None
+  var reusable: Bool = false
+  var settled: Bool = false
+
+  /** The response was read to its end: the connection goes back to the pool where it may carry another request. */
+  fn giveBack() {
+    if settled {
+      return
+    }
+    settled = true
+    if reusable {
+      if const Some(kept) = connection {
+        if !kept.hasBuffered() {
+          var keeping = pool
+          keeping.keep origin, kept
+        }
+      }
+    }
+    connection = None
+    var freeing = slots
+    freeing.release()
+  }
+
+  /** Discards what neither [Lease.giveBack] nor [Lease.discard] settled: what the release of the lease runs. */
+  var fn close() {
+    discard()
+  }
+
+  /** The request failed, or its response was released unread: the connection is dropped, and closes with its last holder. */
+  fn discard() {
+    if settled {
+      return
+    }
+    settled = true
+    connection = None
+    var freeing = slots
+    freeing.release()
+  }
+}
+
+/** The body of a pooled response: the reader its framing asks for, and the lease its connection goes back through. */
+shared type PooledBody with Source<Bytes, HttpError> {
+  private var inner: Body
+  private lease: Lease
+
+  var fn next(): Task<Result<Bytes?, HttpError>> {
+    match inner.next().await() {
+      Ok(Some(chunk)) => Ok Some(chunk)
+      Ok(None) => {
+        lease.giveBack()
+        Ok None
+      }
+      Fail(problem) => {
+        lease.discard()
+        Fail problem
+      }
+    }
+  }
+
+  /** Released before its end: the connection is dropped rather than read to the end of a body nobody wants. */
+  var fn close() {
+    lease.discard()
+  }
+}

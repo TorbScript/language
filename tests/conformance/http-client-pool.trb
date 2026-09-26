@@ -1,0 +1,120 @@
+use * as http from "std/http"
+use Server, Request, Response, Status, Body, HttpError, Method, Headers, Client, RedirectPolicy from "std/http"
+use SocketAddress, IpAddress from "std/network"
+use UriReference from "std/uri"
+use sleep from "std/time"
+
+/**
+ * The client that keeps its connections, over loopback: two requests of one `Client` arrive over one connection - the
+ * server sees the same remote port - where the free functions open one per request; a response released unread gives
+ * its connection up instead of returning it; with one connection allowed, a second request waits until the first
+ * response was read. Redirects: none by the free functions, the same host by default, another host only where the
+ * policy says so and then without the credentials, `303` as a `GET`, and a loop cut off at the limit.
+ */
+
+/** The routes of the test server. */
+fn handle(request: Request): Task<Result<Response, HttpError>> {
+  const port = request.remote.map({ _.port }) ?? 0
+  match request.path() {
+    "/port" => Ok Response.text("{port}")
+    "/slow" => {
+      sleep(5.0).await()
+      Ok Response.text("too late")
+    }
+    "/moved" => Ok redirect(301, "/target")
+    "/see-other" => Ok redirect(303, "/target")
+    "/elsewhere" => Ok redirect(302, "http://localhost:{request.uri.port() ?? 0}/target")
+    "/loop" => Ok redirect(307, "/loop")
+    "/target" => {
+      const secret = if request.headers.contains("Authorization") { "with" } else { "without" }
+      Ok Response.text("{request.method} /target {secret} credentials")
+    }
+    _ => Ok Response.of(Status.notFound)
+  }
+}
+
+/** A redirect with `code` to `location`. */
+fn redirect(code: Int, location: String): Response {
+  var headers = Headers()
+  headers.set "Location", location
+  Response(Status.of(code).ok() ?? Status.notFound, headers, Body.empty())
+}
+
+/** `path` below `base`. */
+fn at(base: Uri, path: String): Uri {
+  match UriReference.tryFrom(path) {
+    Ok(reference) => reference.resolved against: base
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** The status and the text of a response. */
+fn described(result: Result<Response, HttpError>): Task<String> {
+  match result {
+    Ok(response) => {
+      var reading = response
+      const text = reading.body.text().await().ok() ?? "(unreadable)"
+      "{response.status.code()} {text}"
+    }
+    Fail(problem) => "failed: {problem}"
+  }
+}
+
+/** The status of a response to a `GET` of `url`, whose body is released unread when this returns. */
+fn statusOf(client: Client, url: Uri): Task<Result<Status, HttpError>> {
+  const response = client.get(url).await()?
+  Ok response.status
+}
+
+/** The remote port the server saw for a request of `client`. */
+fn portOf(client: Client, base: Uri): Task<Result<String, HttpError>> {
+  var response = client.get(at(base, "/port")).await()?
+  response.body.text().await()
+}
+
+fn run(base: Uri): Task<Result<Void, HttpError>> {
+  const client = Client()
+  const first = portOf(client, base).await()?
+  const second = portOf(client, base).await()?
+  print "one client, one connection: {first == second}"
+  var once = http.get(at(base, "/port")).await()?
+  var twice = http.get(at(base, "/port")).await()?
+  print "the free functions, one each: {once.body.text().await()? != twice.body.text().await()?}"
+  // Released before its body was read: the connection is given up, and the next request opens another
+  print "released unread: {statusOf(client, at(base, "/port")).await()?}"
+  const third = portOf(client, base).await()?
+  print "after an unread response, a new connection: {third != first}"
+  // One connection: the second request waits for the first response's body
+  const single = Client maximumConnections: 1
+  var holding = single.get(at(base, "/port")).await()?
+  var waiting = portOf single, base
+  const held = holding.body.text().await()?
+  print "one connection allowed, and reused: {waiting.await()? == held}"
+  print "free, moved: {described(http.get(at(base, "/moved")).await()).await()}"
+  print "client, moved: {described(client.get(at(base, "/moved")).await()).await()}"
+  print "client, see other: {described(client.post(at(base, "/see-other"), Body.from("form")).await()).await()}"
+  var credentials = Headers()
+  credentials.set "Authorization", "Bearer secret"
+  print "same host only: {described(client.get(at(base, "/elsewhere"), headers: credentials).await()).await()}"
+  const roaming = Client redirects: RedirectPolicy.AnyHost(5)
+  print "any host: {described(roaming.get(at(base, "/elsewhere"), headers: credentials).await()).await()}"
+  const never = Client redirects: RedirectPolicy.Never
+  print "never: {described(never.get(at(base, "/moved")).await()).await()}"
+  print "a loop: {described(client.get(at(base, "/loop")).await()).await()}"
+  // A request that times out is cancelled, and gives its connection and its slot back on the way
+  const hasty = Client maximumConnections: 1, timeout: Some(1.seconds())
+  print "timed out: {described(hasty.get(at(base, "/slow")).await()).await()}"
+  print "the slot came back: {portOf(hasty, base).await().isOk()}"
+  Ok void
+}
+
+match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
+  Ok(server) => {
+    const base = at(Uri.tryFrom("http://{server.localAddress()}").ok() ?? panic("no URI"), "/")
+    var serving = server.serve()
+    print run(base).await()
+    serving.cancel()
+    print "server: {serving.result()}"
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}

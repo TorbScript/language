@@ -12,6 +12,9 @@ keywords:
   - Response
   - Body
   - Server
+  - Client
+  - connection pool
+  - redirect
   - Headers
   - Status
   - Method
@@ -20,6 +23,7 @@ source:
   - std/http/src/message.trb
   - std/http/src/error.trb
   - std/http/src/client.trb
+  - std/http/src/pool.trb
   - std/http/src/server.trb
   - std/http/src/parse.trb
   - std/http/src/write.trb
@@ -99,6 +103,55 @@ over [TLS](tls.md), on port 443 unless the URI names another: the server's
 certificate is checked for the host the way the platform checks it, or against the roots of `tls` where `send` names
 some, and a certificate that is refused is an `HttpError` whose `cause()` is the `NetworkError` that
 `isCertificateRejected()`.
+
+### Client
+
+```trb fragment
+public shared type Client {
+  maximumConnections: Int = 6
+  timeout: Duration? = None
+  redirects: RedirectPolicy = RedirectPolicy.SameHost(10)
+  tls: TlsSettings = TlsSettings()
+  fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+  fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>>
+  fn send(method: Method, url: Uri, headers: Headers = Headers(), body: Body = Body.empty()): Task<Result<Response, HttpError>>
+}
+
+public type RedirectPolicy {
+  case Never
+  case SameHost(limit: Int)
+  case AnyHost(limit: Int)
+}
+```
+
+The client that keeps its connections: `get`, `post` and `send` are the free functions', over a pool of kept-alive
+connections per origin (scheme, host and port), at most `maximumConnections` of them open to one origin - a request
+beyond waits until a response gives one back. A connection goes back to the pool once its response's body was read to
+its end, and is closed where the response is released before that. A kept-alive connection the server closed while it
+waited is noticed when a request finds it closed before any byte of a response, and a request without a body is sent
+again over a new one. `timeout` limits each request up to the head of its response, redirects included; the body is the
+program's to limit with `within`.
+
+Redirects follow `redirects`: a `Client` follows up to ten to the same host (`http` to `https` included), because a
+program that named a host gets answers from that host; `AnyHost` follows them anywhere and then drops `Authorization`,
+`Cookie` and `Proxy-Authorization` where the host changes; `Never` answers the redirect itself, as the free functions
+always do. No policy follows `https` to `http`, or a `307`/`308` that would have to send a streamed body again; `303` -
+and `301`/`302` after a `POST` - becomes a `GET` without a body. More redirects than the limit is an `HttpError`
+(`tooManyRedirects`). A `Client` is an object: it stays with the task that made it, so the requests of one client run on
+that task's worker.
+
+```trb check
+use Client, HttpError from "std/http"
+
+/** Two requests to one API over one kept-alive connection. */
+fn twoUsers(api: Uri): Task<Result<(String, String), HttpError>> {
+  const client = Client maximumConnections: 2
+  var first = client.get(api.joined("users/1")).await()?
+  const one = first.body.text().await()?
+  var second = client.get(api.joined("users/2")).await()?
+  Ok((one, second.body.text().await()?))
+}
+```
 
 ### Server
 

@@ -1,8 +1,9 @@
 /**
  * The HTTP/1.1 client: `get`, `post` and `send` answer a task of a `Response` whose `Body` is a stream
- * (docs/design/NETWORK.md section 7), over TCP for `http` and over TLS for `https`. One connection per request, closed
- * with its response; a pool is a later slice. What to reach is a `Uri` (docs/design/URI.md section 10): the text was
- * read once, where it entered the program, and nothing here takes a URL apart by hand.
+ * (docs/design/NETWORK.md section 7), over TCP for `http` and over TLS for `https`. The free functions open one
+ * connection per request and close it with its response; a [Client] keeps connections alive and follows redirects
+ * (`./pool`). What to reach is a `Uri` (docs/design/URI.md section 10): the text was read once, where it entered the
+ * program, and nothing here takes a URL apart by hand.
  */
 
 use SocketAddress, TcpStream from "std/network"
@@ -11,25 +12,34 @@ use Authority from "std/uri"
 use Transport from "./transport"
 use Body, Headers, Method, Response, Status from "./message"
 use Connection, FixedReader, ChunkedReader, UntilEndReader from "./connection"
-use Framing, headLines, statusLineOf, fieldsOf, responseFraming from "./parse"
+use Framing, headLines, statusLineOf, fieldsOf, responseFraming, keepsAlive from "./parse"
 use fieldLines, writeBody from "./write"
 use HttpError from "./error"
 
 /** Where a request goes: the connection, the target to ask for, and the `Host` to name. */
-type Destination {
+public type Destination {
   /** `https`: the connection is TLS, and the certificate has to be the host's. */
   secure: Bool
   authority: Authority
   port: Int
   /** The origin form of RFC 9112 section 3.2.1: the path, `/` where it is empty, and the query. */
   target: String
+
+  /**
+   * The origin of RFC 6454 as text - the scheme, the host in lower case and the port - which is what a pool keys its
+   * connections by: two URIs of one origin may share a connection, two of different origins never.
+   */
+  fn origin(): String {
+    const scheme = if secure { "https" } else { "http" }
+    "{scheme}://{authority.host.show().toLowerCase()}:{port}"
+  }
 }
 
 /**
  * What RFC 9110 section 4.2 asks of an `http` or `https` URI beyond its syntax: the scheme, a host that is not empty
  * and no user information. A URI that breaks it names something this client does not reach.
  */
-fn destinationOf(url: Uri): Result<Destination, HttpError> {
+public fn destinationOf(url: Uri): Result<Destination, HttpError> {
   const secure = match url.scheme() {
     "http" => false
     "https" => true
@@ -59,38 +69,10 @@ fn destinationOf(url: Uri): Result<Destination, HttpError> {
 }
 
 /**
- * `http.get(url).await()?`: a `GET` of `url`. A status that is not a success is a `Response` too - `status` says what
- * it is - and no redirect is followed.
+ * A connection to the host of `destination`: straight to an IP literal, through the resolver for a name, and TLS over it
+ * for `https`, with the host's name as the one its certificate has to carry.
  */
-public fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
-  send(Method.Get, url, headers: headers).await()
-}
-
-/** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
-public fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
-  send(Method.Post, url, headers: headers, body: body).await()
-}
-
-/**
- * A request of any method: connects to the host of `url` - straight to an IP literal, through the resolver for a
- * name - writes the request - with `Content-Length` where the body's length is known, in chunks where it is not - and
- * answers the response once its head arrived. The body of the response is read from the connection as the program
- * pulls it, and the connection closes with the response. The fragment of `url` is not sent.
- *
- * # Errors
- *
- * - [HttpError] that is `unsupported` for a URI this client does not reach (a scheme other than `http` and `https`, an
- *   empty host, user information), and for a connection that fails, a certificate that is not the host's (its
- *   `cause()` is the `NetworkError` that `isCertificateRejected()`), and a response that breaks HTTP/1.1.
- */
-public fn send(
-  method: Method,
-  url: Uri,
-  headers: Headers = Headers(),
-  body: Body = Body.empty(),
-  tls: TlsSettings = TlsSettings(),
-): Task<Result<Response, HttpError>> {
-  const destination = destinationOf(url)?
+public fn openConnection(destination: Destination, tls: TlsSettings): Task<Result<Connection, HttpError>> {
   const stream = match destination.authority.host {
     .Address(address) => TcpStream.connect(SocketAddress(address, destination.port)).await()?
     .Name(name) => TcpStream.connectTo(name, destination.port).await()?
@@ -108,7 +90,22 @@ public fn send(
     const session = TlsStream.connect(stream, serverName, tls).await()?
     transport = Transport.encrypted stream, session
   }
-  var connection = Connection.of transport
+  Ok Connection.of(transport)
+}
+
+/**
+ * Writes a request to `destination` over `connection`: the head - with `Content-Length` where the body's length is
+ * known, in chunks where it is not, and `Connection: close` where `closing` - and the body.
+ */
+public fn writeRequest(
+  connection: Connection,
+  method: Method,
+  destination: Destination,
+  headers: Headers,
+  body: Body,
+  closing: Bool,
+): Task<Result<Void, HttpError>> {
+  var writing = connection
   const length = body.length()
   // A body of no bytes on a method that means none is not announced at all (RFC 9110 section 8.6)
   const announced = length != Some(0) || method == Method.Post || method == Method.Put || method == Method.Patch
@@ -123,11 +120,43 @@ public fn send(
   } else if announced {
     head = head + "Content-Length: {length ?? 0}\r\n"
   }
-  head = head + "Connection: close\r\n\r\n"
-  connection.sendText(head).await()?
-  const _ = writeBody(connection, body, chunked).await()?
+  if closing {
+    head = head + "Connection: close\r\n"
+  }
+  writing.sendText(head + "\r\n").await()?
+  const _ = writeBody(writing, body, chunked).await()?
+  Ok void
+}
+
+/** The head of a response as the client read it: the status, the fields, how the body is framed, and the version. */
+public type ResponseHead {
+  status: Status
+  headers: Headers
+  framing: Framing
+  version: String
+
+  /**
+   * Whether the connection may carry another request once this response's body was read to its end: an HTTP/1.1
+   * response without `Connection: close` (or an HTTP/1.0 one with `keep-alive`) whose body does not end with the
+   * connection.
+   */
+  fn keepsConnection(): Bool {
+    framing != Framing.UntilEnd && keepsAlive(headers, version)
+  }
+}
+
+/**
+ * The head of the response to a request of `method`: interim responses (`100 Continue`, `103 Early Hints`) are read
+ * and dropped, and the fields are read with the parser's limits.
+ *
+ * # Errors
+ *
+ * - [HttpError] `incomplete` where the connection ended before a head arrived, and every refusal of the parser.
+ */
+public fn readHead(connection: Connection, method: Method): Task<Result<ResponseHead, HttpError>> {
+  var reading = connection
   loop {
-    const found = connection.head(65536).await()?
+    const found = reading.head(65536).await()?
     const bytes = match found {
       Some(read) => read
       None => {
@@ -137,16 +166,61 @@ public fn send(
     const lines = headLines(bytes)?
     const line = statusLineOf(lines[0])?
     const fields = fieldsOf(lines[1..lines.length()], 100)?
-    // An interim response (`100 Continue`, `103 Early Hints`) is followed by the real one
+    // An interim response is followed by the real one
     if line.status.isInformational() {
       continue
     }
-    const responseBody = match responseFraming(fields, line.status, method)? {
-      .Empty => Body.empty()
-      .Fixed(size) => Body.of FixedReader.of(connection, size), length: Some(size)
-      .Chunked => Body.of ChunkedReader.of(connection)
-      .UntilEnd => Body.of UntilEndReader.of(connection)
-    }
-    return Ok Response(line.status, fields, responseBody)
+    const framing = responseFraming(fields, line.status, method)?
+    return Ok ResponseHead(line.status, fields, framing, line.version)
   }
+}
+
+/** The body of a response as its framing says, read from `connection` as the program pulls it. */
+public fn bodyOf(connection: Connection, framing: Framing): Body {
+  match framing {
+    .Empty => Body.empty()
+    .Fixed(size) => Body.of FixedReader.of(connection, size), length: Some(size)
+    .Chunked => Body.of ChunkedReader.of(connection)
+    .UntilEnd => Body.of UntilEndReader.of(connection)
+  }
+}
+
+/**
+ * `http.get(url).await()?`: a `GET` of `url`. A status that is not a success is a `Response` too - `status` says what
+ * it is - and no redirect is followed.
+ */
+public fn get(url: Uri, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+  send(Method.Get, url, headers: headers).await()
+}
+
+/** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
+public fn post(url: Uri, body: Body, headers: Headers = Headers()): Task<Result<Response, HttpError>> {
+  send(Method.Post, url, headers: headers, body: body).await()
+}
+
+/**
+ * A request of any method on a connection of its own: connects to the host of `url` - straight to an IP literal,
+ * through the resolver for a name - writes the request - with `Content-Length` where the body's length is known, in
+ * chunks where it is not - and answers the response once its head arrived. The body of the response is read from the
+ * connection as the program pulls it, and the connection closes with the response. The fragment of `url` is not sent,
+ * and no redirect is followed: a [Client] keeps connections alive and follows redirects.
+ *
+ * # Errors
+ *
+ * - [HttpError] that is `unsupported` for a URI this client does not reach (a scheme other than `http` and `https`, an
+ *   empty host, user information), and for a connection that fails, a certificate that is not the host's (its
+ *   `cause()` is the `NetworkError` that `isCertificateRejected()`), and a response that breaks HTTP/1.1.
+ */
+public fn send(
+  method: Method,
+  url: Uri,
+  headers: Headers = Headers(),
+  body: Body = Body.empty(),
+  tls: TlsSettings = TlsSettings(),
+): Task<Result<Response, HttpError>> {
+  const destination = destinationOf(url)?
+  const connection = openConnection(destination, tls).await()?
+  writeRequest(connection, method, destination, headers, body, true).await()?
+  const head = readHead(connection, method).await()?
+  Ok Response(head.status, head.headers, bodyOf(connection, head.framing))
 }
