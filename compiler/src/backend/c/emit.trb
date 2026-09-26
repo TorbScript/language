@@ -2169,6 +2169,7 @@ fn emitDefinitions(
   // Which parameters every callee may keep, once for the whole program: it decides where a closure environment lives
   const keeping = keepingOf program
   const closing = closingOf program
+  const frameNames = frameNamesByFunction program
   for function in functions {
     if const .ConstantCell(initializer) = function.kind {
       emitConstantCell emission, program, function, initializer
@@ -2191,6 +2192,10 @@ fn emitDefinitions(
       sited.appendAll statements
       statements = sited
     }
+    // First of all, so that every label and every `goto` of the body is inside the scope of the frame
+    var framed = [frameEntryOf(frameNames.get(function.name) ?? function.name)]
+    framed.appendAll statements
+    statements = framed
     const declaration = CDeclaration.Definition(
       commentOf(program, function),
       signatureHeadOf(program, function),
@@ -2198,6 +2203,26 @@ fn emitDefinitions(
     )
     write emission, declaration
   }
+}
+
+/** What a frame of the `dev` profile calls each function ([IrProgram.frameNames]), by its mangled name. */
+fn frameNamesByFunction(program: IrProgram): Map<String, String> {
+  var names: Map<String, String> = [:]
+  for index in 0..program.functions.length() {
+    if const Some(name) = program.frameNames.get(index) {
+      names.set program.functions[index].name, name
+    }
+  }
+  names
+}
+
+/**
+ * `TORB_ENTER_FRAME("ArrayList.at");`, the first statement of every function: the frame a panic of the `dev` profile
+ * names, which leaves itself on every way out of the function (`runtime/include/torb.h`). Every other profile compiles
+ * it to nothing, so the C is the same under every profile.
+ */
+fn frameEntryOf(name: String): CStatement {
+  CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_ENTER_FRAME"), [CExpression.Literal(cStringOf(name))])
 }
 
 /**
@@ -2229,7 +2254,7 @@ fn callsProgramCode(program: IrProgram, function: IrFunction): Bool {
   for block in function.blocks {
     for instruction in block.instructions {
       match instruction {
-        .CallClosure(_, _, _) | .CallWitness(_, _, _, _, _) => {
+        .CallClosure(_, _, _, _) | .CallWitness(_, _, _, _, _) => {
           return true
         }
         .Call(_, callee, _, _, _) => {

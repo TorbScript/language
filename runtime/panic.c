@@ -32,8 +32,16 @@
 
 const torb_location torb_location_unknown = { NULL, 0, 0 };
 
-#define TORB_PANIC_BUFFER_SIZE 2048
+#define TORB_PANIC_BUFFER_SIZE 4096
 #define TORB_MESSAGE_BUFFER_SIZE 1024
+/** The frames of the `dev` profile, rendered below the site. */
+#define TORB_FRAMES_BUFFER_SIZE 2048
+/** A recursion that ran out of stack has thousands of frames, and the innermost ones are what says where. */
+#define TORB_FRAMES_SHOWN 24u
+
+#if defined(TORB_FRAMES)
+_Thread_local torb_frame *torb_frame_innermost = NULL;
+#endif
 
 /**
  * How much of the stack the check leaves over: the panic renders into two buffers of a few kilobytes and writes through
@@ -63,8 +71,61 @@ void torb_set_panic_hook(torb_panic_hook hook) {
 torb_recovery *torb_begin_recovery(torb_recovery *point) {
   torb_worker *worker = torb_worker_current();
   torb_recovery *previous = worker->recovery;
+  if (point != NULL) {
+    point->frames[0] = '\0';
+#if defined(TORB_FRAMES)
+    point->innermost = torb_frame_innermost;
+#else
+    point->innermost = NULL;
+#endif
+  }
   worker->recovery = point;
   return previous;
+}
+
+/**
+ * The frames of the `dev` profile below a panic's site (`torb_frame` in `torb.h`), one line each and innermost first:
+ * `  in <function>`, and `, at <site>` behind every frame but the innermost, whose line is the site itself. The first
+ * `TORB_FRAMES_SHOWN`, then how many more there are. Renders the empty text in every other build.
+ */
+static void torb_render_frames(char *buffer, size_t size) {
+  buffer[0] = '\0';
+#if defined(TORB_FRAMES)
+  {
+    const torb_frame *frame;
+    size_t filled = 0u;
+    unsigned shown = 0u;
+    unsigned long long more = 0u;
+    for (frame = torb_frame_innermost; frame != NULL; frame = frame->caller) {
+      const char *separator = filled == 0u ? "" : "\n";
+      int written;
+      if (shown == TORB_FRAMES_SHOWN) {
+        more += 1u;
+        continue;
+      }
+      if (frame != torb_frame_innermost && frame->site.path != NULL) {
+        written = snprintf(buffer + filled, size - filled, "%s  in %s, at %s:%u:%u", separator, frame->function,
+                           frame->site.path, frame->site.line, frame->site.column);
+      } else {
+        written = snprintf(buffer + filled, size - filled, "%s  in %s", separator, frame->function);
+      }
+      if (written < 0 || (size_t)written >= size - filled) {
+        /* The line did not fit: it is cut off where it was, and counted with the rest */
+        buffer[filled] = '\0';
+        shown = TORB_FRAMES_SHOWN;
+        more += 1u;
+        continue;
+      }
+      filled += (size_t)written;
+      shown += 1u;
+    }
+    if (more > 0u) {
+      (void)snprintf(buffer + filled, size - filled, "\n  ... and %llu frames more", more);
+    }
+  }
+#else
+  (void)size;
+#endif
 }
 
 void torb_end_recovery(torb_recovery *previous) {
@@ -78,6 +139,7 @@ void torb_end_recovery(torb_recovery *previous) {
  */
 static TORB_NORETURN void torb_end_with_panic(const char *message, torb_location at, int code) {
   char buffer[TORB_PANIC_BUFFER_SIZE];
+  char frames[TORB_FRAMES_BUFFER_SIZE];
   torb_worker *worker = torb_worker_current();
   /*
    * A test runner that set up a recovery point catches the panic instead: the message and the site go into the point
@@ -91,12 +153,22 @@ static TORB_NORETURN void torb_end_with_panic(const char *message, torb_location
     worker->recovery = NULL;
     snprintf(point->message, sizeof point->message, "%s", message);
     point->at = at;
+    torb_render_frames(point->frames, sizeof point->frames);
+#if defined(TORB_FRAMES)
+    /* The jump skips the cleanup of every frame between here and the point */
+    torb_frame_innermost = point->innermost;
+#endif
     longjmp(point->destination, 1);
   }
+  torb_render_frames(frames, sizeof frames);
   if (at.path != NULL) {
     snprintf(buffer, sizeof buffer, "panic: %s\n  at %s:%u:%u", message, at.path, at.line, at.column);
   } else {
     snprintf(buffer, sizeof buffer, "panic: %s", message);
+  }
+  if (frames[0] != '\0') {
+    size_t length = strlen(buffer);
+    snprintf(buffer + length, sizeof buffer - length, "\n%s", frames);
   }
   if (torb_hook != NULL) {
     torb_hook(buffer);

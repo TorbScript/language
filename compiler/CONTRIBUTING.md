@@ -337,7 +337,8 @@ tier A: `torb docs source --panics std`, a public function of `std/` that can pa
 ## Traps of the Code Base
 
 A **panic** prints `panic: <message>` and the site it happened at, two lines and no more, and leaves with 101. A
-panic inside the toolchain is found by narrowing what is compiled, not by a stack trace.
+panic inside the toolchain is found by narrowing what is compiled, not by a stack trace - or by building the compiler
+with `--profile dev`, whose binary prints the frames of the panic below the site (`runtime/include/torb.h`).
 
 1. **Copy on write is O(n).** Never hold a second live copy of a big table across a write. Big tables live in one
    `var` owner and are passed as `var` parameters. Interning is a `Map` lookup, never a scan.

@@ -34,7 +34,7 @@ use isManagedType from "../layout"
 use isSharedStorage from "../capture"
 use describeIrType from "../print"
 use isReferenceParameter, isClosedType from "../instances"
-use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf from "./context"
+use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf, locationOf from "./context"
 use substituted from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
@@ -974,7 +974,8 @@ public fn lowerPropertyWrite(
     }
   }
   const voidType = voidTypeOf lowering
-  emitClosureCall lowering, builder, None, holder, [path.reference.base], [Some(path.reference)], voidType
+  const site = Some locationOf(lowering, callee.span)
+  emitClosureCall lowering, builder, None, holder, [path.reference.base], [Some(path.reference)], voidType, site
   match destination {
     Some(_) => voidSlot lowering, builder, destination
     None => abandonedSlot lowering, builder, destination

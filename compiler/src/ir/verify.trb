@@ -477,7 +477,7 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
       used.appendAll slotsOfWitnesses(witnesses)
       used
     }
-    .CallClosure(_, callee, arguments) => {
+    .CallClosure(_, callee, arguments, _) => {
       var used = [callee]
       used.appendAll slotsOfArguments(arguments)
       used
@@ -550,7 +550,7 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .Move(target, _) => Some target
     .Copy(target, _) => Some target
     .Call(target, _, _, _, _) => target
-    .CallClosure(target, _, _) => target
+    .CallClosure(target, _, _, _) => target
     .CallWitness(target, _, _, _, _) => target
     .Intrinsic(target, _, _, _) => target
     .Construct(target, _, _, _) => Some target
@@ -701,7 +701,7 @@ fn verifyInstruction(
       const name = program.functionAt(callee).name
       verifyCall program, function, found, at, target, signature, arguments, witnesses, "`{name}`"
     }
-    .CallClosure(target, callee, arguments) => {
+    .CallClosure(target, callee, arguments, _) => {
       if !function.hasSlot(callee) {
         found.append "{at}: there is no slot %{callee.value}"
         return

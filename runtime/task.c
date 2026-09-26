@@ -999,13 +999,25 @@ static void torb_task_panicked(torb_worker *self, torb_task *task, const torb_re
 static void torb_run_one(torb_worker *self, torb_task *task) {
   torb_scheduler *scheduler = &self->scheduler;
   torb_poll poll = TORB_POLL_SUSPENDED;
+#if defined(TORB_FRAMES)
+  /* The frames a panic of the task prints are the task's: whoever waits for it on this thread is not among them */
+  torb_frame *waiting = torb_frame_innermost;
+  torb_frame_innermost = NULL;
+#endif
   torb_settle(self, task);
   scheduler->current = task;
   if (task->test == 0u) {
     poll = task->resume(task);
+#if defined(TORB_FRAMES)
+    torb_frame_innermost = waiting;
+#endif
   } else {
     torb_recovery point;
-    if (!torb_resume_recovered(self, task, &poll, &point)) {
+    bool resumed = torb_resume_recovered(self, task, &poll, &point);
+#if defined(TORB_FRAMES)
+    torb_frame_innermost = waiting;
+#endif
+    if (!resumed) {
       scheduler->current = NULL;
       self->ran += 1u;
       torb_task_panicked(self, task, &point);

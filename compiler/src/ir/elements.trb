@@ -756,8 +756,8 @@ fn substituted(instruction: Instruction, element: Slot, prefix: Reference): Inst
         at,
       )
     }
-    .CallClosure(target, callee, arguments) => {
-      Instruction.CallClosure target, callee, substitutedArguments(arguments, element, prefix)
+    .CallClosure(target, callee, arguments, at) => {
+      Instruction.CallClosure target, callee, substitutedArguments(arguments, element, prefix), at
     }
     .CallWitness(target, witness, member, arguments, at) => {
       Instruction.CallWitness(
@@ -873,7 +873,7 @@ fn writtenReferencesOf(instruction: Instruction): List<Reference> {
     .TakeOut(_, container, _, _) => [container]
     .PutBack(container, _, _, _) => [container]
     .Call(_, _, arguments, _, _) => placesOfArguments arguments
-    .CallClosure(_, _, arguments) => placesOfArguments arguments
+    .CallClosure(_, _, arguments, _) => placesOfArguments arguments
     .CallWitness(_, witness, _, arguments, _) => {
       var found = placesOfArguments arguments
       found.appendAll placeOfWitness(witness)
@@ -898,7 +898,7 @@ public fn referencesOf(instruction: Instruction): List<Reference> {
       }
       found
     }
-    .CallClosure(_, _, arguments) => placesOfArguments arguments
+    .CallClosure(_, _, arguments, _) => placesOfArguments arguments
     .CallWitness(_, witness, _, arguments, _) => {
       var found = placeOfWitness witness
       found.appendAll placesOfArguments(arguments)

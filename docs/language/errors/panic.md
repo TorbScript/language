@@ -57,6 +57,20 @@ panic <message>
      at src/main.trb:4:7
    ```
 
+   **A native binary of the `dev` profile adds the frames**, innermost first: every function the panic is inside of,
+   and the line each one is in the middle of. That is the binary `torb run --native` and `torb test --native` build;
+   a release binary and the VM print the two lines above and nothing else, which is what the conformance suite
+   compares. The frames are what finds the line of a panic that happened in a closure the standard library called:
+
+   ```text
+   panic: arithmetic overflow in `+`
+     at std/iteration/src/iteration.trb:278:33
+     in a closure in Iterate.sum
+     in Iterate.fold, at std/iteration/src/iteration.trb:240:15
+     in Iterate.sum, at std/iteration/src/iteration.trb:278:5
+     in the top level, at src/main.trb:2:7
+   ```
+
 3. **Nothing runs on the way out of a panic.** There is no destructor, no `Close`, and no `using` cleanup, because a
    panic means the program already has a bug, and running more code in a broken program is how bugs get worse.
 

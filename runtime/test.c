@@ -142,6 +142,10 @@ void torb_test_case(torb_text name, torb_closure body) {
     snprintf(site, sizeof site, "          at %s:%u:%u", point.at.path, point.at.line, point.at.column);
     torb_test_line(site);
   }
+  /* The frames of the `dev` profile, below the site as a panic that ends the process prints them */
+  if (point.frames[0] != '\0') {
+    torb_test_print_indented(point.frames);
+  }
   fflush(stdout);
 }
 

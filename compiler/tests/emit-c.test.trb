@@ -144,6 +144,7 @@ group "The translation unit" {
 
         /* t_acme_x2f_app_main: the top-level code of the entry file */
         static void t_acme_x2f_app_main(void) {
+          TORB_ENTER_FRAME("the top level");
           TORB_CHECK_STACK(TORB_LOCATION("acme/app/src/main.trb", 5, 1));
           int64_t s0 = { 0 };
           int64_t s1 = { 0 };
@@ -151,12 +152,14 @@ group "The translation unit" {
         #line 5 "acme/app/src/main.trb"
           /* entry */
           s0 = s_literal__Int64_21;
+          TORB_FRAME_SITE(TORB_LOCATION("acme/app/src/main.trb", 5, 11));
           s1 = t_acme_x2f_app_main_double(s0);
           return;
         }
 
         /* t_acme_x2f_app_main_double */
         static int64_t t_acme_x2f_app_main_double(int64_t s0_value) {
+          TORB_ENTER_FRAME("double");
           int64_t s1 = { 0 };
           int64_t s2 = { 0 };
         #line 1 "acme/app/src/main.trb"
@@ -393,6 +396,7 @@ group "Bodies" {
     assert(
       functionOf(source, "t_acme_x2f_app_main_pick") == raw"""
         static int64_t t_acme_x2f_app_main_pick(bool s0_flag, int64_t s1_value) {
+          TORB_ENTER_FRAME("pick");
           torb_void s2 = { 0 };
           int64_t s3 = { 0 };
           (void)s2;
@@ -465,6 +469,7 @@ group "Bodies" {
     assert(
       functionOf(source, "t_acme_x2f_app_main_stop") == raw"""
         static TORB_NORETURN void t_acme_x2f_app_main_stop(void) {
+          TORB_ENTER_FRAME("stop");
           torb_text s0 = { 0 };
           torb_void s1 = { 0 };
           (void)s1;
@@ -949,5 +954,44 @@ group "What the C back end does not emit yet" {
       const _ = sum(Point(1, 2))
       """
     assert(findingsOf(source) == [])
+  }
+}
+
+group "The frames of the dev profile" {
+  test "every function enters a frame named as the program names it, and a call says where it is" {
+    const source = raw"""
+      fn double(value: Int): Int {
+        value * 2
+      }
+
+      fn quadruple(value: Int): Int {
+        double(double(value))
+      }
+
+      const _ = quadruple(21)
+      """
+    const body = functionOf source, "t_acme_x2f_app_main_quadruple"
+    assert body.contains("  TORB_ENTER_FRAME(\"quadruple\");")
+    assert body.contains("TORB_FRAME_SITE(TORB_LOCATION(\"acme/app/src/main.trb\", 6, 10));")
+    assert body.contains("TORB_FRAME_SITE(TORB_LOCATION(\"acme/app/src/main.trb\", 6, 3));")
+    assert cOf(source).contains("TORB_ENTER_FRAME(\"the top level\");")
+  }
+
+  test "a closure is named after the function it is written in, and a call of one says where it is" {
+    const source = raw"""
+      fn apply(transform: (value: Int) => Int): Int {
+        transform(1)
+      }
+
+      fn run(): Int {
+        apply { value => value + 1 }
+      }
+
+      const _ = run()
+      """
+    const text = cOf source
+    assert text.contains("TORB_ENTER_FRAME(\"a closure in run\");")
+    const body = functionOf source, "t_acme_x2f_app_main_apply"
+    assert body.contains("TORB_FRAME_SITE(TORB_LOCATION(\"acme/app/src/main.trb\", 2, 3));")
   }
 }

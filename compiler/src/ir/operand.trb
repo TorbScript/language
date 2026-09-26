@@ -121,7 +121,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
       found.appendAll borrowedOperands(witnessSlotsOf(witnesses))
       found
     }
-    .CallClosure(_, callee, arguments) => {
+    .CallClosure(_, callee, arguments, _) => {
       var found = [borrowedOperand(callee)]
       found.appendAll closureOperands(program, facts, callee, arguments)
       found
@@ -280,7 +280,7 @@ public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
   match instruction {
     .Move(_, source) => [source]
     .Call(_, _, arguments, _, _) => movedSlotsOf arguments
-    .CallClosure(_, _, arguments) => movedSlotsOf arguments
+    .CallClosure(_, _, arguments, _) => movedSlotsOf arguments
     .CallWitness(_, _, _, arguments, _) => movedSlotsOf arguments
     .Construct(_, _, _, fields) => movedSlotsOf fields
     .ArrayNew(_, items) => movedSlotsOf items
@@ -326,9 +326,9 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Call(target, callee, arguments, witnesses, at) => {
       Instruction.Call target, callee, takenArguments(arguments, decided, 0), witnesses, at
     }
-    .CallClosure(target, _, arguments) => {
+    .CallClosure(target, _, arguments, at) => {
       const slot = decidedAt(decided, 0).slot
-      Instruction.CallClosure target, slot, takenArguments(arguments, decided, 1)
+      Instruction.CallClosure target, slot, takenArguments(arguments, decided, 1), at
     }
     .CallWitness(target, witness, member, arguments, at) => {
       const first = witnessSlotsOf([witness]).length()

@@ -28,6 +28,7 @@ use SymbolId from "../../semantics/symbols"
 use TypeId from "../../semantics/checker/type"
 use scriptReceiverOf from "../../semantics/checker/receiver"
 use instanceOfSymbol from "../instances"
+use symbolPathOf from "../instantiate"
 use lowerGenerated from "./derive"
 use requestCloseFunctions from "./scope"
 use settleEntryCells from "./cell"
@@ -133,6 +134,65 @@ fn finishLowering(var lowering: Lowering) {
   dropListBoundsChecks lowering.program, readers, lengths
   // Last, because which calls are direct and which checks remain is what decides where a panic can happen
   trackCallerSites lowering.program, standard
+  // After the copies, which a frame names as it names their original
+  lowering.program.frameNames = frameNamesOf lowering
+}
+
+/**
+ * What a frame of the `dev` profile calls each function ([IrProgram.frameNames]): a declaration by the declarations
+ * around it and its own name, `ArrayList.at`; a closure after the function it is written in, `a closure in main`; the
+ * resume function of a task after the function that answers it; the top-level code of an entry file `the top level`.
+ */
+fn frameNamesOf(lowering: Lowering): List<String> {
+  const functions = lowering.program.functions
+  var byName: Map<String, Int> = [:]
+  for index in 0..functions.length() {
+    byName.set functions[index].name, index
+  }
+  var names: List<String> = []
+  for function in functions {
+    names.append frameNameOf(lowering, byName, function.name, 0)
+  }
+  names
+}
+
+fn frameNameOf(lowering: Lowering, byName: Map<String, Int>, name: String, depth: Int): String {
+  // A closure inside a closure names its owner's owner, and a chain that long is a bug the bound keeps finite
+  if depth > 16 {
+    return name
+  }
+  if const Some(rest) = name.withoutPrefix("t_closure__") {
+    const cut = rest.lastByteOffsetOf("_") ?? rest.byteLength()
+    const owner = rest.sliceBytes 0, cut
+    const named = frameNameOf(lowering, byName, owner, depth + 1)
+    // The mangled name of an owner too long to spell is hashed, and then it names nothing to look up
+    if named == owner {
+      return "a closure"
+    }
+    return "a closure in {named}"
+  }
+  if const Some(rest) = name.withoutPrefix("t_resume__") {
+    return frameNameOf(lowering, byName, rest, depth + 1)
+  }
+  if name.startsWith("t_spawned__") {
+    return "a spawned task"
+  }
+  const function = match byName.get(name) {
+    Some(index) => lowering.program.functions[index]
+    None => {
+      return name
+    }
+  }
+  if const Some(symbol) = function.origin {
+    const path = symbolPathOf lowering.checker, symbol
+    var parts = path.owners
+    parts.append path.name
+    return parts.joined separator: "."
+  }
+  match function.blocks.first() {
+    Some(entry) => if entry.label == "entry" { "the top level" } else { name }
+    None => name
+  }
 }
 
 /**

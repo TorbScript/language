@@ -229,7 +229,7 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
     .Clear(_) => {}
     .MakeUnique(reference) => markReference reads, reference
     .Call(_, _, arguments, _, _) => markArguments reads, arguments
-    .CallClosure(_, callee, arguments) => {
+    .CallClosure(_, callee, arguments, _) => {
       markRead reads, callee
       markArguments reads, arguments
     }
@@ -964,7 +964,9 @@ fn instructionStatements(
     }
     .MakeUnique(reference) => makeUniqueStatements emission, program, body, reference
     .Call(target, callee, arguments, witnesses, at) => {
-      callStatements emission, program, body, target, callee, arguments, witnesses, at
+      var statements = frameSiteStatements program, at, isProgramCallee(program, callee)
+      statements.appendAll callStatements(emission, program, body, target, callee, arguments, witnesses, at)
+      statements
     }
     .Intrinsic(target, intrinsic, arguments, at) => {
       intrinsicStatements emission, program, body, target, intrinsic, arguments, at
@@ -1012,11 +1014,15 @@ fn instructionStatements(
       statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_panic"), [name, site]))
       statements
     }
-    .CallClosure(target, callee, arguments) => {
-      closureCallStatements emission, program, body, target, callee, arguments
+    .CallClosure(target, callee, arguments, at) => {
+      var statements = frameSiteStatements program, at, true
+      statements.appendAll closureCallStatements(emission, program, body, target, callee, arguments)
+      statements
     }
     .CallWitness(target, witness, member, arguments, at) => {
-      witnessCallStatements emission, program, body, target, witness, member, arguments, at
+      var statements = frameSiteStatements program, at, true
+      statements.appendAll witnessCallStatements(emission, program, body, target, witness, member, arguments, at)
+      statements
     }
     .Closure(target, callee, captures, _) => {
       closureStatements emission, program, body, target, callee, captures
@@ -1608,6 +1614,37 @@ fn callStatements(
 
 /** The hidden parameter of a function that tracks its caller (`ir/sites.trb`): where its panics say they are. */
 public const callerSiteName = "torb_site"
+
+/**
+ * `TORB_FRAME_SITE(TORB_LOCATION(...));` in front of a call: the line the frame of this function names while the call
+ * runs, which only the `dev` profile keeps (`runtime/include/torb.h`) and every other profile compiles to nothing. A
+ * call of program code without a location says so, so a panic below it never names the line of an earlier call; a
+ * call of the runtime without one sets nothing, because the runtime only calls back into the program where a call
+ * has one (a hash, a comparison, a closure it was handed).
+ */
+fn frameSiteStatements(program: IrProgram, at: LocationId?, isProgramCall: Bool): List<CStatement> {
+  const site = match at {
+    Some(found) => locationExpression program, found
+    None => {
+      if !isProgramCall {
+        return []
+      }
+      CExpression.Name "torb_location_unknown"
+    }
+  }
+  [CStatement.Evaluate(CExpression.Call(CExpression.Name("TORB_FRAME_SITE"), [site]))]
+}
+
+/** Whether a direct call reaches a function of the program, which has a frame, and not one of the runtime. */
+fn isProgramCallee(program: IrProgram, callee: FunctionId): Bool {
+  if !program.hasFunction(callee) {
+    return false
+  }
+  match program.functionAt(callee).kind {
+    .Runtime(_) => false
+    _ => true
+  }
+}
 
 /**
  * What a call of a function that tracks its caller hands it: the site this function was handed, where it tracks its

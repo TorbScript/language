@@ -653,8 +653,11 @@ public type Instruction {
     witnesses: List<WitnessSource>,
     at: LocationId? = None,
   )
-  /** A closure value, a function in a field, a `lazy` force. */
-  case CallClosure(target: Slot?, callee: Slot, arguments: List<Argument>)
+  /**
+   * A closure value, a function in a field, a `lazy` force. `at` is where the call is written: the line a frame of
+   * the `dev` profile names for the function that is in the middle of this call.
+   */
+  case CallClosure(target: Slot?, callee: Slot, arguments: List<Argument>, at: LocationId? = None)
   /** A member of a witness table: a trait-typed receiver, or a forwarded witness. */
   /**
    * A member of a witness table: a trait-typed receiver, or a forwarded witness. `at` is where the call is written,
@@ -812,6 +815,11 @@ public type IrProgram {
    * call through a table names its caller as a direct call does (`ir/sites.trb`).
    */
   var siteCopies: Map<Int, Int> = [:]
+  /**
+   * What a frame of the `dev` profile calls each function, by index: `ArrayList.at`, `a closure in main`, `the top
+   * level`. Written last by the lowering (`frameNamesOf`); a function past its end is named by its mangled name.
+   */
+  var frameNames: List<String> = []
   /**
    * The functions a host calls with words it holds itself - the host of a receiver script, the entry of a `torb repl`
    * session - whose signature therefore may not move: a value the host passes in or keeps was laid out by another

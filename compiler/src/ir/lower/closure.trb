@@ -26,7 +26,7 @@ use signatureOf from "../../semantics/checker/signature"
 use matchTypePattern from "../../semantics/checker/implementation"
 use Dispatch from "../../semantics/checker/context"
 use IrProgram, IrTypeId, IrType, IrSignature, IrSignatureId, IrParameter, Ownership from "../ir"
-use Slot, BlockId, LayoutId, FunctionId, FunctionKind from "../ir"
+use Slot, BlockId, LayoutId, FunctionId, FunctionKind, LocationId from "../ir"
 use Instruction, Terminator, Reference, PathStep, Capture, Argument as IrArgument, borrowed from "../ir"
 use FieldLayout from "../layout"
 use boxLayoutOf, environmentLayoutOf from "../capture"
@@ -400,7 +400,7 @@ public fn lowerForcedRead(
   const thunkType = shape.fields[1].annotation
   const thunk = addTemporary builder, thunkType
   emit builder, Instruction.Read(thunk, Reference(cell, [PathStep.Field(layout, 1)]))
-  emit builder, Instruction.CallClosure(Some(target), thunk, [])
+  emit builder, Instruction.CallClosure(Some(target), thunk, [], Some(location))
   const wrapped = addTemporary builder, optional
   emit builder, Instruction.Construct(wrapped, optionLayout, someIndex, [borrowed(target)])
   emit builder, Instruction.Write(Reference(cell, [PathStep.Field(layout, 0)]), borrowed(wrapped))
@@ -836,7 +836,8 @@ public fn lowerClosureCall(
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
-  const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation
+  const site = locationOf lowering, expression.span
+  const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation, Some(site)
   putBackElements lowering, builder, taken
   result
 }
@@ -960,7 +961,10 @@ fn closureDefaults(
   found
 }
 
-/** One `CallClosure`, with the result where it belongs and `Void` for a closure that answers nothing. */
+/**
+ * One `CallClosure`, with the result where it belongs and `Void` for a closure that answers nothing. `at` is where
+ * the call is written.
+ */
 public fn emitClosureCall(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -969,10 +973,11 @@ public fn emitClosureCall(
   slots: List<Slot>,
   places: List<Reference?>,
   annotation: IrTypeId,
+  at: LocationId?,
 ): Slot {
   const given = borrowedArguments slots, places
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.CallClosure(None, holder, given)
+    emit builder, Instruction.CallClosure(None, holder, given, at)
     match destination {
       Some(_) => {
         return voidSlot lowering, builder, destination
@@ -983,7 +988,7 @@ public fn emitClosureCall(
     }
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.CallClosure(Some(target), holder, given)
+  emit builder, Instruction.CallClosure(Some(target), holder, given, at)
   target
 }
 

@@ -260,6 +260,53 @@ static inline uintptr_t torb_stack_floor(void) {
 void torb_set_stack_limit(void);
 
 /**
+ * The frames of the `dev` profile: what a panic prints below its site, innermost first, so that a panic inside a
+ * closure the standard library called, or three calls below the line that went wrong, still names that line.
+ *
+ *     panic: arithmetic overflow in `+`
+ *       at std/iteration/src/iteration.trb:278:33
+ *       in a closure in Iterate.sum
+ *       in Iterate.fold, at std/iteration/src/iteration.trb:240:15
+ *       in Iterate.sum, at std/iteration/src/iteration.trb:278:5
+ *       in the top level, at main.trb:2:7
+ *
+ * Every emitted function starts with `TORB_ENTER_FRAME("name");`, and every call of program code is preceded by
+ * `TORB_FRAME_SITE(location);`: a frame on the function's own stack, linked to its caller's, which the function leaves
+ * on every way out through the `cleanup` attribute of GCC and Clang. The innermost frame is the running thread's, and a
+ * worker runs one task at a time, so the chain a panic walks is the running task's from its resume down - the
+ * scheduler starts each resume with an empty chain, and a recovered panic puts back the chain its recovery point began
+ * with, because a `longjmp` leaves the frames it skips without their cleanup.
+ *
+ * Only `TORB_PROFILE_DEV` with GCC or Clang keeps them; every other build compiles both macros to nothing, so the C a
+ * program is emitted as is the same under every profile. A release binary pays nothing.
+ */
+typedef struct torb_frame {
+  /** What the program calls the function: `ArrayList.at`, `a closure in main`, `the top level`. */
+  const char *function;
+  /** Where the function is in the middle of a call, or a `NULL` path before its first one. */
+  torb_location site;
+  struct torb_frame *caller;
+} torb_frame;
+
+#if defined(TORB_PROFILE_DEV) && (defined(__GNUC__) || defined(__clang__))
+#  define TORB_FRAMES 1
+/** The innermost frame of the running thread, `NULL` outside every function of the program. */
+extern _Thread_local torb_frame *torb_frame_innermost;
+static inline void torb_leave_frame(torb_frame *frame) {
+  torb_frame_innermost = frame->caller;
+}
+#  define TORB_ENTER_FRAME(name)                                                                                  \
+    torb_frame torb_frame_here __attribute__((cleanup(torb_leave_frame))) = {                                     \
+      (name), { NULL, 0u, 0u }, torb_frame_innermost                                                              \
+    };                                                                                                            \
+    torb_frame_innermost = &torb_frame_here
+#  define TORB_FRAME_SITE(location) (torb_frame_here.site = (location))
+#else
+#  define TORB_ENTER_FRAME(name) ((void)0)
+#  define TORB_FRAME_SITE(location) ((void)0)
+#endif
+
+/**
  * A test build replaces what a panic does with this. The hook receives the whole message as it would have been
  * printed (without the trailing newline), borrowed, and is expected not to return - `runtime/tests` longjmps out of
  * it. If it does return anyway, the panic leaves with `TORB_PANIC_EXIT_CODE` after all.
@@ -279,12 +326,15 @@ void torb_set_panic_hook(torb_panic_hook hook);
  * (`tests/conformance/README.md`).
  *
  * `message` and `at` are filled in before the jump. The message is the panic's own, without the `panic: ` in front of
- * it, so a runner can print it in its own format.
+ * it, so a runner can print it in its own format. `frames` is what the `dev` profile prints below the site, one frame
+ * per line and empty elsewhere; `innermost` is the frame the point was begun in, which the jump makes innermost again.
  */
 typedef struct torb_recovery {
   jmp_buf destination;
   char message[1024];
   torb_location at;
+  char frames[2048];
+  torb_frame *innermost;
 } torb_recovery;
 
 /**

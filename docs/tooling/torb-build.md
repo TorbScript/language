@@ -109,12 +109,18 @@ under both, so a profile never changes what a program means - only how long the 
 is. `build` builds `release` unless told otherwise, and the default path of the binary is `build/<profile>/<name>`;
 `torb test` and `torb run` build `dev`.
 
-The one thing besides speed a profile decides is the **default memory limit**. A `dev` binary stops at the smaller of
-8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was reached` and exit code `102`, so
+One of the two things besides speed a profile decides is the **default memory limit**. A `dev` binary stops at the
+smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was reached` and exit code `102`, so
 a scratch program or a test suite that allocates without end cannot take the machine down; a `release` binary has no
 limit of its own, because what a shipped program may use is its user's decision. `TORB_MEMORY_LIMIT` in the
 environment of the running binary overrides both: a number of bytes, or one with `K`, `M`, `G` or `T` (`512M`), and
 `0` or `none` for no limit. [`torb run`](torb-run.md) says what the limit does on each system.
+
+The other is **the frames of a panic**. A `dev` binary keeps a frame per call on the stack of the function, and a panic
+prints them below its site, innermost first - `  in pick, at src/main.trb:12:5` - so a panic inside the standard
+library or a closure still names the line of the program that led there ([panic](../language/errors/panic.md)). A
+`release` binary keeps none and prints the site alone. The C is the same under both: the two macros that make a frame
+compile to nothing outside of `dev`.
 
 ### The C compiler
 
