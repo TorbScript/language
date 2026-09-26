@@ -46,13 +46,11 @@ test {
 
 ## What it does
 
-### What the toolchain reads today
+### What the toolchain reads
 
-`torb check`, `build` and `test` are what read `project.trb`, and today they read it **statically**, from its syntax
-tree, rather than by evaluating it against `Project` the way a receiver script normally runs. The evaluation exists -
-`torb manifest` runs the file in the sandboxed VM and prints the settings it configured - but no command reads its
-result yet (see [The sandbox](../language/configuration/the-sandbox.md)). Only the following settings are consulted,
-each as a literal argument - a string, or an integer for the two of `tasks`:
+`torb check`, `build`, `run` and `test` are what read `project.trb`. They read it **statically** first, from its
+syntax tree, and evaluate it against `Project` in the sandboxed VM - the way a receiver script runs - only where a
+setting they use is computed. Only the following settings are consulted:
 
 | Setting | What it decides |
 |---------|------------------|
@@ -69,9 +67,24 @@ each as a literal argument - a string, or an integer for the two of `tasks`:
 
 `authors`, `registry`, `build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
 and type check, because the whole file is also checked as an ordinary program against `Project` - but no command
-reads them yet. A computed setting, such as `build { output = "build/{target}/{binary}" }`
-(see `CONCEPT.md`), type checks the same way and is silently not read either: only a
-literal string argument with no `{...}` in it is.
+reads them yet.
+
+**What decides the workspace is a literal**: `name`, `prelude`, `dependencies`, `workspace` and the `input` of
+`build` and `test` are needed before anything can run, so one of them written as something that would have to run is
+an error at its value:
+
+```console
+$ torb check shop
+error: `name` has to be a plain string
+ --> shop/project.trb:3:8
+  = The toolchain reads `name` before it can run anything, so it cannot be computed
+```
+
+**`version` and `tasks` may be computed.** Where one is - or where the file has a line that is no setting at all, such
+as an `if` - the build, `torb run` and `torb test` evaluate the file in the sandboxed VM and read the two from what it
+configured. What the evaluation read is kept in `build/manifest-inputs.trb` beside what it answered, each file and each
+variable by a hash - a variable never by its value - and the next build evaluates again only where one of them changed.
+A file that computes only what no command reads, such as `description`, is never evaluated.
 
 ### What a project file may do
 

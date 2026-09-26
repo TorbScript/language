@@ -25,10 +25,12 @@ use printProgram from "../print"
 use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule, lowerScriptFunction from "./function"
 use SymbolId from "../../semantics/symbols"
-use TypeId from "../../semantics/checker/type"
+use TypeId, ParameterId from "../../semantics/checker/type"
 use scriptReceiverOf from "../../semantics/checker/receiver"
 use instanceOfSymbol from "../instances"
 use symbolPathOf from "../instantiate"
+use instanceFor from "../instances"
+use signatureOf from "../../semantics/checker/signature"
 use lowerGenerated from "./derive"
 use requestCloseFunctions from "./scope"
 use settleEntryCells from "./cell"
@@ -41,9 +43,13 @@ public fn lowerWorkspace(
   seedsEverything: Bool,
   target: BuildTarget,
   forMachine: Bool = false,
+  scriptSources: String = "",
+  scriptRoot: String = "",
 ): Lowering {
   var lowering = newLowering checker, paths, target
   lowering.forMachine = forMachine
+  lowering.scriptSources = scriptSources
+  lowering.scriptRoot = scriptRoot
   lowering.programPackages = programPackagesOf checker, modules
   const own = programModules checker, modules
   for module in own {
@@ -72,6 +78,9 @@ public fn lowerWorkspace(
  * The program of a host that runs receiver scripts (docs/design/SCRIPTS.md section 3): the script function of every
  * module in `scripts` against its receiver, the functions in `hosts` that call them, and everything they reach. A
  * `project.trb` is a script here, and the one place it is ever lowered: `evaluated` of `std/project` is its host.
+ *
+ * A generic host is instantiated with `hostArguments` for its type parameters, in order: `crossedHost<Value>` of
+ * `std/sandbox` for the receiver, in the VM a native binary embeds (slice 8).
  */
 public fn lowerScripts(
   checker: Checker,
@@ -79,6 +88,7 @@ public fn lowerScripts(
   scripts: List<(ModuleId, TypeId)>,
   hosts: List<SymbolId>,
   target: BuildTarget,
+  hostArguments: List<TypeId> = [],
 ): Lowering {
   var lowering = newLowering checker, paths, target
   lowering.forMachine = true
@@ -97,7 +107,41 @@ public fn lowerScripts(
     drainPending lowering
   }
   for symbol in hosts {
-    if const Some(function) = instanceOfSymbol(lowering, symbol) {
+    // The signature may be built only now, so it is asked for before the checker is read
+    const identifier = signatureOf lowering.checker, symbol
+    const generics = lowering.checker.signature(identifier).generics
+    var mapping: Map<ParameterId, TypeId> = [:]
+    for index in 0..generics.length().min(hostArguments.length()) {
+      mapping.set generics[index], hostArguments[index]
+    }
+    if const Some(function) = instanceFor(lowering, symbol, mapping) {
+      lowering.scriptHosts.append function
+      lowering.program.hosted.append function
+    }
+    drainPending lowering
+  }
+  finishLowering lowering
+  lowering
+}
+
+/**
+ * The program of a library of C functions: the functions `exports` names and everything they reach, and no entry - the
+ * script host a native binary that loads receiver scripts links in (docs/design/SCRIPTS.md slice 8). Each keeps the
+ * signature it is declared with ([IrProgram.hosted]), because the C of another program calls it; its function is in
+ * `scriptHosts`, in the order of `exports`.
+ */
+public fn lowerLibrary(checker: Checker, paths: List<String>, exports: List<SymbolId>, target: BuildTarget): Lowering {
+  var lowering = newLowering checker, paths, target
+  var roots: List<ModuleId> = []
+  for symbol in exports {
+    if const Some(site) = checker.siteOf(symbol) {
+      roots.append site.module
+    }
+  }
+  lowering.programPackages = programPackagesOf checker, roots
+  for symbol in exports {
+    const empty: Map<ParameterId, TypeId> = [:]
+    if const Some(function) = instanceFor(lowering, symbol, empty) {
       lowering.scriptHosts.append function
       lowering.program.hosted.append function
     }

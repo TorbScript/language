@@ -26,6 +26,11 @@
  * the two compare as text.
  *
  * What the sandbox keeps for itself is `malloc`ed and never counted: it is the host's, not the script's.
+ *
+ * A grant with the word `record` makes the sandbox write down what the script read - every path a file function read
+ * and every variable it asked for - which the toolchain keeps in `build/manifest-inputs.trb` to know when a
+ * `project.trb` has to be evaluated again (docs/design/PROJECT.md section 8). The record outlives the sandbox until the
+ * next one opens, so the host reads it after the call.
  */
 
 #include "torb.h"
@@ -50,6 +55,10 @@ static int64_t torb_sandbox_allocated = 0;
 static int torb_sandbox_guards = 0;
 static int64_t torb_sandbox_stop_kind = 0;
 static int torb_sandbox_unrestricted = 0;
+static int torb_sandbox_records = 0;
+static char *torb_sandbox_record = NULL;
+static size_t torb_sandbox_record_length = 0u;
+static size_t torb_sandbox_record_capacity = 0u;
 
 static char *torb_sandbox_absolute(char *written);
 
@@ -89,9 +98,39 @@ static bool torb_sandbox_word_is(const char *line, size_t length, const char *wo
   return length > size && memcmp(line, word, size) == 0 && line[size] == '\t';
 }
 
+/** One line of the record, `<word>\t<text>`, where the grant asked for one. */
+static void torb_sandbox_note(const char *word, const char *text) {
+  size_t size = strlen(word) + 1u + strlen(text) + 1u;
+  /* Only what the script asks for, inside an operation of the kernel: the interpreter's own reads are the host's */
+  if (torb_sandbox_records == 0 || torb_sandbox_guards == 0) {
+    return;
+  }
+  if (torb_sandbox_record_length + size > torb_sandbox_record_capacity) {
+    size_t capacity = torb_sandbox_record_capacity == 0u ? 256u : torb_sandbox_record_capacity * 2u;
+    char *grown;
+    while (capacity < torb_sandbox_record_length + size) {
+      capacity *= 2u;
+    }
+    grown = (char *)realloc(torb_sandbox_record, capacity);
+    if (grown == NULL) {
+      torb_panic_out_of_memory(capacity);
+    }
+    torb_sandbox_record = grown;
+    torb_sandbox_record_capacity = capacity;
+  }
+  snprintf(torb_sandbox_record + torb_sandbox_record_length, size + 1u, "%s\t%s\n", word, text);
+  torb_sandbox_record_length += size;
+}
+
+const char *torb_sandbox_recorded(size_t *length) {
+  *length = torb_sandbox_record_length;
+  return torb_sandbox_record == NULL ? "" : torb_sandbox_record;
+}
+
 void torb_sandbox_open(const char *grant, size_t length) {
   size_t start = 0u;
   torb_sandbox_close();
+  torb_sandbox_record_length = 0u;
   while (start < length) {
     size_t end = start;
     while (end < length && grant[end] != '\n') {
@@ -111,6 +150,8 @@ void torb_sandbox_open(const char *grant, size_t length) {
         torb_sandbox_append(&torb_sandbox_patterns, line + 9, size - 9u);
       } else if (torb_sandbox_word_is(line, size, "unrestricted")) {
         torb_sandbox_unrestricted = 1;
+      } else if (torb_sandbox_word_is(line, size, "record")) {
+        torb_sandbox_records = 1;
       } else if (torb_sandbox_word_is(line, size, "memory")) {
         char *number = torb_sandbox_copy(line + 7, size - 7u);
         torb_sandbox_memory_limit = (int64_t)strtoll(number, NULL, 10);
@@ -147,6 +188,7 @@ void torb_sandbox_close(void) {
   torb_sandbox_allocated = 0;
   torb_sandbox_guards = 0;
   torb_sandbox_unrestricted = 0;
+  torb_sandbox_records = 0;
 }
 
 bool torb_sandbox_is_open(void) {
@@ -212,7 +254,11 @@ void torb_sandbox_exit(int64_t code) {
 /* ------------------------------------------------------------------------------------------------ environment --- */
 
 bool torb_sandbox_allows_variable(const char *name) {
-  if (torb_sandbox_active == 0 || torb_sandbox_unrestricted != 0) {
+  if (torb_sandbox_active == 0) {
+    return true;
+  }
+  torb_sandbox_note("variable", name);
+  if (torb_sandbox_unrestricted != 0) {
     return true;
   }
   for (size_t index = 0; index < torb_sandbox_patterns.count; index++) {
@@ -456,6 +502,9 @@ char *torb_sandbox_path(torb_text path, bool writes, size_t *capacity) {
     }
   }
   free(written);
+  if (!writes) {
+    torb_sandbox_note("file", joined);
+  }
   {
     size_t size = strlen(joined);
     char *result = (char *)torb_raw_allocate(size + 1u);

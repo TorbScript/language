@@ -1,8 +1,9 @@
 # The Project File
 
-**Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree, and the
-VM evaluates a whole manifest in the sandbox of section 8 (`torb manifest`, docs/design/SCRIPTS.md section 7) without
-the toolchain reading the result yet; profiles, targets and the lock file are not built.
+**Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree and
+refuses one of its settings that is computed, and where a setting it uses is computed it evaluates the manifest in the
+sandbox of section 8 and reads that (docs/design/SCRIPTS.md slice 5, section 12's slice 7); profiles, targets and the
+lock file are not built.
 
 **The names of the files say what a package produces, `project.trb` says what the names cannot, and a program is the
 one thing it says by hand.** A file called `lib.trb` is the library, a file called `main.trb` is the program, a file
@@ -810,15 +811,19 @@ file that is supposed to be stable would be the noisiest thing in the repository
 
   ```trb
   // build/manifest-inputs.trb - written by the build. Do not edit.
-  file "project.trb", hash: "sha256:..."
-  file "VERSION", hash: "sha256:..."
-  variable "CI_COMMIT_TAG", hash: "sha256:..."
+  file "project.trb", hash: "4215339106279925103"
+  file "VERSION", hash: "n1867339253446187461"
+  variable "CI_COMMIT_TAG", hash: "7719027363150917264"
   variable "BUILD_NUMBER", unset: true
+  settings "version = \"1.4.0\"\n"
   ```
 
   An incremental build re-evaluates the manifest when one of the hashes no longer matches and not otherwise. That is
   sound precisely because the grant has no clock, no network and no writing: given the same files and the same
-  variables, the evaluation has the same result.
+  variables, the evaluation has the same result. The last line is what the evaluation answered, the settings the
+  `settings` section of a lock publishes anyway, which the next build reads instead of evaluating again. The hash is the
+  toolchain's own 64-bit hash of the text - of a directory, of its names; of a file that is not there, `missing` - which
+  says whether an input changed and is no digest of it: a SHA-256 waits for a hashing module of the standard library.
 
   **A variable is never recorded by value.** A manifest may legitimately read something that is a secret in a build
   that is not publishing, and a build artifact that held the value would be a place a secret ends up without anybody
@@ -835,23 +840,26 @@ file that is supposed to be stable would be the noisiest thing in the repository
   difference is lifetime and audience: `build/manifest-inputs.trb` is rewritten by every build and read by the next
   one, and `from { }` is written when the package is locked and read by whoever looks at the package.
 
-### The evaluation runs, and nothing reads it yet
+### The toolchain reads the evaluation
 
-Probe 21 answered ``Unknown name `Sandbox` `` on stage 0, which has since been deleted, and the native back end refuses
-`Script`. Since milestone 7.5 the VM evaluates a `project.trb` under the grant above (docs/design/SCRIPTS.md section
-7): `torb manifest` prints what the evaluation configured, and `torb manifest --check`, a gate of tier A, asserts that
-the static reader reads the same from it as from the file on every manifest of the repository. The toolchain itself
-still reads a `project.trb` with its static reader (`compiler/src/project/manifest.trb`), which takes the literal
-settings from the syntax tree; reading the evaluation where a setting is computed is SCRIPTS.md's slice 5.
+Since milestone 7.5 the VM evaluates a `project.trb` under the grant above (docs/design/SCRIPTS.md section 7):
+`torb manifest` prints what the evaluation configured, and `torb manifest --check`, a gate of tier A, asserts that the
+static reader reads the same from it as from the file on every manifest of the repository. Since SCRIPTS.md's slice 5
+the toolchain reads it, too, where the static read is not enough:
 
-**What works before the VM exists is the static subset, which is every setting in the repository's own thirty-five
-manifests.** `language`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section
-10's static nine rows — are plain literals, read from the syntax tree, and a `version` written as a literal is read by
-the same pass. A manifest that computes anything is
-refused by a toolchain without a VM, with a message that says so — rather than the current behaviour, which is to
-read an empty value and say nothing (section 1, findings 3 and 4). **The repository's own manifests therefore stay
-literal until the VM exists**, and the slice that switches evaluation on (section 12, slice 7) changes no manifest in
-the tree.
+- **A static setting that is computed is refused**, at its value, with the file, the line and the column and the note
+  of section 10 (`manifestProblemsOf` of `compiler/src/project/manifest.trb`, a problem of the workspace): the nine
+  static rows, and `input` of `build { }` and `test { }`, which name the entry files. It is never evaluated.
+- **A setting the toolchain uses that is computed is evaluated**: `version`, `tasks { ... }`, or a line that is no
+  setting at all - an `if`, a loop - which may configure anything (`needsEvaluation`). The build, `torb run` and
+  `torb test` evaluate that manifest and read `version` and `tasks` from the settings it answers
+  (`manifestOfProject` of `compiler/src/vm/manifest.trb`); everything that decides the workspace still comes from the
+  static read. A stop of the script is an error of the build, with the line of `project.trb`.
+- **What is computed and read by nobody** - `description`, `license`, a `const` - **is not evaluated at all.** So
+  the repository's own manifests, which are literal, cost nothing, and neither does a manifest that computes only its
+  description.
+- **`build/manifest-inputs.trb`** keeps what the evaluation read, as the sandbox recorded it (the grant's `record`),
+  and what it answered, as described above.
 
 ## 9. Resources, as far as the project file is concerned
 
@@ -1058,14 +1066,11 @@ const suffix = "shop"
 name = "acme/{suffix}"
 ```
 
-Today that second file is accepted and `name` is silently empty (there is a test asserting it). It becomes an error:
+The static reader reads no `name` from that second file, and the workspace reports it as an error (`manifestProblemsOf`):
 
 ```text
 error: `name` has to be a plain string
  --> project.trb:3:8
-  |
-3 | name = "acme/{suffix}"
-  |        ^^^^^^^^^^^^^^^
   = The toolchain reads `name` before it can run anything, so it cannot be computed
 ```
 
@@ -1150,7 +1155,7 @@ every `.trb` file and nothing should be rebased across it.
 | 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
 | 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
-| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/os`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
+| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/os`, the VM | **Done** as SCRIPTS.md's slice 5 (section 8, "The toolchain reads the evaluation"): every manifest the toolchain evaluates gets the environment, because no dependency is resolved yet, and the hash is the toolchain's own until a hashing module exists |
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/design/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 

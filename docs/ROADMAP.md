@@ -28,9 +28,10 @@ code, panics and leak count, `torb run` and `torb test` run in the VM by default
 channels and the worker pool run in both; the streams of `File`, of the three standard streams and of `Process.start`
 are built on the blocking pool beside the IO poller of sockets; a program the VM runs loads receiver scripts from
 paths only known while it runs; `torb build --embed-vm` builds a native binary that embeds the VM; and the REPL has
-every slice of REPL.md. **What is left around it:** compiled code that loads a script with the value encoded across
-(SCRIPTS.md slice 8), the toolchain reading an evaluated manifest (SCRIPTS.md slice 5), and the poller for the pipes
-of a POSIX child.
+every slice of REPL.md. A native binary loads and applies receiver scripts through the script host it links, the value
+encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manifest where a setting it uses is computed
+(SCRIPTS.md slice 5). **What is left around it:** the poller for the pipes of a POSIX child, and the sandbox's own heap
+(SCRIPTS.md slice 6).
 
 - [design/VM.md](design/VM.md) section 9 - slices 4 to 8
 - [BACKEND.md](BACKEND.md) section 5 - rows 7.1 to 7.7

@@ -101,9 +101,11 @@ jump left behind released nothing. The directory is the exemption, instead of a 
 error and its exit code with the **same** expectation files, folded the same way. There are no expectation files of
 the VM's own: an answer that differs between the two back ends is a bug of one of them, never a second expectation.
 
-`vm-only/` holds the programs that load a receiver script, which only the VM runs (docs/design/SCRIPTS.md section 1):
+`vm-only/` holds the programs that load a receiver script and that only the VM runs (docs/design/SCRIPTS.md section 1):
 a program there has an `.expected` file and no native run, and the scripts beside it, which have none, are no programs
-of their own. The leak gate applies to a VM run as it does natively, and so do `.environment` and `.workers`; the two
+of their own. `sandbox-crossing.trb` loads its scripts in both back ends - a native binary through the script host it
+links (slice 8) - and its scripts are in `crossing/`, which no run lists; its native build is the one that compiles the
+script host of the checkout once, into `build/script-host/`, which every later run reuses. The leak gate applies to a VM run as it does natively, and so do `.environment` and `.workers`; the two
 checks of the C do not. There is no list of what the VM runs: it runs everything (docs/design/VM.md section 8).
 
 ## The programs
@@ -307,6 +309,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `non-ascii-paths.trb` | A path whose components are not ASCII (`grüße/日本.txt`), created, written, asked about, listed and read back - the boundary to the operating system converts, so both implementations name the same file |
 | `long-paths.trb` | The same steps through a path of 271 bytes, over the 260 of `MAX_PATH`, which one platform's plain path form cannot hold at all |
 | `absolute-path-form.trb` | `File.absolutePath` answers **one** form: forward slashes, an upper-cased drive letter, and no `.`, `..` or `\\?\` left in it |
+| `sandbox-crossing.trb` | A script configures a value of the program in both back ends alike: a native binary loads it through the front end and the VM it links and hands the value across as text and back, every field of it - a `private` counter with a default, a case, an optional record, a map - and a type error, an import the grant does not name, the step limit, a panic and a file that is nowhere are the same `SandboxError`s, with the same lines, and nothing leaks |
 | `process-non-ascii-argument.trb` | An argument of a child process that is not ASCII arrives as the text that was passed, which the child answers in its exit code |
 | `process-run-input.trb` | `Process.run` is a task: `input:` is all the child reads, an empty input ends at once, and a program that is nowhere is a failure |
 | `process-start.trb` | `Process.start` hands back a running child: what its `input()` sink takes the child reads until `end()`, its `output()` and `errors()` are sources read while it runs, `wait()` answers the exit code, and a program that is nowhere cannot be started |

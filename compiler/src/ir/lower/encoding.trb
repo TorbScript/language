@@ -366,12 +366,16 @@ fn encodeGroup(
 ) {
   const place = referenced Reference(Slot(1), [])
   for field in group.fields {
-    if !everyField && !field.isPassable {
+    // A `private` field with a default is written only for a target that asks for the whole value, and only where its
+    // type is `Encode` at all - nothing else about the type asked it to be
+    const isPrivate = !everyField && !field.isPassable
+    if isPrivate && !isEncodable(lowering, field.subject) {
       continue
     }
     const value = readInto builder, Slot(0), field.step, field.annotation
     const name = textSlot lowering, builder, field.name
-    perform lowering, builder, "encodeField", [field.subject, target], [borrowed(value), borrowed(name), place], at
+    const written = if isPrivate { "encodePrivateField" } else { "encodeField" }
+    perform lowering, builder, written, [field.subject, target], [borrowed(value), borrowed(name), place], at
   }
 }
 
@@ -567,7 +571,8 @@ fn decodeFields(
 /**
  * The fields of one group, in declaration order: a required one through `decodeRequired`, one with a default through
  * `decodeHasField` and then either `decodeFieldValue` or the default - evaluated only where the input has no value. A
- * field that is not a parameter from outside takes its default without asking the input.
+ * field that is not a parameter from outside asks the same through `decodeHasPrivateField`, which answers `false` - and
+ * so its default - unless the source reads the whole value; one whose type is not `Decode` takes its default.
  */
 fn decodeGroup(
   var lowering: Lowering,
@@ -584,7 +589,7 @@ fn decodeGroup(
   var values: List<Slot> = []
   for field in group.fields {
     const name = textSlot lowering, builder, field.name
-    if !field.isPassable {
+    if !field.isPassable && (!field.hasDefault || !isDecodable(lowering, field.subject)) {
       const taken = defaultOf(lowering, builder, symbol, arguments, field, at)?
       values.append taken
       continue
@@ -594,7 +599,8 @@ fn decodeGroup(
       values.append read
       continue
     }
-    const present = checkedStep(lowering, builder, "decodeHasField", [source], [borrowed(name), place], at)?
+    const asked = if field.isPassable { "decodeHasField" } else { "decodeHasPrivateField" }
+    const present = checkedStep(lowering, builder, asked, [source], [borrowed(name), place], at)?
     const value = addLocal builder, field.annotation, field.name
     const given = addBlock builder, "{field.name} given", Some(location)
     const missing = addBlock builder, "{field.name} missing", Some(location)
@@ -920,7 +926,16 @@ fn describeGroup(
 }
 
 fn isEncodable(var lowering: Lowering, subject: TypeId): Bool {
-  const symbol = match lowering.checker.wellKnown.symbolNamed("Encode") {
+  implementsTraitNamed lowering, subject, "Encode"
+}
+
+fn isDecodable(var lowering: Lowering, subject: TypeId): Bool {
+  implementsTraitNamed lowering, subject, "Decode"
+}
+
+/** Whether `subject` implements the trait of the prelude of that name: `Encode`, `Decode`. */
+public fn implementsTraitNamed(var lowering: Lowering, subject: TypeId, name: String): Bool {
+  const symbol = match lowering.checker.wellKnown.symbolNamed(name) {
     Some(found) => found
     None => {
       return false

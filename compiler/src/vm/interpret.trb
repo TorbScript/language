@@ -513,6 +513,11 @@ public fn wordAt(loaded: LoadedProgram, index: Int): Int {
   loadRegister loaded.registers, index
 }
 
+/** Writes the word in the register `index` - an absolute register below every frame - for a host that keeps a value there. */
+public fn storeWordAt(var loaded: LoadedProgram, index: Int, value: Int) {
+  storeRegister loaded.registers, index, value
+}
+
 /** The reference a `var` parameter of an entry takes for the absolute register `index`: the register's address. */
 public fn registerReferenceOf(loaded: LoadedProgram, index: Int): Int {
   loaded.registers.address + 8 * index
@@ -633,6 +638,30 @@ fn stopAt(var words: ArrayList<Int>, var kernel: ArrayList<Int>, budget: Budget,
     points.append loadRegister(registers, scratch + 2 + index)
   }
   Stop kind, textOfCodePoints(points), site, budget.frames
+}
+
+/**
+ * A text of the host placed in the VM, as the two words a parameter of type `String` takes: the argument a host hands a
+ * chunk of the program through [callSandboxed] (`vm/host.trb`). The words are all that hold it.
+ */
+public fn placedText(var loaded: LoadedProgram, text: String): List<Int> {
+  const registers = loaded.registers
+  const scratch = firstFrameOf loaded.program
+  ensureRegisters(registers, scratch + 4)
+  Machine.placeText registers.words, scratch, text
+  [loadRegister(registers, scratch), loadRegister(registers, scratch + 1)]
+}
+
+/**
+ * What the sandbox opened last recorded, where its grant said `record`: `file\t<path>` and `variable\t<name>` lines,
+ * the inputs of a `project.trb` (docs/design/PROJECT.md section 8). Read after [callSandboxed] returned.
+ */
+public fn recordedInputs(var loaded: LoadedProgram): String {
+  const registers = loaded.registers
+  const scratch = firstFrameOf loaded.program
+  ensureRegisters(registers, scratch + 4)
+  const _ = kernelCall registers.words, loaded.kernel, scratch, KernelOperation.TakeInputs, [0]
+  textAt(registers.words, loaded.kernel, registers, scratch, scratch + 2)
 }
 
 /** The text of the two words of a `String` in the VM, as a `String` of the host: `TextOut`, then the code points. */

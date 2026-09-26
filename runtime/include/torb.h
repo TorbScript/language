@@ -40,6 +40,17 @@
 #  define TORB_HAS_OVERFLOW_BUILTINS 0
 #endif
 
+/*
+ * A `static` function of the generated C that nothing may name: the copy of an environment whose closures all keep it
+ * in a frame. It stays `static` so that two translation units - a program and the script host it links - never define
+ * one symbol twice.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  define TORB_MAYBE_UNUSED __attribute__((unused))
+#else
+#  define TORB_MAYBE_UNUSED
+#endif
+
 #if defined(__SIZEOF_INT128__)
 #  define TORB_HAS_INT128 1
 #else
@@ -381,6 +392,13 @@ void torb_sandbox_account(size_t size);
 TORB_NORETURN void torb_sandbox_exit(int64_t code);
 /** Whether `Environment.get` may answer for the variable. True where no sandbox is open. */
 bool torb_sandbox_allows_variable(const char *name);
+/**
+ * What the sandbox that was opened last recorded while it was open, where its grant says `record`: a line
+ * `file\t<path>` per path a file function read (normalized, absolute) and a line `variable\t<name>` per variable
+ * `Environment.get` was asked for, in the order they happened (docs/design/PROJECT.md section 8, `manifest-inputs.trb`).
+ * Borrowed until the next sandbox opens; `length` bytes, 0 where nothing was recorded.
+ */
+const char *torb_sandbox_recorded(size_t *length);
 /**
  * The NUL-terminated path a file function hands the operating system: the text itself where no sandbox is open, and
  * otherwise the path read against the base directory, normalized, checked against the roots of the side `writes`

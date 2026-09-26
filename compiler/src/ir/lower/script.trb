@@ -17,7 +17,7 @@ use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
 use scriptReceiverOf, moduleOfImport from "../../semantics/checker/receiver"
 use ScriptTableKind from "../../backend/c/natives"
-use relativePath from "../../project/path"
+use relativePath, embeddedPathOf from "../../project/path"
 use IrType, IrTypeId, FunctionId, BlockId, Slot, Instruction, Terminator, Intrinsic, IntrinsicOperation from "../ir"
 use StaticContents, StaticId, borrowed from "../ir"
 use LiteralValue from "../../semantics/checker/type"
@@ -28,6 +28,8 @@ use instanceArgumentsOf, irSignatureUnder from "../instances"
 use Lowering, reportUnsupported, locationOf, internStatic from "./context"
 use variantLayoutOfType, variantNamed from "./match"
 use lowerScriptFunction from "./function"
+use instanceFor from "../instances"
+use implementsTraitNamed from "./encoding"
 
 /** The generated body of one of the two tables for the receiver the instance names, built once per receiver. */
 public fn scriptTableOf(
@@ -63,10 +65,17 @@ public fn scriptTableOf(
   const text = lowering.program.internType IrType.Text
   const boolean = lowering.program.internType IrType.Boolean
   const layout = variantLayoutOfType lowering, declared.result
-  // No path at all: the receiver as the running `torb` finds its declaration again (docs/design/SCRIPTS.md slice 7)
-  if const .Receiver = kind {
-    // Only the VM loads a script from such a path; the C a native binary is built from names no path of this machine
-    const written = if lowering.forMachine { receiverTextOf lowering, receiver } else { "" }
+  // No path at all: the receiver as the running `torb` - or the front end a native binary embeds - finds its declaration
+  // again (docs/design/SCRIPTS.md slices 7 and 8), and the files that front end checks again
+  if kind == ScriptTableKind.Receiver || kind == ScriptTableKind.Sources {
+    // The C of a program that loads scripts names paths of the machine it was built on: the sources are keyed by them
+    if kind == ScriptTableKind.Sources && !lowering.forMachine {
+      lowering.asksScriptSources = true
+    }
+    const written = match kind {
+      .Receiver => receiverTextOf lowering, receiver
+      _ => if lowering.forMachine { "" } else { lowering.scriptSources }
+    }
     const described = addTemporary builder, text
     emit builder, Instruction.Constant(described, textStatic(lowering, written, text))
     terminate builder, Terminator.Return(Some(borrowed(described)))
@@ -74,7 +83,9 @@ public fn scriptTableOf(
     lowering.nativeWrappers.set name, built
     return Some built
   }
-  for (module, path) in scriptsOf(lowering, receiver) {
+  // A native binary runs no script natively: the front end it embeds loads even the ones it was compiled with
+  const tabled = if lowering.forMachine || kind != ScriptTableKind.Body { scriptsOf lowering, receiver } else { [] }
+  for (module, path) in tabled {
     const written = addTemporary builder, text
     emit builder, Instruction.Constant(written, textStatic(lowering, path, text))
     const equal = addTemporary builder, boolean
@@ -107,8 +118,8 @@ public fn scriptTableOf(
         emit builder, Instruction.Constant(imports, textStatic(lowering, importsOf(lowering, module), text))
         terminate builder, Terminator.Return(Some(borrowed(imports)))
       }
-      // Answered above, without a path
-      .Receiver => {}
+      // Answered above, without a path, or no table at all
+      .Receiver | .Sources | .Crossing => {}
     }
     switchTo builder, next
   }
@@ -130,11 +141,62 @@ public fn scriptTableOf(
       emit builder, Instruction.Constant(nothing, textStatic(lowering, "", text))
       terminate builder, Terminator.Return(Some(borrowed(nothing)))
     }
-    .Receiver => {}
+    .Receiver | .Sources => {}
+    .Crossing => {
+      reportUnsupported lowering, "the crossing of a script's value as a table", at
+      return None
+    }
   }
   const built = finishFunction lowering.program, builder
   lowering.nativeWrappers.set name, built
   Some built
+}
+
+/**
+ * `crossedApply` of `std/sandbox` for the receiver of a `runCrossed` of a native binary (docs/design/SCRIPTS.md slice
+ * 8): the value crosses into the VM through the derived `Encode` and `Decode` of the receiver, so a receiver without
+ * them is an error of the program at the `Sandbox.load` that reached it.
+ */
+public fn crossedApplyOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  at: Span,
+): FunctionId? {
+  const receiver = match mapping.values().first() {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "the crossing of a script's value without a receiver type", at
+      return None
+    }
+  }
+  if !implementsTraitNamed(lowering, receiver, "Encode") || !implementsTraitNamed(lowering, receiver, "Decode") {
+    const shown = lowering.checker.describe receiver
+    const what = "a script whose receiver `{shown}` is not `Encode & Decode`: a native binary hands the value to the VM it runs the script in as text"
+    reportUnsupported lowering, what, at
+    return None
+  }
+  const site = match lowering.checker.siteOf(member) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "the crossing of a script's value outside `std/sandbox`", at
+      return None
+    }
+  }
+  const symbol = match lowering.checker.program.scopes[site.module.value].names.get("crossedApply") {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "the crossing of a script's value without `crossedApply` in `std/sandbox`", at
+      return None
+    }
+  }
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  var crossed: Map<ParameterId, TypeId> = [:]
+  if const Some(parameter) = signature.generics.first() {
+    crossed.set parameter, receiver
+  }
+  instanceFor lowering, symbol, crossed
 }
 
 /**
@@ -149,7 +211,10 @@ fn receiverTextOf(var lowering: Lowering, receiver: TypeId): String {
     }
     const declared = lowering.checker.symbolAt symbol
     if const Some(module) = declared.module {
-      return "{lowering.checker.program.graph.at(module).path}\t{declared.name}"
+      // In C, as the files the binary carries name it (`Lowering.scriptRoot`)
+      const path = lowering.checker.program.graph.at(module).path
+      const named = if lowering.forMachine { path } else { embeddedPathOf lowering.scriptRoot, path }
+      return "{named}\t{declared.name}"
     }
   }
   ""

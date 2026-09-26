@@ -31,7 +31,10 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
-use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol, hostsMachineMacro from "../backend/c/natives"
+use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol, hostsMachineMacro, scriptHostSymbolPrefix from "../backend/c/natives"
+use findCompilerSources from "../project/toolchain"
+use scriptHostObjectOf, programSourcesOf, hostedStandardLibraryOf from "./host"
+use manifestOfProject from "../vm/manifest"
 use Clock from "std/time"
 use renderDiagnostic, renderProblem, counted from "./render"
 
@@ -176,6 +179,13 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   const checker = checked.checker
   // Only what the entry files reach: nothing unreachable is emitted
   var lowering = lowerWorkspace checker, paths, modules, false, target
+  // A program that loads receiver scripts carries its files for the script host it links (docs/design/SCRIPTS.md slice
+  // 8): only such a program is lowered a second time, with the text
+  if lowering.asksScriptSources {
+    const hosted = hostedStandardLibraryOf(findCompilerSources(options.paths) ?? "")
+    const (sources, root) = programSourcesOf tree, requested, checked, hosted
+    lowering = lowerWorkspace checker, paths, modules, false, target, false, sources, root
+  }
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
   insertOwnership lowering.program
@@ -206,29 +216,37 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     }
     return Ok 0
   }
-  // A program that runs the VM runs whatever its programs call, TLS included, and limits their memory
-  const hostsMachine = text.contains machineKernelSymbol
+  // A program that runs the VM runs whatever its programs call, TLS included, and limits their memory - one that links
+  // the script host runs it too
+  const hostsScripts = text.contains scriptHostSymbolPrefix
+  const hostsMachine = text.contains(machineKernelSymbol) || hostsScripts
   const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
-  compile source, text.byteLength(), binary, options, usesTls, hostsMachine, pool
+  compile source, text.byteLength(), binary, options, usesTls, hostsMachine, pool, hostsScripts
 }
 
 /**
  * `tasks { workers, blocking }` of the `project.trb` of the package the entry belongs to (docs/design/CONCURRENCY.md
- * section 3), 0 for a number it does not name - or why it cannot be used.
+ * section 3), 0 for a number it does not name - or why it cannot be used. A manifest that computes the setting is
+ * evaluated in the sandboxed VM (docs/design/SCRIPTS.md slice 5).
  */
 public fn poolOf(checked: Checked, entry: ModuleId): Result<(workers: Int, blocking: Int), String> {
   const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
-  if const Some(problem) = package.manifest.poolProblem() {
+  const manifest = if package.directory.isEmpty() {
+    package.manifest
+  } else {
+    manifestOfProject(package.directory, package.manifest)?
+  }
+  if const Some(problem) = manifest.poolProblem() {
     const manifestPath = if package.directory.isEmpty() { "project.trb" } else { joinPath package.directory, "project.trb" }
     return Fail "{manifestPath}: {problem}"
   }
-  Ok package.manifest.pool()
+  Ok manifest.pool()
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
 
 /** Everything the front end found, rendered the way `torb check` renders it. */
-fn reportChecked(checked: Checked): Int {
+public fn reportChecked(checked: Checked): Int {
   var problems = checked.problems.length()
   for problem in checked.problems {
     printError renderProblem(problem)
@@ -252,7 +270,7 @@ fn reportChecked(checked: Checked): Int {
  * the runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed
  * body is a bug of the compiler.
  */
-fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
+public fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
   var found = 0
   for problem in lowering.problems {
     const module = checked.program.graph.at problem.module
@@ -397,7 +415,7 @@ public fn binaryNameOf(path: String): String {
 // --- The C compiler -------------------------------------------------------------------------------------------------
 
 /** Which compiler was found, and how it is called. */
-type CCompiler {
+public type CCompiler {
   command: String
   /** MSVC takes `/`-flags and names its output differently, so the two shapes are told apart once. */
   isMicrosoft: Bool
@@ -571,6 +589,7 @@ fn compile(
   usesTls: Bool,
   hostsMachine: Bool,
   pool: (workers: Int, blocking: Int),
+  hostsScripts: Bool = false,
 ): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
@@ -591,6 +610,15 @@ fn compile(
     }
   }
   var sources = runtimeSourcesOf(runtime)?
+  // The script host is an object of its own, compiled once per toolchain (`cli/host.trb`)
+  if hostsScripts {
+    match scriptHostObjectOf(options, runtime, compiler)? {
+      Some(object) => sources.append object
+      None => {
+        return Ok buildFailedCode
+      }
+    }
+  }
   if usesTls {
     sources.appendAll(tlsArgumentsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?)
   }
@@ -648,7 +676,7 @@ const slottedSize = 8_388_608
  * Without `sh`, or without the script beside the runtime, the compile runs without a slot: a machine that cannot run
  * the script is not one on which several checkouts build at once.
  */
-fn runCompiler(
+public fn runCompiler(
   compiler: CCompiler,
   arguments: List<String>,
   source: String,
@@ -720,7 +748,7 @@ fn compilerArguments(
 }
 
 /** A C compiler error is never the user's fault: the C file is kept and the first lines of the output are shown. */
-fn reportInternalError(compiler: CCompiler, source: String, standardOutput: String, standardError: String) {
+public fn reportInternalError(compiler: CCompiler, source: String, standardOutput: String, standardError: String) {
   printError "internal error: the generated C did not compile. This is a bug in torb, please report it."
   printError "  kept: {source}"
   const text = if standardError.trim().isEmpty() { standardOutput } else { standardError }

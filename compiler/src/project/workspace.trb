@@ -4,11 +4,11 @@
  * own project, or a standalone script that belongs to none.
  */
 
-use SourceText from "../syntax/source"
+use SourceText, LineIndex from "../syntax/source"
 use parse from "../syntax/parser/parser"
 use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth from "./path"
 use SourceTree from "./source-tree"
-use Manifest, readManifest from "./manifest"
+use Manifest, readManifest, manifestProblemsOf from "./manifest"
 
 /** One project: one `project.trb`, one package name, the files below its `src/` and its test directory. */
 public type Package {
@@ -140,7 +140,36 @@ fn workspaceOf(tree: SourceTree, manifests: List<String>, owners: List<String>, 
       directories.append member
     }
   }
+  for directory in directories {
+    problems.appendAll manifestProblemLines(tree, directory)
+  }
   Workspace(directories.map({ packageAt tree, _ }).toList(), problems)
+}
+
+/**
+ * A setting of the `project.trb` of a directory that the toolchain reads before it can run anything, where it is
+ * computed (docs/design/PROJECT.md section 10): refused, with the file, the line and the column of the value.
+ */
+fn manifestProblemLines(tree: SourceTree, directory: String): List<String> {
+  const path = joinPath directory, "project.trb"
+  const text = match tree.text(path) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const source = SourceText.of text
+  const problems = manifestProblemsOf parse(source).file
+  if problems.isEmpty() {
+    return []
+  }
+  const lines = LineIndex.of text
+  var found: List<String> = []
+  for problem in problems {
+    const (line, column) = lines.lineAndColumn problem.span.start
+    found.append "{problem.message}\n --> {tree.display(path)}:{line}:{column}\n  = {problem.note}"
+  }
+  found
 }
 
 /** `members "std/*", "compiler"`: a pattern is a directory, or `directory/*` for every project directly below it. */

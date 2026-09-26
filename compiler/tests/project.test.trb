@@ -6,14 +6,24 @@
 
 use test, group from "std/test"
 use normalizePath, parentPath, pathName, joinPath, isInside, pathDepth, relativePath from "../src/project/path"
+use embeddedPathOf, commonDirectoryOf from "../src/project/path"
 use SourceTree from "../src/project/source-tree"
-use Manifest, readManifest from "../src/project/manifest"
+use Manifest, readManifest, manifestProblemsOf, needsEvaluation from "../src/project/manifest"
 use findWorkspace from "../src/project/workspace"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
 
 fn manifestOf(text: String): Manifest {
   readManifest parse(SourceText.of(text)).file
+}
+
+/** What the static reader refuses in a manifest: the message of every problem. */
+fn problemsOf(text: String): List<String> {
+  manifestProblemsOf(parse(SourceText.of(text)).file).map({ _.message }).toList()
+}
+
+fn evaluates(text: String): Bool {
+  needsEvaluation parse(SourceText.of(text)).file
 }
 
 /** The name and the files of every package of the workspace a path belongs to, in the order the toolchain sees them. */
@@ -65,6 +75,16 @@ group "Paths" {
     assert(relativePath("/repository/app", "/repository/std/fs/src/lib.trb") == "../std/fs/src/lib.trb")
     assert(relativePath("/repository", "/repository/compiler") == "compiler")
     assert(relativePath("/repository", "/repository") == ".")
+  }
+
+  test "a native binary keys the files it carries below /torb, not below the directory they share" {
+    const root = commonDirectoryOf(["C:/work/shop/src", "C:/work/shop", "C:/work/torb/std"])
+    assert(root == "C:/work")
+    assert(embeddedPathOf(root, "C:/work/shop/src/main.trb") == "/torb/shop/src/main.trb")
+    assert(embeddedPathOf(root, "C:/work") == "/torb")
+    assert(embeddedPathOf(root, "D:/elsewhere/x.trb") == "D:/elsewhere/x.trb")
+    assert(embeddedPathOf("", "C:/work/x.trb") == "C:/work/x.trb")
+    assert(commonDirectoryOf(["C:/a", "D:/b"]) == "")
   }
 }
 
@@ -124,6 +144,27 @@ group "Manifest" {
 
   test "a name with an interpolation is not a literal, so it is not read" {
     assert(manifestOf("name \"acme/\{suffix\}\"").name == "")
+  }
+
+  test "a setting the toolchain reads before it can run anything is refused where it is computed" {
+    assert(problemsOf("name = \"acme/\{suffix\}\"") == ["`name` has to be a plain string"])
+    assert(problemsOf("prelude = preludeName()") == ["`prelude` has to be a plain string"])
+    assert(problemsOf("dependencies \{\n  runtime \"acme/\{name\}\"\n\}") == ["`dependencies` has to be a plain string"])
+    assert(problemsOf("build \{\n  input = entry\n\}") == ["`build \{ input \}` has to be a plain string"])
+    // A setting that may be computed is no problem, and neither is anything else of a block that is not `input`
+    assert problemsOf("name = \"acme/app\"\nversion = tag ?? \"0.0.0\"\ntest \{\n  coverageThreshold = threshold\n\}").isEmpty()
+    const problem = manifestProblemsOf(parse(SourceText.of("\nname = prefix + \"/app\"")).file)[0]
+    assert(problem.span.start == 8)
+  }
+
+  test "a manifest is evaluated only where a setting the toolchain uses is computed" {
+    assert(!evaluates("name = \"acme/app\"\nversion = \"1.0.0\"\ntasks \{\n  workers = 4\n\}"))
+    assert(!evaluates("use File from \"std/fs\"\n\nconst threshold = 80\ndescription = File.readText(\"ABOUT\").ok() ?? \"\""))
+    // A computed static setting is refused, not evaluated
+    assert(!evaluates("name = \"acme/\{suffix\}\""))
+    assert evaluates("version = Environment.get(\"CI_COMMIT_TAG\") ?? \"0.0.0\"")
+    assert evaluates("tasks \{\n  workers = cores / 2\n\}")
+    assert evaluates("if Environment.get(\"CI\").isSome() \{\n  version = \"ci\"\n\}")
   }
 }
 
@@ -188,5 +229,13 @@ group "Workspaces" {
       "."
     )
     assert(found.problems == ["The workspace member pattern `packages/*` of . matches no project"])
+  }
+
+  test "a computed static setting of a manifest is a problem of the workspace, with its place" {
+    const found = findWorkspace SourceTree.of(["project.trb": "const suffix = \"shop\"\n\nname = \"acme/\{suffix\}\""]), "."
+    const expected = [
+      "`name` has to be a plain string\n --> project.trb:3:8\n  = The toolchain reads `name` before it can run anything, so it cannot be computed",
+    ]
+    assert(found.problems == expected)
   }
 }

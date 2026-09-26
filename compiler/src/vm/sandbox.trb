@@ -23,6 +23,11 @@ public type Grant {
   /** Bytes the script may allocate while it runs. */
   memory: Int = 64_000_000
   milliseconds: Int = 2000
+  /**
+   * Whether the sandbox writes down the files and the variables the script read (`recordedInputs` of `./interpret`):
+   * the inputs of a `project.trb`, which `build/manifest-inputs.trb` keeps (docs/design/PROJECT.md section 8).
+   */
+  records: Bool = false
 }
 
 /** The grant as `runtime/sandbox.c` reads it: one setting per line, a tab between the word and the value. */
@@ -36,6 +41,9 @@ public fn grantText(grant: Grant): String {
   }
   for pattern in grant.environment {
     lines.append "variable\t{pattern}"
+  }
+  if grant.records {
+    lines.append "record\t1"
   }
   lines.joined separator: "\n"
 }

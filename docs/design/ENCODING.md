@@ -171,6 +171,17 @@ present must not pay for one.
 tuple, the options of a `--help` text, the default field numbers of a wire format. It is the one ordering a type
 already has.
 
+**The whole value, where a target asks for it.** A copy of a value is not a format: the crossing of a receiver between
+a native binary and the VM it runs a script in (docs/design/SCRIPTS.md section 5) has to bring a counter a `var fn` of
+the receiver keeps back as the script left it. So `Encoder` has `writesPrivateFields()` and `Decoder` has
+`readsPrivateFields()`, both `false` unless a target says otherwise, and the derived forms ask them: `encode` writes a
+`private` field with a default through `encodePrivateField`, which writes nothing for a format, and `decode` asks
+`decodeHasPrivateField`, which answers "not there" - and so the default - unless the source reads the whole value and
+the input has the field. `Values(privateFields: true)` and `ValueDecoder.of(value, privateFields: true)` are the pair
+that asks, and `EncodedValue.of(value, privateFields: true)` the short way. A field whose type is not `Encode` (or not
+`Decode`) is left out either way, because nothing about the type asked it to be, and a capsule is still written through
+its pair: the condition of derivation above is unchanged.
+
 ## 3a. A capsule is written as its source type
 
 A type whose constructor is closed from outside is a **capsule**

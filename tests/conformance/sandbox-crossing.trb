@@ -1,0 +1,105 @@
+/**
+ * `Sandbox.load` and `Script.apply` in both back ends (docs/design/SCRIPTS.md slice 8). A program the VM runs hands the
+ * script its value by reference; a native binary loads the script through the front end and the VM it embeds, and the
+ * value crosses into that VM and back as text, through the derived `Encode` and `Decode` of `Settings` - every field
+ * of it, the `private` counter with a default included, the case, the optional record and the map. So the two print
+ * the same, for a script the program was compiled with and for one it writes while it runs, and every way one fails -
+ * a type error, an import the grant does not name, the step limit, a panic, a file that is nowhere - is a
+ * `SandboxError` of `load` or of `apply`, and the program goes on.
+ */
+
+use Sandbox, Script, SandboxError from "std/sandbox"
+use File from "std/fs"
+
+type Endpoint {
+  host: String = "localhost"
+  port: Int = 80
+}
+
+type Level {
+  case Quiet
+  case Verbose(depth: Int)
+}
+
+type Settings {
+  var port: Int = 8080
+  var ratio: Float64 = 0.5
+  var level: Level = Level.Quiet
+  var fallback: Endpoint? = None
+  var endpoints: Map<String, Endpoint> = [:]
+  private(var) names: List<String> = []
+  private var named: Int = 0
+
+  var fn name(value: String) {
+    names.append value
+    named = named + 1
+  }
+
+  var fn endpoint(key: String, host: String, port: Int) {
+    endpoints.set key, Endpoint(host, port)
+  }
+
+  var fn verbose(depth: Int) {
+    level = Level.Verbose depth
+  }
+
+  fn summary(): String {
+    const listed = names.joined separator: " "
+    "port {port}, ratio {ratio}, {level}, fallback {fallback}, endpoints {endpoints}, names {listed}, {named} named"
+  }
+}
+
+/** What the script configured, or where and why it failed. */
+fn configured(loading: Result<Script<Settings>, SandboxError>): String {
+  const script = match loading {
+    Ok(found) => found
+    Fail(error) => {
+      return "not loaded: {error}"
+    }
+  }
+  var settings = Settings()
+  settings.name "before"
+  settings.fallback = Some Endpoint("backup", 8081)
+  match script.apply(settings) {
+    Ok(_) => settings.summary()
+    Fail(error) => "stopped: {error}"
+  }
+}
+
+/** Writes a script of these lines below the working directory, and answers the path it is loaded by. */
+fn written(name: String, lines: List<String>): String {
+  if !File.isDirectory("generated") {
+    const _ = File.createDirectory "generated"
+  }
+  const path = "./generated/{name}.trb"
+  const _ = File.writeText(path, lines.joined(separator: "\n") + "\n")
+  path
+}
+
+print configured(Sandbox.load<Settings>("./crossing/configures.trb"))
+
+// The same script applied twice: each apply configures the value it is handed, and nothing is kept in between
+const twice = Sandbox.load<Settings>("./crossing/configures.trb")
+if const Ok(script) = twice {
+  var settings = Settings()
+  const _ = script.apply settings
+  const _ = script.apply settings
+  print "applied twice: {settings.summary()}"
+}
+
+const looping = Sandbox.load<Settings>("./crossing/loops.trb") {
+  limits steps: 10_000
+}
+print configured(looping)
+print configured(Sandbox.load<Settings>("./crossing/imports.trb"))
+const granted = Sandbox.load<Settings>("./crossing/imports.trb") {
+  modules "std/os/environment"
+}
+print configured(granted)
+
+// Scripts only known while the program runs
+print configured(Sandbox.load<Settings>(written("runs", ["port = 1", "name \"run\"", "verbose 7", "ratio = 0.125"])))
+print configured(Sandbox.load<Settings>(written("mistyped", ["port = \"eighty\""])))
+print configured(Sandbox.load<Settings>(written("panics", ["name \"a\"", "panic \"no configuration today\""])))
+print configured(Sandbox.load<Settings>("./generated/nowhere.trb"))
+print "the program goes on"

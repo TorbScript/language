@@ -5,6 +5,7 @@
  */
 
 use SourceFile, Statement, Expression, TextSegment from "../syntax/ast"
+use Span from "../syntax/source"
 
 /**
  * What the toolchain needs to know about a project. Names of dependencies are stored without their version
@@ -248,6 +249,200 @@ fn settingOfAssign(target: Expression, value: Expression): Setting? {
     }
   }
   Some Setting(word, [text], [])
+}
+
+// --- What has to be evaluated (docs/design/PROJECT.md sections 8 and 10, SCRIPTS.md slice 5) ----------------------
+
+/**
+ * A setting the toolchain reads before it can run anything, written as something that has to be run:
+ * `name = "acme/{suffix}"`. The static reader refuses it instead of reading an empty value (PROJECT.md section 10).
+ */
+public type ManifestProblem {
+  /** The value that is not a literal. */
+  span: Span
+  message: String
+  note: String
+}
+
+/**
+ * The settings the toolchain reads from the syntax tree alone: it needs them before anything is checked, so they are
+ * literals (PROJECT.md section 10, the first nine rows). `build { input }` and `test { input }` are the entry files,
+ * which the checker needs as well.
+ */
+const staticWords = ["language", "name", "prelude", "dependencies", "source", "registry", "workspace", "program"]
+
+/** The blocks whose `input` is static: which files are entry files. */
+const inputWords = ["build", "test"]
+
+/** Settings the toolchain does not read at all: computing one never makes it evaluate the file. */
+const unreadWords = ["authors", "description", "license", "repository", "profile", "resources"]
+
+/** Every setting of the file the toolchain reads before it can run anything, where one is not a literal. */
+public fn manifestProblemsOf(file: SourceFile): List<ManifestProblem> {
+  var found: List<ManifestProblem> = []
+  for statement in file.statements {
+    const word = wordOf(statement) ?? ""
+    if staticWords.contains(word) {
+      staticProblemsOf statement, word, found
+    } else if inputWords.contains(word) {
+      inputProblemsOf statement, word, found
+    }
+  }
+  found
+}
+
+/**
+ * Whether the toolchain has to evaluate the file to know a setting it uses (SCRIPTS.md slice 5): a `version` or a
+ * `tasks { ... }` that is not a literal, or a line that is no setting at all - an `if`, a loop, a call of something
+ * else - which may configure anything. A `use`, a `const` and a computed setting the toolchain does not read change
+ * nothing it reads; a computed static setting is refused ([manifestProblemsOf]) and never evaluated.
+ */
+public fn needsEvaluation(file: SourceFile): Bool {
+  for statement in file.statements {
+    if const .Declare(_) = statement.kind {
+      continue
+    }
+    if const .Bind(_) = statement.kind {
+      continue
+    }
+    const word = match wordOf(statement) {
+      Some(found) => found
+      None => {
+        return true
+      }
+    }
+    if staticWords.contains(word) || unreadWords.contains(word) {
+      continue
+    }
+    if inputWords.contains(word) {
+      // Only `input` is read, and it is static; `test { coverageThreshold = threshold }` is nothing the toolchain uses
+      continue
+    }
+    if !isLiteralStatement(statement) {
+      return true
+    }
+  }
+  false
+}
+
+/** The word of a setting - `name = ...`, `name ...`, `tasks { ... }` - or `None` for a line that is no setting. */
+fn wordOf(statement: Statement): String? {
+  match statement.kind {
+    .Assign(target, _) => {
+      if const .Name(text) = target.kind {
+        return Some text
+      }
+      None
+    }
+    .Evaluate(expression) => {
+      if const .Call(callee, _, _) = expression.kind {
+        if const .Name(text) = callee.kind {
+          return Some text
+        }
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+/** A setting whose every value is a literal, and every line of whose block is one. */
+fn isLiteralStatement(statement: Statement): Bool {
+  firstComputedOf(statement).isNone()
+}
+
+/** The first value of a setting that is not a literal, or the whole line where it is no setting. */
+fn firstComputedOf(statement: Statement): Span? {
+  match statement.kind {
+    .Assign(target, value) => {
+      if const .Name(_) = target.kind {
+        if isLiteral(value) {
+          return None
+        }
+        return Some value.span
+      }
+      Some statement.span
+    }
+    .Evaluate(expression) => {
+      const arguments = match expression.kind {
+        .Call(callee, given, _) => {
+          if const .Name(_) = callee.kind {
+            given
+          } else {
+            return Some statement.span
+          }
+        }
+        _ => {
+          return Some statement.span
+        }
+      }
+      for argument in arguments {
+        if const .Closure(closure) = argument.value.kind {
+          for inner in closure.body.statements {
+            if const Some(span) = firstComputedOf(inner) {
+              return Some span
+            }
+          }
+          continue
+        }
+        if !isLiteral(argument.value) {
+          return Some argument.value.span
+        }
+      }
+      None
+    }
+    _ => Some statement.span
+  }
+}
+
+/** A plain string or an integer, as written. */
+fn isLiteral(expression: Expression): Bool {
+  match expression.kind {
+    .TextLiteral(segments) => plainText(segments).isSome()
+    .IntegerLiteral(_) => true
+    _ => false
+  }
+}
+
+fn staticProblemsOf(statement: Statement, word: String, var found: List<ManifestProblem>) {
+  if const Some(span) = firstComputedOf(statement) {
+    found.append(ManifestProblem(
+      span,
+      "`{word}` has to be a plain string",
+      "The toolchain reads `{word}` before it can run anything, so it cannot be computed",
+    ))
+  }
+}
+
+/** `build { input = ... }`, `test { input = ... }`: the entry files, which the checker needs before it checks any. */
+fn inputProblemsOf(statement: Statement, word: String, var found: List<ManifestProblem>) {
+  const arguments = match statement.kind {
+    .Evaluate(expression) => {
+      if const .Call(_, given, _) = expression.kind {
+        given
+      } else {
+        return
+      }
+    }
+    _ => {
+      return
+    }
+  }
+  for argument in arguments {
+    if const .Closure(closure) = argument.value.kind {
+      for inner in closure.body.statements {
+        if wordOf(inner) == Some("input") {
+          if const Some(span) = firstComputedOf(inner) {
+            found.append(ManifestProblem(
+              span,
+              "`{word} \{ input \}` has to be a plain string",
+              "It names the entry files, which the checker needs before it can run anything",
+            ))
+          }
+        }
+      }
+    }
+  }
 }
 
 /** `None` for a string with `{...}` in it: what it means depends on evaluation. */

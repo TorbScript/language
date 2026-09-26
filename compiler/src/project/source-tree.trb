@@ -109,6 +109,20 @@ public type SourceTree {
     files.containsKey(normalized) || (disk?.lists(normalized) ?? false)
   }
 
+  /**
+   * Every file whose text the tree holds: the ones it was made with, and the ones read from disk since - which are the
+   * files a check of it read, what a native binary that loads scripts carries (`cli/host.trb`).
+   */
+  fn readTexts(): Map<String, String> {
+    var found = files
+    if const Some(read) = disk {
+      for (path, text) in read.texts {
+        found.set path, text
+      }
+    }
+    found
+  }
+
   /** Every file of the tree, sorted by path. */
   fn paths(): List<String> {
     sortedPaths

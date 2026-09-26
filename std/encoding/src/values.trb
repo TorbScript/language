@@ -55,9 +55,12 @@ public type EncodedValue with Show {
   /** One case of a type with cases, with the fields of that case. */
   case Variant(typeName: String, name: String, fields: List<EncodedField>)
 
-  /** `EncodedValue.of(user)`: the value, written by [Values]. */
-  static fn of<Value: Encode>(value: Value): EncodedValue {
-    var builder = Values()
+  /**
+   * `EncodedValue.of(user)`: the value, written by [Values]. With `privateFields`, a `private` field with a default
+   * is written as well, so the value is the whole value and not only its data ([Encoder.writesPrivateFields]).
+   */
+  static fn of<Value: Encode>(value: Value, privateFields: Bool = false): EncodedValue {
+    var builder = Values privateFields: privateFields
     value.encode builder
     builder.result()
   }
@@ -203,8 +206,14 @@ public fn rendered<Value: Encode>(value: Value): String {
  * A record that announced no field and holds one value is a **wrapper**, and it becomes that value.
  */
 public type Values with Encoder {
+  /** Whether a `private` field with a default is written as well ([Encoder.writesPrivateFields]). */
+  privateFields: Bool = false
   private var frames: List<ValueFrame> = []
   private var finished: EncodedValue? = None
+
+  fn writesPrivateFields(): Bool {
+    privateFields
+  }
 
   /** What was written. `Nothing` when nothing was. */
   fn result(): EncodedValue {
@@ -351,17 +360,27 @@ public type ValueDecoder with Decoder {
   private lenient: Bool = false
   private naming: Naming = Naming.Unchanged
   private strict: Bool = false
+  /** Whether a `private` field with a default is read as well, where the value has it ([Decoder.readsPrivateFields]). */
+  private privateFields: Bool = false
   /** Whether the value that was taken last was the text key of a map, which is read as whatever the key type is. */
   private var tookKey: Bool = false
 
-  /** A decoder that reads `value`, with the options of the format that parsed it. */
+  /**
+   * A decoder that reads `value`, with the options of the format that parsed it. `privateFields` reads back what
+   * `EncodedValue.of(value, privateFields: true)` wrote: the whole value.
+   */
   static fn of(
     value: EncodedValue,
     lenient: Bool = false,
     naming: Naming = Naming.Unchanged,
     strict: Bool = false,
+    privateFields: Bool = false,
   ): ValueDecoder {
-    Self root: Some(value), lenient: lenient, naming: naming, strict: strict
+    Self root: Some(value), lenient: lenient, naming: naming, strict: strict, privateFields: privateFields
+  }
+
+  fn readsPrivateFields(): Bool {
+    privateFields
   }
 
   var fn nothing(): Bool {

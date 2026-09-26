@@ -28,7 +28,7 @@ use keepingOf from "../../ir/kept"
 use referencesOf from "../../ir/elements"
 use closingOf from "../../ir/closing"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
-use nativeEntries from "./natives"
+use nativeEntries, scriptHostPrototypes from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
 use Emission, write, reportUnsupported, emittedText, locationExpression, slotNameOf from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
@@ -58,14 +58,26 @@ public type ProgramEntry {
   file: String = ""
 }
 
+/**
+ * A function C code of another translation unit calls: one of the script host, which a native binary that loads
+ * receiver scripts links in (docs/design/SCRIPTS.md slice 8). The library it belongs to has no `main`.
+ */
+public type ProgramExport {
+  /** The mangled name of the function, whose signature the lowering kept as declared (`IrProgram.hosted`). */
+  function: String
+  /** The name it is called by from outside: a plain C function with the same parameters, calling it. */
+  name: String
+}
+
 /** Everything one translation unit is: the C, and what the back end could not emit. */
-public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission {
+public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>, exports: List<ProgramExport> = []): Emission {
   var emission = Emission()
   const functions = emittedFunctionsOf program
   const layouts = usedLayoutsOf program, functions
   const prototypes = runtimePrototypes()
   checkProgramTypes emission, program, functions, layouts
   emitHeader emission
+  emitScriptHostPrototypes emission, program
   // The trait-typed values come first: they are made of the erased pointers of the ABI and of nothing of the program,
   // while a layout may hold one in a field - the environment of a closure over a trait-typed value is one
   emitObjectTypes emission, program, functions, layouts
@@ -87,7 +99,67 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>): Emission
     emitEntryCellRelease emission, program, functions
   }
   emitMain emission, entries, functions
+  emitExports emission, program, functions, exports
   emission
+}
+
+/**
+ * The functions of the script host the program calls, declared here: they are defined by the object the driver links
+ * in, not by the runtime, so `torb_natives.h` does not know them (docs/design/SCRIPTS.md slice 8).
+ */
+fn emitScriptHostPrototypes(var emission: Emission, program: IrProgram) {
+  const prototypes = scriptHostPrototypes()
+  var declared: List<String> = []
+  for function in program.functions {
+    if const .Runtime(symbol) = function.kind {
+      if prototypes.containsKey(symbol) && !declared.contains(symbol) {
+        declared.append symbol
+      }
+    }
+  }
+  if declared.isEmpty() {
+    return
+  }
+  declared.sort({ _ })
+  write emission, CDeclaration.Comment("The script host this binary links in, which loads receiver scripts (SCRIPTS.md slice 8).")
+  for symbol in declared {
+    write emission, CDeclaration.Fixed(prototypes.get(symbol) ?? "")
+  }
+}
+
+/**
+ * One plain C function per export, calling the function it names with the same parameters: what C code of another
+ * translation unit calls. A parameter by reference or a result by pointer has no such plain form and is refused.
+ */
+fn emitExports(var emission: Emission, program: IrProgram, functions: List<IrFunction>, exports: List<ProgramExport>) {
+  for export in exports {
+    const function = match functions.find({ _.name == export.function }) {
+      Some(found) => found
+      None => {
+        reportUnsupported emission, "the export `{export.name}` of a function nothing emitted"
+        continue
+      }
+    }
+    if function.signature.parameters.any({ _.isReference }) {
+      reportUnsupported emission, "the export `{export.name}` of a function with a `var` parameter"
+      continue
+    }
+    if const .ByPointer = function.signature.resultMode {
+      reportUnsupported emission, "the export `{export.name}` of a function whose result is written through a pointer"
+      continue
+    }
+    var parameters: List<String> = []
+    var arguments: List<String> = []
+    for index in 0..function.signature.parameters.length() {
+      parameters.append declarationOf(valueTypeOf(program, function.signature.parameters[index].annotation), "a{index}")
+      arguments.append "a{index}"
+    }
+    const written = if parameters.isEmpty() { "void" } else { parameters.joined separator: ", " }
+    const result = resultTypeOf program, function.signature.result
+    const call = "{function.name}({arguments.joined(separator: ", ")})"
+    const body = if result == "void" { "  {call};\n" } else { "  return {call};\n" }
+    write emission, CDeclaration.Fixed(declarationOf(result, "{export.name}({written})") + " \{\n" + body + "\}")
+  }
 }
 
 /** The whole C of a program with one entry and no test report, for `--emit-c` and for the snapshot tests. */
@@ -691,11 +763,12 @@ fn emitWitnessTable(
     CExpression.Name nestedName
   }
   const initializer = CExpression.Initializer([drop, retain, size, inner, array])
-  // The table itself has **external** linkage while its two arrays are `static`: once the devirtualization has turned
-  // the last dispatch through a table into a direct call, nothing in the translation unit names that table any more, and
-  // a `static const` nothing reads is an error under `-Wunused-const-variable -Werror`. Its name is mangled and unique,
-  // so there is nothing for it to collide with, and the member that nobody calls is what finding 12 removes for real
-  write emission, CDeclaration.StaticData("const torb_witness_table", table.name, initializer)
+  // Once the devirtualization has turned the last dispatch through a table into a direct call, nothing in the
+  // translation unit names that table any more, and a `static const` nothing reads is an error under
+  // `-Wunused-const-variable -Werror` - so it is `TORB_MAYBE_UNUSED`. It stays `static`: a program and the script host
+  // it links (docs/design/SCRIPTS.md slice 8) have tables of one name, and the member that nobody calls is what finding
+  // 12 removes for real
+  write emission, CDeclaration.StaticData("static TORB_MAYBE_UNUSED const torb_witness_table", table.name, initializer)
 }
 
 // --- The thunks of the closures -------------------------------------------------------------------------------------
@@ -1395,7 +1468,8 @@ fn environmentCopiesOf(program: IrProgram, functions: List<IrFunction>): List<La
  * The copies of environments at the crossing of a worker (`torb_environment.privatize`, docs/design/CONCURRENCY.md
  * section 16, "The copy at the crossing"): the environment itself where only its closure holds it, else a block of its
  * own with every capture retained - then every capture made private in place, and `NULL` where one could not be.
- * They are not `static`: a layout whose closures all keep their environment in a frame names its copy nowhere.
+ * A layout whose closures all keep their environment in a frame names its copy nowhere, so each is `TORB_MAYBE_UNUSED`;
+ * it stays `static`, because a program and the script host it links (docs/design/SCRIPTS.md slice 8) may both have it.
  */
 fn emitEnvironmentCopies(var emission: Emission, program: IrProgram, layouts: List<LayoutId>) {
   if layouts.isEmpty() {
@@ -1443,7 +1517,7 @@ fn emitEnvironmentCopies(var emission: Emission, program: IrProgram, layouts: Li
 }
 
 fn environmentCopyHeadOf(program: IrProgram, layout: LayoutId): String {
-  "torb_environment *{environmentCopyNameOf(program, layout)}(torb_environment *environment)"
+  "static TORB_MAYBE_UNUSED torb_environment *{environmentCopyNameOf(program, layout)}(torb_environment *environment)"
 }
 
 fn privateHeadOf(program: IrProgram, layout: LayoutId): String {
@@ -2597,6 +2671,10 @@ public fn runtimePrototypes(): Map<String, String> {
         found.set symbol, entry.prototype
       }
     }
+  }
+  // The functions of the script host, which the program's C declares itself (`emitScriptHostPrototypes`)
+  for (symbol, prototype) in scriptHostPrototypes() {
+    found.set symbol, prototype
   }
   found
 }

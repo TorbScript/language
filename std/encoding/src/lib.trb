@@ -41,8 +41,9 @@ public use FieldDescription, FieldDefault, Structure, StructureField, StructureC
 public use Naming from "./naming"
 // The steps a derived `encode`, `decode` and `describe` are made of. The compiler finds them here by name
 public use encodeRecord, encodeVariant, encodeSequence, encodeFinish, encodeField, encodeItem from "./derived"
-public use encodeThrough from "./derived"
+public use encodeThrough, encodePrivateField from "./derived"
 public use decodeRecord, decodeRequired, decodeHasField, decodeFieldValue, decodeFinish, decodeVariant from "./derived"
+public use decodeHasPrivateField from "./derived"
 public use decodeSequence, decodeItem, unknownCase, decodeThrough, decodeThroughChecked, decodeLiteral from "./derived"
 public use describeRecord, describeVariant, describeCase, describeFinish, describeThrough from "./derived"
 public use describeField, describeDefaultedField, describeConstantField from "./derived"
@@ -178,6 +179,16 @@ public trait Encoder {
   var fn field(name: String)
   /** Closes the innermost `sequence`, `map`, `record` or `variant`. */
   var fn finish()
+
+  /**
+   * Whether a derived `encode` writes the fields that are no parameter of the constructor from outside, too: a
+   * `private` field with a default. A format writes a type's data and answers `false`; a copy of the whole value
+   * answers `true` (`Values(privateFields: true)`), such as the value a native binary hands a script in its VM
+   * (`std/sandbox`, docs/design/SCRIPTS.md section 5). A field whose type is not `Encode` is left out either way.
+   */
+  fn writesPrivateFields(): Bool {
+    false
+  }
 }
 
 // --- What a format implements: reading ---------------------------------------------------------------------------
@@ -217,6 +228,14 @@ public trait Decoder {
   var fn field(name: String): Result<Bool, DecodeError>
   /** Closes the innermost `sequence`, `map`, `record` or `variant`. */
   var fn finish(): Result<Void, DecodeError>
+
+  /**
+   * Whether a derived `decode` reads the fields that are no parameter of the constructor from outside, too, where the
+   * input has them: the other half of [Encoder.writesPrivateFields]. A field the input does not have takes its default.
+   */
+  fn readsPrivateFields(): Bool {
+    false
+  }
 }
 
 // --- What a format implements: describing ------------------------------------------------------------------------
@@ -582,6 +601,27 @@ extend<Item: Decode> List<Item> with Decode {
 
 /** A list describes as a `sequence` around its item's structure: the shape is one item, repeated. */
 extend<Item: Describe> List<Item> with Describe {
+  static fn describe<Target: Describer>(var target: Target) {
+    target.sequence()
+    Item.describe target
+    target.finish()
+  }
+}
+
+/**
+ * An `ArrayList` reads back as the list it is written as - a sequence, item by item - so a field of one does not keep
+ * the type around it from having a derived `decode` (`Chunk` of the bytecode, whose code is one). It writes through the
+ * `encode` of `List`.
+ */
+extend<Item: Decode> ArrayList<Item> with Decode {
+  static fn decode<Source: Decoder>(var source: Source): Result<ArrayList<Item>, DecodeError> {
+    const items = List<Item>.decode(source)?
+    Ok ArrayList.from(items)
+  }
+}
+
+/** An `ArrayList` describes as the `sequence` of `List`. */
+extend<Item: Describe> ArrayList<Item> with Describe {
   static fn describe<Target: Describer>(var target: Target) {
     target.sequence()
     Item.describe target

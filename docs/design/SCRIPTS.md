@@ -1,7 +1,7 @@
 # Receiver Scripts and the Sandbox
 
-**Status: decided on 2026-09-23 as milestones 7.4 and 7.5 (`docs/BACKEND.md` section 5.4); slices 1 to 4 are in
-(section 9).** A receiver script is lowered as one function of its module and run by the VM inside a sandbox: the
+**Status: decided on 2026-09-23 as milestones 7.4 and 7.5 (`docs/BACKEND.md` section 5.4); every slice but the
+sandbox's own heap (slice 6) is in (section 9).** A receiver script is lowered as one function of its module and run by the VM inside a sandbox: the
 grant reaches the runtime (`runtime/sandbox.c`), a panic, `Process.exit`, a refused path and every limit stop the
 script and never the host, and each stop carries the line of the script it happened on (`compiler/src/vm/sandbox.trb`,
 `compiler/tests/sandbox.test.trb`). `torb manifest` evaluates a `project.trb` through it and `torb manifest --check`
@@ -9,10 +9,12 @@ compares the result with the static reader on every manifest of the repository, 
 run by `torb run` loads and applies scripts through `std/sandbox` (`examples/config-dsl`,
 `tests/conformance/vm-only/sandbox-load.trb`), and **a script from a path only known while the program runs** is
 checked and lowered into the running program by the `torb` that runs it (slice 7,
-`tests/conformance/vm-only/sandbox-runtime-path.trb`). The evaluation replacing the static reader where a setting is
-computed (slice 5), the sandbox's own heap (slice 6) and compiled code that loads scripts (slice 8) are not built;
-`torb build --embed-vm` builds a native binary that embeds the VM and runs a whole program in it, scripts included
-(VM.md section 11).
+`tests/conformance/vm-only/sandbox-runtime-path.trb`). **A native binary loads and applies scripts** through the
+front end and the VM it links (slice 8, section 1): the value crosses into that VM and back as text, every field of it
+(section 5), and `tests/conformance/sandbox-crossing.trb` prints the same in both back ends. **The toolchain reads the
+evaluated manifest** where a setting it uses is computed, refuses a computed static setting, and keeps what the
+evaluation read in `build/manifest-inputs.trb` (slice 5, section 7). The sandbox's own heap (slice 6) is not built;
+`torb build --embed-vm` builds a native binary that interprets a whole program instead (VM.md section 11).
 
 A receiver script is a `.trb` file that is the **body of a receiver closure** instead of a module: `project.trb` against
 `Project`, a `config.trb` against the `ServerConfig` of the program that loads it (CONCEPT.md, "Receiver Scripts and the
@@ -55,13 +57,27 @@ an interpreter: a native frame cannot be counted per instruction, and a panic in
 the one construct defined to run in the VM.
 
 - **This is the one exception to "the VM is never the more permissive back end"** (VM.md section 1). That rule is
-  about *programs*, which both back ends must run alike. A script is not a program: it is data with control flow,
-  and the C back end refuses a program that loads one with a finding that says a native binary does not embed the VM
-  yet (slice 8), exactly as it refused `Script` before.
-- **The hosts that exist are the ones that already have a VM:** `torb` itself (it evaluates `project.trb`) and a
-  program `torb run` runs in the VM (`Sandbox.load`, slices 4 and 7) - also inside a native binary that
-  `torb build --embed-vm` built, which interprets the whole program (VM.md section 11) and loads the scripts it was
-  compiled with. Compiled code that loads scripts embeds the front end and the VM (BACKEND 5.4) and is slice 8.
+  about *programs*, which both back ends must run alike. A script is not a program: it is data with control flow, and
+  a native binary runs it in a VM of its own - the one of its script host, below.
+- **Every host has a VM:** `torb` itself (it evaluates `project.trb`), a program `torb run` runs in the VM
+  (`Sandbox.load`, slices 4 and 7), a native binary `torb build --embed-vm` built, which interprets the whole program
+  (VM.md section 11), and a native binary `torb build` compiled, which links the script host.
+- **A native binary (slice 8, as built) links the script host**: `compiler/src/vm/host.trb` - the front end and the
+  VM - with the toolchain's standard library as text, compiled once per toolchain, profile and C compiler into an object
+  of its own below `build/script-host/` beside the runtime (`compiler/src/cli/host.trb`). It is the size of the
+  compiler, so no program waits for it twice; the key is a hash of the compiler's and the standard library's sources, the
+  runtime's headers and the `torb` that emits the C, and two builds that compile it at once each write a directory of
+  their own. The program carries the files its build read, the standard library aside (`scriptSources`), keyed below
+  `/torb` instead of the directory they share, so the binary names no path of the machine that built it. `Sandbox.load`
+  hands the host the path (`hostLoadScript`): it checks those files again with the script as one more module - one
+  the program was compiled with, or a file of the disk it runs on - against the receiver, lowers the script next to
+  `crossedIn` and `crossedOut` of `std/sandbox`, and answers the bytecode as text, which the `Script` keeps; a
+  refusal is the `SandboxError` of `load`, with its line. `Script.apply` hands it back with the value as crossing text
+  and the grant (`hostRunScript`): the host reads the value in, runs the script on it inside the sandbox and under its
+  limits, which count the script alone, writes it out and gives back what it placed in its VM. Nothing is kept between
+  two calls, so every load costs a check of the program - a fraction of a second at `-O2` - and a binary that loads
+  scripts needs `compiler/` beside `torb` where it is built, and nothing where it runs. The C of such a program declares
+  the host's two functions itself; the VM, which runs its scripts in place, never reaches them.
 - **A path only known while the program runs (slice 7, as built).** `Sandbox.load` looks a path up in the table of the
   program's scripts first; any other path goes to the `torb` that runs the program, through the instruction
   `load.script`: the program's files are checked again with the file as one more module whose receiver is the type
@@ -196,10 +212,18 @@ the VM, only text crosses, and the text is the receiver's own vocabulary.**
   it is an operation, not a native, so it needs no second commit (VM.md section 6).
 - **Values in** are the same the other way round: the host places a text with `Machine.placeText` (the program's
   arguments already come in this way), and a receiver starts from its default value inside the VM.
-- **A native binary** (slice 8) will cross with `std/encoding`: the host's value is encoded, decoded into the VM,
-  configured, and encoded back. A receiver used from a native host must then be `Encode & Decode`, which a receiver of
-  plain settings is by derivation; the checker will say so at the `Sandbox.load` of a native build. That is a decision
-  about slice 8 and nothing before it depends on it.
+- **A native binary** (slice 8, as built) crosses with `std/encoding`: `crossedApply` writes the value with
+  `EncodedValue.of(value, privateFields: true)` and the crossing text of `std/sandbox/src/crossing.trb` - one letter per
+  part, a text with its length in bytes in front, a float as the text that reads back as the same bits - the host's VM
+  reads it in with `ValueDecoder.of(..., privateFields: true)` and the receiver's `Decode`, the script configures it,
+  and the way back is the same. **Every field crosses**: a derived `encode` writes a `private` field with a default as
+  well where its target asks for the whole value (`Encoder.writesPrivateFields`), and a derived `decode` reads it back
+  where its source does (`Decoder.readsPrivateFields`), so a counter a `var fn` of the receiver keeps comes back as the
+  script left it; a format answers `false` to both and writes a type's data as before (ENCODING.md section 3, "The whole value"). A
+  receiver used from a native binary is therefore `Encode & Decode`, which a receiver of plain settings is by
+  derivation; one that is not - a field of a closure or of a `shared` type - is an error of the program at the
+  `Script.apply` the native build reaches (`runCrossed`, which the lowering turns into `crossedApply` for the receiver),
+  and a program the VM runs is not asked. A `private` field whose type is not `Encode` stays behind, at its default.
 
 ## 6. Errors and their sites
 
@@ -256,8 +280,17 @@ public fn evaluated(script: (var self: Project) => Void): String {
   is what makes the comparison with the static reader cheap enough to be a gate of tier A: the two must agree on every
   `Manifest` field of every `project.trb` of the repository before anything reads the evaluated one (BACKEND row 7.5).
 - **The static reader stays** for the settings that decide the workspace - `name`, `prelude`, `dependencies`,
-  `workspace` - because they are needed before anything can be checked, and "the static read comes first"
-  (PROJECT.md section 8). What evaluation adds is every other setting, once slice 5 lets the toolchain read it.
+  `workspace`, the entry files - because they are needed before anything can be checked, and "the static read comes
+  first" (PROJECT.md section 8). One of them written as something that would have to run is refused at its value, with
+  the file, the line and the column (`manifestProblemsOf`), and never evaluated.
+- **The toolchain reads the evaluation (slice 5, as built)** where a setting it uses is computed - `version`, or
+  `tasks { ... }`, or a line that is no setting at all, such as an `if` (`needsEvaluation` of `project/manifest.trb`):
+  the build, `torb run` and `torb test` evaluate that one manifest and read `version` and `tasks` from what it answers
+  (`manifestOfProject` of `vm/manifest.trb`). The sandbox records every file the script read and every variable it asked
+  for (the grant's `record`, the kernel operation `take.inputs`), and `build/manifest-inputs.trb` keeps them with a hash
+  each - a variable by the hash of its name and value, never the value - beside the settings the evaluation answered: the
+  next build reads those instead of evaluating again unless one of the hashes changed. A manifest that computes only
+  what the toolchain does not read, such as `description`, is never evaluated.
 
 ## 8. What this is not
 
@@ -268,8 +301,8 @@ public fn evaluated(script: (var self: Project) => Void): String {
 - **Not a security boundary against the operating system.** The locks are the language's: a script cannot name a
   capability it was not granted, and the runtime refuses paths and variables outside the grant. A bug in the runtime,
   a race between the link check and the open (PATH.md section 7), and a hard link inside a root are outside it.
-- **Not a cache.** Which files and variables an evaluation read (`build/manifest-inputs.trb`) is PROJECT.md's, and
-  slice 5.
+- **Not a cache of programs.** Which files and variables an evaluation of `project.trb` read, and what it answered,
+  is kept (`build/manifest-inputs.trb`, section 7); a script a program loads is checked again at every load.
 
 ## 9. Slices
 
@@ -279,10 +312,10 @@ public fn evaluated(script: (var self: Project) => Void): String {
 | 2 | The sandbox of the VM: `runtime/sandbox.c` (roots, links, patterns, the allocation budget, the stop), the kernel's recovery point around every operation while a sandbox is open, `TextOut`, the interpreter's step and time counters and the propagation of a stop, the line of a stop; a script module lowered as its `script` function; `compiler/src/vm/sandbox.trb`, the host's API; the checker's import rule for scripts | **Done**: `compiler/tests/sandbox.test.trb` pins every refusal with its exact text |
 | 3 | `project.trb` through the VM: `Project.settings()` and `evaluated` in `std/project`, `torb manifest [--check]`, the gate | **Done**: `torb manifest --check` agrees with the static reader on every manifest of the repository |
 | 4 | `Sandbox.load` in a program the VM runs: `SandboxCapabilities` and `Script` as TorbScript over the generated table of the program's scripts (`scriptBody`, `scriptImports`) and the one operation only the VM has (`runScript`, the instruction `run.script`); relative roots and the base read against the working directory | **Done**: `examples/config-dsl` under `torb run`, `tests/conformance/vm-only/sandbox-load.trb` |
-| 5 | The toolchain reads the evaluated manifest where a setting it uses is computed, and refuses a computed static setting (PROJECT.md section 12, slice 7); `build/manifest-inputs.trb` | Open, after 4 |
+| 5 | The toolchain reads the evaluated manifest where a setting it uses is computed, and refuses a computed static setting (PROJECT.md section 12, slice 7); `build/manifest-inputs.trb` | **Done**: section 7; `manifestProblemsOf`, `needsEvaluation`, `manifestOfProject`, the grant's `record` and `take.inputs`; `compiler/tests/project.test.trb` |
 | 6 | The sandbox's own heap: an exact memory limit, a teardown that frees what a stopped script held | Open |
 | 7 | A path known only at run time: the front end inside the running `torb` checks and lowers the file into the program | **Done**: section 1; `scriptReceiver`, `loadScript`, `runLoadedScript` of `std/sandbox`, the instructions `load.script` and `run.loaded`, `vm/run.trb`'s loader; `tests/conformance/vm-only/sandbox-runtime-path.trb` |
-| 8 | A native binary that loads scripts: the front end and the VM embedded, the value encoded across (section 5) | **Open** for compiled code. A whole program interpreted in a native binary loads the scripts it was compiled with: `torb build --embed-vm` (VM.md section 11) |
+| 8 | A native binary that loads scripts: the front end and the VM embedded, the value encoded across (section 5) | **Done**: sections 1 and 5; the script host (`vm/host.trb`, `cli/host.trb`), `crossedApply`, `crossedIn`, `crossedOut` and the crossing text of `std/sandbox`, derived `Encode`/`Decode` over every field; `tests/conformance/sandbox-crossing.trb` in both back ends |
 
 ## 10. Open
 

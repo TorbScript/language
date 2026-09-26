@@ -1,0 +1,304 @@
+/**
+ * The script host a native binary that loads receiver scripts links in (docs/design/SCRIPTS.md slice 8): `vm/host.trb` -
+ * the front end and the VM - with the toolchain's standard library as text, built as a library of two C functions,
+ * `torb_script_host_load` and `torb_script_host_run`, which `hostLoadScript` and `hostRunScript` of `std/sandbox` are.
+ *
+ * It is built from the toolchain's own sources, the way `--embed-vm` builds its VM, and it is the size of the compiler,
+ * so it is compiled once per toolchain, profile and C compiler into `build/script-host/` beside the runtime and every
+ * later build links the object that is there: two builds that compile it at the same time each write a directory of
+ * their own, and only one that finished is ever read. The key is a hash of everything the object is made of - the
+ * sources of the compiler and of the standard library, the runtime's headers, the `torb` that emits the C - so an edit
+ * to any of them builds it again.
+ */
+
+use File, IoError from "std/fs"
+use Process from "std/process"
+use Clock from "std/time"
+use normalizePath, parentPath, joinPath, isInside, relativePath, embeddedPathOf, embeddedRoot, commonDirectoryOf from "../project/path"
+use SourceTree from "../project/source-tree"
+use readSourceTree from "../project/read"
+use findCompilerSources from "../project/toolchain"
+use hostTarget from "../project/target"
+use check, Checked, modulesOfProgram from "../semantics/check"
+use checkBodiesOf from "../semantics/checker/check"
+use SymbolId from "../semantics/symbols"
+use insertOwnership from "../ir/ownership"
+use Lowering from "../ir/lower/context"
+use lowerLibrary, pathsOfModules from "../ir/lower/lower"
+use emitProgram, ProgramExport from "../backend/c/emit"
+use emittedText from "../backend/c/emission"
+use scriptHostLoadFunction, scriptHostRunFunction from "../backend/c/natives"
+use EmbeddedSources, embeddedSourcesText from "../vm/host"
+use BuildOptions, CCompiler, runCompiler, reportChecked, reportLowering, reportInternalError, identityFileName from "./build"
+
+/** The module of the host that exists only in memory: the two exported functions and the standard library as text. */
+const entryName = "src/vm/script-host.trb"
+
+/**
+ * The toolchain's `std` directory as the script host carries it: the one beside the `compiler/` it is built from. A
+ * native binary carries every file its build read except the ones below it.
+ */
+public fn hostedStandardLibraryOf(compiler: String): String {
+  joinPath parentPath(compiler), "std"
+}
+
+/**
+ * The files a native binary that loads scripts carries for its script host ([EmbeddedSources]): every file the build
+ * read, except the standard library the host carries itself, and the scripts the program was compiled with - each
+ * keyed below [embeddedRoot] instead of the directory all of them and the standard library lie below, so the binary
+ * names no path of this machine. Answers the text and that directory, which the lowering spells a receiver's module
+ * with the same way.
+ */
+public fn programSourcesOf(tree: SourceTree, requested: List<String>, checked: Checked, hosted: String): (String, String) {
+  var read: Map<String, String> = [:]
+  for (path, text) in tree.readTexts() {
+    if !isInside(path, hosted) {
+      read.set path, text
+    }
+  }
+  var compiled: Map<String, String> = [:]
+  for module in checked.program.graph.modules {
+    if const Some(.Loaded(_, _)) = module.receiver {
+      const package = checked.program.workspace.packages[module.package]
+      compiled.set relativePath(package.directory, module.path), module.path
+      read.set module.path, module.source.text
+    }
+  }
+  var directories: List<String> = [hosted]
+  for (path, _) in read {
+    directories.append parentPath(path)
+  }
+  for path in requested {
+    directories.append parentPath(path)
+  }
+  const root = commonDirectoryOf directories
+  var files: Map<String, String> = [:]
+  for (path, text) in read {
+    files.set embeddedPathOf(root, path), text
+  }
+  var scripts: Map<String, String> = [:]
+  for (written, path) in compiled {
+    scripts.set written, embeddedPathOf(root, path)
+  }
+  const library = tree.standardLibrary()
+  const sources = EmbeddedSources(
+    base: embeddedRoot,
+    standardLibrary: if library.isEmpty() { "" } else { embeddedPathOf root, library },
+    hosted: embeddedPathOf(root, hosted),
+    requested: requested.map({ embeddedPathOf root, _ }).toList(),
+    scripts: scripts,
+    files: files,
+  )
+  (embeddedSourcesText(sources), root)
+}
+
+/**
+ * The object of the script host for this build, compiled now where no build of it for the same toolchain, profile and
+ * C compiler has finished. `None` where it cannot be built, which is printed.
+ */
+public fn scriptHostObjectOf(options: BuildOptions, runtime: String, compiler: CCompiler): Result<String?, IoError> {
+  if compiler.isMicrosoft {
+    printError "error: a native binary that loads receiver scripts is built with gcc or clang: its script host is not built with `cl` yet"
+    return Ok None
+  }
+  const sources = match findCompilerSources(options.paths) {
+    Some(found) => found
+    None => {
+      printError "error: a native binary that loads receiver scripts embeds the front end, which is built from the toolchain's own sources, and there is no `compiler/` beside it"
+      return Ok None
+    }
+  }
+  const library = hostedStandardLibraryOf sources
+  const tree = readSourceTree([sources])?
+  const standard = standardSourcesOf tree, library
+  const key = keyOf tree, sources, standard, runtime, options, compiler
+  const common = joinPath parentPath(runtime), "build/script-host/{key}"
+  if File.isDirectory(common) {
+    for entry in File.list(common)? {
+      const object = joinPath common, "{entry}/script-host.o"
+      if File.exists(joinPath(common, "{entry}/compiled-version")) && File.exists(object) {
+        return Ok Some(object)
+      }
+    }
+  }
+  const unique = "{common.hash()}-{Clock.milliseconds()}".replace("-", "n")
+  const target = joinPath common, "objects-{unique}"
+  File.createDirectory(target)?
+  printError "building the script host of this toolchain once into {target}: it is the size of the compiler"
+  const source = joinPath target, "script-host.c"
+  if !writeHostC(tree, sources, standard, source)? {
+    return Ok None
+  }
+  const object = joinPath target, "script-host.o"
+  var arguments = ["-std=c11", options.profile.optimization(), "-g0", "-Wall", "-Wextra", "-Werror"]
+  arguments.append "-I{joinPath(runtime, "include")}"
+  for macro in options.profile.macros() {
+    arguments.append "-D{macro}"
+  }
+  arguments.appendAll(["-c", "-o", object, source])
+  const size = File.readText(source).map({ _.byteLength() }).ok() ?? 0
+  const output = match runCompiler(compiler, arguments, source, size, runtime) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
+      return Ok None
+    }
+  }
+  if output.exitCode != 0 {
+    reportInternalError compiler, source, output.standardOutput, output.standardError
+    return Ok None
+  }
+  File.writeText(joinPath(target, "compiled-version"), "{common}\n")?
+  Ok Some(object)
+}
+
+/**
+ * The C of the host: `vm/host.trb` behind a module of its own that exists only in memory, with the standard library as
+ * one text and the two functions the program calls. False where it could not be emitted, which is printed.
+ */
+fn writeHostC(tree: SourceTree, sources: String, standard: String, source: String): Result<Bool, IoError> {
+  const entry = joinPath sources, entryName
+  const lines = [
+    "use loadHostedScript, runHostedScript from \"./host\"",
+    "",
+    "const standardSources = \"{literalOf(standard)}\"",
+    "",
+    "public fn scriptHostLoad(sources: String, path: String, written: String, receiver: String): String \{",
+    "  loadHostedScript standardSources, sources, path, written, receiver",
+    "\}",
+    "",
+    "public fn scriptHostRun(program: String, input: String, grant: String): String \{",
+    "  runHostedScript program, input, grant",
+    "\}",
+    "",
+  ]
+  const around = tree.withFile entry, lines.joined(separator: "\n")
+  const checked = check around, [entry], false, false, [], true
+  if reportChecked(checked) > 0 {
+    return Ok false
+  }
+  var exports: List<SymbolId> = []
+  for name in ["scriptHostLoad", "scriptHostRun"] {
+    match exportedOf(checked, entry, name) {
+      Some(found) => exports.append found
+      None => {
+        printError "internal error: the module of the script host declares no `{name}`"
+        return Ok false
+      }
+    }
+  }
+  const paths = pathsOfModules checked
+  var checker = checked.checker
+  checker.checksOnDemand = true
+  var lowering = lowerLibrary checker, paths, exports, hostTarget()
+  if !isLowered(lowering) {
+    var every = checked.checker
+    checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
+    lowering = lowerLibrary every, paths, exports, hostTarget()
+  }
+  insertOwnership lowering.program
+  if reportLowering(checked, around, lowering) > 0 {
+    return Ok false
+  }
+  if lowering.scriptHosts.length() != 2 {
+    printError "internal error: the functions of the script host were not lowered"
+    return Ok false
+  }
+  const names = [scriptHostLoadFunction, scriptHostRunFunction]
+  var programExports: List<ProgramExport> = []
+  for index in 0..2 {
+    programExports.append ProgramExport(lowering.program.functionAt(lowering.scriptHosts[index]).name, names[index])
+  }
+  const emission = emitProgram lowering.program, [], programExports
+  if !emission.unsupported.isEmpty() {
+    for what in emission.unsupported {
+      printError "error: {what}"
+    }
+    return Ok false
+  }
+  File.writeText(source, emittedText(emission))?
+  Ok true
+}
+
+/** A public function of the module at `path`. */
+fn exportedOf(checked: Checked, path: String, name: String): SymbolId? {
+  const module = checked.program.graph.moduleAt(path)?
+  checked.program.scopes[module.value].exported.get name
+}
+
+/** Whether the lowering found nothing to refuse. */
+fn isLowered(lowering: Lowering): Bool {
+  lowering.problems.isEmpty() && lowering.unsupported.isEmpty() && lowering.program.planned.isEmpty()
+    && lowering.program.problems.isEmpty()
+}
+
+/**
+ * The toolchain's standard library as the text the host carries ([EmbeddedSources]): every file of it that is no test,
+ * the manifests included, because its packages are found through them.
+ */
+public fn standardSourcesOf(tree: SourceTree, library: String): String {
+  var files: Map<String, String> = [:]
+  for path in tree.below(library) {
+    if path.contains("/tests/") || path.endsWith(".test.trb") {
+      continue
+    }
+    files.set(path, tree.text(path) ?? "")
+  }
+  embeddedSourcesText EmbeddedSources(standardLibrary: library, files: files)
+}
+
+/**
+ * What the object is made of, as one hash: the sources of the compiler, the standard library as the host carries it,
+ * the runtime's headers, the identity of the `torb` that emits the C, the profile and the C compiler.
+ */
+fn keyOf(
+  tree: SourceTree,
+  sources: String,
+  standard: String,
+  runtime: String,
+  options: BuildOptions,
+  compiler: CCompiler,
+): String {
+  var parts: List<String> = [standard, options.profile.name(), compiler.command]
+  for path in tree.below(joinPath(sources, "src")) {
+    parts.append path
+    parts.append(tree.text(path) ?? "")
+  }
+  const include = joinPath runtime, "include"
+  for entry in File.list(include).ok() ?? [] {
+    parts.append entry
+    parts.append(File.readText(joinPath(include, entry)).ok() ?? "")
+  }
+  // The C is a function of the `torb` that emits it as well: the hash of its own C where it has one beside it
+  if const Some(executable) = Process.executablePath() {
+    const identity = joinPath parentPath(normalizePath(executable)), identityFileName
+    parts.append(File.readText(identity).ok() ?? executable)
+  }
+  // A hash below zero would put `--` into the name: its sign is a letter
+  "{parts.joined(separator: "\n").hash()}".replace("-", "n")
+}
+
+/** The text as the body of a string literal of TorbScript: a backslash, a quote, the braces and the line breaks escaped. */
+fn literalOf(value: String): String {
+  var escaped: List<String> = []
+  for character in value.chars() {
+    if character == '\\' {
+      escaped.append "\\\\"
+    } else if character == '"' {
+      escaped.append "\\\""
+    } else if character == '{' {
+      escaped.append "\\\{"
+    } else if character == '}' {
+      escaped.append "\\\}"
+    } else if character == '\n' {
+      escaped.append "\\n"
+    } else if character == '\r' {
+      escaped.append "\\r"
+    } else if character == '\t' {
+      escaped.append "\\t"
+    } else {
+      escaped.append "{character}"
+    }
+  }
+  escaped.joined separator: ""
+}

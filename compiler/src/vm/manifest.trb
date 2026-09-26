@@ -3,29 +3,33 @@
  * lowered as the script it is next to `evaluated` of `std/project`, and run in a sandbox of its own with the grant a
  * project file has. What comes back is the configured `Project` printed as its settings, which the static reader reads.
  *
- * Nothing in the toolchain reads an evaluated manifest yet: `torb manifest --check` asserts that the evaluation and the
- * static reader agree on every manifest of the repository first (BACKEND row 7.5).
+ * `torb manifest --check` asserts that the evaluation and the static reader agree on every manifest of the repository
+ * (BACKEND row 7.5), and the toolchain reads the evaluation where a setting it uses is computed ([manifestOfProject],
+ * docs/design/SCRIPTS.md slice 5), keeping what it read in `build/manifest-inputs.trb`.
  */
 
-use IoError from "std/fs"
+use File, IoError from "std/fs"
+use Environment from "std/os"
 use SourceText from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
 use parse from "../syntax/parser/parser"
+use Statement from "../syntax/ast"
 use readSourceTree, absolutePaths from "../project/read"
 use SourceTree from "../project/source-tree"
-use Manifest, readManifest from "../project/manifest"
-use normalizePath, parentPath, pathName, joinPath, isInside from "../project/path"
+use Manifest, readManifest, needsEvaluation from "../project/manifest"
+use normalizePath, parentPath, pathName, joinPath, isInside, relativePath from "../project/path"
 use hostTarget from "../project/target"
 use ModuleId from "../semantics/module"
 use SymbolId from "../semantics/symbols"
-use check, Checked from "../semantics/check"
+use check, Checked, modulesOfProgram from "../semantics/check"
+use checkBodiesOf from "../semantics/checker/check"
 use scriptReceiverOf from "../semantics/checker/receiver"
 use TypeId from "../semantics/checker/type"
 use lowerScripts, pathsOfModules from "../ir/lower/lower"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use emitBytecode from "../backend/bytecode/emit"
-use loadedProgram from "./interpret"
+use loadedProgram, recordedInputs from "./interpret"
 use Grant, ScriptStop, runScript from "./sandbox"
 
 /** One `project.trb`: where it is, and what its evaluation answered. */
@@ -38,6 +42,8 @@ public type EvaluatedManifest {
   statically: Manifest
   /** The settings the evaluation printed, or why the script stopped. */
   evaluated: Result<String, ScriptStop>
+  /** What the evaluation read, as the sandbox recorded it: `file\t<path>` and `variable\t<name>` lines. */
+  inputs: String = ""
 }
 
 /** Why no manifest could be evaluated at all: the files do not check, or the program the VM would run does not build. */
@@ -60,6 +66,7 @@ public fn projectGrant(directory: String): Grant {
     steps: 1_000_000,
     memory: 16_000_000,
     milliseconds: 2000,
+    records: true,
   )
 }
 
@@ -105,7 +112,16 @@ public fn evaluateManifests(paths: List<String>): Result<Result<List<EvaluatedMa
     }
   }
   const locations = pathsOfModules checked
+  // The bodies of `std/project` and of what it reaches are checked where the lowering gets to them: a project outside
+  // the repository's workspace has the standard library only as the toolchain's, whose bodies nothing checked yet
+  checker.checksOnDemand = true
   var lowering = lowerScripts checker, locations, scripts, [host], hostTarget()
+  if !(lowering.problems.isEmpty() && lowering.unsupported.isEmpty() && lowering.program.planned.isEmpty()) {
+    // A refusal is about the program with every body checked, as a native build sees it
+    var every = checked.checker
+    checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
+    lowering = lowerScripts every, locations, scripts, [host], hostTarget()
+  }
   insertOwnership lowering.program
   var refused: List<String> = []
   for problem in lowering.problems {
@@ -156,9 +172,247 @@ public fn evaluateManifests(paths: List<String>): Result<Result<List<EvaluatedMa
     }
     const grant = projectGrant parentPath(inside.path)
     const answered = runScript loaded, grant, hostChunk, scriptChunk, locations[module.value]
-    evaluated.append EvaluatedManifest(display, inside.source.text, statically, answered)
+    const inputs = recordedInputs loaded
+    evaluated.append EvaluatedManifest(display, inside.source.text, statically, answered, inputs)
   }
   Ok Ok(evaluated)
+}
+
+// --- The manifest the toolchain uses (docs/design/SCRIPTS.md slice 5) -----------------------------------------------
+
+/** Where the inputs of the last evaluation of a `project.trb` and its settings are kept, below the project. */
+public const inputsName = "build/manifest-inputs.trb"
+
+/**
+ * The manifest of the project in `directory` as the toolchain uses it: `statically`, what the static reader read, and
+ * where a setting it uses is computed ([needsEvaluation]) the settings the evaluation in the sandboxed VM answered for
+ * `version` and `tasks` - evaluated once, and again only when a file or a variable it read changed
+ * (`build/manifest-inputs.trb`, docs/design/PROJECT.md section 8). What decides the workspace always comes from the
+ * static read. `Fail` with a rendered message where the evaluation stopped or could not run.
+ */
+public fn manifestOfProject(directory: String, statically: Manifest): Result<Manifest, String> {
+  const path = joinPath directory, "project.trb"
+  const text = match File.readText(path) {
+    Ok(found) => found
+    Fail(_) => {
+      return Ok statically
+    }
+  }
+  if !needsEvaluation(parse(SourceText.of(text)).file) {
+    return Ok statically
+  }
+  const kept = joinPath directory, inputsName
+  if const Some(settings) = keptSettingsOf(directory, kept) {
+    return Ok withEvaluated(statically, settings)
+  }
+  const evaluation = match evaluateManifests([path]) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "{path}: {problem.message}"
+    }
+  }
+  const manifests = match evaluation {
+    Ok(found) => found
+    Fail(failure) => {
+      const first = failure.problems.first() ?? "{path} does not check"
+      return Fail "{path} could not be evaluated: {first}"
+    }
+  }
+  const manifest = match manifests.first() {
+    Some(found) => found
+    None => {
+      return Fail "{path} could not be evaluated"
+    }
+  }
+  const settings = match manifest.evaluated {
+    Ok(found) => found
+    Fail(stop) => {
+      return Fail renderedStop(manifest, stop)
+    }
+  }
+  // A build directory that cannot be written costs an evaluation next time and nothing else
+  const _ = keepInputs directory, kept, manifest.inputs, settings
+  Ok withEvaluated(statically, settings)
+}
+
+/** The settings of the static read, with what the evaluation configured of the ones that may be computed. */
+fn withEvaluated(statically: Manifest, settings: String): Manifest {
+  const evaluated = manifestOfSettings settings
+  statically.copy version: evaluated.version, workers: evaluated.workers, blocking: evaluated.blocking
+}
+
+/** A stop of the evaluation as a message: the line of `project.trb` and why. */
+fn renderedStop(manifest: EvaluatedManifest, stop: ScriptStop): String {
+  if stop.line <= 0 {
+    return "{manifest.path}: {stop.message}"
+  }
+  "{manifest.path}:{stop.line}: {stop.message}"
+}
+
+/**
+ * The settings the last evaluation answered, where every input it read is as it was - the file's hash, the variable's
+ * hash or its absence - and `None` where one changed or nothing is kept.
+ */
+fn keptSettingsOf(directory: String, kept: String): String? {
+  const text = File.readText(kept).ok()?
+  const file = parse(SourceText.of(text)).file
+  var settings: String? = None
+  for statement in file.statements {
+    const (word, arguments) = callOf(statement)?
+    match word {
+      "file" => {
+        const written = arguments.get(0) ?? ""
+        if (arguments.get(1) ?? "") != fileHashOf(joinPath(directory, written)) {
+          return None
+        }
+      }
+      "variable" => {
+        const name = arguments.get(0) ?? ""
+        if (arguments.get(1) ?? "") != variableHashOf(name) {
+          return None
+        }
+      }
+      "settings" => {
+        settings = Some(arguments.get(0) ?? "")
+      }
+      _ => {
+        return None
+      }
+    }
+  }
+  settings
+}
+
+/** `word "a", hash: "b"`: the word and its string arguments, or `None` for a line of any other shape. */
+fn callOf(statement: Statement): (String, List<String>)? {
+  const expression = match statement.kind {
+    .Evaluate(found) => found
+    _ => {
+      return None
+    }
+  }
+  const (callee, arguments) = match expression.kind {
+    .Call(target, given, _) => (target, given)
+    _ => {
+      return None
+    }
+  }
+  const word = match callee.kind {
+    .Name(text) => text
+    _ => {
+      return None
+    }
+  }
+  var texts: List<String> = []
+  for argument in arguments {
+    match argument.value.kind {
+      .TextLiteral(segments) => {
+        var joined = ""
+        for segment in segments {
+          if const .Literal(part) = segment {
+            joined = joined + part
+          }
+        }
+        texts.append joined
+      }
+      .BoolLiteral(value) => texts.append(if value { "unset" } else { "" })
+      _ => {}
+    }
+  }
+  Some((word, texts))
+}
+
+/**
+ * Writes `build/manifest-inputs.trb`: every file the evaluation read, by its path below the project and its hash, every
+ * variable it asked for by its name and the hash of name and value - never the value - or `unset: true`, and the
+ * settings it answered, which the next build reads instead of evaluating again.
+ */
+fn keepInputs(directory: String, kept: String, inputs: String, settings: String): Result<Void, IoError> {
+  var files: List<String> = ["project.trb"]
+  var variables: List<String> = []
+  for line in inputs.split("\n") {
+    if const Some(path) = line.substringAfter("file\t") {
+      const written = relativePath directory, normalizePath(path)
+      if line.startsWith("file\t") && !files.contains(written) {
+        files.append written
+      }
+    } else if const Some(name) = line.substringAfter("variable\t") {
+      if line.startsWith("variable\t") && !variables.contains(name) {
+        variables.append name
+      }
+    }
+  }
+  var lines = ["// build/manifest-inputs.trb - written by the build. Do not edit."]
+  for written in files {
+    lines.append "file {quoted(written)}, hash: {quoted(fileHashOf(joinPath(directory, written)))}"
+  }
+  for name in variables {
+    const hash = variableHashOf name
+    if hash == "unset" {
+      lines.append "variable {quoted(name)}, unset: true"
+    } else {
+      lines.append "variable {quoted(name)}, hash: {quoted(hash)}"
+    }
+  }
+  lines.append "settings {quoted(settings)}"
+  File.createDirectory(parentPath(kept))?
+  File.writeText(kept, lines.joined(separator: "\n") + "\n")
+}
+
+/**
+ * The hash of what a file of the project is: its text, a directory's names, or that there is none. The toolchain's own
+ * 64-bit hash of the text, which says whether it changed and is no digest of it.
+ */
+fn fileHashOf(path: String): String {
+  if File.isDirectory(path) {
+    var names = File.list(path).ok() ?? []
+    names.sort({ _ })
+    return "directory:{hexOf(names.joined(separator: "\n").hash())}"
+  }
+  if !File.exists(path) {
+    return "missing"
+  }
+  match File.readText(path) {
+    Ok(text) => hexOf text.hash()
+    Fail(_) => "unreadable"
+  }
+}
+
+/** The hash of a variable's name and value together, or `unset`: two variables with one value do not look alike. */
+fn variableHashOf(name: String): String {
+  match Environment.get(name) {
+    Some(value) => hexOf "{name}\n{value}".hash()
+    None => "unset"
+  }
+}
+
+fn hexOf(value: Int): String {
+  "{value}".replace("-", "n")
+}
+
+/** A text as a string literal of TorbScript: a backslash, a quote, the braces and the line breaks escaped. */
+fn quoted(value: String): String {
+  var escaped: List<String> = []
+  for character in value.chars() {
+    if character == '\\' {
+      escaped.append "\\\\"
+    } else if character == '"' {
+      escaped.append "\\\""
+    } else if character == '{' {
+      escaped.append "\\\{"
+    } else if character == '}' {
+      escaped.append "\\\}"
+    } else if character == '\n' {
+      escaped.append "\\n"
+    } else if character == '\t' {
+      escaped.append "\\t"
+    } else if character == '\r' {
+      escaped.append "\\r"
+    } else {
+      escaped.append "{character}"
+    }
+  }
+  "\"{escaped.joined(separator: "")}\""
 }
 
 /** The manifest the evaluated settings say, read by the same static reader as the file itself. */

@@ -490,13 +490,14 @@ program and runs it (`runEmbedded`) - is what `torb build` compiles through C wi
   `tests/language/`.
 - **What it is not.** The whole program is interpreted: this is no native code that calls into a VM for its scripts,
   and nothing crosses between a native and an interpreted value. That host - compiled code that loads a script, the
-  value encoded across with `std/encoding` - is `docs/design/SCRIPTS.md`'s slice 8 and stays open. The front end is
-  not in the binary either, so a script is loaded by a path the program was compiled with; any other path is the
-  `SandboxError` of `Sandbox.load` there.
+  value encoded across with `std/encoding` - is `docs/design/SCRIPTS.md`'s slice 8, built beside this: a program
+  `torb build` compiles links the script host instead. The front end is not in an `--embed-vm` binary, so a script is
+  loaded there by a path the program was compiled with; any other path is the `SandboxError` of `Sandbox.load`.
 - **Why text, and why a module of TorbScript.** The bytecode is plain data, and a string literal is the one piece of
   data the C back end already places in a binary without a native of its own; the text is one token per word, and its
-  first token is a version the binary checks. The derived `Encode` and `Decode` do not reach every field of a
-  `Chunk` yet, and the hand-written reader is a few hundred lines. Building the interpreter from the toolchain's own
+  first token is a version the binary checks. The derived `Encode` and `Decode` reach every field of a `Chunk` since
+  an `ArrayList` decodes; the hand-written reader of a few hundred lines stays, because it reads the tokens straight
+  into the chunks, where a derived `decode` would build every word of the code as a value first. Building the interpreter from the toolchain's own
   sources, as the compiler itself is built, needs no library of the VM kept beside the runtime; it costs a C compile of
   the interpreter per binary, about half a minute.
 - **The sources.** `--embed-vm` finds `compiler/` the way the toolchain finds `std/` and `runtime/` (above a path of

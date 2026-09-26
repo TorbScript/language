@@ -1640,7 +1640,8 @@ enum {
   TORB_OPERATION_SITE_PENDING_CURRENT = 65,
   TORB_OPERATION_SITE_PUSH = 66,
   TORB_OPERATION_SITE_POP = 67,
-  TORB_OPERATION_LIST_ITEM_ADDRESS = 68
+  TORB_OPERATION_LIST_ITEM_ADDRESS = 68,
+  TORB_OPERATION_TAKE_INPUTS = 69
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2324,6 +2325,14 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
                                                          strlen(torb_machine_stop_message));
       torb_machine_stop_kind = 0;
       return kind;
+    }
+    case TORB_OPERATION_TAKE_INPUTS: {
+      /* target: what the sandbox opened last recorded (`torb_sandbox_recorded`), as a text the host reads out */
+      size_t length = 0u;
+      const char *recorded = torb_sandbox_recorded(&length);
+      torb_text text = torb_text_from_bytes((const uint8_t *)recorded, length, torb_location_unknown);
+      memcpy(words + base + o[0], &text, sizeof text);
+      return 0;
     }
     case TORB_OPERATION_TEXT_OUT: {
       /* target, source: the code points of the text, one per word; answers how many */

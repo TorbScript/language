@@ -1,0 +1,459 @@
+/**
+ * The script host: the front end and the VM a native binary that loads receiver scripts embeds (docs/design/SCRIPTS.md
+ * slice 8). `torb build` compiles this module once per toolchain into an object of its own (`cli/host.trb`), whose two
+ * C functions are what `hostLoadScript` and `hostRunScript` of `std/sandbox` call in such a binary.
+ *
+ * Loading checks the program's files again - the ones the binary carries ([EmbeddedSources]) and the standard library
+ * the host carries - with the script as one more module against the receiver the program names, lowers the script as
+ * its `script` function next to `crossedIn` and `crossedOut` of `std/sandbox` for that receiver, and answers the
+ * bytecode as text. The binary keeps that text in its `Script`; running it decodes the program, reads the value in from
+ * its crossing text with `crossedIn`, runs the script on it in a sandbox of the grant and under its limits - which
+ * count the script alone - and answers what `crossedOut` writes of the configured value. Nothing is kept between two
+ * calls, so the host has no state of its own.
+ */
+
+use File from "std/fs"
+use LineIndex from "../syntax/source"
+use normalizePath from "../project/path"
+use SourceTree from "../project/source-tree"
+use hostTarget from "../project/target"
+use check, Checked, modulesOfProgram from "../semantics/check"
+use checkBodiesOf from "../semantics/checker/check"
+use RuntimeScript from "../semantics/scripts"
+use ModuleId from "../semantics/module"
+use SymbolId from "../semantics/symbols"
+use TypeId from "../semantics/checker/type"
+use scriptReceiverOf from "../semantics/checker/receiver"
+use Lowering from "../ir/lower/context"
+use lowerScripts, pathsOfModules from "../ir/lower/lower"
+use insertOwnership from "../ir/ownership"
+use verifyOwnedProgram from "../ir/ownership-verify"
+use emitBytecode from "../backend/bytecode/emit"
+use programText, programOf from "./embed"
+use loadedProgram, limitedBudget, unlimitedBudget, callSandboxed, textOfWords, scriptStopOf, placedText, ScriptStop from "./interpret"
+use reserveWords, wordAt, storeWordAt, registerReferenceOf, releaseSandboxed from "./interpret"
+use importsOf from "./run"
+
+/** The first line of the text of [EmbeddedSources]: what the host checks before it reads a file of it. */
+const sourcesVersion = "torb-sources-1"
+
+/**
+ * The files a native binary carries for its script host: the ones the build read, without the toolchain's standard
+ * library, which the host carries itself - keyed by the paths of the machine that built it, which is all they are here.
+ */
+public type EmbeddedSources {
+  /** How a path is shown: the working directory of the build. */
+  var base: String = "."
+  /** The toolchain's `std` directory, for a program without a standard library of its own. */
+  var standardLibrary: String = ""
+  /**
+   * Where the standard library the host carries goes among these files: the host keys its own files by the directory
+   * it was built from, and moves them here.
+   */
+  var hosted: String = ""
+  /** The files that were named: the entry file. */
+  var requested: List<String> = []
+  /**
+   * The scripts the program was compiled with - the literal paths of its `Sandbox.load`s - as their path below their
+   * package (what `Sandbox.load` spells) to their path among the files.
+   */
+  var scripts: Map<String, String> = [:]
+  var files: Map<String, String> = [:]
+}
+
+/** The sources as the text a binary carries: a line per setting, then every file with its length in bytes in front. */
+public fn embeddedSourcesText(sources: EmbeddedSources): String {
+  var parts: List<String> = [sourcesVersion, "\n", "base\t{sources.base}\n", "library\t{sources.standardLibrary}\n"]
+  parts.append "hosted\t{sources.hosted}\n"
+  for path in sources.requested {
+    parts.append "entry\t{path}\n"
+  }
+  var written = sources.scripts.keys().toList()
+  written.sort({ _ })
+  for path in written {
+    parts.append "script\t{path}\t{sources.scripts.get(path) ?? ""}\n"
+  }
+  var paths = sources.files.keys().toList()
+  paths.sort({ _ })
+  for path in paths {
+    const text = sources.files.get(path) ?? ""
+    parts.append "file\t{path}\t{text.byteLength()}\n"
+    parts.append text
+    parts.append "\n"
+  }
+  parts.joined separator: ""
+}
+
+/** The sources [embeddedSourcesText] wrote, or `None` for a text it did not write. */
+public fn embeddedSourcesOf(text: String): EmbeddedSources? {
+  var sources = EmbeddedSources()
+  var at = 0
+  var isFirst = true
+  while at < text.byteLength() {
+    const end = lineEndOf text, at
+    const line = text.sliceBytes at, end
+    at = end + 1
+    if isFirst {
+      if line != sourcesVersion {
+        return None
+      }
+      isFirst = false
+      continue
+    }
+    const fields = line.split("\t").toList()
+    match fields.get(0) ?? "" {
+      "base" => {
+        sources.base = fields.get(1) ?? "."
+      }
+      "library" => {
+        sources.standardLibrary = fields.get(1) ?? ""
+      }
+      "hosted" => {
+        sources.hosted = fields.get(1) ?? ""
+      }
+      "entry" => sources.requested.append(fields.get(1) ?? "")
+      "script" => sources.scripts.set(fields.get(1) ?? "", fields.get(2) ?? "")
+      "file" => {
+        const length = Int.tryFrom(fields.get(2) ?? "").ok()?
+        if at + length > text.byteLength() {
+          return None
+        }
+        sources.files.set(fields.get(1) ?? "", text.sliceBytes(at, at + length))
+        at = at + length + 1
+      }
+      _ => {
+        return None
+      }
+    }
+  }
+  if isFirst {
+    return None
+  }
+  Some sources
+}
+
+/** The offset of the next line break at or after `from`, or the end of the text. */
+fn lineEndOf(text: String, from: Int): Int {
+  var at = from
+  loop {
+    const byte = match text.byteAt(at) {
+      Some(found) => found
+      None => {
+        return at
+      }
+    }
+    if byte == 10 {
+      return at
+    }
+    at = at + 1
+  }
+}
+
+/**
+ * `hostLoadScript` of `std/sandbox`: the script at `path` - or the one the program was compiled with whose path below
+ * its package is `written` - checked against `receiver` and lowered. Answers the modules it imports, an empty line and
+ * the program to run it with; or `!`, the line of the script and why it did not load, a tab between the two.
+ */
+public fn loadHostedScript(standard: String, sources: String, path: String, written: String, receiver: String): String {
+  match hostedScriptOf(standard, sources, path, written, receiver) {
+    Ok(answer) => answer
+    Fail(stop) => "!{stop.line}\t{stop.message}"
+  }
+}
+
+fn hostedScriptOf(
+  standard: String,
+  sources: String,
+  path: String,
+  written: String,
+  receiver: String,
+): Result<String, ScriptStop> {
+  const library = match embeddedSourcesOf(standard) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the standard library of the script host cannot be read")
+    }
+  }
+  const program = match embeddedSourcesOf(sources) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the files this binary carries for its scripts cannot be read")
+    }
+  }
+  // The standard library of the host, moved to where the program's files expect it
+  var files: Map<String, String> = [:]
+  const moved = if program.hosted.isEmpty() { library.standardLibrary } else { program.hosted }
+  for (file, text) in library.files {
+    if const Some(below) = file.substringAfter("{library.standardLibrary}/") {
+      if file.startsWith("{library.standardLibrary}/") {
+        files.set "{moved}/{below}", text
+        continue
+      }
+    }
+    files.set file, text
+  }
+  for (file, text) in program.files {
+    files.set file, text
+  }
+  const (declaring, name) = match receiver.split("\t").toList() {
+    [module, typeName] => (module, typeName)
+    _ => {
+      return Fail ScriptStop(0, "A script is loaded against a type without type arguments, and this one has them")
+    }
+  }
+  const tree = SourceTree.of files, program.base, program.standardLibrary
+  // A script the program was compiled with is one of its files already; any other is read from this machine's disk
+  if const Some(compiled) = program.scripts.get(written) {
+    const checked = check tree, program.requested, false, false, [], true
+    if const Some(module) = checked.program.graph.moduleAt(compiled) {
+      if receiverTextOf(checked, module) == receiver {
+        return loweredScriptOf(checked, module, compiled, files.get(compiled) ?? "")
+      }
+    }
+  }
+  const absolute = match File.absolutePath(path) {
+    Ok(found) => normalizePath found
+    Fail(problem) => {
+      return Fail ScriptStop(0, "There is no script `{path}`: {problem.message}")
+    }
+  }
+  if !File.exists(absolute) || File.isDirectory(absolute) {
+    return Fail ScriptStop(0, "There is no script `{path}`")
+  }
+  const text = match File.readText(absolute) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail ScriptStop(0, "The script `{path}` cannot be read: {problem.message}")
+    }
+  }
+  const around = tree.withFile absolute, text
+  const checked = check around, program.requested, false, false, [RuntimeScript(absolute, declaring, name)], true
+  const module = match checked.program.graph.moduleAt(absolute) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the script `{path}` is no module of the program")
+    }
+  }
+  loweredScriptOf checked, module, absolute, text
+}
+
+/** Where the receiver of the script `module` is declared, as `scriptReceiver` of `std/sandbox` spells it. */
+fn receiverTextOf(checked: Checked, module: ModuleId): String {
+  var checker = checked.checker
+  const receiver = match scriptReceiverOf(checker, module) {
+    Some(found) => found
+    None => {
+      return ""
+    }
+  }
+  if const .Nominal(symbol, arguments) = checker.types.form(receiver) {
+    if arguments.isEmpty() {
+      const declared = checker.symbolAt symbol
+      if const Some(inside) = declared.module {
+        return "{checked.program.graph.at(inside).path}\t{declared.name}"
+      }
+    }
+  }
+  ""
+}
+
+/**
+ * The checked script lowered next to `crossedIn` and `crossedOut` of `std/sandbox` for its receiver, and encoded: the
+ * modules it imports, an empty line, and the program - the chunks of the two and of the script and the path a stop is
+ * blamed on, then the bytecode.
+ */
+fn loweredScriptOf(checked: Checked, module: ModuleId, path: String, text: String): Result<String, ScriptStop> {
+  const shown = checked.program.graph.at(module).shownPath
+  for file in checked.files {
+    if (file.path == shown || file.path == path) && !file.diagnostics.isEmpty() {
+      const first = file.diagnostics[0]
+      const lines = LineIndex.of text
+      const (line, _) = lines.lineAndColumn first.span.start
+      return Fail ScriptStop(line, first.message)
+    }
+  }
+  var checker = checked.checker
+  const typed = match scriptReceiverOf(checker, module) {
+    Some(found) => found
+    None => {
+      return Fail ScriptStop(0, "internal error: the receiver of the script `{path}` is not found again")
+    }
+  }
+  const hosts = crossingOf checked
+  if hosts.length() != 2 {
+    return Fail ScriptStop(0, "internal error: there is no `crossedIn` and `crossedOut` in `std/sandbox` to run the script with")
+  }
+  const paths = pathsOfModules checked
+  checker.checksOnDemand = true
+  var lowering = lowerScripts checker, paths, [(module, typed)], hosts, hostTarget(), [typed]
+  if !isLowered(lowering) {
+    var every = checked.checker
+    checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
+    lowering = lowerScripts every, paths, [(module, typed)], hosts, hostTarget(), [typed]
+  }
+  insertOwnership lowering.program
+  var refused: List<String> = []
+  for problem in lowering.problems {
+    refused.append problem.diagnostic.message
+  }
+  for blocked in lowering.unsupported {
+    refused.append "{blocked.what} (at {blocked.at})"
+  }
+  for what in lowering.program.planned {
+    refused.append what
+  }
+  for problem in lowering.program.problems {
+    refused.append "internal error: {problem}"
+  }
+  for problem in verifyOwnedProgram(lowering.program) {
+    refused.append "internal error: {problem}"
+  }
+  if const Some(first) = refused.first() {
+    return Fail ScriptStop(0, first)
+  }
+  var names: List<String> = []
+  for function in lowering.scriptHosts {
+    names.append lowering.program.functionAt(function).name
+  }
+  if const Some(found) = lowering.scriptFunctions.get(module.value) {
+    names.append lowering.program.functionAt(found).name
+  }
+  // As entries, their chunks carry the shape of every parameter's value, which the host releases what it placed by
+  const emission = emitBytecode lowering.program, names
+  if const Some(what) = emission.unsupported.first() {
+    return Fail ScriptStop(0, "{what} is not supported by the VM yet")
+  }
+  var chunks: List<Int> = []
+  for name in names {
+    for index in 0..emission.program.chunks.length() {
+      if emission.program.chunks[index].name == name {
+        chunks.append index
+      }
+    }
+  }
+  if chunks.length() != 3 {
+    return Fail ScriptStop(0, "internal error: the script `{path}` or its host was not emitted")
+  }
+  const imports = importsOf checked, module
+  const header = "{chunks[0]}\t{chunks[1]}\t{chunks[2]}\t{paths[module.value]}"
+  Ok "{imports}\n\n{header}\n{programText(emission.program)}"
+}
+
+/** `crossedIn` and `crossedOut` of `std/sandbox`, in that order: what the value crosses the VM of a native binary by. */
+fn crossingOf(checked: Checked): List<SymbolId> {
+  var found: List<SymbolId> = []
+  const package = match checked.program.workspace.packageNamed("std/sandbox") {
+    Some(inside) => inside
+    None => {
+      return found
+    }
+  }
+  const module = match checked.program.graph.moduleAt("{package.directory}/src/lib.trb") {
+    Some(inside) => inside
+    None => {
+      return found
+    }
+  }
+  for name in ["crossedIn", "crossedOut"] {
+    if const Some(symbol) = checked.program.scopes[module.value].names.get(name) {
+      found.append symbol
+    }
+  }
+  found
+}
+
+/** Whether the lowering found nothing to refuse. */
+fn isLowered(lowering: Lowering): Bool {
+  lowering.problems.isEmpty() && lowering.unsupported.isEmpty() && lowering.program.planned.isEmpty()
+    && lowering.program.problems.isEmpty()
+}
+
+/**
+ * `hostRunScript` of `std/sandbox`: the program [loadHostedScript] answered, run in a sandbox of `grant` on the value
+ * `input` holds as crossing text. Answers the configured value as crossing text, or `!`, the line of the script that
+ * stopped and why, a tab between the two.
+ */
+public fn runHostedScript(program: String, input: String, grant: String): String {
+  const header = program.substringBefore("\n") ?? ""
+  var chunks: List<Int> = []
+  var scriptPath = ""
+  for field in header.split("\t") {
+    if chunks.length() < 3 {
+      chunks.append(Int.tryFrom(field).ok() ?? (0 - 1))
+    } else {
+      scriptPath = field
+    }
+  }
+  const decoded = match programOf(program.substringAfter("\n") ?? "") {
+    Some(found) => found
+    None => {
+      return "!0\tinternal error: the program of the script cannot be read"
+    }
+  }
+  if chunks.length() != 3 || chunks.any({ _ < 0 || _ >= decoded.chunks.length() }) {
+    return "!0\tinternal error: the program of the script names no host"
+  }
+  const (reads, writes, script) = (chunks[0], chunks[1], chunks[2])
+  var loaded = loadedProgram decoded
+  // The value, and the two texts it crosses as, live in words below every frame: the script configures the value
+  // through its `var self`, and the host gives all three back at the end by their shapes
+  const width = decoded.chunks[reads].resultWidth
+  const textShape = decoded.chunks[reads].parameters.first()?.valueShape ?? 0
+  const valueShape = decoded.chunks[writes].parameters.first()?.valueShape ?? 0
+  const place = reserveWords(loaded, width + 4)
+  const inputPlace = place + width
+  const outputPlace = place + width + 2
+  const placed = placedText loaded, input
+  storeWordAt(loaded, inputPlace, placed.get(0) ?? 0)
+  storeWordAt(loaded, inputPlace + 1, placed.get(1) ?? 0)
+  // Read in and written out outside the script's budget and grant: its limits count the script alone
+  const unrestricted = "unrestricted\t1"
+  var reading = unlimitedBudget()
+  const read = callSandboxed loaded, unrestricted, reading, reads, placed
+  const _ = releaseSandboxed loaded, unrestricted, inputPlace, 2, textShape
+  const words = match read {
+    Ok(found) => found
+    Fail(stop) => {
+      return "!0\tinternal error: the value to configure could not be read: {stop.message}"
+    }
+  }
+  for index in 0..width {
+    storeWordAt(loaded, place + index, words.get(index) ?? 0)
+  }
+  var budget = limitedBudget limitOf(grant, "steps", 1_000_000), limitOf(grant, "milliseconds", 2000)
+  if const Fail(stop) = callSandboxed(loaded, grant, budget, script, [registerReferenceOf(loaded, place)]) {
+    const _ = releaseSandboxed loaded, unrestricted, place, width, valueShape
+    const blamed = scriptStopOf loaded.program, stop, scriptPath
+    return "!{blamed.line}\t{blamed.message}"
+  }
+  var value: List<Int> = []
+  for index in 0..width {
+    value.append wordAt(loaded, place + index)
+  }
+  var writing = unlimitedBudget()
+  const written = callSandboxed loaded, unrestricted, writing, writes, value
+  const _ = releaseSandboxed loaded, unrestricted, place, width, valueShape
+  const output = match written {
+    Ok(found) => found
+    Fail(stop) => {
+      return "!0\tinternal error: the configured value could not be written: {stop.message}"
+    }
+  }
+  storeWordAt(loaded, outputPlace, output.get(0) ?? 0)
+  storeWordAt(loaded, outputPlace + 1, output.get(1) ?? 0)
+  const answer = textOfWords loaded, output
+  const _ = releaseSandboxed loaded, unrestricted, outputPlace, 2, textShape
+  answer
+}
+
+/** A number of the grant's text, `steps\t1000000`, or `otherwise` where it names none. */
+fn limitOf(grant: String, word: String, otherwise: Int): Int {
+  for line in grant.split("\n") {
+    if const Some(value) = line.substringAfter("{word}\t") {
+      if line.startsWith("{word}\t") {
+        return Int.tryFrom(value).ok() ?? otherwise
+      }
+    }
+  }
+  otherwise
+}

@@ -44,6 +44,18 @@ public fn encodeField<Value: Encode, Target: Encoder>(value: Value, name: String
   value.encode target
 }
 
+/**
+ * A field that is no parameter of the constructor from outside - `private`, with a default - written like any other
+ * field, but only for a target that asks for every field ([Encoder.writesPrivateFields]).
+ */
+public fn encodePrivateField<Value: Encode, Target: Encoder>(value: Value, name: String, var target: Target) {
+  if !target.writesPrivateFields() {
+    return
+  }
+  target.field name
+  value.encode target
+}
+
 /** One position of a tuple: its value's own `encode`. */
 public fn encodeItem<Value: Encode, Target: Encoder>(value: Value, var target: Target) {
   value.encode target
@@ -79,6 +91,17 @@ public fn decodeRequired<Value: Decode, Source: Decoder>(
  * code evaluates the default - and only then, so a value that is there never pays for one.
  */
 public fn decodeHasField<Source: Decoder>(name: String, var source: Source): Result<Bool, DecodeError> {
+  source.field name
+}
+
+/**
+ * [decodeHasField] for a field that is no parameter of the constructor from outside: `false`, and so its default,
+ * unless the source reads every field ([Decoder.readsPrivateFields]) and the input has it.
+ */
+public fn decodeHasPrivateField<Source: Decoder>(name: String, var source: Source): Result<Bool, DecodeError> {
+  if !source.readsPrivateFields() {
+    return Ok false
+  }
   source.field name
 }
 

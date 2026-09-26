@@ -68,6 +68,58 @@ public fn pathDepth(path: String): Int {
 }
 
 /**
+ * Where the files a native binary carries for its script host live (docs/design/SCRIPTS.md slice 8): below this
+ * directory, which is no directory of any machine, so the binary names no path of the one that built it.
+ */
+public const embeddedRoot = "/torb"
+
+/**
+ * `path` as a native binary carries it: below [embeddedRoot] instead of below `root`, the directory every file it
+ * carries lies below. Unchanged where `root` is empty or the path is not below it.
+ */
+public fn embeddedPathOf(root: String, path: String): String {
+  if root.isEmpty() {
+    return path
+  }
+  const normalized = normalizePath path
+  if normalized == root {
+    return embeddedRoot
+  }
+  if const Some(below) = normalized.substringAfter("{root}/") {
+    if normalized.startsWith("{root}/") {
+      return "{embeddedRoot}/{below}"
+    }
+  }
+  normalized
+}
+
+/**
+ * The directory every path lies below, by whole segments: empty where they share none, as two drives do.
+ */
+public fn commonDirectoryOf(paths: List<String>): String {
+  var common: List<String> = []
+  var isFirst = true
+  for path in paths {
+    const segments = normalizePath(path).split("/").toList()
+    if isFirst {
+      common = segments
+      isFirst = false
+      continue
+    }
+    var length = 0
+    while length < common.length() && length < segments.length() && common[length] == segments[length] {
+      length = length + 1
+    }
+    var kept: List<String> = []
+    for index in 0..length {
+      kept.append common[index]
+    }
+    common = kept
+  }
+  common.joined separator: "/"
+}
+
+/**
  * The path as seen from `base`, which is how paths are shown to the user: the same way they were typed on the
  * command line. Paths on different roots (`C:` and `D:`) have nothing in common, so the absolute path is the answer.
  */

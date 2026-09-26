@@ -218,6 +218,12 @@ public type NativeTarget {
    * section 1). `function` is the name the IR carries it under.
    */
   case Machine(function: String)
+  /**
+   * A function of the **script host**: the front end and the VM a native binary that loads receiver scripts embeds
+   * (docs/design/SCRIPTS.md slice 8), compiled once per toolchain into an object of its own that the driver links in
+   * (`cli/host.trb`). The C of the program declares it itself ([scriptHostPrototypes]); the VM never reaches one.
+   */
+  case ScriptHost(function: String)
 }
 
 /**
@@ -229,6 +235,33 @@ public type ScriptTableKind {
   case Body
   case Imports
   case Receiver
+  /**
+   * The files of the program, as the front end a native binary embeds checks them again: the text the driver hands the
+   * lowering ([Lowering.scriptSources]), empty in the VM (docs/design/SCRIPTS.md slice 8).
+   */
+  case Sources
+  /**
+   * The crossing of a script's value in a native binary: a call of `crossedApply` of `std/sandbox` for the receiver,
+   * which has to be `Encode & Decode` there. No table at all - the lowering redirects the call.
+   */
+  case Crossing
+}
+
+/** The function of the script host that loads a script: `hostLoadScript` of `std/sandbox`. */
+public const scriptHostLoadFunction = "torb_script_host_load"
+
+/** The function of the script host that runs a loaded script: `hostRunScript` of `std/sandbox`. */
+public const scriptHostRunFunction = "torb_script_host_run"
+
+/** The prefix of every function of the script host: what the driver looks for in a program's C. */
+public const scriptHostSymbolPrefix = "torb_script_host_"
+
+/** The C prototype of each function of the script host, by name: the program's C writes them itself. */
+public fn scriptHostPrototypes(): Map<String, String> {
+  var found: Map<String, String> = [:]
+  found.set scriptHostLoadFunction, "torb_text {scriptHostLoadFunction}(torb_text sources, torb_text path, torb_text written, torb_text receiver);"
+  found.set scriptHostRunFunction, "torb_text {scriptHostRunFunction}(torb_text program, torb_text input, torb_text grant);"
+  found
 }
 
 /** The name a call of `runScript` of `std/sandbox` carries in the IR, which the bytecode emitter turns into its instruction. */
@@ -1448,6 +1481,11 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.append NativeEntry(name: "scriptReceiver", target: NativeTarget.ScriptTable(ScriptTableKind.Receiver))
   entries.append NativeEntry(name: "loadScript", target: NativeTarget.Machine(loadScriptFunction))
   entries.append NativeEntry(name: "runLoadedScript", target: NativeTarget.Machine(runLoadedScriptFunction))
+  // A native binary: the front end and the VM it embeds load and run the script, and the value crosses as text
+  entries.append NativeEntry(name: "scriptSources", target: NativeTarget.ScriptTable(ScriptTableKind.Sources))
+  entries.append NativeEntry(name: "hostLoadScript", target: NativeTarget.ScriptHost(scriptHostLoadFunction))
+  entries.append NativeEntry(name: "hostRunScript", target: NativeTarget.ScriptHost(scriptHostRunFunction))
+  entries.append NativeEntry(name: "runCrossed", target: NativeTarget.ScriptTable(ScriptTableKind.Crossing))
 }
 
 /**

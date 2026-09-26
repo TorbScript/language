@@ -22,7 +22,7 @@ use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch, DefaultSource from "../../semantics/checker/context"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
-use NativeEntry, DerivedKind, ArrayOperation, loadScriptFunction from "../../backend/c/natives"
+use NativeEntry, DerivedKind, ArrayOperation, loadScriptFunction, ScriptTableKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
 use IrType, StaticContents from "../ir"
 use LiteralValue from "../../semantics/checker/type"
@@ -38,7 +38,7 @@ use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "..
 use generatedFunctionOf, literalConversionOf, isKeyedContainer from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
-use scriptTableOf from "./script"
+use scriptTableOf, crossedApplyOf from "./script"
 use elementFor from "../element"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
@@ -823,6 +823,21 @@ fn lowerNativeCall(
     }
     // The scripts the program was compiled with, one table per receiver type (docs/design/SCRIPTS.md section 3)
     .ScriptTable(kind) => {
+      // The crossing of a native binary is `crossedApply` for the receiver, called with the operands of the call
+      if kind == ScriptTableKind.Crossing {
+        if lowering.forMachine {
+          const text = lowering.program.internType IrType.Text
+          const answer = "0\tinternal error: only a native binary crosses a script's value"
+          return constantSlot lowering, builder, destination, StaticContents.Literal(LiteralValue.Text(answer)), text
+        }
+        const crossed = match crossedApplyOf(lowering, member, mapping, at) {
+          Some(found) => found
+          None => {
+            return abandonedSlot lowering, builder, destination
+          }
+        }
+        return emitCall lowering, builder, destination, crossed, operands, annotation, at, places
+      }
       const table = match scriptTableOf(lowering, member, mapping, kind, at) {
         Some(found) => found
         None => {
@@ -831,18 +846,30 @@ fn lowerNativeCall(
       }
       emitCall lowering, builder, destination, table, operands, annotation, at
     }
-    // Running a script is the VM's alone: a native binary does not embed one (docs/design/SCRIPTS.md section 1)
+    // Running a script is the VM's alone (docs/design/SCRIPTS.md section 1): a native binary runs its scripts in the VM
+    // of the script host it links, through `hostLoadScript` and `runCrossed`, and never takes these paths
     .Machine(function) => {
       if !lowering.forMachine {
-        // A native binary loads a script only by a path it was compiled with: `Sandbox.load` of any other answers why,
-        // and only running one is refused, so a program that loads and never applies still builds
-        if function == loadScriptFunction {
-          const text = lowering.program.internType IrType.Text
-          const answer = "!0\tA native binary loads no script from a path only known while it runs, which needs the VM"
-          return constantSlot lowering, builder, destination, StaticContents.Literal(LiteralValue.Text(answer)), text
+        const text = lowering.program.internType IrType.Text
+        const answer = if function == loadScriptFunction { "!" } else { "" }
+        const said = "{answer}0\tinternal error: a native binary runs a script in the VM of its script host"
+        return constantSlot lowering, builder, destination, StaticContents.Literal(LiteralValue.Text(said)), text
+      }
+      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
         }
-        const what = "a receiver script run by `Script.apply` (only the VM runs one)"
-        return unsupportedSlot lowering, builder, destination, what, at
+      }
+      emitCall lowering, builder, destination, identifier, operands, annotation, at, places
+    }
+    // The script host a native binary embeds (docs/design/SCRIPTS.md slice 8): a function of the object the driver
+    // links in. The VM loads and runs a script itself and never takes this path, whatever the program says
+    .ScriptHost(function) => {
+      if lowering.forMachine {
+        const text = lowering.program.internType IrType.Text
+        const answer = "!0\tinternal error: only a native binary loads a script through the front end it embeds"
+        return constantSlot lowering, builder, destination, StaticContents.Literal(LiteralValue.Text(answer)), text
       }
       const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
         Some(found) => found
@@ -2118,5 +2145,6 @@ fn lowerNativeOperator(
     .Target(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .ScriptTable(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
     .Machine(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
+    .ScriptHost(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

@@ -1,0 +1,187 @@
+/**
+ * The text a value crosses in between a native binary and the VM it runs a script in (docs/design/SCRIPTS.md section
+ * 5): the value as `EncodedValue.of(value, privateFields: true)` holds it - every field, a `private` one with a default
+ * included - written as one letter per part and read back exactly.
+ *
+ * | Part | Written as |
+ * |---|---|
+ * | nothing, `true`, `false` | `n`, `t`, `f` |
+ * | a whole number, an unsigned one, a float | `i42;`, `u42;`, `d0.1;` (a float's text reads back as the same bits) |
+ * | a text | `s5:hello`, its length in bytes in front, so nothing in it needs an escape |
+ * | bytes | `b2:` and each byte as `7;` |
+ * | a sequence, a map | `q2:` and the items, `m4:` and the keys and values in turn |
+ * | a record | `r`, the type name as a text, `2:`, and each field as its name as a text and its value |
+ * | a case | `v`, the type name and the case name as texts, `1:`, and the fields as a record's |
+ *
+ * Both sides are this code, compiled by the two back ends; neither ever reads a text a person wrote.
+ */
+
+use EncodedValue, EncodedField from "std/encoding"
+
+/** The value as the text that crosses. */
+public fn crossingTextOf(value: EncodedValue): String {
+  var parts: List<String> = []
+  writeValue parts, value
+  parts.joined separator: ""
+}
+
+/** The value a crossing text holds, or `None` for a text [crossingTextOf] did not write. */
+public fn crossingValueOf(text: String): EncodedValue? {
+  var reader = CrossingReader text
+  const value = reader.value()?
+  if reader.at != text.byteLength() {
+    return None
+  }
+  Some value
+}
+
+fn writeValue(var parts: List<String>, value: EncodedValue) {
+  match value {
+    .Nothing => parts.append "n"
+    .Bool(truth) => parts.append(if truth { "t" } else { "f" })
+    .Int(number) => parts.append "i{number};"
+    .Unsigned(number) => parts.append "u{number};"
+    .Float(number) => parts.append "d{number};"
+    .String(text) => writeText parts, "s", text
+    .Bytes(bytes) => {
+      parts.append "b{bytes.length()}:"
+      for byte in bytes {
+        parts.append "{byte};"
+      }
+    }
+    .Sequence(items) => {
+      parts.append "q{items.length()}:"
+      for item in items {
+        writeValue parts, item
+      }
+    }
+    .Mapping(entries) => {
+      parts.append "m{entries.length()}:"
+      for entry in entries {
+        writeValue parts, entry
+      }
+    }
+    .Record(typeName, fields) => {
+      writeText parts, "r", typeName
+      writeFields parts, fields
+    }
+    .Variant(typeName, name, fields) => {
+      writeText parts, "v", typeName
+      writeText parts, "", name
+      writeFields parts, fields
+    }
+  }
+}
+
+/** A text with its length in bytes in front: `s5:hello`, or without the letter inside a record or a case. */
+fn writeText(var parts: List<String>, letter: String, text: String) {
+  parts.append "{letter}{text.byteLength()}:{text}"
+}
+
+fn writeFields(var parts: List<String>, fields: List<EncodedField>) {
+  parts.append "{fields.length()}:"
+  for field in fields {
+    writeText parts, "", field.name
+    writeValue parts, field.value
+  }
+}
+
+/** Where [crossingValueOf] is in the text: a byte offset. */
+type CrossingReader {
+  text: String
+  var at: Int = 0
+
+  var fn value(): EncodedValue? {
+    const letter = text.byteAt(at)?
+    at = at + 1
+    // The letters, as bytes: n t f i u d s b q m r v
+    match letter {
+      110 => Some EncodedValue.Nothing
+      116 => Some EncodedValue.Bool(true)
+      102 => Some EncodedValue.Bool(false)
+      105 => {
+        const number = Int64.tryFrom(numberText(59)?).ok()?
+        Some EncodedValue.Int(number)
+      }
+      117 => {
+        const number = UInt64.tryFrom(numberText(59)?).ok()?
+        Some EncodedValue.Unsigned(number)
+      }
+      100 => {
+        const number = Float64.tryFrom(numberText(59)?).ok()?
+        Some EncodedValue.Float(number)
+      }
+      115 => Some EncodedValue.String(textPart()?)
+      98 => {
+        const count = countOf()?
+        var bytes: List<UInt8> = []
+        for _ in 0..count {
+          const number = Int.tryFrom(numberText(59)?).ok()?
+          bytes.append(UInt8.tryFrom(number).ok()?)
+        }
+        Some EncodedValue.Bytes(bytes)
+      }
+      113 => Some EncodedValue.Sequence(values()?)
+      109 => Some EncodedValue.Mapping(values()?)
+      114 => {
+        const typeName = textPart()?
+        Some EncodedValue.Record(typeName, fields()?)
+      }
+      118 => {
+        const typeName = textPart()?
+        const name = textPart()?
+        Some EncodedValue.Variant(typeName, name, fields()?)
+      }
+      _ => None
+    }
+  }
+
+  /** The digits up to the byte `end` - `;` or `:` - which is passed over. */
+  var fn numberText(end: Int): String? {
+    const start = at
+    loop {
+      const byte = text.byteAt(at)?
+      if Int.from(byte) == end {
+        break
+      }
+      at = at + 1
+    }
+    const found = text.sliceBytes start, at
+    at = at + 1
+    Some found
+  }
+
+  var fn countOf(): Int? {
+    Int.tryFrom(numberText(58)?).ok()
+  }
+
+  /** `5:hello`: a length in bytes, a colon, and that many bytes. */
+  var fn textPart(): String? {
+    const length = countOf()?
+    if length < 0 || at + length > text.byteLength() {
+      return None
+    }
+    const found = text.sliceBytes(at, at + length)
+    at = at + length
+    Some found
+  }
+
+  var fn values(): List<EncodedValue>? {
+    const count = countOf()?
+    var found: List<EncodedValue> = []
+    for _ in 0..count {
+      found.append(value()?)
+    }
+    Some found
+  }
+
+  var fn fields(): List<EncodedField>? {
+    const count = countOf()?
+    var found: List<EncodedField> = []
+    for _ in 0..count {
+      const name = textPart()?
+      found.append EncodedField(name, value()?)
+    }
+    Some found
+  }
+}
