@@ -14,8 +14,11 @@ source:
   - std/expression/src/lib.trb
 ---
 
-> **Not built natively yet.** A quoted expression (`Expression<Value>`) is not built by the native back end yet, so
-> `torb run` refuses the examples here that use it. `torb check` accepts them, and the rules are the language's.
+> **`captures()` is not built yet.** Both back ends build a quoted expression as a value - its `tree`, `source`,
+> `location` and `value()` - but not the encoded values `captures()` answers, and not the node of a map literal, of
+> a range, of a field reached through the implicit `self`, or of a top-level `const` of a script that is neither a
+> compile-time constant nor a number, `Bool` or `String`: a program that needs one of those is refused by `torb run`
+> with a message that names it. `torb check` accepts them, and the rules are the language's.
 
 A parameter or a binding typed `Expression<Value>` checks its argument as an ordinary `Value` and additionally hands
 over the typed tree of what was written, its exact source text, and the values any captured variable held. `assert`
@@ -57,7 +60,8 @@ native type Expression<Value> {
    parameter were a plain `Bool`.
 
 2. **`value()` answers the ordinary value, evaluated at most once**, and for a quoted function type it answers the
-   closure rather than calling it.
+   closure rather than calling it. Nothing is evaluated before `value()` asks: `nameOf(items[9])` reads the name and
+   never indexes the list.
 
 3. **`source` is the exact text that was written, and `tree` is the same thing as data**, an `ExpressionNode` built
    from literals, parameters, captured variables, field access, calls, constructors, operators, `if`/`else`, nested

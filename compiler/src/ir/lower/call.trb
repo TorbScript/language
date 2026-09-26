@@ -52,6 +52,7 @@ use traitExtensionTargetOf from "../instantiate"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
 use isAssertion, lowerAssertion from "./quote"
+use lowerQuotedValue from "./quoted"
 use describedKeySlot from "./text"
 use lowerItemList, listBoundFor from "./collection"
 use loweredNativeOf, lowerSpawn, lowerStop, isSuspendingCall, emitSuspension from "./task"
@@ -364,6 +365,10 @@ public fn lowerDispatched(
       if const Some(generated) = literalConversionOf(lowering, dispatched.subject, at) {
         return emitCall lowering, builder, destination, generated, operands, annotation, at
       }
+    }
+    // `expression.value()`: the `lazy` cell the quotation was built with, forced (`ir/lower/quoted.trb`)
+    if owner == "Expression" && name == "value" && operands.length() == 1 {
+      return lowerQuotedValue lowering, builder, destination, operands[0], annotation, at
     }
     if const Some(entry) = nativeNamed(lowering, owner, name, signature) {
       return lowerNativeCall lowering, builder, destination, at, operands, annotation, dispatched, entry, places

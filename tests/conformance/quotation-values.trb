@@ -1,0 +1,98 @@
+/**
+ * **An argument of an `Expression<Value>` parameter is a value of its own**: the tree of what was written, its source
+ * text, where it starts, and the value itself - built where the quotation is written and handed on like any other
+ * value. `nameOf` reads the tree through a parameter that was quoted once and passed on as it is, and `value()`
+ * evaluates the quoted expression the first time it is asked and never before: `nameOf(items[9])` does not index.
+ */
+
+use Regex from "std/regex"
+
+type User {
+  name: String
+  age: Int
+
+  fn isAdult(): Bool {
+    age >= 18
+  }
+}
+
+/** The quotation arrives here and is passed on unchanged: a name that holds one is never quoted again. */
+fn label(value: Expression<Int>): String {
+  nameOf value
+}
+
+/** The shape of a tree, the way a provider walks one: the case of every node, depth first. */
+fn shapeOf(node: ExpressionNode): String {
+  match node {
+    .Literal(value, of) => "Literal({value}: {of})"
+    .Parameter(index, name, of) => "Parameter({index} {name}: {of})"
+    .Captured(index, name, of) => "Captured({index} {name}: {of})"
+    .Field(target, name, of) => "Field({shapeOf(target)}.{name}: {of})"
+    .Call(target, owner, method, arguments, of) => {
+      const receiver = target.map({ shapeOf _ }) ?? "-"
+      const given = arguments.map({ shapeOf _ }).joined(separator: ", ")
+      "Call({receiver} {owner}.{method}({given}): {of})"
+    }
+    .Construct(arguments, of) => "Construct({arguments.length()}: {of})"
+    .Unary(operator, operand, _) => "Unary({operator} {shapeOf(operand)})"
+    .Binary(operator, left, right, of) => "Binary({shapeOf(left)} {operator} {shapeOf(right)}: {of})"
+    .Conditional(condition, then, otherwise, _) => {
+      "Conditional({shapeOf(condition)} ? {shapeOf(then)} : {shapeOf(otherwise)})"
+    }
+    .Lambda(parameters, body, _) => "Lambda({parameters.joined(separator: ", ")} => {shapeOf(body)})"
+    .Items(items, of) => "Items({items.length()}: {of})"
+    .Interpolation(parts) => "Interpolation({parts.length()})"
+  }
+}
+
+fn tree<Value>(expression: Expression<Value>): String {
+  shapeOf expression.tree
+}
+
+/** A checked literal is one `Literal` node, braces and all: a pattern is no interpolation. */
+fn patternTree(expression: Expression<Regex>): String {
+  shapeOf expression.tree
+}
+
+fn sourceOf<Value>(expression: Expression<Value>): String {
+  "{expression.source} at line {expression.location.line}"
+}
+
+/** `value()` twice: the quoted expression runs once, the second answer is the first one kept. */
+fn twice(expression: Expression<Int>): Int {
+  expression.value() + expression.value()
+}
+
+/** Says when it runs, so a reader sees how often the quoted call is evaluated. */
+fn noisy(): Int {
+  print "evaluated"
+  21
+}
+
+/** Inside a function the bindings around a quotation are its captures; a folded constant is a `Literal`. */
+fn run() {
+  const user = User "Ada", 36
+  const items = [1, 2, 3]
+  const minimum = 18
+  print label(user.age)
+  print label(items.length())
+  print label(items[9])
+  print nameOf(user.name)
+  print tree(user.isAdult())
+  print tree(-minimum)
+  print tree(if minimum > 3 { "big" } else { "small" })
+  print tree({ person: User => person.age >= minimum })
+  print tree([1, 2])
+  print tree("{user.name} is {user.age}")
+  print tree(User("Alan", 41))
+  print sourceOf(minimum * 2)
+  print patternTree("a{2,4}")
+  print twice(noisy())
+  const predicate: Expression<(person: User) => Bool> = { _.age >= minimum }
+  print predicate.value()(user), shapeOf(predicate.tree)
+}
+
+const limit = 5
+print label(limit)
+print tree(limit + 1)
+run()

@@ -1,0 +1,814 @@
+/**
+ * A quotation as a value: the `Expression<Value>` an argument of an `Expression<Value>` parameter becomes, built where
+ * the quotation is written (design 4.8, CONCEPT "Quoted Expressions").
+ *
+ * An `Expression<Value>` is a record of the program (`ir/instantiate.trb` gives it its layout): the fields `std/expression`
+ * declares - the `tree`, the `source` text and the `location` - and one field of its own after them, the `value`. The
+ * tree is built node by node from the syntax tree of the quoted span and what the checker recorded about it: every
+ * node's type, what every name resolved to, and which name is a parameter of a quoted closure or a capture
+ * (`Quotation`). Nothing is resolved again.
+ *
+ * **The value is a `lazy` cell**, the very one a `lazy` argument is: the quoted expression lowered as the thunk of the
+ * cell, forced by `value()` at most once, and never evaluated where nobody asks - `nameOf(items[9])` reads the name
+ * and does not index the list. The thunk captures what the quotation captured, by value.
+ *
+ * `captures()` is not built: it needs an `EncodedValue` of every capture, which is the `Encode` of each captured type,
+ * and stays the planned native it was. `assert` builds none of this - it is lowered on its own (`ir/lower/quote.trb`).
+ */
+
+use Span from "../../syntax/source"
+use Expression, Argument, TextSegment, PrefixOperator, InfixOperator, Block from "../../syntax/ast"
+use TypeId, TypeForm, LiteralValue from "../../semantics/checker/type"
+use Quotation, QuotationName, Capture from "../../semantics/checker/context"
+use IrTypeId, IrType, Slot, Instruction, StaticContents, LayoutId, Reference, PathStep, borrowed from "../ir"
+use Argument as IrArgument from "../ir"
+use FunctionBuilder, addTemporary, emit from "../build"
+use layoutOfType from "../verify"
+use describeIrType from "../print"
+use evaluateConstant, integerOf, floatOf, booleanOf, textOf, characterOf from "../constant"
+use Lowering, reportUnsupported, locationOf, substituted, irTypeOf from "./context"
+use unsupportedSlot, abandonedSlot, valueSlot, isLiteralExpression, integerSlot, constantSlot from "./expression"
+use lowerValue from "./expression"
+use textSlot from "./text"
+use variantNamed from "./match"
+use preludeType from "./generic"
+use listOfValues from "./collection"
+use lowerLazyArgument, lowerForcedRead from "./closure"
+
+/** Everything one tree is built from: the quotation, and the layouts of the types of `std/expression` it is made of. */
+type TreeBuilder {
+  quotation: Quotation
+  node: IrTypeId
+  nodeLayout: LayoutId
+  nodeItem: TypeId
+  reference: IrTypeId
+  referenceLayout: LayoutId
+  referenceItem: TypeId
+  encoded: LayoutId
+  optionalNode: IrTypeId
+  optionalLayout: LayoutId
+  nodes: IrTypeId
+  references: IrTypeId
+  names: IrTypeId
+  stringItem: TypeId
+}
+
+/** Whether the checker quoted the expression at this span, which makes it the `Expression` value built here. */
+public fn isQuotedHere(lowering: Lowering, at: Span): Bool {
+  if lowering.inlinedQuotations.containsKey(at) {
+    return false
+  }
+  const module = lowering.module
+  for adaptation in lowering.checker.adaptationsAt(module, at) {
+    if const .Quote(_) = adaptation {
+      return true
+    }
+  }
+  false
+}
+
+/** The `Expression<Value>` of the quoted expression: its tree, its source, where it starts, and the cell of its value. */
+public fn lowerQuotation(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+): Slot {
+  const at = expression.span
+  const module = lowering.module
+  const quotation = match lowering.checker.quotationAt(module, at) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a quotation the checker did not record", at
+    }
+  }
+  const symbol = match lowering.checker.wellKnown.expression {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a quotation without `Expression` in the prelude", at
+    }
+  }
+  const value = substituted lowering, quotation.annotation
+  const annotation = irTypeOf lowering, lowering.checker.nominal(symbol, [value])
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "an `Expression` without a layout", at
+    }
+  }
+  const tree = match treeBuilderOf(lowering, quotation, layout, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const root = match nodeOf(lowering, builder, tree, expression) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const source = textSlot lowering, builder, sourceTextOf(lowering, at)
+  const location = match sourceLocationOf(lowering, builder, layout, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  // The thunk captures what the quotation captured; a quoted closure recorded its own captures at the same span already
+  const captures = quotation.captures.map({ Capture _.binding, false }).toList()
+  lowering.quotedCaptures.set at, captures
+  lowering.inlinedQuotations.set at, true
+  const cell = lowerLazyArgument lowering, builder, expression, value
+  lowering.inlinedQuotations.remove at
+  const held = match cell {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  const fields = [borrowed(root), borrowed(source), borrowed(location), borrowed(held)]
+  emit builder, Instruction.Construct(target, layout, 0, fields)
+  target
+}
+
+/** The layouts a tree is made of, read off the fields of the `Expression` record and of `ExpressionNode`. */
+fn treeBuilderOf(var lowering: Lowering, quotation: Quotation, layout: LayoutId, at: Span): TreeBuilder? {
+  const shape = lowering.program.layoutAt layout
+  if shape.fields.length() != 4 {
+    reportUnsupported lowering, "an `Expression` whose layout is not tree, source, location and value", at
+    return None
+  }
+  const node = shape.fields[0].annotation
+  const nodeLayout = layoutIn(lowering, node, "ExpressionNode", at)?
+  const call = fieldsOfCase(lowering, nodeLayout, "Call", at)?
+  const lambda = fieldsOfCase(lowering, nodeLayout, "Lambda", at)?
+  const literal = fieldsOfCase(lowering, nodeLayout, "Literal", at)?
+  if call.length() != 5 || lambda.length() != 3 || literal.length() != 2 {
+    reportUnsupported lowering, "an `ExpressionNode` of another shape than `std/expression` declares", at
+    return None
+  }
+  const optionalNode = call[0]
+  const reference = call[1]
+  const referenceLayout = layoutIn(lowering, reference, "TypeReference", at)?
+  const referenceShape = lowering.program.layoutAt referenceLayout
+  if referenceShape.fields.length() != 2 {
+    reportUnsupported lowering, "a `TypeReference` of another shape than `std/expression` declares", at
+    return None
+  }
+  const nodeItem = preludeTypeOrReport(lowering, "ExpressionNode", at)?
+  const referenceItem = preludeTypeOrReport(lowering, "TypeReference", at)?
+  const stringItem = preludeTypeOrReport(lowering, "String", at)?
+  Some(
+    TreeBuilder(
+      quotation: quotation,
+      node: node,
+      nodeLayout: nodeLayout,
+      nodeItem: nodeItem,
+      reference: reference,
+      referenceLayout: referenceLayout,
+      referenceItem: referenceItem,
+      encoded: layoutIn(lowering, literal[0], "EncodedValue", at)?,
+      optionalNode: optionalNode,
+      optionalLayout: layoutIn(lowering, optionalNode, "ExpressionNode?", at)?,
+      nodes: call[3],
+      references: referenceShape.fields[1].annotation,
+      names: lambda[0],
+      stringItem: stringItem,
+    ),
+  )
+}
+
+fn preludeTypeOrReport(var lowering: Lowering, name: String, at: Span): TypeId? {
+  const empty: List<TypeId> = []
+  match preludeType(lowering, name, empty) {
+    Some(found) => Some found
+    None => {
+      reportUnsupported lowering, "a quotation without `{name}` in the prelude", at
+      None
+    }
+  }
+}
+
+fn layoutIn(var lowering: Lowering, annotation: IrTypeId, name: String, at: Span): LayoutId? {
+  match layoutOfType(lowering.program, annotation) {
+    Some(found) => Some found
+    None => {
+      reportUnsupported lowering, "a quotation whose `{name}` has no layout", at
+      None
+    }
+  }
+}
+
+/** The types of the fields of one case, without the fields every case has in front. */
+fn fieldsOfCase(var lowering: Lowering, layout: LayoutId, name: String, at: Span): List<IrTypeId>? {
+  const variant = variantNamed lowering, layout, name
+  if variant < 0 {
+    reportUnsupported lowering, "an `ExpressionNode` without the case `{name}`", at
+    return None
+  }
+  const shape = lowering.program.layoutAt layout
+  Some shape.fieldsOfVariant(variant).map({ _.annotation }).toList()
+}
+
+// --- Nodes ----------------------------------------------------------------------------------------------------------
+
+/** One node of the tree, and every node under it. */
+fn nodeOf(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilder, expression: Expression): Slot? {
+  const at = expression.span
+  // A checked literal (`"/a{?q}"` as a `UriTemplate`) is one value, braces and all: its text and the type it was read as
+  if lowering.checker.checkedLiteralAt(lowering.module, at).isSome() {
+    const written = sourceTextOf lowering, at
+    const inner = if written.byteLength() >= 2 { written.sliceBytes(1, written.byteLength() - 1) } else { written }
+    const encoded = encodedCase(lowering, builder, tree, "String", [textSlot(lowering, builder, inner)], at)?
+    const of = typeOfNode(lowering, builder, tree, at)?
+    return caseNode lowering, builder, tree, "Literal", [encoded, of], at
+  }
+  if isLiteralExpression(expression) {
+    return literalNode lowering, builder, tree, expression
+  }
+  match expression.kind {
+    .Name(text) => nameNode lowering, builder, tree, expression, text
+    .Member(target, name, _) => memberNode lowering, builder, tree, expression, target, name.text
+    .ImplicitMember(_) => constructNode lowering, builder, tree, [], at
+    .Generic(inner, _) => nodeOf lowering, builder, tree, inner
+    .Call(callee, arguments, _) => callNode lowering, builder, tree, expression, callee, arguments
+    .Unary(operator, operand) => {
+      const inner = nodeOf(lowering, builder, tree, operand)?
+      const chosen = unaryCaseOf operator
+      const operatorSlot = unitCase(lowering, builder, tree, "UnaryOperator", chosen, at)?
+      const of = typeOfNode(lowering, builder, tree, at)?
+      caseNode lowering, builder, tree, "Unary", [operatorSlot, inner, of], at
+    }
+    .Binary(operator, left, right) => binaryNode lowering, builder, tree, expression, operator, left, right
+    .If(condition, then, otherwise) => {
+      const test = match condition {
+        .Test(inner) => inner
+        .Bind(_, _, _) => {
+          reportUnsupported lowering, "a quoted `if` with a pattern", at
+          return None
+        }
+      }
+      const alternative = match otherwise {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "a quoted `if` without an `else`", at
+          return None
+        }
+      }
+      const first = nodeOf(lowering, builder, tree, test)?
+      const second = blockNode(lowering, builder, tree, then)?
+      const third = nodeOf(lowering, builder, tree, alternative)?
+      const of = typeOfNode(lowering, builder, tree, at)?
+      caseNode lowering, builder, tree, "Conditional", [first, second, third, of], at
+    }
+    .Block(block) => blockNode lowering, builder, tree, block
+    .Closure(closure) => {
+      const parameters = tree.quotation.lambdas.get(at) ?? []
+      var names: List<Slot> = []
+      for parameter in parameters {
+        names.append textSlot(lowering, builder, parameter.name)
+      }
+      const named = listOfValues(lowering, builder, names, tree.stringItem, tree.names, at)?
+      const body = blockNode(lowering, builder, tree, closure.body)?
+      const of = typeOfNode(lowering, builder, tree, at)?
+      caseNode lowering, builder, tree, "Lambda", [named, body, of], at
+    }
+    .ListLiteral(items) => itemsNode lowering, builder, tree, items, at
+    .TupleLiteral(items) => itemsNode lowering, builder, tree, items, at
+    .TextLiteral(segments) => interpolationNode lowering, builder, tree, segments, at
+    .Index(target, index) => {
+      const receiver = nodeOf(lowering, builder, tree, target)?
+      const argument = nodeOf(lowering, builder, tree, index)?
+      const owner = typeReferenceAt(lowering, builder, tree, target.span)?
+      callOf lowering, builder, tree, Some(receiver), owner, "at", [argument], at
+    }
+    _ => {
+      reportUnsupported lowering, "this quoted expression, which has no node the back end builds yet", at
+      None
+    }
+  }
+}
+
+/** `{ a }` inside a quotation is the one expression in it; the checker refused everything else already. */
+fn blockNode(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilder, block: Block): Slot? {
+  if block.statements.length() == 1 {
+    if const .Evaluate(inner) = block.statements[0].kind {
+      return nodeOf lowering, builder, tree, inner
+    }
+  }
+  reportUnsupported lowering, "a quoted block that is not one expression", block.span
+  None
+}
+
+/** A name: a parameter of a quoted closure, a capture, or a compile-time constant, which is its value. */
+fn nameNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  expression: Expression,
+  text: String,
+): Slot? {
+  const at = expression.span
+  if const Some(name) = tree.quotation.names.get(at) {
+    const (kind, index) = match name {
+      .Parameter(position) => ("Parameter", position)
+      .Captured(position) => ("Captured", position)
+    }
+    const integer = lowering.program.internType IrType.Integer(64, true)
+    const position = integerSlot lowering, builder, index, integer
+    const written = textSlot lowering, builder, text
+    const of = typeOfNode(lowering, builder, tree, at)?
+    return caseNode lowering, builder, tree, kind, [position, written, of], at
+  }
+  const module = lowering.module
+  if const Some(.Constant(_, _)) = lowering.checker.resolutionAt(module, at) {
+    return literalNode lowering, builder, tree, expression
+  }
+  reportUnsupported lowering, "a quoted name that is neither a parameter, a capture nor a constant", at
+  None
+}
+
+/** `a.b`: a field, a method read without a call - both a `Field` node - a case without fields, or a constant. */
+fn memberNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  expression: Expression,
+  target: Expression,
+  name: String,
+): Slot? {
+  const at = expression.span
+  const module = lowering.module
+  match lowering.checker.resolutionAt(module, at) {
+    Some(.Constant(_, _)) => literalNode lowering, builder, tree, expression
+    Some(.CaseOf(_, _)) => constructNode lowering, builder, tree, [], at
+    Some(.Field(_, _)) | Some(.TupleField(_, _)) | Some(.Callable(_, _, _)) => {
+      const inner = nodeOf(lowering, builder, tree, target)?
+      const written = textSlot lowering, builder, name
+      const of = typeOfNode(lowering, builder, tree, at)?
+      caseNode lowering, builder, tree, "Field", [inner, written, of], at
+    }
+    _ => {
+      reportUnsupported lowering, "a quoted member the back end builds no node for", at
+      None
+    }
+  }
+}
+
+/** A call: a constructor or a case is a `Construct`, everything else a `Call` with or without its receiver. */
+fn callNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  expression: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+): Slot? {
+  const at = expression.span
+  const module = lowering.module
+  var resolution = lowering.checker.resolutionAt module, callee.span
+  if resolution.isNone() {
+    resolution = lowering.checker.resolutionAt module, at
+  }
+  var values: List<Slot> = []
+  for argument in arguments {
+    values.append(nodeOf(lowering, builder, tree, argument.value)?)
+  }
+  match resolution {
+    Some(.Construct(_)) | Some(.CaseOf(_, _)) => constructNode lowering, builder, tree, values, at
+    Some(.Callable(symbol, _, _)) => {
+      const method = lowering.checker.symbolAt(symbol).name
+      const base = match callee.kind {
+        .Member(inner, _, _) => Some inner
+        .Generic(inner, _) => {
+          match inner.kind {
+            .Member(found, _, _) => Some found
+            _ => None
+          }
+        }
+        _ => None
+      }
+      // `Point.origin()` names its owner and has no receiver; `user.name()` has one, and its type is the owner
+      if const Some(receiver) = base {
+        if const Some(.TypeOf(_)) = lowering.checker.resolutionAt(module, receiver.span) {
+          const owner = typeReferenceAt(lowering, builder, tree, receiver.span)?
+          return callOf lowering, builder, tree, None, owner, method, values, at
+        }
+        const target = nodeOf(lowering, builder, tree, receiver)?
+        const owner = typeReferenceAt(lowering, builder, tree, receiver.span)?
+        return callOf lowering, builder, tree, Some(target), owner, method, values, at
+      }
+      const owner = namedReference(lowering, builder, tree, "", [])?
+      callOf lowering, builder, tree, None, owner, method, values, at
+    }
+    _ => {
+      reportUnsupported lowering, "a quoted call of something that is not a function", at
+      None
+    }
+  }
+}
+
+fn callOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  target: Slot?,
+  owner: Slot,
+  method: String,
+  arguments: List<Slot>,
+  at: Span,
+): Slot? {
+  const optional = match target {
+    Some(inner) => wrapped(lowering, builder, tree, "Some", [inner], at)?
+    None => wrapped(lowering, builder, tree, "None", [], at)?
+  }
+  const named = textSlot lowering, builder, method
+  const list = listOfValues(lowering, builder, arguments, tree.nodeItem, tree.nodes, at)?
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Call", [optional, owner, named, list, of], at
+}
+
+/** `Some(node)` or `None` of the receiver of a `Call`. */
+fn wrapped(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  name: String,
+  fields: List<Slot>,
+  at: Span,
+): Slot? {
+  const variant = variantNamed lowering, tree.optionalLayout, name
+  if variant < 0 {
+    reportUnsupported lowering, "an `Option` without `{name}`", at
+    return None
+  }
+  const target = addTemporary builder, tree.optionalNode
+  emit builder, Instruction.Construct(target, tree.optionalLayout, variant, fields.map({ borrowed _ }).toList())
+  Some target
+}
+
+fn constructNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  arguments: List<Slot>,
+  at: Span,
+): Slot? {
+  const list = listOfValues(lowering, builder, arguments, tree.nodeItem, tree.nodes, at)?
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Construct", [list, of], at
+}
+
+/** `a + b` is a `Binary` node; `a ?? b` has none, it is the call of `orElse` it means. */
+fn binaryNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  expression: Expression,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+): Slot? {
+  const at = expression.span
+  const first = nodeOf(lowering, builder, tree, left)?
+  const second = nodeOf(lowering, builder, tree, right)?
+  if const .Coalesce = operator {
+    const owner = typeReferenceAt(lowering, builder, tree, left.span)?
+    return callOf lowering, builder, tree, Some(first), owner, "orElse", [second], at
+  }
+  const chosen = binaryCaseOf operator
+  const operatorSlot = unitCase(lowering, builder, tree, "BinaryOperator", chosen, at)?
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Binary", [operatorSlot, first, second, of], at
+}
+
+fn itemsNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  items: List<Argument>,
+  at: Span,
+): Slot? {
+  var values: List<Slot> = []
+  for item in items {
+    values.append(nodeOf(lowering, builder, tree, item.value)?)
+  }
+  const list = listOfValues(lowering, builder, values, tree.nodeItem, tree.nodes, at)?
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Items", [list, of], at
+}
+
+/** `"{a} and {b}"`: a `Literal` of every piece of text and a node of every part, in order. */
+fn interpolationNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  segments: List<TextSegment>,
+  at: Span,
+): Slot? {
+  var parts: List<Slot> = []
+  for segment in segments {
+    match segment {
+      .Literal(text) => {
+        const value = textSlot lowering, builder, text
+        const encoded = encodedCase(lowering, builder, tree, "String", [value], at)?
+        const of = namedReference(lowering, builder, tree, "String", [])?
+        parts.append(caseNode(lowering, builder, tree, "Literal", [encoded, of], at)?)
+      }
+      .Interpolated(inner) => parts.append(nodeOf(lowering, builder, tree, inner)?)
+    }
+  }
+  const list = listOfValues(lowering, builder, parts, tree.nodeItem, tree.nodes, at)?
+  caseNode lowering, builder, tree, "Interpolation", [list], at
+}
+
+/** A literal, or a name of a compile-time constant: its value as an `EncodedValue`, and its type. */
+fn literalNode(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilder, expression: Expression): Slot? {
+  const at = expression.span
+  const value = match evaluateConstant(lowering, expression) {
+    Some(found) => found
+    None => {
+      return readConstantNode lowering, builder, tree, expression
+    }
+  }
+  const encoded = if const Some(number) = integerOf(value) {
+    const integer = lowering.program.internType IrType.Integer(64, true)
+    encodedCase(lowering, builder, tree, "Int", [integerSlot(lowering, builder, number, integer)], at)?
+  } else if const Some(number) = floatOf(value) {
+    const floating = lowering.program.internType IrType.Floating(64)
+    const slot = constantSlot lowering, builder, None, StaticContents.Floating(number), floating
+    encodedCase(lowering, builder, tree, "Float", [slot], at)?
+  } else if const Some(truth) = booleanOf(value) {
+    const boolean = lowering.program.internType IrType.Boolean
+    const slot = constantSlot lowering, builder, None, StaticContents.Literal(LiteralValue.Boolean(truth)), boolean
+    encodedCase(lowering, builder, tree, "Bool", [slot], at)?
+  } else if const Some(text) = textOf(value) {
+    encodedCase(lowering, builder, tree, "String", [textSlot(lowering, builder, text)], at)?
+  } else if const Some(character) = characterOf(value) {
+    encodedCase(lowering, builder, tree, "String", [textSlot(lowering, builder, "{character}")], at)?
+  } else {
+    encodedCase(lowering, builder, tree, "Nothing", [], at)?
+  }
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Literal", [encoded, of], at
+}
+
+/**
+ * A constant that is not folded - a top-level `const` of a script is a cell its entry fills - is read where the
+ * quotation is built, and a scalar value becomes the `Literal` it would have folded to.
+ */
+fn readConstantNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  expression: Expression,
+): Slot? {
+  const at = expression.span
+  const slot = lowerValue lowering, builder, expression
+  if !lowering.isSupported {
+    return None
+  }
+  const name = encodedCaseOfType lowering, builder.typeOfSlot(slot)
+  if name.isEmpty() {
+    const shown = describeIrType lowering.program, builder.typeOfSlot(slot)
+    reportUnsupported lowering, "a quoted constant of the type `{shown}`, which is neither folded nor a scalar", at
+    return None
+  }
+  const encoded = encodedCase(lowering, builder, tree, name, [slot], at)?
+  const of = typeOfNode(lowering, builder, tree, at)?
+  caseNode lowering, builder, tree, "Literal", [encoded, of], at
+}
+
+/** The case of `EncodedValue` a value of this type is written as without a conversion, or an empty text. */
+fn encodedCaseOfType(lowering: Lowering, annotation: IrTypeId): String {
+  match lowering.program.typeAt(annotation) {
+    .Integer(width, isSigned) => if width == 64 && isSigned { "Int" } else { "" }
+    .Floating(width) => if width == 64 { "Float" } else { "" }
+    .Boolean => "Bool"
+    .Text => "String"
+    .ConstantValue(_, of) => encodedCaseOfType lowering, of
+    _ => ""
+  }
+}
+
+fn encodedCase(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  name: String,
+  fields: List<Slot>,
+  at: Span,
+): Slot? {
+  const variant = variantNamed lowering, tree.encoded, name
+  if variant < 0 {
+    reportUnsupported lowering, "an `EncodedValue` without the case `{name}`", at
+    return None
+  }
+  const annotation = lowering.program.internType IrType.Variant(tree.encoded)
+  const target = addTemporary builder, annotation
+  emit builder, Instruction.Construct(target, tree.encoded, variant, fields.map({ borrowed _ }).toList())
+  Some target
+}
+
+/** One case of `ExpressionNode`, with the place it stands at in front of its own fields. */
+fn caseNode(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  name: String,
+  fields: List<Slot>,
+  at: Span,
+): Slot? {
+  const variant = variantNamed lowering, tree.nodeLayout, name
+  if variant < 0 {
+    reportUnsupported lowering, "an `ExpressionNode` without the case `{name}`", at
+    return None
+  }
+  // Interned first: the receiver of `locationAt` is read before its argument runs
+  const interned = locationOf lowering, at
+  const location = lowering.program.locationAt interned
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  var given: List<IrArgument> = []
+  // The place a node stands at is three fields every case has, where the layout carries them in front of its own
+  const shape = lowering.program.layoutAt tree.nodeLayout
+  if shape.fieldsOfConstruction(variant).length() == fields.length() + 3 {
+    given.append borrowed(textSlot(lowering, builder, location.path))
+    given.append borrowed(integerSlot(lowering, builder, location.line, integer))
+    given.append borrowed(integerSlot(lowering, builder, location.column, integer))
+  }
+  given.appendAll fields.map({ borrowed _ })
+  const target = addTemporary builder, tree.node
+  emit builder, Instruction.Construct(target, tree.nodeLayout, variant, given)
+  Some target
+}
+
+/** A case without fields of one of the two operator types, whose layout the node's own field says. */
+fn unitCase(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  owner: String,
+  name: String,
+  at: Span,
+): Slot? {
+  const container = if owner == "UnaryOperator" { "Unary" } else { "Binary" }
+  const fields = fieldsOfCase(lowering, tree.nodeLayout, container, at)?
+  const annotation = fields.first()?
+  const layout = layoutIn(lowering, annotation, owner, at)?
+  const variant = variantNamed lowering, layout, name
+  if variant < 0 {
+    reportUnsupported lowering, "a `{owner}` without the case `{name}`", at
+    return None
+  }
+  const target = addTemporary builder, annotation
+  emit builder, Instruction.Construct(target, layout, variant, [])
+  Some target
+}
+
+fn unaryCaseOf(operator: PrefixOperator): String {
+  match operator {
+    .Negate => "Negate"
+    .Not => "Not"
+    .BitwiseNot => "BitwiseNot"
+  }
+}
+
+fn binaryCaseOf(operator: InfixOperator): String {
+  match operator {
+    .Add => "Add"
+    .Subtract => "Subtract"
+    .Multiply => "Multiply"
+    .Divide => "Divide"
+    .Remainder => "Remainder"
+    .Power => "Power"
+    .BitwiseAnd => "BitwiseAnd"
+    .BitwiseOr => "BitwiseOr"
+    .BitwiseExclusiveOr => "BitwiseExclusiveOr"
+    .ShiftLeft => "ShiftLeft"
+    .ShiftRight => "ShiftRight"
+    .Equal => "Equal"
+    .NotEqual => "NotEqual"
+    .Less => "Less"
+    .LessOrEqual => "LessOrEqual"
+    .Greater => "Greater"
+    .GreaterOrEqual => "GreaterOrEqual"
+    .And => "And"
+    .Or => "Or"
+    .Coalesce => "Coalesce"
+  }
+}
+
+// --- Types and places -----------------------------------------------------------------------------------------------
+
+/** The `of` of a node: the type the checker recorded for the expression at this span. */
+fn typeOfNode(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilder, at: Span): Slot? {
+  typeReferenceAt lowering, builder, tree, at
+}
+
+fn typeReferenceAt(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilder, at: Span): Slot? {
+  const module = lowering.module
+  const written = match lowering.checker.expressionType(module, at) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a quoted expression without a type", at
+      return None
+    }
+  }
+  typeReferenceOf lowering, builder, tree, substituted(lowering, written), at
+}
+
+/** `TypeReference(name, arguments)`: the name of a declaration and its arguments, or how any other type is written. */
+fn typeReferenceOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  annotation: TypeId,
+  at: Span,
+): Slot? {
+  if const .Nominal(symbol, arguments) = lowering.checker.types.form(annotation) {
+    var inner: List<Slot> = []
+    for argument in arguments {
+      inner.append(typeReferenceOf(lowering, builder, tree, argument, at)?)
+    }
+    return namedReference lowering, builder, tree, lowering.checker.symbolAt(symbol).name, inner
+  }
+  namedReference lowering, builder, tree, lowering.checker.describe(annotation), []
+}
+
+fn namedReference(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  tree: TreeBuilder,
+  name: String,
+  arguments: List<Slot>,
+): Slot? {
+  const span = Span 0, 0
+  const list = listOfValues(lowering, builder, arguments, tree.referenceItem, tree.references, span)?
+  const target = addTemporary builder, tree.reference
+  const fields = [borrowed(textSlot(lowering, builder, name)), borrowed(list)]
+  emit builder, Instruction.Construct(target, tree.referenceLayout, 0, fields)
+  Some target
+}
+
+/** `SourceLocation(file, line, column)` of where the quoted expression starts. */
+fn sourceLocationOf(var lowering: Lowering, var builder: FunctionBuilder, layout: LayoutId, at: Span): Slot? {
+  const shape = lowering.program.layoutAt layout
+  const annotation = shape.fields[2].annotation
+  const target = layoutIn(lowering, annotation, "SourceLocation", at)?
+  // Interned first: the receiver of `locationAt` is read before its argument runs
+  const interned = locationOf lowering, at
+  const location = lowering.program.locationAt interned
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const fields = [
+    borrowed(textSlot(lowering, builder, location.path)),
+    borrowed(integerSlot(lowering, builder, location.line, integer)),
+    borrowed(integerSlot(lowering, builder, location.column, integer)),
+  ]
+  const slot = addTemporary builder, annotation
+  emit builder, Instruction.Construct(slot, target, 0, fields)
+  Some slot
+}
+
+/** `expression.value()`: the `lazy` cell in the last field of the quotation, forced - evaluated at most once. */
+public fn lowerQuotedValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  quotation: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const layout = match layoutOfType(lowering.program, builder.typeOfSlot(quotation)) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`value()` of an `Expression` without a layout", at
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  if shape.fields.length() != 4 {
+    return unsupportedSlot lowering, builder, destination, "`value()` of an `Expression` without its cell", at
+  }
+  const cell = addTemporary builder, shape.fields[3].annotation
+  emit builder, Instruction.Read(cell, Reference(quotation, [PathStep.Field(layout, 3)]))
+  lowerForcedRead lowering, builder, destination, cell, annotation, at
+}
+
+/** The bytes a span covers, out of the source of the module that is being lowered: what `Expression.source` is. */
+fn sourceTextOf(lowering: Lowering, at: Span): String {
+  const index = lowering.module.value
+  const modules = lowering.checker.program.graph.modules
+  if index < 0 || index >= modules.length() {
+    return ""
+  }
+  const text = modules[index].source.text
+  const end = at.end.min text.byteLength()
+  if at.start >= end {
+    return ""
+  }
+  text.sliceBytes at.start, end
+}

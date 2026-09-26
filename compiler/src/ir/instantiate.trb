@@ -79,7 +79,6 @@ public fn newInstantiation(checker: Checker): Instantiation {
   addPrimitive checker, table, "TrieSet", PrimitiveKind.Runtime(RuntimeKind.SetStorage)
   addPrimitive checker, table, "Task", PrimitiveKind.Runtime(RuntimeKind.TaskObject)
   addPrimitive checker, table, "Channel", PrimitiveKind.Runtime(RuntimeKind.ChannelObject)
-  addPrimitive checker, table, "Expression", PrimitiveKind.Runtime(RuntimeKind.ExpressionTree)
   addPrimitive checker, table, "Decimal", PrimitiveKind.Runtime(RuntimeKind.DecimalNumber)
   // `Void` and `Never` are names of the language *and* declarations of the prelude, and one type each
   for symbol in checker.wellKnown.voidSymbols {
@@ -403,6 +402,14 @@ fn buildNominalLayout(
       fields.append FieldLayout(field.name, annotation, Some(field.symbol))
     }
     variants.append VariantLayout(declared.name, first, fields.length() - first, Some(declared.symbol))
+  }
+  // `Expression<Value>` is a record of the program with one field more than `std/expression` declares: the `lazy` cell
+  // of its value, which `value()` forces (`ir/lower/quoted.trb`)
+  if checker.wellKnown.expression == Some(signature.symbol) && arguments.length() == 1 {
+    const empty: Map<ParameterId, TypeId> = [:]
+    const inner = instantiateType program, checker, instantiation, empty, arguments[0]
+    const cell = cellType program, checker, instantiation, arguments[0], inner
+    fields.append FieldLayout("value", cell, None)
   }
   const layout = program.layoutAt id
   program.setLayout(

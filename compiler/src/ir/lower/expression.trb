@@ -45,6 +45,7 @@ use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
 use entryCellRead, readEntryCell from "./cell"
 use lowerCheckedLiteral from "./literal"
+use isQuotedHere, lowerQuotation from "./quoted"
 
 /** One expression, lowered into `destination` where the caller has a slot for it, or into a fresh one otherwise. */
 public fn lowerExpression(
@@ -61,6 +62,10 @@ public fn lowerExpression(
     None => {
       return unsupportedSlot lowering, builder, destination, "an expression without a type", expression.span
     }
+  }
+  // An argument of an `Expression<Value>` parameter is the quotation of what was written, built as a value
+  if isQuotedHere(lowering, expression.span) {
+    return lowerQuotation lowering, builder, destination, expression
   }
   if !canReplayAdaptations(lowering, expression) {
     return abandonedSlot lowering, builder, destination

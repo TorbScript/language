@@ -74,7 +74,9 @@ where the back end could build it.
    Every generic function of `std/live` has this shape (section 8, F3).
 5. **Quoted expressions do not build natively.** `input bind: model.name` with `bind: Expression<String>` checks and
    answers `nameOf(bind)`, and `torb run` refuses it with `a quoted expression is not supported by the native back end
-   yet`. That keeps typed form bindings out of v1 (section 3.5).
+   yet`. That keeps typed form bindings out of v1 (section 3.5). **Closed** (bug batch 7): both back ends build an
+   `Expression<Value>` as a record of its tree, source, location and a `lazy` cell of its value
+   (`compiler/src/ir/lower/quoted.trb`, `tests/conformance/quotation-values.trb`); `captures()` is still planned.
 
 ---
 
