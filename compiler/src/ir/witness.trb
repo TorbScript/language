@@ -717,31 +717,42 @@ fn isUnoverriddenDefault(var lowering: Lowering, member: SymbolId, name: String)
   if !lowering.checker.signature(identifier).hasBody {
     return false
   }
-  !overridesAnyMember(lowering, name)
+  !isOverriddenDefault(lowering, member, name)
 }
 
-/** Whether any implementation of the program provides a member under this name. Built once, over the whole program. */
-fn overridesAnyMember(var lowering: Lowering, name: String): Bool {
+/** Whether some implementation of the program overrides this default. Built once, over the whole program. */
+fn isOverriddenDefault(var lowering: Lowering, member: SymbolId, name: String): Bool {
   if !lowering.overriddenMembersAreKnown {
     collectOverriddenMembers lowering
   }
-  lowering.overriddenMembers.containsKey name
+  lowering.overriddenMembers.containsKey member
 }
 
 /**
- * Every name some implementation answers a member with, which is every way an override can be **written**: the members of
- * an `extend ... with` block, the body of a `type ... with`, and the body of the implementation's target, which
- * `providerOf` reaches as well.
+ * Every default some implementation of the program overrides: for each implementation of a trait, each default of that
+ * trait and of its supertraits that the implementation answers with a declaration of its own - which is every way an
+ * override can be **written**: the members of an `extend ... with` block, the body of a `type ... with`, and the body of
+ * the implementation's target, which `providerOf` reaches as well.
  *
- * It over-approximates on purpose. Reading a name as an override that nothing really overrides costs one slot in one
- * table; *missing* one would run the default where the override should have run, which is observable.
+ * The question is asked **per trait and per signature**, and the answer is the one the table itself is built from
+ * (`declaredMemberOf`): a declaration counts only where it can *be* the member (`providesMember`), and only for the
+ * traits the implementation implements. Asked by name alone, the `all(name)` of `std/http`'s `Headers`, which is a
+ * `Show` and an `Equals` and nothing iterable, made `Iterate.all` and `Iterate.any` overridden in every program that
+ * imports `std/http`, and put both into every witness table of `Iterate` there.
  *
- * The **fields** of a target are deliberately not in it, although `providerOf` answers a member with one: a field is not
- * a method and cannot be the body of a default, and one field of the compiler is called `indexed` - which would put
+ * It still over-approximates where it has to. Reading a declaration as an override that nothing really overrides costs
+ * one slot in one table; *missing* one would run the default where the override should have run, which is observable.
+ *
+ * The **fields** of a target are deliberately not overrides, although `providerOf` answers a member with one: a field is
+ * not a method and cannot be the body of a default, and one field of the compiler is called `indexed` - which would put
  * `Iterate.indexed` back into every table and bring the non-terminating worklist back with it.
  */
 fn collectOverriddenMembers(var lowering: Lowering) {
   lowering.overriddenMembersAreKnown = true
+  // Every name some implementation of the program writes at all: a default whose name is not among them is overridden
+  // nowhere, which spares the far more expensive `providerOf` for most of them
+  var written: Map<String, Bool> = [:]
+  var implementations: List<Int> = []
   const total = lowering.checker.implementations.all.length()
   for index in 0..total {
     const implementation = lowering.checker.implementations.all[index]
@@ -749,10 +760,97 @@ fn collectOverriddenMembers(var lowering: Lowering) {
       continue
     }
     for (name, _) in implementation.members {
-      lowering.overriddenMembers.set name, true
+      written.set name, true
     }
-    addTargetMembers lowering, implementation.target
+    addTargetMembers lowering, written, implementation.target
+    implementations.append index
   }
+  for index in implementations {
+    addOverriddenDefaults lowering, written, index
+  }
+}
+
+/**
+ * The defaults one implementation overrides. A **derived** implementation writes nothing, and one whose target is a
+ * **trait** overrides only with what its own block writes: `extend<Item: Show> List<Item> with Show` has `List<Item>` as
+ * its target, and reading the defaults of `List` there as overrides would put every one of them back into every table.
+ */
+fn addOverriddenDefaults(var lowering: Lowering, written: Map<String, Bool>, index: Int) {
+  const implementation = lowering.checker.implementations.all[index]
+  if const .Derived = implementation.origin {
+    return
+  }
+  const capability = match implementation.capability {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const ownOnly = isTraitTarget lowering, implementation.target
+  var traits: List<SymbolId> = []
+  addTraitClosure lowering, traits, capability, implementation.target, 0
+  for symbol in traits {
+    const identifier = typeSignatureOf lowering.checker, symbol
+    const shape = lowering.checker.typeSignature identifier
+    for (name, member) in shape.members {
+      if !written.containsKey(name) || lowering.overriddenMembers.containsKey(member) {
+        continue
+      }
+      const provider = if ownOnly {
+        implementation.members.get name
+      } else {
+        memberOfImplementation lowering.checker, ImplementationId(index), name
+      }
+      const found = match provider {
+        Some(inner) => inner
+        None => {
+          continue
+        }
+      }
+      if found == member {
+        continue
+      }
+      if const .Field(_) = lowering.checker.symbolAt(found).kind {
+        continue
+      }
+      const signature = signatureOf lowering.checker, member
+      if !lowering.checker.signature(signature).hasBody {
+        continue
+      }
+      if providesMember(lowering, member, found) {
+        lowering.overriddenMembers.set member, true
+      }
+    }
+  }
+}
+
+/** A trait and every supertrait of it, by symbol and once each. */
+fn addTraitClosure(var lowering: Lowering, var traits: List<SymbolId>, bound: TypeId, subject: TypeId, depth: Int) {
+  if depth > 6 {
+    return
+  }
+  const symbol = match lowering.checker.types.form(bound) {
+    .Nominal(inner, _) => inner
+    _ => {
+      return
+    }
+  }
+  if traits.contains(symbol) {
+    return
+  }
+  traits.append symbol
+  for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
+    addTraitClosure(lowering, traits, supertrait, subject, depth + 1)
+  }
+}
+
+fn isTraitTarget(var lowering: Lowering, target: TypeId): Bool {
+  if const .Nominal(symbol, _) = lowering.checker.types.form(target) {
+    if const .Trait = lowering.checker.symbolAt(symbol).kind {
+      return true
+    }
+  }
+  false
 }
 
 /**
@@ -770,11 +868,10 @@ fn isProgramPackage(var lowering: Lowering, package: Int): Bool {
 }
 
 /**
- * The members and the fields of the target of an implementation. A target whose head is a **trait** contributes nothing:
- * `extend<Item: Show> List<Item> with Show` has `List<Item>` as its target, and reading the defaults of `List` there as
- * overrides of themselves would put every one of them back into every table.
+ * The names of the members of the target of an implementation. A target whose head is a **trait** contributes nothing
+ * (`addOverriddenDefaults` says why).
  */
-fn addTargetMembers(var lowering: Lowering, target: TypeId) {
+fn addTargetMembers(var lowering: Lowering, var written: Map<String, Bool>, target: TypeId) {
   const symbol = match lowering.checker.types.form(target) {
     .Nominal(found, _) => found
     _ => {
@@ -787,7 +884,7 @@ fn addTargetMembers(var lowering: Lowering, target: TypeId) {
   const identifier = typeSignatureOf lowering.checker, symbol
   const shape = lowering.checker.typeSignature identifier
   for (name, _) in shape.members {
-    lowering.overriddenMembers.set name, true
+    written.set name, true
   }
 }
 

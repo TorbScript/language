@@ -691,7 +691,13 @@ group "Real code" {
     // and `Iterate.any` sat in every table of the program. `outcome()` is gone, and with it the twenty-three instances.
     // 145 since `TextIndex`: the two files slice their source through `sliceBytes`, and the instances of `String.slice`
     // and the `Bounds<Int>` it read its ends through are gone.
-    assert(found.lowered + found.stubbed == 145)
+    //
+    // 51 since 2026-09-26 (145 before): "overridden" is asked per trait and per signature (`collectOverriddenMembers`
+    // in `ir/witness.trb`). By name alone, every member of every type that implements *some* trait counted as an
+    // override of every default of that name, of whatever trait - so a default sat in the tables of its trait wherever
+    // an unrelated type of the program wrote a member called like it, and each such slot is an instance per item type.
+    // Smaller tables are the point of the fix.
+    assert(found.lowered + found.stubbed == 51)
     // **The instance-count tripwire.** Monomorphization with `List<Item>` everywhere can multiply, and what
     // multiplies it is the **element type**: a container literal builds the witness table of `List<Item>`, and that
     // table carries only the default members of `Iterate`, `List`, `MutableIndexed`, `Length` and
@@ -700,9 +706,10 @@ group "Real code" {
     // so that an explosion fails a test instead of being noticed as a build time.
     // Eleven of these are the copies the devirtualization makes of a frozen member a direct call names
     // (`specializeFrozenCallees`): the table keeps the original, the call site gets a body whose result and whose
-    // parameters may become concrete
-    assert(found.program.functions.length() == 216)
-    assert(found.program.witnessTables.length() == 38)
+    // parameters may become concrete. 111 functions and 26 tables since 2026-09-26 (216 and 38 before), for the
+    // reason the declaration count above gives
+    assert(found.program.functions.length() == 111)
+    assert(found.program.witnessTables.length() == 26)
     assert(found.program.elements.length() == 3)
     var blocked: List<String> = []
     for entry in found.unsupported {

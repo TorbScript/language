@@ -172,6 +172,61 @@ group "Trait-typed values" {
     )
   }
 
+  /**
+   * "Overridden" is asked **per trait**: a member of the same name on a type that does not implement the trait
+   * overrides nothing. `Headers.all(name)` of `std/http` is written on a type that is a `Show` and an `Equals`, and
+   * reading it as an override put `Iterate.all` and `Iterate.any` into every table of `Iterate` in every program that
+   * imported `std/http`.
+   */
+  test "a member that only shares the name of a default overrides nothing" {
+    const source = raw"""
+      trait Sized {
+        fn size(): Int
+
+        fn doubled(): Int {
+          size() * 2
+        }
+      }
+
+      type Small with Sized {
+        amount: Int
+
+        fn size(): Int {
+          amount
+        }
+      }
+
+      type Label with Show {
+        text: String
+
+        fn doubled(): Int {
+          2
+        }
+
+        fn show(): String {
+          text
+        }
+      }
+
+      fn doubledOf(value: Sized): Int {
+        value.doubled()
+      }
+
+      fn used(): Int {
+        doubledOf(Small(2)) + Label("a").doubled()
+      }
+      """
+    assert(unsupportedIn(source) == [])
+    const text = textOf source
+    assert(
+      text.contains(
+        "witness w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small Sized for Record(T_acme_x2f_app_main_Small)"
+          + " members(t_acme_x2f_app_main_Small_size) nested()"
+      )
+    )
+    assert text.contains("call t_acme_x2f_app_main_Sized_doubled__Object_acme_x2f_app_main_Sized(%0 borrowed)")
+  }
+
   /** The coercion: the payload is boxed and one witness pointer per bound goes with it, and the box is owned. */
   test "a value that becomes trait-typed is boxed with the table of its bound" {
     const source = raw"""
