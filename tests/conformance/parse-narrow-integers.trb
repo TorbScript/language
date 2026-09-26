@@ -1,0 +1,45 @@
+/**
+ * **Reading a number from text writes exactly the width that was asked for.** `Int8.tryFrom("42")` answers an `Int8`,
+ * and a text whose number does not fit the width fails with the `NumberParseError` of that text, like one that is no
+ * number at all. Every narrow width has a parser of its own in the runtime, so the payload of the `Result` is written
+ * with its own size - and `tryInto()`, which reaches the same `TryFrom`, says the same.
+ */
+
+const small: Result<Int8, NumberParseError> = Int8.tryFrom "42"
+const smallest: Result<Int8, NumberParseError> = Int8.tryFrom "-128"
+const tooSmall: Result<Int8, NumberParseError> = Int8.tryFrom "-129"
+const tooLarge: Result<Int8, NumberParseError> = Int8.tryFrom "300"
+print small, smallest, tooSmall, tooLarge
+
+const short: Result<Int16, NumberParseError> = Int16.tryFrom "-32768"
+const tooShort: Result<Int16, NumberParseError> = Int16.tryFrom "32768"
+print short, tooShort
+
+const middle: Result<Int32, NumberParseError> = Int32.tryFrom "2147483647"
+const tooMiddle: Result<Int32, NumberParseError> = Int32.tryFrom "2147483648"
+print middle, tooMiddle
+
+const byte: Result<UInt8, NumberParseError> = UInt8.tryFrom "255"
+const noByte: Result<UInt8, NumberParseError> = UInt8.tryFrom "256"
+const negativeByte: Result<UInt8, NumberParseError> = UInt8.tryFrom "-1"
+print byte, noByte, negativeByte
+
+const word: Result<UInt16, NumberParseError> = UInt16.tryFrom "65535"
+const noWord: Result<UInt16, NumberParseError> = UInt16.tryFrom "65536"
+print word, noWord
+
+const wide: Result<UInt32, NumberParseError> = UInt32.tryFrom "4294967295"
+const noWide: Result<UInt32, NumberParseError> = UInt32.tryFrom "4294967296"
+print wide, noWide
+
+// `tryInto()` of a text reaches the same parser, and a number narrows through its own `TryFrom`
+const read: Result<Int8, NumberParseError> = "-7".tryInto()
+const narrowed: Result<Int8, NumberRangeError> = 300.tryInto()
+const fits: Result<UInt16, NumberRangeError> = 300.tryInto()
+print read, narrowed.isOk(), fits
+
+// The value that arrives is the number itself, usable in arithmetic of its own width
+match (Int8.tryFrom("100"), Int8.tryFrom("27")) {
+  (Ok(first), Ok(second)) => print(first + second)
+  _ => print "not read"
+}

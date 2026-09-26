@@ -253,12 +253,24 @@ int64_t torb_os_windows_version(int64_t *major, int64_t *minor, int64_t *build, 
 void torb_panic(torb_text message, torb_location at);
 /* Float64.tryFrom(String) */
 bool torb_parse_f64(torb_text text, double *out);
-/* Int16.tryFrom(String), Int32.tryFrom(String), Int64.tryFrom(String), Int8.tryFrom(String) */
+/* Int16.tryFrom(String) */
+bool torb_parse_i16(torb_text text, int16_t *out);
+/* Int32.tryFrom(String) */
+bool torb_parse_i32(torb_text text, int32_t *out);
+/* Int64.tryFrom(String) */
 bool torb_parse_i64(torb_text text, int64_t *out);
 /* Int64.parseDigits */
 bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);
-/* UInt16.tryFrom(String), UInt32.tryFrom(String), UInt64.tryFrom(String), UInt8.tryFrom(String) */
+/* Int8.tryFrom(String) */
+bool torb_parse_i8(torb_text text, int8_t *out);
+/* UInt16.tryFrom(String) */
+bool torb_parse_u16(torb_text text, uint16_t *out);
+/* UInt32.tryFrom(String) */
+bool torb_parse_u32(torb_text text, uint32_t *out);
+/* UInt64.tryFrom(String) */
 bool torb_parse_u64(torb_text text, uint64_t *out);
+/* UInt8.tryFrom(String) */
+bool torb_parse_u8(torb_text text, uint8_t *out);
 /* pause */
 torb_task *torb_pause(void);
 /* Float64.power */

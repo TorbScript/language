@@ -218,6 +218,44 @@ TORB_TEST(parsing_integers_checks_the_range) {
   TORB_CHECK(!parse_radix("g", 16, &value));
 }
 
+/* One parser per narrow width, each writing exactly its own width and failing where the number does not fit it. */
+TORB_TEST(parsing_a_narrow_integer_checks_its_own_width) {
+  torb_text low = torb_text_from_cstring("-128");
+  torb_text below = torb_text_from_cstring("-129");
+  torb_text byte = torb_text_from_cstring("255");
+  torb_text above = torb_text_from_cstring("65536");
+  torb_text wide = torb_text_from_cstring("4294967295");
+  int8_t tiny = 0;
+  int16_t shorter = 0;
+  int32_t middle = 0;
+  uint8_t unsigned_tiny = 0u;
+  uint16_t unsigned_short = 0u;
+  uint32_t unsigned_middle = 0u;
+  TORB_CHECK(torb_parse_i8(low, &tiny));
+  TORB_CHECK_INTEGER(tiny, -128);
+  TORB_CHECK(!torb_parse_i8(below, &tiny));
+  TORB_CHECK_INTEGER(tiny, -128);
+  TORB_CHECK(torb_parse_i16(below, &shorter));
+  TORB_CHECK_INTEGER(shorter, -129);
+  TORB_CHECK(!torb_parse_i16(above, &shorter));
+  TORB_CHECK(torb_parse_i32(above, &middle));
+  TORB_CHECK_INTEGER(middle, 65536);
+  TORB_CHECK(!torb_parse_i32(wide, &middle));
+  TORB_CHECK(torb_parse_u8(byte, &unsigned_tiny));
+  TORB_CHECK_INTEGER(unsigned_tiny, 255);
+  TORB_CHECK(!torb_parse_u8(low, &unsigned_tiny));
+  TORB_CHECK(!torb_parse_u16(above, &unsigned_short));
+  TORB_CHECK(torb_parse_u16(byte, &unsigned_short));
+  TORB_CHECK_INTEGER(unsigned_short, 255);
+  TORB_CHECK(torb_parse_u32(wide, &unsigned_middle));
+  TORB_CHECK(unsigned_middle == UINT32_MAX);
+  torb_text_release(low);
+  torb_text_release(below);
+  torb_text_release(byte);
+  torb_text_release(above);
+  torb_text_release(wide);
+}
+
 /** `|a - b| < 1e-9`, for the results that are not exact in `double` (a logarithm in another base, `arcTangent2`). */
 static bool close_enough(double a, double b) {
   double difference = a - b;
@@ -310,6 +348,7 @@ void torb_register_number_tests(void) {
   TORB_ADD(the_remainder_of_two_floats_is_fmod);
   TORB_ADD(the_total_order_of_floats_puts_nan_above_everything);
   TORB_ADD(parsing_integers_checks_the_range);
+  TORB_ADD(parsing_a_narrow_integer_checks_its_own_width);
   TORB_ADD(an_integer_power_is_exact_up_to_the_edge_of_every_width);
   TORB_ADD(an_integer_power_panics_on_overflow_and_on_a_negative_exponent);
   TORB_ADD(a_float_power_is_pow);

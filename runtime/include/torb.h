@@ -998,6 +998,16 @@ bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);
 /** `Int.parse`: an optional sign and decimal digits, nothing else. `text` borrowed. */
 bool torb_parse_i64(torb_text text, int64_t *out);
 bool torb_parse_u64(torb_text text, uint64_t *out);
+/**
+ * `Int8.tryFrom(text)` and the other narrow widths: what `torb_parse_i64` and `torb_parse_u64` read, false as well when
+ * the number does not fit the width. Each writes exactly its own width, so `out` is the payload of the `Result` itself.
+ */
+bool torb_parse_i8(torb_text text, int8_t *out);
+bool torb_parse_i16(torb_text text, int16_t *out);
+bool torb_parse_i32(torb_text text, int32_t *out);
+bool torb_parse_u8(torb_text text, uint8_t *out);
+bool torb_parse_u16(torb_text text, uint16_t *out);
+bool torb_parse_u32(torb_text text, uint32_t *out);
 /** `Float.parse`. `text` borrowed. */
 bool torb_parse_f64(torb_text text, double *out);
 bool torb_parse_bool(torb_text text, bool *out);

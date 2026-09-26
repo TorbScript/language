@@ -1184,6 +1184,60 @@ bool torb_parse_u64(torb_text text, uint64_t *out) {
   return true;
 }
 
+bool torb_parse_i8(torb_text text, int8_t *out) {
+  int64_t whole;
+  if (!torb_parse_i64(text, &whole) || whole < INT8_MIN || whole > INT8_MAX) {
+    return false;
+  }
+  *out = (int8_t)whole;
+  return true;
+}
+
+bool torb_parse_i16(torb_text text, int16_t *out) {
+  int64_t whole;
+  if (!torb_parse_i64(text, &whole) || whole < INT16_MIN || whole > INT16_MAX) {
+    return false;
+  }
+  *out = (int16_t)whole;
+  return true;
+}
+
+bool torb_parse_i32(torb_text text, int32_t *out) {
+  int64_t whole;
+  if (!torb_parse_i64(text, &whole) || whole < INT32_MIN || whole > INT32_MAX) {
+    return false;
+  }
+  *out = (int32_t)whole;
+  return true;
+}
+
+bool torb_parse_u8(torb_text text, uint8_t *out) {
+  uint64_t whole;
+  if (!torb_parse_u64(text, &whole) || whole > UINT8_MAX) {
+    return false;
+  }
+  *out = (uint8_t)whole;
+  return true;
+}
+
+bool torb_parse_u16(torb_text text, uint16_t *out) {
+  uint64_t whole;
+  if (!torb_parse_u64(text, &whole) || whole > UINT16_MAX) {
+    return false;
+  }
+  *out = (uint16_t)whole;
+  return true;
+}
+
+bool torb_parse_u32(torb_text text, uint32_t *out) {
+  uint64_t whole;
+  if (!torb_parse_u64(text, &whole) || whole > UINT32_MAX) {
+    return false;
+  }
+  *out = (uint32_t)whole;
+  return true;
+}
+
 bool torb_parse_f64(torb_text text, double *out) {
   char buffer[512];
   char *end = NULL;
