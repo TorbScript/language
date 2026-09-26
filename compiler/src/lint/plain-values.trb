@@ -1,0 +1,82 @@
+/**
+ * Which bindings of a module hold a value that certainly has no `close()` anywhere in it, by where their pattern
+ * starts. A binding whose value may hold one is released at the end of its block (docs/design/DESTRUCTORS.md, 2a), so
+ * writing it `_` would run that `close()` earlier - which is why `unread-binding` offers its fix only for these.
+ *
+ * "Certainly" is a short list rather than the derived fact the lowering computes: a number, a `Bool`, a `Char`, a
+ * `String`, `Void`, a literal type, and a tuple, an `Option`, a `Result`, a range or a collection of the prelude whose
+ * type arguments are all of them. Everything else - a `shared type`, a type of the program, a type parameter, a
+ * trait-typed value - might hold one, and keeps its name.
+ */
+
+use Checker from "../semantics/checker/context"
+use TypeId, TypeForm from "../semantics/checker/type"
+use ModuleId from "../semantics/module"
+
+/** The collections of the prelude, which hold nothing but their elements. */
+const plainContainers = ["List", "ArrayList", "TrieList", "Map", "TrieMap", "Set", "TrieSet", "Array"]
+
+/** The start of every pattern of the module whose type is plain. */
+public fn plainBindingStarts(checker: Checker, module: ModuleId): Set<Int> {
+  var starts: Set<Int> = Set.of()
+  for (span, annotation) in checker.tables[module.value].patternTypes {
+    if isPlain(checker, annotation, 0) {
+      starts.insert span.start
+    }
+  }
+  starts
+}
+
+/** Whether a value of the type certainly holds nothing with a `close()`. `depth` stops a type that nests itself. */
+fn isPlain(checker: Checker, annotation: TypeId, depth: Int): Bool {
+  if depth > 8 {
+    return false
+  }
+  const known = checker.wellKnown
+  match checker.types.form(annotation) {
+    .VoidType | .Literals(_, _) => true
+    .Tuple(fields) => {
+      for field in fields {
+        if !isPlain(checker, field.annotation, depth + 1) {
+          return false
+        }
+      }
+      true
+    }
+    .Nominal(symbol, arguments) => {
+      if arguments.isEmpty() {
+        return known.numerics.get(symbol.value).isSome()
+          || known.string == Some(symbol)
+          || known.character == Some(symbol)
+          || known.boolean == Some(symbol)
+      }
+      const isContainer = known.option == Some(symbol)
+        || known.result == Some(symbol)
+        || known.range == Some(symbol)
+        || known.rangeFrom == Some(symbol)
+        || known.rangeTo == Some(symbol)
+        || isPreludeContainer(checker, symbol.value)
+      if !isContainer {
+        return false
+      }
+      for argument in arguments {
+        if !isPlain(checker, argument, depth + 1) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
+  }
+}
+
+fn isPreludeContainer(checker: Checker, symbol: Int): Bool {
+  for name in plainContainers {
+    if const Some(found) = checker.wellKnown.names.get(name) {
+      if found.value == symbol {
+        return true
+      }
+    }
+  }
+  false
+}

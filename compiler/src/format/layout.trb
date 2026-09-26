@@ -1,0 +1,675 @@
+/**
+ * The layout half of `torb format`: the indentation of every line, the spaces between the tokens of a line, the blank
+ * lines, and the end of the file - computed from the tokens of the lexer and the syntax tree, never from a regular
+ * expression.
+ *
+ * **What it keeps.** Every line break between two tokens is the author's: a line is never joined with the next one
+ * and never broken in two, so a long call stays laid out the way it was written. A comment stays where it was, a
+ * multi-line string and a multi-line comment are one piece whose text is not looked into (the rule `strings` of the
+ * canon indents a string afterwards), and every line break the file writes is the first one it has: a file with CRLF
+ * stays CRLF.
+ *
+ * **What it decides.**
+ *
+ * - **Indentation** is two spaces per level. A line inside `(`, `[` or `{` is one level deeper than the line that
+ *   opened it, however many brackets that line opened; a line that starts with the closing bracket is at the level of
+ *   the line that opened it. A line that continues the one before it - it starts with an operator or a `.`, or the one
+ *   before ends with one, or it is an item of a list that the line before did not end with `,` - is one level deeper
+ *   than the line its item started on, and every further line of the same item is at that level too. The block of an
+ *   `if`, `while`, `fn` or `type` whose head runs over several lines is one level deeper than the head's first line.
+ * - **Spaces**: one around an infix operator, `=` and `=>`; one behind `,` and `:` and none in front of them; none
+ *   inside `(...)` and `[...]`, one inside `{ ... }` and none in `{}`; none around `.`, `?.`, `..` and `..=`; none
+ *   behind a prefix operator, `...` and the `.` of `.Case`; none in front of a postfix `?`; none around the angle
+ *   brackets of type arguments; none between a callee and its `(` or an indexed value and its `[`. The spaces in front
+ *   of a comment behind code are kept (at least one), so comments aligned in a column stay aligned.
+ * - **Blank lines**: at most one in a row, none at the start of the file, behind a line that ends with an opening
+ *   bracket or in front of one that starts with a closing one, and the file ends with exactly one line break.
+ *
+ * [laidOut] is the entry point. It only takes a source that parses without a diagnostic; the caller compares the
+ * syntax tree of what comes out with the one that went in, so a layout that would change what a program means is
+ * refused instead of written.
+ */
+
+use SourceText from "../syntax/source"
+use Token, TokenKind, Keyword from "../syntax/token"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use walk from "../canon/walk"
+
+/** One level of indentation. */
+const step = "  "
+
+/** The byte order mark some editors on Windows write in front of UTF-8. It is kept where a file has one. */
+const byteOrderMark = "\u{FEFF}"
+
+/**
+ * The source laid out, or `None` where it does not parse without a diagnostic or holds something between two tokens
+ * that is neither white space nor a comment.
+ */
+public fn laidOut(source: String): String? {
+  const text = SourceText.of source
+  const parsed = parse text
+  if !parsed.diagnostics.isEmpty() {
+    return None
+  }
+  const tokens = lex(text).tokens
+  const sites = walk parsed.file
+  const marks = marksOf tokens, sites.infixOperators, sites.prefixOperators, sites.implicitMembers, sites.closureArrows
+  const hasMark = source.startsWith byteOrderMark
+  const start = if hasMark { byteOrderMark.byteLength() } else { 0 }
+  const pieces = piecesOf(source, tokens, start)?
+  const lines = linesOf pieces
+  const indents = indentationsOf lines, tokens, marks.closureArrows
+  const lineEnding = lineEndingOf source
+  var parts: List<String> = []
+  if hasMark {
+    parts.append byteOrderMark
+  }
+  for (index, line) in lines.indexed() {
+    if index > 0 {
+      parts.append lineEnding
+      if line.blank && !endsWithOpening(lines[index - 1], tokens) && !startsWithClosing(line, tokens) {
+        parts.append lineEnding
+      }
+    }
+    parts.append step.repeat(indents[index])
+    renderLine parts, source, line, indents[index], tokens, marks.roles
+  }
+  if !lines.isEmpty() {
+    parts.append lineEnding
+  }
+  Some parts.joined(separator: "")
+}
+
+/** The first line break of the file, which is the one every line break of the layout is written with. */
+fn lineEndingOf(source: String): String {
+  match source.byteOffsetOf("\n") {
+    Some(at) if at > 0 && source.byteAt(at - 1) == Some(13) => "\r\n"
+    _ => "\n"
+  }
+}
+
+// --- Pieces and lines -------------------------------------------------------------------------------------------------
+
+/** One token or comment of the source, in the order they stand in. */
+type Piece {
+  start: Int
+  end: Int
+  /** Its index among the tokens of the lexer, `None` for a comment */
+  token: Int?
+  /** How many line breaks stand between it and the piece in front of it */
+  breaks: Int
+  /** How many spaces and tabs stand in front of it on its own line */
+  spaces: Int
+}
+
+/** What stands between two pieces so far: the line breaks, and the spaces behind the last one. */
+type Gap {
+  var breaks: Int = 0
+  var spaces: Int = 0
+}
+
+/**
+ * Every token of the lexer except the line breaks it keeps, with every comment between them. `None` where something
+ * stands between two tokens that is neither white space nor a comment.
+ */
+fn piecesOf(source: String, tokens: List<Token>, start: Int): List<Piece>? {
+  var pieces: List<Piece> = []
+  var gap = Gap()
+  var cursor = start
+  for (index, token) in tokens.indexed() {
+    if token.kind == TokenKind.Newline || token.kind == TokenKind.EndOfFile {
+      continue
+    }
+    if !scanGap(source, cursor, token.span.start, pieces, gap) {
+      return None
+    }
+    pieces.append Piece(token.span.start, token.span.end, Some(index), gap.breaks, gap.spaces)
+    gap = Gap()
+    cursor = token.span.end
+  }
+  if !scanGap(source, cursor, source.byteLength(), pieces, gap) {
+    return None
+  }
+  Some pieces
+}
+
+/** The comments between two tokens, and the white space in front of the next piece. `false` for anything else. */
+fn scanGap(source: String, from: Int, to: Int, var pieces: List<Piece>, var gap: Gap): Bool {
+  var at = from
+  while at < to {
+    const byte = source.byteAt(at) ?? 0
+    if byte == 10 {
+      gap.breaks = gap.breaks + 1
+      gap.spaces = 0
+      at = at + 1
+    } else if byte == 32 || byte == 9 {
+      gap.spaces = gap.spaces + 1
+      at = at + 1
+    } else if byte == 13 {
+      at = at + 1
+    } else if byte == 47 && source.byteAt(at + 1) == Some(47) {
+      var end = at
+      while end < to && source.byteAt(end) != Some(10) {
+        end = end + 1
+      }
+      var trimmed = end
+      while trimmed > at && isBlankByte(source.byteAt(trimmed - 1) ?? 0) {
+        trimmed = trimmed - 1
+      }
+      pieces.append Piece(at, trimmed, token: None, breaks: gap.breaks, spaces: gap.spaces)
+      gap = Gap()
+      at = end
+    } else if byte == 47 && source.byteAt(at + 1) == Some(42) {
+      const length = match source.sliceBytes(at + 2, to).byteOffsetOf("*/") {
+        Some(found) => found
+        None => {
+          return false
+        }
+      }
+      const end = at + 2 + length + 2
+      pieces.append Piece(at, end, token: None, breaks: gap.breaks, spaces: gap.spaces)
+      gap = Gap()
+      at = end
+    } else {
+      return false
+    }
+  }
+  true
+}
+
+/** A space, a tab or the carriage return of a CRLF: what a line comment never ends with. */
+fn isBlankByte(byte: UInt8): Bool {
+  byte == 32 || byte == 9 || byte == 13
+}
+
+/** One line of the output: its pieces, and whether a blank line stood in front of it. */
+type Line {
+  pieces: List<Piece>
+  blank: Bool
+}
+
+fn linesOf(pieces: List<Piece>): List<Line> {
+  var lines: List<Line> = []
+  var current: List<Piece> = []
+  var blank = false
+  for piece in pieces {
+    if piece.breaks > 0 && !current.isEmpty() {
+      lines.append Line(current, blank)
+      current = []
+      blank = piece.breaks > 1
+    }
+    current.append piece
+  }
+  if !current.isEmpty() {
+    lines.append Line(current, blank)
+  }
+  lines
+}
+
+/** The indices of the tokens of a line, without its comments. */
+fn codeOf(line: Line): List<Int> {
+  var code: List<Int> = []
+  for piece in line.pieces {
+    if const Some(index) = piece.token {
+      code.append index
+    }
+  }
+  code
+}
+
+fn endsWithOpening(line: Line, tokens: List<Token>): Bool {
+  match codeOf(line).last() {
+    Some(index) => isOpening tokens[index].kind
+    None => false
+  }
+}
+
+fn startsWithClosing(line: Line, tokens: List<Token>): Bool {
+  const first = match line.pieces.first() {
+    Some(piece) => piece
+    None => {
+      return false
+    }
+  }
+  match first.token {
+    Some(index) => isClosing tokens[index].kind
+    None => false
+  }
+}
+
+fn isOpening(kind: TokenKind): Bool {
+  kind == TokenKind.ParenOpen || kind == TokenKind.BracketOpen || kind == TokenKind.BraceOpen
+}
+
+fn isClosing(kind: TokenKind): Bool {
+  kind == TokenKind.ParenClose || kind == TokenKind.BracketClose || kind == TokenKind.BraceClose
+}
+
+// --- Indentation ------------------------------------------------------------------------------------------------------
+
+/** One bracket that is open at the start of a line, or the file itself at the bottom. */
+type Context {
+  opener: TokenKind
+  /** The level of a line inside of it */
+  content: Int
+  /** The level of the line the current item of it started on: a continuation is one deeper */
+  var itemIndent: Int
+  /** The last token of it so far, outside of the brackets nested in it */
+  var last: TokenKind? = None
+  /** The last token is the `=>` behind the parameters of a closure, which continues nothing */
+  var lastEndsParameters: Bool = false
+  /** The `{` of a `match`, where a line that starts with `.` is an arm and not a continuation */
+  holdsArms: Bool = false
+  /** The line it was opened on */
+  line: Int
+  /** The current item started with a keyword whose block follows its head: `if`, `while`, `fn`, `type`... */
+  var headed: Bool = false
+}
+
+/** The level of indentation of every line. */
+fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int>): List<Int> {
+  var indents: List<Int> = []
+  var current = Context(opener: TokenKind.EndOfFile, content: 0, itemIndent: 0, line: -1)
+  var outer: List<Context> = []
+  var pendingMatch: Int? = None
+  // Lines of nothing but comments, which take the level of the next line that has code
+  var waiting: List<Int> = []
+  for (lineIndex, line) in lines.indexed() {
+    const code = codeOf line
+    if code.isEmpty() {
+      waiting.append indents.length()
+      indents.append 0
+      continue
+    }
+    const first = tokens[code[0]].kind
+    var indent = current.content
+    var continues = false
+    if isClosing(first) {
+      indent = current.content - 1
+    } else {
+      continues = continuesTheLineBefore current, first
+      if continues {
+        indent = current.itemIndent + 1
+      } else {
+        current.itemIndent = indent
+        current.headed = startsWithHeadKeyword tokens, code
+      }
+    }
+    const commentIndent = if isClosing(first) { indent + 1 } else { indent }
+    for waitingLine in waiting {
+      indents[waitingLine] = commentIndent
+    }
+    waiting = []
+    indents.append indent
+    var lineBase = indent
+    for (position, index) in code.indexed() {
+      const kind = tokens[index].kind
+      const isLast = position == code.length() - 1
+      if kind == TokenKind.Reserved(Keyword.Match) && isMatchKeyword(tokens, code, position) {
+        pendingMatch = Some outer.length()
+      }
+      if isOpening(kind) {
+        const holdsArms = kind == TokenKind.BraceOpen && pendingMatch == Some(outer.length())
+        if holdsArms {
+          pendingMatch = None
+        }
+        var content = lineBase + 1
+        if kind == TokenKind.BraceOpen && isLast && continues && current.headed {
+          content = current.itemIndent + 1
+        }
+        const itemIndent = if isLast { content } else { content - 1 }
+        outer.append current
+        current = Context opener: kind, content: content, itemIndent: itemIndent, holdsArms: holdsArms, line: lineIndex
+      } else if isClosing(kind) {
+        const closed = current
+        if const Some(enclosing) = outer.removeAt(outer.length() - 1) {
+          current = enclosing
+        }
+        if closed.line != lineIndex {
+          lineBase = closed.content - 1
+        }
+        current.last = Some kind
+        current.lastEndsParameters = false
+      } else {
+        current.last = Some kind
+        const endsParameters = kind == TokenKind.Arrow && closureArrows.contains(index)
+        current.lastEndsParameters = endsParameters
+        if endsParameters && current.line == lineIndex {
+          current.itemIndent = current.content
+        }
+      }
+    }
+  }
+  for waitingLine in waiting {
+    indents[waitingLine] = current.content
+  }
+  indents
+}
+
+/**
+ * Whether a line that starts with `first` continues the item of the line before it. In a list that is every line the
+ * line before did not end with `,`; in a block and at the top level of a file it is what the lexer decides as well:
+ * the line starts with an operator or a `.` (unless it is an arm of a `match`), or the one before ends with one.
+ */
+fn continuesTheLineBefore(current: Context, first: TokenKind): Bool {
+  const isList = current.opener == TokenKind.ParenOpen || current.opener == TokenKind.BracketOpen
+  if isList {
+    return match current.last {
+      Some(kind) => kind != TokenKind.Comma
+      None => false
+    }
+  }
+  const startsArm = current.holdsArms && first == TokenKind.Dot
+  const isElse = first == TokenKind.Reserved(Keyword.Else)
+  if !startsArm && !isElse && first.continuesLineBefore() {
+    return true
+  }
+  match current.last {
+    Some(kind) => kind.continuesLineAfter() && kind != TokenKind.Comma && !current.lastEndsParameters
+    None => false
+  }
+}
+
+/** Whether the `match` at this position of a line is the keyword and not a name (`text.match(...)`, `match: value`). */
+fn isMatchKeyword(tokens: List<Token>, code: List<Int>, position: Int): Bool {
+  if position > 0 {
+    const before = tokens[code[position - 1]].kind
+    if before == TokenKind.Dot || before == TokenKind.QuestionDot {
+      return false
+    }
+  }
+  const index = code[position]
+  tokens.get(index + 1)?.kind != Some(TokenKind.Colon)
+}
+
+/**
+ * Whether an item starts with a keyword whose block follows a head that may run over several lines: the block of such
+ * a head is one level deeper than its first line, not than its last.
+ */
+fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>): Bool {
+  match tokens[code[0]].kind {
+    .BraceClose => true
+    .Reserved(.If | .Else | .While | .For | .Match | .Loop | .Fn | .Type | .Trait | .Extend | .Foreign) => true
+    .Reserved(.Public | .Private | .Native | .Shared | .Static) => true
+    .Reserved(.Var) => code.length() > 1 && tokens[code[1]].kind == TokenKind.Reserved(Keyword.Fn)
+    _ => false
+  }
+}
+
+// --- Spaces -----------------------------------------------------------------------------------------------------------
+
+/** What a token is to the spaces around it. */
+type Role {
+  /** A name, a keyword, a literal */
+  case Word
+  case Opening
+  case Closing
+  case Comma
+  case Colon
+  /** One space on both sides: `+`, `==`, `=`, `=>`, `&&`, `|` */
+  case Infix
+  /** Nothing behind it: `-x`, `!done`, `...rest`, the `.` of `.Case` */
+  case Prefix
+  /** Nothing in front of it: `value?`, `Int?` */
+  case Postfix
+  /** Nothing on either side: `a.b`, `a?.b` */
+  case Member
+  /** Nothing on either side: `0..count` */
+  case Range
+  /** The `<` of type arguments */
+  case AngleOpening
+  /** The `>` of type arguments */
+  case AngleClosing
+  /** The second `>` of the shift `>>`, glued to the first */
+  case ShiftSecond
+}
+
+/** The role of every token, and the indices of the `=>` behind the parameters of a closure. */
+type Marks {
+  roles: List<Role>
+  closureArrows: Set<Int>
+}
+
+fn marksOf(
+  tokens: List<Token>,
+  infixOperators: List<Int>,
+  prefixOperators: List<Int>,
+  implicitMembers: List<Int>,
+  closureEnds: List<Int>,
+): Marks {
+  var roles: List<Role> = []
+  for token in tokens {
+    roles.append roleOf(token.kind)
+  }
+  var infixTokens: Set<Int> = Set.of()
+  for offset in infixOperators {
+    if const Some(index) = firstTokenFrom(tokens, offset, isInfixKind) {
+      roles[index] = Role.Infix
+      infixTokens.insert index
+      const next = index + 1
+      if tokens[index].kind == TokenKind.Greater && next < tokens.length() && tokens[next].kind == TokenKind.Greater {
+        if tokens[next].span.start == tokens[index].span.end {
+          roles[next] = Role.ShiftSecond
+        }
+      }
+    }
+  }
+  // A `-` the walk did not reach - in a type, say - negates where no operand stands in front of it
+  for (index, token) in tokens.indexed() {
+    if token.kind == TokenKind.Minus && !infixTokens.contains(index) {
+      if index == 0 || !endsOperand(tokens[index - 1].kind) {
+        roles[index] = Role.Prefix
+      }
+    }
+  }
+  for offset in prefixOperators {
+    if const Some(index) = firstTokenFrom(tokens, offset, isPrefixKind) {
+      roles[index] = Role.Prefix
+    }
+  }
+  for offset in implicitMembers {
+    if const Some(index) = firstTokenFrom(tokens, offset, { _ == TokenKind.Dot }) {
+      roles[index] = Role.Prefix
+    }
+  }
+  var closureArrows: Set<Int> = Set.of()
+  for offset in closureEnds {
+    if const Some(index) = firstTokenFrom(tokens, offset, { _ == TokenKind.Arrow }) {
+      closureArrows.insert index
+    }
+  }
+  Marks roles, closureArrows
+}
+
+fn roleOf(kind: TokenKind): Role {
+  match kind {
+    .ParenOpen | .BracketOpen | .BraceOpen => Role.Opening
+    .ParenClose | .BracketClose | .BraceClose => Role.Closing
+    .Comma => Role.Comma
+    .Colon => Role.Colon
+    .Dot | .QuestionDot => Role.Member
+    .DotDot | .DotDotEqual => Role.Range
+    .Ellipsis | .Bang | .Tilde => Role.Prefix
+    .Question => Role.Postfix
+    .Less => Role.AngleOpening
+    .Greater => Role.AngleClosing
+    .Arrow | .Equal | .EqualEqual | .BangEqual | .LessEqual | .GreaterEqual | .AndAnd | .OrOr => Role.Infix
+    .Pipe | .Ampersand | .Caret | .LessLess | .Plus | .Minus | .Star | .StarStar | .Slash | .Percent => Role.Infix
+    .QuestionQuestion => Role.Infix
+    _ => Role.Word
+  }
+}
+
+/** The kinds of token an infix operator of an expression is written with. */
+fn isInfixKind(kind: TokenKind): Bool {
+  match kind {
+    .EqualEqual | .BangEqual | .Less | .LessEqual | .Greater | .GreaterEqual | .AndAnd | .OrOr => true
+    .Pipe | .Ampersand | .Caret | .LessLess | .Plus | .Minus | .Star | .StarStar | .Slash | .Percent => true
+    .QuestionQuestion => true
+    _ => false
+  }
+}
+
+fn isPrefixKind(kind: TokenKind): Bool {
+  kind == TokenKind.Minus || kind == TokenKind.Bang || kind == TokenKind.Tilde
+}
+
+/** Whether an operand can end with a token of this kind, so that a `-` behind it infixTokens. */
+fn endsOperand(kind: TokenKind): Bool {
+  match kind {
+    .Identifier | .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true
+    .ParenClose | .BracketClose | .Question => true
+    .Reserved(.SelfValue | .SelfType | .True | .False | .Void) => true
+    _ => false
+  }
+}
+
+/**
+ * The token an offset of the tree points at: the first one at or after it, past the `)` of an operand in parentheses.
+ * `None` where the offset lies inside of a token - the expression of an interpolation, whose tokens are not the file's
+ * - or the token there is of a kind the test does not accept.
+ */
+fn firstTokenFrom(tokens: List<Token>, offset: Int, accepts: (TokenKind) => Bool): Int? {
+  var low = 0
+  var high = tokens.length()
+  while low < high {
+    const middle = (low + high) / 2
+    if tokens[middle].span.start < offset {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  if low > 0 && tokens[low - 1].span.end > offset {
+    return None
+  }
+  var index = low
+  while index < tokens.length() {
+    const kind = tokens[index].kind
+    if accepts(kind) {
+      return Some index
+    }
+    if kind != TokenKind.ParenClose {
+      return None
+    }
+    index = index + 1
+  }
+  None
+}
+
+/** Whether one space stands between two tokens of a line. */
+fn spaced(left: Role, leftKind: TokenKind, right: Role, rightKind: TokenKind): Bool {
+  if right == Role.Comma || right == Role.Colon {
+    return false
+  }
+  if left == Role.Comma {
+    return true
+  }
+  if left == Role.Colon {
+    return rightKind != TokenKind.BracketClose
+  }
+  if left == Role.Opening && leftKind != TokenKind.BraceOpen {
+    return false
+  }
+  if right == Role.Closing && rightKind != TokenKind.BraceClose {
+    return false
+  }
+  if leftKind == TokenKind.BraceOpen {
+    return rightKind != TokenKind.BraceClose
+  }
+  if rightKind == TokenKind.BraceClose {
+    return true
+  }
+  if right == Role.ShiftSecond {
+    return false
+  }
+  if left == Role.Infix || right == Role.Infix || left == Role.ShiftSecond {
+    return true
+  }
+  if left == Role.Member || right == Role.Member || left == Role.Prefix || right == Role.Postfix {
+    return false
+  }
+  if rightKind == TokenKind.BraceOpen {
+    return true
+  }
+  if left == Role.Range || right == Role.Range {
+    return false
+  }
+  // `private(var)` is one modifier
+  if leftKind == TokenKind.Reserved(Keyword.Private) && rightKind == TokenKind.ParenOpen {
+    return false
+  }
+  if left == Role.AngleOpening || right == Role.AngleOpening || right == Role.AngleClosing {
+    return false
+  }
+  if rightKind == TokenKind.ParenOpen || rightKind == TokenKind.BracketOpen {
+    return !(endsOperand(leftKind) || left == Role.AngleClosing)
+  }
+  true
+}
+
+/** The pieces of one line, each with the spaces in front of it that the layout decides. */
+fn renderLine(var parts: List<String>, source: String, line: Line, indent: Int, tokens: List<Token>, roles: List<Role>) {
+  for (position, piece) in line.pieces.indexed() {
+    if position > 0 {
+      const previous = line.pieces[position - 1]
+      match (previous.token, piece.token) {
+        (Some(left), Some(right)) => {
+          if spaced(roles[left], tokens[left].kind, roles[right], tokens[right].kind) {
+            parts.append " "
+          }
+        }
+        // A comment behind code keeps the spaces in front of it, so that a column of comments stays a column
+        (Some(_), None) => parts.append " ".repeat(piece.spaces.max(1))
+        _ => {
+          if piece.spaces > 0 {
+            parts.append " "
+          }
+        }
+      }
+    }
+    const text = source.sliceBytes piece.start, piece.end
+    const isComment = piece.token.isNone()
+    if isComment && position == 0 && text.contains("\n") {
+      parts.append reindentedComment(text, step.byteLength() * indent - piece.spaces)
+    } else {
+      parts.append text
+    }
+  }
+}
+
+/**
+ * A block comment that starts a line and runs over several, moved by as many columns as its first line moved. Only a
+ * line that starts with the `*` of a margin moves: the lexer strips that margin from a doc comment, so moving it
+ * changes nothing, while any other line of a doc comment is part of its text and stays exactly as it is.
+ */
+fn reindentedComment(text: String, shift: Int): String {
+  if shift == 0 {
+    return text
+  }
+  var lines: List<String> = []
+  for (index, line) in text.split("\n").indexed() {
+    if index == 0 {
+      lines.append line
+      continue
+    }
+    const leading = leadingBlanks line
+    const rest = line.sliceBytes leading, line.byteLength()
+    if rest.startsWith("*") {
+      lines.append(" ".repeat((leading + shift).max(0)) + rest)
+    } else {
+      lines.append line
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+/** How many spaces and tabs a line starts with. */
+fn leadingBlanks(line: String): Int {
+  var count = 0
+  while line.byteAt(count) == Some(32) || line.byteAt(count) == Some(9) {
+    count = count + 1
+  }
+  count
+}

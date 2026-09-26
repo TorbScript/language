@@ -1,0 +1,270 @@
+/**
+ * The rule `unread-binding`: a name that an irrefutable pattern binds and that nothing reads is written `_`. The
+ * refutable positions - an arm of a `match`, an `if const`, a `while const` - are the checker's, where an unread binding
+ * is an error; these are the others (CONCEPT, "Pattern Forms"): a `const` inside a body, and what `for` and the
+ * parameters of a closure bind.
+ *
+ * It stays on the safe side without name resolution, as the rule `unused-bindings` of the canon does: a name counts as
+ * read when it occurs as a word anywhere in the text it could be read in - the rest of the block behind a `const`, the
+ * body of a `for` or a closure - so a comment, a string and a name bound again all count. Left alone are a name that
+ * starts with `_`, a `var` (whose unread value the checker's dead changes are about), a `using` (whose point is the end
+ * of its block), a binding at the top level of a file (another file or a function above may read it), and the
+ * parameters of a function, which are the labels of its calls.
+ *
+ * The fix is offered only for a value the checker calls plain (`./plain-values`): a value that may hold something with
+ * a `close()` is released at the end of its block, and `_` would release it at once.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
+use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument from "../syntax/ast"
+use Pattern, PatternKind from "../syntax/ast"
+use Finding, LintRule, TextEdit from "./finding"
+
+/**
+ * Every unread binding of a file. `plain` holds where the patterns start whose value certainly has no `close()` in it
+ * (`./plain-values`): only those get the fix, because `_` releases at once a value that a name keeps to the end of its
+ * block. Without the checker's answer (`None`) nothing gets one.
+ */
+public fn unreadBindingFindings(source: String, file: SourceFile, plain: Set<Int>?): List<Finding> {
+  var walk = Walk source, plain, []
+  for statement in file.statements {
+    walkTopLevel walk, statement
+  }
+  var findings = walk.findings
+  findings.sort({ _.span.start })
+  findings
+}
+
+type Walk {
+  source: String
+  plain: Set<Int>?
+  var findings: List<Finding>
+}
+
+fn walkTopLevel(var walk: Walk, statement: Statement) {
+  match statement.kind {
+    .Declare(declaration) => walkDeclaration walk, declaration
+    // A binding of a script is visible to everything below it and above it in a function: only what it holds is walked
+    .Bind(binding) => walkExpression walk, binding.value
+    _ => walkStatement walk, statement, Span(statement.span.end, statement.span.end)
+  }
+}
+
+fn walkDeclaration(var walk: Walk, declaration: Declaration) {
+  match declaration.kind {
+    .Function(inner) => walkFunction walk, inner
+    .Type(inner) => walkMembers walk, inner.members
+    .Trait(inner) => walkMembers walk, inner.members
+    .Extend(inner) => walkMembers walk, inner.members
+    .Constant(binding) => walkExpression walk, binding.value
+    .Use(_) | .Alias(_) | .Foreign(_) => {}
+  }
+}
+
+fn walkMembers(var walk: Walk, members: List<Member>) {
+  for member in members {
+    match member.kind {
+      .Field(field) => {
+        if const Some(default) = field.default {
+          walkExpression walk, default
+        }
+      }
+      .Constant(binding) => walkExpression walk, binding.value
+      .Function(declaration) => walkFunction walk, declaration
+      .Case(_) => {}
+    }
+  }
+}
+
+fn walkFunction(var walk: Walk, declaration: FunctionDeclaration) {
+  for parameter in declaration.parameters {
+    if const Some(default) = parameter.default {
+      walkExpression walk, default
+    }
+  }
+  if const Some(body) = declaration.body {
+    walkBlock walk, body
+  }
+}
+
+fn walkBlock(var walk: Walk, block: Block) {
+  for statement in block.statements {
+    walkStatement walk, statement, Span(statement.span.end, block.span.end)
+  }
+}
+
+/** One statement of a block, and the text behind it that its bindings can be read in. */
+fn walkStatement(var walk: Walk, statement: Statement, rest: Span) {
+  match statement.kind {
+    .Declare(declaration) => walkDeclaration walk, declaration
+    .Bind(binding) => {
+      if !binding.isVar && !binding.scoped && !binding.required {
+        checkPattern walk, binding.pattern, rest
+      }
+      walkExpression walk, binding.value
+    }
+    .Assign(target, value) => {
+      walkExpression walk, target
+      walkExpression walk, value
+    }
+    .For(pattern, iterable, body) => {
+      checkPattern walk, pattern, body.span
+      walkExpression walk, iterable
+      walkBlock walk, body
+    }
+    .While(condition, body) => {
+      walkCondition walk, condition
+      walkBlock walk, body
+    }
+    .Loop(body) => walkBlock walk, body
+    .Return(value) => {
+      if const Some(inner) = value {
+        walkExpression walk, inner
+      }
+    }
+    .Break | .Continue => {}
+    .Evaluate(expression) => walkExpression walk, expression
+  }
+}
+
+fn walkCondition(var walk: Walk, condition: Condition) {
+  match condition {
+    .Test(expression) => walkExpression walk, expression
+    .Bind(_, _, value) => walkExpression walk, value
+  }
+}
+
+fn walkArguments(var walk: Walk, arguments: List<Argument>) {
+  for argument in arguments {
+    walkExpression walk, argument.value
+  }
+}
+
+fn walkExpression(var walk: Walk, expression: Expression) {
+  match expression.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .VoidLiteral | .CharLiteral(_) => {}
+    .Name(_) | .ImplicitMember(_) | .Invalid | .TextLiteral(_) => {}
+    .Generic(target, _) => walkExpression walk, target
+    .TupleLiteral(items) | .ListLiteral(items) => walkArguments walk, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression walk, key
+        walkExpression walk, value
+      }
+    }
+    .Member(target, _, _) => walkExpression walk, target
+    .Index(target, index) => {
+      walkExpression walk, target
+      walkExpression walk, index
+    }
+    .Call(callee, arguments, _) => {
+      walkExpression walk, callee
+      walkArguments walk, arguments
+    }
+    .Unary(_, operand) => walkExpression walk, operand
+    .Binary(_, left, right) => {
+      walkExpression walk, left
+      walkExpression walk, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(inner) = start {
+        walkExpression walk, inner
+      }
+      if const Some(inner) = end {
+        walkExpression walk, inner
+      }
+    }
+    .Try(inner) => walkExpression walk, inner
+    .Closure(closure) => {
+      // The span of the body starts at the `{`, in front of the parameters: what reads them comes after the last one
+      if const Some(last) = closure.parameters.last() {
+        const end = match last.annotation {
+          Some(annotation) => annotation.span.end
+          None => last.pattern.span.end
+        }
+        for parameter in closure.parameters {
+          checkPattern walk, parameter.pattern, Span(end, closure.body.span.end)
+        }
+      }
+      walkBlock walk, closure.body
+    }
+    .If(condition, then, otherwise) => {
+      walkCondition walk, condition
+      walkBlock walk, then
+      if const Some(inner) = otherwise {
+        walkExpression walk, inner
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression walk, subject
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          walkExpression walk, guard
+        }
+        walkExpression walk, arm.body
+      }
+    }
+    .Block(block) => walkBlock walk, block
+  }
+}
+
+/** Every name the pattern binds that does not occur in the text it could be read in. */
+fn checkPattern(var walk: Walk, pattern: Pattern, region: Span) {
+  match pattern.kind {
+    .Binding(name) => {
+      if name.startsWith("_") || occursAsWord(walk.source, region, name) {
+        return
+      }
+      const isPlain = match walk.plain {
+        Some(starts) => starts.contains pattern.span.start
+        None => false
+      }
+      const fix = if isPlain { [TextEdit(pattern.span.start, pattern.span.end, "_")] } else { [] }
+      const message = if isPlain {
+        "`{name}` is never read: write `_`, or `_{name}` to keep the name"
+      } else {
+        "`{name}` is never read: write `_`, or `_{name}` to keep the name - or `using`, where what it holds has to be closed at the end of the block"
+      }
+      walk.findings.append Finding(LintRule.UnreadBinding, message, pattern.span, fix)
+    }
+    .TuplePattern(items) => {
+      for item in items {
+        checkPattern walk, item, region
+      }
+    }
+    .Variant(_, fields, _) | .ImplicitVariant(_, fields, _) => {
+      for field in fields {
+        checkPattern walk, field.pattern, region
+      }
+    }
+    // Irrefutable patterns are names, tuples and the fields of a type; the rest never stands in these positions
+    _ => {}
+  }
+}
+
+/** Whether a name occurs in a part of the source as a whole word: not inside of a longer name. */
+fn occursAsWord(source: String, region: Span, name: String): Bool {
+  const text = source.sliceBytes region.start, region.end
+  var from = 0
+  loop {
+    const found = match text.sliceBytes(from, text.byteLength()).byteOffsetOf(name) {
+      Some(offset) => from + offset
+      None => {
+        return false
+      }
+    }
+    const end = found + name.byteLength()
+    const isStart = found == 0 || !isWordByte(text.byteAt(found - 1) ?? 0)
+    const isEnd = !isWordByte(text.byteAt(end) ?? 0)
+    if isStart && isEnd {
+      return true
+    }
+    from = found + 1
+  }
+}
+
+/** A byte of a name: `A`-`Z`, `a`-`z`, `0`-`9` and `_`. */
+fn isWordByte(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
+}

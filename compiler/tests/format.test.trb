@@ -1,0 +1,244 @@
+/**
+ * Text in, text out for `torb format`: the layout of indentation, spaces and blank lines, over the rules of the canon,
+ * and that a second run changes nothing.
+ */
+
+use test, group from "std/test"
+use formatted, formatOptionsOf, formatOptionsOfCanon from "../src/format/command"
+
+/** Prints both texts where they differ, so that a failing test says how. */
+fn expectText(actual: String, expected: String) {
+  if actual != expected {
+    print "expected:\n{expected.showNested()}\nactual:\n{actual.showNested()}"
+  }
+  assert(actual == expected)
+}
+
+/** What the formatter makes of a source, that it dropped nothing on the way, and that a second run keeps it. */
+fn formats(source: String, expected: String) {
+  const once = formatted source
+  if !once.dropped.isEmpty() {
+    print "dropped: {once.dropped}"
+  }
+  assert once.dropped.isEmpty()
+  expectText once.text, expected
+  expectText formatted(once.text).text, once.text
+}
+
+/** The source is formatted already. */
+fn keeps(source: String) {
+  formats source, source
+}
+
+group "Indentation" {
+  test "two spaces per level of braces" {
+    formats "fn f() \{\nif ready \{\nstop()\n\}\n\}\n", "fn f() \{\n  if ready \{\n    stop()\n  \}\n\}\n"
+    formats "fn f() \{\n      stop()\n\}\n", "fn f() \{\n  stop()\n\}\n"
+  }
+
+  test "a line opens one level however many brackets it opens" {
+    keeps "fn f() \{\n  list.sort(\{ left =>\n    left\n  \})\n\}\n"
+    formats "fn f() \{\n  list.sort(\{ left =>\n        left\n      \})\n\}\n", "fn f() \{\n  list.sort(\{ left =>\n    left\n  \})\n\}\n"
+  }
+
+  test "the arguments of a call over several lines" {
+    keeps "const x = f(\n  a,\n  b,\n)\n"
+    formats "const x = f(\n      a,\n   b,\n)\n", "const x = f(\n  a,\n  b,\n)\n"
+  }
+
+  test "a long parameter list that hangs is indented by one level, and the body by one" {
+    formats(
+      "fn register(owner: String, kind: Int,\n             size: Int) \{\n  stop()\n\}\n",
+      "fn register(owner: String, kind: Int,\n  size: Int) \{\n  stop()\n\}\n",
+    )
+    keeps "fn register(\n  owner: String,\n  kind: Int,\n) \{\n  stop()\n\}\n"
+  }
+
+  test "a line that continues the one before is one level deeper, and so is every further one" {
+    formats "const ready = first\n&& second\n&& third\n", "const ready = first\n  && second\n  && third\n"
+    formats "const text = \"a\" +\n\"b\"\n", "const text = \"a\" +\n  \"b\"\n"
+    keeps "const names = items\n  .filter(\{ _.ready \})\n  .map(\{ _.name \})\n"
+  }
+
+  test "the block of a head over several lines is one level deeper than the head's first line" {
+    keeps "fn f() \{\n  if first\n    && second \{\n    stop()\n  \}\n\}\n"
+    keeps "fn f() \{\n  while first\n    && second \{\n    stop()\n  \}\n\}\n"
+  }
+
+  test "a continuation inside a call that goes on from the line of its `(`" {
+    keeps "fn f() \{\n  report(\"first\"\n    + \"second\")\n\}\n"
+    keeps "fn f() \{\n  print(\n    \"first\"\n      + \"second\"\n  )\n\}\n"
+  }
+
+  test "an arm of a match that starts with `.` is no continuation" {
+    keeps "fn f(shape: Shape): Int \{\n  match shape \{\n    .Circle(_) => 1\n    .Square(_) => 2\n  \}\n\}\n"
+    keeps "fn f(shape: Shape): Int \{\n  match shape \{\n    .Circle(_) =>\n      1\n    _ => 2\n  \}\n\}\n"
+  }
+
+  test "a closure's parameters at the end of a line continue nothing" {
+    keeps "fn f() \{\n  items.map \{ item =>\n    item\n  \}\n\}\n"
+  }
+
+  test "a comment takes the level of the line after it" {
+    formats "fn f() \{\n// first\nstop()\n    // last\n\}\n", "fn f() \{\n  // first\n  stop()\n  // last\n\}\n"
+  }
+
+  test "a doc comment moves with its declaration, margin and all" {
+    formats(
+      "type Point \{\n      /**\n       * The first.\n       */\n  x: Int\n\}\n",
+      "type Point \{\n  /**\n   * The first.\n   */\n  x: Int\n\}\n",
+    )
+  }
+}
+
+group "Spaces" {
+  test "one around an infix operator, `=` and `=>`" {
+    formats "const x=1+2*3\n", "const x = 1 + 2 * 3\n"
+    formats "const ready = a&&b||c\n", "const ready = a && b || c\n"
+    formats "const x = a??b\n", "const x = a ?? b\n"
+    keeps "const x = a >> 2\n"
+    keeps "const x = a << 2\n"
+  }
+
+  test "a prefix operator keeps its operand" {
+    keeps "const x = -1\n"
+    keeps "const x = a - -b\n"
+    formats "const x = a-1\n", "const x = a - 1\n"
+    formats "const x = - 1\n", "const x = -1\n"
+    formats "const x = ! ready\n", "const x = !ready\n"
+    keeps "fn f(values: List<Int>) \{\n  g(...values)\n\}\n"
+  }
+
+  test "type arguments are not comparisons" {
+    keeps "const values: List<Int> = []\n"
+    keeps "const nested: Map<String, List<List<Int>>> = [:]\n"
+    formats "const values: List< Int > = []\n", "const values: List<Int> = []\n"
+    formats "fn f(a: Int, b: Int): Bool \{\n  a<b\n\}\n", "fn f(a: Int, b: Int): Bool \{\n  a < b\n\}\n"
+    keeps "const numbers = Channel<Int>(capacity: 8)\n"
+    keeps "const value = json.decode<String>(text)\n"
+  }
+
+  test "commas, colons and brackets" {
+    formats "const x = f(a ,b)\n", "const x = f a, b\n"
+    formats "const x = [ 1,2 ]\n", "const x = [1, 2]\n"
+    formats "const x: Map<String, Int> = [ : ]\n", "const x: Map<String, Int> = [:]\n"
+    formats "fn f(x : Int) : Int \{\n  x\n\}\n", "fn f(x: Int): Int \{\n  x\n\}\n"
+  }
+
+  test "braces" {
+    formats "const x = items.map(\{_ + 1\})\n", "const x = items.map(\{ _ + 1 \})\n"
+    keeps "fn f() \{\n  match 1 \{\n    _ => \{\}\n  \}\n\}\n"
+    formats "fn f() \{\n  loop\{\n    stop()\n  \}\n\}\n", "fn f() \{\n  loop \{\n    stop()\n  \}\n\}\n"
+  }
+
+  test "members, ranges and cases" {
+    formats "const x = a . b\n", "const x = a.b\n"
+    formats "const x = 0 .. 10\n", "const x = 0..10\n"
+    keeps "fn f() \{\n  for value in 0.. \{\n    stop()\n  \}\n\}\n"
+    keeps "const kind: TokenKind = .Dot\n"
+    keeps "const kinds = [.Dot, .Comma]\n"
+    formats "const x = f(. Case)\n", "const x = f(.Case)\n"
+    keeps "const x = value?.name ?? \"\"\n"
+    keeps "const x: Int? = None\n"
+  }
+
+  test "a callee keeps its parentheses and an indexed value its brackets" {
+    formats "const x = f (1) + 2\n", "const x = f(1) + 2\n"
+    formats "const x = values [0]\n", "const x = values[0]\n"
+    keeps "fn f() \{\n  if (a || b) && c \{\n    stop()\n  \}\n\}\n"
+    keeps "fn f(): (Int, Int) \{\n  return (1, 2)\n\}\n"
+  }
+
+  test "`private(var)` is one modifier" {
+    keeps "type Account \{\n  private(var) balance: Int = 0\n\}\n"
+  }
+
+  test "a comment behind code keeps its column" {
+    keeps "const x = 1    // one\nconst yy = 22  // two\n"
+    formats "const x = 1// one\n", "const x = 1 // one\n"
+  }
+
+  test "the inside of a string is never touched" {
+    keeps "const x = \"a  +b \{a+b\}\"\n"
+    keeps "const x = raw\"a  \{ b\"\n"
+  }
+
+  test "receiver closures and trailing closures" {
+    keeps "server \{\n  port = 8080\n  host = \"localhost\"\n\}\n"
+    formats "server \{ port=8080 \}\n", "server \{ port = 8080 \}\n"
+    formats "test \"adds\"\{\n  stop()\n\}\n", "test \"adds\" \{\n  stop()\n\}\n"
+    keeps "const doubled = numbers.map \{ value => value * 2 \}\n"
+  }
+}
+
+group "Blank lines and the end of the file" {
+  test "at most one blank line in a row" {
+    formats "const a = 1\n\n\n\nconst b = 2\n", "const a = 1\n\nconst b = 2\n"
+  }
+
+  test "no blank line behind an opening bracket or in front of a closing one" {
+    formats "fn f() \{\n\n  stop()\n\n\}\n", "fn f() \{\n  stop()\n\}\n"
+  }
+
+  test "no blank line at the start, and one line break at the end" {
+    formats "\n\nconst a = 1", "const a = 1\n"
+    formats "const a = 1\n\n\n", "const a = 1\n"
+    formats "", ""
+  }
+
+  test "trailing white space goes" {
+    formats "const a = 1   \n// note   \n", "const a = 1\n// note\n"
+  }
+
+  test "a file with CRLF stays CRLF" {
+    formats "fn f() \{\r\nstop()\r\n\}\r\n", "fn f() \{\r\n  stop()\r\n\}\r\n"
+    formats "fn f() \{\r\n\r\n\r\n  stop()\r\n\}", "fn f() \{\r\n  stop()\r\n\}\r\n"
+  }
+}
+
+group "Multi-line strings" {
+  test "the content moves with the line the string starts on" {
+    formats(
+      "fn f(): String \{\n      const text = \"\"\"\n        one\n          two\n        \"\"\"\n  text\n\}\n",
+      "fn f(): String \{\n  const text = \"\"\"\n    one\n      two\n    \"\"\"\n  text\n\}\n",
+    )
+  }
+
+  test "a string in a file with CRLF keeps its line breaks" {
+    keeps "fn f(): String \{\r\n  const text = \"\"\"\r\n    one\r\n    \"\"\"\r\n  text\r\n\}\r\n"
+  }
+}
+
+group "The rules of the canon" {
+  test "every rule of `torb canon` is a rule of `torb format`" {
+    formats "print(\"Hello\")\n", "print \"Hello\"\n"
+    formats "fn f() \{\n  while true \{\n    stop()\n  \}\n\}\n", "fn f() \{\n  loop \{\n    stop()\n  \}\n\}\n"
+    formats(
+      "fn f(value: Int?) \{\n  match value \{\n    Some(found) => stop()\n    .None => stop()\n  \}\n\}\n",
+      "fn f(value: Int?) \{\n  match value \{\n    Some(_) => stop()\n    None => stop()\n  \}\n\}\n",
+    )
+  }
+
+  test "a file that does not parse is left alone" {
+    const outcome = formatted "fn f( \{\n"
+    assert outcome.skipped.isSome()
+    assert(outcome.text == "fn f( \{\n")
+  }
+}
+
+group "The command line" {
+  test "format takes --check and paths, and the current directory without one" {
+    const options = formatOptionsOf(["--check", "std"]).expect("options")
+    assert options.check
+    assert(options.paths == ["std"])
+    assert(formatOptionsOf([]).expect("options").paths == ["."])
+    assert formatOptionsOf(["--rule", "calls"]).isNone()
+  }
+
+  test "the arguments of `torb canon` are read as those of `torb format`" {
+    const options = formatOptionsOfCanon(["--check", "--rule", "calls", "--rule=loops", "."]).expect("options")
+    assert options.check
+    assert(options.paths == ["."])
+    assert formatOptionsOfCanon(["--check"]).isNone()
+  }
+}

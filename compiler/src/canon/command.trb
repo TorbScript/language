@@ -1,28 +1,20 @@
 /**
- * `torb canon`: rewrites TorbScript sources into the canon of the formatter, over the syntax tree and never with a
- * regular expression.
+ * The canon of the formatter, as the engine `torb format` (`../format/command`) runs first: rewrites over the syntax
+ * tree and never with a regular expression. It only moves parentheses and indentation and rewrites three small forms of
+ * the tree; it never reprints a file - that is the layout's job (`../format/layout`).
  *
- * This is tooling for the bootstrap phase. Milestone 8's `torb format` enforces the same canon and replaces this
- * command; until then this is how the canon is applied to a whole checkout. It stays small on purpose: it only
- * moves parentheses and indentation, and it never reprints a file.
- *
- * ```text
- * torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings|loops]... <path>...
- * ```
- *
- * `calls` and `strings` run by default; `--rule` picks a set instead. `--check` writes nothing and leaves with a
- * non-zero code if something would change. The command is idempotent: a second run over the same tree changes
- * nothing.
+ * The rules are [Rule]s, and [rewrite] applies a set of them to one source text.
  *
  * **The safety net.** Every edit is applied on its own and the file is parsed again. The edit only stays if the
  * syntax tree is the one from before with every span and every `CallStyle` erased ([canonicalText]), and if the
  * file still has no diagnostics; otherwise it is dropped and reported. A file that does not parse to begin with is
- * skipped whole - `tests/parser-cases/` and `tests/lexer-cases/` hold files that are broken on
- * purpose and are not even read. Nothing outside of an edited byte range is touched, so line endings and everything
- * else stay byte-identical.
+ * skipped whole. Nothing outside of an edited byte range is touched, so line endings and everything else stay
+ * byte-identical.
+ *
+ * `torb canon`, the command this was until milestone 8, is an alias of `torb format` now that prints that it is
+ * deprecated.
  */
 
-use File, IoError from "std/fs"
 use SourceText, LineIndex from "../syntax/source"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
@@ -33,90 +25,14 @@ use stringEdits from "./strings"
 use patternEdits from "./patterns"
 use bindingEdits from "./bindings"
 use loopEdits from "./loops"
-use counted from "../cli/render"
 
-/** `torb canon --help` */
-public fn canonUsage(): String {
-  [
-    "torb canon - write TorbScript sources in the canon of the formatter",
-    "",
-    "Usage:",
-    "  torb canon [--check] [--rule <rule>]... <path>...",
-    "",
-    "Rules (`calls` and `strings` by default):",
-    "  calls                    A call is a command where the grammar allows it, and has parentheses where it does not",
-    "  strings                  A multi-line `\"\"\"` string is indented one level deeper than the line it starts on",
-    "  imported-case-patterns   `.None` becomes `None` for a case a `use` imported (changes the tree, off by default)",
-    "  unused-bindings          A binding of a refutable pattern that nobody reads becomes `_` (changes the tree, off by default)",
-    "  loops                    `while true \{` becomes `loop \{` (changes the tree, off by default)",
-    "",
-    "  --check   Write nothing, list what would change, leave with a non-zero code",
-  ].joined(separator: "\n")
-}
-
-/** The five rules of the canon. `Calls` and `Strings` run by default. */
+/** The five rules of the canon. `torb format` runs every one of them. */
 public type Rule {
   case Calls
   case Strings
   case ImportedCasePatterns
   case UnusedBindings
   case Loops
-
-  static fn fromText(text: String): Rule? {
-    match text {
-      "calls" => Some Rule.Calls
-      "strings" => Some Rule.Strings
-      "imported-case-patterns" => Some Rule.ImportedCasePatterns
-      "unused-bindings" => Some Rule.UnusedBindings
-      "loops" => Some Rule.Loops
-      _ => None
-    }
-  }
-}
-
-/** What the command line asked for. */
-public type CanonOptions {
-  check: Bool
-  rules: List<Rule>
-  paths: List<String>
-}
-
-const ruleFlag = "--rule="
-
-/** Parses `torb canon`'s arguments. `None` for a flag that is not one of these, an unknown rule, or no path at all - the caller prints [canonUsage] and exits with 2. */
-public fn canonOptionsOf(arguments: List<String>): CanonOptions? {
-  var check = false
-  var rules: List<Rule> = []
-  var paths: List<String> = []
-  var index = 0
-  while index < arguments.length() {
-    const argument = arguments[index]
-    if argument == "--check" {
-      check = true
-      index = index + 1
-      continue
-    }
-    if const Some(rule) = argument.withoutPrefix(ruleFlag) {
-      rules.append(Rule.fromText(rule)?)
-      index = index + 1
-      continue
-    }
-    if argument == "--rule" {
-      rules.append(Rule.fromText(arguments.get(index + 1)?)?)
-      index = index + 2
-      continue
-    }
-    if argument.startsWith("-") {
-      return None
-    }
-    paths.append argument
-    index = index + 1
-  }
-  if paths.isEmpty() {
-    return None
-  }
-  const finalRules = if rules.isEmpty() { [Rule.Calls, Rule.Strings] } else { rules }
-  Some CanonOptions(check, finalRules, paths)
 }
 
 /** How many edits of each kind were made (or would be), for the summary line. */
@@ -150,15 +66,6 @@ public type Counts {
       }
     }
   }
-
-  var fn addAll(other: Counts) {
-    toCommand = toCommand + other.toCommand
-    toParentheses = toParentheses + other.toParentheses
-    strings = strings + other.strings
-    patterns = patterns + other.patterns
-    bindings = bindings + other.bindings
-    endless = endless + other.endless
-  }
 }
 
 /** The canon of one source text: the rewritten text, the counts, and what the safety net skipped or dropped. */
@@ -169,102 +76,6 @@ public type Outcome {
   var skipped: List<String> = []
   /** An edit the safety net threw away, with what it would have changed */
   var dropped: List<String> = []
-}
-
-/** The whole run: every file, and the totals of every [Outcome]. */
-type Report {
-  var files: Int = 0
-  var changed: List<String> = []
-  var counts: Counts = Counts()
-  var dropped: List<String> = []
-  var skipped: List<String> = []
-}
-
-fn printCanonReport(report: Report, check: Bool) {
-  for file in report.changed {
-    print file
-  }
-  for reason in report.skipped {
-    print "skipped {reason}"
-  }
-  for reason in report.dropped {
-    print "dropped {reason}"
-  }
-  const verb = if check { "would change" } else { "changed" }
-  const counts = report.counts
-  print ""
-  print(
-    "{report.changed.length()} of {counted(report.files, "file")} {verb}: "
-      + "{counted(counts.toCommand, "call")} to commands, {counted(counts.toParentheses, "call")} to parentheses, "
-      + "{counted(counts.strings, "string")} indented, {counted(counts.patterns, "case pattern")}, "
-      + "{counted(counts.bindings, "unread binding")}, {counted(counts.endless, "endless loop")}"
-  )
-  if !report.dropped.isEmpty() {
-    print "{counted(report.dropped.length(), "edit")} dropped by the safety net"
-  }
-}
-
-/** `torb canon [--check] [--rule <rule>]... <path>...`. Returns the exit code. */
-public fn runCanon(options: CanonOptions): Result<Int, IoError> {
-  var files: List<String> = []
-  for path in options.paths {
-    collectCanonFiles(files, path)?
-  }
-  files.sort({ _ })
-
-  var report = Report()
-  for file in files {
-    const source = File.readText(file)?
-    report.files = report.files + 1
-    const outcome = rewrite source, options.rules
-    for reason in outcome.skipped {
-      report.skipped.append "{file}: {reason}"
-    }
-    for reason in outcome.dropped {
-      report.dropped.append "{file}: {reason}"
-    }
-    report.counts.addAll outcome.counts
-    if outcome.text == source {
-      continue
-    }
-    report.changed.append file
-    if options.check {
-      continue
-    }
-    File.writeText(file, outcome.text)?
-  }
-  printCanonReport report, options.check
-  if options.check && !report.changed.isEmpty() {
-    return Ok 1
-  }
-  Ok 0
-}
-
-/**
- * Every `.trb` file below the paths, without the hidden directories, the `build` directories (what a build or a docs
- * check writes, never a source) and the two directories of files that are broken on purpose - unlike a file that fails
- * to parse, they are not even read.
- */
-fn collectCanonFiles(var files: List<String>, path: String): Result<Void, IoError> {
-  if !File.isDirectory(path) {
-    if !File.exists(path) {
-      return Fail IoError(path, "The file does not exist")
-    }
-    files.append path
-    return Ok(void)
-  }
-  for entry in File.list(path)? {
-    const child = "{path}/{entry}"
-    if File.isDirectory(child) {
-      const isSkipped = entry.startsWith(".") || entry == "build" || entry == "parser-cases" || entry == "lexer-cases"
-      if !isSkipped {
-        collectCanonFiles(files, child)?
-      }
-    } else if entry.endsWith(".trb") {
-      files.append child
-    }
-  }
-  Ok(void)
 }
 
 /** The canon of one source text. Public for the tests; every rule is here, so a test can ask for one of them alone. */
@@ -337,7 +148,7 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
  * every node - a tree that is equal here is equal everywhere except in the two places the canon is allowed to
  * touch.
  */
-fn canonicalText(source: String): String? {
+public fn canonicalText(source: String): String? {
   const parsed = parse SourceText.of(source)
   if !parsed.diagnostics.isEmpty() {
     return None

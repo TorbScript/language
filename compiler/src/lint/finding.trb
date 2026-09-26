@@ -1,0 +1,77 @@
+/**
+ * The vocabulary of `torb lint`: a [LintRule] has an id and a summary, and what it finds is a [Finding] - a message,
+ * the span it is about, and a fix as [TextEdit]s where the rule knows one for certain.
+ *
+ * A fix is text and not a tree: the edits are byte ranges of the source the rule read, which is what `--fix` applies
+ * and what a language server will offer as a quick fix.
+ */
+
+use Span from "../syntax/source"
+
+/** One replacement of a byte range of the source a rule read. */
+public type TextEdit {
+  start: Int
+  end: Int
+  text: String
+}
+
+/** What a rule found: which rule, what it says, where, and the edits that fix it (none where the rule has no fix). */
+public type Finding {
+  rule: LintRule
+  message: String
+  span: Span
+  fix: List<TextEdit> = []
+
+  fn hasFix(): Bool {
+    !fix.isEmpty()
+  }
+}
+
+/** The rules of `torb lint`. Every one of them runs unless the command line picks others. */
+public type LintRule {
+  /** Inside a `type` or an `extend`, its own name where `Self` means the same */
+  case SelfName
+  /** A `Bool` field named as a question: `isShared` instead of `shared` */
+  case QuestionField
+  /** A binding of an irrefutable pattern that nothing reads */
+  case UnreadBinding
+  /** `true`, `false` or `None` passed to a `Bool` or an optional without the parameter's label */
+  case LabeledLiteral
+
+  /** The name of the rule on the command line and in every finding. */
+  fn id(): String {
+    match self {
+      .SelfName => "self-name"
+      .QuestionField => "question-field"
+      .UnreadBinding => "unread-binding"
+      .LabeledLiteral => "labeled-literal"
+    }
+  }
+
+  /** One line for `torb lint --help`. */
+  fn summary(): String {
+    match self {
+      .SelfName => "Inside a `type` or an `extend`, its own name is written `Self` (fix)"
+      .QuestionField => "A `Bool` field is an adjective or a participle, not a question that starts with `is`"
+      .UnreadBinding => "A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)"
+      .LabeledLiteral => "`true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)"
+    }
+  }
+
+  /**
+   * Whether the rule reads the checker's tables, so that a run with it checks the projects of the paths first:
+   * `labeled-literal` for all it finds, `unread-binding` for which of its findings may be fixed.
+   */
+  fn needsTheChecker(): Bool {
+    self == Self.LabeledLiteral || self == Self.UnreadBinding
+  }
+
+  static fn named(id: String): Self? {
+    everyLintRule().find({ _.id() == id })
+  }
+}
+
+/** Every rule, in the order they are listed and run. */
+public fn everyLintRule(): List<LintRule> {
+  [LintRule.SelfName, LintRule.QuestionField, LintRule.UnreadBinding, LintRule.LabeledLiteral]
+}

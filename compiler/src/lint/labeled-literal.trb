@@ -1,0 +1,215 @@
+/**
+ * The rule `labeled-literal`: `true`, `false` or `None` passed to a parameter that is *declared* as `Bool` or as an
+ * optional carries the parameter's label (`hasCapacity: false`, not a bare `false`), because a literal has no name of
+ * its own that could say what it means (compiler/CONTRIBUTING.md, "A literal that sets an option is labeled").
+ *
+ * The two exceptions of the rule are kept: a call with a single argument (`setEnabled(true)`), and a literal that is the
+ * data rather than an option, which is the case exactly when the declared type is a type parameter (`Some(true)`,
+ * `list.append(None)`) - such a parameter is neither `Bool` nor an optional, so it is never found.
+ *
+ * This is the one rule that needs the checker: which declaration a call reaches, and which parameter an argument
+ * fills, are the checker's tables. The fix writes the label in front of the literal, and only where every argument
+ * behind it is labeled already or is a trailing closure - labeled arguments follow the positional ones, so anywhere
+ * else the call has to be reordered, which is a person's choice.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Expression, ExpressionKind, Argument from "../syntax/ast"
+use Checker, Resolution from "../semantics/checker/context"
+use TypeId, TypeForm, TypeSignature, SignatureState from "../semantics/checker/type"
+use ModuleId from "../semantics/module"
+use Finding, LintRule, TextEdit from "./finding"
+use everyNodeOf from "./nodes"
+
+/** One parameter a call can fill: the label it has, and the type it is declared with. */
+type Target {
+  name: String
+  annotation: TypeId
+}
+
+public fn labeledLiteralFindings(checker: Checker, module: ModuleId, file: SourceFile): List<Finding> {
+  var findings: List<Finding> = []
+  for expression in everyNodeOf(file).expressions {
+    match expression.kind {
+      .Call(callee, arguments, _) => findingsOfCall findings, checker, module, expression, callee, arguments
+      _ => {}
+    }
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+fn findingsOfCall(
+  var findings: List<Finding>,
+  checker: Checker,
+  module: ModuleId,
+  call: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+) {
+  if arguments.length() < 2 {
+    return
+  }
+  const targets = match checker.argumentTargetsAt(module, call.span) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const parameters = match parametersOf(checker, module, call, callee) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  for (index, argument) in arguments.indexed() {
+    if argument.label.isSome() || argument.isSpread {
+      continue
+    }
+    const literal = match literalText(argument.value) {
+      Some(text) => text
+      None => {
+        continue
+      }
+    }
+    const target = targets.get(index) ?? -1
+    if target < 0 {
+      continue
+    }
+    const parameter = match parameters.get(target) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if !isBool(checker, parameter.annotation) && !isOptional(checker, parameter.annotation) {
+      continue
+    }
+    const message = "`{literal}` sets the option `{parameter.name}`, and a literal does not say so: write `{parameter.name}: {literal}`"
+    const fix = if followedByLabels(arguments, index) {
+      [TextEdit(argument.value.span.start, argument.value.span.start, "{parameter.name}: ")]
+    } else {
+      []
+    }
+    findings.append Finding(LintRule.LabeledLiteral, message, argument.value.span, fix)
+  }
+}
+
+/** `true`, `false` and `None` as written: the literals that have no name of their own. */
+fn literalText(value: Expression): String? {
+  match value.kind {
+    .BoolLiteral(flag) => Some(if flag { "true" } else { "false" })
+    .Name(text) if text == "None" => Some text
+    _ => None
+  }
+}
+
+/** Whether every argument behind this one is labeled, or is the closure that trails the call. */
+fn followedByLabels(arguments: List<Argument>, index: Int): Bool {
+  var next = index + 1
+  while next < arguments.length() {
+    const argument = arguments[next]
+    const isTrailingClosure = next == arguments.length() - 1 && isClosure(argument.value)
+    if argument.label.isNone() && !isTrailingClosure {
+      return false
+    }
+    next = next + 1
+  }
+  true
+}
+
+fn isClosure(value: Expression): Bool {
+  match value.kind {
+    .Closure(_) => true
+    _ => false
+  }
+}
+
+/**
+ * The parameters a call fills, in the order `argumentTargets` counts them: those of a function or a method, the fields
+ * of a type for its constructor, the fields of a case. `None` for anything else - and for a method called through its
+ * type with the receiver as the first argument (`Point.area(p)`), where the count is not the one of the parameters.
+ */
+fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Expression): List<Target>? {
+  const resolution = match checker.resolutionAt(module, call.span) {
+    Some(.Deferred) | None => checker.resolutionAt(module, callee.span)?
+    Some(found) => found
+  }
+  match resolution {
+    .Callable(symbol, _, _) => {
+      const index = match checker.signatureStates.get(symbol) {
+        Some(.Ready(found)) => found
+        _ => {
+          return None
+        }
+      }
+      const signature = checker.signatures[index]
+      if signature.takesSelf && isReachedThroughItsType(checker, module, callee) {
+        return None
+      }
+      var targets: List<Target> = []
+      for parameter in signature.form.parameters {
+        targets.append Target(parameter.name?, parameter.annotation)
+      }
+      Some targets
+    }
+    .Construct(owner) => {
+      const shape = typeSignatureOf(checker, owner)?
+      var targets: List<Target> = []
+      for field in shape.fields {
+        targets.append Target(field.name, field.annotation)
+      }
+      Some targets
+    }
+    .CaseOf(owner, variant) => {
+      const shape = typeSignatureOf(checker, owner)?
+      const found = shape.cases.find({ _.symbol == variant })?
+      var targets: List<Target> = []
+      for field in found.fields {
+        targets.append Target(field.name, field.annotation)
+      }
+      Some targets
+    }
+    _ => None
+  }
+}
+
+/** `Point.area(p)`: a member read through a type rather than through a value. */
+fn isReachedThroughItsType(checker: Checker, module: ModuleId, callee: Expression): Bool {
+  match callee.kind {
+    .Member(target, _, _) => {
+      match checker.resolutionAt(module, target.span) {
+        Some(.TypeOf(_)) => true
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+fn typeSignatureOf(checker: Checker, owner: TypeId): TypeSignature? {
+  const symbol = match checker.types.form(owner) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  match checker.typeSignatureStates.get(symbol) {
+    Some(.Ready(index)) => Some checker.typeSignatures[index]
+    _ => None
+  }
+}
+
+fn isBool(checker: Checker, annotation: TypeId): Bool {
+  match checker.types.form(annotation) {
+    .Nominal(symbol, arguments) => arguments.isEmpty() && checker.wellKnown.boolean == Some(symbol)
+    _ => false
+  }
+}
+
+fn isOptional(checker: Checker, annotation: TypeId): Bool {
+  match checker.types.form(annotation) {
+    .Nominal(symbol, _) => checker.wellKnown.option == Some(symbol)
+    _ => false
+  }
+}

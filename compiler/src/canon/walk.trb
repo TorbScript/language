@@ -41,6 +41,18 @@ public type Sites {
   var bindings: List<BindingSite> = []
   /** Every `while true { ... }`: the statement the rule `loops` rewrites into a `loop { ... }` */
   var endless: List<Statement> = []
+  /**
+   * Where the left operand of every infix operator ends: the operator is the first token after it that can be one.
+   * This is how `torb format` tells a `<` that compares from one that opens type arguments, and a `-` that subtracts
+   * from one that negates.
+   */
+  var infixOperators: List<Int> = []
+  /** Where every `-`, `!` and `~` in front of an operand starts. */
+  var prefixOperators: List<Int> = []
+  /** Where every `.Case` of an expression or a pattern starts: a `.` in front of a name rather than between two. */
+  var implicitMembers: List<Int> = []
+  /** Where the parameters of every closure that has some end: its `=>` is the first one after it. */
+  var closureArrows: List<Int> = []
 }
 
 public fn walk(file: SourceFile): Sites {
@@ -188,7 +200,8 @@ fn walkArguments(var sites: Sites, fields: List<String>, items: List<Argument>) 
 fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCommandPosition: Bool) {
   match node.kind {
     .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .VoidLiteral | .CharLiteral(_) => {}
-    .Name(_) | .ImplicitMember(_) | .Invalid => {}
+    .Name(_) | .Invalid => {}
+    .ImplicitMember(_) => sites.implicitMembers.append node.span.start
     .TextLiteral(segments) => {
       for segment in segments {
         match segment {
@@ -219,8 +232,12 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
       walkExpression sites, fields, callee, isCommandPosition: false
       walkArguments sites, fields, arguments
     }
-    .Unary(_, operand) => walkExpression sites, fields, operand, isCommandPosition: false
+    .Unary(_, operand) => {
+      sites.prefixOperators.append node.span.start
+      walkExpression sites, fields, operand, isCommandPosition: false
+    }
     .Binary(_, left, right) => {
+      sites.infixOperators.append left.span.end
       walkExpression sites, fields, left, isCommandPosition: false
       walkExpression sites, fields, right, isCommandPosition: false
     }
@@ -238,6 +255,13 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
     .Closure(closure) => {
       for parameter in closure.parameters {
         walkPattern sites, fields, parameter.pattern
+      }
+      if const Some(last) = closure.parameters.last() {
+        const end = match last.annotation {
+          Some(annotation) => annotation.span.end
+          None => last.pattern.span.end
+        }
+        sites.closureArrows.append end
       }
       walkBlock sites, fields, closure.body
     }
@@ -290,7 +314,13 @@ fn walkPattern(var sites: Sites, fields: List<String>, node: Pattern) {
         walkPattern sites, fields, item
       }
     }
-    .Variant(_, variantFields, _) | .ImplicitVariant(_, variantFields, _) => {
+    .Variant(_, variantFields, _) => {
+      for field in variantFields {
+        walkPattern sites, fields, field.pattern
+      }
+    }
+    .ImplicitVariant(_, variantFields, _) => {
+      sites.implicitMembers.append node.span.start
       for field in variantFields {
         walkPattern sites, fields, field.pattern
       }

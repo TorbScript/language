@@ -1,0 +1,320 @@
+/**
+ * `torb lint`: the rules of style the type checker deliberately leaves alone, each with an id, a message, the span it
+ * is about and, where the rule is certain of it, a fix.
+ *
+ * ```text
+ * torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...
+ * ```
+ *
+ * Every rule runs unless `--rule` picks some; `--skip` leaves one out. A finding is printed the way `torb check`
+ * prints a diagnostic, with `warning` in front and the id of its rule under it, and the command leaves with 1 when it
+ * found something. `--fix` writes every fix, parses each file it changed again and keeps only fixes that still parse,
+ * then lints once more and reports what is left - which is how a breaking change before 1.0 migrates the code of its
+ * users.
+ *
+ * A project cannot choose its rules yet: docs/design/PROJECT.md has no place for them, so the command line is the one
+ * way to (docs/tooling/torb-lint.md, "What is not decided").
+ */
+
+use File, IoError from "std/fs"
+use SourceText, LineIndex from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use parse from "../syntax/parser/parser"
+use SourceFile from "../syntax/ast"
+use renderDiagnosticAs, counted from "../cli/render"
+use collectFormatFiles from "../format/command"
+use readSourceTree, absolutePaths from "../project/read"
+use normalizePath from "../project/path"
+use check from "../semantics/check"
+use Finding, LintRule, TextEdit, everyLintRule from "./finding"
+use selfNameFindings from "./self-name"
+use questionFieldFindings from "./question-field"
+use unreadBindingFindings from "./unread-binding"
+use labeledLiteralFindings from "./labeled-literal"
+use plainBindingStarts from "./plain-values"
+
+/** `torb lint --help` */
+public fn lintUsage(): String {
+  var lines = [
+    "torb lint - the rules of style the type checker leaves alone",
+    "",
+    "Usage:",
+    "  torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...",
+    "",
+    "Rules (every one runs unless --rule picks some):",
+  ]
+  for rule in everyLintRule() {
+    const padding = " ".repeat((16 - rule.id().byteLength()).max(1))
+    lines.append "  {rule.id()}{padding}{rule.summary()}"
+  }
+  lines.appendAll([
+    "",
+    "  --fix         Write every fix a rule is certain of, then lint again and report what is left",
+    "  --rule <id>   Run this rule (repeatable); without it every rule runs",
+    "  --skip <id>   Leave this rule out (repeatable)",
+  ])
+  lines.joined separator: "\n"
+}
+
+/** What the command line asked for. */
+public type LintOptions {
+  fix: Bool
+  rules: List<LintRule>
+  paths: List<String>
+}
+
+/** Parses `torb lint`'s arguments. `None` for an unknown flag or rule - the caller prints [lintUsage] and exits with 2. */
+public fn lintOptionsOf(arguments: List<String>): LintOptions? {
+  var fix = false
+  var picked: List<LintRule> = []
+  var skipped: List<LintRule> = []
+  var paths: List<String> = []
+  var index = 0
+  while index < arguments.length() {
+    const argument = arguments[index]
+    index = index + 1
+    if argument == "--fix" {
+      fix = true
+    } else if argument == "--rule" || argument == "--skip" {
+      const rule = LintRule.named(arguments.get(index)?)?
+      index = index + 1
+      if argument == "--rule" {
+        picked.append rule
+      } else {
+        skipped.append rule
+      }
+    } else if argument.startsWith("-") {
+      return None
+    } else {
+      paths.append argument
+    }
+  }
+  if paths.isEmpty() {
+    paths.append "."
+  }
+  const chosen = if picked.isEmpty() { everyLintRule() } else { picked }
+  var rules: List<LintRule> = []
+  for rule in chosen {
+    if !skipped.contains(rule) {
+      rules.append rule
+    }
+  }
+  Some LintOptions(fix, rules, paths)
+}
+
+/**
+ * What the chosen rules that need nothing but the syntax tree find in one source text, sorted by where they are.
+ * `None` if it does not parse. Public for the tests.
+ */
+public fn lintFindings(source: String, rules: List<LintRule>, plain: Set<Int>? = None): List<Finding>? {
+  const parsed = parse SourceText.of(source)
+  if !parsed.diagnostics.isEmpty() {
+    return None
+  }
+  var findings: List<Finding> = []
+  for rule in rules {
+    findings.appendAll findingsOf(rule, source, parsed.file, plain)
+  }
+  findings.sort({ _.span.start })
+  Some findings
+}
+
+fn findingsOf(rule: LintRule, source: String, file: SourceFile, plain: Set<Int>?): List<Finding> {
+  match rule {
+    .SelfName => selfNameFindings source, file
+    .QuestionField => questionFieldFindings file
+    .UnreadBinding => unreadBindingFindings source, file, plain
+    // Read from the checker's tables instead, by [typedFactsOf]
+    .LabeledLiteral => []
+  }
+}
+
+/** What the checker's tables say about one file: the findings of the rules that read them, and the plain bindings. */
+type TypedFacts {
+  findings: List<Finding>
+  plain: Set<Int>
+}
+
+/**
+ * What the checker's tables say, by the absolute path of the file. The projects of the paths are checked the way
+ * `torb check` checks them; a file the checker has a problem with gets nothing, because its tables are not whole, and
+ * neither does a file that belongs to no project the paths reach.
+ */
+fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, TypedFacts>, IoError> {
+  var found: Map<String, TypedFacts> = [:]
+  if !rules.any({ _.needsTheChecker() }) {
+    return Ok found
+  }
+  const tree = readSourceTree(paths)?
+  const checked = check(tree, absolutePaths(paths)?)
+  var broken: List<String> = []
+  for file in checked.files {
+    if !file.diagnostics.isEmpty() {
+      broken.append file.path
+    }
+  }
+  for module in checked.requested {
+    const shape = checked.program.graph.at module
+    if broken.contains(shape.shownPath) || !shape.diagnostics.isEmpty() {
+      continue
+    }
+    const findings = if rules.contains(LintRule.LabeledLiteral) {
+      labeledLiteralFindings checked.checker, module, shape.file
+    } else {
+      []
+    }
+    found.set shape.path, TypedFacts(findings, plainBindingStarts(checked.checker, module))
+  }
+  Ok found
+}
+
+/** Every finding of one file: those of the syntax tree, and those the checker's tables gave. `None` if it does not parse. */
+fn findingsOfFile(file: String, source: String, rules: List<LintRule>, typed: Map<String, TypedFacts>): Result<List<Finding>?, IoError> {
+  const facts = typed.get normalizePath(File.absolutePath(file)?)
+  var findings = match lintFindings(source, rules, facts?.plain) {
+    Some(found) => found
+    None => {
+      return Ok None
+    }
+  }
+  if const Some(known) = facts {
+    findings.appendAll known.findings
+    findings.sort({ _.span.start })
+  }
+  Ok Some(findings)
+}
+
+/**
+ * Every fix of the findings applied to the source, as long as the result still parses. Fixes that overlap one taken
+ * before them are left out, and if the whole set does not parse, each fix is tried on its own. Public for the tests.
+ */
+public fn fixed(source: String, findings: List<Finding>): String {
+  var edits: List<List<TextEdit>> = []
+  var end = -1
+  for finding in findings {
+    if !finding.hasFix() {
+      continue
+    }
+    var sorted = finding.fix
+    sorted.sort({ _.start })
+    if sorted[0].start < end {
+      continue
+    }
+    edits.append sorted
+    end = sorted[sorted.length() - 1].end
+  }
+  const all = applied source, edits
+  if parses(all) {
+    return all
+  }
+  var text = source
+  var kept: List<List<TextEdit>> = []
+  for fix in edits {
+    const candidate = applied source, kept.appended(fix)
+    if parses(candidate) {
+      kept.append fix
+      text = candidate
+    }
+  }
+  text
+}
+
+/** The edits applied from the last to the first, so that every offset still means the original source. */
+fn applied(source: String, fixes: List<List<TextEdit>>): String {
+  var edits: List<TextEdit> = []
+  for fix in fixes {
+    edits.appendAll fix
+  }
+  edits.sort({ _.start })
+  var text = source
+  for edit in edits.reversed() {
+    text = text.sliceBytes(0, edit.start) + edit.text + text.sliceBytes(edit.end, text.byteLength())
+  }
+  text
+}
+
+fn parses(source: String): Bool {
+  parse(SourceText.of(source)).diagnostics.isEmpty()
+}
+
+/** `torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...`. Returns the exit code. */
+public fn runLint(options: LintOptions): Result<Int, IoError> {
+  var files: List<String> = []
+  for path in options.paths {
+    collectFormatFiles(files, path)?
+  }
+  files.sort({ _ })
+  if options.fix {
+    const typedBefore = typedFactsOf(options.paths, options.rules)?
+    var changed = 0
+    for file in files {
+      const source = File.readText(file)?
+      const findings = match findingsOfFile(file, source, options.rules, typedBefore)? {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const text = fixed source, findings
+      if text != source {
+        File.writeText(file, text)?
+        changed = changed + 1
+      }
+    }
+    print "fixed {counted(changed, "file")}; what is left:"
+  }
+  const typed = typedFactsOf(options.paths, options.rules)?
+  var total = 0
+  var filesWithFindings = 0
+  var perRule: List<Int> = []
+  for _ in everyLintRule() {
+    perRule.append 0
+  }
+  var skipped: List<String> = []
+  for file in files {
+    const source = File.readText(file)?
+    const findings = match findingsOfFile(file, source, options.rules, typed)? {
+      Some(found) => found
+      None => {
+        skipped.append file
+        continue
+      }
+    }
+    if findings.isEmpty() {
+      continue
+    }
+    filesWithFindings = filesWithFindings + 1
+    const lines = LineIndex.of source
+    for finding in findings {
+      total = total + 1
+      const ruleIndex = everyLintRule().indexOf(finding.rule) ?? 0
+      perRule[ruleIndex] = perRule[ruleIndex] + 1
+      printError renderDiagnosticAs("warning", file, lines, diagnosticOf(finding))
+      printError ""
+    }
+  }
+  for file in skipped {
+    printError "skipped {file}: it does not parse (`torb parse` says why)"
+  }
+  if total == 0 {
+    print "{counted(files.length(), "file")}, no findings"
+    return Ok 0
+  }
+  var counts: List<String> = []
+  for (index, rule) in everyLintRule().indexed() {
+    if perRule[index] > 0 {
+      counts.append "{rule.id()} {perRule[index]}"
+    }
+  }
+  printError "{counted(total, "finding")} in {filesWithFindings} of {counted(files.length(), "file")} ({counts.joined(separator: ", ")})"
+  Ok 1
+}
+
+/** A finding as the diagnostic `torb check` would print, with its rule and its fix as notes. */
+fn diagnosticOf(finding: Finding): Diagnostic {
+  var diagnostic = Diagnostic.error(finding.message, finding.span).withNote("rule `{finding.rule.id()}`")
+  if finding.hasFix() {
+    diagnostic = diagnostic.withNote "`torb lint --fix` writes the fix"
+  }
+  diagnostic
+}

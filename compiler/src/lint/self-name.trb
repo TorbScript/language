@@ -1,0 +1,169 @@
+/**
+ * The rule `self-name`: inside a `type` or an `extend`, the type's own name is written `Self` (the owner, 2026-09-26).
+ *
+ * It finds the name where `Self` means exactly the same type, and nowhere else:
+ *
+ * - a written type (`fn origin(): Point`, `other: Box<Item>`) whose type arguments are the type's own parameters in
+ *   their order - `Box<Other>` inside `type Box<Item>` is another type and stays;
+ * - a name in an expression (`Point(0, 0)`, `Point.origin`, `Shape.Circle`) of a type without parameters, and
+ *   `Box<Item>(...)` with exactly its own parameters - a bare `Box(...)` inside a generic type may build another
+ *   instance, so it stays;
+ * - `Shape.Circle(radius)` in a pattern becomes `.Circle(radius)`, because a pattern has no `Self`.
+ *
+ * A method that declares a type parameter of the same name as one of the type's own is left alone: there `Item` is
+ * somebody else. A `trait` is not a type of its own values, so the rule does not look into one.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Declaration, DeclarationKind, Member, MemberKind, GenericParameter from "../syntax/ast"
+use Expression, ExpressionKind, Pattern, PatternKind, TypeReference, TypeKind from "../syntax/ast"
+use Finding, LintRule, TextEdit from "./finding"
+use Nodes, nodesOfFile, nodesOfMember from "./nodes"
+
+public fn selfNameFindings(source: String, file: SourceFile): List<Finding> {
+  var findings: List<Finding> = []
+  const nodes = nodesOfFile file
+  for declaration in nodes.declarations {
+    findingsOfDeclaration findings, source, declaration
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+/** The type a declaration is about: its name, and the text of each of the type arguments that make it `Self`. */
+type Owner {
+  name: String
+  arguments: List<String>
+}
+
+fn findingsOfDeclaration(var findings: List<Finding>, source: String, declaration: Declaration) {
+  const (owner, members) = match declaration.kind {
+    .Type(inner) => (Owner(inner.name.text, namesOf(inner.generics)), inner.members)
+    .Extend(inner) => {
+      match inner.target.kind {
+        .Named(path, arguments) if path.length() == 1 => {
+          var texts: List<String> = []
+          for argument in arguments {
+            texts.append textOf(source, argument.span)
+          }
+          (Owner(path[0].text, texts), inner.members)
+        }
+        _ => {
+          return
+        }
+      }
+    }
+    // A trait is not the type of its own values, and nothing else has members
+    _ => {
+      return
+    }
+  }
+  for member in members {
+    if shadowsAnArgument(member, owner) {
+      continue
+    }
+    const nodes = nodesOfMember member
+    findingsOfNodes findings, source, owner, nodes
+    for nested in nodes.declarations {
+      findingsOfDeclaration findings, source, nested
+    }
+  }
+}
+
+fn namesOf(generics: List<GenericParameter>): List<String> {
+  var names: List<String> = []
+  for generic in generics {
+    names.append generic.name.text
+  }
+  names
+}
+
+/** A method with a type parameter named like one of the type's own: inside it, that name is not the type's. */
+fn shadowsAnArgument(member: Member, owner: Owner): Bool {
+  match member.kind {
+    .Function(declaration) => {
+      for generic in declaration.generics {
+        if owner.arguments.contains(generic.name.text) {
+          return true
+        }
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+fn findingsOfNodes(var findings: List<Finding>, source: String, owner: Owner, nodes: Nodes) {
+  for reference in nodes.types {
+    match reference.kind {
+      .Named(path, arguments) if path.length() == 1 && path[0].text == owner.name => {
+        if sameArguments(source, arguments, owner.arguments) {
+          findings.append selfFinding(source, owner, reference.span)
+        }
+      }
+      _ => {}
+    }
+  }
+  for expression in nodes.expressions {
+    match expression.kind {
+      .Name(text) if text == owner.name && owner.arguments.isEmpty() => {
+        findings.append selfFinding(source, owner, expression.span)
+      }
+      .Generic(target, arguments) if !owner.arguments.isEmpty() => {
+        const isOwner = match target.kind {
+          .Name(text) => text == owner.name
+          _ => false
+        }
+        if isOwner && sameArguments(source, arguments, owner.arguments) {
+          findings.append selfFinding(source, owner, expression.span)
+        }
+      }
+      _ => {}
+    }
+  }
+  for pattern in nodes.patterns {
+    match pattern.kind {
+      .Variant(path, _, _) if path.length() == 2 && path[0].text == owner.name => {
+        const caseName = path[1].text
+        findings.append(Finding(
+          LintRule.SelfName,
+          "`{owner.name}.{caseName}` names the type this pattern is about: write `.{caseName}`",
+          Span(path[0].span.start, path[1].span.end),
+          fix: [TextEdit(path[0].span.start, path[1].span.start, ".")],
+        ))
+      }
+      _ => {}
+    }
+  }
+}
+
+fn selfFinding(source: String, owner: Owner, span: Span): Finding {
+  const written = textOf source, span
+  Finding(
+    LintRule.SelfName,
+    "`{written}` is the type this is declared in: write `Self`",
+    span,
+    fix: [TextEdit(span.start, span.end, "Self")],
+  )
+}
+
+/** Whether written type arguments are the type's own, text for text (white space aside). */
+fn sameArguments(source: String, arguments: List<TypeReference>, own: List<String>): Bool {
+  if arguments.length() != own.length() {
+    return false
+  }
+  for (index, argument) in arguments.indexed() {
+    if withoutBlanks(textOf(source, argument.span)) != withoutBlanks(own[index]) {
+      return false
+    }
+  }
+  true
+}
+
+fn textOf(source: String, span: Span): String {
+  source.sliceBytes span.start, span.end
+}
+
+fn withoutBlanks(text: String): String {
+  text.replace " ", ""
+}

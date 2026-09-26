@@ -1,8 +1,8 @@
 /**
  * The `torb` command line: one `match` over `Process.arguments()` at the bottom of this file, and one function per
  * subcommand above it - `check`, `build`, `run`, `test`, `new`, `ir`, `natives --header`, `parse`, `tokens`, `ast`,
- * `highlight`, and the `docs` family from `./documentation`. This file has no exported declarations: it is the
- * entry point of the toolchain itself.
+ * `highlight`, `format`, `lint`, and the `docs` family from `./documentation`. This file has no exported
+ * declarations: it is the entry point of the toolchain itself.
  *
  * Compiled, this file **is** `torb`, and `run` and `test` are what make it the driver: a program is built into a cache
  * and started, and a test package is built into one binary and run.
@@ -43,8 +43,16 @@ use documentationOptionsOf, printDocumentationUsage from "./documentation/comman
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
 use docOptionsOf, runDoc, printDocUsage from "./reference/command"
-use canonUsage, canonOptionsOf, runCanon from "./canon/command"
+use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format/command"
+use lintUsage, lintOptionsOf, runLint from "./lint/command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
+
+/** Leaves with the code a command answered, where it is not 0. */
+fn exitWith(code: Int) {
+  if code != 0 {
+    Process.exit code
+  }
+}
 
 /** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
 fn printUsage() {
@@ -94,7 +102,10 @@ fn printUsage() {
   printError "  torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor"
   printError "                         --stdin: read the source from standard input instead of a file"
 
-  printError "  torb canon <path>...   Write sources in the canon of the formatter (`torb canon --help`)"
+  printError "  torb format [path]...  Write sources in the layout of the language (`torb format --help`)"
+  printError "                         --check: write nothing, list the files that would change, fail if one would"
+  printError "  torb lint [path]...    The style rules the checker leaves alone (`torb lint --help`)"
+  printError "                         --fix: write the fixes, then lint again"
   printDocUsage()
   printDocumentationUsage()
 }
@@ -768,17 +779,33 @@ match Process.arguments() {
   ["highlight", "--stdin"] => runHighlight None
   ["highlight", path] => runHighlight Some(path)
 
-  ["canon", "--help"] | ["canon", "help"] => print canonUsage()
-  ["canon", ...more] => {
-    match canonOptionsOf(more) {
-      Some(options) => {
-        const code = runCanon(options)?
-        if code != 0 {
-          Process.exit code
-        }
-      }
+  ["format", "--help"] | ["format", "help"] => print formatUsage()
+  ["format", ...more] => {
+    match formatOptionsOf(more) {
+      Some(options) => exitWith(runFormat(options)?)
       None => {
-        printError canonUsage()
+        printError formatUsage()
+        Process.exit 2
+      }
+    }
+  }
+  // Retired in milestone 8: every rule it had is a rule of `torb format`, which runs all of them
+  ["canon", ...more] => {
+    printError "warning: `torb canon` is deprecated: it runs `torb format` now, with every rule of the canon (`--rule` is ignored)"
+    match formatOptionsOfCanon(more) {
+      Some(options) => exitWith(runFormat(options)?)
+      None => {
+        printError formatUsage()
+        Process.exit 2
+      }
+    }
+  }
+  ["lint", "--help"] | ["lint", "help"] => print lintUsage()
+  ["lint", ...more] => {
+    match lintOptionsOf(more) {
+      Some(options) => exitWith(runLint(options)?)
+      None => {
+        printError lintUsage()
         Process.exit 2
       }
     }

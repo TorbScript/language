@@ -34,6 +34,11 @@ public fn renderProblem(problem: String): String {
  *       |                       ^
  */
 public fn renderDiagnostic(path: String, lines: LineIndex, diagnostic: Diagnostic): String {
+  renderDiagnosticAs "error", path, lines, diagnostic
+}
+
+/** The same with another word in front of the message: `warning` for what `torb lint` finds. */
+public fn renderDiagnosticAs(severity: String, path: String, lines: LineIndex, diagnostic: Diagnostic): String {
   const (line, column) = lines.lineAndColumn diagnostic.span.start
   const (endLine, endColumn) = lines.lineAndColumn diagnostic.span.end
   const text = lines.lineText line
@@ -44,7 +49,7 @@ public fn renderDiagnostic(path: String, lines: LineIndex, diagnostic: Diagnosti
   }
   const gutter = " ".repeat("{line}".byteLength())
   var rendered = [
-    "error: {diagnostic.message}",
+    "{severity}: {diagnostic.message}",
     "{gutter}--> {path}:{line}:{column}",
     "{gutter} |",
     "{line} | {text}",

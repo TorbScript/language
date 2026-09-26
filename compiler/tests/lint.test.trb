@@ -1,0 +1,259 @@
+/**
+ * Every rule of `torb lint`: what it finds, what it leaves alone, and what its fix writes.
+ */
+
+use test, group from "std/test"
+use lintFindings, fixed, lintOptionsOf from "../src/lint/command"
+use Finding, LintRule from "../src/lint/finding"
+use labeledLiteralFindings from "../src/lint/labeled-literal"
+use plainBindingStarts from "../src/lint/plain-values"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+use probe from "./harness"
+
+fn findingsOf(source: String, rule: LintRule): List<Finding> {
+  lintFindings(source, [rule]).expect("the source parses")
+}
+
+/** The text every finding of a rule is about, in order. */
+fn foundTexts(source: String, rule: LintRule): List<String> {
+  var texts: List<String> = []
+  for finding in findingsOf(source, rule) {
+    texts.append source.sliceBytes(finding.span.start, finding.span.end)
+  }
+  texts
+}
+
+/** What `--fix` writes for one rule, and that the rule finds nothing it can fix in that. */
+fn fixedBy(source: String, rule: LintRule): String {
+  const text = fixed source, findingsOf(source, rule)
+  for finding in findingsOf(text, rule) {
+    assert(!finding.hasFix())
+  }
+  text
+}
+
+fn expectText(actual: String, expected: String) {
+  if actual != expected {
+    print "expected:\n{expected.showNested()}\nactual:\n{actual.showNested()}"
+  }
+  assert(actual == expected)
+}
+
+group "self-name" {
+  test "the own name of a type in a written type and in an expression" {
+    const source = "type Point \{\n  x: Int\n\n  static fn origin(): Point \{\n    Point(0)\n  \}\n\}\n"
+    assert(foundTexts(source, LintRule.SelfName) == ["Point", "Point"])
+    expectText fixedBy(source, LintRule.SelfName), "type Point \{\n  x: Int\n\n  static fn origin(): Self \{\n    Self(0)\n  \}\n\}\n"
+  }
+
+  test "a case and a static member reached through the own name" {
+    const source = "type Shape \{\n  case Circle(radius: Float)\n\n  static unit = Shape.Circle(1.0)\n\}\n"
+    expectText fixedBy(source, LintRule.SelfName), "type Shape \{\n  case Circle(radius: Float)\n\n  static unit = Self.Circle(1.0)\n\}\n"
+  }
+
+  test "a generic type: only with its own parameters, in their order" {
+    const source = [
+      "type Box<Item> \{",
+      "  item: Item",
+      "",
+      "  fn again(): Box<Item> \{",
+      "    Box<Item>(item)",
+      "  \}",
+      "",
+      "  fn map<Other>(transform: (Item) => Other): Box<Other> \{",
+      "    Box(transform(item))",
+      "  \}",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    assert(foundTexts(source, LintRule.SelfName) == ["Box<Item>", "Box<Item>"])
+  }
+
+  test "a method whose own type parameter shadows one of the type's is left alone" {
+    const source = "type Box<Item> \{\n  item: Item\n\n  static fn wrap<Item>(value: Item): Box<Item> \{\n    Box(value)\n  \}\n\}\n"
+    assert findingsOf(source, LintRule.SelfName).isEmpty()
+  }
+
+  test "the target of an extend" {
+    const source = "extend Int \{\n  fn twice(): Int \{\n    self * 2\n  \}\n\}\n"
+    expectText fixedBy(source, LintRule.SelfName), "extend Int \{\n  fn twice(): Self \{\n    self * 2\n  \}\n\}\n"
+  }
+
+  test "a pattern has no `Self`: the case is written with the dot" {
+    const source = "type Shape \{\n  case Circle(radius: Float)\n\n  fn size(): Float \{\n    match self \{\n      Shape.Circle(radius) => radius\n    \}\n  \}\n\}\n"
+    expectText(
+      fixedBy(source, LintRule.SelfName),
+      "type Shape \{\n  case Circle(radius: Float)\n\n  fn size(): Float \{\n    match self \{\n      .Circle(radius) => radius\n    \}\n  \}\n\}\n",
+    )
+  }
+
+  test "another type, a trait, and `Self` itself are not found" {
+    assert findingsOf("type Point \{\n  x: Int\n\n  fn other(): Line \{\n    Line(self)\n  \}\n\}\n", LintRule.SelfName).isEmpty()
+    assert findingsOf("trait Area \{\n  fn larger(other: Area): Bool\n\}\n", LintRule.SelfName).isEmpty()
+    assert findingsOf("type Point \{\n  x: Int\n\n  fn copied(): Self \{\n    Self(x)\n  \}\n\}\n", LintRule.SelfName).isEmpty()
+  }
+}
+
+group "question-field" {
+  test "a `Bool` field that starts with `is` and a capital letter" {
+    const source = "type Flags \{\n  isVisible: Bool\n  visible: Bool\n  island: Bool\n  isCount: Int\n\}\n\ntype Entry \{\n  case Door(isOpen: Bool)\n\}\n"
+    assert(foundTexts(source, LintRule.QuestionField) == ["isVisible", "isOpen"])
+  }
+
+  test "it has no fix" {
+    const source = "type Flags \{\n  isVisible: Bool\n\}\n"
+    assert(!findingsOf(source, LintRule.QuestionField)[0].hasFix())
+    assert(fixed(source, findingsOf(source, LintRule.QuestionField)) == source)
+  }
+
+  test "a method named as a question is what the rule asks for" {
+    assert findingsOf("type Flags \{\n  visible: Bool\n\n  fn isVisible(): Bool \{\n    visible\n  \}\n\}\n", LintRule.QuestionField).isEmpty()
+  }
+}
+
+group "unread-binding" {
+  test "a `const` nothing reads" {
+    const source = "fn f(): Int \{\n  const unused = 2\n  const used = 1\n  used\n\}\n"
+    assert(foundTexts(source, LintRule.UnreadBinding) == ["unused"])
+    expectText unreadFixed(source), "fn f(): Int \{\n  const _ = 2\n  const used = 1\n  used\n\}\n"
+  }
+
+  test "what `for`, destructuring and a closure bind" {
+    const source = [
+      "fn f(pairs: List<(Int, Int)>): Int \{",
+      "  for (left, right) in pairs \{",
+      "    print right",
+      "  \}",
+      "  const (low, high) = (1, 2)",
+      "  const always = \{ value: Int => high \}",
+      "  always(3)",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    assert(foundTexts(source, LintRule.UnreadBinding) == ["left", "low", "value"])
+    const after = unreadFixed source
+    assert after.contains("for (_, right) in")
+    assert after.contains("const (_, high) =")
+    assert after.contains("\{ _: Int => high \}")
+  }
+
+  test "a value that may have to be closed at the end of the block keeps its name: the finding has no fix" {
+    const source = [
+      "shared type Probe with Close \{",
+      "  name: String",
+      "",
+      "  var fn close() \{",
+      "    print name",
+      "  \}",
+      "\}",
+      "",
+      "fn f() \{",
+      "  const held = Probe(\"held\")",
+      "  print \"body\"",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    const findings = unreadFindings source
+    assert(findings.length() == 1)
+    assert(!findings[0].hasFix())
+  }
+
+  test "without the checker there is no fix" {
+    const source = "fn f(): Int \{\n  const unused = 2\n  1\n\}\n"
+    assert(!findingsOf(source, LintRule.UnreadBinding)[0].hasFix())
+  }
+
+  test "a read in a string, a comment or a closure counts" {
+    assert findingsOf("fn f() \{\n  const name = 1\n  print \"\{name\}\"\n\}\n", LintRule.UnreadBinding).isEmpty()
+    assert findingsOf("fn f() \{\n  const name = 1\n  run(\{ print name \})\n\}\n", LintRule.UnreadBinding).isEmpty()
+  }
+
+  test "`_name`, `var`, `using`, the top level and the parameters of a function are left alone" {
+    assert findingsOf("fn f() \{\n  const _unused = compute()\n\}\n", LintRule.UnreadBinding).isEmpty()
+    assert findingsOf("fn f() \{\n  var unused = compute()\n\}\n", LintRule.UnreadBinding).isEmpty()
+    assert findingsOf("fn f() \{\n  using file = open()\n\}\n", LintRule.UnreadBinding).isEmpty()
+    assert findingsOf("const unused = 1\n", LintRule.UnreadBinding).isEmpty()
+    assert findingsOf("fn f(unused: Int) \{\n  stop()\n\}\n", LintRule.UnreadBinding).isEmpty()
+  }
+}
+
+/** What `unread-binding` finds with the checker's answer about which values are plain. */
+fn unreadFindings(source: String): List<Finding> {
+  const probed = probe source
+  const plain = plainBindingStarts probed.checker, probed.module
+  lintFindings(source, [LintRule.UnreadBinding], Some(plain)).expect("the source parses")
+}
+
+/** What `--fix` writes for `unread-binding`, and that nothing fixable is left in it. */
+fn unreadFixed(source: String): String {
+  const text = fixed source, unreadFindings(source)
+  for finding in unreadFindings(text) {
+    assert(!finding.hasFix())
+  }
+  text
+}
+
+/** What `labeled-literal` finds in a program the checker checked, with the harness's prelude. */
+fn labeledFindings(source: String): List<Finding> {
+  const probed = probe source
+  labeledLiteralFindings probed.checker, probed.module, parse(SourceText.of(source)).file
+}
+
+fn labeledTexts(source: String): List<String> {
+  var texts: List<String> = []
+  for finding in labeledFindings(source) {
+    texts.append source.sliceBytes(finding.span.start, finding.span.end)
+  }
+  texts
+}
+
+group "labeled-literal" {
+  test "a `Bool` and an optional are labeled, and the fix writes the label" {
+    const source = [
+      "fn list(entries: Int, hasCapacity: Bool = true, limit: Int? = None): Int \{",
+      "  entries",
+      "\}",
+      "",
+      "print list(3, false, None)",
+      "print list(3, hasCapacity: false)",
+      "",
+    ].joined(separator: "\n")
+    assert(labeledTexts(source) == ["false", "None"])
+    const findings = labeledFindings source
+    assert(!findings[0].hasFix())
+    assert findings[1].hasFix()
+  }
+
+  test "the fix labels a literal that only labeled arguments follow" {
+    const source = "fn list(entries: Int, hasCapacity: Bool): Int \{\n  entries\n\}\n\nprint list(3, false)\n"
+    expectText fixed(source, labeledFindings(source)), "fn list(entries: Int, hasCapacity: Bool): Int \{\n  entries\n\}\n\nprint list(3, hasCapacity: false)\n"
+  }
+
+  test "a single argument and a type parameter need no label" {
+    assert labeledFindings("fn enable(on: Bool) \{\n\}\n\nenable(true)\n").isEmpty()
+    assert labeledFindings("fn pair<Item>(first: Item, second: Item): Item \{\n  first\n\}\n\nprint pair(true, false)\n").isEmpty()
+  }
+
+  test "the constructor of a type and a case" {
+    const source = "type Entry \{\n  name: String\n  hidden: Bool\n\}\n\nprint Entry(\"a\", true)\n"
+    assert(labeledTexts(source) == ["true"])
+  }
+}
+
+group "The command line" {
+  test "every rule runs unless --rule picks some, and --skip leaves one out" {
+    const every = lintOptionsOf([]).expect("options")
+    assert(every.rules.length() == 4)
+    assert(every.paths == ["."])
+    assert(lintOptionsOf(["--rule", "self-name", "std"]).expect("options").rules == [LintRule.SelfName])
+    assert(lintOptionsOf(["--skip", "question-field"]).expect("options").rules.length() == 3)
+    assert lintOptionsOf(["--fix"]).expect("options").fix
+    assert lintOptionsOf(["--rule", "no-such-rule"]).isNone()
+    assert lintOptionsOf(["--frobnicate"]).isNone()
+  }
+
+  test "a source that does not parse has no findings to give" {
+    assert lintFindings("fn f( \{", [LintRule.SelfName]).isNone()
+  }
+}

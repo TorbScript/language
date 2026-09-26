@@ -1,0 +1,76 @@
+/**
+ * The rule `question-field`: a `Bool` field is an adjective or a participle (`inclusive`, `shared`, `exported`), and a
+ * question that is computed is a method (`isEmpty()`). A field of a `type` or of a `case` whose type is `Bool` and whose
+ * name is `is` followed by a capital letter is reported.
+ *
+ * It has no fix: the better name is a word only a person can choose, and a rename has to reach every use, which is a
+ * checked rename and not a text replacement.
+ */
+
+use SourceFile, Declaration, DeclarationKind, Member, MemberKind, Field, TypeKind from "../syntax/ast"
+use Finding, LintRule from "./finding"
+use nodesOfFile, nodesOfMembers from "./nodes"
+
+public fn questionFieldFindings(file: SourceFile): List<Finding> {
+  var findings: List<Finding> = []
+  for declaration in nodesOfFile(file).declarations {
+    findingsOfDeclaration findings, declaration
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+fn findingsOfDeclaration(var findings: List<Finding>, declaration: Declaration) {
+  const members = match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    _ => {
+      return
+    }
+  }
+  for member in members {
+    match member.kind {
+      .Field(field) => findingOfField findings, field
+      .Case(declaration) => {
+        for field in declaration.fields {
+          findingOfField findings, field
+        }
+      }
+      _ => {}
+    }
+  }
+  for nested in nodesOfMembers(members).declarations {
+    findingsOfDeclaration findings, nested
+  }
+}
+
+fn findingOfField(var findings: List<Finding>, field: Field) {
+  const isBool = match field.annotation.kind {
+    .Named(path, arguments) => path.length() == 1 && path[0].text == "Bool" && arguments.isEmpty()
+    _ => false
+  }
+  if !isBool || !isQuestion(field.name.text) {
+    return
+  }
+  const name = field.name.text
+  findings.append(Finding(
+    LintRule.QuestionField,
+    "`{name}` is a `Bool` field named as a question: name it with an adjective or a participle, and keep `is...` for a method that computes the answer",
+    field.name.span,
+  ))
+}
+
+/** `is` followed by a capital letter: `isShared`, not `island`. */
+fn isQuestion(name: String): Bool {
+  const rest = match name.withoutPrefix("is") {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  match rest.chars().first() {
+    Some(first) => first >= 'A' && first <= 'Z'
+    None => false
+  }
+}

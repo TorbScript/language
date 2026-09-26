@@ -1,0 +1,299 @@
+/**
+ * One flat collection of the nodes below a declaration: every expression, every pattern and every written type, for a
+ * rule that asks the same question of each of them wherever it stands. A `type`, `trait` or `extend` declared inside a
+ * body is not walked into but collected, because it is a scope of its own.
+ */
+
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
+use FunctionDeclaration, Field, Binding, Condition, Block, Expression, ExpressionKind, Argument from "../syntax/ast"
+use Pattern, PatternKind, TypeReference, TypeKind, TextSegment from "../syntax/ast"
+
+/** What a walk found, in the order it found it. */
+public type Nodes {
+  var expressions: List<Expression> = []
+  var patterns: List<Pattern> = []
+  var types: List<TypeReference> = []
+  /** Every declaration of a type, a trait or an `extend`, at the top level of a file or inside a body */
+  var declarations: List<Declaration> = []
+}
+
+/** The declarations of a file, and the nodes of everything at its top level that is not one of them. */
+public fn nodesOfFile(file: SourceFile): Nodes {
+  var nodes = Nodes()
+  walkStatements nodes, file.statements
+  nodes
+}
+
+/** Every node of a file: its top level, and the members of every declaration in it, however deep. */
+public fn everyNodeOf(file: SourceFile): Nodes {
+  var nodes = nodesOfFile file
+  var index = 0
+  while index < nodes.declarations.length() {
+    const members = match nodes.declarations[index].kind {
+      .Type(inner) => inner.members
+      .Trait(inner) => inner.members
+      .Extend(inner) => inner.members
+      _ => []
+    }
+    const inner = nodesOfMembers members
+    nodes.expressions.appendAll inner.expressions
+    nodes.patterns.appendAll inner.patterns
+    nodes.types.appendAll inner.types
+    nodes.declarations.appendAll inner.declarations
+    index = index + 1
+  }
+  nodes
+}
+
+/** The nodes of the members of one declaration. */
+public fn nodesOfMembers(members: List<Member>): Nodes {
+  var nodes = Nodes()
+  for member in members {
+    walkMember nodes, member
+  }
+  nodes
+}
+
+/** The nodes of one member. */
+public fn nodesOfMember(member: Member): Nodes {
+  var nodes = Nodes()
+  walkMember nodes, member
+  nodes
+}
+
+fn walkMember(var nodes: Nodes, member: Member) {
+  match member.kind {
+    .Field(field) => walkField nodes, field
+    .Constant(binding) => walkBinding nodes, binding
+    .Function(declaration) => walkFunction nodes, declaration
+    .Case(declaration) => {
+      for field in declaration.fields {
+        walkField nodes, field
+      }
+    }
+  }
+}
+
+fn walkField(var nodes: Nodes, field: Field) {
+  walkType nodes, field.annotation
+  if const Some(default) = field.default {
+    walkExpression nodes, default
+  }
+}
+
+fn walkFunction(var nodes: Nodes, declaration: FunctionDeclaration) {
+  for parameter in declaration.parameters {
+    if const Some(annotation) = parameter.annotation {
+      walkType nodes, annotation
+    }
+    if const Some(default) = parameter.default {
+      walkExpression nodes, default
+    }
+  }
+  if const Some(result) = declaration.returnType {
+    walkType nodes, result
+  }
+  if const Some(body) = declaration.body {
+    walkStatements nodes, body.statements
+  }
+}
+
+fn walkBinding(var nodes: Nodes, binding: Binding) {
+  walkPattern nodes, binding.pattern
+  if const Some(annotation) = binding.annotation {
+    walkType nodes, annotation
+  }
+  walkExpression nodes, binding.value
+}
+
+fn walkStatements(var nodes: Nodes, statements: List<Statement>) {
+  for statement in statements {
+    walkStatement nodes, statement
+  }
+}
+
+fn walkStatement(var nodes: Nodes, statement: Statement) {
+  match statement.kind {
+    .Declare(declaration) => {
+      match declaration.kind {
+        .Function(inner) => walkFunction nodes, inner
+        .Constant(binding) => walkBinding nodes, binding
+        .Type(_) | .Trait(_) | .Extend(_) => nodes.declarations.append declaration
+        .Use(_) | .Alias(_) | .Foreign(_) => {}
+      }
+    }
+    .Bind(binding) => walkBinding nodes, binding
+    .Assign(target, value) => {
+      walkExpression nodes, target
+      walkExpression nodes, value
+    }
+    .For(pattern, iterable, body) => {
+      walkPattern nodes, pattern
+      walkExpression nodes, iterable
+      walkStatements nodes, body.statements
+    }
+    .While(condition, body) => {
+      walkCondition nodes, condition
+      walkStatements nodes, body.statements
+    }
+    .Loop(body) => walkStatements nodes, body.statements
+    .Return(value) => {
+      if const Some(inner) = value {
+        walkExpression nodes, inner
+      }
+    }
+    .Break | .Continue => {}
+    .Evaluate(expression) => walkExpression nodes, expression
+  }
+}
+
+fn walkCondition(var nodes: Nodes, condition: Condition) {
+  match condition {
+    .Test(expression) => walkExpression nodes, expression
+    .Bind(_, pattern, value) => {
+      walkPattern nodes, pattern
+      walkExpression nodes, value
+    }
+  }
+}
+
+fn walkArguments(var nodes: Nodes, arguments: List<Argument>) {
+  for argument in arguments {
+    walkExpression nodes, argument.value
+  }
+}
+
+fn walkExpression(var nodes: Nodes, expression: Expression) {
+  nodes.expressions.append expression
+  match expression.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .VoidLiteral | .CharLiteral(_) => {}
+    .Name(_) | .ImplicitMember(_) | .Invalid => {}
+    .TextLiteral(segments) => {
+      for segment in segments {
+        match segment {
+          .Interpolated(inner) => walkExpression nodes, inner
+          .Literal(_) => {}
+        }
+      }
+    }
+    .Generic(target, arguments) => {
+      walkExpression nodes, target
+      for argument in arguments {
+        walkType nodes, argument
+      }
+    }
+    .TupleLiteral(items) | .ListLiteral(items) => walkArguments nodes, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression nodes, key
+        walkExpression nodes, value
+      }
+    }
+    .Member(target, _, _) => walkExpression nodes, target
+    .Index(target, index) => {
+      walkExpression nodes, target
+      walkExpression nodes, index
+    }
+    .Call(callee, arguments, _) => {
+      walkExpression nodes, callee
+      walkArguments nodes, arguments
+    }
+    .Unary(_, operand) => walkExpression nodes, operand
+    .Binary(_, left, right) => {
+      walkExpression nodes, left
+      walkExpression nodes, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(inner) = start {
+        walkExpression nodes, inner
+      }
+      if const Some(inner) = end {
+        walkExpression nodes, inner
+      }
+    }
+    .Try(inner) => walkExpression nodes, inner
+    .Closure(closure) => {
+      for parameter in closure.parameters {
+        walkPattern nodes, parameter.pattern
+        if const Some(annotation) = parameter.annotation {
+          walkType nodes, annotation
+        }
+      }
+      walkStatements nodes, closure.body.statements
+    }
+    .If(condition, then, otherwise) => {
+      walkCondition nodes, condition
+      walkStatements nodes, then.statements
+      if const Some(inner) = otherwise {
+        walkExpression nodes, inner
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression nodes, subject
+      for arm in arms {
+        walkPattern nodes, arm.pattern
+        if const Some(guard) = arm.guard {
+          walkExpression nodes, guard
+        }
+        walkExpression nodes, arm.body
+      }
+    }
+    .Block(block) => walkStatements nodes, block.statements
+  }
+}
+
+fn walkPattern(var nodes: Nodes, pattern: Pattern) {
+  nodes.patterns.append pattern
+  match pattern.kind {
+    .Wildcard | .Binding(_) | .Invalid => {}
+    .Literal(value) => walkExpression nodes, value
+    .RangePattern(start, end, _) => {
+      walkExpression nodes, start
+      walkExpression nodes, end
+    }
+    .TuplePattern(items) | .Alternatives(items) => {
+      for item in items {
+        walkPattern nodes, item
+      }
+    }
+    .ListPattern(items, _) => {
+      for item in items {
+        walkPattern nodes, item
+      }
+    }
+    .Variant(_, fields, _) | .ImplicitVariant(_, fields, _) => {
+      for field in fields {
+        walkPattern nodes, field.pattern
+      }
+    }
+  }
+}
+
+fn walkType(var nodes: Nodes, reference: TypeReference) {
+  nodes.types.append reference
+  match reference.kind {
+    .Named(_, arguments) => {
+      for argument in arguments {
+        walkType nodes, argument
+      }
+    }
+    .Optional(inner) | .Lazy(inner) => walkType nodes, inner
+    .TupleType(fields) => {
+      for field in fields {
+        walkType nodes, field.annotation
+      }
+    }
+    .Literals(_) | .Invalid => {}
+    .Intersection(members) => {
+      for member in members {
+        walkType nodes, member
+      }
+    }
+    .FunctionType(parameters, result) => {
+      for parameter in parameters {
+        walkType nodes, parameter.annotation
+      }
+      walkType nodes, result
+    }
+  }
+}
