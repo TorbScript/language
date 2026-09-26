@@ -1,0 +1,441 @@
+/**
+ * The bounds check of `list[index]` where the index is proven inside the list (docs/design/PANICS.md, recommendation 6;
+ * docs/PERFORMANCE.md, finding 8).
+ *
+ * `for index in 0..list.length() { ... list[index] ... }` reads every item through the `at` of `ArrayList`, which asks
+ * `get` and panics on `None`: a check a sum over a list pays per item, and one that stops a C compiler from vectorizing
+ * the loop. Where the index is proven inside, the read is one `Element` step into the list's storage with `checked`
+ * off, and the back ends index the storage without comparing.
+ *
+ * **What proves it** is a small forward analysis over one function, with two kinds of fact:
+ *
+ * - `index >= 0`: a constant that is not negative, a copy of such a slot, and the sum of two of them (a sum that
+ *   overflowed would have panicked before it was stored);
+ * - `index < length`: on the `then` edge of a `Branch` whose condition is `index < length`, computed by the instruction
+ *   just in front of it, where `length` is the one definition of its slot, `length()` of the list.
+ *
+ * A fact holds where it holds on every edge into a block, and an instruction that may write a slot - a definition, a
+ * `var` argument, a write through a place - kills every fact about it. The list itself has to be **stable**: defined
+ * at most once, and never written through a place anywhere in the function, so its length is the one `length()` read.
+ * Anything else keeps the call, and with it the check - a dropped check that could fire would be a missing panic.
+ *
+ * # Related
+ *
+ * - [dropListBoundsChecks] - the pass.
+ * - `ir/ranges.trb` - the same question for an `Array<Item, Size>`, whose size its type says.
+ */
+
+use IrProgram, IrFunction, Block, Slot, Instruction, Argument, StaticId, Reference, PathStep, IrTypeId from "./ir"
+use RuntimeKind from "./ir"
+use successorsOf, definedSlot from "./verify"
+
+/**
+ * Every read of `list[index]` through a reader of `std/collections` whose index is proven inside the list, rewritten into
+ * one unchecked `Element` step. `readers[function]` says whether the function is such an `at`, `lengths[function]`
+ * whether it is the `length()` of a list; the lowering knows both from the declarations.
+ */
+public fn dropListBoundsChecks(var program: IrProgram, readers: List<Bool>, lengths: List<Bool>) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    if function.blocks.isEmpty() || !callsAny(function, readers) {
+      continue
+    }
+    const rewritten = rewrittenFunction program, function, readers, lengths
+    if const Some(blocks) = rewritten {
+      program.functions[index].blocks = blocks
+    }
+  }
+}
+
+fn callsAny(function: IrFunction, readers: List<Bool>): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Call(_, callee, _, _, _) = instruction {
+        if readers.get(callee.value) ?? false {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+/** The blocks with every proven read rewritten, or `None` where nothing was. */
+fn rewrittenFunction(
+  program: IrProgram,
+  function: IrFunction,
+  readers: List<Bool>,
+  lengths: List<Bool>,
+): List<Block>? {
+  const stable = stableSlotsOf function
+  const lengthOf = lengthsOf function, lengths, stable
+  if lengthOf.isEmpty() {
+    return None
+  }
+  const entries = settledEntries program, function, lengthOf
+  var blocks = function.blocks
+  var isChanged = false
+  for block in 0..function.blocks.length() {
+    var facts = match entries[block] {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    var instructions = function.blocks[block].instructions
+    for at in 0..instructions.length() {
+      const instruction = instructions[at]
+      if const Some(read) = provenRead(program, function, instruction, facts, readers, lengthOf, stable) {
+        instructions.set at, read
+        isChanged = true
+      }
+      facts = afterInstruction program, facts, instruction
+    }
+    if isChanged {
+      blocks[block].instructions = instructions
+    }
+  }
+  if isChanged {
+    return Some blocks
+  }
+  None
+}
+
+/**
+ * The slots that are written at most once in the whole body - a parameter never, anything else by one definition - and
+ * never through a place: what a list has to be for one `length()` read to say its length everywhere.
+ */
+fn stableSlotsOf(function: IrFunction): List<Bool> {
+  var definitions: List<Int> = []
+  var isStable: List<Bool> = []
+  for declaration in function.slots {
+    definitions.append 0
+    isStable.append true
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const Some(defined) = definedSlot(instruction) {
+        if defined.value >= 0 && defined.value < definitions.length() {
+          definitions.set(defined.value, definitions[defined.value] + 1)
+        }
+      }
+      for written in writtenThroughPlace(instruction) {
+        if written.value >= 0 && written.value < isStable.length() {
+          isStable.set written.value, false
+        }
+      }
+    }
+  }
+  for slot in 0..function.slots.length() {
+    const limit = if isParameter(function, slot) { 0 } else { 1 }
+    if definitions[slot] > limit {
+      isStable.set slot, false
+    }
+  }
+  isStable
+}
+
+fn isParameter(function: IrFunction, slot: Int): Bool {
+  if const .Parameter(_) = function.slots[slot].role {
+    return true
+  }
+  false
+}
+
+/** Every slot that holds `length()` of a stable list, with that list: the one definition of the slot is the call. */
+fn lengthsOf(function: IrFunction, lengths: List<Bool>, stable: List<Bool>): Map<Int, Int> {
+  var found: Map<Int, Int> = [:]
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Call(Some(target), callee, arguments, witnesses, _) = instruction {
+        if !(lengths.get(callee.value) ?? false) || !witnesses.isEmpty() || arguments.length() != 1 {
+          continue
+        }
+        const list = arguments[0].slot
+        if arguments[0].place.isNone() && (stable.get(list.value) ?? false) && (stable.get(target.value) ?? false) {
+          found.set target.value, list.value
+        }
+      }
+    }
+  }
+  found
+}
+
+// --- The facts ------------------------------------------------------------------------------------------------------
+
+/** `n:<slot>` is `slot >= 0`; `l:<index>:<length>` is `index < length`. */
+fn nonNegative(slot: Slot): String {
+  "n:{slot.value}"
+}
+
+fn below(index: Slot, length: Int): String {
+  "l:{index.value}:{length}"
+}
+
+/** The facts at the entry of every block: `None` for a block no path reaches. */
+fn settledEntries(program: IrProgram, function: IrFunction, lengthOf: Map<Int, Int>): List<Set<String>?> {
+  var entries: List<Set<String>?> = []
+  for _ in 0..function.blocks.length() {
+    entries.append None
+  }
+  entries.set 0, Some(Set.of())
+  var isChanged = true
+  var rounds = 0
+  while isChanged && rounds < 50 {
+    isChanged = false
+    rounds = rounds + 1
+    for block in 0..function.blocks.length() {
+      const entry = match entries[block] {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      var facts = entry
+      for instruction in function.blocks[block].instructions {
+        facts = afterInstruction program, facts, instruction
+      }
+      const body = function.blocks[block]
+      for successor in successorsOf(body) {
+        var edge = facts
+        if const Some(fact) = guardFact(function, block, successor, lengthOf) {
+          edge.insert fact
+        }
+        const merged = match entries[successor] {
+          Some(known) => intersected known, edge
+          None => edge
+        }
+        if !isSameFacts(entries[successor], merged) {
+          entries.set successor, Some(merged)
+          isChanged = true
+        }
+      }
+    }
+  }
+  // A body that did not settle proves nothing: every fact would be one that has not been intersected away yet
+  if isChanged {
+    var unsettled: List<Set<String>?> = []
+    for _ in 0..function.blocks.length() {
+      unsettled.append None
+    }
+    return unsettled
+  }
+  entries
+}
+
+/** Whether a block already starts with exactly these facts: both sets hold the same ones. */
+fn isSameFacts(known: Set<String>?, facts: Set<String>): Bool {
+  const found = match known {
+    Some(inner) => inner
+    None => {
+      return false
+    }
+  }
+  if found.length() != facts.length() {
+    return false
+  }
+  for fact in facts {
+    if !found.contains(fact) {
+      return false
+    }
+  }
+  true
+}
+
+fn intersected(left: Set<String>, right: Set<String>): Set<String> {
+  var found: Set<String> = Set.of()
+  for fact in left {
+    if right.contains(fact) {
+      found.insert fact
+    }
+  }
+  found
+}
+
+/** `index < length` on the `then` edge of a `Branch` on `index < length`, computed just in front of it. */
+fn guardFact(function: IrFunction, block: Int, successor: Int, lengthOf: Map<Int, Int>): String? {
+  const body = function.blocks[block]
+  const (condition, then) = match body.terminator {
+    .Branch(slot, first, _) => (slot, first.value)
+    _ => {
+      return None
+    }
+  }
+  if then != successor {
+    return None
+  }
+  const last = body.instructions.last()?
+  const (target, intrinsic, arguments) = match last {
+    .Intrinsic(found, operation, operands, _) => (found, operation, operands)
+    _ => {
+      return None
+    }
+  }
+  if target != Some(condition) || arguments.length() != 2 {
+    return None
+  }
+  match intrinsic.operation {
+    .Less => {
+      if lengthOf.containsKey(arguments[1].value) {
+        return Some below(arguments[0], arguments[1].value)
+      }
+      None
+    }
+    .Greater => {
+      if lengthOf.containsKey(arguments[0].value) {
+        return Some below(arguments[1], arguments[0].value)
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+/** The facts after one instruction: what it establishes about its target, and nothing about a slot it may write. */
+fn afterInstruction(program: IrProgram, facts: Set<String>, instruction: Instruction): Set<String> {
+  var gained: List<String> = []
+  match instruction {
+    .Constant(target, value) => {
+      if (integerOfStatic(program, value) ?? -1) >= 0 {
+        gained.append nonNegative(target)
+      }
+    }
+    .Copy(target, source) | .Move(target, source) => {
+      for fact in facts {
+        gained.appendAll renamed(fact, source, target)
+      }
+    }
+    .Intrinsic(Some(target), intrinsic, arguments, _) => {
+      if const .Add = intrinsic.operation {
+        if arguments.length() == 2 && facts.contains(nonNegative(arguments[0])) && facts.contains(nonNegative(arguments[1])) {
+          gained.append nonNegative(target)
+        }
+      }
+    }
+    _ => {}
+  }
+  var written: List<Slot> = writtenThroughPlace instruction
+  if const Some(defined) = definedSlot(instruction) {
+    written.append defined
+  }
+  var kept: Set<String> = Set.of()
+  for fact in facts {
+    if !mentionsAny(fact, written) {
+      kept.insert fact
+    }
+  }
+  for fact in gained {
+    kept.insert fact
+  }
+  kept
+}
+
+/** The facts about `source`, said about `target` instead: a copy holds what its source holds. */
+fn renamed(fact: String, source: Slot, target: Slot): List<String> {
+  const parts = fact.split ":"
+  if parts.length() == 2 && parts[1] == "{source.value}" {
+    return [nonNegative(target)]
+  }
+  if parts.length() == 3 && parts[1] == "{source.value}" {
+    return ["l:{target.value}:{parts[2]}"]
+  }
+  []
+}
+
+fn mentionsAny(fact: String, slots: List<Slot>): Bool {
+  const parts = fact.split ":"
+  for slot in slots {
+    const name = "{slot.value}"
+    if parts[1] == name || (parts.length() == 3 && parts[2] == name) {
+      return true
+    }
+  }
+  false
+}
+
+fn writtenThroughPlace(instruction: Instruction): List<Slot> {
+  match instruction {
+    .MakeUnique(reference) => [reference.base]
+    .Write(reference, _) => [reference.base]
+    .TakeOut(_, container, _, _) => [container.base]
+    .PutBack(container, _, value, _) => [container.base, value]
+    .Call(_, _, arguments, _, _) => placeBasesOf arguments
+    .CallClosure(_, _, arguments) => placeBasesOf arguments
+    .CallWitness(_, _, _, arguments, _) => placeBasesOf arguments
+    _ => []
+  }
+}
+
+fn placeBasesOf(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    if const Some(place) = argument.place {
+      found.append place.base
+    }
+  }
+  found
+}
+
+fn integerOfStatic(program: IrProgram, value: StaticId): Int? {
+  if !program.hasStatic(value) {
+    return None
+  }
+  if const .Literal(.Integer(found)) = program.staticAt(value).contents {
+    return Some found
+  }
+  None
+}
+
+// --- The rewrite ----------------------------------------------------------------------------------------------------
+
+/** `list[index]` as one unchecked `Element` step, where the facts prove `0 <= index < list.length()`. */
+fn provenRead(
+  program: IrProgram,
+  function: IrFunction,
+  instruction: Instruction,
+  facts: Set<String>,
+  readers: List<Bool>,
+  lengthOf: Map<Int, Int>,
+  stable: List<Bool>,
+): Instruction? {
+  const (target, callee, arguments, witnesses, at) = match instruction {
+    .Call(Some(found), reader, given, passed, Some(site)) => (found, reader, given, passed, site)
+    _ => {
+      return None
+    }
+  }
+  if !(readers.get(callee.value) ?? false) || !witnesses.isEmpty() || arguments.length() != 2 {
+    return None
+  }
+  if arguments[0].place.isSome() || arguments[1].place.isSome() {
+    return None
+  }
+  const list = arguments[0].slot
+  const index = arguments[1].slot
+  if !(stable.get(list.value) ?? false) || !facts.contains(nonNegative(index)) {
+    return None
+  }
+  var isBelow = false
+  for (length, lengthList) in lengthOf {
+    if lengthList == list.value && facts.contains(below(index, length)) {
+      isBelow = true
+    }
+  }
+  if !isBelow {
+    return None
+  }
+  const item = listItemOf(program, function.typeOfSlot(list))?
+  if item != function.typeOfSlot(target) {
+    return None
+  }
+  Some Instruction.Read(target, Reference(list, [PathStep.Element(item, index, at, false)]))
+}
+
+fn listItemOf(program: IrProgram, annotation: IrTypeId): IrTypeId? {
+  if const .Runtime(kind, arguments) = program.typeAt(annotation) {
+    if kind == RuntimeKind.ListStorage && arguments.length() == 1 {
+      return Some arguments[0]
+    }
+  }
+  None
+}

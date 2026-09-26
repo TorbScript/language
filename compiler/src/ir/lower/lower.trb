@@ -13,11 +13,12 @@ use Checked from "../../semantics/check"
 use Package, Workspace from "../../project/workspace"
 use relativePath, pathName from "../../project/path"
 use BuildTarget, hostTarget from "../../project/target"
-use IrProgram, Instruction from "../ir"
+use IrProgram, IrFunction, Instruction, RuntimeKind from "../ir"
 use devirtualizeProgram from "../devirtualize"
 use rewriteElementPlaces from "../elements"
 use dropProvableChecks from "../ranges"
 use trackCallerSites from "../sites"
+use dropListBoundsChecks from "../bounds"
 use finishProgram, isManagedType from "../layout"
 use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
@@ -126,9 +127,57 @@ fn finishLowering(var lowering: Lowering) {
   // Last of the three, because a direct call is what makes a constant visible where a dispatch hid it: an overflow
   // check the ranges of a function prove cannot fire is the plain operation from here on
   dropProvableChecks lowering.program
-  // Last, because which calls are direct and which checks remain is what decides where a panic can happen
   const standard = standardFunctionsOf lowering
+  // A read of a list whose index a loop proves inside it needs no check (docs/design/PANICS.md, recommendation 6)
+  const (readers, lengths) = listMembersOf lowering, standard
+  dropListBoundsChecks lowering.program, readers, lengths
+  // Last, because which calls are direct and which checks remain is what decides where a panic can happen
   trackCallerSites lowering.program, standard
+}
+
+/**
+ * Which functions are the `at` and the `length()` of a list of `std/collections`: a member of that name whose first
+ * parameter is the runtime's list. The readers are also recorded as element readers, so one whose every call was
+ * rewritten into an `Element` step is left out of the emitted C like one `ir/elements.trb` made unnecessary.
+ */
+fn listMembersOf(var lowering: Lowering, standard: List<Bool>): (List<Bool>, List<Bool>) {
+  var readers: List<Bool> = []
+  var lengths: List<Bool> = []
+  for index in 0..lowering.program.functions.length() {
+    const function = lowering.program.functions[index]
+    var isReader = false
+    var isLength = false
+    if const Some(symbol) = function.origin {
+      if (standard.get(index) ?? false) && isListParameter(lowering, function) {
+        const name = lowering.checker.symbolAt(symbol).name
+        const count = function.signature.parameters.length()
+        isReader = name == "at" && count == 2
+        isLength = name == "length" && count == 1
+        if isReader {
+          lowering.program.elementReaders.insert symbol.value
+        }
+      }
+    }
+    readers.append isReader
+    lengths.append isLength
+  }
+  (readers, lengths)
+}
+
+fn isListParameter(var lowering: Lowering, function: IrFunction): Bool {
+  const first = match function.signature.parameters.first() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if first.isReference {
+    return false
+  }
+  if const .Runtime(kind, _) = lowering.program.typeAt(first.annotation) {
+    return kind == RuntimeKind.ListStorage
+  }
+  false
 }
 
 /**

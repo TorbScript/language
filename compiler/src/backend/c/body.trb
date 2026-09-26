@@ -3040,6 +3040,12 @@ fn elementReferenceOf(
     return container
   }
   const spelling = valueTypeOf program, item
+  // An unchecked step into a list is a read whose index `ir/bounds.trb` proved inside: no comparison, and no copy of a
+  // storage somebody else holds, because nothing is written through it
+  if !checked {
+    const read = CExpression.Call CExpression.Name("torb_list_item"), [container, slotExpression(body, index)]
+    return CExpression.Dereference CExpression.Cast(pointerTo(spelling), read)
+  }
   const found = CExpression.Call(CExpression.Name("torb_list_element_address"), [
     CExpression.AddressOf(container),
     slotExpression(body, index),

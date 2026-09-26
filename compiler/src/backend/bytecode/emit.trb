@@ -1405,7 +1405,7 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
         }
         pending = pending + fieldOffset(emitter, layout, position)
       }
-      .Element(item, index, at, _) => {
+      .Element(item, index, at, checked) => {
         pending = flushOffset steps, pending
         const register = operand emitter, body, program, index
         const location = siteIndex emitter, body, program, at
@@ -1414,7 +1414,8 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
         if const .FixedArray(_, size) = program.typeAt(current) {
           steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), location)
         } else {
-          steps.append PlaceStep.Element(register, location)
+          // An unchecked step into a list is a proven read (`ir/bounds.trb`): nothing is made unique
+          steps.append(if checked { PlaceStep.Element register, location } else { PlaceStep.ListItem register, location })
           // An element of a list is stored in its own width, as the runtime stores it
           narrow = narrowCodeOf program, item
         }

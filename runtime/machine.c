@@ -1639,7 +1639,8 @@ enum {
   TORB_OPERATION_SITE_PENDING = 64,
   TORB_OPERATION_SITE_PENDING_CURRENT = 65,
   TORB_OPERATION_SITE_PUSH = 66,
-  TORB_OPERATION_SITE_POP = 67
+  TORB_OPERATION_SITE_POP = 67,
+  TORB_OPERATION_LIST_ITEM_ADDRESS = 68
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2060,6 +2061,11 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
     case TORB_OPERATION_SITE_PUSH:
       torb_machine_site_push();
       return 0;
+    case TORB_OPERATION_LIST_ITEM_ADDRESS: {
+      /* the register holding the list's reference, the index, the location: an item that is only read */
+      torb_list *list = (torb_list *)torb_machine_address(words, words[base + o[0]]);
+      return (int64_t)(intptr_t)torb_list_at(*list, words[base + o[1]], torb_machine_location(o[2]));
+    }
     case TORB_OPERATION_SITE_POP:
       if (torb_machine_site_count > 0) {
         torb_machine_site_count -= 1u;

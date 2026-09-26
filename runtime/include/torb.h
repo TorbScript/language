@@ -974,6 +974,15 @@ bool torb_list_get(torb_list list, int64_t index, void *out);
 void *torb_list_element_address(torb_list *list, int64_t index, torb_location at);
 
 /**
+ * The item at an index the compiler proved inside the list (`compiler/src/ir/bounds.trb`): no comparison and no copy,
+ * because it is only read. Inline, so that a loop over a list is a loop over its storage.
+ */
+static inline const void *torb_list_item(torb_list list, int64_t index) {
+  return (const uint8_t *)torb_list_storage_data(list.storage)
+    + ((size_t)list.offset + (size_t)index) * (size_t)list.storage->element->size;
+}
+
+/**
  * The same with the message of an index out of range handed in: what the C of a compiler before the `at` of `ArrayList`
  * called, and what the seed's C still calls. It goes once the seed is past that change.
  */

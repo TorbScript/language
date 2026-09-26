@@ -661,12 +661,13 @@ even be written down keeps its check. That is what makes a wrong answer impossib
 `sum = sum + value`, a field read, a call result, and `UInt64`, whose upper bound does not fit the `Int64` the intervals
 are computed in.
 
-**What is left.** The **bounds check** of `list[index]`, which is the other half this finding promised. It is not the
-same rewrite: `a[index]` goes through the `at` of `ArrayList`, whose body matches on `get(index)`, so the check is an
-`Option` the standard library builds and unwraps and not an `Intrinsic` with a flag on it. Removing it means a second
-path through `at` - a `torb_list_get_unchecked` and a lowering that reaches for it where the range holds - and the
-panic message has to stay the one `std/collections` decides. The ranges this file computes are what such
-a round would read; the round itself is not done.
+**The bounds check of a list** is the other half this finding promised, and `ir/bounds.trb` removes it where a loop
+proves the index: `for index in 0..list.length()` over a list the body does not change reads `list[index]` as one
+`Element` step with `checked` off - `torb_list_item` in C, no comparison, no copy of a shared storage - instead of the
+call of the `at` of `ArrayList` and its `Option`. The proof is a forward analysis of two facts, `index >= 0` and
+`index < length` (read off the guard of the loop, where `length` is the one `length()` read of a list that is written
+nowhere else in the function); anything it cannot prove keeps the call and its panic. The VM keeps its comparison
+(`ListItemAddress`) and drops only the copy. `tests/conformance/list-bounds-proven.trb` holds both sides.
 
 **The risk.** A wrong range is a missing panic, which is an observable difference between the two back ends.
 `tests/conformance/range-checks.trb` is the program that holds it: a guarded subtraction and a loop counter that the

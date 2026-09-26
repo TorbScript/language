@@ -1021,6 +1021,8 @@ const elementStep = 2
 
 const itemStep = 3
 
+const listItemStep = 4
+
 const stepWords = 6
 
 /**
@@ -1038,6 +1040,7 @@ fn appendPlace(var words: ArrayList<Int>, place: Place) {
       .Offset(count) => (offsetStep, count, 0, 0, 0, 0)
       .Dereference => (dereferenceStep, 0, 0, 0, 0, 0)
       .Element(index, location) => (elementStep, index, location, 0, 0, 0)
+      .ListItem(index, location) => (listItemStep, index, location, 0, 0, 0)
       .Item(index, size, width, location) => (itemStep, index, size, width, location, 0)
     }
     words.append kind
@@ -1567,6 +1570,13 @@ fn resolvePlace(
       storeRegister registers, top, address
       const operands = [0, base + Machine.load(step + 8) - top, Machine.load(step + 16)]
       address = kernelCall words, kernel, top, KernelOperation.ElementAddress, operands
+      if address == stoppedWord {
+        return stoppedWord
+      }
+    } else if kind == listItemStep {
+      storeRegister registers, top, address
+      const operands = [0, base + Machine.load(step + 8) - top, Machine.load(step + 16)]
+      address = kernelCall words, kernel, top, KernelOperation.ListItemAddress, operands
       if address == stoppedWord {
         return stoppedWord
       }

@@ -593,6 +593,8 @@ public type KernelOperation {
   case PoolDefaults
   /** `index, length, location`: the runtime's `index <index> is out of bounds for a length of <length>` panic. */
   case IndexOutOfBounds
+  /** `register, index, location`: the address of an item of the list the reference points at, only to be read. */
+  case ListItemAddress
   /**
    * `location`: the site a call of a function that tracks its caller hands it (`ir/sites.trb`), left pending for the
    * callee's [KernelOperation.SitePush]. `-1` for a call without one.
@@ -672,6 +674,7 @@ public type KernelOperation {
       .SetExecutable => "set.executable"
       .PoolDefaults => "pool.defaults"
       .IndexOutOfBounds => "index.out.of.bounds"
+      .ListItemAddress => "list.item.address"
       .SitePending => "site.pending"
       .SitePendingCurrent => "site.pending.current"
       .SitePush => "site.push"
@@ -750,6 +753,7 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.SitePendingCurrent,
   KernelOperation.SitePush,
   KernelOperation.SitePop,
+  KernelOperation.ListItemAddress,
 ]
 
 /**
@@ -881,6 +885,11 @@ public type PlaceStep {
    * with `index <index> is out of bounds for a length of <count>` at `location` for an index out of range.
    */
   case Element(index: Int, location: Int)
+  /**
+   * An item of the contiguous list here that is only read, where `ir/bounds.trb` proved the index inside the list:
+   * `torb_list_at`, which neither copies nor makes the storage unique. The VM keeps its comparison, at `location`.
+   */
+  case ListItem(index: Int, location: Int)
   /**
    * An item of the `Array<Item, Size>` here, which holds its items inline: `index` items of `width` words further on,
    * after the index is checked against `size` - out of range it panics as the list does, at `location`.
