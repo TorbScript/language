@@ -1,0 +1,30 @@
+# Builds tools/release-sync as a native binary from source, then runs it in a small image with exactly the tools it
+# shells out to (docs/design/RELEASE.md section 7.11): curl for downloads, sha256sum for hashing, cosign for the
+# signature - a release release-sync cannot verify is refused, so cosign is not optional here.
+#
+#   docker build -f tools/deploy/Dockerfile.release-sync -t torb-release-sync .
+#
+# Built from the repository root, with the whole checkout as the build context: release-sync is not published
+# separately, and this is the simplest way to hand the build stage `std/`, `runtime/` and a seed to bootstrap from.
+
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc make ca-certificates curl tar gzip \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+# No seed/ in a fresh clone (CLAUDE.md, "Seed and breaking changes"): tools/bootstrap.sh fetches the newest published
+# one on its own, over plain HTTPS, when TORB_SEED is not set
+RUN sh tools/bootstrap.sh
+RUN build/release/torb build tools/release-sync/src/main.trb --release --output /out/release-sync
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    # cosign has no Debian package: a pinned release. TODO(owner, one time): add `&& echo "<sha256>  cosign" |
+    # sha256sum -c -` below, the hash from https://github.com/sigstore/cosign/releases/tag/v2.4.1's own checksums file
+    && curl -fsSL -o /usr/local/bin/cosign \
+         https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 \
+    && chmod 755 /usr/local/bin/cosign
+COPY --from=build /out/release-sync /usr/local/bin/release-sync
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/release-sync"]

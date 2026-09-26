@@ -1,0 +1,77 @@
+/**
+ * The one HTTP endpoint this program answers: GitHub's "release published" webhook, POSTed to `/webhook` and signed
+ * with `X-Hub-Signature-256` (docs/design/RELEASE.md section 7.11). The payload names a tag; what is actually synced
+ * is `github.fetchRelease` of that tag, never the webhook's own asset list, which nothing here signs or trusts.
+ */
+
+use Request, Response, Status, Handler, HttpError from "std/http"
+use Process from "std/process"
+use Config from "./config"
+use parseReleaseEvent, fetchRelease from "./github"
+use shouldSync, signatureMatches from "./verify"
+use syncRelease from "./sync"
+
+/** `openssl dgst -sha256 -hmac <secret>` over `body`, fed through standard input - the hex digest, lower case. */
+fn hmacSha256(secret: String, body: String): Task<Result<String, String>> {
+  match Process.run("openssl", ["dgst", "-sha256", "-hmac", secret], input: body).await() {
+    Fail(error) => Fail "openssl could not be started: {error.show()}"
+    Ok(output) => {
+      if !output.isSuccess() {
+        Fail "openssl dgst failed: {output.standardError.trim()}"
+      } else {
+        // "(stdin)= <hex>", or "SHA2-256(stdin)= <hex>" on a newer openssl - the hex is everything after the last "="
+        const text = output.standardOutput.trim()
+        match text.lastIndexOf("=") {
+          None => Fail "openssl dgst printed no digest: {text}"
+          Some(at) => Ok text.sliceBytes(at + 1, text.byteLength()).trim()
+        }
+      }
+    }
+  }
+}
+
+/** The handler `Server.listen` is given: everything but `POST /webhook` is `404`, and a bad signature is `401`. */
+public fn handler(config: Config): Handler {
+  { request: Request => handle(config, request).await() }
+}
+
+fn handle(config: Config, request: Request): Task<Result<Response, HttpError>> {
+  if request.path() != "/webhook" {
+    return Ok Response.of(Status.notFound)
+  }
+  const body = match request.body.text().await() {
+    Fail(_) => { return Ok Response.text("could not read the body", status: Status.badRequest) }
+    Ok(text) => text
+  }
+  match config.webhookSecret {
+    None => void
+    Some(secret) => {
+      const header = request.headers.get("X-Hub-Signature-256") ?? ""
+      const computed = match hmacSha256(secret, body).await() {
+        Fail(message) => { return Ok Response.text(message, status: Status.internalServerError) }
+        Ok(hex) => hex
+      }
+      if !signatureMatches(computed, header) {
+        return Ok Response.text("bad signature", status: Status.unauthorized)
+      }
+    }
+  }
+  const event = match parseReleaseEvent(body) {
+    Fail(message) => { return Ok Response.text(message, status: Status.badRequest) }
+    Ok(found) => found
+  }
+  if !shouldSync(event) {
+    return Ok Response.text("ignored: action \"{event.action}\"")
+  }
+  const tag = event.release.tagName
+  // The webhook's own payload names the assets too, but they are never trusted: fetching the release again is what
+  // `github.fetchRelease` is for, and it is the same call the periodic check makes
+  const release = match fetchRelease(config.repository, tag, config.token).await() {
+    Fail(message) => { return Ok Response.text(message, status: Status.internalServerError) }
+    Ok(found) => found
+  }
+  match syncRelease(release, config.repository, config.token, config.root).await() {
+    Fail(message) => Ok Response.text("sync of {tag} failed: {message}", status: Status.internalServerError)
+    Ok(_) => Ok Response.text("synced {tag}")
+  }
+}

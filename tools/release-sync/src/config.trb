@@ -1,0 +1,35 @@
+/**
+ * What `release-sync` needs, read once from the environment (docs/design/RELEASE.md section 7.11): which repository
+ * to pull from, the read-only token, the webhook secret, where `<root>/download/` is, and how often to poll besides
+ * the webhook. No file and no command-line flag - a `docker-compose.yml` (`tools/deploy/`) passes all of it as
+ * environment variables, which is where a secret belongs and a checked-in file does not.
+ */
+
+use Environment from "std/os"
+
+public type Config {
+  /** `owner/name` on GitHub, e.g. `TorbScript/language`. */
+  repository: String
+  /** A token with read-only access to the repository's releases - never write access, this program never publishes. */
+  token: String?
+  /** The secret GitHub's "release published" webhook is configured with; a request without a matching signature is refused. */
+  webhookSecret: String?
+  /** `<root>/download/<version>/` is written, and `<root>/download/versions.txt` and `.../latest` updated. */
+  root: String
+  /** What `Server.listen` binds - `host:port`, e.g. `0.0.0.0:8088` behind Traefik. */
+  listenAddress: String
+  /** How often the periodic check looks for a release the webhook may have missed, in seconds. */
+  pollSeconds: Int
+
+  /** Every value from the environment, with the defaults the deployment does not have to set. */
+  static fn fromEnvironment(): Config {
+    Config(
+      repository: Environment.get("RELEASE_SYNC_REPOSITORY") ?? "TorbScript/language",
+      token: Environment.get("RELEASE_SYNC_TOKEN"),
+      webhookSecret: Environment.get("RELEASE_SYNC_WEBHOOK_SECRET"),
+      root: Environment.get("RELEASE_SYNC_ROOT") ?? "/srv/torb",
+      listenAddress: Environment.get("RELEASE_SYNC_LISTEN") ?? "0.0.0.0:8088",
+      pollSeconds: Environment.get("RELEASE_SYNC_POLL_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 300,
+    )
+  }
+}

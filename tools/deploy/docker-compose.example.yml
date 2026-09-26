@@ -1,0 +1,90 @@
+# The root server, as decided in docs/design/RELEASE.md section 7.11 (2026-09-25): Docker and Traefik, three
+# containers behind one TLS proxy. Copy this to docker-compose.yml next to a .env (never committed) that sets the
+# secrets below, then `docker compose up -d`. No real credentials are in this file or anywhere else in the repository.
+#
+#   torb.dev              -> static  (install.sh, install.ps1, /download/<version>/...)
+#   packages.torb.dev/... -> static  (/index, /archives, /docs - reading, behind a CDN in front of Traefik)
+#   packages.torb.dev/api -> registry (placeholder: the write service does not exist yet, PROJECT.md milestone 8)
+#
+# release-sync is the only writer of /srv/torb/download: CI never pushes to this machine, this machine pulls
+# (docs/design/RELEASE.md section 7.11, "the root server pulls, CI never pushes").
+
+services:
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+
+  static:
+    build:
+      context: ../..
+      dockerfile: tools/deploy/Dockerfile.static
+    restart: unless-stopped
+    volumes:
+      - torb-data:/srv/torb:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.torb-dev.rule=Host(`torb.dev`)
+      - traefik.http.routers.torb-dev.entrypoints=websecure
+      - traefik.http.routers.torb-dev.tls.certresolver=letsencrypt
+      - traefik.http.routers.packages-torb-dev.rule=Host(`packages.torb.dev`) && !PathPrefix(`/api`)
+      - traefik.http.routers.packages-torb-dev.entrypoints=websecure
+      - traefik.http.routers.packages-torb-dev.tls.certresolver=letsencrypt
+
+  release-sync:
+    build:
+      context: ../..
+      dockerfile: tools/deploy/Dockerfile.release-sync
+    restart: unless-stopped
+    environment:
+      RELEASE_SYNC_REPOSITORY: TorbScript/language
+      RELEASE_SYNC_TOKEN: ${RELEASE_SYNC_TOKEN}
+      RELEASE_SYNC_WEBHOOK_SECRET: ${RELEASE_SYNC_WEBHOOK_SECRET}
+      RELEASE_SYNC_ROOT: /srv/torb
+      RELEASE_SYNC_LISTEN: 0.0.0.0:8088
+      RELEASE_SYNC_POLL_SECONDS: "300"
+    volumes:
+      - torb-data:/srv/torb
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.release-sync.rule=Host(`torb.dev`) && PathPrefix(`/webhook`)
+      - traefik.http.routers.release-sync.entrypoints=websecure
+      - traefik.http.routers.release-sync.tls.certresolver=letsencrypt
+      - traefik.http.services.release-sync.loadbalancer.server.port=8088
+
+  # Placeholder: packages.torb.dev/api (docs/design/RELEASE.md section 7, "one small service - accounts, owners,
+  # tokens, publish, yank"). Not built yet (needs the package manager of milestone 8 and std/http's server, which
+  # release-sync above already shows works); the route is reserved here so the final compose file is one image away.
+  # registry:
+  #   image: torb-registry:latest
+  #   restart: unless-stopped
+  #   environment:
+  #     REGISTRY_ROOT: /srv/torb/registry
+  #   volumes:
+  #     - torb-data:/srv/torb
+  #   labels:
+  #     - traefik.enable=true
+  #     - traefik.http.routers.packages-api.rule=Host(`packages.torb.dev`) && PathPrefix(`/api`)
+  #     - traefik.http.routers.packages-api.entrypoints=websecure
+  #     - traefik.http.routers.packages-api.tls.certresolver=letsencrypt
+  #     - traefik.http.services.packages-api.loadbalancer.server.port=8089
+
+volumes:
+  letsencrypt:
+  # /srv/torb: download/ (torb.dev) and registry/ (packages.torb.dev) - backed up nightly with restic to another
+  # provider (RELEASE.md section 7.11); a named volume here for the example, a bind mount to that disk in production
+  torb-data:

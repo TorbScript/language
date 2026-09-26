@@ -1,0 +1,66 @@
+/**
+ * Tests for `src/verify.trb`: the parts of `release-sync` that decide something without touching the network or the
+ * disk - which webhook actions to act on, whether a signature matches, and reading a hash out of `SHA256SUMS`.
+ */
+
+use test, group from "std/test"
+use ReleaseEvent, ReleaseInfo from "../src/github"
+use shouldSync, signatureOf, signatureMatches, expectedHash, namesEveryArchive from "../src/verify"
+
+group "which webhook events to act on" {
+  test "a published release is synced" {
+    assert shouldSync(ReleaseEvent("published", ReleaseInfo("v0.4.0", [])))
+  }
+
+  test "every other action is ignored" {
+    assert(!shouldSync(ReleaseEvent("created", ReleaseInfo("v0.4.0", []))))
+    assert(!shouldSync(ReleaseEvent("deleted", ReleaseInfo("v0.4.0", []))))
+    assert(!shouldSync(ReleaseEvent("edited", ReleaseInfo("v0.4.0", []))))
+  }
+}
+
+group "the webhook signature" {
+  test "signatureOf reads the hex after sha256=" {
+    assert(signatureOf("sha256=abc123") == Some("abc123"))
+  }
+
+  test "signatureOf answers None for a header that is not sha256=..." {
+    assert(signatureOf("sha1=abc123") == None)
+    assert(signatureOf("abc123") == None)
+  }
+
+  test "signatureMatches compares case-insensitively" {
+    assert signatureMatches("ABC123", "sha256=abc123")
+    assert signatureMatches("abc123", "sha256=ABC123")
+  }
+
+  test "signatureMatches refuses a different digest" {
+    assert(!signatureMatches("abc123", "sha256=def456"))
+  }
+
+  test "signatureMatches refuses a header of the wrong shape" {
+    assert(!signatureMatches("abc123", "abc123"))
+  }
+}
+
+group "reading SHA256SUMS" {
+  const sums = "92bcb60a...ff  torb-0.4.0-linux-x64.tar.gz\nabc123  torb-0.4.0-linux-arm64.tar.gz\n"
+
+  test "finds the hash of the named file" {
+    assert(expectedHash(sums, "torb-0.4.0-linux-x64.tar.gz") == Some("92bcb60a...ff"))
+  }
+
+  test "strips a leading * (a hash taken in binary mode)" {
+    const starred = "92bcb60a...ff *torb-0.4.0-linux-x64.tar.gz\n"
+    assert(expectedHash(starred, "torb-0.4.0-linux-x64.tar.gz") == Some("92bcb60a...ff"))
+  }
+
+  test "answers None for a file the sums do not list" {
+    assert(expectedHash(sums, "torb-0.4.0-macos-arm64.tar.gz") == None)
+  }
+
+  test "namesEveryArchive is true only when every file has a hash" {
+    assert namesEveryArchive(sums, ["torb-0.4.0-linux-x64.tar.gz", "torb-0.4.0-linux-arm64.tar.gz"])
+    assert(!namesEveryArchive(sums, ["torb-0.4.0-linux-x64.tar.gz", "torb-0.4.0-macos-arm64.tar.gz"]))
+  }
+}

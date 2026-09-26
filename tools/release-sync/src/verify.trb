@@ -1,0 +1,60 @@
+/**
+ * Everything `release-sync` decides without touching the network or the disk: whether a webhook's payload is one to
+ * act on, whether its signature matches, and reading a hash out of `SHA256SUMS`. Kept apart from `sync.trb` (which
+ * downloads, shells out and writes files) so it can be tested as what it is - pure functions of a `String`.
+ */
+
+use ReleaseEvent from "./github"
+
+/** GitHub sends one action per release event; only "published" is what a download and a signature exist for. */
+public fn shouldSync(event: ReleaseEvent): Bool {
+  event.action == "published"
+}
+
+/** The value of `X-Hub-Signature-256` is `sha256=<hex>`; `None` for a header that is not that shape. */
+public fn signatureOf(header: String): String? {
+  if header.startsWith("sha256=") {
+    Some header.sliceBytes(7, header.byteLength())
+  } else {
+    None
+  }
+}
+
+/**
+ * Whether `computed` (the hex HMAC-SHA256 this program calculated over the request body) is the one `header` names -
+ * case-insensitively, since hex case is not part of what either side means.
+ */
+public fn signatureMatches(computed: String, header: String): Bool {
+  match signatureOf(header) {
+    None => false
+    Some(claimed) => claimed.toLowerCase() == computed.toLowerCase()
+  }
+}
+
+/** The SHA-256 of `file` inside `sums` (the text of `SHA256SUMS`), a leading `*` (a hash taken in binary mode) stripped. */
+public fn expectedHash(sums: String, file: String): String? {
+  for line in sums.lines() {
+    const words = line.trim().split(" ").filter({ !_.isEmpty() }).toList()
+    if words.length() < 2 {
+      continue
+    }
+    var name = words[1]
+    if name.startsWith("*") {
+      name = name.sliceBytes 1, name.byteLength()
+    }
+    if name == file {
+      return Some words[0]
+    }
+  }
+  None
+}
+
+/** Whether every file `sums` lists for `version`'s target archives has a matching entry - nothing computed here yet. */
+public fn namesEveryArchive(sums: String, files: List<String>): Bool {
+  for file in files {
+    if expectedHash(sums, file).isNone() {
+      return false
+    }
+  }
+  true
+}

@@ -1,0 +1,212 @@
+/**
+ * The one thing this program does: given a release (from the webhook or the periodic check), download its assets
+ * with the read-only token, verify `SHA256SUMS` and its cosign signature, and place the result under
+ * `<root>/download/<version>/`, updating `versions.txt` and `latest` (docs/design/RELEASE.md section 7.11).
+ *
+ * Downloading, hashing and moving files shell out to `curl`, `sha256sum` and `mv` - this program's own deployment is
+ * one Linux container (`tools/deploy/`), so unlike `torb upgrade` it needs no Windows arm at all - and the signature
+ * is checked by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, or
+ * whose signature does not verify, is refused and nothing is placed.**
+ */
+
+use File, IoError from "std/fs"
+use Process from "std/process"
+use ReleaseInfo, ReleaseAsset from "./github"
+use expectedHash from "./verify"
+
+/** `v0.2.0` -> `0.2.0`; a nightly's tag (`nightly-20260925`) has no `v` and is already the version. */
+public fn versionOf(tag: String): String {
+  if tag.startsWith("v") {
+    tag.sliceBytes 1, tag.byteLength()
+  } else {
+    tag
+  }
+}
+
+/** `stable` for a tagged release, `nightly` for `nightly-YYYYMMDD` - the same two channels `versions.txt` lists. */
+public fn channelOf(version: String): String {
+  if version.startsWith("nightly-") {
+    "nightly"
+  } else {
+    "stable"
+  }
+}
+
+/** The identity `cosign verify-blob` checks the certificate against - release.yml's or nightly.yml's, by the tag's shape. */
+public fn certificateIdentity(repository: String, tag: String): String {
+  if tag.startsWith("v") {
+    "https://github.com/{repository}/.github/workflows/release.yml@refs/tags/{tag}"
+  } else {
+    "https://github.com/{repository}/.github/workflows/nightly.yml@refs/heads/main"
+  }
+}
+
+/** Runs `program` to its end; `Fail` names the command and what it wrote to standard error. */
+fn run(program: String, arguments: List<String>): Task<Result<Void, String>> {
+  match Process.run(program, arguments).await() {
+    Ok(output) => {
+      if output.isSuccess() {
+        Ok void
+      } else {
+        Fail "{program} {arguments.joined(separator: " ")} failed: {output.standardError.trim()}"
+      }
+    }
+    Fail(error) => Fail "{program} could not be started: {error.show()}"
+  }
+}
+
+/** `curl`, with the token and `Accept: application/octet-stream` (releasing.md: how a private repository's asset is read). */
+fn downloadAsset(asset: ReleaseAsset, token: String?, destination: String): Task<Result<Void, String>> {
+  var arguments: List<String> = ["-fsSL", "-H", "Accept: application/octet-stream"]
+  match token {
+    Some(value) => {
+      arguments.append "-H"
+      arguments.append "Authorization: Bearer {value}"
+    }
+    None => void
+  }
+  arguments.append "-o"
+  arguments.append destination
+  arguments.append asset.url
+  run("curl", arguments).await()
+}
+
+/** Every asset of `release` downloaded into `directory`, under its own name. */
+public fn downloadRelease(release: ReleaseInfo, token: String?, directory: String): Task<Result<Void, String>> {
+  match File.createDirectory(directory) {
+    Fail(error) => { return Fail error.show() }
+    Ok(_) => void
+  }
+  for asset in release.assets {
+    match downloadAsset(asset, token, "{directory}/{asset.name}").await() {
+      Fail(message) => { return Fail message }
+      Ok(_) => void
+    }
+  }
+  Ok void
+}
+
+/** `sha256sum <path>`'s first word - the hash, nothing shelled out for by anything but this program's own check. */
+fn sha256Of(path: String): Task<Result<String, String>> {
+  match Process.run("sha256sum", [path]).await() {
+    Ok(output) => {
+      if output.isSuccess() {
+        Ok(output.standardOutput.trim().split(" ").filter({ !_.isEmpty() }).toList().first() ?? "")
+      } else {
+        Fail "sha256sum {path} failed: {output.standardError.trim()}"
+      }
+    }
+    Fail(error) => Fail "sha256sum could not be started: {error.show()}"
+  }
+}
+
+/**
+ * Every archive `release` names checked against `SHA256SUMS` in `directory` - refuses where the file is missing from
+ * the sums, where the sums themselves are missing, or where a computed hash does not match.
+ */
+public fn verifyHashes(release: ReleaseInfo, directory: String): Task<Result<Void, String>> {
+  const sumsPath = "{directory}/SHA256SUMS"
+  const sums = match File.readText(sumsPath) {
+    Ok(text) => text
+    Fail(error) => { return Fail "no SHA256SUMS: {error.show()}" }
+  }
+  for asset in release.assets {
+    if asset.name == "SHA256SUMS" || asset.name.endsWith(".sigstore.json") {
+      continue
+    }
+    const expected = match expectedHash(sums, asset.name) {
+      Some(hash) => hash
+      None => { return Fail "{asset.name} is not listed in SHA256SUMS" }
+    }
+    const actual = match sha256Of("{directory}/{asset.name}").await() {
+      Ok(hash) => hash
+      Fail(message) => { return Fail message }
+    }
+    if actual.toLowerCase() != expected.toLowerCase() {
+      return Fail "{asset.name}: expected sha256 {expected}, got {actual}"
+    }
+  }
+  Ok void
+}
+
+/**
+ * `cosign verify-blob` of `SHA256SUMS` against `SHA256SUMS.sigstore.json`, with the identity the release's own
+ * workflow signs with. `cosign` missing from the machine is answered the same as a signature that does not verify:
+ * `Fail`, and nothing is placed - a release this program cannot check the signature of is not published as if it had.
+ */
+public fn verifySignature(directory: String, repository: String, tag: String): Task<Result<Void, String>> {
+  run("cosign", [
+    "verify-blob",
+    "--bundle", "{directory}/SHA256SUMS.sigstore.json",
+    "--certificate-identity", certificateIdentity(repository, tag),
+    "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+    "{directory}/SHA256SUMS",
+  ]).await()
+}
+
+/**
+ * Moves every file of `directory` into `<root>/download/<version>/`, then updates `versions.txt` (the version's old
+ * line, if any, replaced) and, for a stable release only, `latest` (a symlink to the version's directory - a nightly
+ * has no "latest", only `/docs/nightly/` on the site, which this program does not touch).
+ */
+public fn place(release: ReleaseInfo, sourceDirectory: String, root: String): Task<Result<Void, String>> {
+  const version = versionOf release.tagName
+  const channel = channelOf version
+  const destination = "{root}/download/{version}"
+  match run("mkdir", ["-p", destination]).await() {
+    Fail(message) => { return Fail message }
+    Ok(_) => void
+  }
+  for asset in release.assets {
+    match run("mv", ["-f", "{sourceDirectory}/{asset.name}", "{destination}/{asset.name}"]).await() {
+      Fail(message) => { return Fail message }
+      Ok(_) => void
+    }
+  }
+  match updateVersionsList("{root}/download/versions.txt", version, channel) {
+    Fail(error) => { return Fail error.show() }
+    Ok(_) => void
+  }
+  if channel == "stable" {
+    match run("ln", ["-sfn", version, "{root}/download/latest"]).await() {
+      Fail(message) => { return Fail message }
+      Ok(_) => void
+    }
+  }
+  Ok void
+}
+
+/** Rewrites `path`: `version`'s previous line (if any) removed, then `"<version> <channel>"` put at the top. */
+fn updateVersionsList(path: String, version: String, channel: String): Result<Void, IoError> {
+  const before = File.readText(path).ok() ?? ""
+  var kept: List<String> = []
+  for line in before.lines() {
+    if line.trim().isEmpty() {
+      continue
+    }
+    const first = line.trim().split(" ").first() ?? ""
+    if first != version {
+      kept.append line
+    }
+  }
+  const rebuilt = ["{version} {channel}", ...kept].joined(separator: "\n")
+  File.writeText path, "{rebuilt}\n"
+}
+
+/** The whole thing, for one release: download, verify, place - `Fail` at the first step that does not check out. */
+public fn syncRelease(release: ReleaseInfo, repository: String, token: String?, root: String): Task<Result<Void, String>> {
+  const scratch = "{root}/tmp-{versionOf(release.tagName)}"
+  match downloadRelease(release, token, scratch).await() {
+    Fail(message) => { return Fail message }
+    Ok(_) => void
+  }
+  match verifyHashes(release, scratch).await() {
+    Fail(message) => { return Fail message }
+    Ok(_) => void
+  }
+  match verifySignature(scratch, repository, release.tagName).await() {
+    Fail(message) => { return Fail message }
+    Ok(_) => void
+  }
+  place(release, scratch, root).await()
+}
