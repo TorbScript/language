@@ -22,7 +22,7 @@ use boundMember, dispatchOfBound from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterateSourceOf from "./implementation"
 use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType, memberOfImplementation from "./implementation"
 use typeFromReference, integerLiteral, unsignedLiteral from "./lowering"
-use typeSignatureOf from "./signature"
+use typeSignatureOf, signatureOf from "./signature"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
@@ -1132,7 +1132,9 @@ fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: 
       .Interpolated(inner) => {
         isPlain = false
         const found = inferExpression checker, inner
-        recordShow checker, found, inner.span
+        if !reportUncalledMethod(checker, inner, found) {
+          recordShow checker, found, inner.span
+        }
       }
     }
   }
@@ -1178,6 +1180,76 @@ fn recordShow(var checker: Checker, found: TypeId, at: Span) {
     return
   }
   checker.adapted at, Adaptation.ShowValue(witness)
+}
+
+/**
+ * `"{found.start}"` and `print found.start`: a method read off a value where the value is shown, without its call.
+ *
+ * A function value has a `Show` - its type - so the line would check and print `() => Int64` where the answer was
+ * meant. Nobody shows a method of a value to see its type: the `()` was forgotten, and that is what the message says.
+ * A function value shown on purpose is a binding or a closure, and those are shown as their type as before; only the
+ * member read of a **method** off a value is refused. Answers whether it reported.
+ */
+public fn reportUncalledMethod(var checker: Checker, expression: Expression, found: TypeId): Bool {
+  const (base, name) = match expression.kind {
+    .Member(target, member, isOptional) => {
+      if isOptional {
+        return false
+      }
+      (target, member.text)
+    }
+    _ => {
+      return false
+    }
+  }
+  if const .Function(form) = checker.types.form(found) {
+    // `(self: Point) => Int64` takes the receiver: the method is named, not bound, and nothing was forgotten
+    if const Some(first) = form.parameters.first() {
+      if const .Receiver(_) = first.mode {
+        return false
+      }
+    }
+    const symbol = match checker.resolutionHere(expression.span) {
+      Some(.Callable(method, _, _)) => method
+      _ => {
+        return false
+      }
+    }
+    // `Point.area` names the method through its type, which is a function taking the point and no forgotten call
+    match checker.resolutionHere(base.span) {
+      Some(.TypeOf(_)) | Some(.Construct(_)) => {
+        return false
+      }
+      _ => {}
+    }
+    const identifier = signatureOf checker, symbol
+    if !checker.signature(identifier).takesSelf {
+      return false
+    }
+    const written = expressionText base
+    const shown = checker.describe found
+    checker.reportHere(
+      Diagnostic.error("`{name}` is a method, and this shows the method instead of its answer", expression.span)
+        .withNote("Did you mean `{written}.{name}()`? Without the call the text would be its type, `{shown}`")
+    )
+    return true
+  }
+  false
+}
+
+/** The source text of a short receiver for a message, or `value` where it is too long to repeat. */
+fn expressionText(expression: Expression): String {
+  match expression.kind {
+    .Name(text) => text
+    .Member(target, member, _) => {
+      const inner = expressionText target
+      if inner == "value" {
+        return inner
+      }
+      "{inner}.{member.text}"
+    }
+    _ => "value"
+  }
 }
 
 /** A part of an interpolation that has no `Show`. A generic parameter is missing a bound, everything else the trait. */

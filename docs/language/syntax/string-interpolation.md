@@ -71,6 +71,26 @@ print "escaped: \{not interpolated\}"
    `{id}` is the template's variable and `{2,4}` the pattern's repetition; see
    [Checked literals](../values-and-types/checked-literals.md).
 
+7. **A method read off a value is refused where it would be shown, with the call to write instead.** Without its `()`,
+   `found.start` is the method bound to `found`, and a function value shows as its type - so the line would print
+   `() => Int64` where the answer was meant. Nobody shows a method to see its type, so the checker says the call was
+   forgotten, inside the braces and in an argument of `print` alike. A function value in a binding, or a method named
+   through its type (`Span.start`), is still shown as its type: that is written on purpose.
+
+   ```trb error
+   type Span {
+     low: Int
+
+     fn start(): Int {
+       low
+     }
+   }
+
+   const found = Span(3)
+   print "starts at {found.start}"
+   // error: `start` is a method, and this shows the method instead of its answer
+   ```
+
 ## What this is not
 
 **A literal `{` is not written by doubling it.** Some template languages use `{{` for a literal brace; here that

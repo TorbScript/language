@@ -20,10 +20,11 @@ use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate, ArgumentS
 use Target, targetOfCandidate from "./name"
 use hasCases, caseNamesOf, boundMember from "./member"
 use checkExpression, inferExpression, deferExpression, deferArguments, optionValueOf from "./expression"
-use resolveTarget, expectationOf from "./expression"
+use resolveTarget, expectationOf, reportUncalledMethod from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use hasVariable, suppressVariables from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf, fitsType, resolveBound, resolveTrait, hasParameter from "./implementation"
+use headSymbolOf from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads, isDeclaredVar from "./place"
 use resultOf from "./signature"
@@ -860,7 +861,7 @@ fn checkArgumentPass(
       checker.nameSite = Some site
       checker.nameSiteAt = at
     }
-    const _ = checkExpression checker, argument.value, inner
+    const given = checkExpression checker, argument.value, inner
     checker.nameSite = None
     if !isClosurePass {
       noteFunctionArgument checker, argument.value, annotation, site
@@ -868,6 +869,10 @@ fn checkArgumentPass(
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call
     if isVarArgument(parameter.mode) {
       const named = parameter.name ?? ""
+    // `print found.start` shows the method where its answer was meant, exactly as `"{found.start}"` would
+    if isShowParameter(checker, annotation) {
+      const _ = reportUncalledMethod checker, argument.value, given
+    }
       // A receiver closure changes its receiver through its own body, so `build(inner)` is not a change the dead-change
       // rule can judge: `var inner = Element()  build(inner)` is what every nested block of a DSL is, and calling that
       // change dead would reject it
@@ -904,6 +909,22 @@ fn isVariadicParameter(mode: ParameterMode): Bool {
     _ => false
   }
 }
+/** A parameter that takes a `Show` and nothing else: what `print` and `printError` take each value as. */
+fn isShowParameter(var checker: Checker, annotation: TypeId): Bool {
+  const show = match checker.wellKnown.show {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Traits(bounds) = checker.types.form(annotation) {
+    if bounds.length() == 1 {
+      return headSymbolOf(checker, bounds[0]) == Some(show)
+    }
+  }
+  false
+}
+
 
 fn isNameArgument(argument: Argument): Bool {
   match argument.value.kind {

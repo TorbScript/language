@@ -188,6 +188,21 @@ group "Members" {
     assert(found.typeOf("place.area") == "() => Int64")
   }
 
+  /** A function value is shown as its type, which is never what `"{place.area}"` meant (bug batch 7). */
+  test "a method read without a call where it is shown is the forgotten call, with the call to write" {
+    const source = "{point}fn probe(place: Point): String \{\n  \"size \{place.area\}\"\n\}"
+    assert(problems(source) == ["`area` is a method, and this shows the method instead of its answer"])
+    const note = "Did you mean `place.area()`? Without the call the text would be its type, `() => Int64`"
+    assert(notes(source) == [note])
+  }
+
+  test "and so is one handed to `print`, while a function value in a binding is shown as its type" {
+    const shown = "{point}fn probe(place: Point) \{\n  print place.area\n\}"
+    assert(problems(shown) == ["`area` is a method, and this shows the method instead of its answer"])
+    const bound = "{point}fn probe(place: Point) \{\n  const size = place.area\n  print \"\{size\} \{Point.area\}\"\n\}"
+    assert problems(bound).isEmpty()
+  }
+
   test "a method read through its type is the member itself" {
     const found = probe "{point}fn probe() \{\n  const size = Point.area\n\}"
     assert(found.typeOf("Point.area") == "(self: Point) => Int64")
