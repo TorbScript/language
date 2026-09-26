@@ -28,11 +28,11 @@ use Expression, Argument, TextSegment from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId, LiteralValue from "../../semantics/checker/type"
 use IrTypeId, IrType, Slot, Instruction, StaticContents, WitnessSource, Reference from "../ir"
-use Intrinsic, IntrinsicOperation, borrowed from "../ir"
+use Intrinsic, IntrinsicOperation, Terminator, borrowed from "../ir"
 use textPartKindOf from "../layout"
 use FunctionBuilder, addTemporary, emit from "../build"
 use memberOfType, memberInValue, traitMemberNamed from "../witness"
-use Lowering, reportUnsupported, locationOf, internStatic, substituted from "./context"
+use Lowering, reportUnsupported, locationOf, internStatic, substituted, finishBlock from "./context"
 use borrowedArguments from "./context"
 use boundsOfTraitValue from "./generic"
 use valueSlot, unsupportedSlot, abandonedSlot, voidSlot, lowerUncoercedValue, lowerValue from "./expression"
@@ -178,6 +178,11 @@ public fn showSlot(
 ): Slot {
   // A part before this one did not return: nothing is shown, and no `show` is instantiated for it
   if lowering.isDiverged {
+    return abandonedSlot lowering, builder, None
+  }
+  // `"{item}"` with an `item: Never` - inside `List<Never>.show`, say - is never reached, and `Never` has no `show`
+  if const .NeverType = lowering.checker.types.form(subject) {
+    finishBlock lowering, builder, Terminator.Unreachable
     return abandonedSlot lowering, builder, None
   }
   const bound = match showBoundOf(lowering) {
