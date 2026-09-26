@@ -39,6 +39,7 @@ torb highlight <file>  Print the semantic tokens of a file as JSON, for an edito
 torb natives --header  Write torb_natives.h and machine_natives.c from the manifest of natives
 torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM
 torb docs <command>    Check, index, and derive the documentation
+torb doc [path]...     The reference of a package: its public API and doc comments as a static site
 torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
 ```
@@ -172,6 +173,13 @@ Four commands over the documentation: `check` is the gate, `index` writes the ge
 derives the Agent Skill, and `bundle` writes `llms.txt` and `llms-full.txt`. See
 [the docs commands](../contributing/checks.md).
 
+### `doc`
+
+Turns the public API of a package and its doc comments into a reference: a static site with an index per package and
+a page per module (`--output`, default `build/doc`), or the same model as one JSON document for an editor or a registry
+(`--json`). `--check` writes nothing and fails on a link of a doc comment that resolves to nothing and on an example
+under `# Examples` that does not compile or run ([torb doc](torb-doc.md)).
+
 ### What is still planned
 
 These are in the design and not in the binary. A page about one of them carries `status: planned`.
@@ -180,7 +188,6 @@ These are in the design and not in the binary. A page about one of them carries 
 |---------|-----------------|
 | `torb format` | The formatter, taking over from `canon` |
 | `torb lint` | The naming and style rules the compiler does not care about |
-| `torb doc` | Documentation from the doc comments, including the standard-library pages |
 | `torb add`, `remove`, `update`, `audit` | The package manager and the advisory database |
 
 ## Examples
@@ -209,6 +216,6 @@ wrote ../build/dev/scratch.exe
 - [Verify your work](verifying-your-work.md) - the commands to run before you are done.
 - [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
-  [torb test](torb-test.md), [torb canon](torb-canon.md) - one page per command, in depth.
+  [torb test](torb-test.md), [torb canon](torb-canon.md), [torb doc](torb-doc.md) - one page per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the canon that `canon` enforces.
 - [The docs commands](../contributing/checks.md) - the four `docs` subcommands.

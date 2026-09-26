@@ -36,7 +36,7 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[torb docs source](torb-docs-source.md)** - torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - **[project.trb](project-trb.md)** - The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
 - **[project.lock.trb](project-lock-trb.md)** _(planned)_ - The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
-- **[torb doc](torb-doc.md)** _(planned)_ - torb doc will render every doc comment of a package into documentation, the same way the standard-library reference's Declarations sections are filled in by hand today.
+- **[torb doc](torb-doc.md)** - torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
 - **[torb format](torb-format.md)** _(planned)_ - torb format will take over the formatter canon from torb canon and own the layout the canon does not decide - line length, blank lines, and where a long call breaks.
 - **[torb lint](torb-lint.md)** _(planned)_ - torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
 

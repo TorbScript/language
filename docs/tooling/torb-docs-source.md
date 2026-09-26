@@ -95,6 +95,7 @@ An example that cannot stand alone says so in its first line:
 | First line          | What is checked                                                          |
 |---------------------|--------------------------------------------------------------------------|
 | nothing             | It parses, it is in the canon, and it type checks                        |
+| `// check`          | The same here; `torb doc --check` type checks it and does not run it     |
 | `// fragment`       | It lexes. For a signature or a shape that is not a program               |
 | `// skip <reason>`  | Nothing. The reason is required, and the report prints every skip        |
 

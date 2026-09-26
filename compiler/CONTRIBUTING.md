@@ -77,7 +77,8 @@ over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every st
 ends (all of them build natively; one that waits for a back-end gap is named in
 [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and in the `broken` list of `gates.sh`, which skips it), every
 program of `tests/language/` run with `torb run --native` and with `torb run` against its `.expected`, the three docs gates
-(`docs check`, `docs index --check`, `docs skill --check`), and `canon --check` with the five rules. Everything it
+(`docs check`, `docs index --check`, `docs skill --check`), `doc --check --no-run std` (every link of a doc comment of
+std's public API resolves and every example of it type checks), and `canon --check` with the five rules. Everything it
 builds only to run it once is built with the `dev` profile.
 
 **Tier B is `sh tools/gates.sh b`**: `tools/conformance.sh` (the conformance suite - every program under
@@ -326,7 +327,9 @@ fn orElse(fallback: lazy Value): Value { ... }
 An example is checked as if it stood in a file next to the one it documents: it sees what that file imports and the
 file's own public declarations, and it is a script, so it may `print`. An example that cannot stand alone says so in its
 first line - `// fragment` for a signature or a shape that only has to lex, `// skip <reason>` for one that is checked
-by nothing and counted in the report.
+by nothing and counted in the report. `torb doc --check` also runs every example as a doc test, and `// check` is the
+first line of one that is type checked and not run: it reads standard input, starts a process, ends the program or
+panics on purpose, or the native back end cannot build it yet.
 
 **`torb docs source` is not in the list above yet.** The repository does not pass it while the writing waves are
 running; `torb docs source std compiler examples --statistics` is what measures how far they have come. It becomes a

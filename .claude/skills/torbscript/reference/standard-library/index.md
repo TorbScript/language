@@ -18,8 +18,9 @@ mathematics, JSON and the time values. What a program can *touch* is deliberatel
 ## What belongs here
 
 One page per package: what it is for, how it is imported, and every public declaration with its doc comment. The
-`## Declarations` section of each page stands between generator markers, so that milestone 8's `torb doc` can fill it from
-the sources. One reference page stands beside them, for the three closure aliases every package's signatures use.
+`## Declarations` section of each page is written by hand; the reference generated from the sources, with every
+signature and doc comment of a package, is what [`torb doc std`](../tooling/torb-doc.md) writes. One reference page
+stands beside them, for the three closure aliases every package's signatures use.
 
 What does not belong here: the language rules that a type participates in, which are in
 [the language reference](../language/index.md), and the argument for a design decision, which is in

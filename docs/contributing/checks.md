@@ -171,8 +171,9 @@ long call breaks. A snippet that passes here is in the canon of `torb canon`; th
 
 ### The declarations of a package page
 
-The `## Declarations` section of a `std/` page is written by hand. `torb doc`, which is planned, will generate it and
-bring its own markers for the generated part; until then no marker pretends that the section is compared with `std/`.
+The `## Declarations` section of a `std/` page is written by hand. The generated reference of every package is
+`torb doc std`'s ([torb doc](../tooling/torb-doc.md)), and torb.dev links each page to it; no marker pretends that
+the section is compared with `std/`.
 
 ### The indexes
 

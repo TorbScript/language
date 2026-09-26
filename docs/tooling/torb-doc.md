@@ -1,79 +1,160 @@
 ---
 title: torb doc
-summary: torb doc will render every doc comment of a package into documentation, the same way the standard-library reference's Declarations sections are filled in by hand today.
+summary: torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
 kind: tooling
-status: planned
+status: stable
 order: 110
 keywords:
   - torb doc
   - doc comment
   - documentation generator
+  - doc test
+  - API reference
 source:
-  - CONCEPT.md#toolchain
+  - compiler/src/reference/command.trb
+  - compiler/src/reference/model.trb
+  - compiler/src/reference/links.trb
+  - compiler/src/reference/site.trb
+  - compiler/src/reference/doctests.trb
   - CONCEPT.md#doc-comments
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
-
-A [doc comment](../glossary.md#doc-comment) already exists for almost every public declaration of `std/` - it is
-read by nothing but a person reading the source, because no command renders it yet.
+A [doc comment](../glossary.md#doc-comment) stands in front of almost every public declaration of `std/`, and `torb
+doc` is what reads it for somebody who does not read the source: one model of a package's public API with three
+readers - the HTML reference, the doc tests, and the JSON a language server's hover and the registry's per-package
+pages take.
 
 ## Synopsis
 
 ```text
-torb doc   Documentation from the doc comments (planned; no command line decided yet)
+torb doc [path]... [--output <dir>] [--json] [--check] [--no-run]
+
+  (no flag)        Write the static site into --output (default: build/doc)
+  --output <dir>   Where the site goes
+  --json           Print the model as one JSON document instead, and write nothing
+  --check          Fail on a broken link or a failing doc test, and write nothing
+  --no-run         With --check: type check the examples without building and running them
 ```
 
 ## What it does
 
-### What is specified
+### What is documented
 
-Everything that is declared can carry a `/** ... */` comment - a parameter, a field and a case included - so there
-is no separate tag language to keep in sync with the signature. The text is Markdown, with the conventional headings
-`# Errors`, `# Panics` and `# Examples`; `[List.append]` and `[Option]` are links, resolved like a name in the code next
-to them. The doc comment is part of the syntax tree, so `torb doc`, the language server and the test runner are
-specified to read the same data - one comment, three consumers.
+A path is a package, a workspace or a directory of packages (`torb doc std` documents every package of `std/`), and
+every package the checked files belong to is documented. The program is checked first, and a program with a problem
+is refused: the model is read out of the checked program - the syntax trees the checker holds, the scopes it built -
+and not out of a second parse.
 
-`CONCEPT.md` also specifies that the code under a doc comment's `# Examples` heading is compiled and run by
-[`torb test`](torb-test.md), so a documented example cannot silently stop working. Neither half exists today: `torb
-test` runs `*.test.trb` files only, and reads nothing out of a doc comment.
+- **A package is documented by what its entry module exports**: the `public use` lines of `src/lib.trb` (the
+  `build { input }` of its `project.trb`) name the public API, and each exported construct is shown in the module
+  that declares it. A package whose entry exports nothing, an application, is documented by every `public` declaration.
+- **A construct is shown with its members**: the fields, cases, `static` members and methods of a type or a trait that
+  are not `private`, and every `extend` of the package with the members it adds. Tests, `project.trb` and every
+  declaration that is not public are left out.
+- **A signature is the source's own text**, token by token on one line: without the body, without the comments -
+  the doc comment of a parameter is shown under the signature instead - and without `public`, which every construct of a
+  reference is.
+- **A doc comment is split the way the standard of `compiler/CONTRIBUTING.md` writes it**: the first sentence is the
+  summary an index and the search show, the paragraphs above the first heading are the description, and `# Examples`,
+  `# Errors`, `# Panics`, `# Pitfalls`, `# Open` and `# Related` each become a section.
 
-### What exists today
+### Links
 
-The comment itself parses and belongs to its declaration - that part of the front end is real, and is what
-[doc comments](../language/syntax/doc-comments.md) describes. What is missing is anything that turns it into a
-rendered page. Every [standard-library](../standard-library/index.md) page already has the place `torb doc` will
-fill: a `## Declarations` section, written by hand for now, which the command will generate and mark as generated - [std/test](../standard-library/test.md)'s
-in full:
+`[Name]` and `[Type.member]` in a doc comment are resolved the way a name at that place resolves for the checker: the
+file's own declarations, its imports and the prelude, and a member through the type - declared in it, added by an
+`extend` anywhere in the program, or declared by a trait it comes `with`. A link that resolves to a construct of the
+site becomes a link to its anchor, one that resolves to a construct without a page (a package that was not documented,
+a declaration that is not public) is shown as code, and one that resolves to nothing is a problem at its line. The rules
+are the ones [`torb docs source`](torb-docs-source.md) judges a link by, so the two commands agree on what is broken.
 
-````md
-## Declarations
+### The site
 
-### `test`, `group`
+Plain files that can be opened from disk or served by any static host, and no request leaves a page:
 
-```trb fragment
-public native fn test(name: String, body: () => Void)
-public native fn group(name: String, body: () => Void)
-```
+| File | What is in it |
+|---|---|
+| `index.html` | Every package with its summary |
+| `<package>/index.html` | The module comment of the entry module, every module, and every construct in alphabetical order |
+| `<package>/<module>.html` | The module comment, a table of contents, and every construct with its signature, its doc comment, its sections and its members, each with an anchor: `#Option`, `#Option.map`, `#Option.Some` |
+| `search.js`, `search-index.js` | The search as the reader types, over every construct and member |
+| `search-index.json` | The same index for a tool |
+| `reference.json` | The whole model, what `--json` prints |
+| `style.css` | Light and dark through custom properties, readable at the width of a phone |
 
-`group` names a closure of `test` calls; `test` names a closure whose body is the check. Both are ordinary calls in the
-`.test.trb` files of `tests`, and nest freely - a `group` inside a `group` is how a suite is organized.
+The Markdown of a comment is rendered by [`std/markdown`](../standard-library/markdown.md), and every TorbScript code
+block is coloured at generation time by the lexer and the resolver behind [`torb highlight`](the-torb-command.md), so a
+page colours a field and a case the way the editor does. The first line of an example that says how it is checked
+(`// fragment`, `// skip <reason>`, `// check`) is for the tools and is not shown.
 
-````
+### The JSON
+
+`--json` prints `{"format": 1, "packages": [...]}`: every package with its modules, every module with its constructs,
+and every construct with its kind, name, anchor, signature, summary, description, sections, parameters, examples,
+resolved links and members. `format` is raised whenever a field changes meaning or goes away. It is the data a
+language server's hover shows and the registry renders per package ([RELEASE.md](../design/RELEASE.md) section 7.7).
+
+### Doc tests
+
+`--check` runs the examples under `# Examples` of every documented construct - the code a doc comment indents by four
+spaces - as tests of the package, which is what CONCEPT's "examples are tests" asks:
+
+| First line of the example | What `--check` does with it |
+|---|---|
+| (none) | Parses it, holds it to the formatter canon, type checks it, builds it natively and runs it |
+| `// check` | Everything but running it: for an example that reads standard input, starts a process, ends the program or panics on purpose, or that the native back end cannot build yet |
+| `// fragment` | Only lexes it: a signature or a shape that is not a program |
+| `// skip <reason>` | Nothing; the reason is listed |
+
+An example is checked as a script next to the file it documents, with that file's imports and its public names, so it
+reaches what a user of the module reaches. An example that says what it prints with `// prints <line>` comments is held
+to that output; every other one is held to running to its end. Every example that runs becomes one entry of **one**
+native program - one C compile for all of them - whose output is cut back into one piece per example, the machinery
+`torb docs check` uses for the `trb run` blocks of the documentation. A finding names the construct the example
+belongs to. `--no-run` stops at the type check: for a machine without a C compiler, and for the registry, which
+generates a package's pages without running any of its code.
+
+### What `--check` does not fail on
+
+The constructs the standard asks a doc comment of that have none are counted - `std/` has 218 of 2353 today - and the
+count is printed, but they do not fail the check: until `std/` has none, the count is what shows the way there.
+
+### In the gates
+
+Tier A of `tools/gates.sh` runs `torb doc --check --no-run std`: every link of a doc comment of std's public API
+resolves, and every example of it parses, is in the canon and type checks - about half a minute. The whole of
+`torb doc --check std`, which also builds and runs the 156 examples that are programs, takes between one and two
+minutes, most of it the lowering and the C compile of their one program, and is run by hand before a change to the
+examples of `std/` is committed.
 
 ## Examples
 
-None: there is no command line to run yet. A real doc comment already in `std/`, waiting to be read by something
-other than a person:
+The reference of the standard library, opened from disk afterwards:
 
-```trb fragment
-/** Writes the values to standard output, separated by spaces, followed by a line break. */
-public native fn print(...values: Show)
+```console
+$ torb doc std --output build/doc/std
+33 packages, 102 modules: wrote 141 files to build/doc/std
+```
+
+The gate of a package's documentation:
+
+```console
+$ torb doc --check std
+218 of 2353 public constructs have no doc comment
+2541 constructs, 164 examples checked, 156 run, no problems
+```
+
+The model of one package, for a tool:
+
+```console
+$ torb doc std/json --json
+{"format":1,"packages":[{"name":"std/json","page":"std/json/index.html", ...
 ```
 
 ## Related
 
 - [Doc comments](../language/syntax/doc-comments.md) - what `/** */` attaches to and the headings it uses.
-- [torb test](torb-test.md) - the command `CONCEPT.md` specifies to run a doc comment's `# Examples`.
-- [The standard library](../standard-library/index.md) - the `Declarations` sections `torb doc` will fill.
-- [The torb command](the-torb-command.md) - every subcommand, and which are still planned.
+- [torb docs source](torb-docs-source.md) - the gate of the doc comments of a whole tree, whose link rules `torb doc`
+  shares.
+- [The standard library](../standard-library/index.md) - the hand-written pages of `std/`, which link to the generated
+  reference.
+- [The torb command](the-torb-command.md) - every subcommand.

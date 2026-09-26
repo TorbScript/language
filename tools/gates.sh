@@ -12,7 +12,8 @@
 # `manifest --check` over every `project.trb`, `test --native compiler/tests`, `test` of the std/example packages in
 # both back ends (one that waits for a back-end gap is named in docs/RUST-EXIT.md section 2.4 and skipped here), the
 # programs of `tests/language/` against their `.expected` in both back ends, the sessions of `tests/repl/` piped into
-# `torb repl` (`tools/repl.sh`), the four docs gates, and `canon --check` with the five rules. Every binary that is
+# `torb repl` (`tools/repl.sh`), the four docs gates, `doc --check --no-run std` (the links of std's doc comments and
+# its examples, type checked), and `canon --check` with the five rules. Every binary that is
 # only built to be run once is built with `--profile dev`, which `torb test --native` and `torb run --native` do.
 #
 # Tier B: `tools/conformance.sh` (the conformance suite, and with `--vm` the same suite and `vm-only/` in the bytecode
@@ -232,6 +233,9 @@ if [ "$tier" = "a" ]; then
   gate "docs skill --check" "$torb" docs skill docs .claude/skills/torbscript --check
   # docs/design/PANICS.md recommendation 10: every public function of std/ that can panic says when (`# Panics`)
   gate "docs source --panics" "$torb" docs source --panics std
+  # docs/tooling/torb-doc.md: every link of a doc comment of std's public API resolves, and every example type checks.
+  # Running the examples too (`torb doc --check std`) takes over a minute, which is why the gate stops at the type check
+  gate "doc --check --no-run std" "$torb" doc --check --no-run std
 
   gate "canon --check" "$torb" canon --check --rule calls --rule strings --rule imported-case-patterns \
     --rule unused-bindings --rule loops .

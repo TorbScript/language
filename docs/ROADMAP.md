@@ -53,7 +53,11 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   the registry at packages.torb.dev ([design/PROJECT.md](design/PROJECT.md) section 12,
   [design/RELEASE.md](design/RELEASE.md) section 7). It needs an HTTP client with TLS, and TLS comes from the platform:
   SChannel on Windows, the system's stack on macOS, OpenSSL where Linux has it.
-- **`torb doc`**, which renders doc comments ([tooling/torb-doc.md](tooling/torb-doc.md)).
+- **`torb doc`** is built: the reference of a package as a static site or as JSON, and the examples of its doc
+  comments as doc tests ([tooling/torb-doc.md](tooling/torb-doc.md)). What is left: `std/` has 218 public constructs
+  without a doc comment, which `torb doc --check` counts and does not fail on yet; the `## Declarations` sections of
+  the standard library's pages are written by hand rather than generated from the model; and the language server's
+  hover does not read the model yet.
 - **The natives that are declared and planned**: `Decimal`, `Float32` arithmetic, the full Unicode tables, and
   `get`, `post` and `request` of `std/http`.
 

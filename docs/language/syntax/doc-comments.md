@@ -110,9 +110,10 @@ fn double(value: Int): Int {
 print double(4)
 ```
 
-The command that reads the text is [`torb docs source`](../../tooling/torb-docs-source.md): it decides the headings,
-the links, the examples and the module comment over a whole tree of sources. `torb test` running the code under
-`# Examples` as a test of the package is described in CONCEPT.md and does not exist yet.
+Two commands read the text. [`torb docs source`](../../tooling/torb-docs-source.md) decides the headings, the links,
+the examples and the module comment over a whole tree of sources, and [`torb doc`](../../tooling/torb-doc.md) renders
+the comments of a package's public API into a reference and runs the code under `# Examples` as its doc tests: an
+example whose first line is `// check` is type checked and not run.
 
 ## Related
 
