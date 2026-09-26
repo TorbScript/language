@@ -16,9 +16,15 @@ keywords:
   - GitHub Actions
 source:
   - docs/design/RELEASE.md#13-the-release-pipeline-as-built
+  - docs/design/RELEASE.md#7.11-hosting-and-the-server
   - .github/workflows/release.yml
   - .github/workflows/seed.yml
   - tools/fetch-seed.sh
+  - tools/install.sh
+  - tools/install.ps1
+  - tools/render-package-manifests.sh
+  - tools/release-sync
+  - tools/deploy
 ---
 
 A release of TorbScript is made by pushing a tag `v0.MINOR.PATCH` to a commit of `main`. The workflow `release` checks
@@ -102,6 +108,44 @@ A fresh clone bootstraps from the newest published seed without any setup beyond
 $ sh tools/bootstrap.sh
 no seed on this machine: fetching the newest published seed (sh tools/fetch-seed.sh)
 ```
+
+## One-time setup
+
+Everything below is done once, by the owner, outside this repository - nothing here is a gate, and none of it blocks a
+release: a channel whose secret is missing is skipped by the workflow that would publish to it.
+
+**The package manager channels** (`publish-packages` of `release.yml`, [RELEASE.md section
+5](../design/RELEASE.md#5-installing-upgrading-channels-and-signing)):
+
+1. Create `TorbScript/homebrew-tap` and `TorbScript/scoop-bucket` on GitHub, each with an empty `Formula/` or
+   `bucket/` directory so the job's first push is a normal commit and not an empty repository's first one.
+2. Submit the first winget manifest by hand, from a built `torb-<version>-windows-x64.zip`:
+   `wingetcreate new https://github.com/TorbScript/language/releases/download/v<version>/torb-<version>-windows-x64.zip`
+   answers a few questions (publisher `TorbScript`, package `Torb`, portable, the nested `bin/torb.exe`) and opens the
+   pull request against `microsoft/winget-pkgs` that creates `TorbScript.Torb`; `wingetcreate update` (what the
+   workflow calls) only ever edits a manifest that already exists.
+3. Add three repository secrets (Settings -> Secrets and variables -> Actions): `HOMEBREW_TAP_TOKEN` and
+   `SCOOP_BUCKET_TOKEN`, each a fine-grained personal access token with `contents: write` of the one repository it
+   pushes to and nothing else; `WINGET_TOKEN`, a token with permission to open a pull request against
+   `microsoft/winget-pkgs` under the owner's account (a classic token with `public_repo` is what `wingetcreate` itself
+   documents needing).
+
+**The root server** ([RELEASE.md section
+7.11](../design/RELEASE.md#public-downloads-while-the-repository-is-private-decided-here)), which makes
+`torb.dev/download/...` answer while the repository is private:
+
+1. A machine with Docker and Docker Compose, and DNS for `torb.dev` and `packages.torb.dev` pointed at it (or at a CDN
+   in front of it).
+2. Copy `tools/deploy/docker-compose.example.yml` to `docker-compose.yml` next to a `.env` (never committed) with
+   `ACME_EMAIL`, `RELEASE_SYNC_TOKEN` (a fine-grained token scoped to `contents: read` of this repository - read-only,
+   since this program never publishes anything back to GitHub) and `RELEASE_SYNC_WEBHOOK_SECRET` (any random string).
+   Then `docker compose up -d --build`.
+3. On the repository, Settings -> Webhooks -> Add webhook: payload URL `https://torb.dev/webhook`, content type
+   `application/json`, secret the same `RELEASE_SYNC_WEBHOOK_SECRET`, event "Releases" only.
+4. Verify it: publish a release (or wait for `release-sync`'s periodic check, `RELEASE_SYNC_POLL_SECONDS`, default 300)
+   and look for `<root>/download/<version>/` on the server; `docker compose logs release-sync` says why one is
+   missing - most often `cosign` refusing a signature it could not verify, which is by design (section 7.11, "a
+   release this program cannot check is not placed as if it had been").
 
 ## Related
 

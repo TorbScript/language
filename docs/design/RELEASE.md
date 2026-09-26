@@ -285,6 +285,66 @@ No beta channel before 1.0: with a minor release every six weeks the nightly is 
   and for the `.pkg`/MSI installers; every arm64 macOS binary must carry at least an ad hoc signature, which the pipeline
   checks.
 
+### Installers, `torb upgrade` and the package manager channels, as built
+
+**`tools/install.sh`** (Linux, macOS, FreeBSD, POSIX sh) and **`tools/install.ps1`** (Windows, PowerShell 5.1+) exist
+and are release assets; both are short, read a target and a channel, download, verify and unpack, and nothing else -
+they print the profile line rather than writing it (POSIX) and extend the user `PATH` themselves (Windows, since that
+has no profile file to append to). Both take their base URL, channel and an exact version from an environment variable
+(`TORB_INSTALL_BASE_URL`, `TORB_INSTALL_CHANNEL`, `TORB_INSTALL_VERSION`; `TORB_INSTALL_TARGET` skips detection),
+which is what the tests below use instead of a second, test-only code path.
+
+**`<base url>/versions.txt`**, decided here since section 7.4's format is for the package index and this is simpler:
+one release per line, `<version> <channel>`, newest first is not required of it - every reader sorts. `release-sync`
+(section 7.11) writes it by rewriting the whole file on every release: the previous line for a version, if any, is
+replaced, and the new one put at the top. `install.sh`/`install.ps1` pick the first line of their channel; `torb
+upgrade --list` (below) sorts every line of the manifest instead, because it shows more than the newest one.
+
+**The layout both scripts write, and `torb upgrade` (`compiler/src/cli/upgrade.trb`) manages afterwards**:
+
+```text
+~/.torb/toolchains/<version>/   one full toolchain per installed version (%LOCALAPPDATA%\torb\toolchains\<version>\)
+~/.torb/bin/torb                 a symlink to the active toolchain's bin/torb (POSIX only)
+~/.torb/active                   the version the symlink, or the Windows copy, is at
+~/.torb/install.trb               channel = "stable"  method = "script"     (%LOCALAPPDATA%\torb\install.trb)
+```
+
+Windows has no per-user symlink without a privilege most machines do not grant, so its "one in use" is a copy at
+`%LOCALAPPDATA%\Programs\torb` (on the `PATH`) that `torb upgrade` replaces with `robocopy /MIR`, renaming the running
+`torb.exe` out of the way first - section 5's "the running `torb.exe` cannot be overwritten; it can be renamed",
+exactly as decided above.
+
+**`install.trb`'s fields are written `key = "value"`, one per line** - a format of its own, chosen because it is not a
+`project.trb` (nothing here is evaluated, and it is read before a version of the toolchain is even chosen) and not the
+lock's literal-call format either (PROJECT.md section 8), which is for a graph, not four settings.
+
+**`torb upgrade`** is implemented exactly as decided above: `torb upgrade [<version>] [--channel <name>] [--list]`,
+never implicit, refuses naming the package manager's command when `install.trb` says another method (`brew upgrade
+torb`, `winget upgrade TorbScript.Torb`, `scoop update torb`), and `--list` shows what is installed (from
+`~/.torb/toolchains`) beside what the channel offers (from `versions.txt`), each release marked once it is installed
+and once more if it is the active one. Downloading, hashing and unpacking shell out to `curl`/`wget`, `sha256sum`/
+`shasum`/`certutil` and `tar` (Windows included: `tar` and `curl` have shipped with Windows since 1803, so the
+download and extraction of `torb upgrade` need no PowerShell at all) - the same tools `tools/fetch-seed.sh` already
+assumes on every target - because `std/fs` has no raw byte read or write, rename, copy or delete yet; closing that gap
+is future work the compiler itself would benefit from, not something this slice should grow to include.
+
+**Package manager channels** (winget, Scoop, a Homebrew tap - the preview's choice, section 5's table): rendered from
+`tools/homebrew/torb.rb.template` and `tools/scoop/torb.json.template` by `tools/render-package-manifests.sh` (its
+placeholders filled from the release's own `SHA256SUMS`, nothing recomputed), and pushed by the `publish-packages` job
+of `release.yml`, after the GitHub release, behind the same `release` environment. Each of the three steps (Homebrew,
+Scoop, winget via `wingetcreate update ... --submit`) reads its own token from a secret and skips itself, in its own
+script, where that secret is empty - the `secrets` context cannot be read in a step's `if:` (a GitHub Actions
+restriction), and a channel nobody has set up yet must never hold back the release. Nightlies publish nothing here:
+`nightly.yml` does not call this job. What the owner sets up once for these three is
+[docs/contributing/releasing.md](../contributing/releasing.md).
+
+**Tested**: `sh -n tools/install.sh` (shellcheck where the machine has it), a full run of `install.sh` against a
+locally packed archive through `TORB_INSTALL_BASE_URL=file://...` and `TORB_INSTALL_TARGET`, the PowerShell parser
+over `install.ps1`, and a run of it against a local HTTP server for the same fake channel. `compiler/tests/upgrade.
+test.trb` covers the pure parts of `torb upgrade` (parsing `install.trb` and `versions.txt`, comparing versions,
+reading `SHA256SUMS`) as ordinary tests; the network and shell-out parts are exercised by the manual runs above, since
+neither a packaged release nor a second machine exists yet to run them against for real.
+
 ## 6. The website
 
 ### The structure
@@ -361,8 +421,10 @@ is replaceable without changing a single URL a script or a lock file contains.**
   Cloudflare Pages, Netlify, or a small server with Caddy. All four serve a directory; the one that is chosen is a
   question of price and taste, not of design.
 - **The downloads**: release archives are large and many; they live in object storage or GitHub Releases, and
-  `torb.dev/download/<version>/<file>` **redirects** to wherever they are. The install scripts and `torb upgrade` only
-  ever see the torb.dev URL.
+  `torb.dev/download/<version>/<file>` answers with them - a redirect while the repository is public and GitHub's own
+  URL can be given out, and (decided 2026-09-25, section 7.11's "Public downloads while the repository is private") a
+  synced copy on the server itself while it is not, since a private repository's release URL answers a login page to
+  everyone else. Either way the install scripts and `torb upgrade` only ever see the torb.dev URL.
 - **`.dev` is on the HSTS preload list as a whole top-level domain**, so every page is HTTPS or nothing; every host above
   handles the certificate.
 - **DNS and mail stay with the owner**, not with the host: `security@torb.dev` (section 9) needs mail for the domain.
@@ -622,7 +684,8 @@ Traefik (TLS, Let's Encrypt)
  ├─ packages.torb.dev/index, /archives, /docs  ->  a static file server over /srv/torb/registry
  ├─ packages.torb.dev/api                      ->  the write service (TorbScript, SQLite)
  └─ torb.dev                                   ->  the website, install.sh and install.ps1;
-                                                    /download/<version>/<file> redirects to the GitHub release
+                                                    /download/<version>/<file> served from /srv/torb/download,
+                                                    written by release-sync (below) - not a redirect to GitHub
 ```
 
 - **A CDN in front** caches an archive as immutable for a year and an index file briefly with an `ETag`, so the
@@ -641,6 +704,69 @@ Traefik (TLS, Let's Encrypt)
 HTTP *server* of milestone 10 (`docs/ROADMAP.md` orders `std/net`, then `std/http`, early in 10), TLS terminated by the proxy in
 front of it, and a database. That puts the registry launch after the first part of milestone 10; question 2 of section
 12 is whether to accept a server in another language to open earlier.
+
+### Public downloads while the repository is private (decided here)
+
+**The repository is private today (fact 3), but section 5's installers and `torb upgrade` have to work now, from a
+public URL, without a token.** A plain redirect to a GitHub release (the diagram above, before this decision) answers
+a login page to anyone who is not a collaborator - the site would work for the maintainer and nobody else. Three ways
+to close that gap:
+
+| Option | For | Against |
+|---|---|---|
+| **The root server pulls; CI never pushes** — decided | one direction of trust (the server's read-only token, never a secret in CI that can push to the server); works unchanged the day the repository turns public, since the pull keeps working and can simply be pointed at the now-public release URL instead; no inbound access from CI to the server to secure | a small service to run and keep up, and a delay between "release published" and "on the server" (closed by the webhook, section 7.11 below) |
+| CI pushes over SSH or `rsync` at release time | no server-side service | a secret that lets a GitHub Actions run write to production, which is what a compromised action or a compromised dependency of one would reach for first; the exhausted Actions budget (this task's own instructions) makes it worse, not better, to add a job that must always run |
+| Make the repository public now | the redirect keeps working, nothing to build | not this record's call, and orthogonal to shipping a preview - question 8 of section 12 |
+
+**`tools/release-sync`** is that pull: a TorbScript program (`std/http` for both the webhook server and the GitHub API
+client, `std/json` for the payload and the API's response), built and run as its own container
+(`tools/deploy/Dockerfile.release-sync`). It:
+
+1. Listens on `/webhook` for GitHub's "release published" event, its `X-Hub-Signature-256` checked (HMAC-SHA256 over
+   the raw body, computed by shelling out to `openssl dgst -sha256 -hmac`, compared to the header) against a secret
+   only this service and the GitHub webhook configuration know.
+2. Never trusts the webhook's own asset list: it re-fetches the release from the API with a read-only token
+   (`GET /repos/<owner>/<name>/releases/tags/<tag>`, releasing.md's own private-repository path), which is also what a
+   periodic poll (`RELEASE_SYNC_POLL_SECONDS`, default 300) calls for the newest stable release, in case a webhook
+   delivery was ever missed.
+3. Downloads every asset (`curl`, with `Accept: application/octet-stream` and the token), verifies every archive
+   against `SHA256SUMS` (`sha256sum`) and verifies `SHA256SUMS.sigstore.json` with `cosign verify-blob` against the
+   identity of the workflow that made the release (`release.yml`'s for a tagged version, `nightly.yml`'s for a
+   nightly) - **refusing when `cosign` is not on the machine at all**, the same as a signature that does not verify:
+   a release this program cannot check is not placed as if it had been.
+4. Only then moves the files into `<root>/download/<version>/`, rewrites `<root>/download/versions.txt` (that
+   version's old line, if any, replaced; put at the top) and, for a stable release, repoints the `<root>/download/
+   latest` symlink - a nightly has no "latest", only `/docs/nightly/` on the site (section 6), which this program does
+   not touch.
+
+**Why shelling out and not `std/http`'s body all the way to disk**: `std/fs` has no raw byte read or write yet (only
+`readText`/`writeText`), and no rename, copy or delete - closing that gap belongs to the standard library, not to this
+one program working around it twice. `curl`, `sha256sum` and `cosign` are exactly the tools `tools/fetch-seed.sh`
+already assumes exist on every target, so `release-sync`'s one target (its own container) is not a new assumption.
+
+**Tested**: `tools/release-sync/tests/verify.test.trb` covers the pure decisions - which webhook actions to act on,
+whether a signature matches, reading a hash out of `SHA256SUMS` - as ordinary TorbScript tests; the network, the
+shelling out and the file placement are not, for the same reason `torb upgrade`'s are not (section 5): no packaged
+release and no second machine exist yet to run them against for real.
+
+**`tools/deploy/`** has the container side: `Dockerfile.release-sync` (built from source, bootstrapping the toolchain
+inside the image, in a `debian:bookworm-slim` with `cosign` pinned in the runtime stage), `Dockerfile.static` and
+`nginx.conf` (the read side: `install.sh`, `install.ps1`, `/download/`, and the registry's future `/index`,
+`/archives`, `/docs`), and `docker-compose.example.yml` wiring both of them and Traefik together with a commented-out
+placeholder for the write service of section 7.2, once it exists.
+
+**What the owner sets up once, beyond what `docs/contributing/releasing.md` already lists for GitHub**:
+
+- A machine with Docker, a copy of `tools/deploy/docker-compose.example.yml` as `docker-compose.yml`, and a `.env`
+  beside it (never committed) with `ACME_EMAIL`, a read-only `RELEASE_SYNC_TOKEN` (a fine-grained token scoped to
+  `contents: read` of this repository), and `RELEASE_SYNC_WEBHOOK_SECRET` (any random string, the same one entered
+  into GitHub's webhook configuration below).
+- DNS: `torb.dev` and `packages.torb.dev` pointed at the machine (or at the CDN in front of it), and a webhook
+  configured on the repository (Settings -> Webhooks) for the "Releases" event, `https://torb.dev/webhook`, content
+  type `application/json`, the same secret as `RELEASE_SYNC_WEBHOOK_SECRET`.
+- `cosign` on the operator's own machine too, for a manual `cosign verify-blob` when investigating a refused sync
+  (`docs/contributing/releasing.md` already has the exact command).
+- The three package manager repositories and their tokens, listed in `docs/contributing/releasing.md`.
 
 ### 7.12 Registries compared
 
@@ -828,7 +954,7 @@ cuts a release is [docs/contributing/releasing.md](../contributing/releasing.md)
 | `.github/workflows/ci.yml` | every push to `main` and every pull request: the gates on the targets the change can affect |
 | `.github/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, conformance, the agreement of the C, and on request the release binaries, the archives and the seed. Read-only |
 | `.github/workflows/nightly.yml` | every night that `main` changed: the gates everywhere, then the seed and a prerelease `nightly-YYYYMMDD` |
-| `.github/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates everywhere, the signed release, the seed |
+| `.github/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates everywhere, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
 | `.github/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
 | `.github/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC` |
 | `.github/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
@@ -1077,3 +1203,11 @@ arm64 add no warning to the generated C, and the network programs pass on every 
   `nightly-*`) can create them.
 - **Branch protection on `main`**: require the checks `gates / tier A (linux-x64)`, `gates / bootstrap (linux-x64)`,
   `gates / bootstrap and conformance (windows-x64)` and `gates / every target emits the same C` before a merge.
+- **The package manager channels** (`publish-packages` of `release.yml`, section 5): create `TorbScript/homebrew-tap`
+  and `TorbScript/scoop-bucket`, each with an empty `Formula/` or `bucket/` directory; submit the first winget manifest
+  by hand with `wingetcreate new` (`update` only ever edits an existing one); add `HOMEBREW_TAP_TOKEN`,
+  `SCOOP_BUCKET_TOKEN` and `WINGET_TOKEN` as repository secrets, each a fine-grained personal access token limited to
+  `contents: write` of the one repository it pushes to (winget's token needs to open a pull request against
+  `microsoft/winget-pkgs`, so a classic token with `public_repo` is what `wingetcreate` itself documents). None of the
+  three is required: the job skips a channel whose secret is absent (`docs/contributing/releasing.md` has the full list
+  of one-time setup, including `release-sync`'s).
