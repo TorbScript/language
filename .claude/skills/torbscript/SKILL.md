@@ -294,7 +294,7 @@ sh tools/gates.sh a
 
 It builds `build/release/torb` where that is missing or older than the compiler sources, then runs `check .`,
 `check --statistics .`, `test compiler/tests`, the test packages of `std/` and `examples/`, the two docs gates and
-`canon --check` with the five rules, one line per gate with its time. A round that touches the IR, a back end or
+`format --check` over the repository, one line per gate with its time. A round that touches the IR, a back end or
 `runtime/` runs `sh tools/gates.sh b` once besides: the conformance suite, the fixpoint and the C runtime tests.
 
 ### Related

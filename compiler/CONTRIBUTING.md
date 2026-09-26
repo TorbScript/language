@@ -80,7 +80,7 @@ ends (all of them build natively; one that waits for a back-end gap is named in
 [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and in the `broken` list of `gates.sh`, which skips it), every
 program of `tests/language/` run with `torb run --native` and with `torb run` against its `.expected`, the three docs gates
 (`docs check`, `docs index --check`, `docs skill --check`), `doc --check --no-run std` (every link of a doc comment of
-std's public API resolves and every example of it type checks), and `canon --check` with the five rules. Everything it
+std's public API resolves and every example of it type checks), and `format --check` over the repository. Everything it
 builds only to run it once is built with the `dev` profile.
 
 **Tier B is `sh tools/gates.sh b`**: `tools/conformance.sh` (the conformance suite - every program under

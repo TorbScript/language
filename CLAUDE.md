@@ -16,6 +16,8 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   `torb run --native` build the `dev` profile (`-O1`), `torb build` builds `release` (`-O2`); `--profile` or
   `--release` says otherwise.
 - A false positive of the checker is a checker bug. `torb check` of a path that reaches no file is an error.
+- `torb format --check .` is a tier A gate; `torb format <path>` writes the layout (the canon plus indentation, spaces
+  and blank lines). `torb canon` is a deprecated alias of it. `torb lint <path>` reports the style rules, not a gate.
 
 ## Checking a scratch program
 
