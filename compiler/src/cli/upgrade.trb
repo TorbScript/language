@@ -25,8 +25,7 @@
 
 use File from "std/fs"
 use Process from "std/process"
-use Environment, Directories, OsError from "std/os"
-use OperatingSystem from "std/core"
+use Environment, OsError from "std/os"
 use hostTarget from "../project/target"
 
 /** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
@@ -189,28 +188,48 @@ public fn packageManagerCommand(method: String): String {
 
 // -------------------------------------------------------------------------------------------------------- the home
 
-/** `~/.torb` on Linux, macOS and FreeBSD; `%LOCALAPPDATA%\torb` on Windows. */
+/**
+ * `~/.torb` on Linux, macOS and FreeBSD; `%LOCALAPPDATA%\torb` on Windows.
+ *
+ * # Pitfalls
+ *
+ * - The system is asked at run time and the directories come from the environment, never from an arm of
+ *   `OperatingSystem.current` or `Directories`: the compiler's own C is the same for every target - the published seed
+ *   is one C file for every machine, and CI compares the C of every target - so nothing it reaches may be folded by the
+ *   target or call a native of one system.
+ */
 public fn torbHome(): Result<String, OsError> {
-  match OperatingSystem.current {
-    .Windows => {
-      const local = Directories.state()?
-      Ok "{local.show()}/torb"
-    }
-    .Linux | .MacOs | .FreeBsd => {
-      const home = Directories.home()?
-      Ok "{home.show()}/.torb"
-    }
+  if onWindows() {
+    const local = variableOf("LOCALAPPDATA")?
+    Ok "{local}/torb"
+  } else {
+    const home = variableOf("HOME")?
+    Ok "{home}/.torb"
   }
 }
 
 /** Where the toolchain in use lives: `<home>/bin` on POSIX, `%LOCALAPPDATA%\Programs\torb\bin` on Windows. */
 fn activeBinDirectory(home: String): Result<String, OsError> {
-  match OperatingSystem.current {
-    .Windows => {
-      const local = Directories.state()?
-      Ok "{local.show()}/Programs/torb/bin"
-    }
-    .Linux | .MacOs | .FreeBsd => Ok "{home}/bin"
+  if onWindows() {
+    const local = variableOf("LOCALAPPDATA")?
+    Ok "{local}/Programs/torb/bin"
+  } else {
+    Ok "{home}/bin"
+  }
+}
+
+/** Whether `torb` runs on Windows, asked at run time (see [torbHome]). */
+fn onWindows(): Bool {
+  match hostTarget().system {
+    .Windows => true
+    .Linux | .MacOs | .FreeBsd => false
+  }
+}
+
+fn variableOf(name: String): Result<String, OsError> {
+  match Environment.get(name) {
+    Some(value) => Ok value
+    None => Fail OsError.Missing("the variable {name}", "it is not set")
   }
 }
 
@@ -266,7 +285,7 @@ fn download(url: String, destination: String): Result<Void, String> {
 
 /** `sha256sum`/`shasum -a 256` on POSIX, PowerShell's `Get-FileHash` on Windows - lower case, without the file name. */
 fn sha256Of(path: String): Result<String, String> {
-  if OperatingSystem.current == .Windows {
+  if onWindows() {
     // Not `certutil`: its extra lines are in the console's own code page, and a German or Japanese Windows prints
     // them outside ASCII, which `Process.run` cannot read back as text (it insists on UTF-8, correctly). One
     // PowerShell expression whose only output is the hex itself sidesteps the question of which code page it is in.
@@ -326,7 +345,7 @@ public fn expectedHash(sums: String, file: String): String? {
 /** Makes `version` the one `<home>/bin/torb` (POSIX) or `%LOCALAPPDATA%\Programs\torb` (Windows) resolves to. */
 fn activate(home: String, version: String): Result<Void, String> {
   const toolchain = "{home}/toolchains/{version}"
-  if OperatingSystem.current == .Windows {
+  if onWindows() {
     const active = match activeBinDirectory(home) {
       Ok(path) => "{path}/.."
       Fail(error) => { return Fail error.show() }
