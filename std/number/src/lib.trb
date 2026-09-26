@@ -122,10 +122,25 @@ public trait Real with Signed, Power, Power<Int64> {
   /** The tangent of an angle in radians. */
   fn tangent(): Self
 
-  /** The angle in radians whose sine is this value, in `[-pi/2, pi/2]`. */
+  /**
+   * The angle in radians whose sine is this value, in `[-pi/2, pi/2]`.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, where no angle has this sine. The precondition is an ordinary expression,
+   * `value.absolute() <= Scalar.one`, so a value outside is a broken promise of the program and every implementor stops
+   * there rather than answering a number (`docs/design/PANICS.md`, 5.1). `value.clamp(-Scalar.one, Scalar.one)` first
+   * is the total form, for a ratio that rounding pushed a hair past one.
+   */
   fn arcSine(): Self
 
-  /** The angle in radians whose cosine is this value, in `[0, pi]`. */
+  /**
+   * The angle in radians whose cosine is this value, in `[0, pi]`.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, as [Real.arcSine] says.
+   */
   fn arcCosine(): Self
 
   /** The angle in radians whose tangent is this value, in `(-pi/2, pi/2)`. */
@@ -621,10 +636,36 @@ extend Float64 with Real {
   native fn cosine(): Float64
   /** The tangent of an angle in radians. */
   native fn tangent(): Float64
-  /** In radians, in `[-pi/2, pi/2]`; `nan` outside `[-1, 1]`. */
-  native fn arcSine(): Float64
-  /** In radians, in `[0, pi]`; `nan` outside `[-1, 1]`. */
-  native fn arcCosine(): Float64
+  /**
+   * In radians, in `[-pi/2, pi/2]`; `nan` answers `nan`.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, where no angle has this sine, exactly as `Fixed.arcSine` of `std/linear` does: the two
+   * implementors of [Real] agree about every value both of them hold (`docs/design/LINEAR.md`, "Numeric policy"). A
+   * ratio that rounding pushed a hair past one is clamped at the call, `ratio.clamp(-1.0, 1.0).arcSine()`, which is the
+   * total form.
+   */
+  fn arcSine(): Float64 {
+    if absolute() > 1.0 {
+      panic "the arc sine of {self} does not exist: the sine of an angle is between -1 and 1"
+    }
+    arcTangentDivided by: ((1.0 - self) * (1.0 + self)).squareRoot()
+  }
+
+  /**
+   * In radians, in `[0, pi]`; `nan` answers `nan`.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, where no angle has this cosine, as [Float64.arcSine] says.
+   */
+  fn arcCosine(): Float64 {
+    if absolute() > 1.0 {
+      panic "the arc cosine of {self} does not exist: the cosine of an angle is between -1 and 1"
+    }
+    ((1.0 - self) * (1.0 + self)).squareRoot().arcTangentDivided(by: self)
+  }
   /** In radians, in `(-pi/2, pi/2)`. */
   native fn arcTangent(): Float64
   /** The angle of the point `(by, self)`, which is C's `atan2(self, by)`. */

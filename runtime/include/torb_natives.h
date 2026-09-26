@@ -13,10 +13,6 @@
 
 /* UInt64.addedWrapping */
 uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);
-/* Float64.arcCosine */
-double torb_arc_cosine_f64(double value);
-/* Float64.arcSine */
-double torb_arc_sine_f64(double value);
 /* Float64.arcTangentDivided */
 double torb_arc_tangent_divided_f64(double value, double by);
 /* Float64.arcTangent */

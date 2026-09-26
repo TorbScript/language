@@ -298,6 +298,14 @@ rotations; only what a *viewer* sees differs. Concretely, the library never has 
   and the honest answer is the one the caller can test.
 - **No `nan` reaches a comparison here.** `Float64` has a total `compare` with `nan` above everything, and `Fixed` has no
   `nan` at all — which is one more reason a lockstep simulation runs on it.
+- **`arcSine` and `arcCosine` panic outside `[-1, 1]`, in both implementors of `Real`** (decided 2026-09-26). `Fixed`
+  cannot answer `nan`, and `Float64` used to answer C's `nan` there, so a body generic over the scalar stopped for one
+  and computed on with a poisoned value for the other. The precondition is an ordinary expression
+  (`value.absolute() <= Scalar.one`), which is exactly where PANICS.md's principle allows a panic and where a wrong
+  number that keeps running is the worse answer (its variant E). `Float64.arcSine` is therefore TorbScript over
+  `arcTangentDivided` with the check in front, `nan` still answers `nan`, and `value.clamp(-Scalar.one, Scalar.one)`
+  is the total form for a ratio that rounding pushed past one. The other members where the two differ -
+  `squareRoot` and `naturalLogarithm` below their domain - are "what the implementor documents" in `Real` and stay so.
 - **`Fixed` is bit-identical everywhere.** Every operation on it, the square root and the trigonometry included, is
   integer arithmetic. The native gate programs `linear.trb`, `geometry.trb` and `grid-vectors.trb` compare the
   compiled binary against their `.expected` byte for byte (they compared stage 0 against the binary until stage 0 was
