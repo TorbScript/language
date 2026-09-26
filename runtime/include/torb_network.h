@@ -96,6 +96,15 @@ torb_task *torb_network_receive_datagram(int64_t socket);
  */
 int64_t torb_network_take_datagram(int64_t socket, torb_list *into, torb_list *from);
 
+/**
+ * The name servers the system is configured with (docs/design/DNS.md section 7), appended to `*parts` as four numbers
+ * each: the family, the high and the low half, the port. Their count, or a failure.
+ */
+int64_t torb_network_name_servers(torb_list *parts);
+
+/** 64 bits from the system's source of randomness: the identifier of a DNS query (RFC 5452). */
+int64_t torb_network_random(void);
+
 /** The words for a failure a native of this header answered. Result owned. */
 torb_text torb_network_error_text(int64_t failure);
 

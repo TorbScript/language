@@ -510,6 +510,29 @@ TORB_TEST(test_io_a_cancelled_datagram_receive_loses_nothing) {
   TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
 }
 
+TORB_TEST(test_io_the_system_names_its_name_servers) {
+  torb_list parts = torb_list_new(&torb_element_int64);
+  int64_t count = torb_network_name_servers(&parts);
+  int64_t index;
+  /* A machine may have no network at all, but the answer is never a failure, and every server is on port 53 */
+  TORB_CHECK(count >= 0);
+  TORB_CHECK_INTEGER(torb_list_length(parts), count * 4);
+  for (index = 0; index < count; index += 1) {
+    int64_t family = *(const int64_t *)torb_list_at(parts, index * 4, torb_location_unknown);
+    TORB_CHECK(family == 4 || family == 6);
+    TORB_CHECK_INTEGER(*(const int64_t *)torb_list_at(parts, index * 4 + 3, torb_location_unknown), 53);
+  }
+  torb_list_release(parts);
+}
+
+TORB_TEST(test_io_randomness_differs) {
+  int64_t first = torb_network_random();
+  int64_t second = torb_network_random();
+  int64_t third = torb_network_random();
+  /* Three equal draws of 64 bits are a broken source, not bad luck */
+  TORB_CHECK(!(first == second && second == third));
+}
+
 void torb_register_io_tests(void) {
   TORB_ADD(test_io_echo_over_loopback);
   TORB_ADD(test_io_shutdown_is_the_end_of_the_stream);
@@ -527,4 +550,6 @@ void torb_register_io_tests(void) {
   TORB_ADD(test_io_a_connected_datagram_socket);
   TORB_ADD(test_io_a_connected_datagram_socket_hears_refused);
   TORB_ADD(test_io_a_cancelled_datagram_receive_loses_nothing);
+  TORB_ADD(test_io_the_system_names_its_name_servers);
+  TORB_ADD(test_io_randomness_differs);
 }

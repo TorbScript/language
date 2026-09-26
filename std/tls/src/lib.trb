@@ -17,7 +17,8 @@
 
 use ArrayList from "std/collections"
 use Source, Sink, Bytes from "std/stream"
-use TcpStream, SocketAddress, NetworkError from "std/network"
+use TcpStream, SocketAddress, NetworkError, randomQueryIdentifier from "std/network"
+use DomainName, RecordType, Record, Message, ResponseCode, query, readResponse from "std/dns"
 
 /** What a client trusts. The default is the platform's judgement, which is what every other program of the machine trusts. */
 public type TlsSettings {
@@ -276,6 +277,106 @@ public shared type TlsSink with Sink<Bytes, NetworkError> {
 
   /** Nothing of its own: the stream closes once its last holder is gone. */
   var fn close() {}
+}
+
+// --- DNS over TLS -------------------------------------------------------------------------------------------------------
+
+/**
+ * DNS over TLS (RFC 7858): the lookups of `std/network`'s `Resolver`, asked of one name server over a TLS connection to
+ * its port 853 - the question and the answer each after their length in two bytes, as over TCP (RFC 7766) - with the
+ * server authenticated by the name its certificate has to carry (RFC 8310's strict profile: a server that cannot prove
+ * `serverName` is never asked).
+ *
+ *     const resolver = TlsResolver(SocketAddress(IpAddress.tryFrom("192.0.2.53")?, 853), "dns.example.test")
+ *     const records = resolver.lookup(DomainName.tryFrom("example.test")?, RecordType.Aaaa).await()?
+ *
+ * Every lookup opens a connection of its own and closes it with the answer: keeping one open for the next question is a
+ * later refinement. Times are milliseconds, because a field's default is a constant and a `Duration` is none.
+ */
+public type TlsResolver {
+  /** The name server, usually on port 853. */
+  server: SocketAddress
+  /** The name its certificate has to carry. */
+  serverName: String
+  /** What the client trusts: the platform's roots by default. */
+  settings: TlsSettings = TlsSettings()
+  /** How long connecting, the handshake and the answer may take together. */
+  attemptMilliseconds: Int = 5000
+
+  /**
+   * The records of `recordType` that `name` has, CNAME chains followed within the answer.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isHostNotFound()` where the name does not exist (NXDOMAIN), and
+   *   `isNameServerFailure()` where the server answered `SERVFAIL`, `REFUSED` or `NOTIMP`.
+   * - Every failure of [TlsResolver.exchange].
+   */
+  fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>> {
+    const message = exchange(name, recordType).await()?
+    if message.responseCode == ResponseCode.NameError {
+      return Fail NetworkError.hostNotFound(name.show())
+    }
+    if message.responseCode == ResponseCode.ServerFailure || message.responseCode == ResponseCode.Refused
+      || message.responseCode == ResponseCode.NotImplemented {
+      return Fail NetworkError.nameServerFailed("{server} answered {message.responseCode} for `{name}`")
+    }
+    Ok message.answersFor(name, recordType)
+  }
+
+  /**
+   * The whole response to a query for `recordType` at `name`, with a random identifier (RFC 5452).
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isTimedOut()` where the attempt's time passed, `isCertificateRejected()` where the server
+   *   could not prove its name, and `isNameServerFailure()` where it answered something that is not the response.
+   */
+  fn exchange(name: DomainName, recordType: RecordType): Task<Result<Message, NetworkError>> {
+    const question = query name, recordType, randomQueryIdentifier()
+    const limit = attemptMilliseconds.milliseconds()
+    var asking = exchangeOverTls server, serverName, settings, question
+    match asking.within(limit).await() {
+      Ok(result) => result
+      Fail(_) => Fail NetworkError.timedOut("{server} did not answer over TLS within {limit}")
+    }
+  }
+}
+
+/** One question over a new TLS connection, and the one response read back after its two-byte length. */
+fn exchangeOverTls(
+  server: SocketAddress,
+  serverName: String,
+  settings: TlsSettings,
+  question: Bytes,
+): Task<Result<Message, NetworkError>> {
+  const stream = TcpStream.connect(server).await()?
+  var session = TlsStream.connect(stream, serverName, settings).await()?
+  const length = question.length()
+  var framed: ArrayList<UInt8> = ArrayList.withCapacity(length + 2)
+  framed.append(UInt8.tryFrom(length >> 8 & 255).ok() ?? 0)
+  framed.append(UInt8.tryFrom(length & 255).ok() ?? 0)
+  framed.appendAll question
+  session.sendBuffer(framed).await()?
+  var received: ArrayList<UInt8> = ArrayList.withCapacity 0
+  var expected = -1
+  loop {
+    if expected < 0 && received.length() >= 2 {
+      expected = Int.from(received[0]) * 256 + Int.from(received[1])
+    }
+    if expected >= 0 && received.length() >= expected + 2 {
+      break
+    }
+    match session.receiveBuffer().await()? {
+      Some(chunk) => received.appendAll chunk
+      None => {
+        return Fail NetworkError.nameServerFailed("{server} ended the session before its answer was complete")
+      }
+    }
+  }
+  const _ = session.shutdown().await()
+  const response: Bytes = received.slice(2..expected + 2)
+  readResponse(response, question).mapError({ NetworkError.nameServerFailed "{server} answered no DNS response: {_}" })
 }
 
 /** A failure of TLS with no code of mbedTLS: kind 12 of runtime/include/torb_io.h, packed. */

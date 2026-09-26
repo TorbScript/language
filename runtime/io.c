@@ -1005,6 +1005,32 @@ int64_t torb_network_take_datagram(int64_t socket, torb_list *into, torb_list *f
   return length;
 }
 
+/* ----------------------------------------------------------------------------------------- the name servers --- */
+
+/* More name servers than a lookup would ever get through in its time. */
+#define TORB_IO_NAME_SERVERS 16u
+
+int64_t torb_network_name_servers(torb_list *parts) {
+  torb_io_address found[TORB_IO_NAME_SERVERS];
+  int64_t count = torb_io_system_name_servers(found, TORB_IO_NAME_SERVERS);
+  int64_t index;
+  if (count < 0) {
+    return count;
+  }
+  for (index = 0; index < count; index += 1) {
+    torb_io_add_address(parts, &found[index], true);
+  }
+  return count;
+}
+
+int64_t torb_network_random(void) {
+  uint64_t value = 0u;
+  if (!torb_io_system_random((uint8_t *)&value, sizeof value)) {
+    torb_panic_text("the system's source of randomness did not answer", torb_location_unknown);
+  }
+  return (int64_t)value;
+}
+
 torb_text torb_network_error_text(int64_t failure) {
   char buffer[512];
   uint64_t packed = failure < 0 ? (uint64_t)(-failure) : 0u;

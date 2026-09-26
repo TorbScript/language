@@ -108,9 +108,9 @@ the natives that exist.** In this order, because each part stands on the one bef
    and OpenAPI on top of it. `std/uri` is finished before `std/http` grows further (the owner, 2026-09-25): the URI
    types, IRIs, URNs, templates and the pure address package `std/ip` come first
    ([design/URI.md](design/URI.md) section 14). The pure `std/dns` - names with IDNA, records, the wire format - is
-   built; its transports come with the network's slices: `lookup(name, type)` over UDP and TCP (RFC 7766) in
-   `std/network`, DNS over TLS (RFC 7858), DNS over HTTPS (RFC 8484) and the HTTPS/SVCB records for ALPN (RFC 9460)
-   in `std/http` ([design/DNS.md](design/DNS.md) section 7). The web layer above HTTP - handlers, routes, HTML and a
+   built, and so are its first transports: `lookup(name, type)` over UDP and TCP (RFC 7766) with the system's name
+   servers in `std/network` and DNS over TLS (RFC 7858) in `std/tls`; DNS over HTTPS (RFC 8484) and the HTTPS/SVCB
+   records for ALPN (RFC 9460) come with `std/http` ([design/DNS.md](design/DNS.md) section 7). The web layer above HTTP - handlers, routes, HTML and a
    live UI - is [design/WEB.md](design/WEB.md).
 3. **Formats**, as packages on `Encode` and `Decode` ([design/ENCODING.md](design/ENCODING.md) section 9): `json`
    exists, then `toml`, `xml` and `html` (the document formats, each with its tree), JSON Schema and JSON Patch, in the
@@ -159,7 +159,7 @@ supported, and neither is a dialect with its own name.
 | `std/random` | a seedable, splittable generator that is a value | [design/RANDOM.md](design/RANDOM.md) | nothing |
 | `std/identifier` | `Uuid`, `Ulid`, the trait `Identifier` | [design/URI.md](design/URI.md) section 12 | `std/random` |
 | `std/uri` | built: `Uri` and `UriReference` after RFC 3986, IRIs (RFC 3987), `Urn` (RFC 8141), `UriTemplate` (RFC 6570) typed against the fields it fills, routes (`route`, `TemplateRoutes`), the `file:` bridge, `std/ip`, `std/http` on `Uri`, `Host.domainName()`, and the literal rule (`Path`, `Uri`, `UriReference`, `UriTemplate`, `Regex`, resources); next: non-ASCII hosts through `std/dns`'s IDNA, and `data:` | [design/URI.md](design/URI.md) section 14 | nothing |
-| `std/dns` | built: `DomainName` with IDNA (Punycode, UTS #46 as far as `std/text`'s tables reach) and RFC 4343's comparison, the records as typed cases, `Message` with compression and EDNS0, `query` and `readResponse`; next: `lookup` over UDP and TCP in `std/network`, DNS over TLS, DNS over HTTPS and HTTPS/SVCB for ALPN in `std/http`, the rest of UTS #46; DNSSEC validation is out | [design/DNS.md](design/DNS.md) section 7 | UDP (design/NETWORK.md slice 5) for `lookup`; the Unicode tables of `std/text` for the rest of UTS #46 |
+| `std/dns` | built: `DomainName` with IDNA (Punycode, UTS #46 as far as `std/text`'s tables reach) and RFC 4343's comparison, the records as typed cases, `Message` with compression and EDNS0, `query` and `readResponse`; `lookup` and `Resolver` over UDP and TCP with the system's servers in `std/network`, `TlsResolver` (DNS over TLS) in `std/tls`; next: DNS over HTTPS and HTTPS/SVCB for ALPN in `std/http`, the rest of UTS #46; DNSSEC validation is out | [design/DNS.md](design/DNS.md) section 7 | the Unicode tables of `std/text` for the rest of UTS #46 |
 | `std/cli` | commands, flags and options declared once, help and errors generated | [design/CLI.md](design/CLI.md) | nothing |
 | `std/os`, `std/path` | the rest of their slices | [design/OS.md](design/OS.md), [design/PATH.md](design/PATH.md) | - |
 | resources | files a program ships or embeds, named by a literal; slice 1 built (`std/resource`, the literal resolved and checked by the compiler); next: embedding and shipping the bytes | [design/RESOURCES.md](design/RESOURCES.md) | - |

@@ -205,6 +205,10 @@ int64_t torb_network_connect_datagram(int64_t socket, int64_t family, int64_t hi
 torb_text torb_network_error_text(int64_t failure);
 /* networkListen */
 int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t port, int64_t backlog);
+/* networkNameServers */
+int64_t torb_network_name_servers(torb_list *parts);
+/* networkRandom */
+int64_t torb_network_random(void);
 /* networkReceive */
 torb_task *torb_network_receive(int64_t stream, int64_t maximum);
 /* networkReceiveDatagram */

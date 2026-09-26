@@ -32,6 +32,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -297,6 +298,85 @@ int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {
     return torb_io_failed(TORB_IO_HOST_NOT_FOUND, 0u);
   }
   return (int64_t)count;
+}
+
+/* ------------------------------------------------------------------------- the name servers, and randomness --- */
+
+/* One address of a `nameserver` line, without a `%scope`: false where it is none. */
+static bool torb_posix_name_server(const char *text, torb_io_address *out) {
+  char address[64];
+  size_t length = 0u;
+  memset(out, 0, sizeof *out);
+  while (text[length] != '\0' && text[length] != '%' && text[length] != ' ' && text[length] != '\t'
+         && text[length] != '\r' && text[length] != '\n' && length < sizeof address - 1u) {
+    address[length] = text[length];
+    length += 1u;
+  }
+  address[length] = '\0';
+  out->port = 53u;
+  if (inet_pton(AF_INET, address, out->bytes) == 1) {
+    out->family = 4;
+    return true;
+  }
+  if (inet_pton(AF_INET6, address, out->bytes) == 1) {
+    out->family = 6;
+    return true;
+  }
+  return false;
+}
+
+int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity) {
+  FILE *file = fopen("/etc/resolv.conf", "r");
+  char line[512];
+  size_t count = 0u;
+  if (file != NULL) {
+    while (fgets(line, (int)sizeof line, file) != NULL) {
+      const char *rest = line;
+      torb_io_address address;
+      if (strncmp(rest, "nameserver", 10u) != 0 || (rest[10] != ' ' && rest[10] != '\t')) {
+        continue;
+      }
+      rest += 10;
+      while (*rest == ' ' || *rest == '\t') {
+        rest += 1;
+      }
+      if (torb_posix_name_server(rest, &address) && count < capacity) {
+        out[count] = address;
+        count += 1u;
+      }
+    }
+    (void)fclose(file);
+  }
+  /* resolv.conf(5): without a `nameserver` line, the name server of the local machine */
+  if (count == 0u && capacity > 0u) {
+    memset(&out[0], 0, sizeof out[0]);
+    out[0].family = 4;
+    out[0].port = 53u;
+    out[0].bytes[0] = 127u;
+    out[0].bytes[3] = 1u;
+    count = 1u;
+  }
+  return (int64_t)count;
+}
+
+bool torb_io_system_random(uint8_t *out, size_t size) {
+  int descriptor = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+  size_t done = 0u;
+  if (descriptor < 0) {
+    return false;
+  }
+  while (done < size) {
+    ssize_t read_now = read(descriptor, out + done, size - done);
+    if (read_now < 0 && errno == EINTR) {
+      continue;
+    }
+    if (read_now <= 0) {
+      break;
+    }
+    done += (size_t)read_now;
+  }
+  (void)close(descriptor);
+  return done == size;
 }
 
 /* ---------------------------------------------------------------------------------------- the calls themselves --- */

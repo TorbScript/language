@@ -1,6 +1,6 @@
 ---
 title: std/tls
-summary: TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, and a stream like the TCP one.
+summary: TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 kind: package
 status: stable
 order: 178
@@ -12,6 +12,8 @@ keywords:
   - TlsStream
   - TlsSettings
   - ServerIdentity
+  - TlsResolver
+  - DNS over TLS
 source:
   - std/tls/src/lib.trb
   - runtime/tls/tls.c
@@ -100,6 +102,25 @@ What a server proves who it is with: its PEM certificate chain - its own certifi
 and the PEM private key of the first certificate. It is read once and shared by every connection; a key that is not the
 certificate's is refused here, not at the first handshake.
 
+### TlsResolver
+
+```trb fragment
+public type TlsResolver {
+  server: SocketAddress
+  serverName: String
+  settings: TlsSettings = TlsSettings()
+  attemptMilliseconds: Int = 5000
+  fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>>
+  fn exchange(name: DomainName, recordType: RecordType): Task<Result<Message, NetworkError>>
+}
+```
+
+DNS over TLS (RFC 7858): the lookups of `std/network`'s [`Resolver`](network.md), asked of one name server over TLS -
+on port 853, the port RFC 7858 assigns - which has to prove `serverName` before a question is sent. The question and the answer go as over
+TCP, each after its length in two bytes, one connection per lookup; the messages are [std/dns](dns.md)'s. `lookup`
+answers the records of the type, CNAME chains followed, and fails with `isHostNotFound()` for a name that does not
+exist and `isNameServerFailure()` for a server that answered `SERVFAIL`, `REFUSED` or `NOTIMP`.
+
 ### Failures
 
 A failure of TLS is a [`NetworkError`](network.md): `isCertificateRejected()` where the peer's certificate is not
@@ -110,6 +131,7 @@ the platform's verifier or of mbedTLS.
 
 - [std/network](network.md) - the TCP stream under TLS, and `NetworkError`.
 - [std/http](http.md) - HTTPS in the client and the server.
+- [std/dns](dns.md) - the messages `TlsResolver` sends and reads.
 - docs/design/NETWORK.md - section 5, why mbedTLS and the platform's verifier.
 - [The standard library](index.md) - the other packages.
 

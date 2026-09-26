@@ -243,5 +243,16 @@ int64_t torb_io_system_resolve(const char *host, torb_io_address **out);
 void torb_io_system_error_text(uint32_t code, char *buffer, size_t size);
 /** The kind of the system's error `code`. */
 torb_io_failure torb_io_system_failure_kind(uint32_t code);
+/**
+ * The name servers the system is configured with, at most `capacity` of them into `out`, on port 53: the servers of the
+ * adapters that are up on Windows, the `nameserver` lines of `/etc/resolv.conf` elsewhere - and there the local machine
+ * where the file names none, as resolv.conf(5) says. Blocking, but short. The count, or a packed failure.
+ */
+int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity);
+/**
+ * `size` bytes from the system's source of randomness: `BCryptGenRandom`, loaded on first use, on Windows;
+ * `/dev/urandom` elsewhere. False where it did not answer.
+ */
+bool torb_io_system_random(uint8_t *out, size_t size);
 
 #endif /* TORB_IO_H */

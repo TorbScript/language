@@ -1,0 +1,222 @@
+/**
+ * DNS lookups: the stub resolver that asks a recursive name server for the records of a name (docs/design/DNS.md
+ * section 7). The messages are `std/dns`'s values; this module moves their bytes - over UDP, and over TCP where a
+ * response came back truncated (RFC 7766) - with a timeout per attempt and every server of the list tried in turn.
+ *
+ * `resolve(host)` stays what connecting uses: the system's own resolver, with its cache, its hosts file and its search
+ * domains. `lookup` is for a program that wants records rather than addresses - `MX`, `TXT`, `SRV`, `HTTPS` - or wants
+ * to ask a server of its own choosing.
+ */
+
+use ArrayList from "std/collections"
+use Bytes from "std/stream"
+use DomainName, RecordType, Record, Message, ResponseCode, query, readResponse from "std/dns"
+use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
+use NetworkError from "./error"
+use TcpStream, addressOf from "./tcp"
+use UdpSocket from "./udp"
+
+/**
+ * How [lookup] asks: which name servers, how long an attempt waits, and how many rounds over the servers it makes. The
+ * default asks the servers the system is configured with - the adapters' on Windows, `/etc/resolv.conf` elsewhere - two
+ * seconds per attempt, two rounds.
+ *
+ *     const resolver = Resolver(servers: [SocketAddress(IpAddress.tryFrom("192.0.2.53")?, 53)])
+ *     const records = resolver.lookup(DomainName.tryFrom("example.test")?, RecordType.Mx).await()?
+ *
+ * Times are milliseconds, because a field's default is a constant and a `Duration` is none.
+ */
+public type Resolver {
+  /** The recursive name servers to ask, in order; empty asks the ones the system is configured with. */
+  servers: List<SocketAddress> = []
+  /** How long one attempt - one datagram to one server, or one exchange over TCP - waits for its answer. */
+  attemptMilliseconds: Int = 2000
+  /** How many times each server is asked before the lookup gives up. */
+  rounds: Int = 2
+
+  /**
+   * The records of `recordType` that `name` has, CNAME chains followed within the answer: what a stub resolver answers.
+   * A name that exists without such records answers an empty list.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isHostNotFound()` where the name does not exist (NXDOMAIN).
+   * - Every failure of [Resolver.exchange].
+   */
+  fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>> {
+    const message = exchange(name, recordType).await()?
+    if message.responseCode == ResponseCode.NameError {
+      return Fail NetworkError.hostNotFound(name.show())
+    }
+    Ok message.answersFor(name, recordType)
+  }
+
+  /**
+   * The whole response to a query for `recordType` at `name`: each server in turn is asked over UDP, with a random
+   * identifier and a new socket per attempt, so an answer that does not match the question - another query's, a stale
+   * one, a forged one - is dropped rather than read. A truncated response is asked again over TCP of the same server
+   * (RFC 7766). A server that answers `SERVFAIL`, `REFUSED` or `NOTIMP`, or not at all within the attempt's time, hands
+   * the question to the next one; `NXDOMAIN` and an empty answer are answers.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isTimedOut()` where no server answered in any round, or the failure of the last attempt.
+   * - [NetworkError] where the system is configured with no name server and none was given.
+   */
+  fn exchange(name: DomainName, recordType: RecordType): Task<Result<Message, NetworkError>> {
+    const asked = if servers.isEmpty() { systemNameServers()? } else { servers }
+    var last = NetworkError.timedOut "no name server answered for `{name}`"
+    for _ in 0..rounds {
+      for server in asked {
+        const question = query name, recordType, randomQueryIdentifier()
+        match attempt(server, question).await() {
+          Ok(message) => {
+            if message.responseCode == ResponseCode.ServerFailure || message.responseCode == ResponseCode.Refused
+              || message.responseCode == ResponseCode.NotImplemented {
+              last = NetworkError.nameServerFailed "{server} answered {message.responseCode} for `{name}`"
+            } else {
+              return Ok message
+            }
+          }
+          Fail(problem) => {
+            last = problem
+          }
+        }
+      }
+    }
+    Fail last
+  }
+
+  /** One question to one server: over UDP, and over TCP where the answer was truncated; each within the attempt's time. */
+  private fn attempt(server: SocketAddress, question: Bytes): Task<Result<Message, NetworkError>> {
+    const limit = attemptMilliseconds.milliseconds()
+    var overUdp = exchangeOverUdp server, question
+    const answered = match overUdp.within(limit).await() {
+      Ok(result) => result?
+      Fail(_) => {
+        return Fail NetworkError.timedOut("{server} did not answer within {limit}")
+      }
+    }
+    if !answered.truncated {
+      return Ok answered
+    }
+    var overTcp = exchangeOverTcp server, question
+    match overTcp.within(limit).await() {
+      Ok(result) => result
+      Fail(_) => Fail NetworkError.timedOut("{server} did not answer over TCP within {limit}")
+    }
+  }
+}
+
+/**
+ * The records of `recordType` that `name` has, asked of the name servers the system is configured with: `Resolver()`'s
+ * [Resolver.lookup].
+ *
+ *     const exchanges = lookup(DomainName.tryFrom("example.test")?, RecordType.Mx).await()?
+ */
+public fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>> {
+  Resolver().lookup(name, recordType).await()
+}
+
+/**
+ * The name servers the system is configured with, in its order, on port 53: the servers of the network adapters that
+ * are up on Windows, the `nameserver` lines of `/etc/resolv.conf` elsewhere.
+ *
+ * # Errors
+ *
+ * - [NetworkError] where the system names none.
+ */
+public fn systemNameServers(): Result<List<SocketAddress>, NetworkError> {
+  var parts: ArrayList<Int> = ArrayList.withCapacity 0
+  const count = networkNameServers parts
+  if count < 0 {
+    return Fail NetworkError.of(count).about("reading the system's name servers")
+  }
+  var found: List<SocketAddress> = []
+  var index = 0
+  while index + 3 < parts.length() {
+    found.append SocketAddress(addressOf(parts[index], parts[index + 1], parts[index + 2]), parts[index + 3])
+    index = index + 4
+  }
+  if found.isEmpty() {
+    return Fail NetworkError.nameServerFailed("the system is configured with no name server")
+  }
+  Ok found
+}
+
+/**
+ * One datagram to `server` and the response to it. A new socket, connected to the server, so the system drops what
+ * anybody else sends; what arrives and is not the response to `question` is dropped here and the wait goes on.
+ */
+fn exchangeOverUdp(server: SocketAddress, question: Bytes): Task<Result<Message, NetworkError>> {
+  const socket = UdpSocket.bind(SocketAddress(unspecifiedLike(server.address), 0))?
+  socket.connect(server)?
+  socket.sendToPeer(question).await()?
+  loop {
+    const (bytes, _) = socket.receive().await()?
+    if const Ok(message) = readResponse(bytes, question) {
+      return Ok message
+    }
+  }
+}
+
+/**
+ * The question over a TCP connection to `server`, each message after its length in two bytes (RFC 1035 section 4.2.2,
+ * RFC 7766), and the one response read back the same way.
+ */
+fn exchangeOverTcp(server: SocketAddress, question: Bytes): Task<Result<Message, NetworkError>> {
+  const stream = TcpStream.connect(server).await()?
+  stream.send(framed(question)).await()?
+  var received: ArrayList<UInt8> = ArrayList.withCapacity 0
+  var expected = -1
+  loop {
+    if expected < 0 && received.length() >= 2 {
+      expected = Int.from(received[0]) * 256 + Int.from(received[1])
+    }
+    if expected >= 0 && received.length() >= expected + 2 {
+      break
+    }
+    match stream.receiveBuffer().await()? {
+      Some(chunk) => received.appendAll chunk
+      None => {
+        return Fail NetworkError.nameServerFailed("{server} closed the connection before its answer was complete")
+      }
+    }
+  }
+  const response: Bytes = received.slice(2..expected + 2)
+  readResponse(response, question).mapError({ NetworkError.nameServerFailed "{server} answered no DNS response: {_}" })
+}
+
+/** A message after its length in two bytes, as DNS over a stream sends it. */
+public fn framed(message: Bytes): Bytes {
+  const length = message.length()
+  var bytes: ArrayList<UInt8> = ArrayList.withCapacity(length + 2)
+  bytes.append(UInt8.tryFrom(length >> 8 & 255).ok() ?? 0)
+  bytes.append(UInt8.tryFrom(length & 255).ok() ?? 0)
+  bytes.appendAll message
+  bytes
+}
+
+/** The unspecified address of the IP version of `address`: where a socket that talks to it binds. */
+fn unspecifiedLike(address: IpAddress): IpAddress {
+  match address {
+    .Version4(_) => IpAddress.Version4 Ipv4Address.unspecified
+    .Version6(_) => IpAddress.Version6 Ipv6Address.unspecified
+  }
+}
+
+/**
+ * A random identifier for a DNS query, from the system's randomness (RFC 5452 section 9.2): what every transport of DNS
+ * draws for each question it sends, so that a forged answer has to guess it.
+ */
+public fn randomQueryIdentifier(): Int {
+  networkRandom() & 65535
+}
+
+// --- the natives of runtime/io.c (runtime/include/torb_network.h) --------------------------------------------------
+
+/** The system's name servers, four numbers each (family, high, low, port), appended to `parts`: their count, or a failure. */
+native fn networkNameServers(var parts: ArrayList<Int>): Int
+
+/** 64 bits from the system's source of randomness. */
+native fn networkRandom(): Int

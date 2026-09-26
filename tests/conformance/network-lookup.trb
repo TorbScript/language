@@ -1,0 +1,162 @@
+use UdpSocket, TcpListener, SocketAddress, IpAddress, Ipv4Address, NetworkError, Resolver from "std/network"
+use DomainName, RecordType, RecordData, Record, Message, MessageKind, ResponseCode from "std/dns"
+use ArrayList from "std/collections"
+use Bytes from "std/stream"
+
+/**
+ * DNS lookups against a name server written here, over loopback: no packet leaves the machine. The server answers over
+ * UDP and TCP on one port; a name with a CNAME is followed to its address, a name with more records than a datagram
+ * holds comes back truncated and is asked again over TCP, a name that does not exist is `isHostNotFound()`, and a lookup
+ * goes on past a closed port, a server that fails and a server that says nothing, to the one that answers.
+ */
+
+/** A name this program writes itself, so a refusal would be a bug of the program. */
+fn nameOf(text: String): DomainName {
+  match DomainName.tryFrom(text) {
+    Ok(name) => name
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** An address record of `name`. */
+fn addressRecord(name: String, last: UInt8): Record {
+  Record name: nameOf(name), timeToLive: 300, data: RecordData.A(Ipv4Address.of(192, 0, 2, last))
+}
+
+/** The answer of the local server: what it knows of the question's name, and over UDP a truncated one for `big`. */
+fn answerTo(query: Message, overTcp: Bool): Message {
+  const name = match query.questions.first() {
+    Some(question) => question.name.show()
+    None => ""
+  }
+  var answers: List<Record> = []
+  var code = ResponseCode.NoError
+  var truncated = false
+  if name == "host.example.test" {
+    answers = [addressRecord("host.example.test", 7)]
+  } else if name == "alias.example.test" {
+    const alias = Record name: nameOf(name), timeToLive: 60, data: RecordData.Cname(nameOf("host.example.test"))
+    answers = [alias, addressRecord("host.example.test", 7)]
+  } else if name == "big.example.test" {
+    if overTcp {
+      for index in 0..40 {
+        const text: Bytes = "record {index} of a set larger than one datagram of 512 bytes".bytes().toList()
+        answers.append Record(name: nameOf(name), timeToLive: 30, data: RecordData.Txt([text]))
+      }
+    } else {
+      truncated = true
+    }
+  } else {
+    code = ResponseCode.NameError
+  }
+  Message(
+    identifier: query.identifier,
+    kind: MessageKind.Response,
+    recursionDesired: query.recursionDesired,
+    recursionAvailable: true,
+    truncated: truncated,
+    responseCode: code,
+    questions: query.questions,
+    answers: answers,
+  )
+}
+
+/** A server that fails every question it gets. */
+fn failureTo(query: Message): Message {
+  Message(
+    identifier: query.identifier,
+    kind: MessageKind.Response,
+    responseCode: ResponseCode.ServerFailure,
+    questions: query.questions,
+  )
+}
+
+/** Answers datagrams until it is cancelled: as the server that knows the names, or as the one that fails. */
+fn serveDatagrams(socket: UdpSocket, failing: Bool): Task<Result<Void, NetworkError>> {
+  loop {
+    const (bytes, sender) = socket.receive().await()?
+    if const Ok(query) = Message.tryFrom(bytes) {
+      const answer = if failing { failureTo query } else { answerTo query, false }
+      if const Ok(encoded) = answer.encoded() {
+        socket.send(encoded, to: sender).await()?
+      }
+    }
+  }
+}
+
+/** Answers connections until it is cancelled: one question per connection, each message after its two-byte length. */
+fn serveConnections(listener: TcpListener): Task<Result<Void, NetworkError>> {
+  loop {
+    const stream = listener.accept().await()?
+    var received: ArrayList<UInt8> = ArrayList.withCapacity 0
+    while received.length() < 2 || received.length() < Int.from(received[0]) * 256 + Int.from(received[1]) + 2 {
+      match stream.receiveBuffer().await()? {
+        Some(chunk) => received.appendAll chunk
+        None => {
+          break
+        }
+      }
+    }
+    if received.length() < 2 {
+      continue
+    }
+    const question: Bytes = received.slice(2..received.length())
+    if const Ok(query) = Message.tryFrom(question) {
+      if const Ok(encoded) = answerTo(query, true).encoded() {
+        var framed: ArrayList<UInt8> = ArrayList.withCapacity(encoded.length() + 2)
+        framed.append(UInt8.tryFrom(encoded.length() >> 8).ok() ?? 0)
+        framed.append(UInt8.tryFrom(encoded.length() & 255).ok() ?? 0)
+        framed.appendAll encoded
+        stream.sendBuffer(framed).await()?
+      }
+    }
+  }
+}
+
+/** The records a lookup answered, one line each, or its failure. */
+fn shown(result: Result<List<Record>, NetworkError>): String {
+  match result {
+    Ok(records) => if records.isEmpty() { "no records" } else { records.map({ _.show() }).joined(separator: "; ") }
+    Fail(problem) => "failed: host not found {problem.isHostNotFound()}, timed out {problem.isTimedOut()}"
+  }
+}
+
+/** A socket bound to a loopback port that nobody answers on any more. */
+fn closedPort(): Result<SocketAddress, NetworkError> {
+  const socket = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+  Ok socket.localAddress()
+}
+
+fn run(): Task<Result<Void, NetworkError>> {
+  const loopback = SocketAddress IpAddress.loopback, 0
+  const server = UdpSocket.bind(loopback)?
+  const address = server.localAddress()
+  const listener = TcpListener.listen(address)?
+  const failing = UdpSocket.bind(loopback)?
+  const silent = UdpSocket.bind(loopback)?
+  var answering = serveDatagrams server, false
+  var connections = serveConnections listener
+  var refusing = serveDatagrams failing, true
+  const resolver = Resolver servers: [address], attemptMilliseconds: 5000, rounds: 1
+  print "host: {shown(resolver.lookup(nameOf("host.example.test"), RecordType.A).await())}"
+  print "alias: {shown(resolver.lookup(nameOf("Alias.Example.Test"), RecordType.A).await())}"
+  const big = resolver.lookup(nameOf("big.example.test"), RecordType.Txt).await()
+  print "big, over TCP: {big.map({ _.length() })} records, the first {big.map({ _.first()?.show() })}"
+  print "missing: {shown(resolver.lookup(nameOf("missing.example.test"), RecordType.A).await())}"
+  const exchanged = resolver.exchange(nameOf("missing.example.test"), RecordType.Aaaa).await()
+  print "the whole answer: {exchanged.map({ _.responseCode })}"
+  // A closed port refuses at once and a failing server hands the question on: the third server answers
+  const persistent = Resolver servers: [closedPort()?, failing.localAddress(), address], attemptMilliseconds: 5000
+  print "past two: {shown(persistent.lookup(nameOf("host.example.test"), RecordType.A).await())}"
+  // A server that says nothing costs one attempt's time, then the next one answers
+  const patient = Resolver servers: [silent.localAddress(), address], attemptMilliseconds: 1000, rounds: 1
+  print "past a silent one: {shown(patient.lookup(nameOf("host.example.test"), RecordType.A).await())}"
+  const hopeless = Resolver servers: [silent.localAddress()], attemptMilliseconds: 50, rounds: 2
+  print "only a silent one: {shown(hopeless.lookup(nameOf("host.example.test"), RecordType.A).await())}"
+  answering.cancel()
+  connections.cancel()
+  refusing.cancel()
+  Ok void
+}
+
+print run().await()

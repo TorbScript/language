@@ -4,6 +4,7 @@
  */
 
 use AddressError from "std/ip"
+use DnsError from "std/dns"
 
 /**
  * What went wrong on the network. The kind is a question (`isConnectionRefused()`, `isTimedOut()`, ...), and `show()`
@@ -58,6 +59,11 @@ public type NetworkError with Show, Error {
     kind == .CertificateRejected
   }
 
+  /** A name server answered with a failure (`SERVFAIL`, `REFUSED`), with no DNS at all, or none is configured. */
+  fn isNameServerFailure(): Bool {
+    kind == .NameServer
+  }
+
   /** Worth trying again unchanged: a refused, reset or timed-out connection, or a network that cannot be reached. */
   fn isRetryable(): Bool {
     kind == .Refused || kind == .Reset || kind == .Aborted || kind == .TimedOut || kind == .Unreachable
@@ -84,6 +90,16 @@ public type NetworkError with Show, Error {
   /** The socket is closed: an operation on a stream or a listener after its `close()`. */
   static fn closed(): NetworkError {
     NetworkError(.Closed, "the socket is closed")
+  }
+
+  /** Nobody answered in time: `message` says who and how long. */
+  static fn timedOut(message: String): NetworkError {
+    NetworkError(.TimedOut, message)
+  }
+
+  /** A name server failed a lookup, as `message` says. */
+  static fn nameServerFailed(message: String): NetworkError {
+    NetworkError(.NameServer, message)
   }
 
   /** `host` resolved to no address. */
@@ -120,6 +136,7 @@ type NetworkErrorKind with Equals {
   case Invalid
   case TlsFailed
   case CertificateRejected
+  case NameServer
   case Other
 }
 
@@ -146,6 +163,13 @@ fn kindOf(failure: Int): NetworkErrorKind {
 extend NetworkError with From<AddressError> {
   static fn from(value: AddressError): NetworkError {
     NetworkError.invalidAddress value
+  }
+}
+
+/** A name that is no domain name, where a lookup was asked for one: `lookup(DomainName.tryFrom(text)?, ...)`. */
+extend NetworkError with From<DnsError> {
+  static fn from(value: DnsError): NetworkError {
+    NetworkError(.Invalid, value.show())
   }
 }
 

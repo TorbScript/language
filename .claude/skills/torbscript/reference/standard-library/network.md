@@ -1,6 +1,6 @@
 ---
 title: std/network
-summary: Name resolution, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
+summary: Name resolution and DNS lookups, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
 kind: package
 status: stable
 order: 175
@@ -16,16 +16,20 @@ keywords:
   - UdpSocket
   - datagram
   - resolve
+  - lookup
+  - Resolver
+  - DNS
   - NetworkError
 source:
   - std/network/src/lib.trb
   - std/network/src/error.trb
   - std/network/src/tcp.trb
   - std/network/src/udp.trb
+  - std/network/src/dns.trb
   - docs/design/NETWORK.md
 ---
 
-`std/network` is the network below HTTP: name resolution, TCP and UDP, over the address values of [std/ip](ip.md). Everything that waits for the
+`std/network` is the network below HTTP: name resolution, DNS lookups, TCP and UDP, over the address values of [std/ip](ip.md). Everything that waits for the
 network answers a `Task` and can be cancelled; a timeout is [`within`](task.md). It runs on the IO core of the runtime -
 an IO completion port on Windows, epoll on Linux, kqueue on macOS and FreeBSD - which wakes a task when its bytes
 arrive, so a thousand connections wait on one thread (see docs/design/NETWORK.md). It needs the
@@ -74,6 +78,43 @@ public fn resolve(host: String): Task<Result<List<IpAddress>, NetworkError>>
 The addresses a host name stands for. A literal address answers itself and `localhost` answers the two loopback
 addresses without asking anybody, so a program that talks to itself needs no resolver; every other name goes to the
 system's resolver, on a thread of the runtime.
+
+### `lookup` and `Resolver`
+
+```trb fragment
+public type Resolver {
+  servers: List<SocketAddress> = []
+  attemptMilliseconds: Int = 2000
+  rounds: Int = 2
+  fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>>
+  fn exchange(name: DomainName, recordType: RecordType): Task<Result<Message, NetworkError>>
+}
+public fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>>
+public fn systemNameServers(): Result<List<SocketAddress>, NetworkError>
+public fn randomQueryIdentifier(): Int
+```
+
+A stub resolver over the messages of [std/dns](dns.md): the records of a type that a name has - `MX`, `TXT`, `SRV`,
+`HTTPS`, or addresses - asked of a recursive name server. `lookup` answers the records, CNAME chains followed, an empty
+list for a name without such records, and `isHostNotFound()` for a name that does not exist; `exchange` answers the
+whole response. Each attempt is a UDP datagram with a random identifier from a new socket; a truncated answer is asked
+again over TCP; no answer within `attemptMilliseconds`, a refusal, or `SERVFAIL`, `REFUSED` and `NOTIMP` hand the
+question to the next server, for `rounds` rounds. An empty `servers` asks the ones the system is configured with -
+`systemNameServers()`: the adapters' on Windows, `/etc/resolv.conf` elsewhere - and the free `lookup` is `Resolver()`'s.
+There is no cache: `resolve` stays what connecting uses, with the system's cache and hosts file. DNS over TLS is
+[std/tls](tls.md)'s `TlsResolver`, which draws its identifiers from `randomQueryIdentifier()` too.
+
+```trb check
+use Resolver, SocketAddress, IpAddress, NetworkError from "std/network"
+use DomainName, RecordType from "std/dns"
+
+/** The mail exchanges of `domain`, lowest preference first, as a server on this machine answers them. */
+fn mailExchanges(domain: String): Task<Result<List<String>, NetworkError>> {
+  const resolver = Resolver servers: [SocketAddress(IpAddress.loopback, 53)]
+  const records = resolver.lookup(DomainName.tryFrom(domain)?, RecordType.Mx).await()?
+  Ok records.map({ _.data.show() }).toList()
+}
+```
 
 ### TcpListener
 
@@ -161,6 +202,7 @@ public type NetworkError with Show, Error {
   fn isClosed(): Bool
   fn isTlsFailure(): Bool
   fn isCertificateRejected(): Bool
+  fn isNameServerFailure(): Bool
   fn isRetryable(): Bool
 }
 ```
@@ -169,7 +211,9 @@ What went wrong, as one wrapper type: a new kind of failure is never a breaking 
 `show()` is the operating system's own words. A cancelled wait is not one of its kinds: cancelling a task ends it, and
 `result()` of the task says `Cancelled`.
 `isTlsFailure()` and `isCertificateRejected()` are the failures of [std/tls](tls.md), which reports through this type
-too.
+too. `isNameServerFailure()` is a lookup's: a name server answered with a failure or with no DNS at all, or the system
+names none. A `DnsError` - a name that is no domain name - converts into a `NetworkError`, so `DomainName.tryFrom(text)?`
+works in a function that fails with one.
 
 ## Related
 

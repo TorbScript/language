@@ -58,8 +58,8 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/test](test.md)** - test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - **[std/ip](ip.md)** - IPv4, IPv6 and socket addresses as values, read from text and shown as text, with no natives and no capability - std/network and std/uri both use them.
 - **[std/dns](dns.md)** - Domain names with IDNA and the comparison of RFC 4343, DNS records as typed cases, and the RFC 1035 wire format with compression and EDNS0 - values with no natives and no capability, for the transports of std/network and std/http.
-- **[std/network](network.md)** - Name resolution, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
-- **[std/tls](tls.md)** - TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, and a stream like the TCP one.
+- **[std/network](network.md)** - Name resolution and DNS lookups, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
+- **[std/tls](tls.md)** - TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 - **[std/http](http.md)** - HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - **[std/sandbox](sandbox.md)** - Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - **[std/project](project.md)** - The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.

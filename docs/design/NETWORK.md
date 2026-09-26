@@ -175,6 +175,11 @@ operation - and not `offload`'s pool, which runs TorbScript and has heaps. An as
 with an overlapped, `getaddrinfo_a`, a DNS client of our own) is a speed change behind the same native and waits for a
 reason.
 
+**`lookup(name, type)` is that DNS client, beside `resolve` and not under it** ([DNS.md](DNS.md) section 7, "Lookups,
+as built"): the records of any type over UDP, TCP where a response was truncated, and TLS in `std/tls`, asked of the
+system's name servers or of the program's own. `resolve` keeps `getaddrinfo`, because connecting wants the system's
+answer - its hosts file, its cache, its search domains - and a stub resolver of our own would answer differently.
+
 ## 3. Cancelling, timeouts and backpressure
 
 ### Cancelling a wait

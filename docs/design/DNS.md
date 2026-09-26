@@ -1,10 +1,11 @@
 # The Domain Name System
 
-**Status: slices 1 and 2 built (2026-09-26)** — the owner decided on 2026-09-25 that `std/dns` exists as a pure
+**Status: slices 1 to 5 built (2026-09-26)** — the owner decided on 2026-09-25 that `std/dns` exists as a pure
 package: names, records and the wire format of RFC 1035 as values, with no I/O. `std/dns` holds `DomainName` with IDNA,
 the records as a closed set of typed cases, `Message` with its codec, and the `query` and `readResponse` helpers;
-`std/uri` answers a `DomainName` from `Host.domainName()`. Every transport - UDP and TCP in `std/network`, DNS over TLS,
-DNS over HTTPS in `std/http` - is a later slice of another package, listed in section 7.
+`std/uri` answers a `DomainName` from `Host.domainName()`. The transports are other
+packages': `lookup` over UDP and TCP with the system's name servers in `std/network`, DNS over TLS in `std/tls`
+(section 7, "Lookups, as built"); DNS over HTTPS in `std/http` is a later slice.
 
 **A DNS message is a value, and so is a name.** A transport moves bytes; everything that gives those bytes a meaning -
 a name with its IDNA mapping and its comparison, a record with its typed data, a message with its compressed names and
@@ -249,9 +250,9 @@ are messages, and what to do about them is the transport's (`truncated` means: a
 
 `message.answersFor(name, recordType)` follows the CNAME chain of the answer section from `name` and answers the
 records of `recordType` at its end, with a guard against a chain in a circle; `message.addresses(of:)` is the same for
-`A` and `AAAA`. That is what a stub resolver answers, and what `lookup` will return.
+`A` and `AAAA`. That is what a stub resolver answers, and what `lookup` returns.
 
-**What a transport does with them**, as `std/network`'s slice will write it:
+**What a transport does with them**, as `std/network`'s `Resolver` does it (section 7):
 
 ```text
    const asked = query(name, RecordType.A, randomIdentifier())
@@ -267,16 +268,82 @@ records of `recordType` at its end, with a guard against a chain in a circle; `m
 |---|-------|---------|------------|-------|
 | 1 | **`std/dns`.** `DomainName` with IDNA (section 3), the records (section 4), `Message` and its codec (section 5), `query` and `readResponse` (section 6); tests with captured responses | `std/dns/*` | `std/ip` | **done** |
 | 2 | **`Host.domainName()`** in `std/uri` | `std/uri/src/authority.trb` | 1 | **done** |
-| 3 | **`lookup(name, type)` over UDP**: random identifiers, a timeout, retries against the system's configured servers | `std/network` | NETWORK.md slice 5 (`UdpSocket`) | later |
-| 4 | **TCP** (RFC 7766): the fallback for a truncated response, and the two-byte framing | `std/network` | 3 | later |
-| 5 | **DNS over TLS** (RFC 7858) to port 853 | `std/network`, `std/tls` | 4 | later |
+| 3 | **`lookup(name, type)` over UDP**: random identifiers, a timeout, retries against the system's configured servers | `std/network` | NETWORK.md slice 5 (`UdpSocket`) | **done** |
+| 4 | **TCP** (RFC 7766): the fallback for a truncated response, and the two-byte framing | `std/network` | 3 | **done** |
+| 5 | **DNS over TLS** (RFC 7858) to port 853: `TlsResolver` | `std/tls` | 4 | **done** |
 | 6 | **DNS over HTTPS** (RFC 8484) as a resolver option of the client | `std/http` | 1; NETWORK.md slice 7 (`Client`) | later |
 | 7 | **HTTPS and SVCB records for ALPN** (RFC 9460): the client takes `alpn`, `port` and the address hints of an origin | `std/http` | 3 or 6; HTTP/2 (NETWORK.md slice 12) for `h2` | later |
 | 8 | **Non-ASCII hosts in `Uri.tryFrom`**: URI.md slice 5 calls `DomainName.tryFrom` | `std/uri` | 1 | later; unblocked |
 | 9 | **The rest of UTS #46**: the mapping table, NFC, the combining-mark, CONTEXTJ, CONTEXTO and Bidi rules | `std/dns` | the Unicode tables in `std/text` | blocked |
 
-Reading the system's configured servers (`/etc/resolv.conf`, `GetNetworkParams` on Windows) is part of slice 3 and
-needs a native; it is the only native any of this adds.
+### Lookups, as built (slices 3 to 5)
+
+```trb fragment
+public type Resolver {
+  servers: List<SocketAddress> = []      // empty: the system's
+  attemptMilliseconds: Int = 2000
+  rounds: Int = 2
+  fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>>
+  fn exchange(name: DomainName, recordType: RecordType): Task<Result<Message, NetworkError>>
+}
+public fn lookup(name: DomainName, recordType: RecordType): Task<Result<List<Record>, NetworkError>>
+public fn systemNameServers(): Result<List<SocketAddress>, NetworkError>
+
+public type TlsResolver {                  // std/tls
+  server: SocketAddress
+  serverName: String
+  settings: TlsSettings = TlsSettings()
+  attemptMilliseconds: Int = 5000
+}
+```
+
+- **`lookup` answers records, `exchange` the message.** `lookup` is `answersFor(name, type)` of the response - CNAME
+  chains followed - an empty list for a name without such records, and `isHostNotFound()` for NXDOMAIN; `exchange` is
+  the whole response for a program that reads the authority section or the flags. Both take a `DomainName`, so the name
+  was read - and its IDNA done - where it entered the program; `From<DnsError>` makes `DomainName.tryFrom(text)?` work in
+  a function that fails with `NetworkError`.
+- **`Resolver` is a value with the three settings a stub resolver has**: the servers (empty asks the system's), the
+  time one attempt waits, and how many rounds over the servers a lookup makes. The free `lookup` is `Resolver()`'s.
+  Times are milliseconds for the reason `ServerLimits` gives. Two seconds and two rounds are between Windows' one second
+  and glibc's five; `resolv.conf`'s `options timeout:` and `attempts:` are not read, a program that wants them says so.
+- **One attempt is one new UDP socket, connected to the server, with a new random identifier.** Connected, so the
+  system drops a datagram from anybody else and a closed port is a refusal at once (NETWORK.md slice 5); a new socket, so
+  the source port is new and random too (RFC 5452 section 9.2); a datagram that is not the response to the question -
+  another query's, a stale one, a forged one - is dropped by `readResponse` and the wait goes on until the attempt's time
+  passes. The identifier comes from the system's randomness (`networkRandom`: `BCryptGenRandom` on Windows,
+  `/dev/urandom` elsewhere), exported as `randomQueryIdentifier()` for the other transports.
+- **Truncated means TCP to the same server, in the same attempt's time** (RFC 7766), one connection per question, the
+  two-byte length before each message. A connection kept for several questions (RFC 7766 section 6.2) is a later
+  refinement, as is pipelining.
+- **What hands the question on**: no answer within the time, a refusal, a response that is not DNS, and `SERVFAIL`,
+  `REFUSED` or `NOTIMP` - each makes the next server of the list the next attempt, and the rounds start over at the first.
+  `NXDOMAIN` and an empty answer are answers and end the lookup. After the last attempt the failure of that attempt is
+  the lookup's: `isTimedOut()`, `isConnectionRefused()`, or `isNameServerFailure()` (a new predicate of `NetworkError`,
+  for a server's failure answer and for a system configured with no server). A server that answers `FORMERR` to the
+  EDNS0 record of the query is not asked again without it (RFC 6891 section 7): every resolver of this decade reads
+  EDNS0, and the retry is a later refinement if one does not.
+- **The system's servers are one native** (`networkNameServers`): on Windows `GetAdaptersAddresses` of iphlpapi, loaded
+  on first use - not `GetNetworkParams`, which knows IPv4 only - with the servers of every adapter that is up, in order,
+  once each, and without the three site-local placeholders (`fec0:0:0:ffff::1` to `::3`) Windows lists for an adapter
+  that has no IPv6 server; on POSIX the `nameserver` lines of `/etc/resolv.conf`, a `%scope` dropped, and the local
+  machine where the file names none, as resolv.conf(5) says. `search`, `domain` and `ndots` are not read: `lookup` takes
+  a whole name and asks for it as it is.
+- **No cache.** Every lookup asks. `resolve(host)` - `getaddrinfo`, with the system's cache and hosts file - stays what
+  connecting uses; `lookup` is for records and for a server of the program's own choosing.
+- **DNS over TLS fits the same shape and is built** (`TlsResolver` in `std/tls`, which may import `std/network` and
+  `std/dns`; `std/network` cannot import `std/tls`): one server, a TCP connection to it - usually port 853 - a TLS
+  handshake in which the server proves `serverName` (RFC 8310's strict profile: nothing is sent to a server that cannot),
+  and the question and the answer framed as over TCP. One connection per lookup; keeping it open is the refinement TCP
+  has too. `lookup` fails with `isNameServerFailure()` for `SERVFAIL`, `REFUSED` and `NOTIMP`, as there is no second
+  server to hand the question to.
+- **DNS over HTTPS stays `std/http`'s** (slice 6): a `POST` of `application/dns-message` through a `Client`
+  (NETWORK.md slice 7, built now), when a program asks for it.
+- **Verified**: `tests/conformance/network-lookup.trb` asks a name server written in the test itself, on loopback over
+  UDP and TCP: an address, a CNAME chain, a truncated answer asked again over TCP, NXDOMAIN, the whole message, a closed
+  port and a failing server passed to the third, a silent server passed after its time, and a list of silent servers
+  timing out; `tests/conformance/dns-over-tls.trb` the same over TLS with a test root, and a server that cannot prove the
+  name refused. Both run natively and in the VM; the runtime tests read the system's servers and randomness on Windows
+  and Linux.
 
 ## 8. What this is not
 

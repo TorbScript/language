@@ -1,0 +1,148 @@
+use TcpListener, SocketAddress, IpAddress, Ipv4Address, NetworkError from "std/network"
+use TlsStream, TlsSettings, ServerIdentity, TlsResolver from "std/tls"
+use DomainName, RecordType, RecordData, Record, Message, MessageKind, ResponseCode from "std/dns"
+use ArrayList from "std/collections"
+use Bytes from "std/stream"
+
+/**
+ * DNS over TLS (RFC 7858) against a name server written here, over loopback: it proves itself with a certificate for
+ * `localhost` that a test root signed, and answers each question after its two-byte length. A resolver that trusts the
+ * root reads the answer; one that asks the server to prove another name is refused before a question is sent.
+ */
+
+
+/** The test root: nothing but these programs trusts it. */
+const testRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBpjCCAUugAwIBAgIUX0ocJiSTMF4EyI948Ywl9dBFuIgwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA2
+  WhgPMjEyNjA4MzExODAwMDZaMB8xHTAbBgNVBAMMFFRvcmJTY3JpcHQgVGVzdCBS
+  b290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnoU8ZlkjCCHuMztPRGCb7EKo
+  y7KLXmMddFh+kw1uKQKo18Dtx4zsURLEMCqklHgEARKvsbTVjXtzvfqkxXUWzKNj
+  MGEwHQYDVR0OBBYEFBz/+wIsZils42wBpvVRftEGr2wwMB8GA1UdIwQYMBaAFBz/
+  +wIsZils42wBpvVRftEGr2wwMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD
+  AgEGMAoGCCqGSM49BAMCA0kAMEYCIQCYnzkVoRbZZ3bCLbuSRf+yC46iVY+2ACKV
+  ttODjyX9TgIhAPq6TrV57XFD683pgB37633cYgqQOLTlf0+5FJ3Dgu1W
+  -----END CERTIFICATE-----
+  """
+
+/** A certificate for `localhost` and `127.0.0.1`, signed by the test root. */
+const serverCertificate = """
+  -----BEGIN CERTIFICATE-----
+  MIIByDCCAW2gAwIBAgIUWW3sNf3SaLIOaLhiA3l8ZCE7EugwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA3
+  WhgPMjEyNjA4MzExODAwMDdaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDBZMBMGByqG
+  SM49AgEGCCqGSM49AwEHA0IABEXvBfnFsZ5jZuUd75E2cE7UrRYne0C63+Fxn5Dr
+  LvdEOFnewKfyQ1fSkK3wTe8HZswifmx1YYrX2LX/uB7QD8ijgY8wgYwwCQYDVR0T
+  BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0R
+  BBMwEYIJbG9jYWxob3N0hwR/AAABMB0GA1UdDgQWBBR5X0QnapZcnsquwu+THlWj
+  wWAAMzAfBgNVHSMEGDAWgBQc//sCLGYpbONsAab1UX7RBq9sMDAKBggqhkjOPQQD
+  AgNJADBGAiEAuFtnGP9Pd3gKzfzkSNvnYnCy0fJzaXiBlIiLmbs+P7MCIQClGtvD
+  ds8yyzK7J9iXnKnTwH4dd92UaqZcruOde6Ozgg==
+  -----END CERTIFICATE-----
+  """
+
+/** The private key of `serverCertificate`. */
+const serverKey = """
+  -----BEGIN PRIVATE KEY-----
+  MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5JAlAbPbwYok2Sif
+  prLNFLAwadIBxYtUO1YQRe2Awp6hRANCAARF7wX5xbGeY2blHe+RNnBO1K0WJ3tA
+  ut/hcZ+Q6y73RDhZ3sCn8kNX0pCt8E3vB2bMIn5sdWGK19i1/7ge0A/I
+  -----END PRIVATE KEY-----
+  """
+
+/** A name this program writes itself. */
+fn nameOf(text: String): DomainName {
+  match DomainName.tryFrom(text) {
+    Ok(name) => name
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** The answer to a question: an address for `secure.example.test`, and NXDOMAIN for every other name. */
+fn answerTo(query: Message): Message {
+  const name = match query.questions.first() {
+    Some(question) => question.name
+    None => DomainName.root
+  }
+  const known = name == nameOf("secure.example.test")
+  const answers = if known {
+    [Record(name: name, timeToLive: 60, data: RecordData.A(Ipv4Address.of(192, 0, 2, 53)))]
+  } else {
+    []
+  }
+  Message(
+    identifier: query.identifier,
+    kind: MessageKind.Response,
+    recursionDesired: query.recursionDesired,
+    recursionAvailable: true,
+    responseCode: if known { ResponseCode.NoError } else { ResponseCode.NameError },
+    questions: query.questions,
+    answers: answers,
+  )
+}
+
+/** Accepts `count` connections; each one that completes its handshake gets one question answered. */
+fn serve(listener: TcpListener, identity: ServerIdentity, count: Int): Task<Result<Int, NetworkError>> {
+  var answered = 0
+  for _ in 0..count {
+    const stream = listener.accept().await()?
+    var session = match TlsStream.accept(stream, identity).await() {
+      Ok(accepted) => accepted
+      Fail(_) => {
+        continue
+      }
+    }
+    var received: ArrayList<UInt8> = ArrayList.withCapacity 0
+    while received.length() < 2 || received.length() < Int.from(received[0]) * 256 + Int.from(received[1]) + 2 {
+      match session.receiveBuffer().await()? {
+        Some(chunk) => received.appendAll chunk
+        None => {
+          break
+        }
+      }
+    }
+    const question: Bytes = received.slice(2..received.length())
+    if const Ok(query) = Message.tryFrom(question) {
+      if const Ok(encoded) = answerTo(query).encoded() {
+        var framed: ArrayList<UInt8> = ArrayList.withCapacity(encoded.length() + 2)
+        framed.append(UInt8.tryFrom(encoded.length() >> 8).ok() ?? 0)
+        framed.append(UInt8.tryFrom(encoded.length() & 255).ok() ?? 0)
+        framed.appendAll encoded
+        session.sendBuffer(framed).await()?
+        const _ = session.shutdown().await()
+        answered = answered + 1
+      }
+    }
+  }
+  Ok answered
+}
+
+/** The records a lookup answered, or its failure. */
+fn shown(result: Result<List<Record>, NetworkError>): String {
+  match result {
+    Ok(records) => records.map({ _.show() }).joined(separator: "; ")
+    Fail(problem) => {
+      "failed: host not found {problem.isHostNotFound()}, certificate rejected {problem.isCertificateRejected()}"
+    }
+  }
+}
+
+match ServerIdentity.of(serverCertificate, serverKey) {
+  Ok(identity) => {
+    match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+      Ok(listener) => {
+        const address = listener.localAddress()
+        const server = serve listener, identity, 3
+        const trusting = TlsResolver address, "localhost", settings: TlsSettings(trusted: [testRoot])
+        print "secure: {shown(trusting.lookup(nameOf("secure.example.test"), RecordType.A).await())}"
+        print "missing: {shown(trusting.lookup(nameOf("missing.example.test"), RecordType.A).await())}"
+        const wrongName = TlsResolver address, "dns.example.test", settings: TlsSettings(trusted: [testRoot])
+        print "another name: {shown(wrongName.lookup(nameOf("secure.example.test"), RecordType.A).await())}"
+        print "answered {server.await()}"
+      }
+      Fail(problem) => print "could not listen: {problem}"
+    }
+  }
+  Fail(problem) => print "no identity: {problem}"
+}

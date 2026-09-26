@@ -287,7 +287,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/json.md` - **std/json** (package): Json, a value with the options of the format, for encoding and decoding any Encode/Decode type, and JsonValue for the rare document whose shape is not known ahead of time.
 - `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - `standard-library/markdown.md` - **std/markdown** (package): Markdown reads CommonMark with GitHub's tables and front matter into a document tree that is a value, with the lines of every block and link; HTML and Markdown are written from the tree.
-- `standard-library/network.md` - **std/network** (package): Name resolution, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
+- `standard-library/network.md` - **std/network** (package): Name resolution and DNS lookups, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
 - `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - `standard-library/os.md` - **std/os** (package, draft): Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
 - `standard-library/parallel.md` - **std/parallel** (package): parallel() on anything that can be iterated, Parallel, a pipeline whose fused stages run on the workers of the pool with the results in input order, and Cut, the collections that cut themselves.
@@ -303,7 +303,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/test.md` - **std/test** (package): test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
 - `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
 - `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
-- `standard-library/tls.md` - **std/tls** (package): TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, and a stream like the TCP one.
+- `standard-library/tls.md` - **std/tls** (package): TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 - `standard-library/uri.md` - **std/uri** (package): Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, UriTemplate, the file bridge to Path and the form codec of HTML - values that open nothing.
 - `standard-library/yaml.md` - **std/yaml** (package): Yaml reads and writes any Encode/Decode type as YAML 1.2 or 1.1, with the target type resolving every scalar, and YamlNode is the tree of a document with its anchors, tags, styles and comments.
 

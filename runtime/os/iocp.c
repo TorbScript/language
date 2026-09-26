@@ -28,6 +28,7 @@
 #include <ws2tcpip.h>
 #include <mswsock.h>
 #include <windows.h>
+#include <iphlpapi.h>
 
 #include "torb_io.h"
 
@@ -634,6 +635,109 @@ int64_t torb_io_system_address(torb_io_socket *socket, bool peer, torb_io_addres
     return torb_io_failed(TORB_IO_INVALID, 0u);
   }
   return 0;
+}
+
+/* ------------------------------------------------------------------------- the name servers, and randomness --- */
+
+typedef ULONG(WINAPI *torb_adapters_function)(ULONG, ULONG, PVOID, PIP_ADAPTER_ADDRESSES, PULONG);
+typedef LONG(WINAPI *torb_random_function)(PVOID, PUCHAR, ULONG, ULONG);
+
+/* `GetAdaptersAddresses` of iphlpapi and `BCryptGenRandom` of bcrypt, loaded on first use like Winsock. */
+static SRWLOCK torb_helpers_lock = SRWLOCK_INIT;
+static torb_adapters_function torb_adapters = NULL;
+static torb_random_function torb_random = NULL;
+static bool torb_adapters_tried = false;
+static bool torb_random_tried = false;
+
+/* The flag of `BCryptGenRandom` that takes the system's generator without an algorithm handle. */
+#define TORB_BCRYPT_SYSTEM_PREFERRED 0x00000002u
+
+/* Whether `address` is one of the three site-local placeholders Windows lists for an adapter without IPv6 servers. */
+static bool torb_ws_placeholder_server(const torb_io_address *address) {
+  static const uint8_t placeholder[15] = { 0xfe, 0xc0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 0 };
+  return address->family == 6 && memcmp(address->bytes, placeholder, 15u) == 0 && address->bytes[15] >= 1u
+         && address->bytes[15] <= 3u;
+}
+
+int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity) {
+  torb_adapters_function adapters;
+  ULONG size = 16384u;
+  IP_ADAPTER_ADDRESSES *list = NULL;
+  IP_ADAPTER_ADDRESSES *adapter;
+  ULONG answer = ERROR_BUFFER_OVERFLOW;
+  size_t count = 0u;
+  int attempts;
+  AcquireSRWLockExclusive(&torb_helpers_lock);
+  if (!torb_adapters_tried) {
+    HMODULE library = LoadLibraryW(L"iphlpapi.dll");
+    torb_adapters_tried = true;
+    if (library != NULL) {
+      torb_adapters = (torb_adapters_function)torb_ws_symbol(library, "GetAdaptersAddresses");
+    }
+  }
+  adapters = torb_adapters;
+  ReleaseSRWLockExclusive(&torb_helpers_lock);
+  if (adapters == NULL) {
+    return torb_io_failed(TORB_IO_OTHER, (uint32_t)GetLastError());
+  }
+  /* The list may grow between the call that measures it and the one that fills it: three tries */
+  for (attempts = 0; attempts < 3 && answer == ERROR_BUFFER_OVERFLOW; attempts += 1) {
+    free(list);
+    list = (IP_ADAPTER_ADDRESSES *)malloc(size);
+    if (list == NULL) {
+      return torb_io_failed(TORB_IO_OTHER, 0u);
+    }
+    answer = adapters(AF_UNSPEC,
+                      GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
+                          | GAA_FLAG_SKIP_FRIENDLY_NAME,
+                      NULL, list, &size);
+  }
+  if (answer != ERROR_SUCCESS) {
+    free(list);
+    return answer == ERROR_NO_DATA ? 0 : torb_io_failed(TORB_IO_OTHER, (uint32_t)answer);
+  }
+  for (adapter = list; adapter != NULL; adapter = adapter->Next) {
+    IP_ADAPTER_DNS_SERVER_ADDRESS *server;
+    if (adapter->OperStatus != IfOperStatusUp) {
+      continue;
+    }
+    for (server = adapter->FirstDnsServerAddress; server != NULL; server = server->Next) {
+      torb_io_address address;
+      size_t index;
+      bool seen = false;
+      if (server->Address.lpSockaddr == NULL || !torb_ws_address_from(server->Address.lpSockaddr, &address)
+          || torb_ws_placeholder_server(&address)) {
+        continue;
+      }
+      address.port = 53u;
+      for (index = 0u; index < count; index += 1u) {
+        if (out[index].family == address.family && memcmp(out[index].bytes, address.bytes, 16u) == 0) {
+          seen = true;
+        }
+      }
+      if (!seen && count < capacity) {
+        out[count] = address;
+        count += 1u;
+      }
+    }
+  }
+  free(list);
+  return (int64_t)count;
+}
+
+bool torb_io_system_random(uint8_t *out, size_t size) {
+  torb_random_function random;
+  AcquireSRWLockExclusive(&torb_helpers_lock);
+  if (!torb_random_tried) {
+    HMODULE library = LoadLibraryW(L"bcrypt.dll");
+    torb_random_tried = true;
+    if (library != NULL) {
+      torb_random = (torb_random_function)torb_ws_symbol(library, "BCryptGenRandom");
+    }
+  }
+  random = torb_random;
+  ReleaseSRWLockExclusive(&torb_helpers_lock);
+  return random != NULL && random(NULL, (PUCHAR)out, (ULONG)size, TORB_BCRYPT_SYSTEM_PREFERRED) == 0;
 }
 
 int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {
