@@ -1,9 +1,9 @@
 # The Domain Name System
 
-**Status: slices 1 to 5 built (2026-09-26)** — the owner decided on 2026-09-25 that `std/dns` exists as a pure
+**Status: slices 1 to 5 and 8 built (2026-09-26)** — the owner decided on 2026-09-25 that `std/dns` exists as a pure
 package: names, records and the wire format of RFC 1035 as values, with no I/O. `std/dns` holds `DomainName` with IDNA,
 the records as a closed set of typed cases, `Message` with its codec, and the `query` and `readResponse` helpers;
-`std/uri` answers a `DomainName` from `Host.domainName()`. The transports are other
+`std/uri` answers a `DomainName` from `Host.domainName()` and maps a non-ASCII host with it. The transports are other
 packages': `lookup` over UDP and TCP with the system's name servers in `std/network`, DNS over TLS in `std/tls`
 (section 7, "Lookups, as built"); DNS over HTTPS in `std/http` is a later slice.
 
@@ -273,7 +273,7 @@ records of `recordType` at its end, with a guard against a chain in a circle; `m
 | 5 | **DNS over TLS** (RFC 7858) to port 853: `TlsResolver` | `std/tls` | 4 | **done** |
 | 6 | **DNS over HTTPS** (RFC 8484) as a resolver option of the client | `std/http` | 1; NETWORK.md slice 7 (`Client`) | later |
 | 7 | **HTTPS and SVCB records for ALPN** (RFC 9460): the client takes `alpn`, `port` and the address hints of an origin | `std/http` | 3 or 6; HTTP/2 (NETWORK.md slice 12) for `h2` | later |
-| 8 | **Non-ASCII hosts in `Uri.tryFrom`**: URI.md slice 5 calls `DomainName.tryFrom` | `std/uri` | 1 | later; unblocked |
+| 8 | **Non-ASCII hosts in `Uri.tryFrom`**: URI.md slice 5 calls `DomainName.tryFrom`, and `iriText()` shows U-labels | `std/uri` | 1 | **done** |
 | 9 | **The rest of UTS #46**: the mapping table, NFC, the combining-mark, CONTEXTJ, CONTEXTO and Bidi rules | `std/dns` | the Unicode tables in `std/text` | blocked |
 
 ### Lookups, as built (slices 3 to 5)

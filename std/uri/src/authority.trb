@@ -9,6 +9,7 @@
 use DomainName from "std/dns"
 use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
 use UriError from "./error"
+use textOf from "std/stream"
 use Component, byteOf, hasNonAscii, hexadecimalValue, isAllowed, isDigit, normalizedComponent, percentDecodedBytes from "./characters"
 
 /**
@@ -189,7 +190,7 @@ fn hostOf(text: String, whole: String): Result<Host, UriError> {
     return literalOf text
   }
   if hasNonAscii(text) {
-    return Fail UriError.NonAsciiHost(text)
+    return internationalHostOf text, text
   }
   var index = 0
   while index < text.byteLength() {
@@ -201,12 +202,68 @@ fn hostOf(text: String, whole: String): Result<Host, UriError> {
   }
   const name = normalizedComponent(text, Component.RegisteredName, whole, lowerCase: true)?
   if name.contains("%") && percentDecodedBytes(name).any({ Int.from(_) >= 128 }) {
-    return Fail UriError.NonAsciiHost(text)
+    // Escaped UTF-8 is the same name written another way (RFC 3986 section 3.2.2): mapped the same way, where it is UTF-8
+    match textOf(percentDecodedBytes(name)) {
+      Ok(decoded) => {
+        return internationalHostOf decoded, text
+      }
+      Fail(_) => {
+        return Fail UriError.NonAsciiHost(text)
+      }
+    }
   }
   if const Ok(address) = Ipv4Address.tryFrom(name) {
     return Ok Host.Address(IpAddress.Version4(address))
   }
   Ok Host.Name(name)
+}
+
+/**
+ * A registered name outside ASCII, as its A-labels (docs/design/URI.md slice 5): the IDNA processing of `std/dns`'s
+ * `DomainName.tryFrom` - the UTS #46 mapping as far as `std/text`'s tables reach, then Punycode - with a trailing dot
+ * kept. `münchen.test` is `xn--mnchen-3ya.test`; a name that maps to an IPv4 address in dotted decimal (fullwidth digits)
+ * is that address, as a browser reads it; a name IDNA refuses is an invalid host, with IDNA's reason.
+ */
+fn internationalHostOf(name: String, written: String): Result<Host, UriError> {
+  match DomainName.tryFrom(name) {
+    Ok(mapped) => {
+      const labels = mapped.show()
+      if const Ok(address) = Ipv4Address.tryFrom(labels) {
+        return Ok Host.Address(IpAddress.Version4(address))
+      }
+      const dot = if name.endsWith(".") { "." } else { "" }
+      Ok Host.Name("{labels}{dot}")
+    }
+    Fail(problem) => Fail UriError.InvalidHost(written, "{problem}")
+  }
+}
+
+/**
+ * The host and the port as an IRI shows them (RFC 3987 section 3.2, docs/design/URI.md slice 5): a registered name with
+ * every valid A-label as its U-label - `münchen.test` for `xn--mnchen-3ya.test` - and everything else as a URI writes it.
+ * Reading the text again maps the U-labels back, so an IRI text is the same URI.
+ */
+public fn unicodeHostAndPort(authority: Authority): String {
+  const host = match authority.host {
+    .Name(name) => {
+      if name.contains("xn--") {
+        match authority.host.domainName() {
+          Some(domain) => {
+            const dot = if name.endsWith(".") { "." } else { "" }
+            "{domain.unicodeText()}{dot}"
+          }
+          None => name
+        }
+      } else {
+        name
+      }
+    }
+    _ => authority.host.show()
+  }
+  match authority.port {
+    Some(found) => "{host}:{found}"
+    None => host
+  }
 }
 
 /** `"[" ( IPv6address / IPvFuture ) "]"`. A zone identifier is not URI syntax since RFC 9844. */

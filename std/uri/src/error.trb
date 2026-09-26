@@ -12,7 +12,10 @@ public type UriError with Show, Error {
   case InvalidEscape(text: String)
   /** A host that is no IP literal, no IPv4 address and no registered name, and why; a zone identifier is one. */
   case InvalidHost(host: String, reason: String)
-  /** A host that is not ASCII, which needs IDNA (docs/design/URI.md section 6). */
+  /**
+   * A host whose percent escapes name bytes outside ASCII that are not UTF-8, so IDNA has no name to map (a host written
+   * outside ASCII is mapped to its A-labels, docs/design/URI.md slice 5).
+   */
   case NonAsciiHost(host: String)
   /** The text after the `:` of an authority is not a number from 0 to 65535. */
   case InvalidPort(text: String)
@@ -35,7 +38,7 @@ public type UriError with Show, Error {
       .InvalidScheme(text) => "`{text}` is not a scheme"
       .InvalidEscape(text) => "`{text}` has a `%` that is not followed by two hexadecimal digits"
       .InvalidHost(host, reason) => "`{host}` is not a host: {reason}"
-      .NonAsciiHost(host) => "`{host}` is not an ASCII host, and IDNA is not part of `std/uri` yet"
+      .NonAsciiHost(host) => "`{host}` escapes bytes outside ASCII that are not UTF-8, so it names no host"
       .InvalidPort(text) => "`{text}` is not a port"
       .Relative(text) => "`{text}` is a relative reference, and a `Uri` has a scheme"
       .NotText(reason) => "a percent escape names bytes that are not UTF-8: {reason}"

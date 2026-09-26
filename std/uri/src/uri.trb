@@ -14,6 +14,7 @@ use Authority, Host, authorityOf from "./authority"
 use Component, byteOf, encodedComponent, isDigit, isLetter, normalizedComponent, percentDecoded from "./characters"
 use formDecoded, formEncoded from "./form"
 use iriDecoded from "./iri"
+use unicodeHostAndPort from "./authority"
 
 /** The five parts of a URI reference, normalized. The one place the two capsules below are written over. */
 type Components with Equals, Hash {
@@ -198,8 +199,9 @@ public type Uri with Show, Equals, Hash, Compare {
   }
 
   /**
-   * The IRI this URI stands for (RFC 3987 section 3.2): every escape of a UTF-8 character outside ASCII decoded, and
-   * everything else as [Uri.text] has it, so `Uri.tryFrom(uri.iriText())` is the same URI again. It carries the
+   * The IRI this URI stands for (RFC 3987 section 3.2): every escape of a UTF-8 character outside ASCII decoded, every
+   * A-label of the host shown as its U-label (`https://münchen.test/` for `https://xn--mnchen-3ya.test/`), and everything
+   * else as [Uri.text] has it, so `Uri.tryFrom(uri.iriText())` is the same URI again. It carries the
    * password, as `text()` does.
    */
   fn iriText(): String {
@@ -577,7 +579,7 @@ fn iriOf(components: Components): String {
       Some(userInfo) => "{iriDecoded(userInfo, inQuery: false)}@"
       None => ""
     }
-    text = text + "//" + front + found.hostAndPort()
+    text = text + "//" + front + unicodeHostAndPort(found)
   }
   text = text + iriDecoded(components.path, inQuery: false)
   if const Some(found) = components.query {
@@ -803,7 +805,7 @@ fn defaultPortOf(scheme: String): Int? {
  *
  * # Errors
  *
- * - [UriError.NonAsciiHost] for a UNC share whose server name is not ASCII, which needs IDNA.
+ * - [UriError.InvalidHost] for a UNC share whose server name IDNA refuses.
  */
 extend UriReference with TryFrom<Path, UriError> {
   static fn tryFrom(value: Path): Result<UriReference, UriError> {
@@ -817,7 +819,7 @@ extend UriReference with TryFrom<Path, UriError> {
  * # Errors
  *
  * - [UriError.Relative] for a relative path, which has no `file:` URI.
- * - [UriError.NonAsciiHost] for a UNC share whose server name is not ASCII.
+ * - [UriError.InvalidHost] for a UNC share whose server name IDNA refuses.
  */
 extend Uri with TryFrom<Path, UriError> {
   static fn tryFrom(value: Path): Result<Uri, UriError> {

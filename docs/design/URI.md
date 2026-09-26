@@ -1,11 +1,12 @@
 # Uniform Resource Identifiers
 
-**Status: slices 1 to 4 and 7 built (2026-09-25)** — `std/ip`, `std/uri` with `Uri`, `UriReference`, `Urn`, IRIs, the
-`file:` bridge and `UriTemplate`, `std/http` on `Uri`, and the literal rule of section 9 with typed templates and routes
-(section 9a). The owner asked for the whole URI layer before HTTP grows further: IRIs, URI references as a type, URI
-templates, every standard that touches them, and the IP address values shared with `std/network`. Sections 2a, 3a, 4a,
-8a and 9a are that revision, and section 14's slice order replaces the old one; IDNA, `data:` and the rest are the later
-slices it lists.
+**Status: slices 1 to 4 and 7 built (2026-09-25), slice 5's hosts (2026-09-26)** — `std/ip`, `std/uri` with `Uri`,
+`UriReference`, `Urn`, IRIs, the `file:` bridge and `UriTemplate`, `std/http` on `Uri`, and the literal rule of section 9
+with typed templates and routes (section 9a); a non-ASCII host is mapped to its A-labels by `std/dns`'s IDNA, and
+`iriText()` shows U-labels. The owner asked for the whole URI layer before HTTP grows further: IRIs, URI references as a
+type, URI templates, every standard that touches them, and the IP address values shared with `std/network`. Sections
+2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one; `repaired(text)`, `data:`
+and the rest are the later slices it lists.
 
 **A URI is a value, and a text that is not one is refused at the door.** That is the whole design of `std/uri`: one
 capsule for RFC 3986, normalized at construction, so that `==`, `hash()` and `compare()` are over the canonical form
@@ -492,7 +493,7 @@ one refusal: a text without a scheme is `UriError.Relative`.
 | dot segments in a relative-path reference (`../a`) | a guess — they mean something only once a base is known | never; `resolved(against:)` does it |
 | a non-ASCII character in the user information, path, query or fragment | a fact — RFC 3987 section 3.1 maps it to its UTF-8 bytes, percent-encoded (section 4a) | construction |
 | an ASCII character no URI may hold in that component — a space, `"`, `<`, `\`, a second `#` | the same mapping — RFC 3987 section 3.1 names these characters too, and the percent-encoded form is the only URI that can stand for the text | construction |
-| a non-ASCII **host** | neither — it needs IDNA, and percent-encoding it is *wrong* | refused until slice 5 (section 6) |
+| a non-ASCII **host** | a fact once IDNA is done — percent-encoding it is *wrong*; its A-labels are the name the DNS knows | construction (slice 5): `DomainName.tryFrom` of `std/dns` |
 | a zone identifier, `[fe80::1%25eth0]` | not URI syntax — RFC 9844 reverted RFC 6874 | refused |
 | the port `80` under `http` | a guess about five schemes, not a fact about URIs | `normalized()` |
 | an empty path under an authority becoming `/` | the same | `normalized()` |
@@ -608,13 +609,14 @@ by characters.
 
 - **In, RFC 3987 section 3.1.** Every character a component may not hold — every non-ASCII character among them — is
   written as the percent-encoded bytes of its UTF-8 in the user information, the path, the query and the fragment. A
-  non-ASCII host is refused until slice 5, which maps it with IDNA instead (section 2a); percent-encoding a host is
-  legal RFC 3986 and useless, because no resolver reads it.
+  non-ASCII host is mapped with IDNA instead (slice 5, section 2a): `münchen.test` is stored as `xn--mnchen-3ya.test`,
+  and a host of percent-escaped UTF-8 the same way; percent-encoding a host is legal RFC 3986 and useless, because no
+  resolver reads it.
 - **Out, RFC 3987 section 3.2.** `iriText()` is `text()` with every percent-encoded UTF-8 sequence decoded where it
   stands for a `ucschar` (or an `iprivate` in the query), and left encoded where it stands for an ASCII character, a
   bidirectional formatting character (section 4.1: U+200E, U+200F, U+202A to U+202E), a character outside those ranges,
-  or bytes that are not UTF-8. So `Uri.tryFrom(uri.iriText()) == Ok(uri)` for every `uri`, and a test holds that. From
-  slice 5 on the host's A-labels are shown as U-labels too.
+  or bytes that are not UTF-8. So `Uri.tryFrom(uri.iriText()) == Ok(uri)` for every `uri`, and a test holds that. The
+  host's valid A-labels are shown as U-labels too (slice 5), and reading them again maps them back.
 
 **`show()` stays ASCII.** A display form in a log is pasted into a terminal and compared by eye, and a Unicode host is
 where homographs live (`аpple.test` with a Cyrillic `а`): browsers show a U-label only under a policy of their own, and
@@ -758,7 +760,7 @@ public type UriError with Show, Error {
   case InvalidEscape(text: String)
   /** A host that is no IP literal, no IPv4 address and no registered name; a zone identifier is one. */
   case InvalidHost(host: String, reason: String)
-  /** A host that is not ASCII, which needs IDNA (section 6). */
+  /** A host of percent escapes that are not UTF-8, so IDNA has no name to map (a host outside ASCII is mapped, slice 5). */
   case NonAsciiHost(host: String)
   /** The text after the `:` of an authority is not a number from 0 to 65535. */
   case InvalidPort(text: String)
@@ -840,7 +842,7 @@ Three reasons, in order of weight.
 | `http://example.com/a b` | the space is encoded as `%20` | the same | nothing |
 | `http://example.com/a\u0000b` | the NUL is encoded as `%00` | removed silently | gets a value where a browser drops a byte |
 | `  http://example.com  ` | the spaces are part of the reference and are encoded | trimmed | trims it itself, or writes a literal |
-| `http://münchen.de` | **refused** (`NonAsciiHost`) until slice 5, then `xn--mnchen-3ya.de` | `xn--mnchen-3ya.de` | waits for slice 5, which calls `std/dns`'s `DomainName.tryFrom` (section 2a) |
+| `http://münchen.de` | `xn--mnchen-3ya.de` (slice 5, `std/dns`'s `DomainName.tryFrom`) | `xn--mnchen-3ya.de` | nothing, within what `std/dns`'s IDNA covers (DNS.md section 3) |
 | `http://[fe80::1%25eth0]/` | refused: RFC 9844 took zones out of the grammar | refused: the host parser has no zones | nothing; they agree |
 | `file:///C:/x` | path `/C:/x`, host `""` | the same, with drive-letter special cases | nothing |
 | `HTTP://A/b` | `http://a/b` | `http://a/b` | nothing |
@@ -1894,11 +1896,10 @@ canonical thirty-six characters.
 Thirteen gaps, each measured by a probe above or by a run in this worktree, with the smallest fix that closes it.
 Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 
-1. **A non-ASCII host is refused.** `Uri.tryFrom("https://münchen.test/a")` answers `NonAsciiHost`. *Smallest fix:*
-   the mapping exists since 2026-09-26 as `DomainName.tryFrom` in `std/dns` (Punycode and UTS #46 as far as
-   `std/text`'s tables reach, [DNS.md](DNS.md) section 3), and `std/uri` already imports it for `Host.domainName()`;
-   `hostOf` calls it for a non-ASCII host and stores the A-labels. It is a slice of its own (section 14, slice 5) and
-   it is what can make `Path` into `UriReference` infallible, which is gap 9's trigger.
+1. **A non-ASCII host was refused. Closed (2026-09-26):** `hostOf` calls `std/dns`'s `DomainName.tryFrom` for a host
+   outside ASCII - Punycode and UTS #46 as far as `std/text`'s tables reach ([DNS.md](DNS.md) section 3) - and stores
+   the A-labels; `iriText()` shows the U-labels. A host IDNA refuses is `InvalidHost` with IDNA's reason, and
+   `NonAsciiHost` is left for escapes that are not UTF-8. `repaired(text)` and gap 9 are the rest of slice 5.
 2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/design/RESOURCES.md`
    slice 1, with the closed list of section 9 instead of three resource types.
 3. **`Into<Uri>` as a parameter type type checks and does not build.** Probe 4, with two internal errors in the
@@ -1988,7 +1989,7 @@ literal) and drops `raw` from the templates and patterns of the tests and the pa
 | 2 | **`std/uri`.** `Uri`, `UriReference`, `Authority`, `Host`, `UriError`, `Urn`; the parser with RFC 3987's mapping in, normalization, resolution with RFC 3986 section 5.4's examples as tests, `relativeTo`, `iriText`, `Show`/`Equals`/`Hash`/`Compare`, `formDecoded`/`formEncoded` and the query parameters; the `Path` bridge of RFC 8089; the prelude exports `Uri` and `UriError` | `std/uri/*`, `std/prelude/src/lib.trb` | 1 | **done** |
 | 3 | **`UriTemplate`.** RFC 6570 levels 1 to 4 expanded, the RFC's examples and the `uritemplate-test` suite as tests, matching of the reversible subset (section 9a) | `std/uri/src/template.trb`, `std/uri/tests/*` | 2 | **done** |
 | 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | **done** |
-| 5 | **IDNA.** Punycode, the UTS #46 mapping and the IDNA 2008 rules are `std/dns`'s `DomainName` ([DNS.md](DNS.md), built 2026-09-26, with `Host.domainName()`); `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2, DNS.md slice 1 | later; the mapping is built |
+| 5 | **IDNA.** Punycode, the UTS #46 mapping and the IDNA 2008 rules are `std/dns`'s `DomainName` ([DNS.md](DNS.md), built 2026-09-26, with `Host.domainName()`); `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels (**built**, 2026-09-26: a host of escaped UTF-8 is mapped the same way, a trailing dot is kept, a name that maps to dotted decimal is that address, a name IDNA refuses is `InvalidHost`); `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2, DNS.md slice 1 | **hosts done**; `repaired` and gap 9 later |
 | 6 | **`data:`.** A `DataUri` refinement (RFC 2397): media type, parameters and the bytes | `std/uri/src/data.trb`, `std/encoding` | Base64 in `std/encoding` | later |
 | 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate`, `Regex` and the resource types; the verbatim reading of a template and a pattern; `UriTemplate<Variables>` and `TemplateCase<Value>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri`, `std/regex` and `std/path` | `compiler/src/syntax/*`, `compiler/src/semantics/checker/literal.trb`, `compiler/src/ir/lower/literal.trb`, `compiler/tests/literals.test.trb`, `tests/conformance/checked-literals.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | **done** (2026-09-25); the slice that put `std/uri` and `std/regex` in the fixpoint |
 | 8 | **Routes.** `route(template, to:)` and `TemplateRoutes` in `std/uri` - stage 1 of section 9a (a check at startup) and stage 2 on slice 7 are built; `std/web` re-exports them with its router | `std/uri/src/route.trb`, later `std/web/*` | 3, 4, and `docs/design/WEB.md`'s slices | the typed API **done**; `std/web` later |
@@ -2070,7 +2071,8 @@ Everything technical above is decided. These are taste or direction, and only th
    produces a host no resolver accepts — a wrong value rather than an unsupported one. The document refuses, and
    slice 5 is the answer.
    **Answered by the owner (2026-09-23):** refuse a non-ASCII host until `std/idna` exists. The package became
-   `std/dns` (the owner, 2026-09-25; [DNS.md](DNS.md)), and the refusal stays until slice 5.
+   `std/dns` (the owner, 2026-09-25; [DNS.md](DNS.md)), and the refusal stayed until slice 5, which maps a non-ASCII
+   host with it since 2026-09-26.
 7. **Is a redacting `show()` the right default?** Section 11 makes `print uri` lossy for the one URI in a thousand
    that carries a password, so a value that is printed no longer round trips through its own display form — which is
    a property every other capsule in the standard library has. The other reading is that `text()` should be the

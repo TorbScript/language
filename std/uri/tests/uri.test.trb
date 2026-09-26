@@ -129,12 +129,38 @@ group "parsing and normalization" {
   }
 }
 
-group "refusals" {
-  test "a non-ASCII host is refused until there is IDNA" {
-    assert(UriReference.tryFrom("https://münchen.test/a") == Fail(UriError.NonAsciiHost("münchen.test")))
-    assert(!UriReference.tryFrom("https://m%C3%BCnchen.test/").isOk())
+group "hosts outside ASCII" {
+  test "a host outside ASCII is stored as its A-labels, and iriText() shows the U-labels" {
+    const uri = uriOf "https://München.test/a"
+    assert(uri.text() == "https://xn--mnchen-3ya.test/a")
+    assert(uri.iriText() == "https://münchen.test/a")
+    assert(Uri.tryFrom(uri.iriText()) == Ok(uri))
+    assert(uriOf("https://bücher.example:8443/").iriText() == "https://bücher.example:8443/")
+    assert(uri.host() == Some(Host.Name("xn--mnchen-3ya.test")))
   }
 
+  test "escaped UTF-8 in a host is the same name, and a trailing dot stays" {
+    assert(uriOf("https://m%C3%BCnchen.test/") == uriOf("https://münchen.test/"))
+    assert(uriOf("https://münchen.test./").text() == "https://xn--mnchen-3ya.test./")
+    assert(uriOf("https://münchen.test./").iriText() == "https://münchen.test./")
+  }
+
+  test "a name that maps to dotted decimal is that address" {
+    assert(uriOf("http://１２７.０.０.１/").host() == Some(Host.Address(IpAddress.loopback)))
+  }
+
+  test "what IDNA refuses is an invalid host, and escapes that are not UTF-8 name no host" {
+    assert(!UriReference.tryFrom("https://a\u{200D}b.test/").isOk())
+    assert(UriReference.tryFrom("https://m%FCnchen.test/") == Fail(UriError.NonAsciiHost("m%FCnchen.test")))
+  }
+
+  test "an ASCII host that already is an A-label is shown as its U-label, and one that is none stays" {
+    assert(uriOf("https://xn--mnchen-3ya.test/").iriText() == "https://münchen.test/")
+    assert(uriOf("https://xn--zz.test/").iriText() == "https://xn--zz.test/")
+  }
+}
+
+group "refusals" {
   test "a percent sign that starts no escape is refused" {
     const text = "https://example.test/a%zz"
     assert(UriReference.tryFrom(text) == Fail(UriError.InvalidEscape(text)))

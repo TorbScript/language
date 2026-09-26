@@ -109,7 +109,9 @@ values until both are normalized. `port()` is the port that is written; `default
 whole text a request, a file or an encoder needs, and `Encode` writes it. `iriText()` is the IRI the URI stands for
 (RFC 3987): escapes of UTF-8 characters outside ASCII decoded, so `https://example.test/%C3%A4` reads as
 `https://example.test/ä`, and `Uri.tryFrom(uri.iriText())` is the same URI again. An IRI is read by `tryFrom` like any
-URI, and a non-ASCII host is refused until the package has IDNA.
+URI. A host outside ASCII is stored as its A-labels - `https://münchen.test/` is `https://xn--mnchen-3ya.test/` - through
+the IDNA of [std/dns](dns.md), and `iriText()` shows the U-labels again; a host IDNA refuses is `InvalidHost`, and
+`NonAsciiHost` is a host of percent escapes that are not UTF-8.
 
 `segments()` is the path split at its `/`, still percent-encoded, without the empty segment in front of an absolute
 path (`/a/b/` has `a`, `b` and `""`); `percentDecoded` decodes one. `joined(relative)` builds a URI below this one: each
