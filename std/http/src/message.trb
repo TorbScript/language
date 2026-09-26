@@ -10,8 +10,9 @@ use lines as streamLines from "std/stream"
 use HttpError from "./error"
 
 /**
- * An HTTP method: a case per method RFC 9110 registers, and `Other` for the rest - the set is open (a WebDAV server
- * meets `PROPFIND`), so a router matches on the cases and still sees every method.
+ * An HTTP method: a case per method RFC 9110 registers, `Query` (RFC 10008) and WebDAV's `Search` (RFC 5323), and
+ * `Other` for the rest - the set is open (a WebDAV server meets `PROPFIND`), so a router matches on the cases and still
+ * sees every method.
  *
  *     match request.method {
  *       .Get => ...
@@ -32,7 +33,14 @@ public type Method with Show, Equals, Hash {
   case Options
   case Trace
   case Connect
-  /** A method RFC 9110 does not register. Made by [Method.of], which never makes one for a registered name. */
+  /**
+   * `QUERY` (RFC 10008, June 2026): a query in the request's content rather than in the URI - safe and idempotent like
+   * `GET`, with a body like `POST`, and its response cacheable with the content as part of the key.
+   */
+  case Query
+  /** `SEARCH` of WebDAV (RFC 5323): a search whose request is the body, safe and idempotent. */
+  case Search
+  /** A method none of the cases names. Made by [Method.of], which never makes one for a name a case has. */
   case Other(name: String)
 
   /**
@@ -53,6 +61,8 @@ public type Method with Show, Equals, Hash {
       "OPTIONS" => Method.Options
       "TRACE" => Method.Trace
       "CONNECT" => Method.Connect
+      "QUERY" => Method.Query
+      "SEARCH" => Method.Search
       _ => Method.Other name
     }
     Ok method
@@ -70,14 +80,35 @@ public type Method with Show, Equals, Hash {
       .Options => "OPTIONS"
       .Trace => "TRACE"
       .Connect => "CONNECT"
+      .Query => "QUERY"
+      .Search => "SEARCH"
       .Other(text) => text
     }
   }
 
-  /** `GET`, `HEAD`, `OPTIONS` and `TRACE`: a request of these asks and changes nothing (RFC 9110 section 9.2.1). */
+  /**
+   * `GET`, `HEAD`, `OPTIONS`, `TRACE`, `QUERY` and `SEARCH`: a request of these asks and changes nothing (RFC 9110
+   * section 9.2.1, RFC 10008 section 2, RFC 5323 section 2). `Other` is not: nothing is known of it.
+   */
   fn isSafe(): Bool {
     match self {
-      .Get | .Head | .Options | .Trace => true
+      .Get | .Head | .Options | .Trace | .Query | .Search => true
+      _ => false
+    }
+  }
+
+  /**
+   * The safe methods, `PUT` and `DELETE`: sending a request of these twice has the effect of sending it once (RFC 9110
+   * section 9.2.2), so a client may send it again where the connection failed before an answer arrived.
+   */
+  fn isIdempotent(): Bool {
+    isSafe() || self == Method.Put || self == Method.Delete
+  }
+
+  /** `POST`, `PUT`, `PATCH`, `QUERY` and `SEARCH`: a request of these carries content, and announces even an empty one. */
+  fn carriesContent(): Bool {
+    match self {
+      .Post | .Put | .Patch | .Query | .Search => true
       _ => false
     }
   }

@@ -424,7 +424,7 @@ public type Method with Show, Equals, Hash {
   case Get
   case Head
   case Post
-  // Put, Delete, Patch, Options, Trace, Connect
+  // Put, Delete, Patch, Options, Trace, Connect, Query (RFC 10008), Search (RFC 5323)
   case Other(name: String)
   static fn of(name: String): Result<Method, HttpError>
   fn name(): String
@@ -467,7 +467,13 @@ public shared type Response {
 - **`Method` is a type with a case per registered method and `Other(name)` for the rest**, so a router matches on it
   (WEB.md's request, section 13). The set is open by the RFC - a WebDAV server meets `PROPFIND` - which is what
   `Other` is for, and `Method.of(name)` is the one way in from text: it answers the case for a registered name and
-  `Other` only for the rest, and refuses a name that is not a token.
+  `Other` only for the rest, and refuses a name that is not a token. **`Query` and `Search` are cases too** (the owner,
+  2026-09-26): `QUERY` is RFC 10008 (June 2026), a query in the request's content, safe and idempotent, whose response is
+  cacheable with the content in the key; `SEARCH` is WebDAV's (RFC 5323), in the IANA registry, safe and idempotent with
+  a body. `isSafe()`, `isIdempotent()` and `carriesContent()` say what a method promises: the client announces the
+  content of a method that carries some even where it is empty, and the pool sends a request again over a fresh
+  connection only for an idempotent method without a body. There is no cache in `std/http`, so QUERY's cache key is
+  not this package's yet.
 - **`Status` is a capsule over its number, with the common codes as constants** (`Status.notFound`): 599 is a valid
   status nobody registered, a router does not match on it, and `of` refuses a number outside 100-599.
 - **`Headers` keeps every field in the order it arrived**, names compared case-insensitively and stored as written.
@@ -546,9 +552,9 @@ public type RedirectPolicy {
   one, and a slow or endless body would hold the slot. Either way the slot is free again.
 - **A stale connection is sent once more.** A server may close a kept-alive connection while it is idle; a request that
   finds its reused connection closed before any byte of a response - the write fails, or the head reads the end of the
-  stream - is sent again over a new connection where its body is empty. A body that was a stream is gone, and the
-  failure is the answer: the retry of a request with a body is a later refinement that needs a body that can be read
-  twice.
+  stream - is sent again over a new connection where its method is idempotent (RFC 9110 section 9.2.2) and its body
+  empty, as Go's client does. A body that was a stream is gone, and the failure is the answer: the retry of a request
+  with a body is a later refinement that needs a body that can be read twice.
 - **`timeout` is `None` by default**, as for the free functions: a timeout is `within`. Where it is set it limits each
   request up to the head of its response, redirects included, and answers `HttpError.timeout()`.
 - **The redirect policy: `SameHost(10)` for a `Client`, `Never` for the free functions** (the owner's rule of this

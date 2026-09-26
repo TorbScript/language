@@ -91,8 +91,8 @@ public shared type Client {
   /**
    * A request of any method, over a kept-alive connection to the origin of `url` where one is idle and over a new one
    * where none is, following redirects as [Client.redirects] allows. A kept-alive connection the server closed while it
-   * was idle is noticed when the request finds it closed before any byte of a response arrived, and a request without a
-   * body is then sent once more over a new connection.
+   * was idle is noticed when the request finds it closed before any byte of a response arrived, and a request of an
+   * idempotent method without a body is then sent once more over a new connection.
    *
    * # Errors
    *
@@ -197,8 +197,9 @@ public shared type Client {
             return Ok response
           }
           Fail(problem) => {
-            // A connection the server closed while it was idle: sent again over a new one, where nothing is lost by it
-            if body.length() != Some(0) {
+            // A connection the server closed while it was idle: sent again over a new one, where nothing is lost by it -
+            // an idempotent method (RFC 9110 section 9.2.2) with no body to send again
+            if !method.isIdempotent() || body.length() != Some(0) {
               lease.discard()
               return Fail problem
             }

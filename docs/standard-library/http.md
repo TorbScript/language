@@ -128,8 +128,8 @@ The client that keeps its connections: `get`, `post` and `send` are the free fun
 connections per origin (scheme, host and port), at most `maximumConnections` of them open to one origin - a request
 beyond waits until a response gives one back. A connection goes back to the pool once its response's body was read to
 its end, and is closed where the response is released before that. A kept-alive connection the server closed while it
-waited is noticed when a request finds it closed before any byte of a response, and a request without a body is sent
-again over a new one. `timeout` limits each request up to the head of its response, redirects included; the body is the
+waited is noticed when a request finds it closed before any byte of a response, and a request of an idempotent method
+without a body is sent again over a new one. `timeout` limits each request up to the head of its response, redirects included; the body is the
 program's to limit with `within`.
 
 Redirects follow `redirects`: a `Client` follows up to ten to the same host (`http` to `https` included), because a
@@ -246,10 +246,14 @@ public type Method with Show, Equals, Hash {
   case Options
   case Trace
   case Connect
+  case Query
+  case Search
   case Other(name: String)
   static fn of(name: String): Result<Method, HttpError>
   fn name(): String
   fn isSafe(): Bool
+  fn isIdempotent(): Bool
+  fn carriesContent(): Bool
 }
 
 public type Status with Show, Equals, Hash, Compare {
@@ -271,8 +275,12 @@ public type Headers with Show, Equals {
 }
 ```
 
-`Method` has a case per registered method, so a router matches on it, and `Other` for the rest: `Method.of(name)` is
-the way in from text, and it never answers `Other` for a registered name. `Status` is a capsule over its number with the
+`Method` has a case per method of RFC 9110, `Query` (RFC 10008, the HTTP QUERY method: a query in the request's content,
+safe and idempotent like `GET`) and `Search` (WebDAV, RFC 5323), so a router matches on it, and `Other` for the rest:
+`Method.of(name)` is the way in from text, and it never answers `Other` for a name a case has. `isSafe()`,
+`isIdempotent()` (RFC 9110 section 9.2) and `carriesContent()` say what the method promises; the client announces the
+content of a method that carries some, even an empty one, and sends a request again over a new connection only where its
+method is idempotent. `Status` is a capsule over its number with the
 common codes as constants, because 599 is a status too. `Headers`
 keeps every field in the order it arrived, compares names without regard to case, and keeps a name that repeats
 (`Set-Cookie`). A value with a line break is written with a space in its place and a name that is not a token is not

@@ -79,6 +79,19 @@ group "the method" {
     assert(Method.of("PROPFIND") == Ok(Method.Other("PROPFIND")))
     assert(Method.of("get") == Ok(Method.Other("get")))
     assert(Method.of("PROPFIND").map({ _.name() }) == Ok("PROPFIND"))
+    assert(Method.of("QUERY") == Ok(Method.Query))
+    assert(Method.of("SEARCH") == Ok(Method.Search))
+    assert(Method.Query.name() == "QUERY")
+    assert(Method.Search.show() == "SEARCH")
+  }
+
+  test "QUERY and SEARCH are safe and idempotent and carry content" {
+    assert(Method.Query.isSafe() && Method.Query.isIdempotent() && Method.Query.carriesContent())
+    assert(Method.Search.isSafe() && Method.Search.isIdempotent() && Method.Search.carriesContent())
+    assert(!Method.Post.isSafe() && !Method.Post.isIdempotent() && Method.Post.carriesContent())
+    assert(!Method.Put.isSafe() && Method.Put.isIdempotent())
+    assert(Method.Get.isIdempotent() && !Method.Get.carriesContent())
+    assert(!Method.Other("PROPFIND").isSafe() && !Method.Other("PROPFIND").isIdempotent())
   }
 
   test "a name that is no token is malformed" {
