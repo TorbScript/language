@@ -319,6 +319,45 @@ group "`spawn` takes no object with it" {
 }
 
 /**
+ * A value of an ordinary trait may cross into a task, so it may not hide an object either (CONCURRENCY section 17,
+ * option b): the conversion is refused where the value's type holds an object that the trait type does not show.
+ */
+group "A trait value hides no object" {
+  const counter = "shared type Counter \{\n  var count: Int = 0\n\n"
+    + "  static fn open(): Self \{\n    Self()\n  \}\n\}\n\n"
+  const action = "trait Action \{\n  fn run(): Int\n\}\n\n"
+    + "type Bumper with Action, Show \{\n  counter: Counter\n\n  fn run(): Int \{\n    counter.count\n  \}\n\}\n\n"
+
+  test "a value whose type holds an object does not become a value of an ordinary trait" {
+    const source = "{counter}{action}fn probe(): Int \{\n  const action: Action = Bumper(Counter.open())\n"
+      + "  action.run()\n\}"
+    assert(problems(source) == ["`Bumper` holds an object, and a value of `Action` would hide it"])
+    assert(
+      notes(source) == [
+        "A value of an ordinary trait is a value, and `spawn` lets one cross into another task - the object would go "
+          + "with it, hidden. Declare the trait a `shared trait`, or keep the value as what it is",
+      ]
+    )
+  }
+
+  test "a `shared trait` is an object itself, and a trait type that names the object shows it" {
+    const source = "{counter}shared trait Labelled \{\n  fn label(): String\n\}\n\n"
+      + "type Tag with Labelled \{\n  counter: Counter\n\n  fn label(): String \{\n    \"tag\"\n  \}\n\}\n\n"
+      + "fn probe(): String \{\n  const labelled: Labelled = Tag(Counter.open())\n"
+      + "  const _: Iterate<Counter> = [Counter.open()]\n  labelled.label()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a closure is not looked into: what it captured is the pinning's" {
+    const source = "{counter}{action}type Deferred with Action \{\n  read: () => Int\n\n"
+      + "  fn run(): Int \{\n    read()\n  \}\n\}\n\n"
+      + "fn probe(): Int \{\n  const counter = Counter.open()\n"
+      + "  const action: Action = Deferred(\{ counter.count \})\n  action.run()\n\}"
+    assert problems(source).isEmpty()
+  }
+}
+
+/**
  * The item of a `Channel` crosses from one task to another, so it may not have an identity either. It is asked where
  * `Channel<Item>` is written - a signature, an annotation, a construction - and not at `sink().add`, which would be
  * a message per call instead of one per item type.

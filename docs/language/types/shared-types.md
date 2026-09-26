@@ -143,7 +143,31 @@ shared type <Name> {
 7. **A shared object stays in the task that made it.** `spawn` takes only what it can see is a value, so a shared
    object, a value that holds one, and anything that may hide one - a type parameter, a function value, a value of a
    `shared trait` - are refused where the closure captures them (see [Tasks](../concurrency-and-streams/tasks.md),
-   rule 5).
+   rule 5). A value of an ordinary trait may cross, so it may not hide an object either: a value whose type holds one
+   does not become a value of an ordinary trait that does not show it (`Iterate<Counter>` shows it, a `shared trait`
+   is an object itself). The one residue is an object captured by a closure that a trait value holds - a function
+   value holds nothing by its type - and the runtime keeps such a task on the worker that made the object.
+
+   ```trb error
+   shared type Counter {
+     var count: Int = 0
+   }
+
+   trait Action {
+     fn run(): Int
+   }
+
+   type Bumper with Action {
+     counter: Counter
+
+     fn run(): Int {
+       counter.count
+     }
+   }
+
+   const action: Action = Bumper(Counter())
+   // error: `Bumper` holds an object, and a value of `Action` would hide it
+   ```
 
 8. **Only a `shared type` implements `Close`.** The destructor belongs to one object, and a value is copied on
    assignment, so two copies would close one resource twice. The same holds for a trait that comes `with Close`, such

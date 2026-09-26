@@ -28,6 +28,7 @@ use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
 use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from "./quote"
 use checkBlock, checkDiscarded, scopeHere, taskValueOf from "./statement"
+use containsShared from "./declaration"
 use checkSubject from "./place"
 use markReferenceBindings from "./mutation"
 use noteParameterUse from "./escape"
@@ -3431,7 +3432,40 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
     checker.reportHere Diagnostic.error("`{given}` does not implement `{wanted}`", at)
     return false
   }
+  if hidesSharedObject(checker, found, applied, at) {
+    return false
+  }
   checker.adapted at, Adaptation.ToTraitValue(applied, witnesses)
+  true
+}
+
+/**
+ * **A value of an ordinary trait never hides a shared object** (CONCURRENCY section 17, option b). `spawn` lets a
+ * value of an ordinary trait cross into another task, because trait rule 17 says such a value is always a value - and a
+ * type that is not shared but *holds* an object (`Bumper { counter: Counter }`) would carry the object past it inside
+ * an `Action`. So the conversion is refused where the value's type holds an object and the trait type does not show
+ * it: a `shared trait` is an object itself, and `Iterate<Counter>` names what it holds, so both stay allowed.
+ *
+ * What the checker cannot see stays the runtime's: a function value holds no object by its type, so a closure that
+ * captured one is carried inside a trait value and kept on its worker by the pinning of the pool (section 16).
+ */
+fn hidesSharedObject(var checker: Checker, found: TypeId, applied: List<TypeId>, at: Span): Bool {
+  if !isConcrete(checker, found) || !containsShared(checker, found) {
+    return false
+  }
+  const target = checker.types.intern TypeForm.Traits(applied)
+  if containsShared(checker, target) {
+    return false
+  }
+  const given = checker.describe found
+  const wanted = checker.describe target
+  checker.reportHere(
+    Diagnostic.error("`{given}` holds an object, and a value of `{wanted}` would hide it", at)
+      .withNote(
+        "A value of an ordinary trait is a value, and `spawn` lets one cross into another task - the object would go"
+          + " with it, hidden. Declare the trait a `shared trait`, or keep the value as what it is"
+      )
+  )
   true
 }
 

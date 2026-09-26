@@ -255,7 +255,8 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     error, and the fix is to name a type.
 
 17. **A `shared type` can only implement a `shared trait`.** So a value of a trait type is always a value: nobody changes
-    it while you hold it, and it can be passed to another task.
+    it while you hold it, and it can be passed to another task. For the same reason a value whose type *holds* a shared
+    object does not become a value of an ordinary trait (see [Shared types](../types/shared-types.md), rule 7).
 
 ## What this is not
 

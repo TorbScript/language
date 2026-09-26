@@ -1826,3 +1826,10 @@ otherwise, and kept memory safe by the pinning above. That closes the hole for e
 pipeline anything, and leaves one precise residue - an object captured by a closure that a trait value holds - which
 the documentation of rule 7 would have to name. (a) is the fallback if the owner wants rule 7 without any residue; it
 is the smaller change in the compiler and the larger one in what programs may write.
+
+**Built (bug batch 7): option (b).** `coerceToTraits` (`semantics/checker/expression.trb`, `hidesSharedObject`)
+refuses the conversion where `containsShared` holds for the value's type and not for the trait type it becomes -
+`Bumper` into `Action` is refused with "`Bumper` holds an object, and a value of `Action` would hide it", while
+`Show` (a `shared trait`, an object itself) and `Iterate<Counter>` (which names what it holds, so `spawn` refuses it
+already) stay allowed. No declaration of `std/` or `examples/` converted such a value. The residue is the one named
+above, stated in shared-types rule 7: a closure's captures are not part of its type and stay the pinning's.
