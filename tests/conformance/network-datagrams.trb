@@ -1,0 +1,70 @@
+use UdpSocket, SocketAddress, IpAddress, NetworkError from "std/network"
+use textOf from "std/stream"
+
+/**
+ * UDP over loopback, end to end: a socket on a port the system chooses answers every datagram with its text in upper
+ * case, to wherever it came from; a client sends to it by address, then connects and sends to its peer; a datagram
+ * without bytes is still one; a connected socket whose peer's port is closed hears the refusal; and a receive that
+ * nothing answers ends with `within`. Both tasks run on one worker, so every wait is a wait for the other through the
+ * operating system.
+ */
+
+/** Answers `count` datagrams, each in upper case, to its sender. Answers what it heard, in order. */
+fn answer(socket: UdpSocket, count: Int): Task<Result<List<String>, NetworkError>> {
+  var heard: List<String> = []
+  for _ in 0..count {
+    const (bytes, sender) = socket.receive().await()?
+    const text = textOf(bytes).ok() ?? "not UTF-8"
+    heard.append "{text.byteLength()} bytes"
+    socket.send(text.toUpperCase().bytes().toList(), to: sender).await()?
+  }
+  Ok heard
+}
+
+/** Sends `text` to `server` and answers the reply's text and whether it came from `server`. */
+fn ask(socket: UdpSocket, server: SocketAddress, text: String): Task<Result<String, NetworkError>> {
+  socket.send(text.bytes().toList(), to: server).await()?
+  const (bytes, sender) = socket.receive().await()?
+  Ok "{textOf(bytes).ok() ?? "not UTF-8"} (from the server: {sender == server})"
+}
+
+/** The address of a socket that was closed again: its release at the end of this function closes it. */
+fn closedAddress(): Result<SocketAddress, NetworkError> {
+  const gone = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+  Ok gone.localAddress()
+}
+
+fn run(): Task<Result<Void, NetworkError>> {
+  const server = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+  const address = server.localAddress()
+  print "bound to {address.address}, a port was chosen: {address.port > 0}"
+  const answering = answer server, 4
+  const client = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+  print ask(client, address, "hello, datagram").await()
+  print ask(client, address, "").await()
+  // Connected: the peer is the one address it sends to and hears from
+  client.connect(address)?
+  print "peer: {client.peerAddress() == Some(address)}"
+  client.sendToPeer("to the peer".bytes().toList()).await()?
+  const (reply, _) = client.receive().await()?
+  print "reply: {textOf(reply).ok() ?? "not UTF-8"}"
+  print ask(client, address, "last").await()
+  print "server heard {answering.await()}"
+  const elsewhere = SocketAddress IpAddress.loopback, 9
+  print "to another address: {client.send([1], to: elsewhere).await().isOk()}"
+  // A port nobody is bound to any more: a connected socket hears that its datagram was refused
+  const goneAddress = closedAddress()?
+  const lonely = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+  lonely.connect(goneAddress)?
+  lonely.sendToPeer("anybody?".bytes().toList()).await()?
+  match lonely.receive().await() {
+    Ok(_) => print "an answer from nowhere"
+    Fail(problem) => print "refused: {problem.isConnectionRefused()}"
+  }
+  // Nothing answers: the receive ends with the limit
+  var waiting = server.receive()
+  print "waited: {waiting.within(50.milliseconds()).await().isOk()}"
+  Ok void
+}
+
+print run().await()

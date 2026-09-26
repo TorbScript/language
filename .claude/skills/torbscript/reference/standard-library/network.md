@@ -1,6 +1,6 @@
 ---
 title: std/network
-summary: Name resolution and TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - over the address values of std/ip, which it re-exports.
+summary: Name resolution, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
 kind: package
 status: stable
 order: 175
@@ -12,16 +12,20 @@ keywords:
   - SocketAddress
   - TcpListener
   - TcpStream
+  - UDP
+  - UdpSocket
+  - datagram
   - resolve
   - NetworkError
 source:
   - std/network/src/lib.trb
   - std/network/src/error.trb
   - std/network/src/tcp.trb
+  - std/network/src/udp.trb
   - docs/design/NETWORK.md
 ---
 
-`std/network` is the network below HTTP: name resolution and TCP, over the address values of [std/ip](ip.md). Everything that waits for the
+`std/network` is the network below HTTP: name resolution, TCP and UDP, over the address values of [std/ip](ip.md). Everything that waits for the
 network answers a `Task` and can be cancelled; a timeout is [`within`](task.md). It runs on the IO core of the runtime -
 an IO completion port on Windows, epoll on Linux, kqueue on macOS and FreeBSD - which wakes a task when its bytes
 arrive, so a thousand connections wait on one thread (see docs/design/NETWORK.md). It needs the
@@ -30,7 +34,7 @@ network capability inside a sandboxed script, and is not in the prelude.
 ## Import
 
 ```trb fragment
-use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError, resolve from "std/network"
+use TcpListener, TcpStream, UdpSocket, SocketAddress, IpAddress, NetworkError, resolve from "std/network"
 ```
 
 ```trb check
@@ -111,6 +115,39 @@ tries its addresses in turn. `TCP_NODELAY` is on. `source()` and `sink()` are th
 `Source<Bytes, NetworkError>` and a `Sink<Bytes, NetworkError>` (see [std/stream](stream.md)); the socket closes when the
 last of the stream, its source and its sink is gone.
 
+### UdpSocket
+
+```trb fragment
+public shared type UdpSocket with Close {
+  static fn bind(address: SocketAddress): Result<UdpSocket, NetworkError>
+  fn localAddress(): SocketAddress
+  fn connect(address: SocketAddress): Result<Void, NetworkError>
+  fn peerAddress(): SocketAddress?
+  fn send(bytes: Bytes, to: SocketAddress): Task<Result<Void, NetworkError>>
+  fn sendToPeer(bytes: Bytes): Task<Result<Void, NetworkError>>
+  fn receive(): Task<Result<(Bytes, SocketAddress), NetworkError>>
+}
+```
+
+A UDP socket: datagrams, each one whole or not at all, with the address it came from. A datagram is not a stream, so
+the socket is no `Source`: `receive` answers the next datagram and its sender - a datagram without bytes is one too -
+and `send` hands one datagram to the operating system, which says nothing of whether it arrives. `bind` is synchronous,
+port 0 asks for a free port, and an IPv6 socket binds IPv6 only. `connect` names one peer without sending anything:
+from then on only the peer's datagrams arrive, `sendToPeer` sends to it, `send` accepts no other address, and a peer
+whose port is closed makes the next `receive` fail with `isConnectionRefused()` - on every system alike, where an
+unconnected socket never hears of such a refusal. A datagram that arrives while nobody receives waits in the socket, and
+a cancelled `receive` leaves it to the next one; a timeout is `within`, which is how a protocol over UDP asks again.
+
+```trb check
+use UdpSocket, SocketAddress, IpAddress, NetworkError from "std/network"
+
+/** Answers one datagram with its bytes reversed, to whoever sent it. */
+fn answerOnce(socket: UdpSocket): Task<Result<Void, NetworkError>> {
+  const (bytes, sender) = socket.receive().await()?
+  socket.send(bytes.reversed(), to: sender).await()
+}
+```
+
 ### NetworkError
 
 ```trb fragment
@@ -138,6 +175,7 @@ too.
 
 - [std/ip](ip.md) - the address values this package connects to.
 - [std/tls](tls.md) - TLS over a `TcpStream`.
+- [std/dns](dns.md) - the messages of the Domain Name System, which a program sends over a `UdpSocket`.
 - [std/http](http.md) - HTTP/1.1 over these streams.
 - [std/stream](stream.md) - `Source`, `Sink` and `Bytes`.
 - [std/task](task.md) - `within`, the timeout of every network task, and `cancel`.

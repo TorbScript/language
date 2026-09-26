@@ -162,8 +162,8 @@ static bool torb_posix_prepare(int descriptor) {
   return true;
 }
 
-int64_t torb_io_system_socket(int32_t family) {
-  int descriptor = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+int64_t torb_io_system_socket(int32_t family, bool datagram) {
+  int descriptor = socket(family == 6 ? AF_INET6 : AF_INET, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
   if (descriptor < 0) {
     return torb_io_posix_failed(errno);
   }
@@ -191,6 +191,33 @@ int64_t torb_io_system_listen(torb_io_socket *socket, const torb_io_address *add
   }
   if (listen(descriptor, (int)backlog) != 0) {
     return torb_io_posix_failed(errno);
+  }
+  return 0;
+}
+
+int64_t torb_io_system_bind(torb_io_socket *socket, const torb_io_address *address) {
+  int descriptor = (int)socket->system;
+  struct sockaddr_storage system;
+  socklen_t length = torb_io_posix_address_of(address, &system);
+  int yes = 1;
+  /* No SO_REUSEADDR: on a datagram socket it lets a second socket take the port, which Windows does not */
+  if (address->family == 6) {
+    (void)setsockopt(descriptor, IPPROTO_IPV6, IPV6_V6ONLY, &yes, (socklen_t)sizeof yes);
+  }
+  if (bind(descriptor, (const struct sockaddr *)(const void *)&system, length) != 0) {
+    return torb_io_posix_failed(errno);
+  }
+  return 0;
+}
+
+int64_t torb_io_system_connect_datagram(torb_io_socket *socket, const torb_io_address *address) {
+  struct sockaddr_storage system;
+  socklen_t length = torb_io_posix_address_of(address, &system);
+  /* A datagram socket connects at once: nothing goes over the network */
+  while (connect((int)socket->system, (const struct sockaddr *)(const void *)&system, length) != 0) {
+    if (errno != EINTR) {
+      return torb_io_posix_failed(errno);
+    }
   }
   return 0;
 }
@@ -275,7 +302,8 @@ int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {
 /* ---------------------------------------------------------------------------------------- the calls themselves --- */
 
 bool torb_io_posix_wants_writable(const torb_io_operation *operation) {
-  return operation->kind == (uint8_t)TORB_IO_SEND || operation->kind == (uint8_t)TORB_IO_CONNECT;
+  return operation->kind == (uint8_t)TORB_IO_SEND || operation->kind == (uint8_t)TORB_IO_CONNECT
+         || operation->kind == (uint8_t)TORB_IO_SEND_DATAGRAM;
 }
 
 /* A connection an accept took: a record of its own, non-blocking, without Nagle. */
@@ -311,6 +339,35 @@ int64_t torb_io_posix_perform(torb_io_operation *operation) {
             return (int64_t)operation->length;
           }
           continue;
+        }
+        break;
+      }
+      case TORB_IO_RECEIVE_DATAGRAM: {
+        struct sockaddr_storage sender;
+        socklen_t length = (socklen_t)sizeof sender;
+        ssize_t received = recvfrom(descriptor, operation->buffer, operation->capacity, 0,
+                                    (struct sockaddr *)(void *)&sender, &length);
+        if (received >= 0) {
+          if (!torb_posix_address_from((const struct sockaddr *)(const void *)&sender, &operation->address)) {
+            memset(&operation->address, 0, sizeof operation->address);
+          }
+          return (int64_t)received;
+        }
+        break;
+      }
+      case TORB_IO_SEND_DATAGRAM: {
+        ssize_t sent;
+        /* A datagram goes whole or not at all: there is no rest to send later */
+        if (operation->address.family == 0) {
+          sent = send(descriptor, operation->buffer, operation->length, TORB_POSIX_SEND_FLAGS);
+        } else {
+          struct sockaddr_storage remote;
+          socklen_t remote_length = torb_io_posix_address_of(&operation->address, &remote);
+          sent = sendto(descriptor, operation->buffer, operation->length, TORB_POSIX_SEND_FLAGS,
+                        (const struct sockaddr *)(const void *)&remote, remote_length);
+        }
+        if (sent >= 0) {
+          return (int64_t)sent;
         }
         break;
       }

@@ -1,13 +1,14 @@
 # Networking, TLS and HTTP
 
 **Status: partly implemented** — decided on 2026-09-23, the owner's three questions answered on 2026-09-24 (section
-14). Slices 1 to 4 and 6 are in (section 11): the IO core of the runtime (`runtime/io.c`, IOCP in `runtime/os/iocp.c`,
-epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP and name resolution, `std/network` over it, an
+14). Slices 1 to 6 are in (section 11): the IO core of the runtime (`runtime/io.c`, IOCP in `runtime/os/iocp.c`,
+epoll in `runtime/os/epoll.c`, kqueue in `runtime/os/kqueue.c`) with TCP, UDP and name resolution, `std/network` over it, an
 HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1.3 over mbedTLS 3.6 in `std/tls`, with `https`
 in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were written
 against their manuals, checked for syntax and types against stub headers, and are built for the first time by the
-Linux and macOS jobs of CI. UDP, the connection pool, the sandbox's network grant, HTTP/2 and HTTP/3 are later slices,
-each with its reason below.
+Linux and macOS jobs of CI. UDP (slice 5) was built on Windows and its runtime tests run on Linux in a container as
+well; kqueue has not run it. The connection pool, the sandbox's network grant, HTTP/2 and HTTP/3 are later slices, each
+with its reason below.
 
 This is the record of how a TorbScript program talks to another machine: which packages there are and what each one
 owns, how a socket meets the task scheduler of `docs/design/CONCURRENCY.md`, which TLS implementation the language
@@ -29,7 +30,7 @@ slice G (the IO poller) for sockets.
 - **[1. The packages](#1-the-packages)** — `std/network`, `std/tls`, `std/http`, and why three
 - **[2. The IO core](#2-the-io-core)** — the poller, the IO thread, operations, and CONCURRENCY slice G reconciled
 - **[3. Cancelling, timeouts and backpressure](#3-cancelling-timeouts-and-backpressure)**
-- **[4. `std/network`](#4-stdnetwork)** — addresses, resolution, TCP, and later UDP
+- **[4. `std/network`](#4-stdnetwork)** — addresses, resolution, TCP and UDP
 - **[5. TLS](#5-tls)** — the implementation, weighed
 - **[6. HTTP messages](#6-http-messages)** — `Method`, `Status`, `Headers`, `Request`, `Response`, `Body`
 - **[7. The client](#7-the-client)**
@@ -50,7 +51,7 @@ prelude.**
 
 | Package | Owns | Depends on |
 |---|---|---|
-| `std/network` | `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress`, `resolve`, `TcpListener`, `TcpStream`, (slice 5) `UdpSocket`, `NetworkError` | `std/stream`, `std/task` |
+| `std/network` | `Ipv4Address`, `Ipv6Address`, `IpAddress`, `SocketAddress`, `resolve`, `TcpListener`, `TcpStream`, `UdpSocket`, `NetworkError` | `std/stream`, `std/task` |
 | `std/tls` (slice 6) | `TlsStream`, `TlsSettings`, the trust store | `std/network` |
 | `std/http` | `Method`, `Status`, `Headers`, `Request`, `Response`, `Body`, `HttpError`, the HTTP/1.1 parser and writer, the client (`get`, `post`, `send`), the server (`Server`) | `std/network`, `std/json`, `std/stream` |
 
@@ -90,7 +91,7 @@ that build, and one of its decisions departs from section 7 on purpose.
 
 | Platform | Poller | File |
 |---|---|---|
-| Windows | an IO completion port, sockets through Winsock with `AcceptEx`, `ConnectEx`, `WSARecv`, `WSASend` | `runtime/os/iocp.c` |
+| Windows | an IO completion port, sockets through Winsock with `AcceptEx`, `ConnectEx`, `WSARecv`, `WSASend`, and `WSARecvFrom`, `WSASendTo` for datagrams | `runtime/os/iocp.c` |
 | Linux | epoll, one-shot registrations; the calls themselves are POSIX (`posix_io.c`) | `runtime/os/epoll.c` |
 | macOS, FreeBSD | kqueue, `EV_ONESHOT` filters; the calls are `posix_io.c`'s as well | `runtime/os/kqueue.c` |
 | every platform | handles, operations, the tasks of the runtime, the resolver threads, error texts | `runtime/io.c` |
@@ -193,9 +194,10 @@ whoever lets go last frees it. That is the whole difference from section 7's tab
 "at once" in every row: **a cancelled network task frees its worker and its frame immediately, and the runtime's own
 record at the next honest moment**.
 
-A socket that is closed while an operation waits on it fails that operation (`WSAECONNABORTED`, or the IO core's own
-"closed" on POSIX), so a task that reads from a connection somebody else closed is woken with a failure and never
-waits forever.
+A socket that is closed while an operation waits on it fails that operation, so a task that reads from a connection
+somebody else closed is woken with a failure and never waits forever. Whatever the system called it - `WSAECONNABORTED`,
+an aborted overlapped call, `EBADF` - the IO core answers "closed" for a socket that was closed (`isClosed()`), which is
+what an accept loop takes as the end of listening (section 4, slice 8).
 
 ### Timeouts
 
@@ -270,9 +272,35 @@ public shared type TcpStream with Close {
 - **`TCP_NODELAY` is on for every stream.** Nagle's algorithm helps a program that writes one byte at a time and hurts
   every request-response protocol, and a program here writes chunks. A setter is a later addition when a program
   needs it off.
-- **UDP is slice 5**: `UdpSocket.bind(address)`, `send(bytes, to:)`, `receive(): Task<Result<(Bytes, SocketAddress),
-  NetworkError>>`. A datagram is not a stream, so it is not a `Source`; the operations are the same shape as TCP's and
-  the IO core needs `WSASendTo`/`WSARecvFrom` and `sendto`/`recvfrom` beside what exists.
+- **UDP is `UdpSocket`** (slice 5): `bind(address)`, `send(bytes, to:)`, `receive(): Task<Result<(Bytes,
+  SocketAddress), NetworkError>>`, and for a socket with one peer `connect(address)`, `peerAddress()` and
+  `sendToPeer(bytes)`. A datagram is not a stream, so it is not a `Source`; the operations are TCP's shape.
+
+### UDP, as built (slice 5)
+
+- **A datagram crosses whole.** A receive answers the length of the next datagram, and the datagram waits in a queue of
+  its socket - bytes and sender together - until `networkTakeDatagram` takes the oldest, so datagram borders survive the
+  two steps every read of the IO core has (section 2). A datagram that arrives for a cancelled receive stays queued for
+  the next one, as received TCP bytes do. The buffer of a receive is the largest datagram there is (64 KiB), so nothing
+  is ever cut short, and `receive()` takes no maximum.
+- **The calls**: `WSARecvFrom` and `WSASendTo` on the completion port, the sender written into the operation beside
+  the bytes; `recvfrom` and `sendto` on readiness under epoll and kqueue, through the same `posix_io.c` that makes the
+  TCP calls. The pollers learned nothing.
+- **`send(bytes, to:)` and `sendToPeer(bytes)`**, two names, because a parameter has no overloads and an `Option` is not
+  filled in by itself: `send(bytes, to: Some(peer))` would be the price of one name. A connected socket refuses `send`
+  to an address other than its peer, because the systems disagree about it (Linux sends, BSD answers `EISCONN`).
+- **"Port unreachable" is a refusal on a connected socket and nothing on an unconnected one**, on every system: Windows
+  reports it on any UDP socket as `WSAECONNRESET` on the next receive, so the IO core turns that off
+  (`SIO_UDP_CONNRESET`) until the socket is connected, and answers a reset of a datagram socket as `isConnectionRefused()`,
+  the word Linux uses. A resolver that asks a server whose port is closed hears it at once instead of waiting out its
+  timeout.
+- **No `SO_REUSEADDR` on a datagram socket**: on POSIX it lets a second socket bind the same port, which Windows does not,
+  so a port bound twice is `isAddressInUse()` everywhere. Broadcast, multicast and the socket options (TTL, buffer sizes)
+  are later additions, each when a program needs it.
+- **Verified**: the runtime tests (`runtime/tests/io_test.c`: datagrams both ways, empty ones, a connected socket and
+  its filter, the refusal, a cancelled receive, a close that wakes a receive) run on Windows and on Linux (gcc 16, in a
+  container); the conformance program `network-datagrams` runs natively and in the VM on Windows. kqueue has not run any
+  of it: macOS and FreeBSD have the same `recvfrom`/`sendto` calls and the same readiness filter, and CI is to run them.
 
 ### Serving on more than one worker
 
@@ -579,7 +607,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 2 | The IO core: `runtime/io.c`, `torb_io.h`, the IO thread and `TORB_WAITING_IO` in `task.c`, IOCP + Winsock (loaded on first use), epoll, kqueue; TCP listen, accept, connect, receive, send, shutdown, close, addresses; the resolver threads; `runtime/tests/io_test.c` | **Done** on Windows; POSIX written, not compiled |
 | 3 | `std/network`: the address types, `resolve`, `TcpListener`, `TcpStream` with its source and sink, `NetworkError`; conformance programs over loopback | **Done** |
 | 4 | `std/http`: messages, the HTTP/1.1 parser and writer, the server and the client (one connection per request); parser tests; conformance over loopback | **Done** |
-| 5 | UDP; with it `lookup(name, type)` over the messages of `std/dns` ([DNS.md](DNS.md) slices 3 and 4) | Open |
+| 5 | UDP: `UdpSocket` with bind, send, receive, connect and its peer, over IOCP, epoll and kqueue (section 4, "UDP, as built") | **Done** on Windows and Linux; kqueue written, not run |
 | 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | **Done** (Windows' verifier; macOS verifies against its bundle until the Security framework step) |
 | 7 | The client's connection pool and redirect policy (`Client`) | Open |
 | 8 | Serving on every worker: several accept loops on one listening socket | Open |

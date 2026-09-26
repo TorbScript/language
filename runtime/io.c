@@ -15,8 +15,9 @@
  * task submits the operation to the poller and waits for it (`torb_task_wait_io`); the completion - from the IO thread,
  * from a resolver thread, or from the submission itself - moves what arrived to where it belongs, wakes the task and
  * drops the kernel's reference; the task then answers. **What the kernel delivered is never lost to a cancellation**:
- * received bytes go to the socket's pending buffer at the completion, so the next receive answers them, and an accepted
- * connection whose task stopped is queued on its listener for the next accept.
+ * received bytes go to the socket's pending buffer at the completion, so the next receive answers them, a received
+ * datagram goes whole, with its sender, to the socket's queue of datagrams, and an accepted connection whose task
+ * stopped is queued on its listener for the next accept.
  *
  * # Memory
  *
@@ -102,6 +103,12 @@ static void torb_io_socket_close(torb_io_socket *socket) {
 }
 
 void torb_io_socket_free(torb_io_socket *socket) {
+  torb_io_datagram *datagram = socket->datagram_first;
+  while (datagram != NULL) {
+    torb_io_datagram *next = datagram->next;
+    free(datagram);
+    datagram = next;
+  }
   free(socket->pending);
   free(socket->addresses);
   free(socket);
@@ -299,13 +306,52 @@ static void torb_io_keep_received(torb_io_socket *socket, const uint8_t *bytes, 
   socket->pending_length += length;
 }
 
+/* Queues a datagram that arrived on `socket`, whole, with its sender. The socket's lock held. */
+static void torb_io_keep_datagram(torb_io_socket *socket, const torb_io_address *from, const uint8_t *bytes,
+                                  size_t length) {
+  torb_io_datagram *datagram = (torb_io_datagram *)malloc(sizeof(torb_io_datagram) + (length == 0u ? 1u : length));
+  if (datagram == NULL) {
+    torb_panic_out_of_memory(sizeof(torb_io_datagram) + length);
+  }
+  datagram->next = NULL;
+  datagram->from = *from;
+  datagram->length = length;
+  if (length > 0u) {
+    memcpy(datagram->bytes, bytes, length);
+  }
+  if (socket->datagram_last != NULL) {
+    socket->datagram_last->next = datagram;
+  } else {
+    socket->datagram_first = datagram;
+  }
+  socket->datagram_last = datagram;
+}
+
 void torb_io_complete(torb_io_operation *operation, int64_t result) {
+  torb_io_socket *socket = operation->socket;
+  if (result < 0 && socket != NULL) {
+    torb_io_failure kind = (torb_io_failure)((uint64_t)(-result) >> 32);
+    torb_spin_lock(&socket->lock);
+    /* Whatever the system called it - an aborted call, a handle that is gone - a socket somebody closed is closed */
+    if (socket->closed != 0u) {
+      result = torb_io_failed(TORB_IO_CLOSED, 0u);
+    } else if (socket->kind == (uint8_t)TORB_IO_DATAGRAM && kind == TORB_IO_RESET) {
+      /* A datagram has no connection to reset: Windows says so when a port answered "unreachable", Linux "refused" */
+      result = torb_io_failed(TORB_IO_REFUSED, (uint32_t)((uint64_t)(-result) & 0xFFFFFFFFu));
+    }
+    torb_spin_unlock(&socket->lock);
+  }
   operation->result = result;
   if (operation->kind == (uint8_t)TORB_IO_RECEIVE && result > 0 && operation->buffer != NULL
       && (size_t)result <= operation->capacity) {
-    torb_io_socket *socket = operation->socket;
     torb_spin_lock(&socket->lock);
     torb_io_keep_received(socket, operation->buffer, (size_t)result);
+    torb_spin_unlock(&socket->lock);
+  }
+  if (operation->kind == (uint8_t)TORB_IO_RECEIVE_DATAGRAM && result >= 0 && operation->buffer != NULL
+      && (size_t)result <= operation->capacity) {
+    torb_spin_lock(&socket->lock);
+    torb_io_keep_datagram(socket, &operation->address, operation->buffer, (size_t)result);
     torb_spin_unlock(&socket->lock);
   }
   torb_task_io_done(&operation->waiting);
@@ -492,6 +538,16 @@ static void torb_io_start(torb_io_operation *operation) {
     torb_io_complete(operation, (int64_t)length);
     return;
   }
+  if (operation->kind == (uint8_t)TORB_IO_RECEIVE_DATAGRAM && socket->datagram_first != NULL) {
+    size_t length = socket->datagram_first->length;
+    torb_spin_unlock(&socket->lock);
+    /* A datagram waits already: it is the answer, and nothing is to be kept from the buffer */
+    free(operation->buffer);
+    operation->buffer = NULL;
+    operation->capacity = 0u;
+    torb_io_complete(operation, (int64_t)length);
+    return;
+  }
   if (operation->kind == (uint8_t)TORB_IO_ACCEPT && socket->accepted_first != NULL) {
     operation->accepted = socket->accepted_first;
     socket->accepted_first = operation->accepted->accepted_next;
@@ -532,6 +588,8 @@ static int64_t torb_io_answer(torb_io_operation *operation) {
     }
     case TORB_IO_RECEIVE:
     case TORB_IO_SEND:
+    case TORB_IO_RECEIVE_DATAGRAM:
+    case TORB_IO_SEND_DATAGRAM:
       return result;
   }
   return result;
@@ -654,7 +712,7 @@ int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t p
   if (failure != 0) {
     return failure;
   }
-  system = torb_io_system_socket((int32_t)family);
+  system = torb_io_system_socket((int32_t)family, false);
   if (system < 0) {
     return system;
   }
@@ -687,7 +745,7 @@ torb_task *torb_network_connect(int64_t family, int64_t high, int64_t low, int64
   if (failure != 0) {
     return torb_io_answered(failure);
   }
-  system = torb_io_system_socket((int32_t)family);
+  system = torb_io_system_socket((int32_t)family, false);
   if (system < 0) {
     return torb_io_answered(system);
   }
@@ -786,6 +844,9 @@ int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts) {
     socket = torb_io_lookup(handle, TORB_IO_LISTENER);
   }
   if (socket == NULL) {
+    socket = torb_io_lookup(handle, TORB_IO_DATAGRAM);
+  }
+  if (socket == NULL) {
     return torb_io_failed(TORB_IO_CLOSED, 0u);
   }
   answer = torb_io_system_address(socket, peer, &address);
@@ -820,6 +881,128 @@ void torb_network_take_resolved(int64_t resolution, torb_list *parts) {
     }
   }
   torb_io_socket_release(record);
+}
+
+/* ----------------------------------------------------------------------------------------------- datagrams --- */
+
+/* The largest datagram there is: 65,507 bytes of UDP over IPv4, 65,527 over IPv6, and a margin. */
+#define TORB_IO_DATAGRAM_MAXIMUM ((size_t)65536u)
+
+int64_t torb_network_bind(int64_t family, int64_t high, int64_t low, int64_t port) {
+  torb_io_address address;
+  torb_io_socket *socket;
+  int64_t system;
+  int64_t failure;
+  if (!torb_io_address_of(family, high, low, port, &address)) {
+    return torb_io_failed(TORB_IO_INVALID, 0u);
+  }
+  failure = torb_io_ensure_running();
+  if (failure != 0) {
+    return failure;
+  }
+  system = torb_io_system_socket((int32_t)family, true);
+  if (system < 0) {
+    return system;
+  }
+  socket = torb_io_socket_new(TORB_IO_DATAGRAM, (int32_t)family, system);
+  failure = torb_io_system_bind(socket, &address);
+  if (failure != 0) {
+    torb_io_socket_release(socket);
+    return failure;
+  }
+  return torb_io_register(socket);
+}
+
+int64_t torb_network_connect_datagram(int64_t socket, int64_t family, int64_t high, int64_t low, int64_t port) {
+  torb_io_socket *record = torb_io_lookup(socket, TORB_IO_DATAGRAM);
+  torb_io_address address;
+  int64_t answer;
+  if (record == NULL) {
+    return torb_io_failed(TORB_IO_CLOSED, 0u);
+  }
+  if (!torb_io_address_of(family, high, low, port, &address) || port == 0 || family != record->family) {
+    torb_io_socket_release(record);
+    return torb_io_failed(TORB_IO_INVALID, 0u);
+  }
+  answer = torb_io_system_connect_datagram(record, &address);
+  if (answer == 0) {
+    torb_spin_lock(&record->lock);
+    record->connected = 1u;
+    torb_spin_unlock(&record->lock);
+  }
+  torb_io_socket_release(record);
+  return answer;
+}
+
+torb_task *torb_network_send_datagram(int64_t socket, torb_list bytes, int64_t family, int64_t high, int64_t low,
+                                      int64_t port) {
+  torb_io_socket *record = torb_io_lookup(socket, TORB_IO_DATAGRAM);
+  torb_io_operation *operation;
+  int64_t length = torb_list_length(bytes);
+  torb_io_address address;
+  bool connected;
+  if (record == NULL) {
+    return torb_io_answered(torb_io_failed(TORB_IO_CLOSED, 0u));
+  }
+  memset(&address, 0, sizeof address);
+  torb_spin_lock(&record->lock);
+  connected = record->connected != 0u;
+  torb_spin_unlock(&record->lock);
+  /* Family 0 is the connected peer; any other address has to be one, of the socket's own family */
+  if (torb_list_element(bytes)->size != 1u
+      || (family == 0 ? !connected
+                      : (!torb_io_address_of(family, high, low, port, &address) || port == 0
+                         || family != record->family))) {
+    torb_io_socket_release(record);
+    return torb_io_answered(torb_io_failed(TORB_IO_INVALID, 0u));
+  }
+  operation = torb_io_operation_new(TORB_IO_SEND_DATAGRAM, record);
+  operation->address = address;
+  operation->length = (size_t)length;
+  operation->buffer = (uint8_t *)torb_io_allocate(length == 0 ? 1u : (size_t)length);
+  if (length > 0) {
+    memcpy(operation->buffer, torb_list_at(bytes, 0, torb_location_unknown), (size_t)length);
+  }
+  return torb_io_task(operation);
+}
+
+torb_task *torb_network_receive_datagram(int64_t socket) {
+  torb_io_socket *record = torb_io_lookup(socket, TORB_IO_DATAGRAM);
+  torb_io_operation *operation;
+  if (record == NULL) {
+    return torb_io_answered(torb_io_failed(TORB_IO_CLOSED, 0u));
+  }
+  operation = torb_io_operation_new(TORB_IO_RECEIVE_DATAGRAM, record);
+  operation->buffer = (uint8_t *)torb_io_allocate(TORB_IO_DATAGRAM_MAXIMUM);
+  operation->capacity = TORB_IO_DATAGRAM_MAXIMUM;
+  return torb_io_task(operation);
+}
+
+int64_t torb_network_take_datagram(int64_t socket, torb_list *into, torb_list *from) {
+  torb_io_socket *record = torb_io_lookup(socket, TORB_IO_DATAGRAM);
+  torb_io_datagram *datagram;
+  int64_t length;
+  if (record == NULL) {
+    return torb_io_failed(TORB_IO_CLOSED, 0u);
+  }
+  torb_spin_lock(&record->lock);
+  datagram = record->datagram_first;
+  if (datagram != NULL) {
+    record->datagram_first = datagram->next;
+    if (record->datagram_first == NULL) {
+      record->datagram_last = NULL;
+    }
+  }
+  torb_spin_unlock(&record->lock);
+  torb_io_socket_release(record);
+  if (datagram == NULL) {
+    return torb_io_failed(TORB_IO_INVALID, 0u);
+  }
+  torb_list_add_plain(into, datagram->bytes, datagram->length);
+  torb_io_add_address(from, &datagram->from, true);
+  length = (int64_t)datagram->length;
+  free(datagram);
+  return length;
 }
 
 torb_text torb_network_error_text(int64_t failure) {

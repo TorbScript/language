@@ -50,6 +50,11 @@ typedef int(WSAAPI *torb_wsa_receive_function)(SOCKET, LPWSABUF, DWORD, LPDWORD,
                                                LPWSAOVERLAPPED_COMPLETION_ROUTINE);
 typedef int(WSAAPI *torb_wsa_send_function)(SOCKET, LPWSABUF, DWORD, LPDWORD, DWORD, LPWSAOVERLAPPED,
                                             LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+typedef int(WSAAPI *torb_wsa_receive_from_function)(SOCKET, LPWSABUF, DWORD, LPDWORD, LPDWORD, struct sockaddr *, LPINT,
+                                                    LPWSAOVERLAPPED, LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+typedef int(WSAAPI *torb_wsa_send_to_function)(SOCKET, LPWSABUF, DWORD, LPDWORD, DWORD, const struct sockaddr *, int,
+                                               LPWSAOVERLAPPED, LPWSAOVERLAPPED_COMPLETION_ROUTINE);
+typedef int(WSAAPI *torb_wsa_connect_function)(SOCKET, const struct sockaddr *, int);
 typedef int(WSAAPI *torb_wsa_last_error_function)(void);
 typedef int(WSAAPI *torb_wsa_shutdown_function)(SOCKET, int);
 typedef INT(WSAAPI *torb_wsa_resolve_function)(PCWSTR, PCWSTR, const ADDRINFOW *, PADDRINFOW *);
@@ -68,6 +73,9 @@ typedef struct torb_winsock {
   torb_wsa_ioctl_function ioctl;
   torb_wsa_receive_function receive;
   torb_wsa_send_function send;
+  torb_wsa_receive_from_function receive_from;
+  torb_wsa_send_to_function send_to;
+  torb_wsa_connect_function connect_datagram;
   torb_wsa_last_error_function last_error;
   torb_wsa_shutdown_function shutdown;
   torb_wsa_resolve_function resolve;
@@ -117,6 +125,9 @@ static bool torb_ws_load(void) {
   torb_ws.ioctl = (torb_wsa_ioctl_function)torb_ws_symbol(library, "WSAIoctl");
   torb_ws.receive = (torb_wsa_receive_function)torb_ws_symbol(library, "WSARecv");
   torb_ws.send = (torb_wsa_send_function)torb_ws_symbol(library, "WSASend");
+  torb_ws.receive_from = (torb_wsa_receive_from_function)torb_ws_symbol(library, "WSARecvFrom");
+  torb_ws.send_to = (torb_wsa_send_to_function)torb_ws_symbol(library, "WSASendTo");
+  torb_ws.connect_datagram = (torb_wsa_connect_function)torb_ws_symbol(library, "connect");
   torb_ws.last_error = (torb_wsa_last_error_function)torb_ws_symbol(library, "WSAGetLastError");
   torb_ws.shutdown = (torb_wsa_shutdown_function)torb_ws_symbol(library, "shutdown");
   torb_ws.resolve = (torb_wsa_resolve_function)torb_ws_symbol(library, "GetAddrInfoW");
@@ -126,7 +137,8 @@ static bool torb_ws_load(void) {
       || torb_ws.close == NULL || torb_ws.set_option == NULL || torb_ws.local_name == NULL || torb_ws.peer_name == NULL
       || torb_ws.ioctl == NULL || torb_ws.receive == NULL || torb_ws.send == NULL || torb_ws.last_error == NULL
       || torb_ws.shutdown == NULL || torb_ws.resolve == NULL || torb_ws.free_resolved == NULL
-      || torb_ws.status_to_error == NULL) {
+      || torb_ws.status_to_error == NULL || torb_ws.receive_from == NULL || torb_ws.send_to == NULL
+      || torb_ws.connect_datagram == NULL) {
     return false;
   }
   if (torb_ws.startup(MAKEWORD(2, 2), &data) != 0) {
@@ -286,8 +298,16 @@ static void torb_iocp_finish(torb_io_operation *operation, OVERLAPPED *overlappe
         result = 0;
         break;
       }
+      case TORB_IO_RECEIVE_DATAGRAM:
+        /* Where it came from, which the kernel wrote into the operation beside the bytes */
+        if (!torb_ws_address_from((const struct sockaddr *)(const void *)operation->peer, &operation->address)) {
+          memset(&operation->address, 0, sizeof operation->address);
+        }
+        result = (int64_t)bytes;
+        break;
       case TORB_IO_RECEIVE:
       case TORB_IO_SEND:
+      case TORB_IO_SEND_DATAGRAM:
       case TORB_IO_RESOLVE:
       default:
         result = (int64_t)bytes;
@@ -354,11 +374,21 @@ void torb_io_system_stop(void) {
 
 /* -------------------------------------------------------------------------------------------------- sockets --- */
 
-int64_t torb_io_system_socket(int32_t family) {
-  SOCKET handle = torb_ws.socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u,
+int64_t torb_io_system_socket(int32_t family, bool datagram) {
+  SOCKET handle = torb_ws.socket(family == 6 ? AF_INET6 : AF_INET, datagram ? SOCK_DGRAM : SOCK_STREAM,
+                                 datagram ? IPPROTO_UDP : IPPROTO_TCP, NULL, 0u,
                                  WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
   if (handle == INVALID_SOCKET) {
     return torb_ws_last_failure();
+  }
+  if (datagram) {
+    /*
+     * An unconnected socket hears no "port unreachable" of a datagram it sent, as on every other system: without this,
+     * Windows fails the next receive with WSAECONNRESET, whoever the unreachable peer was
+     */
+    BOOL report = FALSE;
+    DWORD returned = 0u;
+    (void)torb_ws.ioctl(handle, SIO_UDP_CONNRESET, &report, (DWORD)sizeof report, NULL, 0u, &returned, NULL, NULL);
   }
   if (CreateIoCompletionPort((HANDLE)handle, torb_iocp_port, TORB_IOCP_SOCKET_KEY, 0u) == NULL) {
     uint32_t code = (uint32_t)GetLastError();
@@ -383,6 +413,34 @@ int64_t torb_io_system_listen(torb_io_socket *socket, const torb_io_address *add
   if (torb_ws.listen(handle, (int)backlog) != 0) {
     return torb_ws_last_failure();
   }
+  return 0;
+}
+
+int64_t torb_io_system_bind(torb_io_socket *socket, const torb_io_address *address) {
+  SOCKET handle = (SOCKET)socket->system;
+  SOCKADDR_STORAGE system;
+  int length = torb_ws_address_of(address, &system);
+  if (address->family == 6) {
+    DWORD only = 1u;
+    (void)torb_ws.set_option(handle, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&only, (int)sizeof only);
+  }
+  if (torb_ws.bind(handle, (const struct sockaddr *)&system, length) != 0) {
+    return torb_ws_last_failure();
+  }
+  return 0;
+}
+
+int64_t torb_io_system_connect_datagram(torb_io_socket *socket, const torb_io_address *address) {
+  SOCKET handle = (SOCKET)socket->system;
+  SOCKADDR_STORAGE system;
+  int length = torb_ws_address_of(address, &system);
+  BOOL report = TRUE;
+  DWORD returned = 0u;
+  if (torb_ws.connect_datagram(handle, (const struct sockaddr *)&system, length) != 0) {
+    return torb_ws_last_failure();
+  }
+  /* A connected socket has one peer, and hears when its port is unreachable - as Linux reports it on a connected one */
+  (void)torb_ws.ioctl(handle, SIO_UDP_CONNRESET, &report, (DWORD)sizeof report, NULL, 0u, &returned, NULL, NULL);
   return 0;
 }
 
@@ -454,9 +512,41 @@ void torb_io_system_submit(torb_io_operation *operation) {
       }
       break;
     }
+    case TORB_IO_RECEIVE_DATAGRAM: {
+      WSABUF buffer;
+      DWORD flags = 0u;
+      buffer.len = (ULONG)operation->capacity;
+      buffer.buf = (CHAR *)operation->buffer;
+      operation->peer_length = (int32_t)sizeof operation->peer;
+      if (torb_ws.receive_from(handle, &buffer, 1u, NULL, &flags, (struct sockaddr *)(void *)operation->peer,
+                               (LPINT)&operation->peer_length, overlapped, NULL)
+          != 0) {
+        code = torb_ws.last_error();
+      }
+      break;
+    }
+    case TORB_IO_SEND_DATAGRAM: {
+      WSABUF buffer;
+      buffer.len = (ULONG)operation->length;
+      buffer.buf = (CHAR *)operation->buffer;
+      if (operation->address.family == 0) {
+        if (torb_ws.send(handle, &buffer, 1u, NULL, 0u, overlapped, NULL) != 0) {
+          code = torb_ws.last_error();
+        }
+      } else {
+        SOCKADDR_STORAGE remote;
+        int remote_length = torb_ws_address_of(&operation->address, &remote);
+        if (torb_ws.send_to(handle, &buffer, 1u, NULL, 0u, (const struct sockaddr *)&remote, remote_length, overlapped,
+                            NULL)
+            != 0) {
+          code = torb_ws.last_error();
+        }
+      }
+      break;
+    }
     case TORB_IO_ACCEPT: {
       LPFN_ACCEPTEX accept = torb_ws_accept_function(handle, operation->socket->family);
-      int64_t accepted = torb_io_system_socket(operation->socket->family);
+      int64_t accepted = torb_io_system_socket(operation->socket->family, false);
       DWORD received = 0u;
       if (accepted < 0) {
         torb_io_complete(operation, accepted);

@@ -65,6 +65,37 @@ torb_task *torb_network_resolve(torb_text host);
 /** Appends the addresses of a resolution to `*parts`, three numbers each (family, high, low), and closes its handle. */
 void torb_network_take_resolved(int64_t resolution, torb_list *parts);
 
+/**
+ * A UDP socket bound to the address; port 0 lets the system choose one. The handle, or a failure. Synchronous: binding
+ * never waits for the network.
+ */
+int64_t torb_network_bind(int64_t family, int64_t high, int64_t low, int64_t port);
+
+/**
+ * Connects the UDP socket `socket` to one peer: a datagram sent without an address goes there, and only the peer's
+ * datagrams arrive. Never waits. 0, or a failure.
+ */
+int64_t torb_network_connect_datagram(int64_t socket, int64_t family, int64_t high, int64_t low, int64_t port);
+
+/**
+ * `bytes` as one datagram to the address - or, with family 0, to the peer the socket is connected to - as a task of how
+ * many bytes were sent or a failure. The bytes are copied before this returns. `bytes` borrowed, result owned.
+ */
+torb_task *torb_network_send_datagram(int64_t socket, torb_list bytes, int64_t family, int64_t high, int64_t low,
+                                      int64_t port);
+
+/**
+ * The next datagram of `socket`, as a task of its length (0 is a datagram without bytes) or a failure. The datagram
+ * waits in the socket, whole and with its sender, for `torb_network_take_datagram`. Result owned.
+ */
+torb_task *torb_network_receive_datagram(int64_t socket);
+
+/**
+ * Takes the oldest datagram `socket` received: its bytes appended to `*into`, a list of `UInt8`, and its sender to
+ * `*from` as four numbers (the family, the high and the low half, the port). Its length, or a failure where none waits.
+ */
+int64_t torb_network_take_datagram(int64_t socket, torb_list *into, torb_list *from);
+
 /** The words for a failure a native of this header answered. Result owned. */
 torb_text torb_network_error_text(int64_t failure);
 

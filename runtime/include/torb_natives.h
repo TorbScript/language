@@ -193,22 +193,32 @@ double torb_natural_logarithm_f64(double value);
 torb_task *torb_network_accept(int64_t listener);
 /* networkAddress */
 int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts);
+/* networkBind */
+int64_t torb_network_bind(int64_t family, int64_t high, int64_t low, int64_t port);
 /* networkClose */
 void torb_network_close(int64_t handle);
 /* networkConnect */
 torb_task *torb_network_connect(int64_t family, int64_t high, int64_t low, int64_t port);
+/* networkConnectDatagram */
+int64_t torb_network_connect_datagram(int64_t socket, int64_t family, int64_t high, int64_t low, int64_t port);
 /* networkErrorText */
 torb_text torb_network_error_text(int64_t failure);
 /* networkListen */
 int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t port, int64_t backlog);
 /* networkReceive */
 torb_task *torb_network_receive(int64_t stream, int64_t maximum);
+/* networkReceiveDatagram */
+torb_task *torb_network_receive_datagram(int64_t socket);
 /* networkResolve */
 torb_task *torb_network_resolve(torb_text host);
 /* networkSend */
 torb_task *torb_network_send(int64_t stream, torb_list bytes, int64_t from);
+/* networkSendDatagram */
+torb_task *torb_network_send_datagram(int64_t socket, torb_list bytes, int64_t family, int64_t high, int64_t low, int64_t port);
 /* networkShutdown */
 int64_t torb_network_shutdown(int64_t stream);
+/* networkTakeDatagram */
+int64_t torb_network_take_datagram(int64_t socket, torb_list *into, torb_list *from);
 /* networkTakeReceived */
 void torb_network_take_received(int64_t stream, torb_list *into);
 /* networkTakeResolved */

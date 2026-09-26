@@ -1,7 +1,7 @@
 /*
  * io_test.c - the IO core over loopback (docs/design/NETWORK.md section 2): listen, accept, connect, send, receive, the
- * end of a stream, a refused connection, a name resolution, and the cancellation of each kind of wait - with what the
- * kernel delivered afterwards kept for the next operation, never lost.
+ * end of a stream, a refused connection, a name resolution, datagrams (bound, connected, refused), and the cancellation
+ * of each kind of wait - with what the kernel delivered afterwards kept for the next operation, never lost.
  *
  * The natives answer tasks of the runtime, and the tests run the scheduler until the one they need has completed
  * (`torb_scheduler_run`). Every test ends with `torb_scheduler_finish()`, which stops the IO core, and then asserts that
@@ -362,6 +362,154 @@ TORB_TEST(test_io_a_large_send_arrives_whole) {
   TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
 }
 
+/* A UDP socket bound to loopback on a port the system chose. */
+static int64_t bound_datagram(void) {
+  return torb_network_bind(4, 0, LOOPBACK4, 0);
+}
+
+/* Receives one datagram on `socket`: its bytes (owned, into `*bytes`) and the port it came from. Its length, or a failure. */
+static int64_t received_datagram(int64_t socket, torb_list *bytes, int64_t *port) {
+  torb_list from = torb_list_new(&torb_element_int64);
+  int64_t length = answer_of(torb_network_receive_datagram(socket));
+  *bytes = torb_list_new(&element_byte);
+  *port = -1;
+  if (length >= 0) {
+    length = torb_network_take_datagram(socket, bytes, &from);
+    if (torb_list_length(from) == 4) {
+      *port = *(const int64_t *)torb_list_at(from, 3, torb_location_unknown);
+    }
+  }
+  torb_list_release(from);
+  return length;
+}
+
+TORB_TEST(test_io_datagrams_over_loopback) {
+  int64_t first = bound_datagram();
+  int64_t second = bound_datagram();
+  int64_t first_port = port_of(first);
+  int64_t second_port = port_of(second);
+  torb_list hello = bytes_of("hello, datagram");
+  torb_list nothing = bytes_of("");
+  torb_list answer;
+  int64_t sender = 0;
+  TORB_CHECK(first > 0 && second > 0 && first_port > 0 && second_port > 0);
+  /* Two datagrams arrive as two, whole and in their own borders, each with where it came from */
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(first, hello, 4, 0, LOOPBACK4, second_port)), 15);
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(first, nothing, 4, 0, LOOPBACK4, second_port)), 0);
+  TORB_CHECK_INTEGER(received_datagram(second, &answer, &sender), 15);
+  TORB_CHECK(bytes_are(answer, "hello, datagram"));
+  TORB_CHECK_INTEGER(sender, first_port);
+  torb_list_release(answer);
+  /* A datagram without bytes is a datagram */
+  TORB_CHECK_INTEGER(received_datagram(second, &answer, &sender), 0);
+  TORB_CHECK_INTEGER(torb_list_length(answer), 0);
+  torb_list_release(answer);
+  /* The answer goes back to where the question came from */
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(second, hello, 4, 0, LOOPBACK4, sender)), 15);
+  TORB_CHECK_INTEGER(received_datagram(first, &answer, &sender), 15);
+  TORB_CHECK_INTEGER(sender, second_port);
+  torb_list_release(answer);
+  /* Taking a datagram where none waits is a failure, and so is a send to the peer of a socket that has none */
+  answer = torb_list_new(&element_byte);
+  {
+    torb_list from = torb_list_new(&torb_element_int64);
+    TORB_CHECK_INTEGER(kind_of(torb_network_take_datagram(first, &answer, &from)), 11);
+    torb_list_release(from);
+  }
+  torb_list_release(answer);
+  TORB_CHECK_INTEGER(kind_of(answer_of(torb_network_send_datagram(first, hello, 0, 0, 0, 0))), 11);
+  torb_list_release(hello);
+  torb_list_release(nothing);
+  torb_network_close(first);
+  torb_network_close(second);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+TORB_TEST(test_io_a_connected_datagram_socket) {
+  int64_t first = bound_datagram();
+  int64_t second = bound_datagram();
+  int64_t stranger = bound_datagram();
+  int64_t second_port = port_of(second);
+  torb_list ping = bytes_of("ping");
+  torb_list noise = bytes_of("noise");
+  torb_list peer = torb_list_new(&torb_element_int64);
+  torb_list answer;
+  int64_t sender = 0;
+  TORB_CHECK(first > 0 && second > 0 && stranger > 0);
+  TORB_CHECK_INTEGER(torb_network_connect_datagram(first, 4, 0, LOOPBACK4, second_port), 0);
+  TORB_CHECK_INTEGER(torb_network_address(first, true, &peer), 0);
+  TORB_CHECK_INTEGER(*(const int64_t *)torb_list_at(peer, 3, torb_location_unknown), second_port);
+  /* Family 0 is the peer */
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(first, ping, 0, 0, 0, 0)), 4);
+  TORB_CHECK_INTEGER(received_datagram(second, &answer, &sender), 4);
+  TORB_CHECK(bytes_are(answer, "ping"));
+  torb_list_release(answer);
+  /* Only the peer's datagrams arrive: the stranger's is dropped by the system, the peer's answer is the next one */
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(stranger, noise, 4, 0, LOOPBACK4, port_of(first))), 5);
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(second, ping, 4, 0, LOOPBACK4, sender)), 4);
+  TORB_CHECK_INTEGER(received_datagram(first, &answer, &sender), 4);
+  TORB_CHECK(bytes_are(answer, "ping"));
+  TORB_CHECK_INTEGER(sender, second_port);
+  torb_list_release(answer);
+  torb_list_release(peer);
+  torb_list_release(ping);
+  torb_list_release(noise);
+  torb_network_close(first);
+  torb_network_close(second);
+  torb_network_close(stranger);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+TORB_TEST(test_io_a_connected_datagram_socket_hears_refused) {
+  int64_t gone = bound_datagram();
+  int64_t gone_port = port_of(gone);
+  int64_t asking = bound_datagram();
+  torb_list question = bytes_of("anybody?");
+  torb_list answer;
+  int64_t sender = 0;
+  TORB_CHECK(gone_port > 0 && asking > 0);
+  torb_network_close(gone);
+  TORB_CHECK_INTEGER(torb_network_connect_datagram(asking, 4, 0, LOOPBACK4, gone_port), 0);
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(asking, question, 0, 0, 0, 0)), 8);
+  /* Nothing listens: the system's "port unreachable" is the receive's failure, a refusal on every system */
+  TORB_CHECK_INTEGER(kind_of(received_datagram(asking, &answer, &sender)), 2);
+  torb_list_release(answer);
+  torb_list_release(question);
+  torb_network_close(asking);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+TORB_TEST(test_io_a_cancelled_datagram_receive_loses_nothing) {
+  int64_t first = bound_datagram();
+  int64_t second = bound_datagram();
+  torb_list message = bytes_of("after the cancel");
+  torb_list answer;
+  torb_task *waiting;
+  int64_t sender = 0;
+  TORB_CHECK(first > 0 && second > 0);
+  waiting = torb_network_receive_datagram(second);
+  let_them_start();
+  TORB_CHECK(!torb_task_is_complete(waiting));
+  torb_task_cancel(waiting);
+  TORB_CHECK_INTEGER(answer_of(waiting), CANCELLED);
+  TORB_CHECK_INTEGER(answer_of(torb_network_send_datagram(first, message, 4, 0, LOOPBACK4, port_of(second))), 16);
+  TORB_CHECK_INTEGER(received_datagram(second, &answer, &sender), 16);
+  TORB_CHECK(bytes_are(answer, "after the cancel"));
+  torb_list_release(answer);
+  /* A receive that waits when its socket is closed is woken with "closed" */
+  waiting = torb_network_receive_datagram(first);
+  let_them_start();
+  torb_network_close(first);
+  TORB_CHECK_INTEGER(kind_of(answer_of(waiting)), 10);
+  torb_list_release(message);
+  torb_network_close(second);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
 void torb_register_io_tests(void) {
   TORB_ADD(test_io_echo_over_loopback);
   TORB_ADD(test_io_shutdown_is_the_end_of_the_stream);
@@ -375,4 +523,8 @@ void torb_register_io_tests(void) {
   TORB_ADD(test_io_resolving_localhost);
   TORB_ADD(test_io_ipv6_loopback);
   TORB_ADD(test_io_a_large_send_arrives_whole);
+  TORB_ADD(test_io_datagrams_over_loopback);
+  TORB_ADD(test_io_a_connected_datagram_socket);
+  TORB_ADD(test_io_a_connected_datagram_socket_hears_refused);
+  TORB_ADD(test_io_a_cancelled_datagram_receive_loses_nothing);
 }

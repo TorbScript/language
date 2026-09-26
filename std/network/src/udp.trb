@@ -1,0 +1,176 @@
+/**
+ * UDP: a `UdpSocket` sends and receives datagrams - each one whole, with the address it came from, or not at all
+ * (docs/design/NETWORK.md section 4, slice 5). A datagram is not a stream, so a socket is no `Source`: a receive answers
+ * one datagram and its sender, and a send hands one datagram to the operating system.
+ *
+ * A socket is a handle of the runtime, like a TCP one, and is closed exactly once, by the `close()` the release of its
+ * owner runs.
+ */
+
+use ArrayList from "std/collections"
+use Bytes from "std/stream"
+use SocketAddress from "std/ip"
+use NetworkError from "./error"
+use numbersOf, addressOf, socketAddressOf, networkClose from "./tcp"
+
+/**
+ * A UDP socket: bound to a local address, and - once [UdpSocket.connect] named one - connected to one peer. It has an
+ * identity, the operating system's socket, so it is a `shared type`, and it closes when the last reference to it goes.
+ *
+ *     using socket = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
+ *     socket.send("ping".bytes().toList(), to: server).await()?
+ *     const (answer, sender) = socket.receive().await()?
+ *
+ * Nothing is promised of a datagram on its way: it may be lost, arrive twice or overtake another, and a protocol over
+ * UDP that needs more (DNS, QUIC) asks again after a timeout - `receive().within(limit)`. What does arrive arrives
+ * whole, up to the largest datagram there is (65,507 bytes over IPv4).
+ */
+public shared type UdpSocket with Close {
+  private handle: Int
+  private bound: SocketAddress
+  private var peer: SocketAddress? = None
+
+  /**
+   * A socket bound to `address`. Port 0 asks the system for a free port, which [UdpSocket.localAddress] then says; an
+   * IPv6 address binds IPv6 only, on every system.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isAddressInUse()` where another socket has the address.
+   */
+  static fn bind(address: SocketAddress): Result<UdpSocket, NetworkError> {
+    const (family, high, low) = numbersOf address.address
+    const handle = networkBind family, high, low, address.port
+    if handle < 0 {
+      return Fail NetworkError.of(handle).about("binding {address}")
+    }
+    match socketAddressOf(handle, false) {
+      Ok(bound) => Ok UdpSocket(handle, bound)
+      Fail(problem) => {
+        networkClose handle
+        Fail problem
+      }
+    }
+  }
+
+  /** Where it is bound, with the port the system chose where port 0 was asked for. */
+  fn localAddress(): SocketAddress {
+    bound
+  }
+
+  /**
+   * Connects the socket to one peer, which waits for nothing - no datagram goes over the network. From now on only the
+   * peer's datagrams arrive, [UdpSocket.sendToPeer] sends to it, and a peer whose port answers "unreachable" makes the
+   * next receive fail with `isConnectionRefused()`. Connecting again names another peer.
+   *
+   * # Errors
+   *
+   * - [NetworkError] for an address of the other IP version than the socket's, or port 0.
+   */
+  fn connect(address: SocketAddress): Result<Void, NetworkError> {
+    const (family, high, low) = numbersOf address.address
+    const answer = networkConnectDatagram handle, family, high, low, address.port
+    if answer < 0 {
+      return Fail NetworkError.of(answer).about("connecting to {address}")
+    }
+    peer = Some address
+    Ok void
+  }
+
+  /** The peer [UdpSocket.connect] named, or `None` for a socket that is not connected. */
+  fn peerAddress(): SocketAddress? {
+    peer
+  }
+
+  /**
+   * Sends `bytes` as one datagram to `to`. Finishes once the operating system took it, which says nothing of whether it
+   * arrives. A connected socket sends to its peer only.
+   *
+   * # Errors
+   *
+   * - [NetworkError] for a datagram larger than the network carries, an address of the other IP version, or an address
+   *   that is not the peer of a connected socket.
+   */
+  fn send(bytes: Bytes, to: SocketAddress): Task<Result<Void, NetworkError>> {
+    if const Some(connected) = peer {
+      if connected != to {
+        return Fail NetworkError.invalid("a socket connected to {connected} sends to it only, not to {to}")
+      }
+      return sendToPeer(bytes).await()
+    }
+    const (family, high, low) = numbersOf to.address
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    const sent = networkSendDatagram(handle, buffer, family, high, low, to.port).await()
+    if sent < 0 {
+      return Fail NetworkError.of(sent).about("sending to {to}")
+    }
+    Ok void
+  }
+
+  /**
+   * Sends `bytes` as one datagram to the peer [UdpSocket.connect] named.
+   *
+   * # Errors
+   *
+   * - [NetworkError] for a socket that is not connected, and for a datagram larger than the network carries.
+   */
+  fn sendToPeer(bytes: Bytes): Task<Result<Void, NetworkError>> {
+    if peer.isNone() {
+      return Fail NetworkError.invalid("the socket is not connected: `connect` names its peer")
+    }
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    const sent = networkSendDatagram(handle, buffer, 0, 0, 0, 0).await()
+    if sent < 0 {
+      return Fail NetworkError.of(sent)
+    }
+    Ok void
+  }
+
+  /**
+   * The next datagram and where it came from. Waits until one arrives; a datagram that arrives while nobody receives
+   * waits in the socket, and a cancelled receive leaves it to the next one. A timeout is `within`:
+   * `socket.receive().within(2.seconds()).await()`.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isConnectionRefused()` on a connected socket whose peer's port is unreachable, and
+   *   `isClosed()` once the socket was closed.
+   */
+  fn receive(): Task<Result<(Bytes, SocketAddress), NetworkError>> {
+    const length = networkReceiveDatagram(handle).await()
+    if length < 0 {
+      return Fail NetworkError.of(length)
+    }
+    var bytes: ArrayList<UInt8> = ArrayList.withCapacity length
+    var sender: ArrayList<Int> = ArrayList.withCapacity 4
+    const taken = networkTakeDatagram handle, bytes, sender
+    if taken < 0 {
+      return Fail NetworkError.of(taken)
+    }
+    const received: Bytes = bytes
+    const from = SocketAddress addressOf(sender[0], sender[1], sender[2]), sender[3]
+    Ok((received, from))
+  }
+
+  /** Closes the socket: a receive that waits fails with a closed socket. What the release of the socket runs. */
+  var fn close() {
+    networkClose handle
+  }
+}
+
+// --- the natives of runtime/io.c (runtime/include/torb_network.h) --------------------------------------------------
+
+/** A UDP socket's handle, bound to the address, or a failure. */
+native fn networkBind(family: Int, high: Int, low: Int, port: Int): Int
+
+/** Connects a UDP socket to one peer: 0, or a failure. */
+native fn networkConnectDatagram(socket: Int, family: Int, high: Int, low: Int, port: Int): Int
+
+/** How many bytes went as one datagram to the address - to the connected peer where `family` is 0 - or a failure. */
+native fn networkSendDatagram(socket: Int, bytes: ArrayList<UInt8>, family: Int, high: Int, low: Int, port: Int): Task<Int>
+
+/** The length of the next datagram, or a failure; the datagram waits for [networkTakeDatagram]. */
+native fn networkReceiveDatagram(socket: Int): Task<Int>
+
+/** The oldest datagram's bytes appended to `into` and its sender's four numbers to `from`: its length, or a failure. */
+native fn networkTakeDatagram(socket: Int, var into: ArrayList<UInt8>, var from: ArrayList<Int>): Int

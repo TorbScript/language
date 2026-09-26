@@ -72,11 +72,21 @@ typedef struct torb_io_address {
 typedef enum torb_io_record_kind {
   TORB_IO_STREAM = 1,
   TORB_IO_LISTENER = 2,
-  TORB_IO_RESOLUTION = 3
+  TORB_IO_RESOLUTION = 3,
+  /** A UDP socket: bound, maybe connected to one peer, its received datagrams queued whole. */
+  TORB_IO_DATAGRAM = 4
 } torb_io_record_kind;
 
 typedef struct torb_io_operation torb_io_operation;
 typedef struct torb_io_socket torb_io_socket;
+
+/** A datagram that arrived and no receive took yet: where it came from, and its bytes right after the record. */
+typedef struct torb_io_datagram {
+  struct torb_io_datagram *next;
+  torb_io_address from;
+  size_t length;
+  uint8_t bytes[];
+} torb_io_datagram;
 
 struct torb_io_socket {
   /** References: the table's while it has a handle, one per operation in flight, one while the poller needs it. */
@@ -100,6 +110,11 @@ struct torb_io_socket {
   /** A resolution: the addresses, `address_count` of them. */
   torb_io_address *addresses;
   size_t address_count;
+  /** A datagram socket: what arrived and no receive took yet, oldest first, each `malloc`ed whole. */
+  torb_io_datagram *datagram_first;
+  torb_io_datagram *datagram_last;
+  /** A datagram socket is connected to one peer: a send without an address goes there, and nothing else arrives. */
+  uint8_t connected;
   /* ---- the readiness pollers' (epoll, kqueue) ---- */
   /** The operation that waits for the socket to become readable, and the one that waits for it to become writable. */
   torb_io_operation *reading;
@@ -117,7 +132,11 @@ typedef enum torb_io_operation_kind {
   TORB_IO_CONNECT = 2,
   TORB_IO_RECEIVE = 3,
   TORB_IO_SEND = 4,
-  TORB_IO_RESOLVE = 5
+  TORB_IO_RESOLVE = 5,
+  /** A datagram in, whole, and where it came from in `address`; the buffer holds the largest datagram there is. */
+  TORB_IO_RECEIVE_DATAGRAM = 6,
+  /** A datagram out, whole, to `address` - or to the connected peer where its family is 0. */
+  TORB_IO_SEND_DATAGRAM = 7
 } torb_io_operation_kind;
 
 struct torb_io_operation {
@@ -139,8 +158,11 @@ struct torb_io_operation {
   int64_t result;
   /** An accept: the socket the connection arrives on (a reference). */
   torb_io_socket *accepted;
-  /** A connect: where to. */
+  /** A connect and a datagram sent: where to. A datagram received: where it came from. */
   torb_io_address address;
+  /** A datagram received on IOCP: the system's form of its sender, which the kernel writes after the call returned. */
+  _Alignas(8) uint8_t peer[128];
+  int32_t peer_length;
   /** A resolution: the host, NUL terminated, and what it resolved to. */
   char *host;
   torb_io_address *addresses;
@@ -183,10 +205,20 @@ bool torb_io_system_start(int64_t *failure);
 /** Wakes the IO thread and joins it. Nothing is in flight any more when it is called. */
 void torb_io_system_stop(void);
 
-/** A stream socket of `family`, non-blocking and known to the poller. The descriptor, or a packed failure. */
-int64_t torb_io_system_socket(int32_t family);
+/**
+ * A socket of `family` - a TCP stream, or with `datagram` a UDP socket - non-blocking and known to the poller. The
+ * descriptor, or a packed failure.
+ */
+int64_t torb_io_system_socket(int32_t family, bool datagram);
 /** Binds `socket` to `address` and listens with `backlog`. 0, or a packed failure. */
 int64_t torb_io_system_listen(torb_io_socket *socket, const torb_io_address *address, int64_t backlog);
+/** Binds the datagram socket `socket` to `address`. 0, or a packed failure. */
+int64_t torb_io_system_bind(torb_io_socket *socket, const torb_io_address *address);
+/**
+ * Connects the datagram socket `socket` to `address`: a send without an address goes there, and only its datagrams
+ * arrive. Never waits. 0, or a packed failure.
+ */
+int64_t torb_io_system_connect_datagram(torb_io_socket *socket, const torb_io_address *address);
 /**
  * Starts `operation`, which holds its two references. Its completion comes through `torb_io_complete`, from the IO thread
  * or from this call itself where the system answered at once.
