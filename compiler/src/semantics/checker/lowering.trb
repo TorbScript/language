@@ -553,6 +553,50 @@ public fn integerLiteral(text: String, isNegative: Bool): LiteralValue? {
   }
 }
 
+/**
+ * A literal above the largest `Int64` and below two to the power of 64, read as the bits of a `UInt64`: the compiler's
+ * integers are `Int64`s, so `14695981039346656037` is held as the negative number with the same 64 bits, which is what
+ * the C back end writes into a `uint64_t` and what a register of the VM holds. `None` for a literal that fits an `Int64`
+ * (that is [integerLiteral]'s) and for one that fits no 64 bits at all.
+ *
+ * The literal's last digit is split off, so that nothing is ever computed that does not fit: with `head` the digits
+ * before it and `digit` the last one, the value is `head * radix + digit`, and two to the power of 64 is
+ * `quotient * radix + rest` - so the bits are `(head - quotient + 1) * radix + (digit - rest - radix)`, where the first
+ * product stays inside an `Int64` for every `head` of a literal between two to the power of 63 and of 64, and the sum
+ * is between `Int64`'s smallest and -1 exactly when the literal is in range.
+ */
+public fn unsignedLiteral(text: String): LiteralValue? {
+  const (radix, digits) = if text.startsWith("0x") {
+    (16, text.withoutPrefix("0x") ?? "")
+  } else if text.startsWith("0b") {
+    (2, text.withoutPrefix("0b") ?? "")
+  } else {
+    (10, text)
+  }
+  if digits.byteLength() < 2 {
+    return None
+  }
+  // Every digit is one character, so the cut counted in characters is the cut counted in digits
+  const head = Int.parseDigits(digits.prefix(characters: digits.byteLength() - 1), radix: radix).ok()?
+  const digit = Int.parseDigits(digits.suffix(characters: 1), radix: radix).ok()?
+  // The smallest `head` of a literal of two to the power of 63 or more, and one more than the largest of one below two
+  // to the power of 64. Base 2's quotient is two to the power of 63 itself, which no `Int64` holds: it is subtracted
+  // as `Int64`'s smallest, added
+  const (lowest, shifted, rest) = match radix {
+    16 => (576460752303423488, head - 1152921504606846976 + 1, 0)
+    2 => (4611686018427387904, head + Int.minimum + 1, 0)
+    _ => (922337203685477580, head - 1844674407370955161 + 1, 6)
+  }
+  if head < lowest || shifted > 1 {
+    return None
+  }
+  const bits = shifted * radix + (digit - rest - radix)
+  if bits >= 0 {
+    return None
+  }
+  Some LiteralValue.Integer(bits)
+}
+
 /** `Show & Encode`: a value that implements all of these. Only traits can be combined. */
 fn intersectionType(
   var checker: Checker,

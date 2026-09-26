@@ -21,7 +21,7 @@ use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, require
 use boundMember, dispatchOfBound from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterateSourceOf from "./implementation"
 use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType, memberOfImplementation from "./implementation"
-use typeFromReference, integerLiteral from "./lowering"
+use typeFromReference, integerLiteral, unsignedLiteral from "./lowering"
 use typeSignatureOf from "./signature"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
@@ -942,7 +942,7 @@ fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expe
   const value = match integerLiteral(text, isNegative) {
     Some(.Integer(found)) => found
     _ => {
-      return reportUnparsedInteger checker, text, at
+      return unsignedLiteralType checker, text, isNegative, expected, at
     }
   }
   const fallback = checker.integerType()
@@ -1051,6 +1051,28 @@ fn describeInteger(text: String, value: Int): String {
     return "{text}"
   }
   "{value}"
+}
+
+/**
+ * A literal above the largest `Int64`, which is read in the type it is expected as: `UInt64` takes every literal below
+ * two to the power of 64, so `var hash: UInt64 = 14695981039346656037` is a `UInt64` and never an `Int64` first. Any
+ * other expectation, and none at all, leaves it out of range.
+ */
+fn unsignedLiteralType(var checker: Checker, text: String, isNegative: Bool, expected: TypeId?, at: Span): TypeId {
+  if isNegative || unsignedLiteral(text).isNone() {
+    return reportUnparsedInteger checker, text, at
+  }
+  var name = "Int64"
+  if const Some(annotation) = expected {
+    if const Some(found) = numericNameOf(checker, annotation) {
+      if found == "UInt64" {
+        return adapt checker, at, annotation
+      }
+      name = found
+    }
+  }
+  checker.reportHere Diagnostic.error("`{text}` does not fit into `{name}`", at)
+  checker.invalidType
 }
 
 /** A literal that does not parse at all is out of the range of every integer type there is. */

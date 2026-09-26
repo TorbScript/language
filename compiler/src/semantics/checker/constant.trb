@@ -14,7 +14,7 @@ use Expression, Argument, TextSegment, InfixOperator, PrefixOperator from "../..
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Checker from "./context"
-use integerLiteral from "./lowering"
+use integerLiteral, unsignedLiteral from "./lowering"
 use bindingOfSite, resultOf, signatureOf, isTraitConstant from "./signature"
 use targetDimensionNamed from "../../backend/c/natives"
 use isSharedType from "./declaration"
@@ -315,7 +315,13 @@ public fn evaluateConstant(
 fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
   match integerLiteral(text, isNegative) {
     Some(.Integer(value)) => ConstantResult.Value ConstantValue.Integer(value)
-    _ => ConstantResult.Broken
+    // A `UInt64` above the largest `Int64` has no value of the checker's own integers, as `wrappedToWidth` says
+    _ => {
+      if !isNegative && unsignedLiteral(text).isSome() {
+        return ConstantResult.NotConstant at
+      }
+      ConstantResult.Broken
+    }
   }
 }
 

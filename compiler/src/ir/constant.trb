@@ -22,7 +22,7 @@ use LiteralValue, TypeId, ParameterId, ImplementationId from "../semantics/check
 use bindingOfSite, resultOf, signatureOf, typeSignatureOf, isTraitConstant from "../semantics/checker/signature"
 use matchTypePattern, witnessFor, traitArgumentsOf from "../semantics/checker/implementation"
 use substitute from "../semantics/checker/unify"
-use integerLiteral from "../semantics/checker/lowering"
+use integerLiteral, unsignedLiteral from "../semantics/checker/lowering"
 use IrTypeId, LayoutId, StaticId, StaticContents, Instance from "./ir"
 use instanceKeyOf, isClosedType from "./instances"
 use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
@@ -211,6 +211,14 @@ fn characterComparison(
   Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
 }
 
+/** Whether a type is `UInt64`, whose values above the largest `Int64` the compiler holds as negative bits. */
+fn isUnsigned64(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match numericKindOf(lowering.program, annotation) {
+    Some(.Unsigned(width)) => width >= 64
+    _ => false
+  }
+}
+
 /** Every integer operation, with the range of the type checked afterwards: `const tiny: Int8 = 100 + 100` is an error. */
 fn integerOperation(
   var lowering: Lowering,
@@ -221,6 +229,11 @@ fn integerOperation(
   annotation: IrTypeId,
   at: Span,
 ): ConstantValue? {
+  // A `UInt64` above the largest `Int64` is its bits, which signed arithmetic would read as a negative number: such an
+  // operation is left to the run time, where it is unsigned
+  if (first < 0 || second < 0) && isUnsigned64(lowering, operands) {
+    return None
+  }
   match operator {
     .Equal => Some comparisonValue(first == second, annotation)
     .NotEqual => Some comparisonValue(first != second, annotation)
@@ -446,7 +459,17 @@ fn integerConstant(
   annotation: IrTypeId,
   at: Span,
 ): ConstantValue? {
-  const literal = integerLiteral(text, isNegative)?
+  // A `UInt64` above the largest `Int64` is held as its bits (`unsignedLiteral`); the checker let it through only where
+  // a `UInt64` was expected
+  const literal = match integerLiteral(text, isNegative) {
+    Some(found) => found
+    None => {
+      if isNegative || !isUnsigned64(lowering, annotation) {
+        return None
+      }
+      unsignedLiteral(text)?
+    }
+  }
   // A literal that does not fit the type it adapts to was already reported by the checker, so nothing is said twice
   Some ConstantValue(StaticContents.Literal(literal), annotation)
 }

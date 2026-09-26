@@ -49,11 +49,18 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
 3. **Every integer type carries `minimum` and `maximum` as its own constants**, so a bound is named instead of
    repeated: `Int8.minimum` is `-128`, `Int8.maximum` is `127`, `UInt64.maximum` is `18446744073709551615`.
 
-4. **A literal that does not fit its target type is a compile error at the literal**, not at some later use.
+4. **A literal that does not fit its target type is a compile error at the literal**, not at some later use. It is
+   read in its target type and never as an `Int64` first, so a `UInt64` takes every literal up to
+   `18446744073709551615`, the upper half an `Int64` does not have included.
 
    ```trb error
    const small: Int8 = 300
    // error: `300` does not fit into `Int8`
+   ```
+
+   ```trb check
+   const basis: UInt64 = 14695981039346656037
+   print basis
    ```
 
 5. **Overflow at runtime panics; overflow written directly in the source is caught where it is written.** Rule 4 is

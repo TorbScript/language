@@ -47,6 +47,20 @@ group "Literals" {
     assert(problems(inBody("  const wide: Int32 = 2147483648")) == ["`2147483648` does not fit into `Int32`"])
   }
 
+  /**
+   * The literal is read in the expected type, never as an `Int64` first: a `UInt64` takes the upper half an `Int64`
+   * lacks (`tests/conformance/unsigned-literal.trb`, since the miniature prelude has no `UInt64`), and everywhere else
+   * such a literal names the type it does not fit.
+   */
+  test "a literal above the largest `Int64` names the type it was expected as" {
+    const wide = "`9223372036854775808` does not fit into `Int64`"
+    assert(problems(inBody("  const wide = 9223372036854775808")) == [wide])
+    const narrow = "`0xFFFFFFFFFFFFFFFF` does not fit into `Int32`"
+    assert(problems(inBody("  const narrow: Int32 = 0xFFFFFFFFFFFFFFFF")) == [narrow])
+    const over = "`18446744073709551616` does not fit into any integer type"
+    assert(problems(inBody("  const over = 18446744073709551616")) == [over])
+  }
+
   test "an integer literal in a base keeps the way it was written in the message" {
     assert(problems(inBody("  const small: Int8 = 0xFFF")) == ["`0xFFF` does not fit into `Int8`"])
   }

@@ -517,8 +517,7 @@ extend UInt64 {
   static one: UInt64 = 1
   /** Always `0`. */
   static minimum: UInt64 = 0
-  /** Every integer literal is parsed as an `Int64` first, so `18446744073709551615` does not fit as a literal here
-   * either - `~UInt64.minimum` is all ones, which is the largest `UInt64` there is. */
+  /** `18446744073709551615`: all ones, which is the largest `UInt64` there is. */
   static maximum: UInt64 = ~UInt64.minimum
 
   /**
@@ -526,8 +525,15 @@ extend UInt64 {
    * arithmetic in the language that does not panic on overflow, and it exists for one reason: a hash function mixes
    * bits and needs the wrap. Everywhere else, overflow is a bug and `+` says so.
    *
+   * An integer literal is read in the type it is expected as, so the offset basis of FNV-1a, which is above the largest
+   * `Int64`, is written as it is:
+   *
+   *     const bytes: List<UInt64> = [104, 105]
    *     var hash: UInt64 = 14695981039346656037
-   *     hash = (hash ^ value).multipliedWrapping(1099511628211)
+   *     for byte in bytes {
+   *       hash = (hash ^ byte).multipliedWrapping(1099511628211)
+   *     }
+   *     print hash
    */
   native fn addedWrapping(other: UInt64): UInt64
 
