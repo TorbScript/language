@@ -150,7 +150,7 @@ TORB_TEST(a_character_and_a_byte_are_read_at_an_offset) {
   TORB_CHECK_INTEGER(byte, 0xC3);
   TORB_CHECK(!torb_text_byte_at(text, 6, &byte));
   TORB_EXPECT_PANIC(torb_text_char_at(text, 2, &character));
-  TORB_CHECK_PANIC_CONTAINS("the byte at offset 2 is not valid UTF-8");
+  TORB_CHECK_PANIC_CONTAINS("the offset 2 is inside of a character of a text of 6 bytes");
   torb_text_release(text);
 }
 

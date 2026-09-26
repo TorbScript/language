@@ -2112,8 +2112,8 @@ static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 
-/* torb_text_char_at */
-static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
+/* torb_text_char_at_located */
+static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2122,7 +2122,7 @@ static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t 
   int64_t a1 = (int64_t)words[base + operands[2]];
   int64_t *p2 = (int64_t *)torb_machine_address(words, words[base + operands[3]]);
   torb_char t2 = (torb_char)*p2;
-  bool r = torb_text_char_at(a0, a1, &t2);
+  bool r = torb_text_char_at_located(a0, a1, &t2, torb_machine_location(operands[4]));
   *p2 = (int64_t)t2;
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }

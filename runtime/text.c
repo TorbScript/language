@@ -226,7 +226,7 @@ bool torb_text_next_char(torb_text text, uint32_t *offset, torb_char *character)
   return true;
 }
 
-bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out) {
+bool torb_text_char_at_located(torb_text text, int64_t offset, torb_char *out, torb_location at) {
   const uint8_t *bytes = torb_text_data(text);
   uint32_t width;
   if (offset < 0 || offset >= (int64_t)text.length) {
@@ -235,9 +235,13 @@ bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out) {
   width = torb_utf8_decode(bytes, (size_t)text.length, (size_t)offset, out);
   if (width == 0u) {
     /* An offset on a continuation byte, which is the one way a caller can get this wrong (decided gap 7). */
-    torb_panic_invalid_utf8(offset, torb_location_unknown);
+    torb_panic_offset_inside_character(offset, (int64_t)text.length, at);
   }
   return true;
+}
+
+bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out) {
+  return torb_text_char_at_located(text, offset, out, torb_location_unknown);
 }
 
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out) {
@@ -598,7 +602,9 @@ torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at) {
   torb_text result;
   int64_t index;
   if (times < 0) {
-    torb_panic_index_out_of_bounds(times, 0, at);
+    char message[96];
+    snprintf(message, sizeof message, "a text cannot be repeated %lld times", (long long)times);
+    torb_panic_text(message, at);
   }
   /* Before the product, which wraps for a count near 2^63 and would then allocate a few bytes and copy past them */
   if (text.length != 0u && (uint64_t)times > (uint64_t)UINT32_MAX / (uint64_t)text.length) {

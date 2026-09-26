@@ -358,7 +358,7 @@ void torb_test_group(torb_text name, torb_closure body);
 /* String.byteAt */
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
 /* String.charAtByte */
-bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
+bool torb_text_char_at_located(torb_text text, int64_t offset, torb_char *out, torb_location at);
 /* String.contains */
 bool torb_text_contains(torb_text text, torb_text part);
 /* String.endsWith */

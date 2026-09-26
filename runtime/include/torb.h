@@ -848,6 +848,12 @@ torb_text torb_text_to_upper_case(torb_text text);
 torb_text torb_text_to_lower_case(torb_text text);
 torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacement);
 torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);
+
+/**
+ * `charAtByte(offset)`: the character that begins at the byte offset, `false` at and past the end, and a panic at `at`
+ * with `the offset <offset> is inside of a character of a text of <length> bytes` on a continuation byte.
+ */
+bool torb_text_char_at_located(torb_text text, int64_t offset, torb_char *out, torb_location at);
 /** A `List<String>`, element descriptor `torb_element_text`. Result owned. */
 torb_list torb_text_split(torb_text text, torb_text separator);
 
@@ -877,6 +883,7 @@ bool torb_text_next_char(torb_text text, uint32_t *offset, torb_char *character)
  * TorbScript over this plus `Char.byteLength()`, so walking a text stays O(1) per character. An offset inside a
  * character panics like every other bad offset (decided gap 7). `text` borrowed.
  */
+/** The same without a site, which the C of a seed from before `torb_text_char_at_located` still calls. */
 bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
 
 /**

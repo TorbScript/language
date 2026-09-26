@@ -626,6 +626,27 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   const same = addBlock builder, "same", Some(location)
   terminate builder, Terminator.Branch(isNegative, negated, same)
   switchTo builder, negated
+  // The smallest value of a signed integer has no positive counterpart: the panic names `absolute`, not the `-` that
+  // computes it (docs/design/PANICS.md, recommendation 3)
+  if const .Signed(width) = kind {
+    const smallest = addTemporary builder, annotation
+    const bound = if width >= 64 { Int.minimum } else { 0 - (1 << (width - 1)) }
+    emit builder, Instruction.Constant(smallest, internStatic(lowering, StaticContents.Literal(LiteralValue.Integer(bound)), annotation))
+    const isSmallest = addTemporary builder, boolean
+    const equal = Intrinsic IntrinsicOperation.Equal, Some(kind)
+    emit builder, Instruction.Intrinsic(Some(isSmallest), equal, [Slot(0), smallest], location)
+    const overflow = addBlock builder, "overflow", Some(location)
+    const fits = addBlock builder, "fits", Some(location)
+    terminate builder, Terminator.Branch(isSmallest, overflow, fits)
+    switchTo builder, overflow
+    const textType = lowering.program.internType IrType.Text
+    const message = addTemporary builder, textType
+    const words = "arithmetic overflow in `absolute`: {bound} has no positive counterpart"
+    emit builder, Instruction.Constant(message, internStatic(lowering, StaticContents.Literal(LiteralValue.Text(words)), textType))
+    emit builder, Instruction.Panic(borrowed(message), location)
+    terminate builder, Terminator.Unreachable
+    switchTo builder, fits
+  }
   const target = addTemporary builder, annotation
   const negate = Intrinsic IntrinsicOperation.Negate, Some(kind)
   emit builder, Instruction.Intrinsic(Some(target), negate, [Slot(0)], location)
