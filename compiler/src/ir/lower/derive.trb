@@ -15,7 +15,7 @@
 use Span from "../../syntax/source"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
-use TypeId, ParameterId, LiteralValue from "../../semantics/checker/type"
+use TypeId, ParameterId, LiteralValue, FunctionForm from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, FunctionId, Slot, BlockId, LayoutId, WitnessSource from "../ir"
@@ -1300,6 +1300,13 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     reportUnsupported lowering, "a generated `show` whose result is not a `String`", at
     return
   }
+  // A function value shows as its type, spelled as the source spells one: `(Int64) => Int64`. Nothing of the closure
+  // itself - what it captured, where it was written - is part of it, so every function of one type shows the same
+  if const .Function(form) = lowering.checker.types.form(substituted(lowering, subject)) {
+    const only = textSlot lowering, builder, functionTypeSpelling(lowering, form)
+    concatenateInto lowering, builder, [only], at
+    return
+  }
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -1481,6 +1488,24 @@ public fn generationDisplayName(name: String): String {
     }
   }
   "{name.sliceBytes(0, at)}#{digits}"
+}
+
+/**
+ * A function type as a type annotation writes it: the parameter types in parentheses, `=>`, the result - without the
+ * names a declaration gives its parameters, which are no part of the type. A `var` or `lazy` parameter keeps its word.
+ */
+fn functionTypeSpelling(var lowering: Lowering, form: FunctionForm): String {
+  var parts: List<String> = []
+  for parameter in form.parameters {
+    const shown = lowering.checker.describe parameter.annotation
+    parts.append(match parameter.mode {
+      .Var => "var {shown}"
+      .Lazy => "lazy {shown}"
+      .Variadic => "...{shown}"
+      _ => shown
+    })
+  }
+  "({parts.joined(separator: ", ")}) => {lowering.checker.describe(form.result)}"
 }
 
 fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {

@@ -166,8 +166,6 @@ supported, and neither is a dialect with its own name.
 
 Each of these is small and has no record of its own.
 
-- **`Show` of a function value** prints `<function>`. The spelling chosen for it is the source form of its type,
-  `(Int64) => Int64`, and it is not built.
 - **A type alias in a diagnostic** is shown by what it stands for; showing the name that was written, with what it
   stands for beside it (`EntityId (Int64)`), is not built.
 - **No signature can say that a closure runs as a task**, so every closure may call `await()`

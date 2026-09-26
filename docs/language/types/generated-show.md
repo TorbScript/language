@@ -92,6 +92,20 @@ value.show(): String
 7. **A `Float` always carries a decimal point or an exponent.** `1.0` shows as `1.0`, never `1`, so a reader can tell a
    `Float` from an `Int` on sight. `-0.0` keeps its sign, and a division by zero shows as `inf`, `-inf` or `nan`.
 
+8. **A function value shows as its type, spelled as a type annotation spells it.** `(Int64) => Int64`, with no
+   parameter names and nothing of what the closure captured, so every function of one type prints the same.
+
+   ```trb
+   type Handler {
+     name: String
+     run: (Int) => Int
+   }
+
+   const increment = { value: Int => value + 1 }
+   print increment                        // (Int64) => Int64
+   print Handler("inc", increment)        // Handler(name: "inc", run: (Int64) => Int64)
+   ```
+
 ## What this is not
 
 **`Show` is not a proxy for identity.** Two values print identically exactly when their fields do, which is a
@@ -124,7 +138,7 @@ print isSame(a, b)
 ```
 
 A `Show` is generated even where `Equals` and `Hash` are not: a function value has a `Show` of its own (a function
-prints as `<function>`), so a function-typed field keeps a type from getting `Equals`, `Hash` and `copy` without
+prints as its type, rule 8), so a function-typed field keeps a type from getting `Equals`, `Hash` and `copy` without
 touching its `Show` - [copy and equality](copy-and-equality.md) shows the `Equals` side of that.
 
 ## Related
