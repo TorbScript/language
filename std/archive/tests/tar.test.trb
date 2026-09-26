@@ -1,0 +1,79 @@
+/**
+ * ustar written and read back: the order, the padding, a path long enough to need the prefix field, the checksum, and
+ * the entries that are refused.
+ */
+
+use test, group from "std/test"
+use TarEntry, tarred, untarred from "../src/lib"
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes().toList()
+}
+
+fn pathsOf(entries: List<TarEntry>): List<String> {
+  entries.map({ _.path }).toList()
+}
+
+/** The header of the first entry with its checksum written again, the way a tool that changed the header would. */
+fn resummed(archive: List<UInt8>): List<UInt8> {
+  var changed = archive
+  var sum = 0
+  for index in 0..512 {
+    sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from changed[index] }
+  }
+  var rest = sum
+  for position in 0..6 {
+    changed[153 - position] = UInt8.tryFrom(48 + rest % 8).ok() ?? 48
+    rest = rest / 8
+  }
+  changed
+}
+
+group "tar" {
+  test "entries come back sorted by path, with their bytes" {
+    const entries = [
+      TarEntry("src/lib.trb", bytesOf("public fn one(): Int \{\n  1\n\}\n")),
+      TarEntry("project.trb", bytesOf("name = \"acme/one\"\n")),
+      TarEntry("empty.txt", []),
+    ]
+    const archive = tarred(entries).expect("an archive")
+    assert(archive.length() % 512 == 0)
+    const read = untarred(archive).expect("the entries")
+    assert(pathsOf(read) == ["empty.txt", "project.trb", "src/lib.trb"])
+    assert(read[2].bytes == entries[0].bytes)
+    assert read[0].bytes.isEmpty()
+  }
+
+  test "the same entries in another order are the same bytes" {
+    const first = [TarEntry("b", bytesOf("2")), TarEntry("a", bytesOf("1"))]
+    const second = [TarEntry("a", bytesOf("1")), TarEntry("b", bytesOf("2"))]
+    assert(tarred(first) == tarred(second))
+  }
+
+  test "a path of more than 100 bytes is split into the prefix and the name" {
+    const long = "{"directory/".repeat(12)}file.trb"
+    const read = untarred(tarred([TarEntry(long, bytesOf("x"))]).expect("an archive")).expect("the entries")
+    assert(pathsOf(read) == [long])
+  }
+
+  test "a path that ustar cannot hold, and two entries of one path, are refused" {
+    assert tarred([TarEntry("x".repeat(101), [])]).isError()
+    assert tarred([TarEntry("", [])]).isError()
+    assert tarred([TarEntry("a", []), TarEntry("a", [])]).isError()
+  }
+
+  test "a changed header fails its checksum, and a cut archive is refused" {
+    var archive = tarred([TarEntry("a.txt", bytesOf("hello"))]).expect("an archive")
+    const cut = archive[0..600]
+    assert untarred(cut).isError()
+    archive[0] = 98
+    assert untarred(archive).isError()
+    assert(untarred(resummed(archive)).map(pathsOf) == Ok(["b.txt"]))
+  }
+
+  test "a symbolic link is refused, with its checksum in order" {
+    var archive = tarred([TarEntry("link", [])]).expect("an archive")
+    archive[156] = 50
+    assert untarred(resummed(archive)).isError()
+  }
+}

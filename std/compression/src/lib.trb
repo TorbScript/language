@@ -1,0 +1,25 @@
+/**
+ * Compressed bytes: DEFLATE (RFC 1951) with [deflated] and [inflated], gzip (RFC 1952) around it with [gzipped] and
+ * [gunzipped], and the [crc32] gzip checks a member with. What a package archive of the registry is compressed with
+ * (docs/design/RELEASE.md section 7.2), and what an HTTP body with `Content-Encoding: gzip` is.
+ *
+ * Ordinary TorbScript over `List<UInt8>`, with no native. **Inflating reads every stream the format allows** - stored,
+ * fixed and dynamic blocks, and gzip members one after the other. **Deflating is deterministic and simple**: one block
+ * of the fixed codes, with a greedy match search over the last 32 KiB. It compresses text to roughly half, where zlib's
+ * dynamic codes get to a third; what it writes is the same for the same bytes on every machine, which is what a
+ * reproducible archive needs, and any inflater reads it.
+ *
+ * # Examples
+ *
+ *     use gzipped, gunzipped from "std/compression"
+ *
+ *     const bytes = "hello, hello, hello".bytes().toList()
+ *     const packed = gzipped bytes
+ *     print(gunzipped(packed) == Ok(bytes))
+ */
+
+public use CompressionError from "./error"
+public use crc32 from "./crc"
+public use inflated from "./inflate"
+public use deflated from "./deflate"
+public use gzipped, gunzipped from "./gzip"

@@ -1,0 +1,161 @@
+/**
+ * [deflated]: DEFLATE written (RFC 1951) as one block of the fixed codes. The matches come from a greedy search along
+ * hash chains over the last 32 KiB, at most [longestChain] candidates deep, so the output is a function of the input
+ * alone.
+ */
+
+use Bytes from "std/stream"
+use lengthBase, lengthExtra, distanceBase, distanceExtra from "./inflate"
+
+/** `bytes` as a raw DEFLATE stream: one final block of the fixed Huffman codes. */
+public fn deflated(bytes: Bytes): Bytes {
+  var writer = BitWriter()
+  // The final block, of the fixed codes
+  writer.write 1, 1
+  writer.write 1, 2
+  const total = bytes.length()
+  var heads = List.filled(hashSize, 0 - 1)
+  var previous = List.filled(windowSize, 0 - 1)
+  var at = 0
+  while at < total {
+    var bestLength = 0
+    var bestDistance = 0
+    if at + 2 < total {
+      var candidate = heads[hashAt(bytes, at)]
+      var depth = 0
+      const longest = if total - at < longestMatch { total - at } else { longestMatch }
+      while candidate >= 0 && at - candidate <= windowSize && depth < longestChain {
+        var length = 0
+        while length < longest && bytes[candidate + length] == bytes[at + length] {
+          length = length + 1
+        }
+        if length > bestLength {
+          bestLength = length
+          bestDistance = at - candidate
+          if length == longest {
+            break
+          }
+        }
+        const next = previous[candidate & windowMask]
+        // A slot of the ring that a newer position took over points forward: the chain ends there
+        if next >= candidate {
+          break
+        }
+        candidate = next
+        depth = depth + 1
+      }
+    }
+    if bestLength >= 3 {
+      writer.writeLength bestLength
+      writer.writeDistance bestDistance
+      for position in at..(at + bestLength) {
+        insert bytes, position, heads, previous
+      }
+      at = at + bestLength
+    } else {
+      writer.writeLiteral Int.from(bytes[at])
+      insert bytes, at, heads, previous
+      at = at + 1
+    }
+  }
+  writer.writeLiteral 256
+  writer.flush()
+  writer.output
+}
+
+/** Records `position` as the newest start of its three bytes. */
+fn insert(bytes: Bytes, position: Int, var heads: List<Int>, var previous: List<Int>) {
+  if position + 2 >= bytes.length() {
+    return
+  }
+  const hash = hashAt bytes, position
+  previous[position & windowMask] = heads[hash]
+  heads[hash] = position
+}
+
+fn hashAt(bytes: Bytes, position: Int): Int {
+  const first = Int.from(bytes[position]) << 10
+  const second = Int.from(bytes[position + 1]) << 5
+  (first ^ second ^ Int.from(bytes[position + 2])) & (hashSize - 1)
+}
+
+/** Bits into bytes, least significant first - and a Huffman code, which DEFLATE writes most significant first. */
+type BitWriter {
+  var output: List<UInt8> = []
+  var buffer: Int = 0
+  var count: Int = 0
+
+  /** The lowest `width` bits of `value`, the lowest first. */
+  var fn write(value: Int, width: Int) {
+    buffer = buffer | (value << count)
+    count = count + width
+    while count >= 8 {
+      output.append(UInt8.tryFrom(buffer & 255).ok() ?? 0)
+      buffer = buffer >> 8
+      count = count - 8
+    }
+  }
+
+  /** A Huffman code of `width` bits, its highest bit first. */
+  var fn writeCode(code: Int, width: Int) {
+    var reversed = 0
+    for index in 0..width {
+      reversed = (reversed << 1) | ((code >> index) & 1)
+    }
+    write reversed, width
+  }
+
+  /** A literal byte, or 256 for the end of the block, in the fixed code of RFC 1951 section 3.2.6. */
+  var fn writeLiteral(symbol: Int) {
+    if symbol < 144 {
+      writeCode(0x30 + symbol, 8)
+    } else if symbol < 256 {
+      writeCode(0x190 + symbol - 144, 9)
+    } else if symbol < 280 {
+      writeCode(symbol - 256, 7)
+    } else {
+      writeCode(0xC0 + symbol - 280, 8)
+    }
+  }
+
+  /** A match length from 3 to 258: its symbol, then its extra bits. */
+  var fn writeLength(length: Int) {
+    var index = lengthBase.length() - 1
+    while lengthBase[index] > length {
+      index = index - 1
+    }
+    writeLiteral(257 + index)
+    write(length - lengthBase[index], lengthExtra[index])
+  }
+
+  /** A match distance from 1 to 32768: its five-bit code, then its extra bits. */
+  var fn writeDistance(distance: Int) {
+    var index = distanceBase.length() - 1
+    while distanceBase[index] > distance {
+      index = index - 1
+    }
+    writeCode index, 5
+    write(distance - distanceBase[index], distanceExtra[index])
+  }
+
+  /** The last byte, filled up with zero bits. */
+  var fn flush() {
+    if count > 0 {
+      output.append(UInt8.tryFrom(buffer & 255).ok() ?? 0)
+      buffer = 0
+      count = 0
+    }
+  }
+}
+
+/** How far back a match may reach. */
+const windowSize = 32768
+
+const windowMask = 32767
+
+const hashSize = 32768
+
+const longestMatch = 258
+
+/** How many earlier starts of the same three bytes a match is looked for at, newest first. */
+public const longestChain = 64

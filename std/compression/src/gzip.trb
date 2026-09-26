@@ -1,0 +1,100 @@
+/** [gzipped] and [gunzipped]: gzip members (RFC 1952) around DEFLATE. */
+
+use Bytes from "std/stream"
+use CompressionError from "./error"
+use crcValue from "./crc"
+use deflated from "./deflate"
+use inflatedFrom from "./inflate"
+
+/**
+ * `bytes` as one gzip member, with nothing in its header that depends on the machine or the moment: no file name, no
+ * time, the operating system "unknown". The same bytes give the same member everywhere.
+ */
+public fn gzipped(bytes: Bytes): Bytes {
+  var output: List<UInt8> = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255]
+  output.appendAll deflated(bytes)
+  appendWord output, crcValue(bytes)
+  appendWord(output, bytes.length() & 0xFFFFFFFF)
+  output
+}
+
+/**
+ * What every gzip member of `bytes` holds, one after the other. Each member's checksum and length are checked.
+ *
+ * # Errors
+ *
+ * - [CompressionError] where a header is not gzip's, a method is not DEFLATE, the DEFLATE stream is broken, or a
+ *   checksum or a length does not match what was inflated.
+ */
+public fn gunzipped(bytes: Bytes): Result<Bytes, CompressionError> {
+  var output: List<UInt8> = []
+  var at = 0
+  loop {
+    const start = at
+    if at + 10 > bytes.length() {
+      return Fail CompressionError("the input ends inside a gzip header", at)
+    }
+    if bytes[at] != 0x1F || bytes[at + 1] != 0x8B {
+      return Fail CompressionError("not gzip: the first two bytes are not 1f 8b", at)
+    }
+    if bytes[at + 2] != 8 {
+      return Fail CompressionError("a gzip member whose method is not DEFLATE", at + 2)
+    }
+    const flags = Int.from bytes[at + 3]
+    at = at + 10
+    if flags & 4 != 0 {
+      if at + 2 > bytes.length() {
+        return Fail CompressionError("the input ends inside the extra field of a gzip header", at)
+      }
+      at = at + 2 + (Int.from(bytes[at]) | (Int.from(bytes[at + 1]) << 8))
+    }
+    if flags & 8 != 0 {
+      at = afterZero(bytes, at)?
+    }
+    if flags & 16 != 0 {
+      at = afterZero(bytes, at)?
+    }
+    if flags & 2 != 0 {
+      at = at + 2
+    }
+    const (member, end) = inflatedFrom(bytes, at)?
+    if end + 8 > bytes.length() {
+      return Fail CompressionError("the input ends inside a gzip trailer", end)
+    }
+    if wordAt(bytes, end) != crcValue(member) {
+      return Fail CompressionError("the CRC-32 of the member does not match what it holds", start)
+    }
+    if wordAt(bytes, end + 4) != member.length() & 0xFFFFFFFF {
+      return Fail CompressionError("the length of the member does not match what it holds", start)
+    }
+    output.appendAll member
+    at = end + 8
+    if at >= bytes.length() {
+      return Ok output
+    }
+  }
+}
+
+/** The offset after the zero byte that ends a text field of the header. */
+fn afterZero(bytes: Bytes, from: Int): Result<Int, CompressionError> {
+  var at = from
+  while at < bytes.length() {
+    if bytes[at] == 0 {
+      return Ok(at + 1)
+    }
+    at = at + 1
+  }
+  Fail CompressionError("the input ends inside a text field of a gzip header", from)
+}
+
+/** Four bytes, least significant first. */
+fn appendWord(var output: List<UInt8>, word: Int) {
+  for shift in [0, 8, 16, 24] {
+    output.append(UInt8.tryFrom((word >> shift) & 255).ok() ?? 0)
+  }
+}
+
+fn wordAt(bytes: Bytes, at: Int): Int {
+  const low = Int.from(bytes[at]) | (Int.from(bytes[at + 1]) << 8)
+  low | (Int.from(bytes[at + 2]) << 16) | (Int.from(bytes[at + 3]) << 24)
+}

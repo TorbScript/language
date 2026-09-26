@@ -1,0 +1,288 @@
+/**
+ * [inflated]: DEFLATE read back (RFC 1951), after Mark Adler's `puff.c` - canonical Huffman codes decoded one bit at a
+ * time, which is short and exact rather than fast.
+ */
+
+use Bytes from "std/stream"
+use CompressionError from "./error"
+
+/** Everything a raw DEFLATE stream holds, which has to end with its last block. */
+public fn inflated(bytes: Bytes): Result<Bytes, CompressionError> {
+  const (output, _) = inflatedFrom(bytes, 0)?
+  Ok output
+}
+
+/**
+ * The DEFLATE stream that starts at `start`, and the offset of the first byte after it: gzip reads its trailer there,
+ * and the next member after that.
+ */
+public fn inflatedFrom(bytes: Bytes, start: Int): Result<(Bytes, Int), CompressionError> {
+  var reader = BitReader bytes, at: start
+  var output: List<UInt8> = []
+  loop {
+    const last = reader.bits(1)?
+    const kind = reader.bits(2)?
+    match kind {
+      0 => storedBlock(reader, output)?
+      1 => {
+        const (lengths, distances) = fixedCodes()?
+        blockCodes(reader, lengths, distances, output)?
+      }
+      2 => {
+        const (lengths, distances) = dynamicCodes(reader)?
+        blockCodes(reader, lengths, distances, output)?
+      }
+      _ => {
+        return Fail CompressionError("a block of the reserved type 3", reader.at)
+      }
+    }
+    if last == 1 {
+      break
+    }
+  }
+  Ok((output, reader.at))
+}
+
+/** The bits of a stream, least significant first, as DEFLATE packs them. */
+type BitReader {
+  bytes: Bytes
+  /** The next byte to load. */
+  var at: Int = 0
+  /** Bits loaded and not read yet, the next one lowest. */
+  var buffer: Int = 0
+  /** How many bits `buffer` holds: always fewer than 8 between two reads. */
+  var count: Int = 0
+
+  /** The next `need` bits as a number, the first of them lowest. */
+  var fn bits(need: Int): Result<Int, CompressionError> {
+    while count < need {
+      if at >= bytes.length() {
+        return Fail CompressionError("the stream ends in the middle of a block", at)
+      }
+      buffer = buffer | (Int.from(bytes[at]) << count)
+      at = at + 1
+      count = count + 8
+    }
+    const value = buffer & ((1 << need) - 1)
+    buffer = buffer >> need
+    count = count - need
+    Ok value
+  }
+
+  /** Drops the rest of the current byte: a stored block starts at a byte boundary. */
+  var fn align() {
+    buffer = 0
+    count = 0
+  }
+}
+
+/** A canonical Huffman code: how many codes each length has, and the symbols in code order. */
+type Huffman {
+  counts: List<Int>
+  symbols: List<Int>
+
+  /**
+   * The code whose symbol `index` has `lengths[index]` bits, 0 for a symbol that has none; and how many codes are left
+   * unused, which is 0 for a complete code. An over-subscribed code is an error.
+   */
+  static fn of(lengths: List<Int>, at: Int): Result<(Huffman, Int), CompressionError> {
+    var counts = List.filled(maximumBits + 1, 0)
+    for length in lengths {
+      counts[length] = counts[length] + 1
+    }
+    if counts[0] == lengths.length() {
+      return Ok((Huffman(counts, []), 0))
+    }
+    var left = 1
+    for length in 1..(maximumBits + 1) {
+      left = (left << 1) - counts[length]
+      if left < 0 {
+        return Fail CompressionError("a Huffman code with more codes than its lengths allow", at)
+      }
+    }
+    var offsets = List.filled(maximumBits + 1, 0)
+    for length in 1..maximumBits {
+      offsets[length + 1] = offsets[length] + counts[length]
+    }
+    var symbols = List.filled lengths.length(), 0
+    for symbol in 0..lengths.length() {
+      const length = lengths[symbol]
+      if length != 0 {
+        symbols[offsets[length]] = symbol
+        offsets[length] = offsets[length] + 1
+      }
+    }
+    Ok((Huffman(counts, symbols), left))
+  }
+
+  /** The next symbol of the stream. */
+  fn decode(var reader: BitReader): Result<Int, CompressionError> {
+    var code = 0
+    var first = 0
+    var index = 0
+    for length in 1..(maximumBits + 1) {
+      code = code | reader.bits(1)?
+      const count = counts[length]
+      if code - count < first {
+        return Ok symbols[index + (code - first)]
+      }
+      index = index + count
+      first = (first + count) << 1
+      code = code << 1
+    }
+    Fail CompressionError("a code that no symbol has", reader.at)
+  }
+}
+
+/** A stored block: its length, the length's complement, and that many bytes as they are. */
+fn storedBlock(var reader: BitReader, var output: List<UInt8>): Result<Void, CompressionError> {
+  reader.align()
+  const at = reader.at
+  if at + 4 > reader.bytes.length() {
+    return Fail CompressionError("the stream ends in the header of a stored block", at)
+  }
+  const length = Int.from(reader.bytes[at]) | (Int.from(reader.bytes[at + 1]) << 8)
+  const complement = Int.from(reader.bytes[at + 2]) | (Int.from(reader.bytes[at + 3]) << 8)
+  if length != (~complement & 0xFFFF) {
+    return Fail CompressionError("a stored block whose length and complement disagree", at)
+  }
+  if at + 4 + length > reader.bytes.length() {
+    return Fail CompressionError("the stream ends inside a stored block", at)
+  }
+  for index in 0..length {
+    output.append reader.bytes[at + 4 + index]
+  }
+  reader.at = at + 4 + length
+  Ok void
+}
+
+/** The codes of a fixed block (RFC 1951 section 3.2.6). */
+fn fixedCodes(): Result<(Huffman, Huffman), CompressionError> {
+  var lengths: List<Int> = []
+  for symbol in 0..288 {
+    lengths.append(if symbol < 144 { 8 } else if symbol < 256 { 9 } else if symbol < 280 { 7 } else { 8 })
+  }
+  const (literals, _) = Huffman.of(lengths, 0)?
+  const (distances, _) = Huffman.of(List.filled(30, 5), 0)?
+  Ok((literals, distances))
+}
+
+/** The codes of a dynamic block, read from its header (RFC 1951 section 3.2.7). */
+fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionError> {
+  const literalCount = reader.bits(5)? + 257
+  const distanceCount = reader.bits(5)? + 1
+  const codeCount = reader.bits(4)? + 4
+  if literalCount > 286 || distanceCount > 30 {
+    return Fail CompressionError("a dynamic block with more codes than DEFLATE has", reader.at)
+  }
+  var codeLengths = List.filled 19, 0
+  for index in 0..codeCount {
+    codeLengths[codeLengthOrder[index]] = reader.bits(3)?
+  }
+  const (lengthCode, lengthLeft) = Huffman.of(codeLengths, reader.at)?
+  if lengthLeft != 0 {
+    return Fail CompressionError("an incomplete code for the code lengths", reader.at)
+  }
+  const total = literalCount + distanceCount
+  var lengths: List<Int> = []
+  while lengths.length() < total {
+    const symbol = lengthCode.decode(reader)?
+    if symbol < 16 {
+      lengths.append symbol
+      continue
+    }
+    var repeated = 0
+    var times = 0
+    if symbol == 16 {
+      repeated = match lengths.last() {
+        Some(previous) => previous
+        None => {
+          return Fail CompressionError("a repeat of the previous length before the first one", reader.at)
+        }
+      }
+      times = 3 + reader.bits(2)?
+    } else if symbol == 17 {
+      times = 3 + reader.bits(3)?
+    } else {
+      times = 11 + reader.bits(7)?
+    }
+    if lengths.length() + times > total {
+      return Fail CompressionError("a repeat that runs past the code lengths", reader.at)
+    }
+    for _ in 0..times {
+      lengths.append repeated
+    }
+  }
+  if lengths[256] == 0 {
+    return Fail CompressionError("a dynamic block without an end-of-block code", reader.at)
+  }
+  const literalLengths = lengths[0..literalCount]
+  const (literals, literalLeft) = Huffman.of(literalLengths, reader.at)?
+  if literalLeft != 0 && literalCount != literals.counts[0] + literals.counts[1] {
+    return Fail CompressionError("an incomplete code for the literals and lengths", reader.at)
+  }
+  const distanceLengths = lengths[literalCount..total]
+  const (distances, distanceLeft) = Huffman.of(distanceLengths, reader.at)?
+  if distanceLeft != 0 && distanceCount != distances.counts[0] + distances.counts[1] {
+    return Fail CompressionError("an incomplete code for the distances", reader.at)
+  }
+  Ok((literals, distances))
+}
+
+/** The symbols of a fixed or dynamic block, up to its end-of-block code. */
+fn blockCodes(
+  var reader: BitReader,
+  literals: Huffman,
+  distances: Huffman,
+  var output: List<UInt8>,
+): Result<Void, CompressionError> {
+  loop {
+    const symbol = literals.decode(reader)?
+    if symbol < 256 {
+      output.append(UInt8.tryFrom(symbol).ok() ?? 0)
+      continue
+    }
+    if symbol == 256 {
+      return Ok void
+    }
+    const lengthIndex = symbol - 257
+    if lengthIndex >= 29 {
+      return Fail CompressionError("a length symbol that DEFLATE does not have", reader.at)
+    }
+    const length = lengthBase[lengthIndex] + reader.bits(lengthExtra[lengthIndex])?
+    const distanceIndex = distances.decode(reader)?
+    if distanceIndex >= 30 {
+      return Fail CompressionError("a distance symbol that DEFLATE does not have", reader.at)
+    }
+    const distance = distanceBase[distanceIndex] + reader.bits(distanceExtra[distanceIndex])?
+    if distance > output.length() {
+      return Fail CompressionError("a distance back past the start of the output", reader.at)
+    }
+    const start = output.length() - distance
+    for index in 0..length {
+      output.append output[start + index]
+    }
+  }
+}
+
+const maximumBits = 15
+
+/** The order the lengths of the code-length code are written in. */
+const codeLengthOrder = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+/** The shortest length of each length symbol from 257, and how many extra bits follow it. */
+public const lengthBase = [
+  3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+]
+
+public const lengthExtra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+
+/** The shortest distance of each distance symbol, and how many extra bits follow it. */
+public const distanceBase = [
+  1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+  8193, 12289, 16385, 24577,
+]
+
+public const distanceExtra = [
+  0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+]

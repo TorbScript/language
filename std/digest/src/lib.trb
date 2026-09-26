@@ -1,0 +1,185 @@
+/**
+ * Message digests: [Sha256], the SHA-256 of FIPS 180-4, and the [Digest] it answers. What the package manager pins a
+ * package by (docs/design/RELEASE.md section 7.2), and what a download is checked against.
+ *
+ * Ordinary TorbScript over `Int`, with no native: every word is kept below 2^32 by a mask, so nothing overflows and the
+ * same bytes give the same digest in both back ends.
+ *
+ * # Examples
+ *
+ *     print Sha256.of("abc".bytes().toList()).hex()
+ *     // prints ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+ *
+ *     var hasher = Sha256()
+ *     hasher.add "ab".bytes().toList()
+ *     hasher.add "c".bytes().toList()
+ *     print hasher.finished().hex()
+ */
+
+use Bytes from "std/stream"
+
+/** What a hash function answers: its bytes, most significant first, shown as lowercase hexadecimal. */
+public type Digest with Show {
+  bytes: List<UInt8>
+
+  /** Two lowercase hexadecimal digits per byte: the spelling of `sha256sum` and of a lock file. */
+  fn hex(): String {
+    var digits: List<String> = []
+    for byte in bytes {
+      const value = Int.from byte
+      digits.append hexDigits[value >> 4]
+      digits.append hexDigits[value & 15]
+    }
+    digits.joined separator: ""
+  }
+
+  fn show(): String {
+    hex()
+  }
+}
+
+/**
+ * SHA-256, fed in pieces: [Sha256.add] takes the next bytes and [Sha256.finished] answers the digest of everything added
+ * so far without changing the hasher, so a hasher can be read, fed more, and read again.
+ */
+public type Sha256 {
+  /** The eight words of the state, each below 2^32. */
+  private var state: List<Int> = initialState
+  /** The bytes of a block that is not full yet: fewer than 64. */
+  private var pending: List<UInt8> = []
+  /** Every byte added so far. */
+  private var length: Int = 0
+
+  /** The digest of `bytes` in one call. */
+  static fn of(bytes: Bytes): Digest {
+    var hasher = Sha256()
+    hasher.add bytes
+    hasher.finished()
+  }
+
+  /** Feeds the next bytes. */
+  var fn add(bytes: Bytes) {
+    length = length + bytes.length()
+    var at = 0
+    if !pending.isEmpty() {
+      while at < bytes.length() && pending.length() < 64 {
+        pending.append bytes[at]
+        at = at + 1
+      }
+      if pending.length() < 64 {
+        return
+      }
+      const block = pending
+      compress block, 0
+      pending = []
+    }
+    while at + 64 <= bytes.length() {
+      compress bytes, at
+      at = at + 64
+    }
+    while at < bytes.length() {
+      pending.append bytes[at]
+      at = at + 1
+    }
+  }
+
+  /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
+  fn finished(): Digest {
+    var last = self
+    const bits = length * 8
+    var padding: List<UInt8> = [0x80]
+    // The length goes into the last eight bytes of a block, so the padding ends 56 bytes into one
+    while (pending.length() + padding.length()) % 64 != 56 {
+      padding.append 0
+    }
+    for shift in [56, 48, 40, 32, 24, 16, 8, 0] {
+      padding.append byteOf(bits >> shift)
+    }
+    last.add padding
+    var bytes: List<UInt8> = []
+    for word in last.state {
+      for shift in [24, 16, 8, 0] {
+        bytes.append byteOf(word >> shift)
+      }
+    }
+    Digest bytes
+  }
+
+  /** One 64-byte block of `bytes`, starting at `offset`, folded into the state. */
+  private var fn compress(bytes: Bytes, offset: Int) {
+    var schedule: Array<Int, 64> = Array.filled 0
+    for index in 0..16 {
+      const at = offset + index * 4
+      const high = (Int.from(bytes[at]) << 24) | (Int.from(bytes[at + 1]) << 16)
+      schedule[index] = high | (Int.from(bytes[at + 2]) << 8) | Int.from(bytes[at + 3])
+    }
+    for index in 16..64 {
+      const early = schedule[index - 15]
+      const late = schedule[index - 2]
+      const small0 = rotated(early, 7) ^ rotated(early, 18) ^ (early >> 3)
+      const small1 = rotated(late, 17) ^ rotated(late, 19) ^ (late >> 10)
+      schedule[index] = (schedule[index - 16] + small0 + schedule[index - 7] + small1) & wordMask
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    var f = state[5]
+    var g = state[6]
+    var h = state[7]
+    for index in 0..64 {
+      const big1 = rotated(e, 6) ^ rotated(e, 11) ^ rotated(e, 25)
+      const choice = (e & f) ^ ((~e & wordMask) & g)
+      const first = (h + big1 + choice + roundConstants[index] + schedule[index]) & wordMask
+      const big0 = rotated(a, 2) ^ rotated(a, 13) ^ rotated(a, 22)
+      const majority = (a & b) ^ (a & c) ^ (b & c)
+      const second = (big0 + majority) & wordMask
+      h = g
+      g = f
+      f = e
+      e = (d + first) & wordMask
+      d = c
+      c = b
+      b = a
+      a = (first + second) & wordMask
+    }
+    state[0] = (state[0] + a) & wordMask
+    state[1] = (state[1] + b) & wordMask
+    state[2] = (state[2] + c) & wordMask
+    state[3] = (state[3] + d) & wordMask
+    state[4] = (state[4] + e) & wordMask
+    state[5] = (state[5] + f) & wordMask
+    state[6] = (state[6] + g) & wordMask
+    state[7] = (state[7] + h) & wordMask
+  }
+}
+
+/** A 32-bit word rotated right by `count` bits. */
+fn rotated(word: Int, count: Int): Int {
+  ((word >> count) | (word << (32 - count))) & wordMask
+}
+
+/** The lowest eight bits of `value`. */
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}
+
+const wordMask = 0xFFFFFFFF
+
+const hexDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+/** The first 32 bits of the fractional parts of the square roots of the first eight primes. */
+const initialState = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+
+/** The first 32 bits of the fractional parts of the cube roots of the first 64 primes. */
+const roundConstants: Array<Int, 64> = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]

@@ -1,0 +1,219 @@
+/**
+ * `tar` archives (POSIX ustar): [tarred] writes the entries as an archive that depends on nothing but the entries, and
+ * [untarred] reads one back. A package of the registry is a `tar` inside gzip (`std/compression`,
+ * docs/design/RELEASE.md section 7.2).
+ *
+ * Only regular files are written and read: a directory entry is skipped, and a link, a device or an extended header is
+ * refused, because a package has no use for one and a link is how an archive writes outside of where it is unpacked.
+ * A path is kept as the archive says it; whoever writes the files out checks it (no `..`, not absolute).
+ *
+ * # Examples
+ *
+ *     const entry = TarEntry "src/lib.trb", "public fn one(): Int \{\n  1\n\}\n".bytes().toList()
+ *     const archive = tarred(List.of(entry)).expect("a path ustar can hold")
+ *     print untarred(archive).map({ found => found.map({ _.path }).toList() })
+ */
+
+use Bytes from "std/stream"
+use textOf from "std/stream"
+
+/** One file of an archive: its path, with `/` between the directories, and its bytes. */
+public type TarEntry {
+  path: String
+  bytes: Bytes
+}
+
+/** A path an archive cannot hold, or an archive that breaks the format: what, and the byte where it was found. */
+public type ArchiveError with Show, Error {
+  reason: String
+  offset: Int
+
+  fn show(): String {
+    "{reason} (at byte {offset})"
+  }
+}
+
+/**
+ * The entries as a ustar archive, sorted by path, with nothing of the machine in it: every mode `0644`, every time 0, no
+ * owner, no group. The same entries give the same bytes everywhere.
+ *
+ * # Errors
+ *
+ * - [ArchiveError] for a path that is empty, has more than 255 bytes, or cannot be split into ustar's prefix of 155
+ *   and name of 100 bytes at a `/`, and for two entries of one path.
+ */
+public fn tarred(entries: List<TarEntry>): Result<Bytes, ArchiveError> {
+  var sorted = entries
+  sorted.sort by: { _.path }
+  var output: List<UInt8> = []
+  var previous = ""
+  for entry in sorted {
+    if entry.path == previous {
+      return Fail ArchiveError("two entries of the path `{entry.path}`", output.length())
+    }
+    previous = entry.path
+    output.appendAll(header(entry, output.length())?)
+    output.appendAll entry.bytes
+    appendZeros(output, (512 - entry.bytes.length() % 512) % 512)
+  }
+  appendZeros output, 1024
+  Ok output
+}
+
+/**
+ * The regular files of an archive, in the order it holds them.
+ *
+ * # Errors
+ *
+ * - [ArchiveError] for a header whose checksum does not match, a size that is no octal number, an archive that ends
+ *   inside an entry, and an entry that is neither a regular file nor a directory.
+ */
+public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
+  var entries: List<TarEntry> = []
+  var at = 0
+  while at + 512 <= bytes.length() {
+    const block = bytes[at..(at + 512)]
+    if block.all({ _ == 0 }) {
+      return Ok entries
+    }
+    var sum = 0
+    for index in 0..512 {
+      sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from block[index] }
+    }
+    if octalAt(block, 148, 8) != Some(sum) {
+      return Fail ArchiveError("a header whose checksum does not match", at)
+    }
+    const size = match octalAt(block, 124, 12) {
+      Some(found) => found
+      None => {
+        return Fail ArchiveError("a size that is not an octal number", at + 124)
+      }
+    }
+    const kind = block[156]
+    const name = fieldText(block, 0, 100, at)?
+    const prefix = fieldText(block, 345, 155, at)?
+    const path = if prefix.isEmpty() { name } else { "{prefix}/{name}" }
+    const start = at + 512
+    if start + size > bytes.length() {
+      return Fail ArchiveError("the archive ends inside `{path}`", at)
+    }
+    // `0` and the NUL of old archives are a regular file, `5` a directory
+    if kind == 48 || kind == 0 {
+      entries.append TarEntry(path, bytes[start..(start + size)])
+    } else if kind != 53 {
+      return Fail ArchiveError("`{path}` is not a regular file or a directory (type {kind})", at + 156)
+    }
+    at = start + size + (512 - size % 512) % 512
+  }
+  if bytes.isEmpty() {
+    return Ok entries
+  }
+  Fail ArchiveError("the archive ends without its two blocks of zeros", at)
+}
+
+/** The 512 bytes in front of an entry. */
+fn header(entry: TarEntry, at: Int): Result<Bytes, ArchiveError> {
+  const pathBytes = entry.path.bytes().toList()
+  if pathBytes.isEmpty() || pathBytes.length() > 255 {
+    return Fail ArchiveError("the path `{entry.path}` has {pathBytes.length()} bytes, and ustar holds 1 to 255", at)
+  }
+  var name = pathBytes
+  var prefix: List<UInt8> = []
+  if pathBytes.length() > 100 {
+    // The first `/` that leaves at most 100 bytes behind it, if it has at most 155 in front of it
+    var split = 0 - 1
+    for index in 0..pathBytes.length() {
+      if pathBytes[index] == 47 && pathBytes.length() - index - 1 <= 100 && index <= 155 {
+        split = index
+        break
+      }
+    }
+    if split < 0 {
+      return Fail ArchiveError("the path `{entry.path}` cannot be split into ustar's prefix and name", at)
+    }
+    prefix = pathBytes[0..split]
+    name = pathBytes[(split + 1)..pathBytes.length()]
+  }
+  var block = List.filled 512, UInt8.minimum
+  write block, 0, name
+  // The mode 0644, in decimal
+  write block, 100, octal(420, 7)
+  write block, 108, octal(0, 7)
+  write block, 116, octal(0, 7)
+  write block, 124, octal(entry.bytes.length(), 11)
+  write block, 136, octal(0, 11)
+  block[156] = 48
+  write block, 257, "ustar".bytes().toList()
+  write block, 263, "00".bytes().toList()
+  write block, 345, prefix
+  // The checksum is taken with its own field as eight spaces, then written as six digits, a NUL and a space
+  write block, 148, "        ".bytes().toList()
+  var sum = 0
+  for byte in block {
+    sum = sum + Int.from(byte)
+  }
+  var digits = octal sum, 6
+  digits.append 0
+  digits.append 32
+  write block, 148, digits
+  Ok block
+}
+
+/** `value` as `width` octal digits, padded with zeros. */
+fn octal(value: Int, width: Int): List<UInt8> {
+  var digits: List<UInt8> = []
+  var rest = value
+  for _ in 0..width {
+    digits.append(UInt8.tryFrom(48 + rest % 8).ok() ?? 48)
+    rest = rest / 8
+  }
+  digits.reversed()
+}
+
+/** The octal number of a field, up to its first NUL or space; `None` where it holds anything else. */
+fn octalAt(block: Bytes, start: Int, width: Int): Int? {
+  var value = 0
+  var digits = 0
+  for index in start..(start + width) {
+    const byte = Int.from block[index]
+    if byte == 0 || byte == 32 {
+      if digits > 0 {
+        break
+      }
+      continue
+    }
+    if byte < 48 || byte > 55 {
+      return None
+    }
+    value = value * 8 + byte - 48
+    digits = digits + 1
+  }
+  if digits == 0 {
+    return None
+  }
+  Some value
+}
+
+/** The text of a field, up to its first NUL. */
+fn fieldText(block: Bytes, start: Int, width: Int, at: Int): Result<String, ArchiveError> {
+  var end = start
+  while end < start + width && block[end] != 0 {
+    end = end + 1
+  }
+  match textOf(block[start..end]) {
+    Ok(text) => Ok text
+    Fail(_) => Fail ArchiveError("a path that is not UTF-8", at + start)
+  }
+}
+
+fn write(var block: List<UInt8>, at: Int, bytes: Bytes) {
+  for index in 0..bytes.length() {
+    block[at + index] = bytes[index]
+  }
+}
+
+fn appendZeros(var output: List<UInt8>, count: Int) {
+  for _ in 0..count {
+    output.append 0
+  }
+}

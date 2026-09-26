@@ -1,0 +1,91 @@
+/**
+ * DEFLATE and gzip: a member `gzip -9 -n` wrote (a dynamic block) read back, stored and fixed blocks, what this package
+ * writes read back by itself, and the broken inputs each refused with its reason.
+ */
+
+use test, group from "std/test"
+use crc32, deflated, inflated, gzipped, gunzipped from "../src/lib"
+
+const sampleText = "TorbScript packages are source archives. Every archive is a deterministic tar inside gzip; the lock pins the hash of the tree, not of the bytes. TorbScript packages are source archives!\n"
+
+/** `printf '%s' "$sampleText" | gzip -9 -n`: one member with a dynamic block. */
+const sampleMember: List<UInt8> = [
+  31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 141, 142, 49, 14, 194, 64, 16, 3, 123, 94, 97, 122, 196, 7, 168, 121, 1, 249, 192,
+  101, 99, 114, 171, 64, 238, 180, 187, 68, 10, 175, 207, 17, 41, 61, 157, 103, 100, 201, 238, 138, 245, 15, 49, 173,
+  129, 154, 100, 74, 35, 29, 201, 8, 47, 31, 19, 182, 40, 89, 23, 250, 21, 247, 133, 182, 30, 12, 109, 45, 12, 12, 218,
+  91, 103, 245, 80, 65, 36, 131, 206, 174, 3, 49, 126, 181, 222, 16, 153, 120, 21, 153, 80, 155, 222, 41, 39, 207, 40,
+  207, 61, 135, 145, 23, 204, 37, 14, 209, 175, 241, 219, 233, 254, 59, 116, 62, 109, 240, 6, 159, 56, 186, 0, 0, 0,
+]
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes().toList()
+}
+
+group "CRC-32" {
+  test "the check value of the standard and the empty input" {
+    assert(crc32(bytesOf("123456789")) == 0xCBF43926)
+    assert(crc32([]) == 0)
+  }
+}
+
+group "Inflating" {
+  test "a member gzip wrote, with a dynamic block, reads back to its text" {
+    assert(gunzipped(sampleMember) == Ok(bytesOf(sampleText)))
+  }
+
+  test "a stored block" {
+    const stored: List<UInt8> = [1, 3, 0, 252, 255, 97, 98, 99]
+    assert(inflated(stored) == Ok(bytesOf("abc")))
+  }
+
+  test "a fixed block with a match: `abcabcabc`" {
+    assert(inflated(deflated(bytesOf("abcabcabc"))) == Ok(bytesOf("abcabcabc")))
+  }
+
+  test "two members one after the other are one output" {
+    var both = gzipped bytesOf("first, ")
+    both.appendAll gzipped(bytesOf("second"))
+    assert(gunzipped(both) == Ok(bytesOf("first, second")))
+  }
+
+  test "a broken input is refused with its reason" {
+    const truncated = sampleMember[0..40]
+    assert gunzipped(truncated).isError()
+    var wrongSum = sampleMember
+    wrongSum[sampleMember.length() - 8] = 0
+    const reason = match gunzipped(wrongSum) {
+      Ok(_) => ""
+      Fail(problem) => problem.reason
+    }
+    assert(reason == "the CRC-32 of the member does not match what it holds")
+    assert gunzipped(bytesOf("plain text, not gzip")).isError()
+    const reserved: List<UInt8> = [7]
+    assert inflated(reserved).isError()
+  }
+}
+
+group "Deflating" {
+  test "what it writes reads back, for text, repetition, every byte value and nothing" {
+    var everyByte: List<UInt8> = []
+    for value in 0..256 {
+      everyByte.append(UInt8.tryFrom(value).ok() ?? 0)
+    }
+    const inputs = [bytesOf(sampleText), bytesOf("a".repeat(1000)), everyByte, bytesOf(""), bytesOf("x")]
+    for input in inputs {
+      assert(inflated(deflated(input)) == Ok(input))
+      assert(gunzipped(gzipped(input)) == Ok(input))
+    }
+  }
+
+  test "repetition compresses, and the same bytes give the same member" {
+    const input = bytesOf "the tree hash is the identity, ".repeat(40)
+    const packed = gzipped input
+    assert(packed.length() < input.length() / 4)
+    assert(gzipped(input) == packed)
+  }
+
+  test "the header says nothing about the machine: no time, no name, an unknown system" {
+    const packed = gzipped bytesOf("x")
+    assert(packed[0..10] == [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255])
+  }
+}
