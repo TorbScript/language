@@ -1,0 +1,255 @@
+/**
+ * `DomainName` and IDNA: Punycode against the samples of RFC 3492 section 7.1, the lookup processing of UTS #46 as far
+ * as `std/dns` covers it (the expected A-labels were checked against a browser's `domainToASCII`), the three ways to
+ * build a name, the limits of 63 and 255 bytes, and the comparison of RFC 4343.
+ */
+
+use test, group from "std/test"
+use DomainName from "../src/name"
+use DnsError from "../src/error"
+use punycodeEncoded, punycodeDecoded from "../src/punycode"
+
+/** The A-label form of `text` read as a host name, or the reason it was refused. */
+fn asciiOf(text: String): String {
+  match DomainName.tryFrom(text) {
+    Ok(name) => name.show()
+    Fail(problem) => "refused: {problem}"
+  }
+}
+
+/** Whether `text` is refused as a host name. */
+fn refused(text: String): Bool {
+  DomainName.tryFrom(text).isError()
+}
+
+/** A name every test here knows to be one. */
+fn nameOf(text: String): DomainName {
+  match DomainName.tryFrom(text) {
+    Ok(name) => name
+    Fail(problem) => panic "a test's name was refused: {problem}"
+  }
+}
+
+/** A name in the presentation format every test here knows to be one. */
+fn presentedOf(text: String): DomainName {
+  match DomainName.ofPresentation(text) {
+    Ok(name) => name
+    Fail(problem) => panic "a test's name was refused: {problem}"
+  }
+}
+
+/** The code points of a text. */
+fn pointsOf(text: String): List<Int> {
+  text.chars().map({ Int.from _ }).toList()
+}
+
+/** `count` copies of `piece`, joined. */
+fn repeated(piece: String, count: Int): String {
+  var pieces: List<String> = []
+  for _ in 0..count {
+    pieces.append piece
+  }
+  pieces.joined separator: ""
+}
+
+group "Punycode" {
+  test "the samples of RFC 3492 section 7.1 and the IDNA examples encode as the RFC writes them" {
+    const samples = [
+      ("bücher", "bcher-kva"),
+      ("münchen", "mnchen-3ya"),
+      ("ü", "tda"),
+      ("他们为什么不说中文", "ihqwcrb4cv8a8dqg056pqjye"),
+      ("3年B組金八先生", "3B-ww4c5e180e575a65lsy2b"),
+      ("パフィーdeルンバ", "de-jg4avhby1noc0d"),
+      ("そのスピードで", "d9juau41awczczp"),
+      ("ليهمابتكلموشعربي؟", "egbpdaj6bu4bxfgehfvwxn"),
+      ("-> $1.00 <-", "-> $1.00 <--"),
+    ]
+    for (text, encoded) in samples {
+      assert(punycodeEncoded(pointsOf(text)) == Some(encoded))
+      assert(punycodeDecoded(encoded) == Some(pointsOf(text)))
+    }
+  }
+
+  test "decoding reads the digits in either case, and copies the basic code points as they are" {
+    assert(punycodeDecoded("bcher-KVA") == Some(pointsOf("bücher")))
+    assert(punycodeDecoded("BCHER-kva") == Some(pointsOf("BüCHER")))
+  }
+
+  test "text that is not Punycode is refused, not a panic" {
+    for text in ["bcher-kv", "ü", "bcher-9999999999", "a-!", "99999999999999"] {
+      assert punycodeDecoded(text).isNone()
+    }
+  }
+}
+
+group "host names and IDNA" {
+  test "a Unicode label becomes its A-label and the name shows as A-labels" {
+    assert(asciiOf("bücher.example") == "xn--bcher-kva.example")
+    assert(asciiOf("straße.de") == "xn--strae-oqa.de")
+    assert(asciiOf("例え.test") == "xn--r8jz45g.test")
+  }
+
+  test "the A-label and the U-label are one name, and unicodeText answers the U-label" {
+    assert(nameOf("bücher.example") == nameOf("xn--bcher-kva.example"))
+    assert(nameOf("xn--bcher-kva.example").unicodeText() == "bücher.example")
+    assert(nameOf("bücher.example").unicodeText() == "bücher.example")
+  }
+
+  test "upper case is mapped to lower case, ASCII and Latin-1 alike" {
+    assert(asciiOf("Bücher.Example") == "xn--bcher-kva.example")
+    assert(asciiOf("BÜCHER.EXAMPLE") == "xn--bcher-kva.example")
+    assert(asciiOf("XN--BCHER-KVA.example") == "xn--bcher-kva.example")
+    assert(asciiOf("Ÿ.test") == "xn--wda.test")
+  }
+
+  test "a trailing dot changes nothing, and a dot alone is the root" {
+    assert(asciiOf("bücher.example.") == "xn--bcher-kva.example")
+    assert(nameOf("example.test.") == nameOf("example.test"))
+    assert nameOf(".").isRoot()
+    assert(DomainName.root.show() == ".")
+  }
+
+  test "the dots of East Asian text separate labels, and fullwidth ASCII is ASCII" {
+    assert(asciiOf("a\u{3002}b") == "a.b")
+    assert(asciiOf("ＥＸＡＭＰＬＥ．com") == "example.com")
+  }
+
+  test "a soft hyphen is ignored" {
+    assert(asciiOf("ex\u{AD}ample.com") == "example.com")
+  }
+
+  test "hyphens: not at either end of a label, and anywhere inside" {
+    assert refused("-example.test")
+    assert refused("example-.test")
+    assert(asciiOf("r3---sn.test") == "r3---sn.test")
+  }
+
+  test "a character that is no letter, digit or hyphen is refused, and ofPresentation takes it" {
+    assert refused("a_b.test")
+    assert refused("*.example.test")
+    assert refused("a b.test")
+    assert(presentedOf("_sip._tcp.example.test").show() == "_sip._tcp.example.test")
+  }
+
+  test "an empty text and an empty label are refused" {
+    assert refused("")
+    assert refused("a..b")
+    assert refused(".a")
+    assert refused("a.b..")
+  }
+
+  test "a broken A-label is refused" {
+    assert refused("xn--bcher-kv.example")
+    assert refused("xn--abc.example")
+    assert refused("xn--.example")
+  }
+
+  test "an A-label of a U-label that the mapping would change is refused" {
+    // The ASCII of an A-label is lower cased like any other, but `xn--bcher-2pa` is `bÜcher`, whose `Ü` the mapping lower cases
+    assert(punycodeEncoded(pointsOf("bÜcher")) == Some("bcher-2pa"))
+    assert refused("xn--bcher-2pa.example")
+    assert(asciiOf("xn--BCHER-KVA.example") == "xn--bcher-kva.example")
+  }
+
+  test "the code points this package cannot check are refused and say which" {
+    assert refused("a\u{200D}b.test")
+    assert refused("a\u{202E}b.test")
+    assert refused("a\u{A0}b.test")
+    match DomainName.tryFrom("a\u{200C}b.test") {
+      Ok(_) => assert false
+      Fail(problem) => assert "{problem}".contains("U+200C")
+    }
+  }
+}
+
+group "limits" {
+  test "a label of 63 bytes is a label and one of 64 is not" {
+    const longest = repeated "a", 63
+    assert(asciiOf("{longest}.test") == "{longest}.test")
+    assert refused("{repeated("a", 64)}.test")
+  }
+
+  test "the limit of 63 counts the A-label, not the characters written" {
+    // 60 characters of `ü` fit into 63 bytes as text and not as an A-label
+    assert refused("{repeated("ü", 60)}.test")
+  }
+
+  test "a name of 255 bytes on the wire is a name and one of 256 is not" {
+    // four labels of 62 bytes and one of 1: 4 * 63 + 2 + 1 = 255
+    const label = repeated "a", 62
+    const longest = "{label}.{label}.{label}.{label}.b"
+    assert(nameOf(longest).wireLength() == 255)
+    assert refused("{longest}b")
+  }
+
+  test "the labels of a message are any bytes, with the same limits" {
+    const labels: List<Bytes> = [[0, 46, 255], "test".bytes().toList()]
+    match DomainName.ofLabels(labels) {
+      Ok(name) => {
+        assert(name.show() == "\\000\\.\\255.test")
+        assert(!name.isHostName())
+        assert(DomainName.ofPresentation(name.show()) == Ok(name))
+      }
+      Fail(_) => assert false
+    }
+    assert DomainName.ofLabels([[]]).isError()
+    assert DomainName.ofLabels([repeated("a", 64).bytes().toList()]).isError()
+    assert(DomainName.ofLabels([]) == Ok(DomainName.root))
+  }
+}
+
+group "the presentation format" {
+  test "escapes are read and written back" {
+    const name = presentedOf "a\\.b.c\\\\d.\\065"
+    assert(name.labels().length() == 3)
+    assert(name.labels()[0] == "a.b".bytes().toList())
+    assert(name.show() == "a\\.b.c\\\\d.A")
+  }
+
+  test "a broken escape and a character that is not ASCII are refused" {
+    for text in ["a\\", "a\\25", "a\\256", "bücher.example", "", "a..b"] {
+      assert DomainName.ofPresentation(text).isError()
+    }
+  }
+
+  test "the case is kept" {
+    assert(presentedOf("WWW.Example.TEST").show() == "WWW.Example.TEST")
+  }
+}
+
+group "comparison and structure" {
+  test "names are equal without regard to the case of ASCII letters, and hash alike (RFC 4343)" {
+    const upper = presentedOf "WWW.EXAMPLE.TEST"
+    const lower = nameOf "www.example.test"
+    assert(upper == lower)
+    assert(upper.hash() == lower.hash())
+    assert(presentedOf("\\195\\188.test") != presentedOf("\\195\\156.test"))
+  }
+
+  test "a name is a key of a map without regard to case" {
+    var seen: Map<DomainName, Int> = [:]
+    seen[presentedOf("Example.TEST")] = 1
+    assert(seen.get(nameOf("example.test")) == Some(1))
+  }
+
+  test "parent, subdomain and the counts" {
+    const name = nameOf "www.example.test"
+    assert(name.labelCount() == 3)
+    assert(name.parent() == Some(nameOf("example.test")))
+    assert name.isSubdomain(of: presentedOf("EXAMPLE.test"))
+    assert name.isSubdomain(of: name)
+    assert name.isSubdomain(of: DomainName.root)
+    assert(!nameOf("example.test").isSubdomain(of: name))
+    assert(!nameOf("badexample.test").isSubdomain(of: nameOf("example.test")))
+    assert(DomainName.root.parent() == None)
+    assert nameOf("xn--bcher-kva.example").isHostName()
+  }
+
+  test "a refusal names the text and the reason" {
+    match DomainName.tryFrom("a..b") {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem == DnsError.InvalidName("a..b", "an empty label"))
+    }
+  }
+}

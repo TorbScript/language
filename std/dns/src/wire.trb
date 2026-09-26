@@ -1,0 +1,852 @@
+/**
+ * The wire format of RFC 1035 section 4: a [Message] from bytes and back, names compressed by pointers (section
+ * 4.1.4), the EDNS0 record of RFC 6891, and the query and response helpers a transport needs - so that `std/network`,
+ * `std/tls` and `std/http` only move bytes (docs/design/DNS.md section 2).
+ *
+ * Reading never indexes past what it checked: every read goes through a [Reader] that answers a [DnsError] where the
+ * bytes end, so bytes from the network cannot make it panic.
+ */
+
+use Ipv4Address, Ipv6Address from "std/ip"
+use textOf from "std/stream"
+use Operation, RecordClass, RecordType, ResponseCode from "./codes"
+use DnsError from "./error"
+use DomainName, presentation from "./name"
+use Edns, EdnsOption, Message, MessageKind, Question from "./message"
+use Record, RecordData, ServiceParameter from "./record"
+
+/** The UDP payload size a query offers: 1232 bytes, which fits every path without fragmentation. */
+const offeredPayload = 1232
+
+// --- Reading ---------------------------------------------------------------------------------------------------------
+
+/** A position in a message and the end it may not read past. */
+type Reader {
+  /** The whole message: a compression pointer may point anywhere in it. */
+  bytes: Bytes
+  /** The next byte to read. */
+  var position: Int
+  /** The first byte this reader may not read: the end of the message, or of the data of one record. */
+  limit: Int
+  /** The type whose data is read, or `None` for the sections of the message. */
+  recordType: RecordType?
+  /** Where the data of the record starts, which a failure inside of it names. */
+  start: Int
+
+  /** Where the bytes end inside of `part`, which starts at `at`. */
+  fn failure(part: String, at: Int): DnsError {
+    match recordType {
+      Some(found) => DnsError.InvalidRecord found, start, "the data ends inside {part}"
+      None => DnsError.Truncated at, part
+    }
+  }
+
+  /** How many bytes are left before the limit. */
+  fn remaining(): Int {
+    limit - position
+  }
+
+  /** The next `count` bytes. */
+  var fn take(count: Int, part: String): Result<Bytes, DnsError> {
+    if count > limit - position {
+      return Fail failure(part, position)
+    }
+    const taken = bytes[position..(position + count)]
+    position = position + count
+    Ok taken
+  }
+
+  /** The next `width` bytes as a number without a sign, most significant first. */
+  var fn integer(width: Int, part: String): Result<Int, DnsError> {
+    if width > limit - position {
+      return Fail failure(part, position)
+    }
+    var value = 0
+    for index in 0..width {
+      value = value << 8 | Int.from(bytes[position + index])
+    }
+    position = position + width
+    Ok value
+  }
+
+  /** The next name, following compression pointers anywhere in the message. */
+  var fn name(part: String): Result<DomainName, DnsError> {
+    const (name, end) = nameAt(bytes, position, part)?
+    if end > limit {
+      return Fail failure(part, position)
+    }
+    position = end
+    Ok name
+  }
+}
+
+/**
+ * The name that starts at `start`, and where it ends in the stream: after its zero byte, or after its first pointer.
+ * A pointer may point anywhere in the message, but never at a pointer this name already followed, and the labels
+ * together may not pass 255 bytes - so every name ends after at most as many steps as the message has bytes.
+ */
+fn nameAt(bytes: Bytes, start: Int, part: String): Result<(DomainName, Int), DnsError> {
+  var labels: List<Bytes> = []
+  var position = start
+  var end = -1
+  var followed: List<Int> = []
+  var length = 1
+  loop {
+    if position >= bytes.length() {
+      return Fail DnsError.Truncated(start, part)
+    }
+    const size = Int.from bytes[position]
+    if size == 0 {
+      if end < 0 {
+        end = position + 1
+      }
+      break
+    }
+    const kind = size & 192
+    if kind == 192 {
+      if position + 1 >= bytes.length() {
+        return Fail DnsError.Truncated(start, part)
+      }
+      const target = (size & 63) << 8 | Int.from(bytes[position + 1])
+      if end < 0 {
+        end = position + 2
+      }
+      if target >= bytes.length() {
+        return Fail DnsError.InvalidPointer(position, target)
+      }
+      if followed.contains(target) {
+        return Fail DnsError.PointerLoop(position)
+      }
+      followed.append target
+      position = target
+      continue
+    }
+    if kind != 0 {
+      return Fail DnsError.InvalidMessage(position, "the label type {kind} is not defined (RFC 6891 section 5)")
+    }
+    if position + 1 + size > bytes.length() {
+      return Fail DnsError.Truncated(start, part)
+    }
+    length = length + size + 1
+    if length > 255 {
+      return Fail DnsError.InvalidName(presentation(labels), "the name at byte {start} is longer than 255 bytes")
+    }
+    labels.append bytes[(position + 1)..(position + 1 + size)]
+    position = position + 1 + size
+  }
+  const name = DomainName.ofLabels(labels)?
+  Ok((name, end))
+}
+
+/** The fixed part of a record: its owner, type, class, time to live, and where its data starts and how long it is. */
+type Entry {
+  name: DomainName
+  typeCode: Int
+  classCode: Int
+  timeToLive: Int
+  start: Int
+  length: Int
+}
+
+/** The next record's fixed part, and the reader moved past its data. */
+fn entryOf(var reader: Reader): Result<Entry, DnsError> {
+  const name = reader.name("the owner of a record")?
+  const typeCode = reader.integer(2, "the type of a record")?
+  const classCode = reader.integer(2, "the class of a record")?
+  const timeToLive = reader.integer(4, "the time to live of a record")?
+  const length = reader.integer(2, "the data length of a record")?
+  const start = reader.position
+  if length > reader.remaining() {
+    return Fail DnsError.Truncated(start, "the data of a {RecordType.of(typeCode)} record")
+  }
+  reader.position = start + length
+  Ok Entry(name, typeCode, classCode, timeToLive, start, length)
+}
+
+/** The record of an entry of the answer or the authority section, where an OPT record is refused. */
+fn recordOf(bytes: Bytes, entry: Entry): Result<Record, DnsError> {
+  const recordType = RecordType.of entry.typeCode
+  if recordType == RecordType.Opt {
+    return Fail DnsError.InvalidMessage(entry.start, "an OPT record belongs to the additional section (RFC 6891)")
+  }
+  const data = dataOf(bytes, recordType, entry.start, entry.length)?
+  Ok Record(entry.name, RecordClass.of(entry.classCode), entry.timeToLive, data)
+}
+
+/** Reads a whole message. */
+public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
+  var reader = Reader bytes, 0, bytes.length(), None, 0
+  const identifier = reader.integer(2, "the header")?
+  const flags = reader.integer(2, "the header")?
+  const questionCount = reader.integer(2, "the header")?
+  const answerCount = reader.integer(2, "the header")?
+  const authorityCount = reader.integer(2, "the header")?
+  const additionalCount = reader.integer(2, "the header")?
+  var questions: List<Question> = []
+  for _ in 0..questionCount {
+    const name = reader.name("a question")?
+    const typeCode = reader.integer(2, "a question")?
+    const classCode = reader.integer(2, "a question")?
+    questions.append Question(name, RecordType.of(typeCode), RecordClass.of(classCode))
+  }
+  var answers: List<Record> = []
+  for _ in 0..answerCount {
+    const entry = entryOf(reader)?
+    answers.append(recordOf(bytes, entry)?)
+  }
+  var authority: List<Record> = []
+  for _ in 0..authorityCount {
+    const entry = entryOf(reader)?
+    authority.append(recordOf(bytes, entry)?)
+  }
+  var additional: List<Record> = []
+  var edns: Edns? = None
+  var extendedCode = 0
+  for _ in 0..additionalCount {
+    const entry = entryOf(reader)?
+    if entry.typeCode != 41 {
+      additional.append(recordOf(bytes, entry)?)
+      continue
+    }
+    if edns.isSome() {
+      return Fail DnsError.InvalidMessage(entry.start, "a second OPT record (RFC 6891 section 6.1.1)")
+    }
+    if !entry.name.isRoot() {
+      return Fail DnsError.InvalidMessage(entry.start, "the owner of an OPT record is the root (RFC 6891 6.1.2)")
+    }
+    extendedCode = entry.timeToLive >> 24 & 255
+    edns = Some(Edns(
+      payloadSize: entry.classCode,
+      version: entry.timeToLive >> 16 & 255,
+      dnssecOk: entry.timeToLive >> 15 & 1 == 1,
+      options: optionsOf(bytes, entry)?,
+    ))
+  }
+  if reader.position < bytes.length() {
+    const reason = "the message is {bytes.length()} bytes long and ends after {reader.position}"
+    return Fail DnsError.InvalidMessage(reader.position, reason)
+  }
+  Ok(Message(
+    identifier: identifier,
+    kind: if flags >> 15 & 1 == 1 { MessageKind.Response } else { MessageKind.Query },
+    operation: Operation.of(flags >> 11 & 15),
+    authoritative: flags >> 10 & 1 == 1,
+    truncated: flags >> 9 & 1 == 1,
+    recursionDesired: flags >> 8 & 1 == 1,
+    recursionAvailable: flags >> 7 & 1 == 1,
+    authenticated: flags >> 5 & 1 == 1,
+    checkingDisabled: flags >> 4 & 1 == 1,
+    responseCode: ResponseCode.of(extendedCode << 4 | flags & 15),
+    questions: questions,
+    answers: answers,
+    authority: authority,
+    additional: additional,
+    edns: edns,
+  ))
+}
+
+/** The options of an OPT record: a code, a length and that many bytes, until the data ends. */
+fn optionsOf(bytes: Bytes, entry: Entry): Result<List<EdnsOption>, DnsError> {
+  var reader = Reader(bytes, entry.start, entry.start + entry.length, Some(RecordType.Opt), entry.start)
+  var options: List<EdnsOption> = []
+  while reader.remaining() > 0 {
+    const code = reader.integer(2, "an option code")?
+    const length = reader.integer(2, "an option length")?
+    options.append EdnsOption(code, reader.take(length, "the data of an option")?)
+  }
+  Ok options
+}
+
+/** The data of a record of `recordType` that starts at `start` and is `length` bytes long. */
+fn dataOf(bytes: Bytes, recordType: RecordType, start: Int, length: Int): Result<RecordData, DnsError> {
+  var reader = Reader(bytes, start, start + length, Some(recordType), start)
+  const data = match recordType {
+    .A => {
+      if length != 4 {
+        return Fail DnsError.InvalidRecord(recordType, start, "an A record holds 4 bytes, not {length}")
+      }
+      const octets = reader.take(4, "an IPv4 address")?
+      RecordData.A Ipv4Address.of(octets[0], octets[1], octets[2], octets[3])
+    }
+    .Aaaa => {
+      if length != 16 {
+        return Fail DnsError.InvalidRecord(recordType, start, "an AAAA record holds 16 bytes, not {length}")
+      }
+      var segments: List<Int> = []
+      for _ in 0..8 {
+        segments.append(reader.integer(2, "an IPv6 address")?)
+      }
+      match Ipv6Address.of(segments) {
+        Ok(address) => RecordData.Aaaa address
+        Fail(problem) => {
+          return Fail DnsError.InvalidRecord(recordType, start, problem.reason)
+        }
+      }
+    }
+    .Cname => RecordData.Cname(reader.name("the canonical name")?)
+    .Ns => RecordData.Ns(reader.name("the name server")?)
+    .Ptr => RecordData.Ptr(reader.name("the target")?)
+    .Mx => {
+      const preference = reader.integer(2, "the preference")?
+      RecordData.Mx(preference, reader.name("the exchange")?)
+    }
+    .Txt => {
+      var strings: List<Bytes> = []
+      while reader.remaining() > 0 {
+        const size = reader.integer(1, "a text string")?
+        strings.append(reader.take(size, "a text string")?)
+      }
+      RecordData.Txt strings
+    }
+    .Srv => {
+      const priority = reader.integer(2, "the priority")?
+      const weight = reader.integer(2, "the weight")?
+      const port = reader.integer(2, "the port")?
+      RecordData.Srv(priority, weight, port, reader.name("the target")?)
+    }
+    .Soa => {
+      const primaryServer = reader.name("the primary server")?
+      const responsibleMailbox = reader.name("the responsible mailbox")?
+      const serial = reader.integer(4, "the serial")?
+      const refresh = reader.integer(4, "the refresh interval")?
+      const retry = reader.integer(4, "the retry interval")?
+      const expire = reader.integer(4, "the expire interval")?
+      const minimum = reader.integer(4, "the minimum")?
+      RecordData.Soa primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum
+    }
+    .Caa => {
+      const flags = reader.integer(1, "the flags")?
+      const tagLength = reader.integer(1, "the tag length")?
+      const tag = reader.take(tagLength, "the tag")?
+      if tag.isEmpty() || !tag.all({ isAlphanumeric Int.from(_) }) {
+        return Fail DnsError.InvalidRecord(recordType, start, "a CAA tag is ASCII letters and digits (RFC 8659)")
+      }
+      const text = textOf(tag) ?? ""
+      RecordData.Caa(flags, text, reader.take(reader.remaining(), "the value")?)
+    }
+    .Svcb => {
+      const (priority, target, parameters) = bindingOf(reader, recordType, start)?
+      RecordData.Svcb priority, target, parameters
+    }
+    .Https => {
+      const (priority, target, parameters) = bindingOf(reader, recordType, start)?
+      RecordData.Https priority, target, parameters
+    }
+    _ => RecordData.Unknown(recordType, reader.take(length, "the data")?)
+  }
+  if reader.remaining() > 0 {
+    const reason = "the data is {length} bytes long and ends after {reader.position - start}"
+    return Fail DnsError.InvalidRecord(recordType, start, reason)
+  }
+  Ok data
+}
+
+/** An ASCII letter or digit. */
+fn isAlphanumeric(code: Int): Bool {
+  (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57)
+}
+
+/** The priority, target and parameters of an SVCB or HTTPS record, the keys strictly increasing (RFC 9460 2.2). */
+fn bindingOf(
+  var reader: Reader,
+  recordType: RecordType,
+  start: Int,
+): Result<(Int, DomainName, List<ServiceParameter>), DnsError> {
+  const priority = reader.integer(2, "the priority")?
+  const target = reader.name("the target")?
+  var parameters: List<ServiceParameter> = []
+  var previous = -1
+  while reader.remaining() > 0 {
+    const key = reader.integer(2, "a parameter key")?
+    const length = reader.integer(2, "a parameter length")?
+    const value = reader.take(length, "a parameter value")?
+    if key <= previous {
+      return Fail DnsError.InvalidRecord(recordType, start, "the parameter keys do not increase (RFC 9460 section 2.2)")
+    }
+    previous = key
+    parameters.append(parameterOf(recordType, start, key, value)?)
+  }
+  Ok((priority, target, parameters))
+}
+
+/** One service parameter, typed where RFC 9460 defines its key. */
+fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Result<ServiceParameter, DnsError> {
+  const broken = DnsError.InvalidRecord recordType, start, "the value of the parameter `{key}` does not fit its key"
+  match key {
+    0 => {
+      if value.isEmpty() || value.length() % 2 != 0 {
+        return Fail broken
+      }
+      var keys: List<Int> = []
+      var index = 0
+      while index < value.length() {
+        keys.append(Int.from(value[index]) << 8 | Int.from(value[index + 1]))
+        index = index + 2
+      }
+      Ok ServiceParameter.Mandatory(keys)
+    }
+    1 => {
+      var protocols: List<String> = []
+      var index = 0
+      while index < value.length() {
+        const size = Int.from value[index]
+        if size == 0 || index + 1 + size > value.length() {
+          return Fail broken
+        }
+        match textOf(value[(index + 1)..(index + 1 + size)]) {
+          Ok(text) => protocols.append text
+          Fail(_) => {
+            return Ok ServiceParameter.Other(key, value)
+          }
+        }
+        index = index + 1 + size
+      }
+      if protocols.isEmpty() {
+        return Fail broken
+      }
+      Ok ServiceParameter.Alpn(protocols)
+    }
+    2 => {
+      if !value.isEmpty() {
+        return Fail broken
+      }
+      Ok ServiceParameter.NoDefaultAlpn
+    }
+    3 => {
+      if value.length() != 2 {
+        return Fail broken
+      }
+      Ok ServiceParameter.Port(Int.from(value[0]) << 8 | Int.from(value[1]))
+    }
+    4 => {
+      if value.isEmpty() || value.length() % 4 != 0 {
+        return Fail broken
+      }
+      var addresses: List<Ipv4Address> = []
+      var index = 0
+      while index < value.length() {
+        addresses.append Ipv4Address.of(value[index], value[index + 1], value[index + 2], value[index + 3])
+        index = index + 4
+      }
+      Ok ServiceParameter.Ipv4Hint(addresses)
+    }
+    5 => Ok ServiceParameter.EncryptedClientHello(value)
+    6 => {
+      if value.isEmpty() || value.length() % 16 != 0 {
+        return Fail broken
+      }
+      var addresses: List<Ipv6Address> = []
+      var index = 0
+      while index < value.length() {
+        var segments: List<Int> = []
+        for segment in 0..8 {
+          segments.append(Int.from(value[index + 2 * segment]) << 8 | Int.from(value[index + 2 * segment + 1]))
+        }
+        match Ipv6Address.of(segments) {
+          Ok(address) => addresses.append address
+          Fail(_) => {
+            return Fail broken
+          }
+        }
+        index = index + 16
+      }
+      Ok ServiceParameter.Ipv6Hint(addresses)
+    }
+    _ => Ok ServiceParameter.Other(key, value)
+  }
+}
+
+// --- Writing ---------------------------------------------------------------------------------------------------------
+
+/** The bytes written so far, and where each name already written starts, for compression. */
+type Writer {
+  var output: Bytes = []
+  /** Every name written at an offset a pointer can reach (below 16384), by its first offset. */
+  var offsets: Map<DomainName, Int> = [:]
+
+  /** One byte: the lowest eight bits of `value`. */
+  var fn byte(value: Int) {
+    output.append(UInt8.tryFrom(value & 255) ?? 0)
+  }
+
+  /** Two bytes, most significant first: the lowest sixteen bits of `value`. */
+  var fn integer16(value: Int) {
+    byte(value >> 8)
+    byte value
+  }
+
+  /** Four bytes, most significant first. */
+  var fn integer32(value: Int) {
+    integer16(value >> 16)
+    integer16 value
+  }
+
+  /** `name`, ending in a pointer to an earlier occurrence of its longest suffix where `compressed` allows one. */
+  var fn name(name: DomainName, compressed: Bool) {
+    var current = name
+    while !current.isRoot() {
+      if compressed {
+        if const Some(offset) = offsets.get(current) {
+          integer16(49152 | offset)
+          return
+        }
+      }
+      if output.length() < 16384 && !offsets.containsKey(current) {
+        offsets[current] = output.length()
+      }
+      const label = current.labels()[0]
+      byte label.length()
+      output.appendAll label
+      current = current.parent() ?? DomainName.root
+    }
+    byte 0
+  }
+}
+
+/** Nothing where `value` fits into `bits` bits without a sign, and otherwise the refusal that names `what`. */
+fn fits(value: Int, bits: Int, what: String): Result<Void, DnsError> {
+  const largest = (1 << bits) - 1
+  if value < 0 || value > largest {
+    return Fail DnsError.Unencodable("{what} is {value}, outside 0 to {largest}")
+  }
+  Ok void
+}
+
+/** `value` where it fits into `bits` bits without a sign, and otherwise the refusal that names `what`. */
+fn fitting(value: Int, bits: Int, what: String): Result<Int, DnsError> {
+  fits(value, bits, what)?
+  Ok value
+}
+
+/** The header: identifier, flags and the four counts. */
+fn writeHeader(var writer: Writer, message: Message, additionalCount: Int) {
+  var flags = message.operation.code() << 11 | message.responseCode.code() & 15
+  for (bit, set) in [
+    (15, message.kind == MessageKind.Response),
+    (10, message.authoritative),
+    (9, message.truncated),
+    (8, message.recursionDesired),
+    (7, message.recursionAvailable),
+    (5, message.authenticated),
+    (4, message.checkingDisabled),
+  ] {
+    if set {
+      flags = flags | 1 << bit
+    }
+  }
+  writer.integer16 message.identifier
+  writer.integer16 flags
+  writer.integer16 message.questions.length()
+  writer.integer16 message.answers.length()
+  writer.integer16 message.authority.length()
+  writer.integer16 additionalCount
+}
+
+/** A question, its name compressed. */
+fn writeQuestion(var writer: Writer, question: Question) {
+  writer.name question.name, true
+  writer.integer16 question.recordType.code()
+  writer.integer16 question.recordClass.code()
+}
+
+/** The EDNS0 record: the root, type 41, the payload size as its class, and the extended code, version and DO bit. */
+fn writeEdns(var writer: Writer, edns: Edns, extendedCode: Int) {
+  writer.byte 0
+  writer.integer16 41
+  writer.integer16 edns.payloadSize
+  writer.byte extendedCode
+  writer.byte edns.version
+  writer.integer16(if edns.dnssecOk { 32768 } else { 0 })
+  var length = 0
+  for option in edns.options {
+    length = length + 4 + option.data.length()
+  }
+  writer.integer16 length
+  for option in edns.options {
+    writer.integer16 option.code
+    writer.integer16 option.data.length()
+    writer.output.appendAll option.data
+  }
+}
+
+/** A record: its owner compressed, the fixed part, and its data with the length in front. */
+fn writeRecord(var writer: Writer, record: Record): Result<Void, DnsError> {
+  writer.name record.name, true
+  writer.integer16 record.recordType().code()
+  writer.integer16 record.recordClass.code()
+  writer.integer32(fitting(record.timeToLive, 32, "the time to live of a record")?)
+  const lengthAt = writer.output.length()
+  writer.integer16 0
+  writeData(writer, record.data)?
+  const length = writer.output.length() - lengthAt - 2
+  if length > 65535 {
+    return Fail DnsError.Unencodable("the data of a {record.recordType()} record is {length} bytes, more than 65535")
+  }
+  writer.output[lengthAt] = UInt8.tryFrom(length >> 8) ?? 0
+  writer.output[lengthAt + 1] = UInt8.tryFrom(length & 255) ?? 0
+  Ok void
+}
+
+/** The data of a record, checked against the bits of its fields. */
+fn writeData(var writer: Writer, data: RecordData): Result<Void, DnsError> {
+  match data {
+    .A(address) => {
+      for octet in address.octets() {
+        writer.byte octet
+      }
+    }
+    .Aaaa(address) => {
+      for segment in address.segments() {
+        writer.integer16 segment
+      }
+    }
+    .Cname(target) => writer.name target, true
+    .Ns(server) => writer.name server, true
+    .Ptr(target) => writer.name target, true
+    .Mx(preference, exchange) => {
+      writer.integer16(fitting(preference, 16, "the preference of an MX record")?)
+      writer.name exchange, true
+    }
+    .Txt(strings) => {
+      for string in strings {
+        if string.length() > 255 {
+          return Fail DnsError.Unencodable("a text string is {string.length()} bytes, and one holds at most 255")
+        }
+        writer.byte string.length()
+        writer.output.appendAll string
+      }
+    }
+    .Srv(priority, weight, port, target) => {
+      writer.integer16(fitting(priority, 16, "the priority of an SRV record")?)
+      writer.integer16(fitting(weight, 16, "the weight of an SRV record")?)
+      writer.integer16(fitting(port, 16, "the port of an SRV record")?)
+      writer.name target, false
+    }
+    .Soa(primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum) => {
+      writer.name primaryServer, true
+      writer.name responsibleMailbox, true
+      writer.integer32(fitting(serial, 32, "the serial of an SOA record")?)
+      writer.integer32(fitting(refresh, 32, "the refresh interval of an SOA record")?)
+      writer.integer32(fitting(retry, 32, "the retry interval of an SOA record")?)
+      writer.integer32(fitting(expire, 32, "the expire interval of an SOA record")?)
+      writer.integer32(fitting(minimum, 32, "the minimum of an SOA record")?)
+    }
+    .Caa(flags, tag, value) => {
+      writer.byte(fitting(flags, 8, "the flags of a CAA record")?)
+      const tagBytes = tag.bytes().toList()
+      if tagBytes.isEmpty() || tagBytes.length() > 255 || !tagBytes.all({ isAlphanumeric Int.from(_) }) {
+        return Fail DnsError.Unencodable("the CAA tag `{tag}` is not ASCII letters and digits (RFC 8659)")
+      }
+      writer.byte tagBytes.length()
+      writer.output.appendAll tagBytes
+      writer.output.appendAll value
+    }
+    .Svcb(priority, target, parameters) => writeBinding(writer, priority, target, parameters)?
+    .Https(priority, target, parameters) => writeBinding(writer, priority, target, parameters)?
+    .Unknown(recordType, bytes) => {
+      if recordType == RecordType.Opt {
+        return Fail DnsError.Unencodable("an OPT record is written from `Message.edns`, not as a record")
+      }
+      writer.output.appendAll bytes
+    }
+  }
+  Ok void
+}
+
+/** The data of an SVCB or HTTPS record: the target uncompressed (RFC 9460 section 2.2), the parameters by key. */
+fn writeBinding(
+  var writer: Writer,
+  priority: Int,
+  target: DomainName,
+  parameters: List<ServiceParameter>,
+): Result<Void, DnsError> {
+  writer.integer16(fitting(priority, 16, "the priority of a service binding")?)
+  writer.name target, false
+  var previous = -1
+  for parameter in parameters.sorted(by: { _.key() }) {
+    const key = fitting(parameter.key(), 16, "the key of a service parameter")?
+    if key == previous {
+      return Fail DnsError.Unencodable("two service parameters with the key {key}")
+    }
+    previous = key
+    const value = parameterValue(parameter)?
+    if value.length() > 65535 {
+      return Fail DnsError.Unencodable("the value of the service parameter {key} is longer than 65535 bytes")
+    }
+    writer.integer16 key
+    writer.integer16 value.length()
+    writer.output.appendAll value
+  }
+  Ok void
+}
+
+/** The value of a service parameter as bytes, checked. */
+fn parameterValue(parameter: ServiceParameter): Result<Bytes, DnsError> {
+  var value = Writer()
+  match parameter {
+    .Mandatory(keys) => {
+      if keys.isEmpty() {
+        return Fail DnsError.Unencodable("a `mandatory` parameter names at least one key")
+      }
+      for key in keys {
+        value.integer16(fitting(key, 16, "a key of a `mandatory` parameter")?)
+      }
+    }
+    .Alpn(protocols) => {
+      if protocols.isEmpty() {
+        return Fail DnsError.Unencodable("an `alpn` parameter names at least one protocol")
+      }
+      for protocol in protocols {
+        const size = protocol.byteLength()
+        if size == 0 || size > 255 {
+          return Fail DnsError.Unencodable("the protocol `{protocol}` is not 1 to 255 bytes")
+        }
+        value.byte size
+        value.output.appendAll protocol.bytes()
+      }
+    }
+    .NoDefaultAlpn => {}
+    .Port(port) => value.integer16(fitting(port, 16, "the port of a service binding")?)
+    .Ipv4Hint(addresses) => {
+      if addresses.isEmpty() {
+        return Fail DnsError.Unencodable("an `ipv4hint` parameter names at least one address")
+      }
+      for address in addresses {
+        value.integer32 address.number()
+      }
+    }
+    .EncryptedClientHello(configurations) => value.output.appendAll configurations
+    .Ipv6Hint(addresses) => {
+      if addresses.isEmpty() {
+        return Fail DnsError.Unencodable("an `ipv6hint` parameter names at least one address")
+      }
+      for address in addresses {
+        for segment in address.segments() {
+          value.integer16 segment
+        }
+      }
+    }
+    .Other(_, bytes) => value.output.appendAll bytes
+  }
+  Ok value.output
+}
+
+/** Writes a whole message, checked. */
+public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
+  fits(message.identifier, 16, "the identifier")?
+  for (count, section) in [
+    (message.questions.length(), "question"),
+    (message.answers.length(), "answer"),
+    (message.authority.length(), "authority"),
+    (message.additional.length(), "additional"),
+  ] {
+    if count > 65535 {
+      return Fail DnsError.Unencodable("the {section} section has {count} entries, more than 65535")
+    }
+  }
+  const extendedCode = message.responseCode.code() >> 4
+  var additionalCount = message.additional.length()
+  match message.edns {
+    Some(edns) => {
+      fits(edns.payloadSize, 16, "the payload size of the EDNS0 record")?
+      fits(edns.version, 8, "the EDNS version")?
+      for option in edns.options {
+        fits(option.code, 16, "the code of an EDNS0 option")?
+        fits(option.data.length(), 16, "the length of an EDNS0 option")?
+      }
+      additionalCount = additionalCount + 1
+    }
+    None => {
+      if extendedCode > 0 {
+        return Fail DnsError.Unencodable("the response code {message.responseCode} needs an EDNS0 record")
+      }
+    }
+  }
+  fits(additionalCount, 16, "the number of additional records")?
+  var writer = Writer()
+  writeHeader writer, message, additionalCount
+  for question in message.questions {
+    writeQuestion writer, question
+  }
+  for section in [message.answers, message.authority, message.additional] {
+    for record in section {
+      writeRecord(writer, record)?
+    }
+  }
+  if const Some(edns) = message.edns {
+    writeEdns writer, edns, extendedCode
+  }
+  Ok writer.output
+}
+
+// --- Queries and responses -------------------------------------------------------------------------------------------
+
+/**
+ * The bytes of a standard query for the records of `recordType` at `name`: one question in class `Internet`,
+ * recursion desired unless `recursionDesired` says otherwise, and an EDNS0 record that offers a UDP payload of 1232
+ * bytes and sets the DO bit where `dnssecOk` asks for DNSSEC records. The identifier is taken modulo 65536; a transport
+ * draws it at random for every query (RFC 5452 section 9.2). What it sends is these bytes, as they are over UDP and
+ * after a length of two bytes over TCP (RFC 7766 section 8).
+ *
+ * # Examples
+ *
+ *     const bytes = query DomainName.tryFrom("example.test")?, RecordType.A, 4660
+ *     print bytes.length()
+ */
+public fn query(
+  name: DomainName,
+  recordType: RecordType,
+  identifier: Int,
+  recursionDesired: Bool = true,
+  dnssecOk: Bool = false,
+): Bytes {
+  const message = Message(
+    identifier: identifier & 65535,
+    recursionDesired: recursionDesired,
+    questions: [Question(name, recordType)],
+  )
+  var writer = Writer()
+  writeHeader writer, message, 1
+  writeQuestion writer, message.questions[0]
+  writeEdns writer, Edns(payloadSize: offeredPayload, dnssecOk: dnssecOk), 0
+  writer.output
+}
+
+/**
+ * The response in `bytes`, checked against the `query` it is supposed to answer: it is a response, its identifier and
+ * operation are the query's, and its question section is the query's, the names compared without their case - or empty,
+ * which a server may send with an error code. What the response says is not judged here: a `NameError`, an empty
+ * answer and a truncated response (`truncated`, to be asked again over TCP) are messages like any other.
+ *
+ * # Errors
+ *
+ * - Every [DnsError] of [Message.tryFrom], for either message.
+ * - [DnsError.UnexpectedResponse] for a message that is not the response to `query`.
+ */
+public fn readResponse(bytes: Bytes, query: Bytes): Result<Message, DnsError> {
+  const asked = decodedMessage(query)?
+  const response = decodedMessage(bytes)?
+  if response.kind != MessageKind.Response {
+    return Fail DnsError.UnexpectedResponse("the QR bit is not set, so it is a query")
+  }
+  if response.identifier != asked.identifier {
+    const reason = "the identifier is {response.identifier}, and the query's is {asked.identifier}"
+    return Fail DnsError.UnexpectedResponse(reason)
+  }
+  if response.operation != asked.operation {
+    const reason = "the operation is {response.operation}, and the query's is {asked.operation}"
+    return Fail DnsError.UnexpectedResponse(reason)
+  }
+  if response.questions.isEmpty() {
+    if response.responseCode == ResponseCode.NoError {
+      return Fail DnsError.UnexpectedResponse("an answer without the question it answers")
+    }
+    return Ok response
+  }
+  if response.questions != asked.questions {
+    const answered = response.questions.map({ _.show() }).joined(separator: ", ")
+    const questioned = asked.questions.map({ _.show() }).joined(separator: ", ")
+    return Fail DnsError.UnexpectedResponse("the question is `{answered}`, and the query asked `{questioned}`")
+  }
+  Ok response
+}

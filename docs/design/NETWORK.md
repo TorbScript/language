@@ -579,7 +579,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 2 | The IO core: `runtime/io.c`, `torb_io.h`, the IO thread and `TORB_WAITING_IO` in `task.c`, IOCP + Winsock (loaded on first use), epoll, kqueue; TCP listen, accept, connect, receive, send, shutdown, close, addresses; the resolver threads; `runtime/tests/io_test.c` | **Done** on Windows; POSIX written, not compiled |
 | 3 | `std/network`: the address types, `resolve`, `TcpListener`, `TcpStream` with its source and sink, `NetworkError`; conformance programs over loopback | **Done** |
 | 4 | `std/http`: messages, the HTTP/1.1 parser and writer, the server and the client (one connection per request); parser tests; conformance over loopback | **Done** |
-| 5 | UDP | Open |
+| 5 | UDP; with it `lookup(name, type)` over the messages of `std/dns` ([DNS.md](DNS.md) slices 3 and 4) | Open |
 | 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | **Done** (Windows' verifier; macOS verifies against its bundle until the Security framework step) |
 | 7 | The client's connection pool and redirect policy (`Client`) | Open |
 | 8 | Serving on every worker: several accept loops on one listening socket | Open |

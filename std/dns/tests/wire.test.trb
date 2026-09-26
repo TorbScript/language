@@ -1,0 +1,584 @@
+/**
+ * The wire format: responses of a public resolver captured byte for byte, read into their records and written back to
+ * the same bytes; a round trip for every record type; compression pointers, including a loop and a pointer out of the
+ * message; every truncation of a real response; EDNS0; the refusals of the encoder; and the query and response helpers.
+ */
+
+use test, group from "std/test"
+use Ipv4Address, Ipv6Address, IpAddress from "std/ip"
+use DomainName from "../src/name"
+use DnsError from "../src/error"
+use RecordType, RecordClass, ResponseCode, Operation from "../src/codes"
+use Record, RecordData, ServiceParameter from "../src/record"
+use Message, MessageKind, Question, Edns, EdnsOption from "../src/message"
+use query, readResponse from "../src/wire"
+
+/** A name every test here knows to be one, in the presentation format. */
+fn nameOf(text: String): DomainName {
+  match DomainName.ofPresentation(text) {
+    Ok(name) => name
+    Fail(problem) => panic "a test's name was refused: {problem}"
+  }
+}
+
+/** Bytes every test here knows to be a message. */
+fn messageOf(bytes: Bytes): Message {
+  match Message.tryFrom(bytes) {
+    Ok(message) => message
+    Fail(problem) => panic "a test's message was refused: {problem}"
+  }
+}
+
+/** A message every test here knows to be encodable, as its bytes. */
+fn bytesOf(message: Message): Bytes {
+  match message.encoded() {
+    Ok(bytes) => bytes
+    Fail(problem) => panic "a test's message was not encoded: {problem}"
+  }
+}
+
+/** Why bytes are no message, or `None` where they are one. */
+fn refusalOf(bytes: Bytes): DnsError? {
+  match Message.tryFrom(bytes) {
+    Ok(_) => None
+    Fail(problem) => Some problem
+  }
+}
+
+/** An IPv4 address every test here knows to be one. */
+fn version4(text: String): Ipv4Address {
+  match Ipv4Address.tryFrom(text) {
+    Ok(address) => address
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** An IPv6 address every test here knows to be one. */
+fn version6(text: String): Ipv6Address {
+  match Ipv6Address.tryFrom(text) {
+    Ok(address) => address
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** The bytes of a text. */
+fn bytesOfText(text: String): Bytes {
+  text.bytes().toList()
+}
+
+/** A response to one question with one answer, for the round trips. */
+fn answering(data: RecordData): Message {
+  const name = nameOf "example.test"
+  Message(
+    identifier: 7,
+    kind: MessageKind.Response,
+    recursionDesired: true,
+    recursionAvailable: true,
+    questions: [Question(name, data.recordType())],
+    answers: [Record(name, timeToLive: 300, data: data)],
+  )
+}
+
+/** The header of a response with one question, for bytes written by hand. */
+fn headerWithOneQuestion(): Bytes {
+  [0, 1, 129, 128, 0, 1, 0, 0, 0, 0, 0, 0]
+}
+
+group "captured responses" {
+  test "example.com A: two addresses, an EDNS0 record, and the flags of a recursive answer" {
+    const message = messageOf exampleAddress()
+    assert(message.identifier == 4660)
+    assert(message.kind == MessageKind.Response && message.recursionDesired && message.recursionAvailable)
+    assert(!message.authoritative && !message.truncated && !message.authenticated)
+    assert(message.operation == Operation.Query)
+    assert(message.responseCode == ResponseCode.NoError)
+    assert(message.questions == [Question(nameOf("example.com"), RecordType.A)])
+    assert(message.answers.map({ _.show() }).toList() == [
+      "example.com. 165 IN A 104.20.23.154",
+      "example.com. 165 IN A 172.66.147.243",
+    ])
+    assert(message.edns == Some(Edns(payloadSize: 512)))
+    assert(message.addresses(of: nameOf("EXAMPLE.com")) == [
+      IpAddress.Version4(version4("104.20.23.154")),
+      IpAddress.Version4(version4("172.66.147.243")),
+    ])
+  }
+
+  test "gmail.com MX: five exchanges whose names point into each other" {
+    const message = messageOf gmailMailExchange()
+    const exchanges = message.answers.map({ _.data.show() }).toList()
+    assert(exchanges == [
+      "40 alt4.gmail-smtp-in.l.google.com.",
+      "20 alt2.gmail-smtp-in.l.google.com.",
+      "5 gmail-smtp-in.l.google.com.",
+      "10 alt1.gmail-smtp-in.l.google.com.",
+      "30 alt3.gmail-smtp-in.l.google.com.",
+    ])
+    assert message.answers.all({ _.timeToLive == 422 })
+  }
+
+  test "cloudflare.com HTTPS: the service form with alpn and both address hints" {
+    const message = messageOf cloudflareHttps()
+    const expected = RecordData.Https(
+      1,
+      DomainName.root,
+      [
+        ServiceParameter.Alpn(["h3", "h2"]),
+        ServiceParameter.Ipv4Hint([version4("104.16.132.229"), version4("104.16.133.229")]),
+        ServiceParameter.Ipv6Hint([version6("2606:4700::6810:84e5"), version6("2606:4700::6810:85e5")]),
+      ],
+    )
+    assert(message.answers.map({ _.data }).toList() == [expected])
+    assert(expected.show() == "1 . alpn=\"h3,h2\" ipv4hint=104.16.132.229,104.16.133.229 ipv6hint=2606:4700::6810:84e5,2606:4700::6810:85e5")
+  }
+
+  test "www.github.com A: the chain through a CNAME is followed" {
+    const message = messageOf githubAlias()
+    const name = nameOf "www.github.com"
+    assert(message.answers[0].data == RecordData.Cname(nameOf("github.com")))
+    assert(message.answersFor(name, RecordType.A).map({ _.show() }).toList() == ["github.com. 60 IN A 140.82.121.4"])
+    assert(message.answersFor(name, RecordType.Cname).length() == 1)
+    assert message.answersFor(name, RecordType.Aaaa).isEmpty()
+    assert(message.addresses(of: name) == [IpAddress.Version4(version4("140.82.121.4"))])
+  }
+
+  test "example.com SOA: two names and five numbers, one of them above 2 ** 31" {
+    const message = messageOf exampleStartOfAuthority()
+    const expected = RecordData.Soa(
+      nameOf("elliott.ns.cloudflare.com"),
+      nameOf("dns.cloudflare.com"),
+      2415729022,
+      10000,
+      2400,
+      604800,
+      1800,
+    )
+    assert(message.answers.map({ _.data }).toList() == [expected])
+    assert(message.answers[0].timeToLive == 1601)
+  }
+
+  test "google.com CAA: the flags, the tag and the value" {
+    const message = messageOf googleAuthorization()
+    assert(message.answers.map({ _.data }).toList() == [RecordData.Caa(0, "issue", bytesOfText("pki.goog"))])
+    assert(message.answers[0].show() == "google.com. 21600 IN CAA 0 issue \"pki.goog\"")
+  }
+
+  test "example.com AAAA: two IPv6 addresses" {
+    const message = messageOf exampleVersion6()
+    assert(message.addresses(of: nameOf("example.com")) == [
+      IpAddress.Version6(version6("2606:4700:10::6814:179a")),
+      IpAddress.Version6(version6("2606:4700:10::ac42:93f3")),
+    ])
+  }
+
+  test "_imaps._tcp.gmail.com SRV: a target that is not compressed" {
+    const message = messageOf gmailService()
+    assert(message.answers.map({ _.data }).toList() == [RecordData.Srv(5, 0, 993, nameOf("imap.gmail.com"))])
+    assert(message.questions[0].name.show() == "_imaps._tcp.gmail.com")
+  }
+
+  test "example.com TXT: two records of one string each" {
+    const message = messageOf exampleText()
+    assert(message.answers.map({ _.data.show() }).toList() == ["\"_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9\"", "\"v=spf1 -all\""])
+  }
+
+  test "every captured response encodes back to its own bytes" {
+    const captured = [
+      exampleAddress(),
+      gmailMailExchange(),
+      cloudflareHttps(),
+      githubAlias(),
+      exampleStartOfAuthority(),
+      googleAuthorization(),
+      exampleVersion6(),
+      gmailService(),
+      exampleText(),
+    ]
+    for bytes in captured {
+      assert(bytesOf(messageOf(bytes)) == bytes)
+    }
+  }
+
+  test "every prefix of a captured response is refused, and none of them panics" {
+    for bytes in [gmailMailExchange(), cloudflareHttps(), exampleStartOfAuthority()] {
+      for length in 0..bytes.length() {
+        assert refusalOf(bytes[0..length]).isSome()
+      }
+    }
+    assert(refusalOf(exampleAddress()[0..11]) == Some(DnsError.Truncated(10, "the header")))
+  }
+
+  test "every byte of a captured response changed to 0, 63, 192 or 255 answers a message or a refusal" {
+    for bytes in [gmailMailExchange(), cloudflareHttps(), githubAlias()] {
+      for index in 0..bytes.length() {
+        for replacement in [0, 63, 192, 255] {
+          var changed = bytes
+          changed[index] = UInt8.tryFrom(replacement) ?? 0
+          const outcome = Message.tryFrom changed
+          assert(outcome.isOk() || outcome.isError())
+        }
+      }
+    }
+  }
+}
+
+group "round trips" {
+  test "every record type is written and read back unchanged" {
+    const target = nameOf "target.example.test"
+    const cases = [
+      RecordData.A(version4("192.0.2.1")),
+      RecordData.Aaaa(version6("2001:db8::1")),
+      RecordData.Cname(target),
+      RecordData.Mx(10, target),
+      RecordData.Txt([bytesOfText("v=spf1 -all"), [], [0, 255, 34]]),
+      RecordData.Srv(1, 2, 5060, target),
+      RecordData.Ns(target),
+      RecordData.Soa(target, nameOf("hostmaster.example.test"), 4294967295, 7200, 900, 1209600, 3600),
+      RecordData.Ptr(target),
+      RecordData.Caa(128, "issuewild", bytesOfText(";")),
+      RecordData.Svcb(0, target, []),
+      RecordData.Svcb(
+        16,
+        target,
+        [
+          ServiceParameter.Mandatory([1, 3]),
+          ServiceParameter.Alpn(["h2"]),
+          ServiceParameter.NoDefaultAlpn,
+          ServiceParameter.Port(8443),
+          ServiceParameter.Ipv4Hint([version4("192.0.2.1")]),
+          ServiceParameter.EncryptedClientHello([0, 1, 2, 3]),
+          ServiceParameter.Ipv6Hint([version6("2001:db8::1")]),
+          ServiceParameter.Other(65000, bytesOfText("x")),
+        ],
+      ),
+      RecordData.Https(1, DomainName.root, [ServiceParameter.Alpn(["h3", "h2"])]),
+      RecordData.Unknown(RecordType.of(99), [1, 2, 3]),
+    ]
+    for data in cases {
+      const message = answering data
+      assert(Message.tryFrom(bytesOf(message)) == Ok(message))
+    }
+  }
+
+  test "every record type is written in the presentation format of a zone file" {
+    const target = nameOf "target.example.test"
+    assert(RecordData.Mx(10, target).show() == "10 target.example.test.")
+    assert(RecordData.Srv(1, 2, 5060, target).show() == "1 2 5060 target.example.test.")
+    assert(RecordData.Txt([bytesOfText("a \"b\""), [7]]).show() == "\"a \\\"b\\\"\" \"\\007\"")
+    assert(RecordData.Unknown(RecordType.of(99), [10, 0, 0, 1]).show() == "\\# 4 0a000001")
+    assert(RecordData.Svcb(1, target, [ServiceParameter.EncryptedClientHello([1, 2, 3, 4])]).show() == "1 target.example.test. ech=AQIDBA==")
+    assert(RecordType.of(99).show() == "TYPE99")
+    assert(RecordType.Other(28) == RecordType.Aaaa)
+  }
+
+  test "the header flags, the operation and every section survive a round trip" {
+    const name = nameOf "example.test"
+    const message = Message(
+      identifier: 65535,
+      kind: MessageKind.Response,
+      operation: Operation.Notify,
+      authoritative: true,
+      truncated: true,
+      recursionDesired: false,
+      recursionAvailable: true,
+      authenticated: true,
+      checkingDisabled: true,
+      responseCode: ResponseCode.Refused,
+      questions: [Question(name, RecordType.Soa, RecordClass.Chaos)],
+      answers: [Record(name, RecordClass.Chaos, 0, RecordData.Txt([bytesOfText("a")]))],
+      authority: [Record(name, timeToLive: 60, data: RecordData.Ns(nameOf("ns.example.test")))],
+      additional: [Record(nameOf("ns.example.test"), timeToLive: 60, data: RecordData.A(version4("192.0.2.53")))],
+    )
+    assert(Message.tryFrom(bytesOf(message)) == Ok(message))
+  }
+}
+
+group "compression" {
+  test "a name written a second time is a pointer to the first" {
+    const bytes = bytesOf answering(RecordData.Cname(nameOf("www.example.test")))
+    // The question's name starts at byte 12; the owner of the answer is a pointer to it, and so is the end of the target
+    assert(bytes[30..32] == [192, 12])
+    assert(bytes.length() == 12 + 18 + 12 + 6)
+  }
+
+  test "the names of SRV, SVCB and HTTPS data are never compressed" {
+    const name = nameOf "example.test"
+    const bytes = bytesOf answering(RecordData.Srv(0, 0, 1, name))
+    assert(bytes.length() == 12 + 18 + 12 + 6 + 14)
+  }
+
+  test "a pointer to itself is a loop" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([192, 12, 0, 1, 0, 1])
+    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(12)))
+  }
+
+  test "a label followed by a pointer back to it is a loop" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([1, 97, 192, 12, 0, 1, 0, 1])
+    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(14)))
+  }
+
+  test "two pointers that point at each other are a loop" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([192, 14, 192, 12, 0, 1, 0, 1])
+    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(12)))
+  }
+
+  test "a pointer past the end of the message is refused" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([193, 244, 0, 1, 0, 1])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidPointer(12, 500)))
+  }
+
+  test "a pointer cut in half is a truncation" {
+    var bytes = headerWithOneQuestion()
+    bytes.append 192
+    assert(refusalOf(bytes) == Some(DnsError.Truncated(12, "a question")))
+  }
+
+  test "the label types 01 and 10 are refused" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([65, 0, 0, 1, 0, 1])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(12, "the label type 64 is not defined (RFC 6891 section 5)")))
+  }
+
+  test "a name of pointers whose labels pass 255 bytes is refused" {
+    // Five labels of 63 bytes, each followed by a pointer to the next: no pointer repeats, and the fourth passes 255
+    var bytes = headerWithOneQuestion()
+    for index in 0..5 {
+      bytes.append 63
+      for _ in 0..63 {
+        bytes.append 97
+      }
+      if index < 4 {
+        bytes.append 192
+        bytes.append(UInt8.tryFrom(12 + 66 * (index + 1)) ?? 0)
+      }
+    }
+    bytes.append 0
+    assert "{refusalOf(bytes)}".contains("longer than 255 bytes")
+  }
+}
+
+group "records that do not fit their type" {
+  test "an A record of five bytes, and bytes after the data of a record" {
+    var bytes = headerWithOneQuestion()
+    bytes[7] = 1
+    bytes.appendAll([0, 0, 1, 0, 1])
+    bytes.appendAll([0, 0, 1, 0, 1, 0, 0, 0, 60, 0, 5, 1, 2, 3, 4, 5])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidRecord(RecordType.A, 28, "an A record holds 4 bytes, not 5")))
+    var trailing = headerWithOneQuestion()
+    trailing[7] = 1
+    trailing.appendAll([0, 0, 1, 0, 1])
+    trailing.appendAll([0, 0, 15, 0, 1, 0, 0, 0, 60, 0, 4, 0, 10, 0, 1])
+    assert(refusalOf(trailing) == Some(DnsError.InvalidRecord(RecordType.Mx, 28, "the data is 4 bytes long and ends after 3")))
+  }
+
+  test "a name in the data that runs past the data is refused" {
+    var bytes = headerWithOneQuestion()
+    bytes[7] = 1
+    bytes.appendAll([0, 0, 1, 0, 1])
+    bytes.appendAll([0, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 1, 97, 0])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidRecord(RecordType.Cname, 28, "the data ends inside the canonical name")))
+  }
+
+  test "service parameters out of order are refused" {
+    var bytes = headerWithOneQuestion()
+    bytes[7] = 1
+    bytes.appendAll([0, 0, 64, 0, 1])
+    // The port (key 3) and then the protocols (key 1)
+    bytes.appendAll([0, 0, 64, 0, 1, 0, 0, 0, 60, 0, 16, 0, 1, 0, 0, 3, 0, 2, 1, 187, 0, 1, 0, 3, 2, 104, 50])
+    assert "{refusalOf(bytes)}".contains("the parameter keys do not increase")
+  }
+
+  test "bytes after the last record are refused" {
+    var bytes = headerWithOneQuestion()
+    bytes.appendAll([0, 0, 1, 0, 1, 0])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(17, "the message is 18 bytes long and ends after 17")))
+  }
+}
+
+group "EDNS0" {
+  test "the DO bit, the version, the options and an extended response code survive a round trip" {
+    const message = Message(
+      identifier: 1,
+      kind: MessageKind.Response,
+      responseCode: ResponseCode.BadVersion,
+      edns: Some(Edns(payloadSize: 4096, version: 0, dnssecOk: true, options: [EdnsOption(10, [1, 2, 3, 4, 5, 6, 7, 8])])),
+    )
+    const bytes = bytesOf message
+    // The header holds the low four bits of 16, which are 0; the OPT record the high eight, which are 1
+    assert(Int.from(bytes[3]) & 15 == 0)
+    assert(Message.tryFrom(bytes) == Ok(message))
+  }
+
+  test "a second OPT record and an OPT record in the answer section are refused" {
+    var bytes: Bytes = [0, 1, 129, 128, 0, 0, 0, 0, 0, 0, 0, 2]
+    bytes.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
+    bytes.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
+    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(34, "a second OPT record (RFC 6891 section 6.1.1)")))
+    var answered: Bytes = [0, 1, 129, 128, 0, 0, 0, 1, 0, 0, 0, 0]
+    answered.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
+    assert(refusalOf(answered) == Some(DnsError.InvalidMessage(23, "an OPT record belongs to the additional section (RFC 6891)")))
+  }
+}
+
+group "the encoder's refusals" {
+  test "a text string of 256 bytes, a port of 70000, an empty CAA tag and a duplicate parameter" {
+    var long: Bytes = []
+    for _ in 0..256 {
+      long.append 97
+    }
+    const target = nameOf "example.test"
+    const refused = [
+      RecordData.Txt([long]),
+      RecordData.Srv(0, 0, 70000, target),
+      RecordData.Caa(0, "", []),
+      RecordData.Caa(0, "is sue", []),
+      RecordData.Https(1, target, [ServiceParameter.Port(1), ServiceParameter.Port(2)]),
+      RecordData.Https(1, target, [ServiceParameter.Alpn([])]),
+      RecordData.Unknown(RecordType.Opt, []),
+    ]
+    for data in refused {
+      assert answering(data).encoded().isError()
+    }
+  }
+
+  test "a response code above 15 needs an EDNS0 record, and the identifier has 16 bits" {
+    assert Message(responseCode: ResponseCode.BadCookie).encoded().isError()
+    assert Message(identifier: 65536).encoded().isError()
+    assert Message(answers: [Record(nameOf("a.test"), timeToLive: -1, data: RecordData.A(version4("192.0.2.1")))]).encoded().isError()
+  }
+}
+
+group "queries and responses" {
+  test "a query is a header, one question and an EDNS0 record that offers 1232 bytes" {
+    const bytes = query nameOf("example.com"), RecordType.A, 4660
+    const expected: Bytes = [
+      18, 52, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 0, 0, 41,
+      4, 208, 0, 0, 0, 0, 0, 0,
+    ]
+    assert(bytes == expected)
+  }
+
+  test "a query without recursion, with the DO bit, and an identifier taken modulo 65536" {
+    const message = messageOf query(nameOf("example.com"), RecordType.Https, 65536 + 5, recursionDesired: false, dnssecOk: true)
+    assert(message.identifier == 5)
+    assert(!message.recursionDesired)
+    assert(message.edns == Some(Edns(payloadSize: 1232, dnssecOk: true)))
+    assert(message.questions == [Question(nameOf("example.com"), RecordType.Https)])
+  }
+
+  test "the captured response is the response to its query" {
+    const asked = query nameOf("example.com"), RecordType.A, 4660
+    match readResponse(exampleAddress(), asked) {
+      Ok(message) => assert(message.answers.length() == 2)
+      Fail(_) => assert false
+    }
+    const upper = query nameOf("EXAMPLE.COM"), RecordType.A, 4660
+    assert readResponse(exampleAddress(), upper).isOk()
+  }
+
+  test "a response with another identifier, another question, or a query is refused" {
+    const other = query nameOf("example.com"), RecordType.A, 4661
+    assert(readResponse(exampleAddress(), other) == Fail(DnsError.UnexpectedResponse("the identifier is 4660, and the query's is 4661")))
+    const otherName = query nameOf("example.org"), RecordType.A, 4660
+    assert readResponse(exampleAddress(), otherName).isError()
+    const otherType = query nameOf("example.com"), RecordType.Aaaa, 4660
+    assert readResponse(exampleAddress(), otherType).isError()
+    const asked = query nameOf("example.com"), RecordType.A, 4660
+    assert readResponse(asked, asked).isError()
+  }
+}
+
+// --- The captured bytes ----------------------------------------------------------------------------------------------
+
+/** The response of 8.8.8.8 to `gmail.com type 15`, captured on 2026-09-26. */
+fn gmailMailExchange(): Bytes {
+  [
+    35, 69, 129, 128, 0, 1, 0, 5, 0, 0, 0, 1, 5, 103, 109, 97, 105, 108, 3, 99, 111, 109, 0, 0, 15, 0, 1, 192, 12, 0,
+    15, 0, 1, 0, 0, 1, 166, 0, 32, 0, 40, 4, 97, 108, 116, 52, 13, 103, 109, 97, 105, 108, 45, 115, 109, 116, 112, 45,
+    105, 110, 1, 108, 6, 103, 111, 111, 103, 108, 101, 192, 18, 192, 12, 0, 15, 0, 1, 0, 0, 1, 166, 0, 9, 0, 20, 4, 97,
+    108, 116, 50, 192, 46, 192, 12, 0, 15, 0, 1, 0, 0, 1, 166, 0, 4, 0, 5, 192, 46, 192, 12, 0, 15, 0, 1, 0, 0, 1, 166,
+    0, 9, 0, 10, 4, 97, 108, 116, 49, 192, 46, 192, 12, 0, 15, 0, 1, 0, 0, 1, 166, 0, 9, 0, 30, 4, 97, 108, 116, 51,
+    192, 46, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `example.com type 6`, captured on 2026-09-26. */
+fn exampleStartOfAuthority(): Bytes {
+  [
+    86, 120, 129, 128, 0, 1, 0, 1, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 6, 0, 1, 192,
+    12, 0, 6, 0, 1, 0, 0, 6, 65, 0, 50, 7, 101, 108, 108, 105, 111, 116, 116, 2, 110, 115, 10, 99, 108, 111, 117, 100,
+    102, 108, 97, 114, 101, 192, 20, 3, 100, 110, 115, 192, 52, 143, 253, 25, 126, 0, 0, 39, 16, 0, 0, 9, 96, 0, 9, 58,
+    128, 0, 0, 7, 8, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `example.com type 1`, captured on 2026-09-26. */
+fn exampleAddress(): Bytes {
+  [
+    18, 52, 129, 128, 0, 1, 0, 2, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 1, 0, 1, 192,
+    12, 0, 1, 0, 1, 0, 0, 0, 165, 0, 4, 104, 20, 23, 154, 192, 12, 0, 1, 0, 1, 0, 0, 0, 165, 0, 4, 172, 66, 147, 243, 0,
+    0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `google.com type 257`, captured on 2026-09-26. */
+fn googleAuthorization(): Bytes {
+  [
+    103, 137, 129, 128, 0, 1, 0, 1, 0, 0, 0, 1, 6, 103, 111, 111, 103, 108, 101, 3, 99, 111, 109, 0, 1, 1, 0, 1, 192,
+    12, 1, 1, 0, 1, 0, 0, 84, 96, 0, 15, 0, 5, 105, 115, 115, 117, 101, 112, 107, 105, 46, 103, 111, 111, 103, 0, 0, 41,
+    2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `cloudflare.com type 65`, captured on 2026-09-26. */
+fn cloudflareHttps(): Bytes {
+  [
+    52, 86, 129, 128, 0, 1, 0, 1, 0, 0, 0, 1, 10, 99, 108, 111, 117, 100, 102, 108, 97, 114, 101, 3, 99, 111, 109, 0, 0,
+    65, 0, 1, 192, 12, 0, 65, 0, 1, 0, 0, 1, 44, 0, 61, 0, 1, 0, 0, 1, 0, 6, 2, 104, 51, 2, 104, 50, 0, 4, 0, 8, 104,
+    16, 132, 229, 104, 16, 133, 229, 0, 6, 0, 32, 38, 6, 71, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 16, 132, 229, 38, 6, 71, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 104, 16, 133, 229, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `example.com type 16`, captured on 2026-09-26. */
+fn exampleText(): Bytes {
+  [
+    154, 188, 129, 128, 0, 1, 0, 2, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 16, 0, 1,
+    192, 12, 0, 16, 0, 1, 0, 0, 1, 44, 0, 33, 32, 95, 107, 50, 110, 49, 121, 52, 118, 119, 51, 113, 116, 98, 52, 115,
+    107, 100, 120, 57, 101, 55, 100, 120, 116, 57, 55, 113, 114, 109, 109, 113, 57, 192, 12, 0, 16, 0, 1, 0, 0, 1, 44,
+    0, 12, 11, 118, 61, 115, 112, 102, 49, 32, 45, 97, 108, 108, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `_imaps._tcp.gmail.com type 33`, captured on 2026-09-26. */
+fn gmailService(): Bytes {
+  [
+    137, 171, 129, 128, 0, 1, 0, 1, 0, 0, 0, 1, 6, 95, 105, 109, 97, 112, 115, 4, 95, 116, 99, 112, 5, 103, 109, 97,
+    105, 108, 3, 99, 111, 109, 0, 0, 33, 0, 1, 192, 12, 0, 33, 0, 1, 0, 0, 84, 96, 0, 22, 0, 5, 0, 0, 3, 225, 4, 105,
+    109, 97, 112, 5, 103, 109, 97, 105, 108, 3, 99, 111, 109, 0, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `example.com type 28`, captured on 2026-09-26. */
+fn exampleVersion6(): Bytes {
+  [
+    120, 154, 129, 128, 0, 1, 0, 2, 0, 0, 0, 1, 7, 101, 120, 97, 109, 112, 108, 101, 3, 99, 111, 109, 0, 0, 28, 0, 1,
+    192, 12, 0, 28, 0, 1, 0, 0, 1, 44, 0, 16, 38, 6, 71, 0, 0, 16, 0, 0, 0, 0, 0, 0, 104, 20, 23, 154, 192, 12, 0, 28,
+    0, 1, 0, 0, 1, 44, 0, 16, 38, 6, 71, 0, 0, 16, 0, 0, 0, 0, 0, 0, 172, 66, 147, 243, 0, 0, 41, 2, 0, 0, 0, 0, 0, 0,
+    0,
+  ]
+}
+
+/** The response of 8.8.8.8 to `www.github.com type 1`, captured on 2026-09-26. */
+fn githubAlias(): Bytes {
+  [
+    69, 103, 129, 128, 0, 1, 0, 2, 0, 0, 0, 1, 3, 119, 119, 119, 6, 103, 105, 116, 104, 117, 98, 3, 99, 111, 109, 0, 0,
+    1, 0, 1, 192, 12, 0, 5, 0, 1, 0, 0, 14, 11, 0, 2, 192, 16, 192, 16, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 140, 82, 121, 4,
+    0, 0, 41, 2, 0, 0, 0, 0, 0, 0, 0,
+  ]
+}
+

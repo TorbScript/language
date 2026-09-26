@@ -1,0 +1,43 @@
+/**
+ * `DnsError`: why a text is not a domain name, why bytes are not a DNS message, why a message cannot be written, and
+ * why a message is not the response to a query. Decoding bytes that came from the network answers one of these and
+ * never panics, whatever the bytes are.
+ */
+
+use RecordType from "./codes"
+
+/** Why a name, a message or a response was refused. Every case says where, so a log line can be checked by hand. */
+public type DnsError with Show, Error {
+  /** Text or labels that are not a domain name, and why: a label longer than 63 bytes, a character IDNA refuses. */
+  case InvalidName(name: String, reason: String)
+  /** The message ends before `part`, which starts at byte `offset`, is complete. */
+  case Truncated(offset: Int, part: String)
+  /** A compression pointer at byte `offset` points at byte `target`, which is outside the message. */
+  case InvalidPointer(offset: Int, target: Int)
+  /** A compression pointer at byte `offset` leads back to a pointer that was already followed. */
+  case PointerLoop(offset: Int)
+  /** The data of a record at byte `offset` does not fit its type, and why. */
+  case InvalidRecord(recordType: RecordType, offset: Int, reason: String)
+  /** Something else about the message at byte `offset`: a label type, a second OPT record, bytes after the end. */
+  case InvalidMessage(offset: Int, reason: String)
+  /** A message that the wire format cannot carry, and why: a text string of 300 bytes, a port of 70000. */
+  case Unencodable(reason: String)
+  /** A well-formed message that is not the response to the query it was read against, and why. */
+  case UnexpectedResponse(reason: String)
+
+  /** One line that names what was refused and where. */
+  fn show(): String {
+    match self {
+      .InvalidName(name, reason) => "`{name}` is not a domain name: {reason}"
+      .Truncated(offset, part) => "the message ends inside {part}, which starts at byte {offset}"
+      .InvalidPointer(offset, target) => {
+        "the compression pointer at byte {offset} points at byte {target}, outside the message"
+      }
+      .PointerLoop(offset) => "the compression pointer at byte {offset} leads back to a pointer already followed"
+      .InvalidRecord(recordType, offset, reason) => "the {recordType} record at byte {offset} is broken: {reason}"
+      .InvalidMessage(offset, reason) => "not a DNS message at byte {offset}: {reason}"
+      .Unencodable(reason) => "the message cannot be encoded: {reason}"
+      .UnexpectedResponse(reason) => "not the response to the query: {reason}"
+    }
+  }
+}

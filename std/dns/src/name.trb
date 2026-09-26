@@ -1,0 +1,551 @@
+/**
+ * [DomainName]: a name of the DNS as a sequence of labels, read from what a person writes (IDNA, docs/design/DNS.md
+ * section 3), from the presentation format of a zone file, or from the labels of a message - and compared the way the
+ * DNS compares names, without regard to the case of ASCII letters (RFC 4343).
+ */
+
+use DnsError from "./error"
+use punycodeEncoded, punycodeDecoded from "./punycode"
+
+/** The longest label, in bytes (RFC 1035 section 2.3.4). */
+const longestLabel = 63
+/** The longest name on the wire, in bytes: every label with its length byte, and the zero byte of the root. */
+const longestName = 255
+
+/**
+ * A domain name: its labels, most specific first, each one to 63 bytes, 255 bytes at most on the wire. The root is
+ * the name without labels. A label may hold any byte (RFC 2181 section 11); [DomainName.tryFrom] builds only host
+ * names, whose labels are letters, digits and hyphens, with Unicode written as A-labels.
+ *
+ * Two names are equal when their labels are equal with the ASCII letters compared without their case, and the hash
+ * agrees (RFC 4343). The case a name was written in is kept, and `show()` writes it back.
+ *
+ * # Examples
+ *
+ *     const name = DomainName.tryFrom("Bücher.Example")?
+ *     print name
+ *     print name.unicodeText()
+ *
+ * # Related
+ *
+ * - [DnsError.InvalidName] - why a text is not one.
+ */
+public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
+  /** The labels, most specific first, without the empty label of the root. */
+  private value: List<Bytes>
+
+  /** The root, `.`: the name without labels. */
+  static root = DomainName([])
+
+  /**
+   * A host name as a person writes it, after the lookup processing of UTS #46 as far as this package covers it
+   * (docs/design/DNS.md section 3): Unicode is mapped, lower cased and written as A-labels, so `Bücher.example` and
+   * `xn--bcher-kva.example` are one name, shown as the second. One trailing dot is allowed and changes nothing, and
+   * `.` is the root.
+   *
+   * A label is letters, digits and hyphens and does not start or end with a hyphen (RFC 1123 section 2.1); a label
+   * that starts with `xn--` has to be an A-label whose U-label this package would have produced itself. An underscore,
+   * as in `_sip._tcp.example.test`, and a `*` are not part of a host name: [DomainName.ofPresentation] reads those.
+   *
+   * # Errors
+   *
+   * - [DnsError.InvalidName] for an empty text, an empty label, a character that is neither a letter, a digit nor a
+   *   hyphen, a character this package cannot map, a broken A-label, a label longer than 63 bytes as an A-label, and a
+   *   name longer than 255 bytes on the wire.
+   */
+  static fn tryFrom(text: String): Result<Self, DnsError> {
+    if text.isEmpty() {
+      return Fail DnsError.InvalidName(text, "an empty text is no name - the root is `.`")
+    }
+    var points: List<Int> = []
+    for character in text.chars() {
+      if const Some(point) = mappedPoint(Int.from(character)) {
+        points.append point
+      }
+    }
+    var pieces: List<List<Int>> = []
+    var current: List<Int> = []
+    for point in points {
+      if point == 46 {
+        pieces.append current
+        current = []
+      } else {
+        current.append point
+      }
+    }
+    pieces.append current
+    if pieces.length() == 2 && pieces[0].isEmpty() && pieces[1].isEmpty() {
+      return Ok DomainName.root
+    }
+    if pieces.length() > 1 && pieces[pieces.length() - 1].isEmpty() {
+      pieces = pieces[0..(pieces.length() - 1)]
+    }
+    var labels: List<Bytes> = []
+    for piece in pieces {
+      labels.append(asciiLabel(text, piece)?)
+    }
+    checkedLength(text, labels)?
+    Ok DomainName(labels)
+  }
+
+  /**
+   * The presentation format of RFC 1035 section 5.1: labels separated by dots, any byte in a label, `\.` for a dot
+   * and `\\` for a backslash inside of one, and `\DDD` for the byte of the decimal number `DDD`. No IDNA and no change
+   * of case: this is the form `show()` writes, and the one for names that are not host names -
+   * `_sip._tcp.example.test`, `*.example.test`.
+   *
+   * # Errors
+   *
+   * - [DnsError.InvalidName] for an empty text, an empty label, a character that is not ASCII (a Unicode name is
+   *   [DomainName.tryFrom]'s), a broken escape, a label longer than 63 bytes and a name longer than 255 bytes.
+   */
+  static fn ofPresentation(text: String): Result<Self, DnsError> {
+    if text.isEmpty() {
+      return Fail DnsError.InvalidName(text, "an empty text is no name - the root is `.`")
+    }
+    if text == "." {
+      return Ok DomainName.root
+    }
+    const codes = text.bytes().map({ Int.from _ }).toList()
+    var labels: List<Bytes> = []
+    var current: Bytes = []
+    var index = 0
+    while index < codes.length() {
+      const code = codes[index]
+      if code >= 128 {
+        return Fail DnsError.InvalidName(text, "the presentation format is ASCII - `DomainName.tryFrom` reads Unicode")
+      }
+      if code == 46 {
+        if current.isEmpty() {
+          return Fail DnsError.InvalidName(text, "an empty label")
+        }
+        labels.append current
+        current = []
+        index = index + 1
+        continue
+      }
+      if code != 92 {
+        current.append byteOf(code)
+        index = index + 1
+        continue
+      }
+      if index + 1 >= codes.length() {
+        return Fail DnsError.InvalidName(text, "a `\\` at the end escapes nothing")
+      }
+      const next = codes[index + 1]
+      if next < 48 || next > 57 {
+        current.append byteOf(next)
+        index = index + 2
+        continue
+      }
+      if index + 3 >= codes.length() {
+        return Fail DnsError.InvalidName(text, "`\\DDD` needs three decimal digits")
+      }
+      var number = 0
+      for offset in 1..4 {
+        const digit = codes[index + offset] - 48
+        if digit < 0 || digit > 9 {
+          return Fail DnsError.InvalidName(text, "`\\DDD` needs three decimal digits")
+        }
+        number = number * 10 + digit
+      }
+      if number > 255 {
+        return Fail DnsError.InvalidName(text, "`\\{number}` is not a byte")
+      }
+      current.append byteOf(number)
+      index = index + 4
+    }
+    if !current.isEmpty() {
+      labels.append current
+    }
+    for label in labels {
+      if label.length() > longestLabel {
+        return Fail DnsError.InvalidName(text, "a label of {label.length()} bytes, and a label has at most 63")
+      }
+    }
+    checkedLength(text, labels)?
+    Ok DomainName(labels)
+  }
+
+  /**
+   * The name of these labels, most specific first, each any bytes: what a message holds. The root is `[]`.
+   *
+   * # Errors
+   *
+   * - [DnsError.InvalidName] for an empty label, a label longer than 63 bytes and a name longer than 255 bytes.
+   */
+  static fn ofLabels(labels: List<Bytes>): Result<Self, DnsError> {
+    const shown = presentation labels
+    for label in labels {
+      if label.isEmpty() {
+        return Fail DnsError.InvalidName(shown, "an empty label - the root is the name without labels")
+      }
+      if label.length() > longestLabel {
+        return Fail DnsError.InvalidName(shown, "a label of {label.length()} bytes, and a label has at most 63")
+      }
+    }
+    checkedLength(shown, labels)?
+    Ok DomainName(labels)
+  }
+
+  /** The labels, most specific first, as bytes. The root has none. */
+  fn labels(): List<Bytes> {
+    value
+  }
+
+  /** How many labels the name has: 2 for `example.test`, 0 for the root. */
+  fn labelCount(): Int {
+    value.length()
+  }
+
+  /** The root, `.`. `root()` would collide with [DomainName.root]. */
+  fn isRoot(): Bool {
+    value.isEmpty()
+  }
+
+  /**
+   * Every label is letters, digits and hyphens and none starts or ends with a hyphen (RFC 1123 section 2.1): what
+   * [DomainName.tryFrom] builds. The root is one.
+   */
+  fn isHostName(): Bool {
+    value.all isHostLabel
+  }
+
+  /** The name without its first label: `example.test` for `www.example.test`, and `None` for the root. */
+  fn parent(): Self? {
+    if value.isEmpty() {
+      return None
+    }
+    Some DomainName(value[1..])
+  }
+
+  /** The name is `of` or lies below it: `www.example.test` is a subdomain of `example.test` and of itself. */
+  fn isSubdomain(of: DomainName): Bool {
+    const skipped = value.length() - of.value.length()
+    if skipped < 0 {
+      return false
+    }
+    for (index, label) in of.value.indexed() {
+      if !sameLabel(value[skipped + index], label) {
+        return false
+      }
+    }
+    true
+  }
+
+  /** The bytes of the name on the wire without compression: each label and its length, and the zero of the root. */
+  fn wireLength(): Int {
+    wireLengthOf value
+  }
+
+  /**
+   * The presentation format, in A-labels and without the dot of the root: `xn--bcher-kva.example`, and `.` for the
+   * root. A dot or a backslash inside of a label is escaped with a backslash, and a byte that is not printable ASCII is
+   * written `\DDD`, so [DomainName.ofPresentation] reads every shown name back.
+   */
+  fn show(): String {
+    if value.isEmpty() {
+      return "."
+    }
+    presentation value
+  }
+
+  /**
+   * The name for a person to read: every A-label as the U-label it stands for, `bücher.example`, and every other label
+   * as `show()` writes it. Where a label that starts with `xn--` is no valid A-label, it stays as it is.
+   *
+   * # Pitfalls
+   *
+   * A U-label is where homographs live - `аpple.test` with a Cyrillic `а`. A program that shows names to a person
+   * decides under a policy of its own when to show this form, as browsers do; `show()` is the form for a log.
+   */
+  fn unicodeText(): String {
+    if value.isEmpty() {
+      return "."
+    }
+    value.map(unicodeLabel).joined(separator: ".")
+  }
+
+  /** Label by label, with the ASCII letters compared without their case (RFC 4343). */
+  fn equals(other: DomainName): Bool {
+    if value.length() != other.value.length() {
+      return false
+    }
+    for (index, label) in value.indexed() {
+      if !sameLabel(label, other.value[index]) {
+        return false
+      }
+    }
+    true
+  }
+
+  /** The hash of the lower-cased presentation, so two names that are equal hash alike. */
+  fn hash(): Int {
+    presentation(value.map(lowerCased).toList()).hash()
+  }
+}
+
+/** The bytes a name of these labels takes on the wire. */
+fn wireLengthOf(labels: List<Bytes>): Int {
+  var length = 1
+  for label in labels {
+    length = length + label.length() + 1
+  }
+  length
+}
+
+/** The labels, or the refusal of a name longer than 255 bytes on the wire. */
+fn checkedLength(text: String, labels: List<Bytes>): Result<Void, DnsError> {
+  const length = wireLengthOf labels
+  if length > longestName {
+    return Fail DnsError.InvalidName(text, "the name takes {length} bytes on the wire, and a name has at most 255")
+  }
+  Ok void
+}
+
+/** The byte of a number that is known to be one. */
+fn byteOf(code: Int): UInt8 {
+  UInt8.tryFrom(code & 255) ?? 0
+}
+
+/** The character of a code point that is known to be one. */
+fn characterOf(code: Int): Char {
+  Char.tryFrom(code) ?? '?'
+}
+
+/** A byte with an upper-case ASCII letter turned into its lower case, and every other byte as it is. */
+fn lowerCasedByte(byte: UInt8): UInt8 {
+  const code = Int.from byte
+  if code >= 65 && code <= 90 {
+    return byteOf(code + 32)
+  }
+  byte
+}
+
+/** A label with its ASCII letters in lower case. */
+fn lowerCased(label: Bytes): Bytes {
+  label.map(lowerCasedByte).toList()
+}
+
+/** Two labels are the same with the ASCII letters compared without their case. */
+fn sameLabel(first: Bytes, second: Bytes): Bool {
+  if first.length() != second.length() {
+    return false
+  }
+  for (index, byte) in first.indexed() {
+    if lowerCasedByte(byte) != lowerCasedByte(second[index]) {
+      return false
+    }
+  }
+  true
+}
+
+/** The labels in the presentation format, separated by dots, with the escapes of RFC 1035 section 5.1. */
+public fn presentation(labels: List<Bytes>): String {
+  labels.map(labelText).joined(separator: ".")
+}
+
+/** One label in the presentation format. */
+fn labelText(label: Bytes): String {
+  var characters: List<Char> = []
+  for byte in label {
+    const code = Int.from byte
+    if code == 46 || code == 92 {
+      characters.append '\\'
+      characters.append characterOf(code)
+    } else if code > 32 && code < 127 {
+      characters.append characterOf(code)
+    } else {
+      characters.append '\\'
+      characters.append characterOf(48 + code / 100)
+      characters.append characterOf(48 + code / 10 % 10)
+      characters.append characterOf(48 + code % 10)
+    }
+  }
+  String.from characters
+}
+
+/** A letter, a digit or a hyphen, as an ASCII code. */
+fn isLetterDigitHyphen(code: Int): Bool {
+  (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || (code >= 48 && code <= 57) || code == 45
+}
+
+/** A label of a host name: letters, digits and hyphens, not starting or ending with a hyphen. */
+fn isHostLabel(label: Bytes): Bool {
+  if label.isEmpty() {
+    return false
+  }
+  if Int.from(label[0]) == 45 || Int.from(label[label.length() - 1]) == 45 {
+    return false
+  }
+  label.all({ isLetterDigitHyphen Int.from(_) })
+}
+
+/** The label starts with `xn--`, in either case: the prefix of an A-label (RFC 5890 section 2.3.2.1). */
+fn hasAcePrefix(label: Bytes): Bool {
+  label.length() > 4
+    && lowerCasedByte(label[0]) == byteOf(120)
+    && lowerCasedByte(label[1]) == byteOf(110)
+    && Int.from(label[2]) == 45
+    && Int.from(label[3]) == 45
+}
+
+/** A label for a person: the U-label of an A-label that decodes to one this package would encode, else the label. */
+fn unicodeLabel(label: Bytes): String {
+  if isHostLabel(label) && hasAcePrefix(label) {
+    const rest = String.from(lowerCased(label[4..]).map({ characterOf Int.from(_) }))
+    if const Some(points) = validUnicodeLabel(rest) {
+      return String.from points.map(characterOf)
+    }
+  }
+  labelText label
+}
+
+/**
+ * The code points of the A-label whose part after `xn--` is `rest`, where it is one this package would have produced
+ * from them: Punycode that decodes, holds a character that is not ASCII, has nothing that the mapping would change or
+ * that it refuses, does not start or end with a hyphen, and encodes back to `rest`.
+ */
+fn validUnicodeLabel(rest: String): List<Int>? {
+  const points = punycodeDecoded(rest)?
+  if points.isEmpty() || points.all({ _ < 128 }) {
+    return None
+  }
+  if points[0] == 45 || points[points.length() - 1] == 45 {
+    return None
+  }
+  for point in points {
+    if mappedPoint(point) != Some(point) || refusal(point).isSome() || point == 46 {
+      return None
+    }
+  }
+  if punycodeEncoded(points) != Some(rest) {
+    return None
+  }
+  Some points
+}
+
+/**
+ * The ASCII label of one label of code points after the mapping, checked: an LDH label, an A-label that is valid, or
+ * the A-label of a Unicode label.
+ */
+fn asciiLabel(text: String, points: List<Int>): Result<Bytes, DnsError> {
+  if points.isEmpty() {
+    return Fail DnsError.InvalidName(text, "an empty label")
+  }
+  for point in points {
+    if const Some(reason) = refusal(point) {
+      return Fail DnsError.InvalidName(text, reason)
+    }
+  }
+  if points[0] == 45 || points[points.length() - 1] == 45 {
+    return Fail DnsError.InvalidName(text, "a label starts or ends with a hyphen (RFC 1123)")
+  }
+  var label: Bytes = []
+  if points.all({ _ < 128 }) {
+    label = points.map(byteOf).toList()
+    if hasAcePrefix(label) {
+      const rest = String.from(label[4..].map({ characterOf Int.from(_) }))
+      if validUnicodeLabel(rest).isNone() {
+        return Fail DnsError.InvalidName(text, "`xn--{rest}` is no A-label this package would have written")
+      }
+    }
+  } else {
+    match punycodeEncoded(points) {
+      Some(encoded) => {
+        label = "xn--{encoded}".bytes().toList()
+      }
+      None => {
+        return Fail DnsError.InvalidName(text, "a label too long for Punycode")
+      }
+    }
+  }
+  if label.length() > longestLabel {
+    return Fail(DnsError.InvalidName(
+      text,
+      "the label `{labelText(label)}` is {label.length()} bytes long, and a label has at most 63",
+    ))
+  }
+  Ok label
+}
+
+/**
+ * The mapping step of UTS #46 section 4 for one code point, as far as this package covers it (docs/design/DNS.md
+ * section 3): `None` where the code point is ignored, and otherwise what it becomes - a full stop for the three other
+ * dots of East Asian text, the ASCII character for a fullwidth one, the lower case of `Char.toLowerCase`, and the code
+ * point itself for everything else.
+ */
+fn mappedPoint(point: Int): Int? {
+  if point == 12290 || point == 65294 || point == 65377 {
+    return Some 46
+  }
+  if isIgnored(point) {
+    return None
+  }
+  var mapped = point
+  if point >= 65281 && point <= 65374 {
+    mapped = point - 65248
+  }
+  Some Int.from(characterOf(mapped).toLowerCase())
+}
+
+/** The code points UTS #46 removes: the soft hyphen, invisible characters but ZWJ and ZWNJ, variation selectors. */
+fn isIgnored(point: Int): Bool {
+  point == 173
+    || point == 847
+    || (point >= 6155 && point <= 6157)
+    || point == 6159
+    || point == 8203
+    || point == 8288
+    || point == 65279
+    || (point >= 65024 && point <= 65039)
+    || (point >= 113824 && point <= 113827)
+    || (point >= 917760 && point <= 917999)
+}
+
+/**
+ * Why a code point after the mapping cannot be part of a host name, or `None` where it can: an ASCII character that is
+ * not a letter, a digit or a hyphen (the STD3 rules), and the code points outside ASCII this package refuses because it
+ * cannot map or check them (docs/design/DNS.md section 3).
+ */
+fn refusal(point: Int): String? {
+  if point < 128 {
+    if isLetterDigitHyphen(point) {
+      return None
+    }
+    const shown = characterOf(point).showNested()
+    return Some "`{shown}` is not a letter, digit or hyphen - `DomainName.ofPresentation` reads any byte"
+  }
+  const shown = "U+{hexadecimal(point)}"
+  if point < 192 || point == 215 || point == 247 {
+    return Some "{shown} is a control character, a space or a symbol of Latin-1, which a host name cannot hold"
+  }
+  if point == 8204 || point == 8205 {
+    return Some "{shown} is a joiner, whose context rules (CONTEXTJ) this package does not check"
+  }
+  if point == 8206 || point == 8207 || (point >= 8234 && point <= 8238) || (point >= 8294 && point <= 8297) {
+    return Some "{shown} is a bidirectional formatting character"
+  }
+  if point == 8232 || point == 8233 {
+    return Some "{shown} is a line or paragraph separator"
+  }
+  if (point >= 57344 && point <= 63743) || point >= 983040 {
+    return Some "{shown} is a private use character"
+  }
+  if (point >= 64976 && point <= 65007) || point & 65534 == 65534 || (point >= 65520 && point <= 65535) {
+    return Some "{shown} is a noncharacter or a special"
+  }
+  None
+}
+
+/** A code point in upper-case hexadecimal, at least four digits: `00E9`. */
+fn hexadecimal(point: Int): String {
+  const digits = "0123456789ABCDEF".chars().toList()
+  var characters: List<Char> = []
+  var rest = point
+  while rest > 0 || characters.length() < 4 {
+    characters.insert 0, digits[rest & 15]
+    rest = rest >> 4
+  }
+  String.from characters
+}

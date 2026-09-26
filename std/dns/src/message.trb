@@ -1,0 +1,194 @@
+/**
+ * [Message]: a DNS message of RFC 1035 section 4 as a value - the header with its flags, the four sections, and the
+ * EDNS0 record of RFC 6891 taken out of the additional section into [Edns]. `Message.tryFrom(bytes)` reads one and
+ * `encoded()` writes one; the codec is in `./wire`.
+ */
+
+use IpAddress from "std/ip"
+use Operation, RecordClass, RecordType, ResponseCode from "./codes"
+use DnsError from "./error"
+use DomainName from "./name"
+use Record, RecordData, absolute from "./record"
+use decodedMessage, encodedMessage from "./wire"
+
+/** A question: which records of which name a message asks for (RFC 1035 section 4.1.2). */
+public type Question with Show, Equals, Hash {
+  /** The name asked about. */
+  name: DomainName
+  /** The type of the records asked for; `Any` asks for all of them. */
+  recordType: RecordType
+  /** `Internet` everywhere but in a Chaosnet query. */
+  recordClass: RecordClass = RecordClass.Internet
+
+  /** A line of a zone file without a time to live: `example.test. IN A`. */
+  fn show(): String {
+    "{absolute(name)} {recordClass} {recordType}"
+  }
+}
+
+/** QR, the first bit of the header: whether a message asks or answers (RFC 1035 section 4.1.1). */
+public type MessageKind with Show, Equals, Hash {
+  /** A query, 0. */
+  case Query
+  /** A response, 1. */
+  case Response
+}
+
+/** One option of the EDNS0 record (RFC 6891 section 6.1.2): its code and its data, as the bytes they are. */
+public type EdnsOption with Show, Equals, Hash {
+  /** The option code: 10 is a cookie (RFC 7873), 12 is padding (RFC 7830). */
+  code: Int
+  /** The data of the option. */
+  data: Bytes
+}
+
+/**
+ * The EDNS0 record (RFC 6891): what a client or a server says about itself beyond RFC 1035. A message has one or none,
+ * and it is not part of [Message.additional].
+ */
+public type Edns with Show, Equals, Hash {
+  /**
+   * The largest UDP payload the sender can receive, in bytes. 1232 avoids fragmentation on every path (the DNS Flag
+   * Day of 2020), and a value below 512 is read as 512 by the receiver.
+   */
+  payloadSize: Int = 1232
+  /** The version of EDNS; 0 is the only one there is. */
+  version: Int = 0
+  /** The DO bit: the sender wants DNSSEC records in the answer (RFC 3225). */
+  dnssecOk: Bool = false
+  /** The options, in order. */
+  options: List<EdnsOption> = []
+}
+
+/**
+ * A DNS message: a query or a response, as its `kind` says. Every field is plain data, so a message is built with the
+ * constructor and read field by field; the flags are the bits of the header (RFC 1035 section 4.1.1, RFC 4035 section
+ * 3.2 for the last two), and [Message.responseCode] holds all twelve bits of the response code, four from the header
+ * and eight from the EDNS0 record.
+ *
+ * # Examples
+ *
+ *     const response = Message.tryFrom(bytes)?
+ *     for record in response.answers {
+ *       print record
+ *     }
+ *
+ * # Related
+ *
+ * - [query] - the bytes of a query, for a transport.
+ * - [readResponse] - a message read and checked against the query it answers.
+ */
+public type Message with Show, Equals, Hash, TryFrom<Bytes, DnsError> {
+  /** The identifier that pairs a response with its query, from 0 to 65535. */
+  identifier: Int = 0
+  /** QR: a query or a response. */
+  kind: MessageKind = MessageKind.Query
+  /** What the message asks the server to do. */
+  operation: Operation = Operation.Query
+  /** AA: the server is an authority for the name in the question. */
+  authoritative: Bool = false
+  /** TC: the response did not fit and was cut short; a client asks again over TCP (RFC 7766). */
+  truncated: Bool = false
+  /** RD: the client wants the server to resolve the name recursively. */
+  recursionDesired: Bool = false
+  /** RA: the server resolves recursively. */
+  recursionAvailable: Bool = false
+  /**
+   * AD: the server says it validated every record of the answer with DNSSEC (RFC 4035 section 3.2.3). This package
+   * validates nothing itself; the bit is as trustworthy as the path to the server.
+   */
+  authenticated: Bool = false
+  /** CD: the client does its own DNSSEC validation and asks the server not to. */
+  checkingDisabled: Bool = false
+  /** How the server answered, with the eight extended bits of the EDNS0 record. */
+  responseCode: ResponseCode = ResponseCode.NoError
+  /** The question section: in practice one question. */
+  questions: List<Question> = []
+  /** The answer section. */
+  answers: List<Record> = []
+  /** The authority section: the name servers of a referral, or the SOA record of a negative answer. */
+  authority: List<Record> = []
+  /** The additional section, without the EDNS0 record, which is [Message.edns]. */
+  additional: List<Record> = []
+  /** The EDNS0 record, where the message has one. */
+  edns: Edns? = None
+
+  /**
+   * The message these bytes are, after RFC 1035 section 4 with compressed names and the EDNS0 record of RFC 6891. Bytes
+   * from the network cannot make this panic: every problem is a [DnsError].
+   *
+   * # Errors
+   *
+   * - [DnsError.Truncated] where the bytes end inside of a part of the message.
+   * - [DnsError.InvalidPointer] and [DnsError.PointerLoop] for a compression pointer outside the message or in a cycle.
+   * - [DnsError.InvalidName] for a name longer than 255 bytes.
+   * - [DnsError.InvalidRecord] for the data of a record that does not fit its type.
+   * - [DnsError.InvalidMessage] for an undefined label type, an OPT record outside the additional section or a second
+   *   one, and bytes after the last record.
+   */
+  static fn tryFrom(bytes: Bytes): Result<Self, DnsError> {
+    decodedMessage bytes
+  }
+
+  /**
+   * The bytes of the message, with every name in the question and in the owner of a record compressed, and the names
+   * in the data of the types of RFC 1035 (CNAME, MX, NS, PTR, SOA) - never those of SRV, SVCB and HTTPS, which their
+   * RFCs forbid to compress.
+   *
+   * # Errors
+   *
+   * - [DnsError.Unencodable] for a number outside the bits of its field, a text string longer than 255 bytes, record
+   *   data longer than 65535 bytes, more than 65535 entries in a section, a response code above 15 without an EDNS0
+   *   record, an empty or invalid CAA tag, two service parameters with one key, and an `Unknown` record of type OPT.
+   */
+  fn encoded(): Result<Bytes, DnsError> {
+    encodedMessage self
+  }
+
+  /**
+   * The records of `recordType` for `name` in the answer section, following the chain of CNAME records from `name` to
+   * the canonical name: what a stub resolver answers. Empty where the answer holds none; a chain that runs in a circle
+   * ends where it closes.
+   */
+  fn answersFor(name: DomainName, recordType: RecordType): List<Record> {
+    var current = name
+    var followed = 0
+    loop {
+      const wanted = current
+      const matching = answers.filter({ _.name == wanted && _.recordType() == recordType }).toList()
+      if !matching.isEmpty() || recordType == RecordType.Cname || followed > answers.length() {
+        return matching
+      }
+      var next: DomainName? = None
+      for record in answers {
+        if record.name == wanted {
+          if const RecordData.Cname(target) = record.data {
+            next = Some target
+          }
+        }
+      }
+      match next {
+        Some(target) => {
+          current = target
+        }
+        None => {
+          return []
+        }
+      }
+      followed = followed + 1
+    }
+  }
+
+  /** The IPv4 and IPv6 addresses of `name` in the answer section, CNAME chains followed, IPv4 first. */
+  fn addresses(of: DomainName): List<IpAddress> {
+    var found: List<IpAddress> = []
+    for recordType in [RecordType.A, RecordType.Aaaa] {
+      for record in answersFor(of, recordType) {
+        if const Some(address) = record.data.address() {
+          found.append address
+        }
+      }
+    }
+    found
+  }
+}

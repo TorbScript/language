@@ -22,6 +22,7 @@ documents:
   - SCRIPTS.md
   - RELEASE.md
   - NETWORK.md
+  - DNS.md
   - WEB.md
   - REPL.md
   - PANICS.md
@@ -46,9 +47,9 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, networking with TLS and HTTP, the
-web layer on top of the network, the public release with its website and package registry, where a program may panic,
-cases with fixed values and bit flags, YAML and regular expressions, random numbers, command lines, tensors and
-gradients, the application framework, and the JavaScript and PHP back ends. Each is plain Markdown without front
+Domain Name System, the web layer on top of the network, the public release with its website and package registry,
+where a program may panic, cases with fixed values and bit flags, YAML and regular expressions, random numbers, command
+lines, tensors and gradients, the application framework, and the JavaScript and PHP back ends. Each is plain Markdown without front
 matter, linked here rather than copied, and stays where the feature it describes keeps changing. The roadmap
 orders them into the milestones that are still ahead.
 
@@ -78,6 +79,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Receiver Scripts and the Sandbox**
 - **Releasing TorbScript**
 - **Networking, TLS and HTTP**
+- **The Domain Name System**
 - **Web: Handlers, HTML and a Live UI**
 - **The REPL**
 - **Panics**

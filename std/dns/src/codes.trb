@@ -1,0 +1,335 @@
+/**
+ * The numbers of the DNS as closed sets: [RecordType], [RecordClass], [Operation] and [ResponseCode]. Each has a case
+ * for every code this package knows and `Other(code)` for the rest, and each compares by its code, so
+ * `RecordType.Other(1) == RecordType.A` - a number read from the wire and a case written in a program are one value.
+ */
+
+/**
+ * The type of a record, or of the records a question asks for (RFC 1035 section 3.2.2, and the registry of IANA's
+ * "Resource Record (RR) TYPEs" for the later ones).
+ *
+ * # Examples
+ *
+ *     print RecordType.of(28)
+ *     print RecordType.Https.code()
+ */
+public type RecordType with Show, Equals, Hash {
+  /** An IPv4 address, 1. */
+  case A
+  /** An authoritative name server, 2. */
+  case Ns
+  /** The canonical name of an alias, 5. */
+  case Cname
+  /** The start of a zone of authority, 6. */
+  case Soa
+  /** A pointer to another name, 12: the reverse lookup of an address. */
+  case Ptr
+  /** A mail exchange, 15. */
+  case Mx
+  /** Text strings, 16. */
+  case Txt
+  /** An IPv6 address, 28 (RFC 3596). */
+  case Aaaa
+  /** The location of a service, 33 (RFC 2782). */
+  case Srv
+  /** The EDNS0 pseudo-record, 41 (RFC 6891). */
+  case Opt
+  /** A service binding, 64 (RFC 9460). */
+  case Svcb
+  /** A service binding for HTTPS, 65 (RFC 9460). */
+  case Https
+  /** Every record of a name, 255: a question only. */
+  case Any
+  /** A certification authority authorization, 257 (RFC 8659). */
+  case Caa
+  /** Any other type, by its number from 0 to 65535. */
+  case Other(code: Int)
+
+  /** The type of the number `code`, a named case where there is one. Taken modulo 65536. */
+  static fn of(code: Int): Self {
+    match code & 65535 {
+      1 => .A
+      2 => .Ns
+      5 => .Cname
+      6 => .Soa
+      12 => .Ptr
+      15 => .Mx
+      16 => .Txt
+      28 => .Aaaa
+      33 => .Srv
+      41 => .Opt
+      64 => .Svcb
+      65 => .Https
+      255 => .Any
+      257 => .Caa
+      other => .Other(other)
+    }
+  }
+
+  /** The number on the wire. */
+  fn code(): Int {
+    match self {
+      .A => 1
+      .Ns => 2
+      .Cname => 5
+      .Soa => 6
+      .Ptr => 12
+      .Mx => 15
+      .Txt => 16
+      .Aaaa => 28
+      .Srv => 33
+      .Opt => 41
+      .Svcb => 64
+      .Https => 65
+      .Any => 255
+      .Caa => 257
+      .Other(code) => code & 65535
+    }
+  }
+
+  /** The mnemonic of a zone file: `AAAA`, `HTTPS`, and `TYPE65280` for a type without one (RFC 3597 section 5). */
+  fn show(): String {
+    match self.code() {
+      1 => "A"
+      2 => "NS"
+      5 => "CNAME"
+      6 => "SOA"
+      12 => "PTR"
+      15 => "MX"
+      16 => "TXT"
+      28 => "AAAA"
+      33 => "SRV"
+      41 => "OPT"
+      64 => "SVCB"
+      65 => "HTTPS"
+      255 => "ANY"
+      257 => "CAA"
+      other => "TYPE{other}"
+    }
+  }
+
+  /** By the code. */
+  fn equals(other: RecordType): Bool {
+    self.code() == other.code()
+  }
+
+  fn hash(): Int {
+    self.code().hash()
+  }
+}
+
+/** The class of a record (RFC 1035 section 3.2.4). Everything on the Internet is `Internet`. */
+public type RecordClass with Show, Equals, Hash {
+  /** `IN`, 1. */
+  case Internet
+  /** `CH`, 3: Chaosnet, still used for `version.bind`. */
+  case Chaos
+  /** `HS`, 4: Hesiod. */
+  case Hesiod
+  /** `ANY`, 255: a question only. */
+  case Any
+  /** Any other class, by its number from 0 to 65535. */
+  case Other(code: Int)
+
+  /** The class of the number `code`, a named case where there is one. Taken modulo 65536. */
+  static fn of(code: Int): Self {
+    match code & 65535 {
+      1 => .Internet
+      3 => .Chaos
+      4 => .Hesiod
+      255 => .Any
+      other => .Other(other)
+    }
+  }
+
+  /** The number on the wire. */
+  fn code(): Int {
+    match self {
+      .Internet => 1
+      .Chaos => 3
+      .Hesiod => 4
+      .Any => 255
+      .Other(code) => code & 65535
+    }
+  }
+
+  /** `IN`, `CH`, `HS`, `ANY`, and `CLASS{n}` for the rest (RFC 3597 section 5). */
+  fn show(): String {
+    match self.code() {
+      1 => "IN"
+      3 => "CH"
+      4 => "HS"
+      255 => "ANY"
+      other => "CLASS{other}"
+    }
+  }
+
+  /** By the code. */
+  fn equals(other: RecordClass): Bool {
+    self.code() == other.code()
+  }
+
+  fn hash(): Int {
+    self.code().hash()
+  }
+}
+
+/** What a message asks the server to do: the four bits of `OPCODE` (RFC 1035 section 4.1.1). */
+public type Operation with Show, Equals, Hash {
+  /** A standard query, 0. */
+  case Query
+  /** A server status request, 2. */
+  case Status
+  /** A zone change notification, 4 (RFC 1996). */
+  case Notify
+  /** A dynamic update, 5 (RFC 2136). */
+  case Update
+  /** Any other operation, by its number from 0 to 15. */
+  case Other(code: Int)
+
+  /** The operation of the number `code`, a named case where there is one. Taken modulo 16. */
+  static fn of(code: Int): Self {
+    match code & 15 {
+      0 => .Query
+      2 => .Status
+      4 => .Notify
+      5 => .Update
+      other => .Other(other)
+    }
+  }
+
+  /** The four bits on the wire. */
+  fn code(): Int {
+    match self {
+      .Query => 0
+      .Status => 2
+      .Notify => 4
+      .Update => 5
+      .Other(code) => code & 15
+    }
+  }
+
+  /** `QUERY`, `STATUS`, `NOTIFY`, `UPDATE`, and `OPCODE{n}` for the rest. */
+  fn show(): String {
+    match self.code() {
+      0 => "QUERY"
+      2 => "STATUS"
+      4 => "NOTIFY"
+      5 => "UPDATE"
+      other => "OPCODE{other}"
+    }
+  }
+
+  /** By the code. */
+  fn equals(other: Operation): Bool {
+    self.code() == other.code()
+  }
+
+  fn hash(): Int {
+    self.code().hash()
+  }
+}
+
+/**
+ * How a server answered: the twelve bits of the response code, four in the header and eight more in the EDNS0 record
+ * (RFC 6891 section 6.1.3). A name that does not exist is `NameError`, the `NXDOMAIN` of the tools.
+ */
+public type ResponseCode with Show, Equals, Hash {
+  /** `NOERROR`, 0. An answer, possibly an empty one. */
+  case NoError
+  /** `FORMERR`, 1: the server could not read the query. */
+  case FormatError
+  /** `SERVFAIL`, 2: the server could not answer. */
+  case ServerFailure
+  /** `NXDOMAIN`, 3: the name does not exist. */
+  case NameError
+  /** `NOTIMP`, 4: the server does not do this kind of query. */
+  case NotImplemented
+  /** `REFUSED`, 5: the server will not answer, by policy. */
+  case Refused
+  /** `YXDOMAIN`, 6: a name exists that an update said should not (RFC 2136). */
+  case NameExists
+  /** `YXRRSET`, 7: a set of records exists that an update said should not. */
+  case RecordSetExists
+  /** `NXRRSET`, 8: a set of records does not exist that an update said should. */
+  case RecordSetMissing
+  /** `NOTAUTH`, 9: the server is not authoritative for the zone. */
+  case NotAuthoritative
+  /** `NOTZONE`, 10: a name is not inside the zone. */
+  case NotInZone
+  /** `BADVERS`, 16: the server does not speak the EDNS version of the query (RFC 6891). */
+  case BadVersion
+  /** `BADCOOKIE`, 23: the server cookie was wrong (RFC 7873). */
+  case BadCookie
+  /** Any other code, by its number from 0 to 4095. */
+  case Other(code: Int)
+
+  /** The response code of the number `code`, a named case where there is one. Taken modulo 4096. */
+  static fn of(code: Int): Self {
+    match code & 4095 {
+      0 => .NoError
+      1 => .FormatError
+      2 => .ServerFailure
+      3 => .NameError
+      4 => .NotImplemented
+      5 => .Refused
+      6 => .NameExists
+      7 => .RecordSetExists
+      8 => .RecordSetMissing
+      9 => .NotAuthoritative
+      10 => .NotInZone
+      16 => .BadVersion
+      23 => .BadCookie
+      other => .Other(other)
+    }
+  }
+
+  /** The twelve bits: the low four go into the header, the high eight into the EDNS0 record. */
+  fn code(): Int {
+    match self {
+      .NoError => 0
+      .FormatError => 1
+      .ServerFailure => 2
+      .NameError => 3
+      .NotImplemented => 4
+      .Refused => 5
+      .NameExists => 6
+      .RecordSetExists => 7
+      .RecordSetMissing => 8
+      .NotAuthoritative => 9
+      .NotInZone => 10
+      .BadVersion => 16
+      .BadCookie => 23
+      .Other(code) => code & 4095
+    }
+  }
+
+  /** The mnemonic the tools print: `NOERROR`, `NXDOMAIN`, `SERVFAIL`, and `RCODE{n}` for a code without one. */
+  fn show(): String {
+    match self.code() {
+      0 => "NOERROR"
+      1 => "FORMERR"
+      2 => "SERVFAIL"
+      3 => "NXDOMAIN"
+      4 => "NOTIMP"
+      5 => "REFUSED"
+      6 => "YXDOMAIN"
+      7 => "YXRRSET"
+      8 => "NXRRSET"
+      9 => "NOTAUTH"
+      10 => "NOTZONE"
+      16 => "BADVERS"
+      23 => "BADCOOKIE"
+      other => "RCODE{other}"
+    }
+  }
+
+  /** By the code. */
+  fn equals(other: ResponseCode): Bool {
+    self.code() == other.code()
+  }
+
+  fn hash(): Int {
+    self.code().hash()
+  }
+}

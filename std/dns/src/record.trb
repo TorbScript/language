@@ -1,0 +1,287 @@
+/**
+ * [Record] and [RecordData]: a resource record of RFC 1035 section 3.2.1 with its data typed by its type - addresses of
+ * `std/ip`, names as [DomainName]s, numbers as `Int`s - and `Unknown` for every type this package does not model.
+ */
+
+use Ipv4Address, Ipv6Address, IpAddress from "std/ip"
+use RecordClass, RecordType from "./codes"
+use DomainName from "./name"
+
+/**
+ * The data of a record, one case per type: the closed set of docs/design/DNS.md section 4. A number is an `Int` in the
+ * range its field has on the wire - 16 bits for a preference, a port, a priority and a weight, 32 bits for the numbers
+ * of an SOA record - and encoding refuses one outside it.
+ *
+ * # Examples
+ *
+ *     const mail = RecordData.Mx(10, DomainName.tryFrom("mail.example.test")?)
+ *     print mail
+ */
+public type RecordData with Show, Equals, Hash {
+  /** An IPv4 address (RFC 1035 section 3.4.1). */
+  case A(address: Ipv4Address)
+  /** An IPv6 address (RFC 3596). */
+  case Aaaa(address: Ipv6Address)
+  /** The canonical name the owner is an alias of (RFC 1035 section 3.3.1). */
+  case Cname(target: DomainName)
+  /** A mail exchange: the lower `preference` is tried first (RFC 1035 section 3.3.9). */
+  case Mx(preference: Int, exchange: DomainName)
+  /** Strings of up to 255 bytes each, in order; a long text is split across several (RFC 1035 section 3.3.14). */
+  case Txt(strings: List<Bytes>)
+  /**
+   * The location of a service (RFC 2782): the lowest `priority` first, and among equal priorities a choice weighted by
+   * `weight`. A `target` of `.` says the service is not offered.
+   */
+  case Srv(priority: Int, weight: Int, port: Int, target: DomainName)
+  /** An authoritative name server of the owner's zone (RFC 1035 section 3.3.11). */
+  case Ns(server: DomainName)
+  /**
+   * The start of a zone (RFC 1035 section 3.3.13): its primary server, the mailbox of the person responsible written as
+   * a name, the serial of the zone, the three intervals in seconds that secondaries follow, and `minimum`, the time to
+   * live of a negative answer (RFC 2308 section 4).
+   */
+  case Soa(
+    primaryServer: DomainName,
+    responsibleMailbox: DomainName,
+    serial: Int,
+    refresh: Int,
+    retry: Int,
+    expire: Int,
+    minimum: Int,
+  )
+  /** A pointer to another name: the answer of a reverse lookup (RFC 1035 section 3.3.12). */
+  case Ptr(target: DomainName)
+  /**
+   * Which certification authority may issue for the owner (RFC 8659): `flags` with 128 for "critical", a tag of ASCII
+   * letters and digits (`issue`, `issuewild`, `iodef`) and its value.
+   */
+  case Caa(flags: Int, tag: String, value: Bytes)
+  /**
+   * A service binding (RFC 9460): priority 0 is the alias form, whose `target` names where to look instead; any
+   * other priority is a service at `target` - `.` for the owner itself - with its parameters, in the order of their
+   * keys.
+   */
+  case Svcb(priority: Int, target: DomainName, parameters: List<ServiceParameter>)
+  /** The service binding for HTTPS (RFC 9460 section 9): the same data as `Svcb`, for the `https` scheme. */
+  case Https(priority: Int, target: DomainName, parameters: List<ServiceParameter>)
+  /** The data of any other type, as the bytes it is on the wire (RFC 3597). */
+  case Unknown(recordType: RecordType, data: Bytes)
+
+  /** The type of a record with this data. */
+  fn recordType(): RecordType {
+    match self {
+      .A(_) => .A
+      .Aaaa(_) => .Aaaa
+      .Cname(_) => .Cname
+      .Mx(...) => .Mx
+      .Txt(_) => .Txt
+      .Srv(...) => .Srv
+      .Ns(_) => .Ns
+      .Soa(...) => .Soa
+      .Ptr(_) => .Ptr
+      .Caa(...) => .Caa
+      .Svcb(...) => .Svcb
+      .Https(...) => .Https
+      .Unknown(recordType, _) => recordType
+    }
+  }
+
+  /** The address of an `A` or an `AAAA` record, and `None` for every other type. */
+  fn address(): IpAddress? {
+    match self {
+      .A(address) => Some IpAddress.Version4(address)
+      .Aaaa(address) => Some IpAddress.Version6(address)
+      _ => None
+    }
+  }
+
+  /**
+   * The data in the presentation format of a zone file: `93.184.216.34`, `10 mail.example.test.`, `"v=spf1 -all"`,
+   * `1 . alpn="h2,h3"`, and `\# 4 0a000001` for an unknown type (RFC 3597 section 5).
+   */
+  fn show(): String {
+    match self {
+      .A(address) => address.show()
+      .Aaaa(address) => address.show()
+      .Cname(target) => absolute target
+      .Mx(preference, exchange) => "{preference} {absolute(exchange)}"
+      .Txt(strings) => strings.map(quoted).joined(separator: " ")
+      .Srv(priority, weight, port, target) => "{priority} {weight} {port} {absolute(target)}"
+      .Ns(server) => absolute server
+      .Soa(primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum) => {
+        "{absolute(primaryServer)} {absolute(responsibleMailbox)} {serial} {refresh} {retry} {expire} {minimum}"
+      }
+      .Ptr(target) => absolute target
+      .Caa(flags, tag, value) => "{flags} {tag} {quoted(value)}"
+      .Svcb(priority, target, parameters) => binding priority, target, parameters
+      .Https(priority, target, parameters) => binding priority, target, parameters
+      .Unknown(_, data) => "\\# {data.length()} {hexadecimal(data)}"
+    }
+  }
+}
+
+/**
+ * One parameter of a service binding (RFC 9460 section 7, and section 14.3's registry): the keys RFC 9460 defines,
+ * typed, and `Other` for every other key with its value as bytes.
+ */
+public type ServiceParameter with Show, Equals, Hash {
+  /** `mandatory`, key 0: the keys a client has to understand to use the record. */
+  case Mandatory(keys: List<Int>)
+  /**
+   * `alpn`, key 1: the protocols of RFC 7301 the service speaks, `h2` and `h3`. An identifier that is not UTF-8 keeps
+   * the whole parameter as `Other(1, ...)`, so decoding loses nothing.
+   */
+  case Alpn(protocols: List<String>)
+  /** `no-default-alpn`, key 2: the protocol of the scheme is not offered unless `Alpn` names it. */
+  case NoDefaultAlpn
+  /** `port`, key 3: the port of the service. */
+  case Port(port: Int)
+  /** `ipv4hint`, key 4: addresses a client may use before it has resolved the target. */
+  case Ipv4Hint(addresses: List<Ipv4Address>)
+  /** `ech`, key 5: an `ECHConfigList` for encrypted client hello, as its bytes. */
+  case EncryptedClientHello(configurations: Bytes)
+  /** `ipv6hint`, key 6: addresses a client may use before it has resolved the target. */
+  case Ipv6Hint(addresses: List<Ipv6Address>)
+  /** Any other key, from 0 to 65535, with its value as the bytes it is on the wire. */
+  case Other(key: Int, value: Bytes)
+
+  /** The key on the wire. */
+  fn key(): Int {
+    match self {
+      .Mandatory(_) => 0
+      .Alpn(_) => 1
+      .NoDefaultAlpn => 2
+      .Port(_) => 3
+      .Ipv4Hint(_) => 4
+      .EncryptedClientHello(_) => 5
+      .Ipv6Hint(_) => 6
+      .Other(key, _) => key
+    }
+  }
+
+  /** The presentation format of RFC 9460 section 2.1: `alpn="h2,h3"`, `port=443`, `key65000="..."`. */
+  fn show(): String {
+    match self {
+      .Mandatory(keys) => "mandatory={keys.map(keyName).joined(separator: ",")}"
+      .Alpn(protocols) => "alpn=\"{protocols.joined(separator: ",")}\""
+      .NoDefaultAlpn => "no-default-alpn"
+      .Port(port) => "port={port}"
+      .Ipv4Hint(addresses) => "ipv4hint={addresses.map({ _.show() }).joined(separator: ",")}"
+      .EncryptedClientHello(configurations) => "ech={base64(configurations)}"
+      .Ipv6Hint(addresses) => "ipv6hint={addresses.map({ _.show() }).joined(separator: ",")}"
+      .Other(key, value) => "{keyName(key)}={quoted(value)}"
+    }
+  }
+}
+
+/**
+ * A resource record: the name it belongs to, its class, how many seconds it may be cached, and its data, whose case
+ * says the type.
+ *
+ * # Examples
+ *
+ *     const name = DomainName.tryFrom("example.test")?
+ *     print Record(name, timeToLive: 300, data: RecordData.A(Ipv4Address.of(192, 0, 2, 1)))
+ */
+public type Record with Show, Equals, Hash {
+  /** The owner: the name the record belongs to. */
+  name: DomainName
+  /** `Internet` everywhere but in a Chaosnet query. */
+  recordClass: RecordClass = RecordClass.Internet
+  /** How long the record may be cached, in seconds, from 0 to 4294967295 (RFC 2181 section 8). */
+  timeToLive: Int
+  /** The data, whose case says the type. */
+  data: RecordData
+
+  /** The type of the record: the case of its data. */
+  fn recordType(): RecordType {
+    data.recordType()
+  }
+
+  /** A line of a zone file: `example.test. 300 IN A 192.0.2.1`. */
+  fn show(): String {
+    "{absolute(name)} {timeToLive} {recordClass} {recordType()} {data}"
+  }
+}
+
+/** A name with the dot of the root, as a zone file writes one: `example.test.`, and `.` for the root. */
+public fn absolute(name: DomainName): String {
+  if name.isRoot() {
+    return "."
+  }
+  "{name}."
+}
+
+/** A binding in the presentation format: priority, target and parameters. */
+fn binding(priority: Int, target: DomainName, parameters: List<ServiceParameter>): String {
+  var parts = ["{priority}", absolute(target)]
+  parts.appendAll(parameters.map({ _.show() }))
+  parts.joined separator: " "
+}
+
+/** The name of a key in the presentation format: `alpn`, and `key65000` for one without a name. */
+fn keyName(key: Int): String {
+  match key {
+    0 => "mandatory"
+    1 => "alpn"
+    2 => "no-default-alpn"
+    3 => "port"
+    4 => "ipv4hint"
+    5 => "ech"
+    6 => "ipv6hint"
+    _ => "key{key}"
+  }
+}
+
+/** Bytes as a quoted string of a zone file: printable ASCII as it is, `\"` and `\\`, and `\DDD` for the rest. */
+fn quoted(bytes: Bytes): String {
+  var pieces: List<String> = ["\""]
+  for byte in bytes {
+    const code = Int.from byte
+    if code == 34 || code == 92 {
+      pieces.append "\\{characterOf(code)}"
+    } else if code >= 32 && code < 127 {
+      pieces.append characterOf(code).show()
+    } else {
+      pieces.append "\\{code / 100}{code / 10 % 10}{code % 10}"
+    }
+  }
+  pieces.append "\""
+  pieces.joined separator: ""
+}
+
+/** Bytes as lower-case hexadecimal, two digits each. */
+fn hexadecimal(bytes: Bytes): String {
+  const digits = "0123456789abcdef".chars().toList()
+  var characters: List<Char> = []
+  for byte in bytes {
+    const code = Int.from byte
+    characters.append digits[code >> 4]
+    characters.append digits[code & 15]
+  }
+  String.from characters
+}
+
+/** Bytes as Base64 with padding (RFC 4648 section 4), the form RFC 9460 writes an `ech` value in. */
+fn base64(bytes: Bytes): String {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".chars().toList()
+  var characters: List<Char> = []
+  var index = 0
+  while index < bytes.length() {
+    const first = Int.from bytes[index]
+    const second = if index + 1 < bytes.length() { Int.from bytes[index + 1] } else { 0 }
+    const third = if index + 2 < bytes.length() { Int.from bytes[index + 2] } else { 0 }
+    const group = first << 16 | second << 8 | third
+    characters.append alphabet[group >> 18 & 63]
+    characters.append alphabet[group >> 12 & 63]
+    characters.append(if index + 1 < bytes.length() { alphabet[group >> 6 & 63] } else { '=' })
+    characters.append(if index + 2 < bytes.length() { alphabet[group & 63] } else { '=' })
+    index = index + 3
+  }
+  String.from characters
+}
+
+/** The character of a code point that is known to be one. */
+fn characterOf(code: Int): Char {
+  Char.tryFrom(code) ?? '?'
+}

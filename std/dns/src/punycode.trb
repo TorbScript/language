@@ -1,0 +1,193 @@
+/**
+ * Punycode (RFC 3492): the Bootstring encoding with the parameters IDNA uses, between the code points of one label
+ * and the ASCII after its `xn--` prefix. Both directions are total over their input and answer `None` where RFC 3492
+ * says the input is invalid or the arithmetic would overflow, so an A-label from the network cannot make this panic.
+ */
+
+const base = 36
+const smallestThreshold = 1
+const largestThreshold = 26
+const skew = 38
+const damp = 700
+const initialBias = 72
+const initialCode = 128
+/** The overflow bound of RFC 3492 section 6.4, which the arithmetic here keeps below although an `Int` has 64 bits. */
+const largest = 2147483647
+
+/** The threshold of the digit at position `k`, clamped between the smallest and the largest. */
+fn threshold(k: Int, bias: Int): Int {
+  if k <= bias {
+    return smallestThreshold
+  }
+  if k >= bias + largestThreshold {
+    return largestThreshold
+  }
+  k - bias
+}
+
+/** RFC 3492 section 6.1: the bias after a code point was inserted. */
+fn adapted(delta: Int, points: Int, first: Bool): Int {
+  var scaled = if first { delta / damp } else { delta / 2 }
+  scaled = scaled + scaled / points
+  var k = 0
+  while scaled > (base - smallestThreshold) * largestThreshold / 2 {
+    scaled = scaled / (base - smallestThreshold)
+    k = k + base
+  }
+  k + (base - smallestThreshold + 1) * scaled / (scaled + skew)
+}
+
+/** The ASCII code of the digit `value`: `a` to `z` for 0 to 25, `0` to `9` for 26 to 35. */
+fn digitCode(value: Int): Int {
+  if value < 26 {
+    return value + 97
+  }
+  value + 22
+}
+
+/** The value of the digit with the ASCII code `code`, either case, or `-1` for a byte that is no digit. */
+fn digitValue(code: Int): Int {
+  if code >= 48 && code <= 57 {
+    return code - 22
+  }
+  if code >= 65 && code <= 90 {
+    return code - 65
+  }
+  if code >= 97 && code <= 122 {
+    return code - 97
+  }
+  -1
+}
+
+/**
+ * The Punycode of `points`, the code points of one label, without the `xn--` prefix: `bücher` becomes `bcher-kva`.
+ * `None` only where the arithmetic would overflow, which a label of 63 bytes never reaches.
+ */
+public fn punycodeEncoded(points: List<Int>): String? {
+  var output: List<Int> = []
+  for point in points {
+    if point < 128 {
+      output.append point
+    }
+  }
+  const basic = output.length()
+  var handled = basic
+  if basic > 0 {
+    output.append 45
+  }
+  var code = initialCode
+  var delta = 0
+  var bias = initialBias
+  while handled < points.length() {
+    var smallest = largest
+    for point in points {
+      if point >= code && point < smallest {
+        smallest = point
+      }
+    }
+    if smallest - code > (largest - delta) / (handled + 1) {
+      return None
+    }
+    delta = delta + (smallest - code) * (handled + 1)
+    code = smallest
+    for point in points {
+      if point < code {
+        delta = delta + 1
+        if delta > largest {
+          return None
+        }
+      }
+      if point == code {
+        var rest = delta
+        var k = base
+        loop {
+          const limit = threshold k, bias
+          if rest < limit {
+            break
+          }
+          output.append digitCode(limit + (rest - limit) % (base - limit))
+          rest = (rest - limit) / (base - limit)
+          k = k + base
+        }
+        output.append digitCode(rest)
+        bias = adapted(delta, handled + 1, handled == basic)
+        delta = 0
+        handled = handled + 1
+      }
+    }
+    delta = delta + 1
+    code = code + 1
+  }
+  var characters: List<Char> = []
+  for point in output {
+    if const Ok(character) = Char.tryFrom(point) {
+      characters.append character
+    }
+  }
+  Some String.from(characters)
+}
+
+/**
+ * The code points a Punycode text stands for, without its `xn--` prefix: `bcher-kva` becomes the code points of
+ * `bücher`. `None` for a text that is not Punycode: a byte that is no digit, a digit sequence that ends early, and a
+ * result that overflows or is no Unicode scalar value.
+ */
+public fn punycodeDecoded(text: String): List<Int>? {
+  const codes = text.bytes().map({ Int.from _ }).toList()
+  var delimiter = -1
+  for (index, byte) in codes.indexed() {
+    if byte >= 128 {
+      return None
+    }
+    if byte == 45 {
+      delimiter = index
+    }
+  }
+  var output: List<Int> = []
+  var position = 0
+  if delimiter > 0 {
+    output.appendAll codes[0..delimiter]
+    position = delimiter + 1
+  }
+  var code = initialCode
+  var index = 0
+  var bias = initialBias
+  while position < codes.length() {
+    const previous = index
+    var weight = 1
+    var k = base
+    loop {
+      if position >= codes.length() {
+        return None
+      }
+      const digit = digitValue codes[position]
+      position = position + 1
+      if digit < 0 || digit > (largest - index) / weight {
+        return None
+      }
+      index = index + digit * weight
+      const limit = threshold k, bias
+      if digit < limit {
+        break
+      }
+      if weight > largest / (base - limit) {
+        return None
+      }
+      weight = weight * (base - limit)
+      k = k + base
+    }
+    const count = output.length() + 1
+    bias = adapted(index - previous, count, previous == 0)
+    if index / count > largest - code {
+      return None
+    }
+    code = code + index / count
+    index = index % count
+    if code < 128 || code > 1114111 || (code >= 55296 && code <= 57343) {
+      return None
+    }
+    output.insert index, code
+    index = index + 1
+  }
+  Some output
+}
