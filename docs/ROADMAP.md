@@ -172,4 +172,3 @@ Each of these is small and has no record of its own.
   ([TYPECHECKER.md](TYPECHECKER.md), gap 58). The spelling belongs to the design of tasks in the VM.
 - **The spelling of a NaN**: the runtime prints `nan`; whether `Show` of a `Float64` says `nan` or `NaN` is not
   decided.
-- **Index-free helpers on lists**: `zip` and `indexed` exist, `windows`, `chunks` and `splitAt` do not.

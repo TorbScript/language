@@ -261,6 +261,59 @@ public trait List<Item>
   }
 
   /**
+   * Every run of `size` neighbouring items, in order, each a list of the same kind: `[1, 2, 3].windows(2)` is `[1, 2]`
+   * and `[2, 3]`. A list shorter than `size` has no window, and neither has a `size` below one - so it never panics,
+   * and a loop over pairs of neighbours needs no index.
+   *
+   * # Examples
+   *
+   *     const readings = [3, 5, 4, 8]
+   *     const rises = readings.windows(2).filter({ pair => pair[1] > pair[0] }).count()
+   *     print rises
+   */
+  fn windows(size: Int): Iterate<Self> {
+    const total = length()
+    const count = if size < 1 { 0 } else { (total - size + 1).max(0) }
+    (0..count).map({ start => self[start..start + size] })
+  }
+
+  /**
+   * The items cut into consecutive lists of `size` items, in order; the last one holds what is left and may be shorter.
+   * `[1, 2, 3, 4, 5].chunks(2)` is `[1, 2]`, `[3, 4]` and `[5]`. A `size` below one cuts nothing and answers no chunk
+   * at all, so it never panics.
+   *
+   * # Examples
+   *
+   *     const cells = ["a", "b", "c", "d", "e"]
+   *     for row in cells.chunks(2) {
+   *       print row
+   *     }
+   */
+  fn chunks(size: Int): Iterate<Self> {
+    const total = length()
+    const count = if size < 1 { 0 } else { (total + size - 1) / size }
+    (0..count).map({ index => self[index * size..(index * size + size).min(total)] })
+  }
+
+  /**
+   * The list cut in two at `index`: the items before it and the items from it on, or `None` where `index` is outside
+   * `0..=length()`. The total form of `(list[..index], list[index..])`, as [List.part] is of one slice.
+   *
+   * # Examples
+   *
+   *     const line = [1, 2, 3, 4]
+   *     if const Some((head, rest)) = line.splitAt(1) {
+   *       print "{head} {rest}"
+   *     }
+   */
+  fn splitAt(index: Int): (before: Self, after: Self)? {
+    if index < 0 || index > length() {
+      return None
+    }
+    Some((self[0..index], self[index..length()]))
+  }
+
+  /**
    * `numbers[1..3] = values`: the items of that part replaced by `values`, in place. The two need not be the same
    * length, so the list grows or shrinks by the difference.
    *
