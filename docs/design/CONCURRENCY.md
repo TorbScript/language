@@ -52,6 +52,7 @@ value like any other, and there are no async keywords.
 - **[14. Slices](#14-slices)** — what fits 7.3, what waits for 7.7
 - **[15. What the owner decided](#15-what-the-owner-decided)**
 - **[16. Runtime ABI, as built](#16-runtime-abi-as-built)** — what the compiler lowers a task to, and the pool of 7.7
+- **[17. Open: a trait value that hides a shared object](#17-open-a-trait-value-that-hides-a-shared-object)** — shared-types rule 7 against trait rule 17
 
 Every snippet below was run against the checker, in `tests/language/` so that `std` resolves, with the
 proposed declarations written out in the probe file. A snippet marked **type checks today** was accepted as written;
@@ -1756,3 +1757,71 @@ this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupte
   was neither compiled nor run on this machine, which has no POSIX toolchain; the MSVC branch of the atomics was not
   compiled either.
 - **The VM half** (`vm/task.trb`) waits for the VM.
+
+## 17. Open: a trait value that hides a shared object
+
+**The gap.** Shared-types rule 7 says a shared object stays in the task that made it, and `spawn` refuses everything
+that may hide one: a shared object, a value that holds one, a type parameter, a function value, a value of a
+`shared trait`. Trait rule 17 says a `shared type` can only implement a `shared trait`, "so a value of a trait type is
+always a value" - and that is what lets a value of an ordinary trait cross. The two rules leave a hole between them: a
+type that is **not** shared may **hold** a shared object and implement an ordinary trait, and the trait value then
+carries the object across the one check that was meant to stop it. This type checks today (2026-09-26) and runs:
+
+```trb fragment
+shared type Counter {
+  var count: Int = 0
+
+  var fn bump() {
+    count = count + 1
+  }
+}
+
+trait Action {
+  fn run(): Int
+}
+
+type Bumper with Action {
+  counter: Counter
+
+  fn run(): Int {
+    counter.bump()
+    counter.count
+  }
+}
+
+const counter = Counter()
+const action: Action = Bumper(counter)
+const task = spawn { action.run() }
+print task.await()
+print counter.count
+```
+
+`spawn` sees an `Action`, which is not a `shared trait`, and lets it in; the `Counter` inside is changed by two tasks.
+**It is memory safe** - a trait-typed value fails the crossing test of section 16 ("The copy at the crossing"), so the
+task that holds one is started pinned (`torb_task_start`) and runs on the worker that made the object, and no count is
+ever touched by two threads - but it is not what rule 7 promises: the object is reached from two tasks, and the order
+of their changes is the scheduler's.
+
+**The options.** The language rule stays as it is until the owner decides; both ways to close the hole cost something.
+
+- **(a) `spawn` refuses every trait value that is not known to be free of objects** - in practice every value of an
+  ordinary trait, since the checker cannot see through one. It closes the hole at the one place it matters, and it is
+  local: nothing else changes. It contradicts trait rule 17, whose whole point is that a value of an ordinary trait
+  *is* a value and may be handed to a task, and it takes `spawn { shape.area() }` over a `Shape` away from every
+  program that never held an object in one.
+- **(b) Converting a value that holds a shared object into a value of an ordinary trait is refused**, as `with` on a
+  `shared type` already is. Rule 17 then holds as written - a trait value never hides an object - and `spawn` needs no
+  change. It breaks the `Iterate` pipelines that hold a closure: `names.map({ connection.send(_) })` builds a stage that
+  holds a closure capturing the `Connection`, and every stage is answered as an `Iterate<Item>`, which is an ordinary
+  trait. Inside `std/iteration` the closure is a function *parameter*, so the conversion site cannot see what it
+  captured; refusing every closure-holding stage refuses every pipeline, and refusing none leaves the hole open through
+  closures.
+
+**Recommendation: (b), limited to what the checker can see**, and the rest stated as the runtime's. The conversion is
+refused where the value's *type* holds an object structurally - the same fixpoint `spawn` already computes for "holds
+an object" (section 12, probe 3), which covers `Bumper` and every record, case and collection of the program - and a
+function value keeps the treatment it has: refused where `spawn` captures it directly, carried inside a trait value
+otherwise, and kept memory safe by the pinning above. That closes the hole for every type a program declares, costs no
+pipeline anything, and leaves one precise residue - an object captured by a closure that a trait value holds - which
+the documentation of rule 7 would have to name. (a) is the fallback if the owner wants rule 7 without any residue; it
+is the smaller change in the compiler and the larger one in what programs may write.
