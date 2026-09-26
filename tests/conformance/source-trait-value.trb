@@ -1,0 +1,37 @@
+/**
+ * **A `Source` held as a trait-typed value runs its generic members**: `through` reaches `Stage.onto<Final>`, a member
+ * with a type parameter of its own, through the witness table of the value (CONCURRENCY gap 11). And a `static fn` the
+ * trait gives a body, called through the trait's name (`Source.from`), is that body - a static member is never in a
+ * table, so there is no value to take it from.
+ */
+
+use mapping from "std/iteration"
+
+fn doubled(): Task<Int> {
+  const channel: Channel<Int> = Channel capacity: 4
+  var writing = channel.sink()
+  for value in [1, 2, 3] {
+    const _ = writing.add(value).await()
+  }
+  const _ = writing.end().await()
+  var source: Source<Int, Never> = channel.source()
+  const stage: Stage<Int, Int> = mapping { value: Int => value * 2 }
+  var result = source.through stage
+  match result.toList().await() {
+    Ok(items) => items.fold(0, { total, item => total + item })
+    Fail(_) => -1
+  }
+}
+
+fn listed(): Task<List<Int>> {
+  var source: Source<Int, Never> = Source.from([4, 5, 6])
+  const stage: Stage<Int, Int> = mapping { value: Int => value + 1 }
+  var result = source.through stage
+  match result.toList().await() {
+    Ok(items) => items
+    Fail(_) => []
+  }
+}
+
+print doubled().await()
+print listed().await()

@@ -396,8 +396,10 @@ fn dynamicDispatch(
   var mapping = memberMappingOf lowering, member, target, bound
   addOwnArguments lowering, mapping, member, typeArguments
   // A member the table cannot hold is a default the value cannot override: an instance of the default body then, with
-  // `Self` bound to the trait-typed value's own type, which is what makes the body see the table inside its receiver
-  const isDynamic = isInTable lowering, bounds, target, member
+  // `Self` bound to the trait-typed value's own type, which is what makes the body see the table inside its receiver.
+  // A `static fn` is never in a table - object safety keeps it out, there being no value to take it from - so
+  // `Source.from(items)` through the trait's name is its default body, whatever an implementation writes for it
+  const isDynamic = isInTable(lowering, bounds, target, member) && takesSelf(lowering, member)
   if !isDynamic {
     const identifier = signatureOf lowering.checker, member
     if !lowering.checker.signature(identifier).hasBody {

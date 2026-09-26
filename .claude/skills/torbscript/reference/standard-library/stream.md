@@ -177,12 +177,13 @@ program.
 
 ## What is missing
 
-What the native back end does not run yet is a `Source` or a `Sink` held as a **trait-typed value**: its witness
-table holds every default member some implementation overrides, `through` among them, and `through` reaches
-`Stage.onto` - a generic member through a trait-typed value, which the back end cannot call yet. A concrete source or
-sink - a `Channel`'s two ends, which `source()` and `sink()` answer as `ChannelSource` and `ChannelSink` - runs, stages
-and terminal operations included. `Bytes`, `Utf8Error`, `textOf`, `lines()` and `decodedText()` do not depend on
-`Task` at all and work wherever a `Stage` does - over an `Iterate<Bytes>` in a test, for instance.
+Nothing that this page declares is missing from the two back ends. A `Source` or a `Sink` held as a **trait-typed
+value** runs like a concrete one: `through` reaches `Stage.onto<Final>`, a generic member through a trait-typed value,
+which the witness table holds once per list of arguments the program calls it with (CONCURRENCY gap 11), and the
+static members the trait gives a body - `Source.from`, `Source.pulling`, `Source.produce` - run as those bodies when
+they are called through the trait's name (`tests/conformance/source-trait-value.trb`). `Bytes`, `Utf8Error`,
+`textOf`, `lines()` and `decodedText()` do not depend on `Task` at all and work wherever a `Stage` does - over an
+`Iterate<Bytes>` in a test, for instance.
 
 ## Related
 

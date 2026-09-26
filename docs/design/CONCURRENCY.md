@@ -1502,10 +1502,11 @@ calls none of it. No resume function enters a frame of `panic.c`, so there is no
   functions of a cycle are not built: an object on a cycle of objects leaks.
 
 **What still does not build natively, and why.** A `Duration` has no representation in the back end yet (5.12), so a
-program that calls `within` does not build. A `Source` or `Sink` held as a **trait-typed value** does not either: its
-witness table holds every default member some implementation overrides, `through` among them, and `through` reaches
-`Stage.onto` - a generic member through a trait-typed value (gap 11). `Source.produce`, `std/stream`'s tests and
-`examples/tour/src/13-streams.trb` stop there. `?` that converts a failure through a `From` the program declares is not
+program that calls `within` does not build. (A `Source` or `Sink` held as a **trait-typed value** did not either until
+gap 11 closed: `through` reaches `Stage.onto<Final>` through the table, and `Source.from` called through the trait's
+name is the trait's own body since bug batch 7 - `Source.produce`, `std/stream`'s tests and
+`examples/tour/src/13-streams.trb` build and run natively, `tests/conformance/source-trait-value.trb` pins both.) `?`
+that converts a failure through a `From` the program declares is not
 lowered yet. (`examples/tour/src/10-async.trb` builds and runs natively since `std/http` became TorbScript over
 `std/network`, `docs/design/NETWORK.md`, against a server of its own on loopback - which makes it a program with real IO
 and no longer one the VM can be held to.) A
