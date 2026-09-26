@@ -21,6 +21,20 @@ group "Bindings" {
     assert(problems(inBody("  const value: Int = \"text\"")) == ["Expected `Int64`, found `String`"])
   }
 
+  /** The alias is kept for the message only: `EntityId` is `Int64` everywhere else (CONCEPT, "Type Aliases"). */
+  test "an annotation that names an alias shows it with its target, and so does a name bound with one" {
+    const alias = "type EntityId = Int\n\n"
+    assert(problems(alias + inBody("  const id: EntityId = \"a\"")) == ["Expected `EntityId (Int64)`, found `String`"])
+    const used = alias + inBody("  const id: EntityId = 1\n  const name: String = id")
+    assert(problems(used) == ["Expected `String`, found `EntityId (Int64)`"])
+    const argument = alias + "fn find(id: EntityId): Int \{\n  id\n\}\n\n" + inBody("  const found = find(\"a\")")
+    assert(problems(argument) == ["Expected `EntityId (Int64)`, found `String`"])
+  }
+
+  test "an alias of the standard library is how a message spells the type anyway, so it is not repeated" {
+    assert(problems(inBody("  const count: Int = \"a\"")) == ["Expected `Int64`, found `String`"])
+  }
+
   test "a wildcard discards on purpose and binds nothing" {
     assert(problems(inBody("  const _ = 1 + 2\n  const value = _")) == ["Cannot find `_` here"])
   }

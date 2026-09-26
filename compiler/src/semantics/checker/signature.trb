@@ -527,6 +527,12 @@ fn functionSignature(
       continue
     }
     parameters.append parameterForm(checker, parameter, scope)
+    // `fn find(id: EntityId)`: what a message about an argument of it calls the type (`Checker.parameterAliases`)
+    if const Some(reference) = parameter.annotation {
+      if const Some(written) = checker.aliasNameAt(module, reference.span) {
+        checker.parameterAliases.set "{symbol.value}:{parameters.length() - 1}", written
+      }
+    }
   }
   const hasBody = function.body.isSome()
   const bounds = boundsOf checker, generics, function.generics, function.whereClauses, scope

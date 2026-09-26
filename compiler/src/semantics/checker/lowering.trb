@@ -698,6 +698,23 @@ fn aliasType(
 ): TypeId {
   const built = typeArguments checker, symbol, arguments, reference.span, scope
   const target = aliasTargetOf checker, symbol
+  // What a message calls the type where it is the one this reference names (`Checker.aliasNames`)
+  var written = checker.symbolAt(symbol).name
+  if !built.isEmpty() {
+    var shown: List<String> = []
+    for argument in built {
+      shown.append checker.describe(argument)
+    }
+    written = "{written}<{shown.joined(separator: ", ")}>"
+  }
+  // `Int`, `Float` and every other alias of the standard library are how a message spells a type anyway (`Int64` is the
+  // name the language shows for an integer); a program's own alias is the one a reader has to find again
+  if const Some(site) = checker.siteOf(symbol) {
+    const found = checker.program.graph.at site.module
+    if !checker.program.workspace.packages[found.package].name.startsWith("std/") {
+      checker.noteAliasName scope.module, reference.span, written
+    }
+  }
   const generics = genericsOf checker, symbol
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..generics.length().min(built.length()) {

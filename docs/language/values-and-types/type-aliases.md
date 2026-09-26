@@ -88,12 +88,14 @@ fn process(id: EntityId): Int {
 }
 
 print process("five")
-// error: Expected `Int64`, found `String`
+// error: Expected `EntityId (Int64)`, found `String`
 ```
 
-The error above names the target type, `Int64`, rather than `EntityId` - CONCEPT.md's design shows the alias name
-alongside the target in a message like this (`EntityId (Int64)`); the checker does not yet do that, so a message
-about an aliased type reads as if the alias were never written.
+The error above names the alias together with its target, `EntityId (Int64)`, where the type was written as the alias:
+the annotation of a binding, a parameter of a function, and a name bound with one of those. Everywhere else - a type
+that a message works out rather than reads off an annotation - it is the target alone, because the checker holds the
+alias for the message only and never in the type itself. The aliases of the standard library (`Int`, `Float`) are
+not repeated: `Int64` is how every message spells an integer.
 
 **Shadowing a prelude name is not rejected, even though it can be confusing.** `type Int = Int32` in rule 4 compiles;
 nothing in the compiler warns that literals are still `Int64` regardless (see [Integers](integers.md)), so a file

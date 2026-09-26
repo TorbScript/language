@@ -886,6 +886,17 @@ public type Checker {
   /** What `Self` means inside a declaration: the trait's own parameter, or the type with its own parameters. */
   var selfTypes: Map<SymbolId, TypeId> = [:]
   var sites: Map<SymbolId, DeclarationSite> = [:]
+  /**
+   * **Display only**: the name an alias gave a type where it was written, which "Expected `EntityId`" shows instead of
+   * the `Int64` it stands for. None of this takes part in a type's identity - `EntityId` *is* `Int64` everywhere else,
+   * and a `TypeId` says nothing about how it was spelled - so these are side tables keyed by where the name was
+   * written: a type reference (`aliasNames`), a value checked against one (`expectedAliases`), both by module and span;
+   * a binding declared with one, and a parameter of a declaration (`"{symbol}:{position}"`).
+   */
+  var aliasNames: Map<String, String> = [:]
+  var expectedAliases: Map<String, String> = [:]
+  var bindingAliases: Map<Int, String> = [:]
+  var parameterAliases: Map<String, String> = [:]
   /** One per module, in the order of `program.graph.modules`: the type of every type position, by its span. */
   var typePositions: List<Map<Span, TypeId>> = []
   /** One per module, in the same order: everything about the expressions of that module. */
@@ -1238,6 +1249,24 @@ public type Checker {
 
   var fn recordType(module: ModuleId, at: Span, id: TypeId) {
     typePositions[module.value].set(at, id)
+  }
+
+  /** `EntityId` was written at this type reference, and it resolved to what the alias stands for. */
+  var fn noteAliasName(module: ModuleId, at: Span, name: String) {
+    aliasNames.set "{module.value}:{at.start}:{at.end}", name
+  }
+
+  fn aliasNameAt(module: ModuleId, at: Span): String? {
+    aliasNames.get "{module.value}:{at.start}:{at.end}"
+  }
+
+  /** The value at this span is checked against a type that was written as the alias `name`. */
+  var fn expectAlias(module: ModuleId, at: Span, name: String) {
+    expectedAliases.set "{module.value}:{at.start}:{at.end}", name
+  }
+
+  fn expectedAliasAt(module: ModuleId, at: Span): String? {
+    expectedAliases.get "{module.value}:{at.start}:{at.end}"
   }
 
   // --- The tables of one module ---------------------------------------------------------------------------------------

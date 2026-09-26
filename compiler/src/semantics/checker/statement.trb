@@ -195,8 +195,13 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
 fn checkBinding(var checker: Checker, binding: Binding) {
   const scope = scopeHere checker
   var annotation: TypeId? = None
+  var alias: String? = None
   if const Some(reference) = binding.annotation {
     annotation = Some typeFromReference(checker, reference, scope.forType())
+    alias = checker.aliasNameAt checker.module, reference.span
+    if const Some(written) = alias {
+      checker.expectAlias checker.module, binding.value.span, written
+    }
   }
   const found = match annotation {
     Some(wanted) => {
@@ -217,6 +222,14 @@ fn checkBinding(var checker: Checker, binding: Binding) {
     bound = checker.deferredType
   }
   checkPattern checker, binding.pattern, bound, binding.isVar
+  // `const id: EntityId = ...`: a message about `id` where it is used calls its type what it was declared as
+  if const Some(written) = alias {
+    if const .Binding(name) = binding.pattern.kind {
+      if const Some(.Bound(declared)) = checker.findLocal(name) {
+        checker.bindingAliases.set declared.value, written
+      }
+    }
+  }
   markUsingBinding checker, binding
   // `const Point(x, y) = p` has no second way to go, so the pattern has to match every value
   requireIrrefutable checker, binding.pattern, bound, "The pattern of a binding", "value"
@@ -723,6 +736,9 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   var annotation: TypeId? = None
   if const Some(reference) = binding.annotation {
     annotation = Some typeFromReference(checker, reference, TypeScope(module).forType())
+    if const Some(written) = checker.aliasNameAt(module, reference.span) {
+      checker.expectAlias module, binding.value.span, written
+    }
   }
   const found = match annotation {
     Some(wanted) => {

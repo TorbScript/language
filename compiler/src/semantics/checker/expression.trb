@@ -3301,8 +3301,16 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
     // The mismatch is the root cause: what the rest of the call would have solved from this argument is not asked for
     suppressVariables checker, wanted
   }
-  const shown = checker.describe wanted
-  const written = checker.describe given
+  // Where the type was written as an alias, the message shows the alias with its target, `EntityId (Int64)` (CONCEPT,
+  // "Type Aliases"), and the plain type everywhere else (`Checker.aliasNames`)
+  var shown = checker.describe wanted
+  if const Some(alias) = checker.expectedAliasAt(checker.module, at) {
+    shown = "{alias} ({shown})"
+  }
+  var written = checker.describe given
+  if const Some(alias) = foundAliasAt(checker, at, given) {
+    written = "{alias} ({written})"
+  }
   var problem = Diagnostic.error "Expected `{shown}`, found `{written}`", at
   // A `String` value where the literal rule reads a literal: the value is only known when the program runs
   if given == checker.stringType() {
@@ -3324,6 +3332,17 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   }
   checker.reportHere problem
   false
+}
+
+/** The alias a name's binding was declared with, where the value at this span is that name and still of that type. */
+fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
+  if const Some(.Local(binding)) = checker.resolutionHere(at) {
+    const written = checker.bindingAliases.get(binding.value)?
+    if sameType(checker.types, checker.binding(binding).annotation, given) {
+      return Some written
+    }
+  }
+  None
 }
 
 /**
