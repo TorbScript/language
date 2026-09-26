@@ -6,6 +6,7 @@
  * answers a `SocketAddress` without a resolver - and without the network capability.
  */
 
+use DomainName from "std/dns"
 use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
 use UriError from "./error"
 use Component, byteOf, hasNonAscii, hexadecimalValue, isAllowed, isDigit, normalizedComponent, percentDecodedBytes from "./characters"
@@ -25,6 +26,24 @@ public type Host with Show, Equals, Hash {
   case Address(address: IpAddress)
   /** RFC 3986's `IPvFuture`, `v7.anything`, lower case: an IP version nobody has defined yet. */
   case Future(text: String)
+
+  /**
+   * The registered name as the [DomainName] a resolver is asked for, where it is one. `None` for an IP literal, an
+   * `IPvFuture` literal, the empty host of `file:///x`, and a registered name that is no host name: a sub-delimiter or
+   * a percent escape in it, an empty label, a label longer than 63 bytes (RFC 3986 allows every one of them in a
+   * `reg-name`; the DNS does not).
+   *
+   * # Examples
+   *
+   *     const uri = Uri.tryFrom("https://www.Example.test/")?
+   *     print uri.host()?.domainName()
+   */
+  fn domainName(): DomainName? {
+    match self {
+      .Name(name) => DomainName.tryFrom(name).ok()
+      _ => None
+    }
+  }
 
   /** The host as a URI writes it: `example.test`, `127.0.0.1`, `[::1]`, `[v7.x]`. */
   fn show(): String {

@@ -155,6 +155,8 @@ public type Host with Show, Equals, Hash {
   case Name(name: String)
   case Address(address: IpAddress)
   case Future(text: String)
+
+  fn domainName(): DomainName?
 }
 ```
 
@@ -162,6 +164,8 @@ The `[userInfo "@"] host [":" port]` of a URI, as data. `mailto:ada@example.test
 one whose host is `Name("")`. A host is an IP literal, an IPv4 address or a registered name, and the first of RFC 3986's
 rules that fits decides: `127.0.0.1` and `[::1]` are `Address`, written back in RFC 5952's form, and `01.2.3.4` is a
 `Name`. A zone identifier (`[fe80::1%25eth0]`) is refused, because RFC 9844 took it out of the URI grammar.
+`domainName()` answers a registered name as the `DomainName` of [std/dns](dns.md) a resolver is asked for, and `None`
+for an address and for a name the DNS cannot carry - a percent escape, a sub-delimiter, a label longer than 63 bytes.
 
 ### Urn
 

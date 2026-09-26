@@ -323,7 +323,7 @@ the standard library itself converts between them and a type of its own.
 | **RFC 8141** | URNs | `Urn`: the namespace identifier checked and lower cased, the r-, q- and f-components read, and `assignedName()` as the equivalence of section 3 (section 7) | 2 |
 | **RFC 5952** | IPv6 text | an IPv6 literal host is an `Ipv6Address` and is written in RFC 5952's form, so `[2001:DB8:0::1]` and `[2001:db8::1]` are one value | 1, 2 |
 | **RFC 6874**, obsoleted by **RFC 9844** | IPv6 zone identifiers in URIs | RFC 6874 (2013) added `[fe80::1%25eth0]` to the grammar; RFC 9844 (August 2025) obsoleted it and reverted the URI grammar to RFC 3986's, because no browser ever implemented it. A zone in a host is refused (`InvalidHost`): a zone names an interface of *this* machine, which is a property of a socket and not of an identifier | 2 |
-| **IDNA 2008** (RFC 5890 to 5893), **UTS #46**, **RFC 3492** (Punycode) | non-ASCII host names | `std/idna`: `Uri.tryFrom` maps a non-ASCII host to its A-labels with UTS #46 non-transitional processing and the IDNA 2008 validity rules, and `iriText()` shows the U-labels. Until then a non-ASCII host is refused (the owner, 2026-09-23) | 5 |
+| **IDNA 2008** (RFC 5890 to 5893), **UTS #46**, **RFC 3492** (Punycode) | non-ASCII host names | `std/dns` ([DNS.md](DNS.md) section 3; the owner put IDNA there on 2026-09-25): Punycode and the UTS #46 mapping as far as `std/text`'s tables reach are built as `DomainName.tryFrom`, and `Host.domainName()` answers a `DomainName`. What slice 5 adds: `Uri.tryFrom` maps a non-ASCII host to its A-labels, and `iriText()` shows the U-labels. Until then a non-ASCII host is refused (the owner, 2026-09-23) | 5 |
 | **WHATWG URL**, section 5: `application/x-www-form-urlencoded` | HTML's convention for queries and form bodies | `formDecoded` and `formEncoded`, byte for byte as the standard's parser and serializer (`+` for a space, U+FFFD for bytes that are not UTF-8), and `queryParameters` over them | 2 |
 | **WHATWG URL**, the URL parser | what a browser's address bar does | not the parser (section 6). `repaired(text)` makes the repairs a browser makes before it parses, as a function a caller calls where a reader sees it | 5 |
 | **RFC 8089** | the `file:` scheme | the `Path` bridge (section 8): `file:///C:/x`, `file://server/share/x`, `file:/x`, `file://localhost/x` and the DOS forms of appendix E are read, `file:///…` is written | 2 |
@@ -840,7 +840,7 @@ Three reasons, in order of weight.
 | `http://example.com/a b` | the space is encoded as `%20` | the same | nothing |
 | `http://example.com/a\u0000b` | the NUL is encoded as `%00` | removed silently | gets a value where a browser drops a byte |
 | `  http://example.com  ` | the spaces are part of the reference and are encoded | trimmed | trims it itself, or writes a literal |
-| `http://münchen.de` | **refused** (`NonAsciiHost`) until slice 5, then `xn--mnchen-3ya.de` | `xn--mnchen-3ya.de` | waits for `std/idna` (section 2a) |
+| `http://münchen.de` | **refused** (`NonAsciiHost`) until slice 5, then `xn--mnchen-3ya.de` | `xn--mnchen-3ya.de` | waits for slice 5, which calls `std/dns`'s `DomainName.tryFrom` (section 2a) |
 | `http://[fe80::1%25eth0]/` | refused: RFC 9844 took zones out of the grammar | refused: the host parser has no zones | nothing; they agree |
 | `file:///C:/x` | path `/C:/x`, host `""` | the same, with drive-letter special cases | nothing |
 | `HTTP://A/b` | `http://a/b` | `http://a/b` | nothing |
@@ -859,7 +859,7 @@ public fn repaired(text: String): String
 ```
 
 `Uri.tryFrom(repaired(userInput))?` is the address-bar case, written where a reader can see it. It lands in slice 5
-with `std/idna`, because a browser's host parser *is* UTS #46 processing and a `repaired` without it would repair
+with IDNA in `Uri.tryFrom`, because a browser's host parser *is* UTS #46 processing and a `repaired` without it would repair
 everything but the host — nothing in the repository reads an address bar before then, and it is named here so that
 nobody designs around its absence.
 
@@ -977,7 +977,7 @@ extend Path with TryFrom<UriReference, UriError>
 **And because none is a `From`, `Path` is not a second conversion pair of `Uri`.** The capsule rule needs the
 source to carry an infallible `From<Self>` (`docs/design/ENCODING.md` section 3a), so `TryFrom`s in both directions make
 no pair at all and `Uri`'s `Decode` stays with `String`. Probe 2 measured it. This is a good outcome reached by a thin
-margin, and section 13 gap 9 is the part that should be fixed rather than relied on: once `std/idna` lands, `Path` into
+margin, and section 13 gap 9 is the part that should be fixed rather than relied on: once slice 5 lands, `Path` into
 `UriReference` can become infallible — and then `UriReference` has `From<Path>` while `Path` has
 `TryFrom<UriReference>`, which is a second conversion pair **of `Path`** beside `String`, and `Path` **silently loses
 `Decode`** (the first version of this record said `Uri` would; the checker's rule says it is the capsule whose `TryFrom`
@@ -1894,10 +1894,11 @@ canonical thirty-six characters.
 Thirteen gaps, each measured by a probe above or by a run in this worktree, with the smallest fix that closes it.
 Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 
-1. **`std/idna` does not exist, so a non-ASCII host is refused.** `Uri.tryFrom("https://münchen.test/a")` answers
-   `NonAsciiHost`. *Smallest fix:* a package with Punycode (RFC 3492) and UTS #46 mapping, about three hundred lines
-   plus a table. It is a slice of its own (section 14, slice 5) and it is what can make `Path` into `UriReference`
-   infallible, which is gap 9's trigger.
+1. **A non-ASCII host is refused.** `Uri.tryFrom("https://münchen.test/a")` answers `NonAsciiHost`. *Smallest fix:*
+   the mapping exists since 2026-09-26 as `DomainName.tryFrom` in `std/dns` (Punycode and UTS #46 as far as
+   `std/text`'s tables reach, [DNS.md](DNS.md) section 3), and `std/uri` already imports it for `Host.domainName()`;
+   `hostOf` calls it for a non-ASCII host and stores the A-labels. It is a slice of its own (section 14, slice 5) and
+   it is what can make `Path` into `UriReference` infallible, which is gap 9's trigger.
 2. **A string literal adapts to nothing.** Probe 3. *Smallest fix:* the parameter kind of `docs/design/RESOURCES.md`
    slice 1, with the closed list of section 9 instead of three resource types.
 3. **`Into<Uri>` as a parameter type type checks and does not build.** Probe 4, with two internal errors in the
@@ -1987,7 +1988,7 @@ literal) and drops `raw` from the templates and patterns of the tests and the pa
 | 2 | **`std/uri`.** `Uri`, `UriReference`, `Authority`, `Host`, `UriError`, `Urn`; the parser with RFC 3987's mapping in, normalization, resolution with RFC 3986 section 5.4's examples as tests, `relativeTo`, `iriText`, `Show`/`Equals`/`Hash`/`Compare`, `formDecoded`/`formEncoded` and the query parameters; the `Path` bridge of RFC 8089; the prelude exports `Uri` and `UriError` | `std/uri/*`, `std/prelude/src/lib.trb` | 1 | **done** |
 | 3 | **`UriTemplate`.** RFC 6570 levels 1 to 4 expanded, the RFC's examples and the `uritemplate-test` suite as tests, matching of the reversible subset (section 9a) | `std/uri/src/template.trb`, `std/uri/tests/*` | 2 | **done** |
 | 4 | **`std/http` on `Uri`.** `get`, `post` and `send` take a `Uri`; a server's `Request` gains `uri`, the target URI of RFC 9112 section 3.3; `destinationOf` and `HttpError.InvalidUrl` are deleted; the examples and the conformance programs migrate | `std/http/src/*`, `examples/tour`, `tests/conformance/*` | 2 | **done** |
-| 5 | **IDNA.** `std/idna` with Punycode, UTS #46 mapping and the IDNA 2008 rules; `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/idna/*`, `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2 | later |
+| 5 | **IDNA.** Punycode, the UTS #46 mapping and the IDNA 2008 rules are `std/dns`'s `DomainName` ([DNS.md](DNS.md), built 2026-09-26, with `Host.domainName()`); `Uri.tryFrom` accepts a non-ASCII host and stores its A-labels, `iriText()` shows U-labels; `repaired(text)` for the WHATWG differences of section 6; gap 9 answered before `Path` into `UriReference` becomes infallible | `std/uri/src/*`, `compiler/src/semantics/checker/derive.trb` | 2, DNS.md slice 1 | later; the mapping is built |
 | 6 | **`data:`.** A `DataUri` refinement (RFC 2397): media type, parameters and the bytes | `std/uri/src/data.trb`, `std/encoding` | Base64 in `std/encoding` | later |
 | 7 | **The literal rule.** The parameter kind in the checker and the closed list of section 9 with `Path`, `Uri`, `UriReference`, `UriTemplate`, `Regex` and the resource types; the verbatim reading of a template and a pattern; `UriTemplate<Variables>` and `TemplateCase<Value>`; the diagnostics; the recorded value in the IR; `compiler/` depends on `std/uri`, `std/regex` and `std/path` | `compiler/src/syntax/*`, `compiler/src/semantics/checker/literal.trb`, `compiler/src/ir/lower/literal.trb`, `compiler/tests/literals.test.trb`, `tests/conformance/checked-literals.trb` | 2, 3; one round with `docs/design/RESOURCES.md` slice 1 | **done** (2026-09-25); the slice that put `std/uri` and `std/regex` in the fixpoint |
 | 8 | **Routes.** `route(template, to:)` and `TemplateRoutes` in `std/uri` - stage 1 of section 9a (a check at startup) and stage 2 on slice 7 are built; `std/web` re-exports them with its router | `std/uri/src/route.trb`, later `std/web/*` | 3, 4, and `docs/design/WEB.md`'s slices | the typed API **done**; `std/web` later |
@@ -2068,7 +2069,8 @@ Everything technical above is decided. These are taste or direction, and only th
 6. **Is refusing a non-ASCII host acceptable until `std/idna` exists?** The alternative is percent-encoding it, which
    produces a host no resolver accepts — a wrong value rather than an unsupported one. The document refuses, and
    slice 5 is the answer.
-   **Answered by the owner (2026-09-23):** refuse a non-ASCII host until `std/idna` exists.
+   **Answered by the owner (2026-09-23):** refuse a non-ASCII host until `std/idna` exists. The package became
+   `std/dns` (the owner, 2026-09-25; [DNS.md](DNS.md)), and the refusal stays until slice 5.
 7. **Is a redacting `show()` the right default?** Section 11 makes `print uri` lossy for the one URI in a thousand
    that carries a password, so a value that is printed no longer round trips through its own display form — which is
    a property every other capsule in the standard library has. The other reading is that `text()` should be the

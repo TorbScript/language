@@ -7,6 +7,7 @@
 use test, group from "std/test"
 use Uri, UriReference from "../src/uri"
 use Host from "../src/authority"
+use DomainName from "std/dns"
 use UriError from "../src/error"
 use IpAddress, Ipv4Address, Ipv6Address, SocketAddress from "std/ip"
 
@@ -196,6 +197,14 @@ group "hosts" {
 
   test "the escapes of a registered name are normalized and its letters lower cased" {
     assert(shown("http://%45xample.TEST/") == "http://example.test/")
+  }
+
+  test "a registered name that is a host name is a domain name, and nothing else is" {
+    assert(uriOf("https://www.Example.test/").host()?.domainName() == DomainName.tryFrom("www.example.test").ok())
+    assert(uriOf("https://xn--bcher-kva.example/").host()?.domainName()?.unicodeText() == Some("bücher.example"))
+    for text in ["http://127.0.0.1/", "http://[::1]/", "http://[v7.x]/", "file:///x", "http://a%2Cb.test/", "http://a!b.test/"] {
+      assert(uriOf(text).host()?.domainName() == None)
+    }
   }
 }
 
