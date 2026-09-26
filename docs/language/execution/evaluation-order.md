@@ -46,7 +46,23 @@ value ?? fallback                       value, then fallback only if value is ab
 ## Rules
 
 1. **A call evaluates its receiver first, then its arguments in the order they are written.** This holds whether the
-   call is a command or has parentheses; the two are the same call with a different spelling.
+   call is a command or has parentheses; the two are the same call with a different spelling. What is evaluated is the
+   **value**: an argument that changes the binding an earlier operand named - through a `var` parameter - does not
+   change the value the call is made on, whether the operand is a whole binding or a field of one.
+
+   ```trb check
+   fn added(var table: List<Int>, value: Int): Int {
+     table.append value
+     value
+   }
+
+   var table = [1, 2, 3]
+   print table.contains(added(table, 7))
+   print table
+   ```
+
+   The first line prints `false`, because `table` was `[1, 2, 3]` when it was evaluated as the receiver; the second
+   prints `[1, 2, 3, 7]`.
 
 2. **A labelled argument is evaluated where it is written, and only reordered into declaration order afterwards.**
    The label decides which parameter gets the value, not when the value runs.

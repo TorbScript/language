@@ -111,6 +111,7 @@ public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
       return
     }
   }
+  noteBindingChange checker, root, place.at
   if !isCountedRoot(checker, root) {
     return
   }
@@ -119,6 +120,27 @@ public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
     return
   }
   checker.valueUses.append ValueUse(root, true, place.at, changedBy: changedBy)
+}
+
+/**
+ * Where a place is changed through a `var` access - a `var` argument, the receiver of a `var fn` - whether or not the
+ * call's result is used, which is all the dead-change rule looks at ([noteChange]).
+ */
+public fn notePlaceChanged(var checker: Checker, place: Place) {
+  if const Some(root) = useRootOf(place.root) {
+    noteBindingChange checker, root, place.at
+  }
+}
+
+/** Where a binding is changed, whatever the dead-change rule counts: what the lowering's evaluation order asks. */
+fn noteBindingChange(var checker: Checker, root: UseRoot, at: Span) {
+  const key = useKey root
+  var starts = checker.bindingChanges.get(key) ?? []
+  if starts.contains(at.start) {
+    return
+  }
+  starts.append at.start
+  checker.bindingChanges.set key, starts
 }
 
 /** A place whose root the rule counts at all: a local or a top-level declaration, never a temporary. */

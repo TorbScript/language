@@ -19,7 +19,7 @@ use SymbolId from "../../semantics/symbols"
 use ModuleId from "../../semantics/module"
 use TypeId, LiteralValue from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
-use Adaptation, BindingId from "../../semantics/checker/context"
+use Adaptation, BindingId, UseRoot, useKey from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
 use FunctionId, FunctionKind, IrSignature, WitnessSource, borrowed from "../ir"
 use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from "../ir"
@@ -181,6 +181,70 @@ type OptionalChain {
 public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
   const destination = valueDestinationOf lowering, builder, expression
   lowerExpression lowering, builder, expression, destination
+}
+
+/**
+ * An operand that later operands of the same call run after, as the value it has **now**. A name is its binding's slot
+ * and not a copy of it (`valueDestinationOf`), so where a later operand changes the binding - `table.at(added(table, 5))`
+ * with `var table` the first parameter of `added` - the call would read the changed value, and evaluation order says
+ * the receiver is evaluated first (docs/language/execution/evaluation-order.md, rule 1). There the slot is copied before
+ * the later operands run; a field or a call is a temporary already, and a binding nothing later changes costs nothing.
+ *
+ * `later` covers every operand that runs after this one: from the start of the first to the end of the last.
+ */
+public fn snapshotted(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  slot: Slot,
+  later: Span?,
+): Slot {
+  const span = match later {
+    Some(found) => found
+    None => {
+      return slot
+    }
+  }
+  if !isChangedWithin(lowering, expression, span) {
+    return slot
+  }
+  const copy = addTemporary builder, builder.typeOfSlot(slot)
+  emit builder, Instruction.Copy(copy, slot)
+  copy
+}
+
+/** Whether the binding a name reads is changed anywhere inside a span, as the checker recorded it. */
+fn isChangedWithin(var lowering: Lowering, expression: Expression, span: Span): Bool {
+  const isName = match expression.kind {
+    .Name(_) => true
+    _ => false
+  }
+  if !isName {
+    return false
+  }
+  const key = match lowering.checker.resolutionAt(lowering.module, expression.span) {
+    Some(.Local(binding)) => useKey UseRoot.Local(binding)
+    Some(.Constant(symbol, _)) => useKey UseRoot.Declared(symbol)
+    _ => {
+      return false
+    }
+  }
+  for start in lowering.checker.bindingChanges.get(key) ?? [] {
+    if start >= span.start && start < span.end {
+      return true
+    }
+  }
+  false
+}
+
+/** The span from the first of these arguments to the end of the last, or `None` where there are none. */
+public fn spanOfArguments(arguments: List<Argument>, from: Int): Span? {
+  if from >= arguments.length() {
+    return None
+  }
+  const first = arguments[from].value.span
+  const last = arguments[arguments.length() - 1].value.span
+  Some first.to(last)
 }
 
 /**
@@ -1185,7 +1249,8 @@ fn lowerBinary(
     .And | .Or => shortCircuit lowering, builder, destination, operator, left, right, annotation, expression.span
     .Coalesce => lowerCoalesce lowering, builder, destination, expression, left, right, annotation
     _ => {
-      const first = lowerValue lowering, builder, left
+      const lowered = lowerValue lowering, builder, left
+      const first = snapshotted lowering, builder, left, lowered, Some(right.span)
       const second = lowerValue lowering, builder, right
       // The type of the **left** operand, which is the receiver of the member an operator is (`a + b` is `a.add(b)`)
       const operand = lowering.checker.expressionType lowering.module, left.span

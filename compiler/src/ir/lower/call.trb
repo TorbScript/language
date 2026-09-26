@@ -45,7 +45,7 @@ use irTypeOfClosed, typeAtSpan, voidTypeOf from "./context"
 use isNeverType, finishBlock, borrowedArguments, enterModule from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot, constantSlot from "./expression"
 use variantIndexOf from "./match"
-use emitIntrinsic, receiverSlot from "./expression"
+use emitIntrinsic, receiverSlot, snapshotted, spanOfArguments from "./expression"
 use Dispatched, dispatchedMember, dispatchedOn, preludeType, lowerTraitValue, boundsOfTraitValue from "./generic"
 use objectTypeOf from "./generic"
 use traitExtensionTargetOf from "../instantiate"
@@ -226,7 +226,8 @@ fn lowerCallable(
       places.append Some(path.reference)
       taken.appendAll path.taken
     } else {
-      operands.append lowerValue(lowering, builder, value)
+      const slot = lowerValue lowering, builder, value
+      operands.append snapshotted(lowering, builder, value, slot, spanOfArguments(arguments, 1))
       places.append None
     }
   } else if signature.takesSelf {
@@ -248,7 +249,12 @@ fn lowerCallable(
           return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      const coerced = match receiverOfTraitExtension(lowering, builder, reached, dispatched, receiver, at) {
+      const later = spanOfArguments arguments, 0
+      const held = match receiverExpressionOf(callee) {
+        Some(written) => snapshotted(lowering, builder, written, reached, later)
+        None => reached
+      }
+      const coerced = match receiverOfTraitExtension(lowering, builder, held, dispatched, receiver, at) {
         Some(found) => found
         None => {
           return abandonedSlot lowering, builder, destination
@@ -1079,7 +1085,9 @@ public fn lowerArgumentSlots(
       taken.appendAll path.taken
       continue
     }
-    const slot = lowerValue lowering, builder, arguments[index].value
+    const value = arguments[index].value
+    const lowered = lowerValue lowering, builder, value
+    const slot = snapshotted lowering, builder, value, lowered, spanOfArguments(arguments, index + 1)
     if !lowering.isSupported {
       return CallOperands([], [])
     }

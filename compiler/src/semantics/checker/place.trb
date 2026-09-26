@@ -25,7 +25,7 @@ use typeSignatureOf from "./signature"
 use resolveType from "./unify"
 use traitArgumentsOf from "./implementation"
 use isRange from "./expression"
-use noteChange, dropRead from "./mutation"
+use noteChange, notePlaceChanged, dropRead from "./mutation"
 use isInsideType, isSharedType from "./declaration"
 
 /** Why a place has to be mutable. The message follows from this, so every caller says what it is doing. */
@@ -707,6 +707,7 @@ public fn openReceiverAccess(
   } else {
     const _ = requireMutable checker, place, at, Mutation.Receiver(member)
   }
+  notePlaceChanged checker, place
   // Only a call whose result goes nowhere is a change and nothing else: `cursor.next()` hands its value on, so the
   // change to `cursor` is not the point of the statement and the dead-change rule has nothing to say about it
   if isDiscarded {
@@ -785,6 +786,7 @@ public fn openArgumentAccess(
       checker.recordPlace at, place
     }
   }
+  notePlaceChanged checker, place
   if isDiscarded {
     noteChange checker, place, callee
   }

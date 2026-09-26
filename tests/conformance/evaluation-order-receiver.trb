@@ -1,0 +1,46 @@
+/**
+ * Evaluation order, rule 1: a call evaluates its receiver first, then its arguments in the order they are written. A
+ * receiver or an argument that is a whole binding is its value **before** a later argument changes the binding - the
+ * same as a field receiver, which was always read into a value of its own first.
+ */
+
+fn added(var table: List<Int>, value: Int): Int {
+  table.append value
+  value
+}
+
+fn bumped(var value: Int): Int {
+  value = value + 10
+  value
+}
+
+fn described(first: List<Int>, second: Int): String {
+  "{first} {second}"
+}
+
+type Holder {
+  var table: List<Int>
+}
+
+fn inBody(): String {
+  var local = [1, 2, 3]
+  const found = local.contains added(local, 7)
+  "{found} {local}"
+}
+
+var table = [1, 2, 3]
+print table.contains(added(table, 7))
+print table
+
+var holder = Holder([1, 2, 3])
+print holder.table.contains(added(holder.table, 7))
+
+var other = [1, 2, 3]
+print described(other, added(other, 7))
+print other
+
+var total = 1
+print(total + bumped(total))
+print total
+
+print inBody()
