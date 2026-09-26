@@ -1,0 +1,39 @@
+use * as http from "std/http"
+use Server, Request, Response, HttpError from "std/http"
+use SocketAddress, IpAddress, TcpStream from "std/network"
+
+/**
+ * Serving on every worker (docs/design/NETWORK.md slice 8): `serve()` starts an accept loop per worker on the one
+ * listening socket, and each connection is served where its loop accepted it. Twelve requests at once all get their
+ * answer, whichever loop took them; a graceful shutdown ends every loop, and a connection afterwards is refused. The
+ * program runs with four workers and with one, and prints the same either way.
+ */
+
+/** Answers the number in the path, doubled. */
+fn handle(request: Request): Task<Result<Response, HttpError>> {
+  const number = Int.tryFrom(request.path().withoutPrefix("/") ?? "").ok() ?? 0
+  Ok Response.text("{number * 2}")
+}
+
+/** The text of the answer to `/number`. */
+fn fetch(base: String, number: Int): Task<Result<String, HttpError>> {
+  const url = Uri.tryFrom("{base}/{number}").ok() ?? panic("no URI")
+  var response = http.get(url).await()?
+  response.body.text().await()
+}
+
+match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
+  Ok(server) => {
+    const address = server.localAddress()
+    const base = "http://{address}"
+    var running = server
+    var serving = running.serve()
+    const asked = (1..13).map({ fetch base, _ }).toList()
+    const answers = Task.all(asked).await()
+    print answers.map({ _.ok() ?? "failed" }).joined(separator: " ")
+    running.shutdown(2.seconds()).await()
+    print "server: {serving.result()}"
+    print "after the shutdown: {TcpStream.connect(address).await().isOk()}"
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}

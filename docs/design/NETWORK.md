@@ -7,8 +7,8 @@ it, an HTTP/1.1 server and client in TorbScript in `std/http`, and TLS 1.2 and 1
 `https` in the client and the server. The Windows half is built and tested on every commit; the POSIX halves were
 written against their manuals, checked for syntax and types against stub headers, and are built for the first time by
 the Linux and macOS jobs of CI. UDP (slice 5) was built on Windows and its runtime tests run on Linux in a container as
-well; kqueue has not run it. The client's connection pool (slice 7) is in. The sandbox's network grant, HTTP/2 and
-HTTP/3 are later slices, each with its reason below.
+well; kqueue has not run it. The client's connection pool (slice 7) and serving on every worker (slice 8) are in. The
+sandbox's network grant, HTTP/2 and HTTP/3 are later slices, each with its reason below.
 
 This is the record of how a TorbScript program talks to another machine: which packages there are and what each one
 owns, how a socket meets the task scheduler of `docs/design/CONCURRENCY.md`, which TLS implementation the language
@@ -315,6 +315,32 @@ several accept loops on one listening socket**, which every operating system sup
 several threads in `accept`): the listener hands out a plain `Int64` handle through a private function of
 `std/http`'s server, each loop is spawned with it, and the socket is closed once the last loop is done. It is slice 8,
 because the first question the server has to answer is whether it is correct.
+
+**As built (slice 8):**
+
+- **`TcpListener.acceptor()` answers a `TcpAcceptor`**, a public value of `std/network` rather than a private function
+  of the server: the handle and nothing else, with `accept()`. It does not own the socket - the listener does, and
+  stopping or releasing it fails every accept of every acceptor with `isClosed()`. Public, because any server of a
+  protocol of its own wants several loops on one socket, not only HTTP's.
+- **`Server.serve()` starts one accept loop per worker** (`Workers.count()`), each a task whose frame holds the
+  acceptor, the handler and the five limits as numbers - a frame an idle worker takes before its first run
+  (CONCURRENCY section 16). The limits cross one number each because `ServerLimits`, at 40 bytes, is a block of the
+  worker's heap, and a frame holding a block stays where it was made; the acceptor holds no address for the same reason.
+  A handler closure crosses where its environment may (`torb_closure_may_move`, or its copy while the pool has several
+  workers); one that holds an object keeps every loop on the serving task's worker - correct, and as parallel as it can be.
+- **A connection is served where its loop accepted it**: the loop's children, pinned by the `TcpStream` they hold.
+  Each loop keeps its own list of connections and its own "closing" flag, so no state is shared between workers and
+  nothing needs a lock.
+- **`shutdown(grace)` stops the listener**; each loop's accept fails with a closed socket, and the loop then closes its
+  idle connections, lets its busy ones finish with `Connection: close`, and answers `Ok` once they did. The server waits
+  for every loop within `grace` and cancels what is left, which cancels their connections with them. **`close()`** stops
+  the listener and cancels every loop. `serve()` answers the first failure of a loop, or `Ok`.
+- **A server with TLS runs one loop**, because its `ServerIdentity` is an object and a loop that holds it cannot move;
+  handing the identity's handle across is the refinement when a benchmark asks for it.
+- **Verified** by `tests/conformance/http-workers.trb`, twelve requests at once and a graceful shutdown, with four workers
+  and with one (the `.workers` file), natively and in the VM; the emitted C starts the loop with
+  `torb_task_start_portable` where the handler may cross. Which worker runs which loop is the scheduler's, and not
+  printed.
 
 ## 5. TLS
 
@@ -678,7 +704,7 @@ not have is flagged by the registry. It is slice 11, with the registry.
 | 5 | UDP: `UdpSocket` with bind, send, receive, connect and its peer, over IOCP, epoll and kqueue (section 4, "UDP, as built") | **Done** on Windows and Linux; kqueue written, not run |
 | 6 | TLS: mbedTLS vendored, compiled only where it is reached, the platform verifiers, `std/tls`, `https` in the client and the server | **Done** (Windows' verifier; macOS verifies against its bundle until the Security framework step) |
 | 7 | The client's connection pool and redirect policy (`Client`, section 7) | **Done** |
-| 8 | Serving on every worker: several accept loops on one listening socket | Open |
+| 8 | Serving on every worker: several accept loops on one listening socket (section 4, "As built") | **Done** |
 | 9 | A poller per worker, if a benchmark asks for it | Open |
 | 10 | The sandbox's network grant, with the VM's tasks | Open |
 | 11 | A package's capability summary, with the registry | Open |

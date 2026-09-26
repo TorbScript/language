@@ -1,10 +1,12 @@
 /**
- * The HTTP/1.1 server: a listener, a handler that is a function from a request to a task of a response, and one task
- * per connection that serves its requests one after another (docs/design/NETWORK.md section 8).
+ * The HTTP/1.1 server: a listener, a handler that is a function from a request to a task of a response, an accept loop
+ * per worker on the one listening socket, and one task per connection that serves its requests one after another
+ * (docs/design/NETWORK.md sections 4 and 8).
  */
 
 use ArrayList from "std/collections"
-use TcpListener, TcpStream, SocketAddress from "std/network"
+use TcpListener, TcpAcceptor, TcpStream, SocketAddress from "std/network"
+use Workers from "std/task"
 use TlsStream, ServerIdentity from "std/tls"
 use Duration from "std/time"
 use Body, Method, Request, Response, Status from "./message"
@@ -36,7 +38,8 @@ public type ServerLimits {
 
 /**
  * An HTTP/1.1 server. It listens as soon as it is made; [Server.serve] accepts connections until the server is shut
- * down or closed, and every connection is a task of its own, on the worker that accepted it.
+ * down or closed - with an accept loop on every worker, all of them on the one listening socket - and every connection
+ * is a task of its own, on the worker whose loop accepted it.
  *
  *     fn hello(request: Request): Task<Result<Response, HttpError>> {
  *       Ok Response.text("hello from {request.path()}")
@@ -60,8 +63,8 @@ public shared type Server with Close {
   private state: ServerState
   /** What the server proves itself with where it speaks TLS; `None` for plain HTTP. */
   private identity: ServerIdentity?
-  /** The connections served now, and some that ended since the last accept. */
-  private var connections: List<Serving> = []
+  /** The accept loops [Server.serve] started, one per worker. */
+  private var loops: List<Task<Result<Void, HttpError>>> = []
 
   /**
    * A server listening on `address`; port 0 asks the system for a free one, which [Server.localAddress] then says. With
@@ -85,21 +88,48 @@ public shared type Server with Close {
   /**
    * Accepts connections and serves each in a task of its own, until the server is shut down or closed - then it
    * answers `Ok` - or the listening socket fails.
+   *
+   * It starts one accept loop per worker (`Workers.count()`), each accepting on the same listening socket, so the
+   * connections spread over every core: a loop holds nothing but the socket's handle, the handler and the limits, so an
+   * idle worker takes it before its first run, and a connection stays on the worker whose loop accepted it. A loop stays
+   * on this task's worker where the handler holds an object that cannot move, and a server that speaks TLS runs one
+   * loop, because its identity is such an object - correct either way, and parallel where it can be.
    */
   var fn serve(): Task<Result<Void, HttpError>> {
-    while !state.closing {
-      const stream = match listener.accept().await() {
-        Ok(accepted) => accepted
-        Fail(problem) => {
-          if state.closing {
-            return Ok void
-          }
-          return Fail HttpError.network(problem)
+    if state.closing {
+      return Ok void
+    }
+    var started: List<Task<Result<Void, HttpError>>> = []
+    match identity {
+      Some(proof) => {
+        started.append serveAccepted(listener.acceptor(), handler, limits, Some(proof))
+      }
+      None => {
+        const count = if Workers.count() < 1 { 1 } else { Workers.count() }
+        for _ in 0..count {
+          started.append(acceptLoop(
+            listener.acceptor(),
+            handler,
+            limits.headBytes,
+            limits.headFields,
+            limits.headMilliseconds,
+            limits.idleMilliseconds,
+            limits.drainBytes,
+          ))
         }
       }
-      track stream
     }
-    Ok void
+    loops = started
+    // Every loop ends `Ok` once the server stopped listening; the first that failed is the server's failure
+    var outcome: Result<Void, HttpError> = Ok void
+    for running in started {
+      if const Ok(Fail(problem)) = running.result() {
+        if outcome.isOk() {
+          outcome = Fail problem
+        }
+      }
+    }
+    outcome
   }
 
   /** Accepts one connection and serves it to its end: what a test wants. */
@@ -116,51 +146,29 @@ public shared type Server with Close {
    */
   var fn shutdown(grace: Duration = 10.seconds()): Task<Void> {
     state.closing = true
+    // Every loop's accept fails with a closed socket, and each loop then shuts its own connections down gently
     listener.stop()
-    var busy: List<Task<Result<Void, HttpError>>> = []
-    for serving in connections {
-      if const Some(task) = serving.task {
-        if serving.busy {
-          busy.append task
-        } else {
-          cancelConnection task
-        }
-      }
-    }
-    var finishing = waitForAll busy
+    var finishing = waitForAll loops
     const inTime = finishing.within(grace).await()
     if !inTime.isOk() {
-      for task in busy {
-        cancelConnection task
+      for running in loops {
+        cancelConnection running
       }
     }
-    connections = []
+    loops = []
   }
 
-  /** Stops at once: the listener closes and every connection is cancelled where it is. What the release of a server runs. */
+  /**
+   * Stops at once: the listener closes and every accept loop is cancelled, and with it every connection it serves. What
+   * the release of a server runs.
+   */
   var fn close() {
     state.closing = true
     listener.stop()
-    for serving in connections {
-      if const Some(task) = serving.task {
-        cancelConnection task
-      }
+    for running in loops {
+      cancelConnection running
     }
-    connections = []
-  }
-
-  /** Starts serving an accepted connection, and forgets the connections that ended since. */
-  private var fn track(stream: TcpStream) {
-    const serving = Serving()
-    serving.task = Some serveTracked(stream, handler, limits, state, serving, identity)
-    var kept: List<Serving> = []
-    for known in connections {
-      if !known.done {
-        kept.append known
-      }
-    }
-    kept.append serving
-    connections = kept
+    loops = []
   }
 }
 
@@ -189,7 +197,76 @@ fn waitForAll(tasks: List<Task<Result<Void, HttpError>>>): Task<Void> {
   }
 }
 
-/** Serves a connection and marks it done, so the server forgets it at its next accept. */
+/**
+ * One accept loop of [Server.serve] without TLS: a task whose frame holds a handle, a handler and numbers, so an idle
+ * worker may take it before it first runs. The limits arrive one number each, because a record of five of them is a
+ * block of this worker's heap, and a frame that holds one stays where it was made (docs/design/CONCURRENCY.md section
+ * 16, "What crosses a worker").
+ */
+fn acceptLoop(
+  acceptor: TcpAcceptor,
+  handler: Handler,
+  headBytes: Int,
+  headFields: Int,
+  headMilliseconds: Int,
+  idleMilliseconds: Int,
+  drainBytes: Int,
+): Task<Result<Void, HttpError>> {
+  const limits = ServerLimits headBytes, headFields, headMilliseconds, idleMilliseconds, drainBytes
+  serveAccepted(acceptor, handler, limits, None).await()
+}
+
+/**
+ * Accepts connections on `acceptor` and serves each in a task of its own, until the listening socket is closed - then
+ * the connections that wait for their next request are closed, the requests in progress are finished and answered with
+ * `Connection: close`, and the loop answers `Ok` once the last connection ended. The connections are this loop's
+ * children, so cancelling the loop cancels them.
+ */
+fn serveAccepted(
+  acceptor: TcpAcceptor,
+  handler: Handler,
+  limits: ServerLimits,
+  identity: ServerIdentity?,
+): Task<Result<Void, HttpError>> {
+  const state = ServerState()
+  var connections: List<Serving> = []
+  loop {
+    const stream = match acceptor.accept().await() {
+      Ok(accepted) => accepted
+      Fail(problem) => {
+        if !problem.isClosed() {
+          return Fail HttpError.network(problem)
+        }
+        // The server stopped listening: what waits is closed, what runs finishes
+        state.closing = true
+        var busy: List<Task<Result<Void, HttpError>>> = []
+        for serving in connections {
+          if const Some(task) = serving.task {
+            if serving.busy {
+              busy.append task
+            } else {
+              cancelConnection task
+            }
+          }
+        }
+        waitForAll(busy).await()
+        return Ok void
+      }
+    }
+    const serving = Serving()
+    serving.task = Some serveTracked(stream, handler, limits, state, serving, identity)
+    var kept: List<Serving> = []
+    for known in connections {
+      if !known.done {
+        kept.append known
+      }
+    }
+    kept.append serving
+    connections = kept
+  }
+}
+
+/** Serves a connection and marks it done, so its loop forgets it at its next accept. */
 fn serveTracked(
   stream: TcpStream,
   handler: Handler,

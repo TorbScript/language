@@ -102,6 +102,16 @@ public shared type TcpListener with Close {
   }
 
   /**
+   * A value that accepts connections on this listener from any task, on any worker: several accept loops on one
+   * listening socket, which is how a server serves on every core (docs/design/NETWORK.md section 4). It holds the
+   * socket's handle and nothing else, so it moves to another worker with the task that holds it; it does not own the
+   * socket, which the listener closes - and then every accept of every acceptor fails with a closed socket.
+   */
+  fn acceptor(): TcpAcceptor {
+    TcpAcceptor handle
+  }
+
+  /**
    * Stops listening before the listener is released: an `accept` that waits fails with a closed socket, and so does
    * every later one. Stopping twice is nothing. A server that shuts down gracefully calls it; the release of the
    * listener does the same by itself.
@@ -113,6 +123,31 @@ public shared type TcpListener with Close {
   /** Stops listening, as [TcpListener.stop] does: what the release of the listener runs. */
   var fn close() {
     networkClose handle
+  }
+}
+
+/**
+ * What [TcpListener.acceptor] answers: the right to accept on a listening socket, as a value that moves between workers.
+ * Several acceptors of one listener accept at once, each connection going to exactly one of them. It is the handle and
+ * nothing else - no address, no text - because a task moves to an idle worker only where its frame holds plain values
+ * of at most 32 bytes each (docs/design/CONCURRENCY.md section 16, "What crosses a worker").
+ */
+public type TcpAcceptor {
+  private handle: Int
+
+  /**
+   * The next connection, on the worker of the task that asked. Waits until one arrives.
+   *
+   * # Errors
+   *
+   * - [NetworkError] that `isClosed()` once the listener stopped listening or was released.
+   */
+  fn accept(): Task<Result<TcpStream, NetworkError>> {
+    const answer = networkAccept(handle).await()
+    if answer < 0 {
+      return Fail NetworkError.of(answer).about("accepting")
+    }
+    Ok TcpStream.of(answer)
   }
 }
 

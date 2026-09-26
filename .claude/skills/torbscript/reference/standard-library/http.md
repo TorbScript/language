@@ -182,8 +182,11 @@ public type ServerLimits {
 ```
 
 The server. A handler is a function from a request to a task of a response - a web framework is one of these, built out
-of routes. `serve()` accepts until the server is shut down or closed, and each connection is a task of its own that
-serves its requests one after another (a persistent connection, and pipelined requests in order). `shutdown(grace)`
+of routes. `serve()` accepts until the server is shut down or closed - with an accept loop on every worker, all of
+them on the one listening socket, so connections spread over the cores - and each connection is a task of its own, on
+the worker whose loop accepted it, that serves its requests one after another (a persistent connection, and pipelined
+requests in order). A handler that holds an object keeps every loop on the serving task's worker, and a server with
+`tls` runs one loop. `shutdown(grace)`
 stops accepting, closes the connections that wait for their next request, lets the requests in progress finish - each
 answered with `Connection: close` - and cancels what still runs after `grace`; then `serve()` answers `Ok`. `close()`,
 which the release of the server runs, stops at once and cancels every connection. With `tls`, every connection is

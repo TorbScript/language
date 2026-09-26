@@ -123,7 +123,12 @@ public shared type TcpListener with Close {
   static fn listen(address: SocketAddress, backlog: Int = 128): Result<TcpListener, NetworkError>
   fn localAddress(): SocketAddress
   fn accept(): Task<Result<TcpStream, NetworkError>>
+  fn acceptor(): TcpAcceptor
   fn stop()
+}
+
+public type TcpAcceptor {
+  fn accept(): Task<Result<TcpStream, NetworkError>>
 }
 ```
 
@@ -132,6 +137,10 @@ a free port, which `localAddress()` then says. An IPv6 listener hears IPv6 only,
 for the next connection; an accept that is cancelled leaves the connection for the next one. `stop()` closes the socket
 before the listener is released, and an `accept` that waits then fails with `isClosed()` - which is how a server stops
 accepting while it is shut down. Otherwise the socket closes when the last reference to the listener goes.
+`acceptor()` hands out the right to accept as a value - the socket's handle and nothing else - which a task may take to
+another worker: several accept loops on one listening socket, each connection going to one of them, are how a server
+serves on every core. The listener still owns the socket, and once it stops every acceptor's `accept` fails with
+`isClosed()`.
 
 ### TcpStream
 
