@@ -1,0 +1,65 @@
+/**
+ * [packageFiles]: which files of a package directory go into its archive (docs/design/RELEASE.md section 7.2) - every
+ * `.trb` below it that is not inside a nested package, skipping hidden directories, `build`, `target` and
+ * `node_modules`, plus `README.md` and the license files beside `project.trb`. There is no include or exclude list: it
+ * would be a second source of truth about which files a package has.
+ */
+
+use File, IoError from "std/fs"
+use TarEntry from "std/archive"
+use joinPath from "../project/path"
+
+/** The files of the package, relative to its directory, sorted. */
+public fn packageFiles(directory: String): Result<List<String>, IoError> {
+  var found: List<String> = []
+  collect(found, directory, "")?
+  for name in File.list(directory)? {
+    if isDocument(name) && !File.isDirectory(joinPath(directory, name)) {
+      found.append name
+    }
+  }
+  found.sort({ _ })
+  Ok found
+}
+
+/** `README.md`, and `LICENSE`, `LICENSE.md`, `LICENSE-MIT` and the like, and `COPYING`. */
+fn isDocument(name: String): Bool {
+  name == "README.md" || name.startsWith("LICENSE") || name.startsWith("COPYING")
+}
+
+fn collect(var found: List<String>, root: String, relative: String): Result<Void, IoError> {
+  const directory = if relative.isEmpty() { root } else { joinPath root, relative }
+  for name in File.list(directory)? {
+    const path = if relative.isEmpty() { name } else { "{relative}/{name}" }
+    const full = joinPath root, path
+    if File.isDirectory(full) {
+      if name.startsWith(".") || name == "build" || name == "target" || name == "node_modules" {
+        continue
+      }
+      // A directory with a project of its own is another package, published on its own
+      if File.exists(joinPath(full, "project.trb")) {
+        continue
+      }
+      collect(found, root, path)?
+      continue
+    }
+    if name.endsWith(".trb") {
+      found.append path
+    }
+  }
+  Ok void
+}
+
+/** The files as the entries of an archive. Every file of a package is text, so one that is not UTF-8 is refused. */
+public fn entriesOf(directory: String, paths: List<String>): Result<List<TarEntry>, String> {
+  var entries: List<TarEntry> = []
+  for path in paths {
+    match File.readText(joinPath(directory, path)) {
+      Ok(text) => entries.append TarEntry(path, text.bytes().toList())
+      Fail(problem) => {
+        return Fail "{problem}: every file of a package is UTF-8 text"
+      }
+    }
+  }
+  Ok entries
+}

@@ -2,8 +2,8 @@
 
 **Status: planning; the CI and the release pipeline of section 13 are built and have not run yet** — this record plans
 the public release of the language: what has to exist first, what a download contains, the website at **torb.dev** and
-the package registry at **packages.torb.dev**. Apart from section 13, no command, page, server or file described here
-exists yet, the domain serves nothing, and nothing has been registered, published or announced. Every statement about what the repository does today comes from section 1, which was measured on the
+the package registry at **packages.torb.dev**. Apart from section 13 and the package manager's client of section 7.13,
+no command, page, server or file described here exists yet, the domain serves nothing, and nothing has been registered, published or announced. Every statement about what the repository does today comes from section 1, which was measured on the
 commit this record was written on (`653af8bb`).
 
 **A release is three launches, not one, and each has its own gate.** The *preview* publishes the language: downloads,
@@ -580,6 +580,8 @@ release "1.2.5" {
 yank "1.2.4", reason: "sends the proxy password in clear text", signature: "ed25519:..."
 ```
 
+The client reads exactly this format since 2026-09-26; what this section left open is decided in section 7.13.
+
 - **Only what resolution needs is in the index**: the version, the hash, the `language` minimum, the runtime
   dependencies and the capabilities — the last so that `torb add` and `torb update` can show "this update gains the
   network" (CONCEPT) before downloading anything. Description, keywords, the README and the documentation are on the
@@ -802,6 +804,39 @@ forever"; pub.dev's verified domains, without a dependency on one company's cons
 **What is left**: install scripts (npm), built artifacts in a source registry (npm, PyPI), a single identity provider
 (crates.io, JSR), revert windows (Hex, npm), and a registry that *is* the version control host (Go).
 
+### 7.13 The client, as built (2026-09-26)
+
+**Slice 11 without its signatures, and slices 4 to 6 as far as the client needs them.** The commands are `torb add`,
+`remove`, `update`, `install` and `publish` (`docs/tooling/torb-add.md` and the pages beside it); the resolver is
+PROJECT.md section 6a's PubGrub; everything is TorbScript, with no new native. What was open above is decided here:
+
+| Question | Decision | Why |
+|---|---|---|
+| URLs of a registry | `<registry>/index/<owner>/<name>.trb` and `<registry>/archives/<owner>/<name>/<version>.tar.gz`; a 404 of an index is a package the registry does not have | the layout of the diagram at the top of this record, with nothing to negotiate |
+| A registry for tests and offline use | **`file:`** and a directory of the same files, relative to the root project (`registry "acme", url: "file:../registry"`); `torb publish` writes one - the archive and one appended release - and never replaces a version | "a mirror is a directory of the same files" (7.5) made literal, and the write service's `file:` storage driver will do the same two writes |
+| How the client fetches | **`curl`, else `wget`**, run to their end; `TORB_FETCH=curl` or `wget` chooses one. **Not `std/http`**, although its client speaks HTTPS with the platform's trust | `torb` cannot wait for a task: an `await()` at the top level of `main.trb` makes that top level a task, and the VM that `torb run` and `torb test` start refuses to run its scheduler from inside one (`the scheduler was run from inside a task`) - which the first version of this client did, and every VM test failed. Every request of `std/http` is a task. Besides, on 2026-09-26 `std/network`'s name resolution crashes a native program on Windows for a host that needs a DNS lookup (`TcpStream.connectTo("example.com", 80)`; an address literal and `localhost` work). `curl` ships with Windows 10 and later, macOS and practically every Linux, and `torb upgrade` already relies on it |
+| The cache | `$TORB_CACHE`, else `~/.torb/cache` (`%LOCALAPPDATA%\torb\cache` on Windows): `packages/<hex of the tree hash>/` with a `.complete` written last, and `index/<registry>/` with the last copy of each index file fetched over the network | content-addressed as 7.5 says; the marker makes a half-written directory one that is unpacked again, since `std/fs` has no rename |
+| `--offline` | an index from the cache's copy, an archive only where it is unpacked; a `file:` registry is read either way | 7.5 |
+| Reading and writing an archive | synchronously through the system: `od -t x1` reads it on Linux, macOS and FreeBSD, `sh` with `printf` and octal escapes writes it; PowerShell's `[IO.File]` with Base64 on Windows. Every other file of a package is text and goes through `File.readText` and `File.writeText`, so a package file that is not UTF-8 is refused | the same reason: `std/fs` reads and writes bytes only through tasks. A synchronous `File.readBytes` and `File.writeBytes` is the clean answer; it is a new native, so it takes the two commits and the seed refresh of CLAUDE.md, and it is left for its own round |
+| The archive | the deterministic `tar` of `std/archive` inside the gzip of `std/compression` (one block of fixed Huffman codes); at most 10 MiB compressed, 64 MiB unpacked and 10 000 files; a link, an absolute path, a `..` or a `\` refused before anything is written | 7.2 and 7.10; the unpacked limit is what stops an archive of zeros |
+| The hash | the tree hash of 7.2 with `std/digest`'s SHA-256, checked on every install | 7.2 |
+| The capability table | in the toolchain for now (`capabilityOf`, `compiler/src/package/archive.trb`): `files` for `std/fs`, `network` for `std/network`, `std/http` and `std/tls`, `processes`, `environment` for `std/os/environment`, `the operating system` for the rest of `std/os`, `clock` for `std/time`, `scripts` for `std/sandbox`, `foreign functions` for a `foreign` block | 7.8 wants it in `std`; until then one function is the one place |
+| An update that gains a capability | refused, printing the gain, unless `--accept-capabilities` | CONCEPT: "needs an explicit confirmation"; a flag is the confirmation a script can give |
+| `language` of a release | compared with the toolchain's language version (`languageVersion`, 0.1.0); a newer one is not chosen, and the explanation says so | 7.4 |
+| Signatures and `config.trb` | a `signature` line is read and kept, and **not verified**: there is no Ed25519 in `std` yet, and a `file:` registry signs nothing. `config.trb` is not fetched | verification belongs with the key of the registry, which the write service's round creates |
+
+**`torb publish` against 7.2's steps.** Step 1 is built (every refusal at once). Step 2 evaluates `project.trb` in the
+sandbox and writes the `settings` block into the workspace's lock; the archive's own lock holds that block and the
+workspace's `graph` as information. Step 3 is not: the sandbox does not record which variables and files an
+evaluation read, so there is nothing to print. Step 4 is `torb check` of the package against its locked graph, not
+`--every-target`. Step 5 is built, with the summary above. Step 6 writes a `file:` registry and **refuses a registry on
+the network** with a message that names the write service as the later round.
+
+**Not built in this round, and why**: the write service, accounts, tokens, trusted publishing and the docker-compose
+deployment (7.11, the next round); signature checks and key rotation (no Ed25519); `yank`, `owner`, `login`, `audit`,
+`vendor` and `deprecate`; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources; two majors of one package
+in one graph (PROJECT.md section 6a); HTTP range requests for an index that grew.
+
 ## 8. Terminology
 
 **Recommendation: keep "package".** It is the word the repository already uses consistently for the unit a registry
@@ -891,7 +926,7 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 | 1 | **`std/markdown`**: CommonMark with tables and front matter, the document tree as a value, HTML output; the CommonMark specification's examples are its test suite; `compiler/src/documentation/markdown.trb` is replaced by it. **Built (2026-09-25)**: all 652 examples pass, and the documentation tool reads through it | nothing | preview |
 | 2 | **`torb docs site <root> <out>`** and `--check`: pages, navigation from the indexes, highlighting from the lexer and `torb highlight`, the search index, a stylesheet, `llms.txt`; the site of `main` built by tier A | 1 | preview |
 | 3 | **CI**: `tools/gates.sh a` and `b` on every tier 1 target; the macOS and FreeBSD `executablePath`; the `runtime/os/*.c` bodies compiled on their systems for the first time (fact 4). **Built, not yet run: section 13** | nothing | preview |
-| 4 | **The archive format and its hash**: SHA-256 and a deterministic `tar` + `gzip` reader and writer, as `std` packages over thin natives; the tree hash of 7.2 | nothing | registry |
+| 4 | **The archive format and its hash**: SHA-256 and a deterministic `tar` + `gzip` reader and writer, as `std` packages over thin natives; the tree hash of 7.2. **Built (2026-09-26)** as `std/digest`, `std/archive` and `std/compression`, in TorbScript with no native | nothing | registry |
 | 5 | **The index format** in `std/project` (or a `std/registry`): `release`, `yank`, `package`, `owner` as receiver-script vocabulary with a static reader and a deterministic printer, and a `--check` over a directory of such files in the shape of
 `canon --check`; the capability table of 7.8 in `std` | 4 for the hashes | registry |
 | 6 | **`torb pack` and `torb publish --dry-run`**: the file set of 7.2, the archive, the hash, the capability summary, the printed environment variables. No network. Needs PROJECT.md slice 8 (the locked manifest), which needs slice 7 | 4, PROJECT.md 7-8 | registry |
@@ -900,7 +935,7 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 | 9 | **`torb upgrade`** and `torb toolchain add c` (the managed `zig cc` of section 4) | 7 | preview |
 | 10 | **The playground**: `torb` for `wasm32-wasi`, the new `OperatingSystem` case, the page | VM slice 7 | preview or later |
 | **—** | **The preview**: torb.dev live with downloads, the documentation of the tag, the policies of section 9 | 1-3, 7-9 | |
-| 11 | **The client**: resolution, `add`/`remove`/`update`, the content-addressed cache, `--offline`, `vendor`, signature checks against `config.trb` — tested against a directory of index files, with no server at all | 5, 6, HTTP and TLS (milestone 8) | registry |
+| 11 | **The client**: resolution, `add`/`remove`/`update`, the content-addressed cache, `--offline`, `vendor`, signature checks against `config.trb` — tested against a directory of index files, with no server at all. **Built (2026-09-26) without `vendor` and the signature checks, with the index format of slice 5 and `torb publish --dry-run` of slice 6: section 7.13** | 5, 6, HTTP and TLS (milestone 8) | registry |
 | 12 | **The write service**: accounts, owners, tokens, 2FA, publish, yank, trusted publishing, the documentation worker | the HTTP server of milestone 10, or question 2 | registry |
 | 13 | **The registry's site**: package pages, capabilities, documentation, search | 2, 12 | registry |
 | **—** | **The registry**: packages.torb.dev live, the policies of 7.10 | 11-13 | |

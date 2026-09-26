@@ -1,0 +1,254 @@
+/**
+ * [VersionSet]: a set of versions, closed under union, intersection and complement - what the resolver's terms are made
+ * of (docs/design/PROJECT.md section 6a).
+ *
+ * **Releases and pre-releases are two halves of every set.** Each half is a list of half-open intervals `[low, high)`
+ * in semver's order, but a version only counts where its kind matches the half: a requirement written without a
+ * pre-release (`^1.2.3`) has an empty pre-release half, so `1.3.0-beta.1` - which lies between `1.2.3` and `2.0.0` in the
+ * order - is not in it. A requirement that names a pre-release (`^1.2.3-beta.1`) adds the pre-releases of that one
+ * release from that one on, which is Cargo's rule. Because the two halves partition the versions, complementing each
+ * half on its own is the complement of the set, and the resolver's algebra stays exact. The bounds of the release half
+ * are releases, so no interval of it is empty of releases without being empty.
+ */
+
+use Version from "./version"
+
+/** Every version from `low` up to and without `high`; `None` has no end. */
+public type Interval {
+  low: Version
+  high: Version?
+
+  fn contains(version: Version): Bool {
+    if version < low {
+      return false
+    }
+    match high {
+      Some(end) => version < end
+      None => true
+    }
+  }
+}
+
+/** The first version of the release half, below which there is no release. */
+const releaseStart = Version 0, 0, 0
+
+/** A set of versions: a list of intervals for releases, and one for pre-releases. */
+public type VersionSet with Show {
+  /** Sorted, disjoint and never touching: the canonical form, so two equal sets are equal values. */
+  releases: List<Interval>
+  preReleases: List<Interval>
+
+  /** Every version, releases and pre-releases alike. */
+  static any = VersionSet([Interval(releaseStart, None)], [Interval(Version.lowest, None)])
+
+  /** No version at all. */
+  static none = VersionSet([], [])
+
+  /** Every release and no pre-release: the requirement `*`, and a dependency written without one. */
+  static everyRelease = VersionSet([Interval(releaseStart, None)], [])
+
+  /** The one version. */
+  static fn exactly(version: Version): VersionSet {
+    const interval = Interval version, Some(version.successor())
+    if version.isPreRelease() {
+      return VersionSet([], [interval])
+    }
+    VersionSet([interval], [])
+  }
+
+  /** The releases from `low` up to and without `high`; a pre-release as a bound stands for its release. */
+  static fn releasesBetween(low: Version, high: Version?): VersionSet {
+    VersionSet normalized([Interval(low.release(), high.map({ _.release() }))]), []
+  }
+
+  /** The pre-releases from `low` up to and without `high`. */
+  static fn preReleasesBetween(low: Version, high: Version?): VersionSet {
+    VersionSet([], normalized([Interval(low, high)]))
+  }
+
+  fn contains(version: Version): Bool {
+    const half = if version.isPreRelease() { preReleases } else { releases }
+    half.any({ _.contains version })
+  }
+
+  fn isEmpty(): Bool {
+    releases.isEmpty() && preReleases.isEmpty()
+  }
+
+  fn isAny(): Bool {
+    self == VersionSet.any
+  }
+
+  fn union(other: VersionSet): VersionSet {
+    VersionSet unionOf(releases, other.releases), unionOf(preReleases, other.preReleases)
+  }
+
+  fn intersection(other: VersionSet): VersionSet {
+    const releaseHalf = intersectionOf releases, other.releases, releaseStart
+    VersionSet releaseHalf, intersectionOf(preReleases, other.preReleases, Version.lowest)
+  }
+
+  fn complement(): VersionSet {
+    VersionSet complementOf(releases, releaseStart), complementOf(preReleases, Version.lowest)
+  }
+
+  /** What is in this set and not in `other`. */
+  fn difference(other: VersionSet): VersionSet {
+    intersection other.complement()
+  }
+
+  /** Whether every version of `other` is in this set. */
+  fn includesAll(other: VersionSet): Bool {
+    other.difference(self).isEmpty()
+  }
+
+  /** Whether some version is in both sets. */
+  fn overlaps(other: VersionSet): Bool {
+    !intersection(other).isEmpty()
+  }
+
+  /**
+   * The set the way a requirement would say it, where one says it: `*`, `1.2.3`, `^1.2.3`, `~1.2.3`, `>=1.2.3`,
+   * `<2.0.0`, `>=1.2.3 <1.5.0`, `^1.2.3-beta.1`; intervals one after the other are joined with `or`.
+   */
+  fn show(): String {
+    if isEmpty() {
+      return "no version"
+    }
+    if isAny() {
+      return "any version"
+    }
+    if preReleases.isEmpty() {
+      return shownHalf releases, releaseStart
+    }
+    // `^1.2.3-beta.1`: the caret of the release, and the pre-releases of that release from the one named
+    if const [single] = preReleases {
+      if const Some(end) = single.high {
+        const release = single.low.release()
+        if end == release {
+          if releases.isEmpty() {
+            return if single.low.successor() == end { single.low.show() } else { ">={single.low} <{end}" }
+          }
+          if const [one] = releases {
+            if one.low == release {
+              const shown = shownInterval one, releaseStart
+              if shown.startsWith("^") || shown.startsWith("~") {
+                return "{shown.prefix(1)}{single.low}"
+              }
+            }
+          }
+        }
+      }
+    }
+    if releases.isEmpty() {
+      return "pre-release {shownHalf(preReleases, Version.lowest)}"
+    }
+    if preReleases == [Interval(Version.lowest, None)] {
+      return "{shownHalf(releases, releaseStart)} or any pre-release"
+    }
+    "{shownHalf(releases, releaseStart)} or pre-release {shownHalf(preReleases, Version.lowest)}"
+  }
+}
+
+fn shownHalf(half: List<Interval>, start: Version): String {
+  half.map({ shownInterval _, start }).toList().joined(separator: " or ")
+}
+
+fn shownInterval(interval: Interval, start: Version): String {
+  const low = interval.low
+  const end = match interval.high {
+    Some(found) => found
+    None => {
+      if low == start {
+        return "*"
+      }
+      return ">={low}"
+    }
+  }
+  if low == start {
+    return "<{end}"
+  }
+  if low.successor() == end {
+    return low.show()
+  }
+  if !low.isPreRelease() && !end.isPreRelease() {
+    if low.major > 0 && end == Version.of(low.major + 1, 0, 0) {
+      return "^{low}"
+    }
+    if low.major == 0 && low.minor > 0 && end == Version.of(0, low.minor + 1, 0) {
+      return "^{low}"
+    }
+    if end == Version.of(low.major, low.minor + 1, 0) {
+      return "~{low}"
+    }
+  }
+  ">={low} <{end}"
+}
+
+/** The intervals sorted by where they start, with every two that overlap or touch made one. */
+fn normalized(intervals: List<Interval>): List<Interval> {
+  var sorted = intervals.filter({ isNonEmpty _ }).toList()
+  sorted.sort({ _.low })
+  var merged: List<Interval> = []
+  for interval in sorted {
+    const count = merged.length()
+    if count > 0 {
+      const last = merged[count - 1]
+      const reaches = match last.high {
+        None => true
+        Some(end) => end >= interval.low
+      }
+      if reaches {
+        merged[count - 1] = Interval last.low, laterEnd(last.high, interval.high)
+        continue
+      }
+    }
+    merged.append interval
+  }
+  merged
+}
+
+fn isNonEmpty(interval: Interval): Bool {
+  match interval.high {
+    Some(end) => interval.low < end
+    None => true
+  }
+}
+
+/** The later of two ends, where `None` is no end and later than every version. */
+fn laterEnd(first: Version?, second: Version?): Version? {
+  match (first, second) {
+    (Some(left), Some(right)) => Some left.max(right)
+    _ => None
+  }
+}
+
+fn unionOf(first: List<Interval>, second: List<Interval>): List<Interval> {
+  var both = first
+  both.appendAll second
+  normalized both
+}
+
+fn complementOf(half: List<Interval>, lowest: Version): List<Interval> {
+  var gaps: List<Interval> = []
+  var start = lowest
+  for interval in half {
+    if start < interval.low {
+      gaps.append Interval(start, Some(interval.low))
+    }
+    match interval.high {
+      Some(end) => {
+        start = end
+      }
+      None => {
+        return gaps
+      }
+    }
+  }
+  gaps.append Interval(start, None)
+  gaps
+}
+
+fn intersectionOf(first: List<Interval>, second: List<Interval>, lowest: Version): List<Interval> {
+  complementOf unionOf(complementOf(first, lowest), complementOf(second, lowest)), lowest
+}

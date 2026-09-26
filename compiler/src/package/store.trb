@@ -1,0 +1,246 @@
+/**
+ * What the package manager keeps on disk, and the few operations on files it needs: the cache directory, reading and
+ * writing an archive's bytes, and a package unpacked into the cache under its tree hash.
+ *
+ * **The cache is content-addressed** (docs/design/RELEASE.md section 7.5): `<cache>/packages/<hex of the tree hash>/`
+ * holds a package's files, shared by every project on the machine, and a `.complete` file written last says that the
+ * directory was unpacked whole and verified. A directory without it is unpacked again. Copies of the index files of a
+ * registry on the network are kept in `<cache>/index/<registry>/`, which is what `--offline` resolves from.
+ *
+ * **Everything here is synchronous**, because `torb` itself cannot wait for a task: an entry file that waits runs its
+ * top level as a task, and `torb run` and `torb test` start the VM's scheduler from that top level, which the runtime
+ * refuses from inside a task. `std/fs` reads and writes bytes only through tasks, so the one binary file the package
+ * manager handles - an archive - is read and written through the system: `od` on Linux, macOS and FreeBSD, PowerShell
+ * on Windows, the same way `torb upgrade` hashes a download. Every other file of a package is text and goes through
+ * `File.readText` and `File.writeText`.
+ */
+
+use File from "std/fs"
+use Environment from "std/os"
+use Process from "std/process"
+use OperatingSystem from "std/core"
+use TarEntry from "std/archive"
+use textOf from "std/stream"
+use joinPath, parentPath from "../project/path"
+use torbHome from "../cli/upgrade"
+
+/**
+ * `$TORB_CACHE`, or `<torb home>/cache` - `~/.torb/cache` on Linux, macOS and FreeBSD, `%LOCALAPPDATA%\torb\cache` on
+ * Windows. `None` where neither can be found.
+ */
+public fn cacheDirectory(): String? {
+  if const Some(given) = Environment.get("TORB_CACHE") {
+    if !given.isEmpty() {
+      return Some(File.absolutePath(given).ok() ?? given).map({ _.replace "\\", "/" })
+    }
+  }
+  match torbHome() {
+    Ok(home) => Some "{home.replace("\\", "/")}/cache"
+    Fail(_) => None
+  }
+}
+
+/** Where a package with this tree hash is unpacked: `<cache>/packages/<hex>`. */
+public fn packageDirectory(cache: String, hash: String): String {
+  "{cache}/packages/{hash.withoutPrefix("sha256:") ?? hash}"
+}
+
+/** Whether a package with this tree hash is in the cache, unpacked whole. */
+public fn isInstalled(cache: String, hash: String): Bool {
+  File.exists "{packageDirectory(cache, hash)}/.complete"
+}
+
+/** The whole of a file, as bytes: `od` prints them as hexadecimal, PowerShell as Base64. */
+public fn readBytes(path: String): Result<List<UInt8>, String> {
+  if !File.exists(path) {
+    return Fail "{path}: the file does not exist"
+  }
+  if OperatingSystem.current == .Windows {
+    const script = "[Convert]::ToBase64String([IO.File]::ReadAllBytes('{quotedForPowerShell(path)}'))"
+    const text = captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script])?
+    return fromBase64 text
+  }
+  fromHex(captured("od", ["-A", "n", "-v", "-t", "x1", path])?)
+}
+
+/**
+ * Creates or empties the file and writes the bytes into it, creating the directories above it: PowerShell decodes
+ * Base64 on Windows, and elsewhere `sh` runs `printf` with an octal escape per byte.
+ */
+public fn writeBytes(path: String, bytes: List<UInt8>): Result<Void, String> {
+  if const Fail(problem) = File.createDirectory(parentPath(path)) {
+    return Fail problem.show()
+  }
+  const staging = "{path}.part"
+  if OperatingSystem.current == .Windows {
+    writeText(staging, toBase64(bytes))?
+    const script = "[IO.File]::WriteAllBytes('{quotedForPowerShell(path)}', [Convert]::FromBase64String([IO.File]::ReadAllText('{quotedForPowerShell(staging)}')))"
+    const _ = captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script])?
+  } else {
+    var lines = ["exec > '{path.replace("'", "'\\''")}'"]
+    var at = 0
+    while at < bytes.length() {
+      var escapes: List<String> = []
+      const end = if at + 1024 < bytes.length() { at + 1024 } else { bytes.length() }
+      for index in at..end {
+        escapes.append "\\{octalOf(Int.from(bytes[index]))}"
+      }
+      lines.append "printf '{escapes.joined(separator: "")}'"
+      at = end
+    }
+    writeText(staging, lines.map({ "{_}\n" }).toList().joined(separator: ""))?
+    const _ = captured("sh", [staging])?
+  }
+  // The staging file is left empty rather than removed: `std/fs` has no way to remove a file yet
+  writeText staging, ""
+}
+
+/** Creates or empties the file and writes the text into it, creating the directories above it. */
+public fn writeText(path: String, text: String): Result<Void, String> {
+  if const Fail(problem) = File.createDirectory(parentPath(path)) {
+    return Fail problem.show()
+  }
+  File.writeText(path, text).mapError({ _.show() })
+}
+
+/**
+ * The files of a verified archive written into the cache under its tree hash, the marker last. The paths were checked
+ * by `unpacked` already; a directory that was half written before is written over. Every file of a package is text,
+ * so a file that is not UTF-8 is refused.
+ */
+public fn install(cache: String, hash: String, entries: List<TarEntry>): Result<Void, String> {
+  const directory = packageDirectory cache, hash
+  for entry in entries {
+    const text = match textOf(entry.bytes) {
+      Ok(found) => found
+      Fail(_) => {
+        return Fail "`{entry.path}` is not UTF-8, and every file of a package is text"
+      }
+    }
+    writeText(joinPath(directory, entry.path), text)?
+  }
+  writeText "{directory}/.complete", "{hash}\n"
+}
+
+/** Runs a program to its end and answers its standard output - or what it said on standard error when it failed. */
+public fn captured(program: String, arguments: List<String>): Result<String, String> {
+  match Process.runBlocking(program, arguments) {
+    Ok(output) => {
+      if output.isSuccess() {
+        Ok output.standardOutput
+      } else {
+        Fail "`{program}` failed: {output.standardError.trim()}"
+      }
+    }
+    Fail(problem) => Fail "`{program}` could not be started: {problem}"
+  }
+}
+
+fn quotedForPowerShell(path: String): String {
+  path.replace "'", "''"
+}
+
+fn octalOf(value: Int): String {
+  "{value / 64}{(value / 8) % 8}{value % 8}"
+}
+
+/** The bytes of `od -t x1`'s output: two hexadecimal digits a byte, between spaces and line breaks. */
+fn fromHex(text: String): Result<List<UInt8>, String> {
+  var bytes: List<UInt8> = []
+  var pending = 0 - 1
+  for character in text.chars() {
+    const digit = hexDigitOf character
+    if digit < 0 {
+      if pending >= 0 {
+        return Fail "od printed a byte of one digit"
+      }
+      continue
+    }
+    if pending < 0 {
+      pending = digit
+    } else {
+      bytes.append(UInt8.tryFrom(pending * 16 + digit).ok() ?? 0)
+      pending = 0 - 1
+    }
+  }
+  Ok bytes
+}
+
+fn hexDigitOf(character: Char): Int {
+  if character >= '0' && character <= '9' {
+    return Int.from(character) - 48
+  }
+  if character >= 'a' && character <= 'f' {
+    return Int.from(character) - 87
+  }
+  0 - 1
+}
+
+const base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+fn toBase64(bytes: List<UInt8>): String {
+  const alphabet = base64Alphabet.chars().map({ _.show() }).toList()
+  var pieces: List<String> = []
+  var at = 0
+  while at < bytes.length() {
+    const first = Int.from bytes[at]
+    const second = if at + 1 < bytes.length() { Int.from bytes[at + 1] } else { 0 }
+    const third = if at + 2 < bytes.length() { Int.from bytes[at + 2] } else { 0 }
+    const word = (first << 16) | (second << 8) | third
+    pieces.append alphabet[(word >> 18) & 63]
+    pieces.append alphabet[(word >> 12) & 63]
+    pieces.append(if at + 1 < bytes.length() { alphabet[(word >> 6) & 63] } else { "=" })
+    pieces.append(if at + 2 < bytes.length() { alphabet[word & 63] } else { "=" })
+    at = at + 3
+  }
+  pieces.joined separator: ""
+}
+
+fn fromBase64(text: String): Result<List<UInt8>, String> {
+  var bytes: List<UInt8> = []
+  var word = 0
+  var count = 0
+  for character in text.chars() {
+    const value = base64ValueOf character
+    if value < 0 {
+      continue
+    }
+    word = (word << 6) | value
+    count = count + 1
+    if count == 4 {
+      bytes.append(UInt8.tryFrom((word >> 16) & 255).ok() ?? 0)
+      bytes.append(UInt8.tryFrom((word >> 8) & 255).ok() ?? 0)
+      bytes.append(UInt8.tryFrom(word & 255).ok() ?? 0)
+      word = 0
+      count = 0
+    }
+  }
+  if count == 2 {
+    bytes.append(UInt8.tryFrom((word >> 4) & 255).ok() ?? 0)
+  } else if count == 3 {
+    bytes.append(UInt8.tryFrom((word >> 10) & 255).ok() ?? 0)
+    bytes.append(UInt8.tryFrom((word >> 2) & 255).ok() ?? 0)
+  } else if count == 1 {
+    return Fail "PowerShell printed Base64 that ends in the middle of a byte"
+  }
+  Ok bytes
+}
+
+fn base64ValueOf(character: Char): Int {
+  if character >= 'A' && character <= 'Z' {
+    return Int.from(character) - 65
+  }
+  if character >= 'a' && character <= 'z' {
+    return Int.from(character) - 71
+  }
+  if character >= '0' && character <= '9' {
+    return Int.from(character) + 4
+  }
+  if character == '+' {
+    return 62
+  }
+  if character == '/' {
+    return 63
+  }
+  0 - 1
+}

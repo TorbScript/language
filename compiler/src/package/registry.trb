@@ -1,0 +1,41 @@
+/**
+ * Which registry a package comes from (docs/design/PROJECT.md section 7, docs/design/RELEASE.md section 7.1): the
+ * registry its owner is bound to by a `registry` line, and the public registry for an owner that no line binds.
+ */
+
+use RegistryBinding from "../project/manifest"
+
+/** The registry of every owner that no `registry` line binds. */
+public const publicRegistry = "https://packages.torb.dev"
+
+/** The URL of the registry `package`'s owner is bound to, as the `registry` line writes it. */
+public fn registryOf(package: String, bindings: List<RegistryBinding>): String {
+  const owner = package.substringBefore("/") ?? package
+  match bindings.find({ _.owner == owner }) {
+    Some(bound) => bound.url
+    None => publicRegistry
+  }
+}
+
+/**
+ * The `registry` lines of a workspace's projects, the root's first, each owner once.
+ *
+ * # Errors
+ *
+ * - Two lines that bind one owner to two registries: which registry a name resolves at is a property of the build, and
+ *   two members that disagree about it are what the lock exists to make impossible.
+ */
+public fn bindingsOf(lines: List<RegistryBinding>): Result<List<RegistryBinding>, String> {
+  var bindings: List<RegistryBinding> = []
+  for line in lines {
+    match bindings.find({ _.owner == line.owner }) {
+      Some(earlier) => {
+        if earlier.url != line.url {
+          return Fail "the owner `{line.owner}` is bound to two registries, `{earlier.url}` and `{line.url}`"
+        }
+      }
+      None => bindings.append line
+    }
+  }
+  Ok bindings
+}

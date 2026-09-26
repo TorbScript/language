@@ -1,0 +1,204 @@
+/**
+ * The registry client (docs/design/RELEASE.md sections 7.4 and 7.5): the index file of a package and the archive of a
+ * release, from a registry on the network or from a directory.
+ *
+ *     <registry>/index/<owner>/<name>.trb
+ *     <registry>/archives/<owner>/<name>/<version>.tar.gz
+ *
+ * **A `file:` registry** is a directory of the same files - the registry of a test, of a machine without a network,
+ * of a mirror copied onto a disk. Its URL is `file:` and a path, relative to the project that names it.
+ *
+ * **The network is `curl`, else `wget`**, run to their end (`TORB_FETCH=curl` or `wget` chooses one). Not `std/http`,
+ * for two reasons of 2026-09-26: `torb` cannot wait for a task (see `./store`), and every request of `std/http` is one;
+ * and its name resolution crashes a native program on Windows for a host that needs a DNS lookup. `curl` ships with
+ * Windows 10 and later, macOS and practically every Linux, and `torb upgrade` already relies on it.
+ *
+ * **`--offline`** never touches the network: an index comes from the copy in the cache, and an archive that is not
+ * unpacked in the cache is an error that names the package. A `file:` registry is read either way.
+ */
+
+use File from "std/fs"
+use Environment from "std/os"
+use Process from "std/process"
+use joinPath, normalizePath from "../project/path"
+use readBytes, writeText from "./store"
+
+/** Where a registry is. */
+public type RegistryLocation {
+  /** A `file:` registry: a directory. */
+  case Directory(path: String)
+  /** `https://...` or `http://...`: the base of the registry's URLs, without a `/` at the end. */
+  case Web(url: String)
+}
+
+/**
+ * The location a `registry` line's URL names; a `file:` path is relative to `projectDirectory`.
+ *
+ * # Errors
+ *
+ * - A URL that is neither `file:` nor `http:` or `https:`.
+ */
+public fn registryLocationOf(url: String, projectDirectory: String): Result<RegistryLocation, String> {
+  if const Some(rest) = url.withoutPrefix("file:") {
+    const path = rest.withoutPrefix("//") ?? rest
+    const absolute = path.startsWith("/") || (path.byteLength() > 1 && path.byteAt(1) == Some(58))
+    return Ok RegistryLocation.Directory(if absolute { normalizePath path } else { joinPath projectDirectory, path })
+  }
+  if url.startsWith("https://") || url.startsWith("http://") {
+    return Ok RegistryLocation.Web(url.withoutSuffix("/") ?? url)
+  }
+  Fail "`{url}` is not a registry URL: a registry is `https://...`, or `file:` and a directory"
+}
+
+/** How a fetch may go: over the network or not, and where the copies of the index are kept. */
+public type FetchSettings {
+  cache: String
+  offline: Bool = false
+}
+
+/**
+ * The index file of a package, or `None` where the registry has none.
+ *
+ * # Errors
+ *
+ * - The registry cannot be reached, answers something other than the file or "not found", or `--offline` and no copy is
+ *   in the cache.
+ */
+public fn fetchIndex(location: RegistryLocation, package: String, settings: FetchSettings): Result<String?, String> {
+  const relative = "index/{package}.trb"
+  match location {
+    .Directory(directory) => {
+      const path = joinPath directory, relative
+      if !File.exists(path) {
+        return Ok None
+      }
+      match File.readText(path) {
+        Ok(text) => Ok Some(text)
+        Fail(problem) => Fail problem.show()
+      }
+    }
+    .Web(url) => {
+      const copy = "{settings.cache}/index/{keyOf(url)}/{package}.trb"
+      if settings.offline {
+        return match File.readText(copy) {
+          Ok(text) => Ok Some(text)
+          Fail(_) => Fail "--offline, and the index of {package} from {url} is not in the cache ({copy})"
+        }
+      }
+      const downloaded = "{settings.cache}/download.part"
+      if !fetchUrl("{url}/{relative}", downloaded)? {
+        return Ok None
+      }
+      const text = match File.readText(downloaded) {
+        Ok(found) => found
+        Fail(_) => {
+          return Fail "the index of {package} from {url} is not UTF-8"
+        }
+      }
+      writeText(copy, text)?
+      Ok Some(text)
+    }
+  }
+}
+
+/**
+ * The archive of a release.
+ *
+ * # Errors
+ *
+ * - The registry has no such archive, cannot be reached, or `--offline`.
+ */
+public fn fetchArchive(
+  location: RegistryLocation,
+  package: String,
+  version: String,
+  settings: FetchSettings,
+): Result<List<UInt8>, String> {
+  const relative = "archives/{package}/{version}.tar.gz"
+  match location {
+    .Directory(directory) => {
+      const path = joinPath directory, relative
+      if !File.exists(path) {
+        return Fail "the registry {directory} has no archive of {package} {version}"
+      }
+      readBytes path
+    }
+    .Web(url) => {
+      if settings.offline {
+        return Fail "--offline, and {package} {version} is not unpacked in the cache: it would have to be fetched"
+      }
+      const downloaded = "{settings.cache}/download.part"
+      if !fetchUrl("{url}/{relative}", downloaded)? {
+        return Fail "{url} has no archive of {package} {version}"
+      }
+      readBytes downloaded
+    }
+  }
+}
+
+/**
+ * A `GET` of `url` into the file `destination`: `true` where the body is there, `false` for 404 and 410. `curl`, else
+ * `wget`, or the one `TORB_FETCH` names.
+ */
+fn fetchUrl(url: String, destination: String): Result<Bool, String> {
+  if const Fail(problem) = File.createDirectory(normalizePath("{destination}/..")) {
+    return Fail problem.show()
+  }
+  const chosen = Environment.get("TORB_FETCH") ?? ""
+  const tools = match chosen {
+    "" => ["curl", "wget"]
+    "curl" | "wget" => [chosen]
+    _ => {
+      return Fail "TORB_FETCH is `{chosen}`: it can be `curl` or `wget`"
+    }
+  }
+  for tool in tools {
+    if const Some(result) = fetchThrough(tool, url, destination) {
+      return result
+    }
+  }
+  Fail "fetching {url} needs `curl` or `wget`, and neither could be started"
+}
+
+/** One program's `GET`; `None` where the program cannot be started at all, so the next one is tried. */
+fn fetchThrough(tool: String, url: String, destination: String): Result<Bool, String>? {
+  const arguments = if tool == "curl" {
+    ["-sSL", "-o", destination, "-w", "%\{http_code\}", url]
+  } else {
+    ["-q", "-S", "-O", destination, url]
+  }
+  const output = match Process.runBlocking(tool, arguments) {
+    Ok(found) => found
+    Fail(_) => {
+      return None
+    }
+  }
+  if tool == "curl" {
+    const status = output.standardOutput.trim()
+    if status == "404" || status == "410" {
+      return Some Ok(false)
+    }
+    if !status.startsWith("2") {
+      return Some Fail("{url}: curl answered {status} {output.standardError.trim()}")
+    }
+    return Some Ok(true)
+  }
+  if output.isSuccess() {
+    return Some Ok(true)
+  }
+  const said = output.standardError
+  if said.contains(" 404 ") || said.contains(" 410 ") {
+    return Some Ok(false)
+  }
+  Some Fail("{url}: wget failed: {said.trim()}")
+}
+
+/** A directory name for a registry: its URL with everything but letters, digits and dots made `-`. */
+fn keyOf(url: String): String {
+  var characters: List<String> = []
+  for character in (url.withoutPrefix("https://") ?? url).chars() {
+    const plain = (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '.'
+    characters.append(if plain { character.show() } else { "-" })
+  }
+  characters.joined separator: ""
+}

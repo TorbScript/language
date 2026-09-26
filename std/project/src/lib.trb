@@ -1,8 +1,8 @@
 /**
- * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Tasks], [Workspace] and [Registry]. A project
- * file is a receiver script against [Project], so everything a project can say about itself is a `var` field or a
- * method of the types here - and nothing else is needed to write one, because a setting is written `name = "acme/shop"`
- * and a section `build { ... }`.
+ * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Tasks], [Workspace], [Registry] and
+ * [Source]. A project file is a receiver script against [Project], so everything a project can say about itself is a
+ * `var` field or a method of the types here - and nothing else is needed to write one, because a setting is written
+ * `name = "acme/shop"` and a section `build { ... }`.
  *
  * The types are ordinary data, not `native`: a project file is deterministic and has no IO, so evaluating it is
  * nothing but running these members. This is what makes a `project.trb` *type check* against a real sandbox, with the
@@ -15,6 +15,21 @@ public type Registry {
   owner: String
   /** Where the registry is reached. */
   url: String
+}
+
+/**
+ * Where one package comes from instead of the registry its owner is bound to (docs/design/PROJECT.md section 7): a
+ * directory (`path`), a git repository at a revision (`git`, `revision`), or an archive with its hash (`archive`,
+ * `hash`). Exactly one of `path`, `git` and `archive` is set.
+ */
+public type Source {
+  /** The `owner/name` whose location this is. */
+  package: String
+  path: String = ""
+  git: String = ""
+  revision: String = ""
+  archive: String = ""
+  hash: String = ""
 }
 
 /**
@@ -93,6 +108,14 @@ public type Project {
   var name: String = ""
   /** The published version, in the package manager's format. */
   var version: String = ""
+  /** The oldest version of the language the project needs: `language = "0.3.0"`. */
+  var language: String = ""
+  /** One sentence about the package: required to publish it. */
+  var description: String = ""
+  /** The license, as an SPDX expression (`"MIT"`, `"MIT OR Apache-2.0"`): required to publish it. */
+  var license: String = ""
+  /** Where its source is read: `"https://github.com/acme/shop"`. */
+  var repository: String = ""
   /** The package whose public names are in scope in every file of the project. */
   var prelude: String = "std/prelude"
   /** What the project needs, split into what dependents get and what stays inside the project. */
@@ -109,6 +132,8 @@ public type Project {
   private(var) authorNames: List<String> = []
   /** The bindings [Project.registry] added. */
   private(var) registries: List<Registry> = []
+  /** The locations [Project.source] added. */
+  private(var) sources: List<Source> = []
 
   /** Names the people or organizations behind the project: `authors "Ada Lovelace"`. */
   var fn authors(...names: String) {
@@ -118,6 +143,22 @@ public type Project {
   /** Binds an owner to the registry its packages come from: `registry "acme", url: "https://packages.acme.test"`. */
   var fn registry(owner: String, url: String) {
     registries.append Registry(owner, url)
+  }
+
+  /**
+   * Says where a package comes from instead of its owner's registry: `source "acme/y", path: "../y"`,
+   * `source "acme/x", git: "https://git.acme.test/x", revision: "v1.2.3"`, or
+   * `source "acme/z", archive: "https://files.acme.test/z-1.0.tar.gz", hash: "sha256:..."`.
+   */
+  var fn source(
+    package: String,
+    path: String = "",
+    git: String = "",
+    revision: String = "",
+    archive: String = "",
+    hash: String = "",
+  ) {
+    sources.append Source(package, path, git, revision, archive, hash)
   }
 
   /**
@@ -136,6 +177,14 @@ public type Project {
     }
     if !version.isEmpty() {
       lines.append "version = {quoted(version)}"
+    }
+    if !language.isEmpty() {
+      lines.append "language = {quoted(language)}"
+    }
+    for (field, text) in [("description", description), ("license", license), ("repository", repository)] {
+      if !text.isEmpty() {
+        lines.append "{field} = {quoted(text)}"
+      }
     }
     if prelude != "std/prelude" {
       lines.append "prelude = {quoted(prelude)}"
@@ -183,6 +232,21 @@ public type Project {
     }
     for bound in registries {
       lines.append "registry {quoted(bound.owner)}, url: {quoted(bound.url)}"
+    }
+    for located in sources {
+      var arguments = [quoted(located.package)]
+      for (label, text) in [
+        ("path", located.path),
+        ("git", located.git),
+        ("revision", located.revision),
+        ("archive", located.archive),
+        ("hash", located.hash),
+      ] {
+        if !text.isEmpty() {
+          arguments.append "{label}: {quoted(text)}"
+        }
+      }
+      lines.append "source {arguments.joined(separator: ", ")}"
     }
     lines.map({ "{_}\n" }).toList().joined(separator: "")
   }

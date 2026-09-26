@@ -1,0 +1,207 @@
+/**
+ * A package as the registry holds it (docs/design/RELEASE.md section 7.2): its files, the deterministic `tar.gz` they
+ * are packed into, the **tree hash** that is its identity, and the capabilities its own imports reach (section 7.8).
+ *
+ * The tree hash is Go's `h1:` directory hash with SHA-256: every file's path and the SHA-256 of its bytes, one
+ * `<hex>  <path>` line each, sorted by path, and the SHA-256 of that listing. It is not the hash of the archive's
+ * bytes, so a mirror may recompress an archive and a change of compression level never changes a lock.
+ */
+
+use Sha256 from "std/digest"
+use TarEntry, tarred, untarred from "std/archive"
+use gzipped, gunzipped from "std/compression"
+use textOf from "std/stream"
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+
+/** The largest archive the registry takes, compressed (RELEASE.md section 7.10), and what a client unpacks at most. */
+public const archiveLimit = 10 * 1024 * 1024
+
+/** The most an archive may hold unpacked: a bomb of zeros is refused before it fills the disk. */
+public const unpackedLimit = 64 * 1024 * 1024
+
+/** The most files an archive may hold. */
+public const fileLimit = 10000
+
+/** `sha256:` and the SHA-256 of the sorted listing of every file's hash and path. */
+public fn treeHash(entries: List<TarEntry>): String {
+  var sorted = entries
+  sorted.sort by: { _.path }
+  var listing: List<String> = []
+  for entry in sorted {
+    listing.append "{Sha256.of(entry.bytes).hex()}  {entry.path}\n"
+  }
+  "sha256:{Sha256.of(listing.joined(separator: "").bytes().toList()).hex()}"
+}
+
+/**
+ * The files as the archive that is uploaded: a `tar` of the files sorted by path, gzipped, with nothing of the machine
+ * in either.
+ *
+ * # Errors
+ *
+ * - A path `tar` cannot hold, more files than [fileLimit], and an archive above [archiveLimit].
+ */
+public fn packed(entries: List<TarEntry>): Result<List<UInt8>, String> {
+  if entries.length() > fileLimit {
+    return Fail "the package has {entries.length()} files, and an archive holds at most {fileLimit}"
+  }
+  const archive = match tarred(entries) {
+    Ok(bytes) => gzipped bytes
+    Fail(problem) => {
+      return Fail problem.show()
+    }
+  }
+  if archive.length() > archiveLimit {
+    return Fail "the archive has {archive.length()} bytes, and the registry takes at most {archiveLimit}"
+  }
+  Ok archive
+}
+
+/**
+ * The files of an archive, checked: every path relative and inside the package, the sizes within the limits, and the
+ * tree hash the one the lock or the index pins.
+ *
+ * # Errors
+ *
+ * - What is wrong: broken gzip or `tar`, a path that climbs out or is absolute, too many or too large files, a tree
+ *   hash that is not `expected`.
+ */
+public fn unpacked(archive: List<UInt8>, expected: String): Result<List<TarEntry>, String> {
+  if archive.length() > archiveLimit {
+    return Fail "the archive has {archive.length()} bytes, more than the {archiveLimit} a package may have"
+  }
+  const bytes = match gunzipped(archive) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "the archive is not gzip: {problem}"
+    }
+  }
+  if bytes.length() > unpackedLimit + 1024 * 1024 {
+    return Fail "the archive unpacks to {bytes.length()} bytes, more than the {unpackedLimit} a package may have"
+  }
+  const entries = match untarred(bytes) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "the archive is not a tar the registry writes: {problem}"
+    }
+  }
+  if entries.length() > fileLimit {
+    return Fail "the archive has {entries.length()} files, more than the {fileLimit} a package may have"
+  }
+  for entry in entries {
+    if const Some(problem) = pathProblem(entry.path) {
+      return Fail problem
+    }
+  }
+  const found = treeHash entries
+  if found != expected {
+    return Fail "the tree hash is {found}, and {expected} was pinned: the archive is not the one that was published"
+  }
+  Ok entries
+}
+
+/** Why a path of an archive may not be written out, or `None`. */
+public fn pathProblem(path: String): String? {
+  if path.isEmpty() || path.startsWith("/") || path.contains("\\") || path.contains(":") {
+    return Some "the archive has a path that is absolute or not portable: `{path}`"
+  }
+  for segment in path.split("/") {
+    if segment.isEmpty() || segment == "." || segment == ".." {
+      return Some "the archive has a path that is not inside the package: `{path}`"
+    }
+  }
+  None
+}
+
+/**
+ * Which capability each `std` package is (RELEASE.md section 7.8). A package that is not here is pure. The table lives
+ * in the toolchain until `std` carries it itself.
+ */
+public fn capabilityOf(package: String): String? {
+  match package {
+    "std/fs" => Some "files"
+    "std/network" | "std/http" | "std/tls" => Some "network"
+    "std/process" => Some "processes"
+    "std/os/environment" => Some "environment"
+    "std/os" => Some "the operating system"
+    "std/time" => Some "clock"
+    "std/sandbox" => Some "scripts"
+    _ => None
+  }
+}
+
+/** One capability and the files whose imports reach it, sorted. */
+public type Reach {
+  capability: String
+  files: List<String>
+}
+
+/**
+ * The capabilities a package's own modules reach by their imports, and a `foreign` declaration as "foreign functions":
+ * every `.trb` file that is not a test and not the manifest or the lock. What its dependencies reach is theirs.
+ */
+public fn capabilitiesOf(entries: List<TarEntry>): List<Reach> {
+  var byCapability: Map<String, List<String>> = [:]
+  for entry in entries {
+    if !entry.path.endsWith(".trb") || entry.path.endsWith(".test.trb") {
+      continue
+    }
+    if entry.path == "project.trb" || entry.path == "project.lock.trb" {
+      continue
+    }
+    const text = match textOfBytes(entry.bytes) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    for statement in parse(SourceText.of(text)).file.statements {
+      if const .Declare(declaration) = statement.kind {
+        var reached: String? = None
+        match declaration.kind {
+          .Use(usage) => {
+            if const .Module(written) = usage.source {
+              reached = match capabilityOf(written) {
+                Some(found) => Some found
+                None => capabilityOf packageOf(written)
+              }
+            }
+          }
+          .Foreign(_) => {
+            reached = Some "foreign functions"
+          }
+          _ => {}
+        }
+        if const Some(capability) = reached {
+          var files = byCapability.get(capability) ?? []
+          if !files.contains(entry.path) {
+            files.append entry.path
+          }
+          byCapability.set capability, files
+        }
+      }
+    }
+  }
+  var reaches: List<Reach> = []
+  for (capability, files) in byCapability {
+    var sorted = files
+    sorted.sort({ _ })
+    reaches.append Reach(capability, sorted)
+  }
+  reaches.sort by: { _.capability }
+  reaches
+}
+
+/** `std/os` of `std/os/environment`: the package of a specifier, its first two segments. */
+fn packageOf(written: String): String {
+  const parts = written.split "/"
+  if parts.length() < 2 {
+    return written
+  }
+  "{parts[0]}/{parts[1]}"
+}
+
+fn textOfBytes(bytes: List<UInt8>): String? {
+  textOf(bytes).ok()
+}

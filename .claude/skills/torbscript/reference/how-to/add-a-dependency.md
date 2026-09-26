@@ -20,8 +20,10 @@ from, before a single line of the dependency's code runs.
 
 ## Steps
 
-1. **Add the package under `runtime` for code your project ships, `development` for tests and tools.** A
-   `development` dependency is never part of what somebody who depends on your project gets.
+1. **Add the package under `runtime` for code your project ships, `development` for tests and tools** -
+   `torb add acme/http` writes the line with the newest release as `^` and locks and installs it, and
+   `torb add --development acme/mock-server` writes a development line. A `development` dependency is never part of
+   what somebody who depends on your project gets.
 
    ```trb fragment
    dependencies {
@@ -62,14 +64,21 @@ from, before a single line of the dependency's code runs.
 
 - **The standard library needs no entry.** Every `std/*` package comes with the toolchain and is exempt from the
   dependency list; only third-party and workspace packages have to be declared.
-- **A dependency still has to be found somewhere the toolchain reads packages from.** `torb add`, a registry client
-  and `project.lock.trb` are designed in `CONCEPT.md` but not built yet: today a name in `dependencies { }` satisfies
-  the check above only, and the package itself still has to exist as a member of the same workspace for `use` to
-  resolve it, the same way [Workspaces](set-up-a-workspace.md) sets one up. A name that is neither `std/*` nor a
-  workspace member is refused as `There is no package \`<name>\``, whatever `dependencies { }` says.
-- **`torb run`, `build` and `test` are meant to fail if `project.lock.trb` does not match `project.trb`, and only
-  `torb add`, `remove` and `update` are meant to write it.** Until those commands exist, nothing enforces this, so a
-  project with dependencies has no lock file to commit yet.
+- **A line written by hand is not resolved yet.** `torb add acme/http` writes the line, resolves the workspace, writes
+  `project.lock.trb` and installs the package in one step. A line written by hand is resolved by `torb update`, and
+  until then `torb check`, `build`, `run` and `test` refuse with exactly that advice:
+
+  ```text
+  error: `acme/shop` depends on `acme/http:^1.2.3`, and project.lock.trb does not pin it: run `torb update`
+  ```
+
+- **Commit `project.lock.trb`.** It is what makes two checkouts build the same files; `torb install` fetches what it
+  pins into the cache, and only `torb add`, `remove` and `update` ever write it
+  ([project.lock.trb](../tooling/project-lock-trb.md)).
+- **The requirement grammar**: `^1.2.3` (the default, also written `1.2.3`) is `>=1.2.3 <2.0.0`, `^0.2.3` is
+  `>=0.2.3 <0.3.0`; `~1.2.3` is `>=1.2.3 <1.3.0`; `=1.2.3` is the one version; comparators joined by spaces all hold
+  (`>=1.2.0 <1.5.0`); `*` or no `:` at all is every release. A pre-release is only chosen where the requirement names
+  one, and then only pre-releases of that release (`^1.3.0-beta.1`).
 
 ## Full example
 
@@ -97,6 +106,7 @@ use Router from "acme/http/routing"
 ## Related
 
 - [Packages](../language/modules-and-packages/packages.md) - `owner/name`, `src/lib.trb`, and the coherence rule in full.
-- [Set up a workspace](set-up-a-workspace.md) - what makes a dependency resolvable without a registry today.
+- [Set up a workspace](set-up-a-workspace.md) - members that depend on each other without a registry.
+- [torb add](../tooling/torb-add.md) and [project.lock.trb](../tooling/project-lock-trb.md) - the command and the file.
 - [use](../language/modules-and-packages/use.md) - every form of importing a name once the package is declared.
 

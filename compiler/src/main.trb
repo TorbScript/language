@@ -46,6 +46,7 @@ use docOptionsOf, runDoc, printDocUsage from "./reference/command"
 use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format/command"
 use lintUsage, lintOptionsOf, runLint from "./lint/command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
+use packageOptionsOf, runPackageCommand from "./cli/packages"
 
 /** Leaves with the code a command answered, where it is not 0. */
 fn exitWith(code: Int) {
@@ -86,6 +87,14 @@ fn printUsage() {
   printError "                         --channel stable|nightly: switches the channel, then upgrades within it"
   printError "                         --list: what is installed and what is available, installs nothing"
   printError "                         only for a toolchain tools/install.sh or tools/install.ps1 installed"
+  printError "  torb add <package>[@<requirement>]...  Add a dependency to project.trb, resolve, lock and install it"
+  printError "                         --development: a development dependency; --offline: no network"
+  printError "  torb remove <package>...  Remove a dependency from project.trb and the lock"
+  printError "  torb update [package]...  Resolve every package, or the named ones, to the highest version allowed"
+  printError "                         --accept-capabilities: take versions that touch more than the locked ones"
+  printError "  torb install           Fetch and verify every package project.lock.trb pins into the cache"
+  printError "  torb publish           Build, check and publish the archive of a package (`--dry-run`: build only)"
+  printError "                         every package command: --project <directory>, --offline"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
   printError "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory"
   printError "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings"
@@ -698,6 +707,21 @@ match Process.arguments() {
       }
     }
     const code = runUpgrade options
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  [command, ...more] if ["add", "remove", "update", "install", "publish"].contains(command) => {
+    const options = match packageOptionsOf(command, more) {
+      Ok(found) => found
+      Fail(problem) => {
+        printError "error: {problem}"
+        Process.exit 2
+      }
+    }
+    // Synchronous on purpose: an `await()` anywhere at this top level makes it a task, and the VM that `run` and `test`
+    // start refuses to run its scheduler from inside one
+    const code = runPackageCommand options
     if code != 0 {
       Process.exit code
     }

@@ -1,0 +1,159 @@
+/**
+ * [Version]: a semantic version as the registry, the index and the lock write it (semver.org 2.0.0) - three numbers and
+ * an optional pre-release, ordered the way semver orders them. Build metadata (`+build.5`) is refused: two releases that
+ * differ only in it would be one version to the resolver and two to a person, and a published version is immutable.
+ */
+
+/** The version of the language this toolchain implements: what a `language` line of an index release is compared with. */
+public const languageVersion = "0.1.0"
+
+/** `1.2.3` or `1.2.3-beta.1`. */
+public type Version with Compare, Show {
+  major: Int
+  minor: Int
+  patch: Int
+  /** The dot-separated identifiers after `-`; empty for a release. */
+  preRelease: List<String> = []
+
+  static fn of(major: Int, minor: Int, patch: Int): Version {
+    Version major, minor, patch
+  }
+
+  /** The lowest version of all, `0.0.0-0`: below every release and every pre-release. */
+  static lowest = Version 0, 0, 0, preRelease: ["0"]
+
+  fn isPreRelease(): Bool {
+    !preRelease.isEmpty()
+  }
+
+  /** The same numbers without the pre-release: `1.2.3-beta.1` is a pre-release of `1.2.3`. */
+  fn release(): Version {
+    Version major, minor, patch
+  }
+
+  /**
+   * The next version after this one in the order, with nothing between the two: the next patch of a release, and for a
+   * pre-release the same identifiers with `.0` after them. `[version, version.successor())` is the version alone.
+   */
+  fn successor(): Version {
+    if isPreRelease() {
+      return copy preRelease: preRelease.appended("0")
+    }
+    Version(major, minor, patch + 1)
+  }
+
+  fn compare(other: Version): Ordering {
+    for (mine, theirs) in [(major, other.major), (minor, other.minor), (patch, other.patch)] {
+      if mine != theirs {
+        return mine.compare theirs
+      }
+    }
+    // A release is above every pre-release of the same numbers
+    if preRelease.isEmpty() && other.preRelease.isEmpty() {
+      return Ordering.Equal
+    }
+    if preRelease.isEmpty() {
+      return Ordering.Greater
+    }
+    if other.preRelease.isEmpty() {
+      return Ordering.Less
+    }
+    var index = 0
+    while index < preRelease.length() && index < other.preRelease.length() {
+      const order = compareIdentifiers preRelease[index], other.preRelease[index]
+      if order != Ordering.Equal {
+        return order
+      }
+      index = index + 1
+    }
+    preRelease.length().compare(other.preRelease.length())
+  }
+
+  fn show(): String {
+    const numbers = "{major}.{minor}.{patch}"
+    if preRelease.isEmpty() {
+      return numbers
+    }
+    "{numbers}-{preRelease.joined(separator: ".")}"
+  }
+}
+
+/**
+ * `1.2.3`, `1.2.3-beta.1`, and nothing else: no `v`, no leading zeros, no build metadata.
+ *
+ * # Errors
+ *
+ * - A text that is not a version, with what is wrong with it.
+ */
+extend Version with TryFrom<String, String> {
+  static fn tryFrom(text: String): Result<Version, String> {
+    if text.contains("+") {
+      return Fail "`{text}` has build metadata, which a package version does not have"
+    }
+    const (numbers, rest) = match text.splitOnce("-") {
+      Some((before, after)) => (before, Some(after))
+      None => (text, None)
+    }
+    const parts = numbers.split "."
+    if parts.length() != 3 {
+      return Fail "`{text}` is not a version: it has three numbers, `1.2.3`"
+    }
+    var values: List<Int> = []
+    for part in parts {
+      values.append(numberOf(part, text)?)
+    }
+    var identifiers: List<String> = []
+    if const Some(written) = rest {
+      for identifier in written.split(".") {
+        if identifier.isEmpty() || !identifier.chars().all(isIdentifierCharacter) {
+          return Fail "`{text}` has a pre-release identifier `{identifier}`: letters, digits and `-` only"
+        }
+        if isNumeric(identifier) && identifier.byteLength() > 1 && identifier.startsWith("0") {
+          return Fail "`{text}` has a leading zero in `{identifier}`"
+        }
+        identifiers.append identifier
+      }
+    }
+    Ok Version(values[0], values[1], values[2], preRelease: identifiers)
+  }
+}
+
+/** Numeric identifiers compare as numbers and below every alphanumeric one, which compares as text. */
+fn compareIdentifiers(mine: String, theirs: String): Ordering {
+  const mineIsNumber = isNumeric mine
+  const theirsIsNumber = isNumeric theirs
+  if mineIsNumber && theirsIsNumber {
+    const left = Int.tryFrom(mine).ok() ?? 0
+    const right = Int.tryFrom(theirs).ok() ?? 0
+    return left.compare right
+  }
+  if mineIsNumber {
+    return Ordering.Less
+  }
+  if theirsIsNumber {
+    return Ordering.Greater
+  }
+  mine.compare theirs
+}
+
+fn isNumeric(identifier: String): Bool {
+  !identifier.isEmpty() && identifier.chars().all({ _ >= '0' && _ <= '9' })
+}
+
+fn isIdentifierCharacter(character: Char): Bool {
+  (character >= '0' && character <= '9') || (character >= 'a' && character <= 'z') ||
+    (character >= 'A' && character <= 'Z') || character == '-'
+}
+
+fn numberOf(part: String, text: String): Result<Int, String> {
+  if !isNumeric(part) {
+    return Fail "`{text}` is not a version: `{part}` is not a number"
+  }
+  if part.byteLength() > 1 && part.startsWith("0") {
+    return Fail "`{text}` has a leading zero in `{part}`"
+  }
+  match Int.tryFrom(part) {
+    Ok(value) => Ok value
+    Fail(_) => Fail "`{text}` has a number that is too large: `{part}`"
+  }
+}

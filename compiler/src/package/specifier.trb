@@ -1,0 +1,140 @@
+/**
+ * The specifier grammar of docs/design/PROJECT.md section 6: what may stand in the quotes after `from`, in a
+ * `dependencies` line and in a `source` line, taken apart once, with a message of its own for every shape that is not
+ * one of the good ones.
+ *
+ *     specifier   = relative | package | scheme
+ *     relative    = ("./" | "../") component ("/" component)*
+ *     package     = owner "/" name ("/" component)*
+ *     scheme      = word ":" rest
+ *     owner       = segment | segment ("." segment)+          a dot makes it host-qualified: reserved
+ *     segment     = lowercase (lowercase | digit | "-")*
+ */
+
+/** A specifier that is one of the good shapes. */
+public type Specifier {
+  /** `./a/b` or `../a`: a module next to the file, `climbs` directories up, named without its extension. */
+  case Relative(climbs: Int, components: List<String>)
+  /** `owner/name` or `owner/name/path`: the library of a package, or a module of it. */
+  case Package(owner: String, name: String, path: List<String>)
+}
+
+/**
+ * A `use` specifier taken apart.
+ *
+ * # Errors
+ *
+ * - What is wrong with the text, in one sentence: a URL, a host-qualified owner, a component with a dot, an empty
+ *   component, a segment that is not lowercase, a path of a package with `.` or `..` in it, and a program (`main`).
+ */
+public fn specifierOf(text: String): Result<Specifier, String> {
+  if const Some(word) = schemeOf(text) {
+    return Fail "`{text}` is a URL (`{word}:`), and a module specifier cannot be one: a source file names a package, and where it comes from belongs in project.trb"
+  }
+  if text.startsWith("./") || text.startsWith("../") {
+    var climbs = 0
+    var rest = text
+    if const Some(after) = rest.withoutPrefix("./") {
+      rest = after
+    }
+    while const Some(after) = rest.withoutPrefix("../") {
+      climbs = climbs + 1
+      rest = after
+    }
+    var components: List<String> = []
+    for component in rest.split("/") {
+      if component.contains(".") {
+        return Fail "`{text}` has a dot in `{component}`: a module is named without its extension, and a name has no dot"
+      }
+      checkedSegment(component, text)?
+      components.append component
+    }
+    return Ok Specifier.Relative(climbs, components)
+  }
+  const parts = text.split "/"
+  if parts.length() < 2 {
+    return Fail "`{text}` is no package: a package is `owner/name`, and a file next to this one starts with `./`"
+  }
+  const (owner, name) = packageNameParts(parts[0], parts[1], text)?
+  var path: List<String> = []
+  for component in parts.skip(2) {
+    if component == "." || component == ".." {
+      return Fail "`{text}` has `{component}` in the path of a package, which names a module below its `src/` only"
+    }
+    if component.contains(".") {
+      return Fail "`{text}` has a dot in `{component}`: a module is named without its extension, and a name has no dot"
+    }
+    checkedSegment(component, text)?
+    path.append component
+  }
+  if path.last() == Some("main") {
+    return Fail "`{text}` names the program of `{owner}/{name}`, and a program is not importable"
+  }
+  Ok Specifier.Package(owner, name, path)
+}
+
+/**
+ * The `owner/name` of a `dependencies` or a `source` line: a package and never a module of one.
+ *
+ * # Errors
+ *
+ * - What is wrong: a URL, a host-qualified owner, a module path, a segment that is not lowercase.
+ */
+public fn packageNameOf(text: String): Result<String, String> {
+  if const Some(word) = schemeOf(text) {
+    return Fail "`{text}` is a URL (`{word}:`): a dependency names a package, `owner/name`, and a `source` line says where it comes from"
+  }
+  const parts = text.split "/"
+  if parts.length() != 2 {
+    return Fail "`{text}` is not `owner/name`: a dependency names a package, never a module of one"
+  }
+  const (owner, name) = packageNameParts(parts[0], parts[1], text)?
+  Ok "{owner}/{name}"
+}
+
+/** Whether `text` is a segment: a lowercase letter, then lowercase letters, digits and `-`. */
+public fn isSegment(text: String): Bool {
+  var first = true
+  for character in text.chars() {
+    const lower = character >= 'a' && character <= 'z'
+    if first {
+      if !lower {
+        return false
+      }
+      first = false
+      continue
+    }
+    if !lower && !(character >= '0' && character <= '9') && character != '-' {
+      return false
+    }
+  }
+  !first
+}
+
+fn packageNameParts(owner: String, name: String, text: String): Result<(String, String), String> {
+  if owner.contains(".") {
+    return Fail "`{text}` has a host-qualified owner, `{owner}`: an owner with a dot is reserved for a host that vouches for its names, and nothing resolves one yet"
+  }
+  checkedSegment(owner, text)?
+  checkedSegment(name, text)?
+  Ok((owner, name))
+}
+
+fn checkedSegment(segment: String, text: String): Result<Void, String> {
+  if segment.isEmpty() {
+    return Fail "`{text}` has an empty component"
+  }
+  if !isSegment(segment) {
+    return Fail "`{text}` has `{segment}`, and a name is a lowercase letter, then lowercase letters, digits and `-`"
+  }
+  Ok void
+}
+
+/** `https` for `https://...`: a word of lowercase letters and digits, then `:`. */
+fn schemeOf(text: String): String? {
+  const (word, _) = text.splitOnce(":")?
+  if word.isEmpty() || !word.chars().all({ (_ >= 'a' && _ <= 'z') || (_ >= '0' && _ <= '9') }) {
+    return None
+  }
+  Some word
+}

@@ -55,9 +55,13 @@ setting they use is computed. Only the following settings are consulted:
 | Setting | What it decides |
 |---------|------------------|
 | `name` | The package's `owner/name`, and what an importing package's `dependencies` has to name |
-| `version` | Recorded, not yet checked against anything |
+| `version` | The version the resolver takes a workspace member at, and what [`torb publish`](torb-publish.md) publishes |
+| `language` | The oldest language the project needs; written into the lock and the index |
+| `description`, `license`, `repository`, `authors` | Metadata; `description` and `license` are required by [`torb publish`](torb-publish.md) |
+| `registry "owner", url: "..."` | Where the packages of an owner come from: `https://...`, or `file:` and a directory relative to the project. An owner no line binds comes from `https://packages.torb.dev` |
+| `source "owner/name", path: "..."` | A package taken from a directory instead of its registry, listed in the lock as `path:`. `git:` and `archive:` sources type check and are not resolved yet |
 | `prelude` | The package whose public names are in scope in every file (default `std/prelude`) |
-| `dependencies { runtime "..." }` | What a package may import at all |
+| `dependencies { runtime "..." }` | What a package may import at all, and what the package manager resolves into [project.lock.trb](project-lock-trb.md) |
 | `dependencies { development "..." }` | The same, for a project's own tests and tools |
 | `workspace { members "..." }` | Which directories are the projects of a workspace |
 | `build { input = "..." }` | The entry file [`torb build`](torb-build.md) compiles when a directory is given |
@@ -65,7 +69,7 @@ setting they use is computed. Only the following settings are consulted:
 | `tasks { workers = 4 }` | How many workers the program's tasks run on, where `TORB_WORKERS` does not say (default: the core count) - an integer from 1 to 1024 |
 | `tasks { blocking = 8 }` | How many threads its blocking pool has, where `TORB_BLOCKING` does not say (default: 4) - an integer from 1 to 1024 |
 
-`authors`, `registry`, `build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
+`build { target, output }` and `test { coverageThreshold }` are part of `Project`'s vocabulary
 and type check, because the whole file is also checked as an ordinary program against `Project` - but no command
 reads them yet.
 

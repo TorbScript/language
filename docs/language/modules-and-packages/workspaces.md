@@ -1,6 +1,6 @@
 ---
 title: Workspaces
-summary: A workspace is one root project.trb naming several member projects that check, build and test as a group; a shared project.lock.trb is designed for them but not read or written yet.
+summary: A workspace is one root project.trb naming several member projects that check, build and test as a group, and resolve their dependencies into one shared project.lock.trb.
 kind: reference
 status: stable
 order: 50
@@ -36,7 +36,7 @@ shop/
 ├ tools/
 ├─ importer/
 ├ project.trb        // the workspace
-└ project.lock.trb   // one lock file for all of them (planned - nothing reads or writes it yet)
+└ project.lock.trb   // one lock file for all of them
 ```
 
 ## Rules
@@ -48,12 +48,12 @@ shop/
    up every package under `packages/`; `members "tools/importer"` names one project exactly.
 
 3. **A dependency whose name is a member of the workspace is that member, from source**, and it needs no version
-   inside the workspace. Publishing a member is designed to write the current versions of its siblings into what is
-   published, but no `torb publish` exists yet to do it.
+   inside the workspace: the resolver takes it as a package of one version, its manifest's.
 
-4. **One `project.lock.trb`, at the root, is designed so every member shares the same resolution** and two members
-   can never end up depending on different versions of the same package - but this is planned, not built: nothing
-   reads or writes `project.lock.trb` today. See [project.lock.trb](../../tooling/project-lock-trb.md).
+4. **One `project.lock.trb`, at the root, holds the resolution every member shares**, so two members can never end up
+   depending on different versions of the same package: `torb add`, `remove` and `update` resolve the requirements of
+   every member together, and where two members want what no version satisfies, the explanation names both. See
+   [project.lock.trb](../../tooling/project-lock-trb.md).
 
 5. **A member inherits `version`, `authors` and the registries of the root unless it sets its own.** Setting them
    again in a member's `project.trb` overrides the root for that member only.
@@ -86,7 +86,6 @@ name = "acme/shop-api"
 
 ## Related
 
-- [project.lock.trb](../../tooling/project-lock-trb.md) - the planned lock file, and what still reads or writes
-  nothing.
+- [project.lock.trb](../../tooling/project-lock-trb.md) - the lock file, and which commands read and write it.
 - [Packages](packages.md) - what an ordinary project is, member or not.
 - [use](use.md) - importing from a package, workspace member or not.

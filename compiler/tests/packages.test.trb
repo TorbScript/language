@@ -1,0 +1,435 @@
+/**
+ * The package manager's pure half: versions and their order, requirements and the sets they allow, the specifier
+ * grammar, the resolver on fixture indexes - diamonds, backtracking, pre-releases, workspace members, yanked releases,
+ * the lock's preference, and an impossible set with its explanation - and the index and the lock written and read back.
+ */
+
+use test, group from "std/test"
+use Version from "../src/package/version"
+use VersionSet from "../src/package/version-set"
+use requirementOf, versionsOf from "../src/package/requirement"
+use specifierOf, packageNameOf from "../src/package/specifier"
+use Candidate, resolve from "../src/package/resolve"
+use PackageIndex, IndexRelease, IndexYank, readIndex, indexStart, renderRelease, renderYank, candidatesOf from "../src/package/index"
+use Lock, LockedPackage, LockedSettings, readLock, renderLock from "../src/package/lock"
+use Manifest from "../src/project/manifest"
+use withRequirement, withoutRequirement from "../src/package/manifest-edit"
+use SourceTree from "../src/project/source-tree"
+use findWorkspace from "../src/project/workspace"
+
+fn parsedVersion(text: String): Version {
+  Version.tryFrom(text).expect("a version")
+}
+
+fn allows(requirement: String, candidate: String): Bool {
+  versionsOf(requirement).expect("a requirement").contains(parsedVersion(candidate))
+}
+
+fn shown(requirement: String): String {
+  versionsOf(requirement).expect("a requirement").show()
+}
+
+/** A candidate of a fixture index: a version and its `runtime` lines. */
+fn release(text: String, dependencies: List<String> = []): Candidate {
+  Candidate parsedVersion(text), dependencies.map({ requirementOf(_).expect("a requirement") }).toList()
+}
+
+/** The resolution as `name version` pairs sorted by name, or the explanation of why there is none. */
+fn resolved(
+  dependencies: List<String>,
+  packages: Map<String, List<Candidate>>,
+  preferred: Map<String, Version> = [:],
+): String {
+  const requirements = dependencies.map({ requirementOf(_).expect("a requirement") }).toList()
+  match resolve("acme/app", requirements, packages, preferred) {
+    Ok(resolution) => {
+      var pairs: List<String> = []
+      for (name, chosen) in resolution.versions {
+        pairs.append "{name} {chosen}"
+      }
+      pairs.sort({ _ })
+      pairs.joined separator: ", "
+    }
+    Fail(explanation) => explanation
+  }
+}
+
+group "Versions" {
+  test "semver's order, pre-releases below their release" {
+    const ordered = [
+      "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11", "1.0.0-rc.1",
+      "1.0.0", "1.0.1", "1.1.0", "2.0.0",
+    ]
+    for index in 1..ordered.length() {
+      const lower = parsedVersion ordered[index - 1]
+      const higher = parsedVersion ordered[index]
+      assert(lower < higher)
+    }
+    const shownVersion = parsedVersion("1.2.3-beta.1").show()
+    assert(shownVersion == "1.2.3-beta.1")
+  }
+
+  test "what is not a package version is refused, with the reason" {
+    for text in ["1.2", "v1.2.3", "01.2.3", "1.2.3+build.5", "1.2.3-", "1.2.3-beta..1", "1.2.3-01"] {
+      assert Version.tryFrom(text).isError()
+    }
+  }
+
+  test "the successor has nothing between it and the version" {
+    const release = parsedVersion "1.2.3"
+    const next = parsedVersion "1.2.4"
+    const pre = parsedVersion "1.2.3-beta.1"
+    const after = parsedVersion "1.2.3-beta.1.0"
+    assert(release.successor() == next)
+    assert(pre.successor() == after)
+    assert(pre < after)
+  }
+}
+
+group "Requirements" {
+  test "a caret, a tilde, an exact version and comparators" {
+    assert allows("^1.2.3", "1.9.0")
+    assert(!allows("^1.2.3", "2.0.0"))
+    assert(!allows("^1.2.3", "1.2.2"))
+    assert allows("^0.2.3", "0.2.9")
+    assert(!allows("^0.2.3", "0.3.0"))
+    assert allows("^0.0.3", "0.0.3")
+    assert(!allows("^0.0.3", "0.0.4"))
+    assert allows("~1.2.3", "1.2.9")
+    assert(!allows("~1.2.3", "1.3.0"))
+    assert allows("=1.2.3", "1.2.3")
+    assert(!allows("=1.2.3", "1.2.4"))
+    assert allows(">=1.2.0 <1.5.0", "1.4.9")
+    assert(!allows(">=1.2.0 <1.5.0", "1.5.0"))
+    assert allows("1.2.3", "1.4.0")
+    assert allows("^1.2", "1.2.0")
+    assert allows("=1.2", "1.2.7")
+    assert(!allows("=1.2", "1.3.0"))
+    assert allows("*", "7.0.0")
+  }
+
+  test "a pre-release only where the requirement names one, and only of that release" {
+    assert(!allows("^1.0.0", "1.1.0-beta.1"))
+    assert(!allows("*", "1.0.0-beta.1"))
+    assert allows("^1.2.3-beta.1", "1.2.3-beta.2")
+    assert allows("^1.2.3-beta.1", "1.2.3")
+    assert allows("^1.2.3-beta.1", "1.5.0")
+    assert(!allows("^1.2.3-beta.1", "1.2.3-alpha"))
+    assert(!allows("^1.2.3-beta.1", "1.3.0-beta.1"))
+    assert allows(">=1.2.3-beta.1 <2.0.0", "1.2.3-rc.1")
+  }
+
+  test "a set shows the way a requirement would say it" {
+    assert(shown("^1.2.3") == "^1.2.3")
+    assert(shown("~1.2.3") == "~1.2.3")
+    assert(shown("=1.2.3") == "1.2.3")
+    assert(shown(">=1.2.0") == ">=1.2.0")
+    assert(shown("<2.0.0") == "<2.0.0")
+    assert(shown(">=1.2.0 <1.5.0") == ">=1.2.0 <1.5.0")
+    assert(shown("*") == "*")
+    assert(shown("^1.2.3-beta.1") == "^1.2.3-beta.1")
+    const both = versionsOf("^1.0.0").expect("a set").union(versionsOf("^3.0.0").expect("a set"))
+    assert(both.show() == "^1.0.0 or ^3.0.0")
+  }
+
+  test "the algebra: union, intersection, complement and difference" {
+    const one = versionsOf("^1.0.0").expect("a set")
+    const late = versionsOf(">=1.5.0").expect("a set")
+    assert(one.intersection(late).show() == "^1.5.0")
+    assert(one.difference(late).show() == ">=1.0.0 <1.5.0")
+    assert(one.complement().complement() == one)
+    assert one.union(one.complement()).isAny()
+    assert one.intersection(one.complement()).isEmpty()
+    assert VersionSet.any.includesAll(one)
+    assert(!one.includesAll(late))
+  }
+
+  test "a dependency line: the package, and a requirement or none" {
+    const line = requirementOf("acme/http:^1.2.3").expect("a requirement")
+    assert(line.package == "acme/http")
+    assert(line.show() == "acme/http:^1.2.3")
+    assert(requirementOf("acme/http").expect("a requirement").versions == VersionSet.everyRelease)
+    assert requirementOf("acme/http:").isError()
+    assert requirementOf("acme/http:^x").isError()
+    assert requirementOf("acme/http/client:^1.0.0").isError()
+    assert requirementOf("Acme/http:^1.0.0").isError()
+  }
+}
+
+group "The specifier grammar" {
+  test "the good shapes" {
+    assert specifierOf("./helper").isOk()
+    assert specifierOf("../../shared/text").isOk()
+    assert specifierOf("acme/http").isOk()
+    assert specifierOf("acme/http/client").isOk()
+    assert(packageNameOf("acme/http") == Ok("acme/http"))
+  }
+
+  test "every other shape has a message of its own" {
+    const cases = [
+      ("https://example.test/x", "a URL"),
+      ("github.com/project/x", "host-qualified"),
+      ("./logo.png", "without its extension"),
+      ("acme/http/../x", "in the path of a package"),
+      ("acme/http/main", "not importable"),
+      ("acme", "is no package"),
+      ("acme/Http", "lowercase"),
+    ]
+    for (text, words) in cases {
+      match specifierOf(text) {
+        Ok(_) => assert false
+        Fail(message) => assert message.contains(words)
+      }
+    }
+  }
+}
+
+group "Resolution" {
+  test "the highest version the requirement allows" {
+    const packages = ["acme/json": [release("1.0.0"), release("1.1.0"), release("2.0.0")]]
+    assert(resolved(["acme/json:^1.0.0"], packages) == "acme/json 1.1.0")
+  }
+
+  test "a diamond takes the one version both sides allow" {
+    const packages = [
+      "acme/a": [release("1.0.0", ["acme/c:^1.0.0"])],
+      "acme/b": [release("1.0.0", ["acme/c:^1.2.0"]), release("1.1.0", ["acme/c:>=1.2.0 <1.3.0"])],
+      "acme/c": [release("1.0.0"), release("1.2.0"), release("1.2.5"), release("1.3.0")],
+    ]
+    assert(resolved(["acme/a:^1.0.0", "acme/b:^1.0.0"], packages) == "acme/a 1.0.0, acme/b 1.1.0, acme/c 1.2.5")
+  }
+
+  test "a conflict found while deciding makes it take an older version" {
+    const packages = [
+      "acme/a": [release("1.0.0", ["acme/b:^1.0.0"]), release("2.0.0", ["acme/b:^2.0.0"])],
+      "acme/b": [release("1.0.0"), release("2.0.0")],
+    ]
+    assert(resolved(["acme/a", "acme/b:^1.0.0"], packages) == "acme/a 1.0.0, acme/b 1.0.0")
+  }
+
+  test "a conflict found after deciding is learned and backjumped over" {
+    const packages = [
+      "acme/foo": [release("1.0.0"), release("1.1.0", ["acme/bar:^1.0.0"])],
+      "acme/bar": [release("1.0.0", ["acme/foo:^1.0.0 <1.1.0"])],
+    ]
+    assert(resolved(["acme/foo:^1.0.0"], packages) == "acme/foo 1.0.0")
+  }
+
+  test "pre-releases are taken only where a requirement names one" {
+    const packages = ["acme/x": [release("1.0.0"), release("1.1.0-beta.1")]]
+    assert(resolved(["acme/x:^1.0.0"], packages) == "acme/x 1.0.0")
+    assert(resolved(["acme/x:^1.1.0-beta.1"], packages) == "acme/x 1.1.0-beta.1")
+    const only = ["acme/y": [release("2.0.0-alpha")]]
+    assert resolved(["acme/y"], only).contains("no version of acme/y matches *")
+  }
+
+  test "workspace members are packages of one version, and two of them constrain one dependency together" {
+    const members = [
+      "acme/web": [release("0.1.0", ["acme/json:^1.0.0"])],
+      "acme/tool": [release("0.2.0", ["acme/json:^1.2.0"])],
+      "acme/json": [release("1.0.0"), release("1.2.0"), release("1.4.0"), release("2.0.0")],
+    ]
+    assert(resolved(["acme/web", "acme/tool"], members) == "acme/json 1.4.0, acme/tool 0.2.0, acme/web 0.1.0")
+  }
+
+  test "the version of the lock is kept where the requirements still allow it" {
+    const packages = ["acme/json": [release("1.0.0"), release("1.1.0")]]
+    const locked = ["acme/json": parsedVersion("1.0.0")]
+    assert(resolved(["acme/json:^1.0.0"], packages, locked) == "acme/json 1.0.0")
+    const moved = ["acme/json": parsedVersion("1.0.0")]
+    assert(resolved(["acme/json:^1.1.0"], packages, moved) == "acme/json 1.1.0")
+  }
+
+  test "a yanked release is not taken, unless the lock already has it" {
+    const index = readIndex(
+      "{indexStart("acme/x")}{renderRelease(IndexRelease(parsedVersion("1.0.0"), hashOf("a")))}{renderRelease(IndexRelease(parsedVersion("1.1.0"), hashOf("b")))}{renderYank(IndexYank(parsedVersion("1.1.0"), "leaks"))}",
+      "acme/x",
+    ).expect("an index")
+    const packages = ["acme/x": candidatesOf(index, "0.1.0")]
+    assert(resolved(["acme/x:^1.0.0"], packages) == "acme/x 1.0.0")
+    const locked = ["acme/x": parsedVersion("1.1.0")]
+    assert(resolved(["acme/x:^1.0.0"], packages, locked) == "acme/x 1.1.0")
+    const explained = resolved(["acme/x:^1.1.0"], packages)
+    assert explained.contains("1.1.0 is yanked: leaks")
+  }
+
+  test "a release that needs a newer language is not taken" {
+    const index = readIndex(
+      "{indexStart("acme/x")}{renderRelease(IndexRelease(parsedVersion("1.0.0"), hashOf("a")))}{renderRelease(IndexRelease(parsedVersion("1.1.0"), hashOf("b"), language: "9.0.0"))}",
+      "acme/x",
+    ).expect("an index")
+    assert(resolved(["acme/x"], ["acme/x": candidatesOf(index, "0.1.0")]) == "acme/x 1.0.0")
+  }
+
+  test "an impossible set is explained, line by line, down to the failure" {
+    const packages = [
+      "acme/a": [release("1.0.0", ["acme/c:^1.0.0"])],
+      "acme/b": [release("1.0.0", ["acme/c:^2.0.0"])],
+      "acme/c": [release("1.0.0"), release("2.0.0")],
+    ]
+    const explanation = resolved(["acme/a:^1.0.0", "acme/b:^1.0.0"], packages)
+    const expected = [
+      "Because every version of acme/a depends on acme/c ^1.0.0 and every version of acme/b depends on acme/c ^2.0.0, acme/a is incompatible with acme/b.",
+      "So, because acme/app depends on both acme/a ^1.0.0 and acme/b ^1.0.0, version solving failed.",
+    ]
+    assert(explanation == expected.joined(separator: "\n"))
+  }
+
+  test "a package no registry has is named as such" {
+    const explanation = resolved(["acme/nowhere:^1.0.0"], [:])
+    assert(explanation == "Because no version of acme/nowhere matches ^1.0.0 (the registry has no package `acme/nowhere`) and acme/app depends on acme/nowhere ^1.0.0, version solving failed.")
+  }
+
+  test "a chain of three: the explanation numbers what it refers back to" {
+    const packages = [
+      "acme/foo": [release("1.0.0", ["acme/bar:^2.0.0"])],
+      "acme/bar": [release("2.0.0", ["acme/baz:^3.0.0"])],
+      "acme/baz": [release("1.0.0"), release("3.0.0")],
+    ]
+    const explanation = resolved(["acme/foo:^1.0.0", "acme/baz:^1.0.0"], packages)
+    assert explanation.contains("acme/bar ^2.0.0")
+    assert explanation.contains("acme/baz ^3.0.0")
+    assert explanation.endsWith("version solving failed.")
+  }
+}
+
+fn hashOf(seed: String): String {
+  "sha256:{seed.repeat(64)}"
+}
+
+group "The index" {
+  test "releases and yanks appended to a file read back" {
+    const first = IndexRelease parsedVersion("1.2.4"), hashOf("0"), language: "0.1.0", dependencies: ["acme/json:^2.0.0"], capabilities: ["network"]
+    const text = "{indexStart("acme/http")}{renderRelease(first)}{renderYank(IndexYank(parsedVersion("1.2.4"), "sends a password"))}"
+    const index = readIndex(text, "acme/http").expect("an index")
+    assert(index.releases == [first])
+    const yanked = parsedVersion "1.2.4"
+    assert(index.yank(yanked).map({ _.reason }) == Some("sends a password"))
+    assert text.contains("release \"1.2.4\" \{\n  hash \"sha256:")
+  }
+
+  test "a file of another package, two releases of one version, or a release without a hash are refused" {
+    const release = renderRelease IndexRelease(parsedVersion("1.0.0"), hashOf("0"))
+    assert readIndex("{indexStart("acme/other")}{release}", "acme/http").isError()
+    assert readIndex("{indexStart("acme/http")}{release}{release}", "acme/http").isError()
+    assert readIndex("{indexStart("acme/http")}\nrelease \"1.0.0\" \{\n\}\n", "acme/http").isError()
+  }
+}
+
+group "The lock" {
+  test "written twice it is the same bytes, and read back it is the same lock" {
+    const lock = Lock(
+      language: "0.1.0",
+      settings: [LockedSettings("acme/app", Manifest(name: "acme/app", version: "1.0.0", license: "MIT", runtimeRequirements: ["acme/json:^1.0.0"], runtimeDependencies: ["acme/json"]))],
+      graph: [
+        LockedPackage("acme/local", path: "../local"),
+        LockedPackage("acme/json", version: "1.2.0", registry: "file:../registry", hash: hashOf("a"), capabilities: ["network", "files"]),
+      ],
+    )
+    const text = renderLock lock
+    assert(renderLock(lock) == text)
+    const read = readLock(text).expect("a lock")
+    assert(renderLock(read) == text)
+    assert(read.locked("acme/json").map({ _.version }) == Some("1.2.0"))
+    assert(read.locked("acme/local").map({ _.isPath() }) == Some(true))
+    assert(read.settingsOf("acme/app").map({ _.runtimeDependencies }) == Some(["acme/json"]))
+    assert text.endsWith("\}\n")
+    assert(!text.endsWith("\n\n"))
+  }
+
+  test "the packages of the graph are sorted by name, whatever order they were resolved in" {
+    const lock = Lock graph: [LockedPackage("acme/b", version: "1.0.0", hash: hashOf("b")), LockedPackage("acme/a", version: "1.0.0", hash: hashOf("a"))]
+    const text = renderLock lock
+    const first = text.indexOf("acme/a") ?? text.end()
+    const second = text.indexOf("acme/b") ?? text.start()
+    assert(first < second)
+  }
+
+  test "a line without a hash is refused" {
+    assert readLock("graph \{\n  package \"acme/a\", version: \"1.0.0\"\n\}\n").isError()
+    assert readLock("graph \{").isError()
+  }
+}
+
+/** A project that depends on `acme/json`, and the lock and the cache the build reads it from. */
+fn lockedTree(lock: String, installed: Bool): SourceTree {
+  const hash = hashOf "a"
+  const hex = "a".repeat(64)
+  var files = [
+    "app/project.trb": "name = \"acme/app\"\n\ndependencies \{\n  runtime \"acme/json:^1.0.0\"\n\}\n",
+    "app/src/main.trb": "use quotedJson from \"acme/json\"\n",
+    "app/project.lock.trb": lock.replace("HASH", hash),
+  ]
+  if installed {
+    files.set "cache/packages/{hex}/project.lock.trb", "settings \"acme/json\" \{\n  version = \"1.2.0\"\n\}\n"
+    files.set "cache/packages/{hex}/src/lib.trb", "public fn quotedJson(): String \{\n  \"\"\n\}\n"
+  }
+  SourceTree.of files, ".", "", "cache"
+}
+
+const lockOfJson = "graph \{\n  package \"acme/json\", version: \"1.2.0\", registry: \"https://packages.torb.dev\", hash: \"HASH\"\n\}\n"
+
+group "The build and the lock" {
+  test "a locked package unpacked in the cache is a package of the workspace, with the settings of its own lock" {
+    const workspace = findWorkspace lockedTree(lockOfJson, true), "app"
+    assert workspace.problems.isEmpty()
+    const json = workspace.packageNamed("acme/json").expect("the locked package")
+    assert json.installed
+    assert(json.manifest.version == "1.2.0")
+    assert(json.files == ["cache/packages/{"a".repeat(64)}/src/lib.trb"])
+  }
+
+  test "a locked package that is not installed, and a dependency the lock does not pin, name the command" {
+    const missing = findWorkspace lockedTree(lockOfJson, false), "app"
+    assert(missing.problems == ["acme/json 1.2.0 is in project.lock.trb and not installed: run `torb install`"])
+    const unpinned = findWorkspace lockedTree("", true), "app"
+    assert(unpinned.problems == ["`acme/app` depends on `acme/json:^1.0.0`, and project.lock.trb does not pin it: run `torb update`"])
+  }
+
+  test "a pinned version the requirement does not allow, or another registry than the owner's, is refused" {
+    const old = findWorkspace lockedTree(lockOfJson.replace("1.2.0", "0.9.0"), true), "app"
+    assert(old.problems == ["project.lock.trb pins acme/json 0.9.0, and `acme/app` needs `acme/json:^1.0.0`: run `torb update acme/json`"])
+    const elsewhere = findWorkspace lockedTree(lockOfJson.replace("https://packages.torb.dev", "file:../mirror"), true), "app"
+    assert(elsewhere.problems.length() == 1)
+    assert elsewhere.problems[0].contains("its owner is bound to `https://packages.torb.dev`")
+  }
+}
+
+group "Editing project.trb" {
+  test "a first dependency creates the block at the end of the file" {
+    const text = "name = \"acme/app\"\n"
+    const edited = withRequirement(text, "runtime", "acme/json:^1.0.0", "acme/json").expect("an edit")
+    assert(edited == "name = \"acme/app\"\n\ndependencies \{\n  runtime \"acme/json:^1.0.0\"\n\}\n")
+  }
+
+  test "a new line goes at the end of the block, a known package is replaced in place, comments stay" {
+    const text = "dependencies \{\n  // the parser\n  runtime \"acme/json:^1.0.0\"\n\}\n"
+    const added = withRequirement(text, "development", "acme/mock", "acme/mock").expect("an edit")
+    assert(added == "dependencies \{\n  // the parser\n  runtime \"acme/json:^1.0.0\"\n  development \"acme/mock\"\n\}\n")
+    const replaced = withRequirement(text, "runtime", "acme/json:^2.0.0", "acme/json").expect("an edit")
+    assert(replaced == "dependencies \{\n  // the parser\n  runtime \"acme/json:^2.0.0\"\n\}\n")
+  }
+
+  test "line endings of the file are kept" {
+    const text = "dependencies \{\r\n  runtime \"acme/a\"\r\n\}\r\n"
+    const added = withRequirement(text, "runtime", "acme/b", "acme/b").expect("an edit")
+    assert(added == "dependencies \{\r\n  runtime \"acme/a\"\r\n  runtime \"acme/b\"\r\n\}\r\n")
+  }
+
+  test "removing takes out the literal, or the line where it was the only one" {
+    const text = "dependencies \{\n  runtime \"acme/a:^1.0.0\", \"acme/b\"\n  runtime \"acme/c\"\n\}\n"
+    const (withoutB, foundB) = withoutRequirement(text, "acme/b").expect("an edit")
+    assert foundB
+    assert(withoutB == "dependencies \{\n  runtime \"acme/a:^1.0.0\"\n  runtime \"acme/c\"\n\}\n")
+    const (withoutC, _) = withoutRequirement(text, "acme/c").expect("an edit")
+    assert(withoutC == "dependencies \{\n  runtime \"acme/a:^1.0.0\", \"acme/b\"\n\}\n")
+    const (unchanged, found) = withoutRequirement(text, "acme/z").expect("an edit")
+    assert(!found)
+    assert(unchanged == text)
+  }
+
+  test "a block that computes anything is refused rather than rewritten" {
+    const text = "const version = \"^1.0.0\"\n\ndependencies \{\n  runtime \"acme/a:\{version\}\"\n\}\n"
+    assert withRequirement(text, "runtime", "acme/b", "acme/b").isError()
+  }
+}

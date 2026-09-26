@@ -1,0 +1,895 @@
+/**
+ * [resolve]: dependency resolution by PubGrub (Natalie Weizenbaum, 2018; the algorithm of Dart's pub and of uv), and
+ * the explanation it gives when there is no solution (docs/design/PROJECT.md section 6a).
+ *
+ * **Why PubGrub.** Resolution has to answer the highest compatible version of every package (CONCEPT, "Packages and the
+ * Supply Chain"), which rules out minimal version selection, and it has to say *why* when it cannot: a backtracking
+ * resolver that answers "no solution" after trying everything is the thing users of every other package manager learn
+ * to fear. PubGrub learns an incompatibility from every conflict, so it never runs into the same dead end twice, and
+ * the incompatibilities it learned form the derivation of the failure, which is written out as the explanation - a
+ * numbered chain of "because" sentences that ends in "version solving failed".
+ *
+ * **Deterministic.** The next package to decide is the one with the fewest versions left, ties broken by name; the
+ * version chosen is the highest the constraints allow - or the one the lock already has, where the constraints still
+ * allow it. The same inputs give the same resolution and the same explanation on every machine.
+ *
+ * The resolver is pure: every version of every package it may consider is in its input, with its dependencies.
+ * Workspace members and `path:` packages come in as packages of one version.
+ */
+
+use Version from "./version"
+use VersionSet from "./version-set"
+use Requirement from "./requirement"
+
+/** One version the resolver may choose, with what it needs. */
+public type Candidate {
+  version: Version
+  dependencies: List<Requirement>
+  /** Why this version may not be chosen - yanked, or a newer language than this toolchain's - or `None`. */
+  excluded: String? = None
+}
+
+/** What resolution answers: the version of every package the root reaches, the root itself not included. */
+public type Resolution {
+  versions: Map<String, Version>
+}
+
+/**
+ * The versions of everything `root` needs: `root` depends on `dependencies`, and every other package is one of
+ * `packages`, whose candidates may come in any order. `preferred` are the versions the lock has, taken where the
+ * constraints allow them; an excluded version that is preferred is allowed, because a yanked release keeps building
+ * where a lock already pins it (RELEASE.md section 7.3).
+ *
+ * # Errors
+ *
+ * - The explanation of why there is no solution: every line a reason, the last one "version solving failed".
+ */
+public fn resolve(
+  root: String,
+  dependencies: List<Requirement>,
+  packages: Map<String, List<Candidate>>,
+  preferred: Map<String, Version> = [:],
+): Result<Resolution, String> {
+  var sorted: Map<String, List<Candidate>> = [:]
+  for (name, candidates) in packages {
+    var ordered = candidates
+    ordered.sort({ _.version })
+    sorted.set name, ordered
+  }
+  sorted.set root, [Candidate(rootVersion, dependencies)]
+  var solver = Solver root, sorted, preferred
+  solver.solve()
+}
+
+/** The one version of the root. */
+const rootVersion = Version 0, 0, 0
+
+const stepLimit = 100000
+
+/** How two terms relate: every version of one is in the other, none is, or some are. */
+type Relation {
+  case Subset
+  case Disjoint
+  case Overlapping
+}
+
+/**
+ * A statement about one package: it is chosen at a version of `versions` (positive), or it is not chosen at any of them
+ * (negative) - which also holds where the package is not chosen at all.
+ */
+type Term {
+  package: String
+  versions: VersionSet
+  positive: Bool
+
+  fn inverse(): Term {
+    Term(package, versions, !positive)
+  }
+
+  /** Both at once; `None` where nothing satisfies both. */
+  fn intersection(other: Term): Term? {
+    if positive != other.positive {
+      const (yes, no) = if positive { (self, other) } else { (other, self) }
+      return nonEmpty yes.versions.difference(no.versions), true
+    }
+    if positive {
+      return nonEmpty versions.intersection(other.versions), true
+    }
+    Some Term(package, versions.union(other.versions), false)
+  }
+
+  /** This term and not `other`. */
+  fn difference(other: Term): Term? {
+    intersection other.inverse()
+  }
+
+  fn nonEmpty(found: VersionSet, isPositive: Bool): Term? {
+    if isPositive && found.isEmpty() {
+      return None
+    }
+    Some Term(package, found, isPositive)
+  }
+
+  /** Whether everything this term allows is allowed by `other`. */
+  fn satisfies(other: Term): Bool {
+    relation(other) == Relation.Subset
+  }
+
+  fn relation(other: Term): Relation {
+    if other.positive {
+      if positive {
+        if other.versions.includesAll(versions) {
+          return Relation.Subset
+        }
+        if !versions.overlaps(other.versions) {
+          return Relation.Disjoint
+        }
+        return Relation.Overlapping
+      }
+      // `not ^1.5.0` is disjoint with `^1.6.0`, and overlaps `^1.0.0`
+      if versions.includesAll(other.versions) {
+        return Relation.Disjoint
+      }
+      return Relation.Overlapping
+    }
+    if positive {
+      // `^2.0.0` is a subset of `not ^1.0.0`, and `^1.5.0` is disjoint with `not ^1.0.0`
+      if !other.versions.overlaps(versions) {
+        return Relation.Subset
+      }
+      if other.versions.includesAll(versions) {
+        return Relation.Disjoint
+      }
+      return Relation.Overlapping
+    }
+    // `not ^1.0.0` is a subset of `not ^1.5.0`
+    if versions.includesAll(other.versions) {
+      return Relation.Subset
+    }
+    Relation.Overlapping
+  }
+}
+
+/** Why an incompatibility holds. */
+type Cause {
+  /** The root is chosen: the incompatibility `{not root}`. */
+  case Root
+  /** `{depender, not dependency}`: a range of versions of one package needs a range of another. */
+  case Dependency
+  /** `{package}`: no version of the range exists, or every one there is excluded - `note` says which and why. */
+  case NoVersions(note: String)
+  /** Learned from a conflict between the two incompatibilities at these positions. */
+  case Conflict(first: Int, second: Int)
+}
+
+/** A set of terms that cannot all hold at once. */
+type Incompatibility {
+  terms: List<Term>
+  cause: Cause
+
+  fn isDerived(): Bool {
+    if const .Conflict(_, _) = cause {
+      return true
+    }
+    false
+  }
+}
+
+/** One step of the partial solution: a decision, or a term derived from an incompatibility. */
+type Assignment {
+  term: Term
+  level: Int
+  /** Its position in the solution. */
+  position: Int
+  /** The incompatibility it was derived from; `None` for a decision. */
+  cause: Int?
+}
+
+type Solver {
+  root: String
+  candidates: Map<String, List<Candidate>>
+  preferred: Map<String, Version>
+  var incompatibilities: List<Incompatibility> = []
+  /** Which incompatibilities mention a package, by position. */
+  var mentioning: Map<String, List<Int>> = [:]
+  var assignments: List<Assignment> = []
+  var decisions: Map<String, Version> = [:]
+  /** The intersection of the assignments of a package that has a positive one. */
+  var positiveTerms: Map<String, Term> = [:]
+  /** The intersection of the assignments of a package that has only negative ones. */
+  var negativeTerms: Map<String, Term> = [:]
+
+  var fn solve(): Result<Resolution, String> {
+    add Incompatibility([Term(root, VersionSet.exactly(rootVersion), false)], Cause.Root)
+    var next: String? = Some root
+    var steps = 0
+    while const Some(package) = next {
+      steps = steps + 1
+      // A bound that no real graph comes near: a bug in the solver ends as an error rather than as a hang
+      if steps > stepLimit {
+        return Fail "resolution did not finish within {stepLimit} decisions: this is a bug of the resolver"
+      }
+      propagate(package)?
+      next = choose()
+    }
+    var versions: Map<String, Version> = [:]
+    for (name, version) in decisions {
+      if name != root {
+        versions.set name, version
+      }
+    }
+    Ok Resolution(versions)
+  }
+
+  var fn add(incompatibility: Incompatibility): Int {
+    const position = incompatibilities.length()
+    incompatibilities.append incompatibility
+    for term in incompatibility.terms {
+      var known = mentioning.get(term.package) ?? []
+      known.append position
+      mentioning.set term.package, known
+    }
+    position
+  }
+
+  // --- unit propagation -------------------------------------------------------------------------------------------
+
+  var fn propagate(start: String): Result<Void, String> {
+    var changed = [start]
+    while const Some(package) = changed.removeAt(0) {
+      const known = (mentioning.get(package) ?? []).reversed()
+      for position in known {
+        match propagateOne(position) {
+          .Conflict => {
+            const cause = resolveConflict(position)?
+            changed = []
+            match propagateOne(cause) {
+              .Derived(derived) => changed.append derived
+              _ => {}
+            }
+            break
+          }
+          .Derived(derived) => {
+            if !changed.contains(derived) {
+              changed.append derived
+            }
+          }
+          .Nothing => {}
+        }
+      }
+    }
+    Ok void
+  }
+
+  /** Derives the one term an incompatibility leaves open, finds that it is violated, or learns nothing. */
+  var fn propagateOne(position: Int): Propagated {
+    const incompatibility = incompatibilities[position]
+    var unsatisfied: Term? = None
+    for term in incompatibility.terms {
+      match relationOf(term) {
+        .Disjoint => {
+          return Propagated.Nothing
+        }
+        .Overlapping => {
+          if unsatisfied.isSome() {
+            return Propagated.Nothing
+          }
+          unsatisfied = Some term
+        }
+        .Subset => {}
+      }
+    }
+    match unsatisfied {
+      None => Propagated.Conflict
+      Some(term) => {
+        assign term.inverse(), Some(position)
+        Propagated.Derived term.package
+      }
+    }
+  }
+
+  // --- the partial solution ---------------------------------------------------------------------------------------
+
+  /** How many decisions there are: 0 before the root is decided, 1 for the root, and one more for each decision. */
+  fn level(): Int {
+    decisions.length()
+  }
+
+  var fn assign(term: Term, cause: Int?) {
+    const assignment = Assignment term, level(), assignments.length(), cause
+    assignments.append assignment
+    register term
+  }
+
+  var fn decide(package: String, version: Version) {
+    decisions.set package, version
+    assign Term(package, VersionSet.exactly(version), true), None
+  }
+
+  var fn register(term: Term) {
+    if const Some(earlier) = positiveTerms.get(term.package) {
+      positiveTerms.set(term.package, earlier.intersection(term) ?? earlier)
+      return
+    }
+    const combined = match negativeTerms.get(term.package) {
+      Some(earlier) => earlier.intersection(term) ?? term
+      None => term
+    }
+    if combined.positive {
+      const _ = negativeTerms.remove term.package
+      positiveTerms.set term.package, combined
+    } else {
+      negativeTerms.set term.package, combined
+    }
+  }
+
+  fn relationOf(term: Term): Relation {
+    if const Some(found) = positiveTerms.get(term.package) {
+      return found.relation term
+    }
+    match negativeTerms.get(term.package) {
+      Some(found) => found.relation term
+      None => Relation.Overlapping
+    }
+  }
+
+  fn satisfiesTerm(term: Term): Bool {
+    relationOf(term) == Relation.Subset
+  }
+
+  /** The earliest assignment after which the assignments of the package satisfy `term`. */
+  fn satisfier(term: Term): Assignment {
+    var accumulated: Term? = None
+    for assignment in assignments {
+      if assignment.term.package != term.package {
+        continue
+      }
+      accumulated = match accumulated {
+        Some(earlier) => Some(earlier.intersection(assignment.term) ?? assignment.term)
+        None => Some assignment.term
+      }
+      if const Some(found) = accumulated {
+        if found.satisfies(term) {
+          return assignment
+        }
+      }
+    }
+    // Only reached for a term the solution does not satisfy, which conflict resolution never asks about
+    assignments[assignments.length() - 1]
+  }
+
+  var fn backtrack(to: Int) {
+    var touched: Set<String> = Set.of()
+    while const Some(last) = assignments.last() {
+      if last.level <= to {
+        break
+      }
+      const _ = assignments.removeAt(assignments.length() - 1)
+      touched.insert last.term.package
+      if last.cause.isNone() {
+        const _ = decisions.remove last.term.package
+      }
+    }
+    for package in touched {
+      const _ = positiveTerms.remove package
+      const _ = negativeTerms.remove package
+    }
+    for assignment in assignments {
+      if touched.contains(assignment.term.package) {
+        register assignment.term
+      }
+    }
+  }
+
+  // --- conflict resolution ----------------------------------------------------------------------------------------
+
+  /**
+   * Learns from a violated incompatibility until the learned one is an incompatibility the solution can be backjumped
+   * to satisfy, and answers its position. An incompatibility that says the root cannot be chosen is the failure.
+   */
+  var fn resolveConflict(violated: Int): Result<Int, String> {
+    var current = violated
+    loop {
+      const incompatibility = incompatibilities[current]
+      if isFailure(incompatibility) {
+        return Fail explain(current)
+      }
+      var mostRecentTerm: Term? = None
+      var mostRecent: Assignment? = None
+      var difference: Term? = None
+      var previousLevel = 1
+      for term in incompatibility.terms {
+        const found = satisfier term
+        match mostRecent {
+          None => {
+            mostRecentTerm = Some term
+            mostRecent = Some found
+          }
+          Some(recent) => {
+            if recent.position < found.position {
+              previousLevel = previousLevel.max recent.level
+              mostRecentTerm = Some term
+              mostRecent = Some found
+              difference = None
+            } else {
+              previousLevel = previousLevel.max found.level
+            }
+          }
+        }
+        if mostRecentTerm == Some(term) {
+          if const Some(recent) = mostRecent {
+            difference = recent.term.difference term
+            if const Some(rest) = difference {
+              previousLevel = previousLevel.max satisfier(rest.inverse()).level
+            }
+          }
+        }
+      }
+      const satisfierFound = match mostRecent {
+        Some(found) => found
+        None => {
+          return Fail explain(current)
+        }
+      }
+      const satisfiedTerm = mostRecentTerm ?? satisfierFound.term
+      const satisfierCause = match satisfierFound.cause {
+        Some(cause) => cause
+        None => {
+          backtrack previousLevel
+          return Ok current
+        }
+      }
+      if previousLevel < satisfierFound.level {
+        backtrack previousLevel
+        return Ok current
+      }
+      var terms: List<Term> = []
+      for term in incompatibility.terms {
+        if term != satisfiedTerm {
+          terms.append term
+        }
+      }
+      for term in incompatibilities[satisfierCause].terms {
+        if term.package != satisfierFound.term.package {
+          terms.append term
+        }
+      }
+      if const Some(rest) = difference {
+        terms.append rest.inverse()
+      }
+      current = add normalized(terms, Cause.Conflict(current, satisfierCause))
+    }
+  }
+
+  fn isFailure(incompatibility: Incompatibility): Bool {
+    if incompatibility.terms.isEmpty() {
+      return true
+    }
+    if const [only] = incompatibility.terms {
+      return only.positive && only.package == root
+    }
+    false
+  }
+
+  /**
+   * The terms of a learned incompatibility, with two terms of one package made one and a positive root dropped from
+   * one that says more than that (the root is always chosen, so it adds nothing).
+   */
+  fn normalized(terms: List<Term>, cause: Cause): Incompatibility {
+    var kept = terms
+    if kept.length() != 1 && kept.any({ _.positive && _.package == root }) {
+      kept = kept.filter({ !(_.positive && _.package == root) }).toList()
+    }
+    var order: List<String> = []
+    var byPackage: Map<String, Term> = [:]
+    for term in kept {
+      match byPackage.get(term.package) {
+        Some(earlier) => byPackage.set(term.package, earlier.intersection(term) ?? earlier)
+        None => {
+          order.append term.package
+          byPackage.set term.package, term
+        }
+      }
+    }
+    var merged: List<Term> = []
+    for package in order {
+      if const Some(term) = byPackage.get(package) {
+        merged.append term
+      }
+    }
+    Incompatibility merged, cause
+  }
+
+  // --- decision making --------------------------------------------------------------------------------------------
+
+  /** Decides the next package, or answers `None` once every package the solution needs has a version. */
+  var fn choose(): String? {
+    var open: List<(count: Int, package: String)> = []
+    for (package, term) in positiveTerms {
+      if !decisions.containsKey(package) {
+        open.append((count: allowedOf(package, term.versions).length(), package: package))
+      }
+    }
+    if open.isEmpty() {
+      return None
+    }
+    open.sort by: { (_.count, _.package) }
+    const package = open[0].package
+    const term = positiveTerms.get(package) ?? Term(package, VersionSet.none, true)
+    const allowed = allowedOf package, term.versions
+    const chosen = match preferred.get(package) {
+      Some(locked) => {
+        if allowed.any({ _.version == locked }) { Some locked } else { allowed.last().map({ _.version }) }
+      }
+      None => allowed.last().map({ _.version })
+    }
+    const version = match chosen {
+      Some(found) => found
+      None => {
+        add Incompatibility([term], Cause.NoVersions(noteOf(package, term.versions)))
+        return Some package
+      }
+    }
+    var conflict = false
+    for incompatibility in dependencyIncompatibilities(package, version) {
+      add incompatibility
+      var satisfied = true
+      for term in incompatibility.terms {
+        satisfied = satisfied && (term.package == package || satisfiesTerm(term))
+      }
+      conflict = conflict || satisfied
+    }
+    if !conflict {
+      decide package, version
+    }
+    Some package
+  }
+
+  /** The candidates of a package within `versions` that may be chosen, lowest first. */
+  fn allowedOf(package: String, versions: VersionSet): List<Candidate> {
+    const known = candidates.get(package) ?? []
+    known.filter({ versions.contains(_.version) && (_.excluded.isNone() || preferred.get(package) == Some(_.version)) }).toList()
+  }
+
+  /** Why a range of a package has nothing to choose from: which versions are there and excluded. */
+  fn noteOf(package: String, versions: VersionSet): String {
+    const known = candidates.get(package) ?? []
+    if known.isEmpty() {
+      return "the registry has no package `{package}`"
+    }
+    var reasons: List<String> = []
+    for candidate in known {
+      if const Some(reason) = candidate.excluded {
+        if versions.contains(candidate.version) {
+          reasons.append "{candidate.version} {reason}"
+        }
+      }
+    }
+    reasons.joined separator: "; "
+  }
+
+  /**
+   * One incompatibility per dependency of the version: `{package in range, not dependency}`. The range is every
+   * neighbouring version that needs the same thing, so a conflict is learned once for all of them and the
+   * explanation says "acme/http >=1.2.0 depends on ..." instead of naming each release.
+   */
+  fn dependencyIncompatibilities(package: String, version: Version): List<Incompatibility> {
+    const known = candidates.get(package) ?? []
+    var index = 0
+    while index < known.length() && known[index].version != version {
+      index = index + 1
+    }
+    if index >= known.length() {
+      return []
+    }
+    var found: List<Incompatibility> = []
+    for dependency in known[index].dependencies {
+      var lower = index
+      while lower > 0 && needsTheSame(known[lower - 1], dependency) {
+        lower = lower - 1
+      }
+      var upper = index
+      while upper + 1 < known.length() && needsTheSame(known[upper + 1], dependency) {
+        upper = upper + 1
+      }
+      const low = if lower == 0 { None } else { Some known[lower].version }
+      const high = if upper + 1 >= known.length() { None } else { Some known[upper + 1].version }
+      var withPreRelease = false
+      for position in lower..(upper + 1) {
+        withPreRelease = withPreRelease || known[position].version.isPreRelease()
+      }
+      const range = if package == root { VersionSet.exactly rootVersion } else { rangeOf low, high, withPreRelease }
+      const depender = Term package, range, true
+      const needed = Term dependency.package, dependency.versions, false
+      found.append Incompatibility([depender, needed], Cause.Dependency)
+    }
+    found
+  }
+
+  // --- the explanation --------------------------------------------------------------------------------------------
+
+  fn explain(failure: Int): String {
+    var writer = Explanation root, incompatibilities
+    writer.write failure
+  }
+}
+
+/** What propagating one incompatibility did. */
+type Propagated {
+  case Nothing
+  case Conflict
+  case Derived(package: String)
+}
+
+/** Whether `candidate` needs `dependency`'s package with the same requirement, as written. */
+fn needsTheSame(candidate: Candidate, dependency: Requirement): Bool {
+  candidate.dependencies.any({ _.package == dependency.package && _.written == dependency.written })
+}
+
+/** `[low, high)` of the whole order, releases always and pre-releases where the range has one. */
+fn rangeOf(low: Version?, high: Version?, withPreRelease: Bool): VersionSet {
+  const releases = VersionSet.releasesBetween(low ?? Version(0, 0, 0), high)
+  if !withPreRelease {
+    return releases
+  }
+  releases.union VersionSet.preReleasesBetween(low ?? Version.lowest, high)
+}
+
+/** Writes the derivation of a failure as numbered sentences (the error reporting of PubGrub, as pub writes it). */
+type Explanation {
+  root: String
+  incompatibilities: List<Incompatibility>
+  var derivations: Map<Int, Int> = [:]
+  var numbers: Map<Int, Int> = [:]
+  var lines: List<(text: String, number: Int?)> = []
+
+  var fn write(failure: Int): String {
+    countDerivations failure
+    if incompatibilities[failure].isDerived() {
+      visit failure, true
+    } else {
+      record failure, "Because {textOf(failure)}, version solving failed.", false
+    }
+    // A number is only shown where a later line refers back to it
+    var referenced: Set<Int> = Set.of()
+    for line in lines {
+      if const Some(number) = line.number {
+        for other in lines {
+          if other.text.contains("({number})") {
+            referenced.insert number
+          }
+        }
+      }
+    }
+    var numbered = false
+    var width = 0
+    for line in lines {
+      if const Some(number) = line.number {
+        if referenced.contains(number) {
+          numbered = true
+          width = width.max "({number}) ".byteLength()
+        }
+      }
+    }
+    var rendered: List<String> = []
+    for line in lines {
+      if line.text.isEmpty() {
+        rendered.append ""
+        continue
+      }
+      if !numbered {
+        rendered.append line.text
+        continue
+      }
+      const label = match line.number {
+        Some(number) => if referenced.contains(number) { "({number}) " } else { "" }
+        None => ""
+      }
+      rendered.append "{label}{" ".repeat(width - label.byteLength())}{line.text}"
+    }
+    rendered.joined separator: "\n"
+  }
+
+  var fn countDerivations(position: Int) {
+    if const Some(count) = derivations.get(position) {
+      derivations.set(position, count + 1)
+      return
+    }
+    derivations.set position, 1
+    if const .Conflict(first, second) = incompatibilities[position].cause {
+      countDerivations first
+      countDerivations second
+    }
+  }
+
+  var fn record(position: Int, text: String, numbered: Bool) {
+    if numbered {
+      const number = numbers.length() + 1
+      numbers.set position, number
+      lines.append((text: text, number: Some(number)))
+    } else {
+      lines.append((text: text, number: None))
+    }
+  }
+
+  var fn visit(position: Int, conclusion: Bool) {
+    const numbered = conclusion || (derivations.get(position) ?? 0) > 1
+    const conjunction = if conclusion { "So," } else { "And" }
+    const text = textOf position
+    const (conflict, other) = match incompatibilities[position].cause {
+      .Conflict(first, second) => (first, second)
+      _ => {
+        record position, "Because {text}, version solving failed.", numbered
+        return
+      }
+    }
+    const conflictDerived = incompatibilities[conflict].isDerived()
+    const otherDerived = incompatibilities[other].isDerived()
+    if conflictDerived && otherDerived {
+      const conflictLine = numbers.get conflict
+      const otherLine = numbers.get other
+      if const (Some(first), Some(second)) = (conflictLine, otherLine) {
+        record position, "Because {joinedOf(conflict, other, Some(first), Some(second))}, {text}.", numbered
+        return
+      }
+      if conflictLine.isSome() || otherLine.isSome() {
+        const (withLine, withoutLine, line) = match conflictLine {
+          Some(found) => (conflict, other, found)
+          None => (other, conflict, otherLine ?? 0)
+        }
+        visit withoutLine, false
+        record position, "{conjunction} because {textOf(withLine)} ({line}), {text}.", numbered
+        return
+      }
+      const singleConflict = isSingleLine conflict
+      const singleOther = isSingleLine other
+      if singleConflict || singleOther {
+        const first = if singleOther { conflict } else { other }
+        const second = if singleOther { other } else { conflict }
+        visit first, false
+        visit second, false
+        record position, "Thus, {text}.", numbered
+        return
+      }
+      visit conflict, true
+      lines.append((text: "", number: None))
+      visit other, false
+      const line = numbers.get(conflict) ?? 0
+      record position, "{conjunction} because {textOf(conflict)} ({line}), {text}.", numbered
+      return
+    }
+    if conflictDerived || otherDerived {
+      const derived = if conflictDerived { conflict } else { other }
+      const external = if conflictDerived { other } else { conflict }
+      if const Some(line) = numbers.get(derived) {
+        record position, "Because {joinedOf(external, derived, None, Some(line))}, {text}.", numbered
+        return
+      }
+      if isCollapsible(derived) {
+        if const .Conflict(innerFirst, innerSecond) = incompatibilities[derived].cause {
+          const innerDerived = if incompatibilities[innerFirst].isDerived() { innerFirst } else { innerSecond }
+          const innerExternal = if incompatibilities[innerFirst].isDerived() { innerSecond } else { innerFirst }
+          visit innerDerived, false
+          record position, "{conjunction} because {joinedOf(innerExternal, external, None, None)}, {text}.", numbered
+          return
+        }
+      }
+      visit derived, false
+      record position, "{conjunction} because {textOf(external)}, {text}.", numbered
+      return
+    }
+    record position, "Because {joinedOf(conflict, other, None, None)}, {text}.", numbered
+  }
+
+  fn isSingleLine(position: Int): Bool {
+    match incompatibilities[position].cause {
+      .Conflict(first, second) => !incompatibilities[first].isDerived() && !incompatibilities[second].isDerived()
+      _ => false
+    }
+  }
+
+  fn isCollapsible(position: Int): Bool {
+    if (derivations.get(position) ?? 0) > 1 {
+      return false
+    }
+    match incompatibilities[position].cause {
+      .Conflict(first, second) => {
+        const firstDerived = incompatibilities[first].isDerived()
+        const secondDerived = incompatibilities[second].isDerived()
+        if firstDerived == secondDerived {
+          return false
+        }
+        const complex = if firstDerived { first } else { second }
+        !numbers.containsKey(complex)
+      }
+      _ => false
+    }
+  }
+
+  /** Two incompatibilities in one clause: `a (1) and b (2)`, or `x depends on both y and z`. */
+  fn joinedOf(first: Int, second: Int, firstLine: Int?, secondLine: Int?): String {
+    const one = incompatibilities[first]
+    const two = incompatibilities[second]
+    if firstLine.isNone() && secondLine.isNone() {
+      if const (.Dependency, .Dependency) = (one.cause, two.cause) {
+        if one.terms[0] == two.terms[0] {
+          const depender = terse one.terms[0], true
+          return "{depender} depends on both {terse(one.terms[1], false)} and {terse(two.terms[1], false)}"
+        }
+      }
+    }
+    const firstText = match firstLine {
+      Some(line) => "{textOf(first)} ({line})"
+      None => textOf first
+    }
+    const secondText = match secondLine {
+      Some(line) => "{textOf(second)} ({line})"
+      None => textOf second
+    }
+    "{firstText} and {secondText}"
+  }
+
+  /** One incompatibility as a clause. */
+  fn textOf(position: Int): String {
+    const incompatibility = incompatibilities[position]
+    const terms = incompatibility.terms
+    match incompatibility.cause {
+      .Root => {
+        return "{root} is the project being resolved"
+      }
+      .Dependency => {
+        if terms.length() == 2 {
+          return "{terse(terms[0], true)} depends on {terse(terms[1], false)}"
+        }
+      }
+      .NoVersions(note) => {
+        if const [only] = terms {
+          const noted = if note.isEmpty() { "" } else { " ({note})" }
+          return "no version of {only.package} matches {only.versions}{noted}"
+        }
+      }
+      .Conflict(_, _) => {}
+    }
+    if terms.isEmpty() || (terms.length() == 1 && terms[0].positive && terms[0].package == root) {
+      return "version solving failed"
+    }
+    if const [only] = terms {
+      return if only.positive { "{terse(only, true)} is forbidden" } else { "{terse(only, false)} is required" }
+    }
+    if const [first, second] = terms {
+      if first.positive && second.positive {
+        return "{terse(first, false)} is incompatible with {terse(second, false)}"
+      }
+      if !first.positive && !second.positive {
+        return "either {terse(first, false)} or {terse(second, false)}"
+      }
+    }
+    const positives = terms.filter({ _.positive }).map({ terse _, false }).toList()
+    const negatives = terms.filter({ !_.positive }).map({ terse _, false }).toList()
+    if !positives.isEmpty() && !negatives.isEmpty() {
+      if positives.length() == 1 {
+        const single = terms.find({ _.positive }) ?? terms[0]
+        return "{terse(single, true)} requires {negatives.joined(separator: " or ")}"
+      }
+      return "if {positives.joined(separator: " and ")} then {negatives.joined(separator: " or ")}"
+    }
+    if !positives.isEmpty() {
+      return "one of {positives.joined(separator: " or ")} must be false"
+    }
+    "one of {negatives.joined(separator: " or ")} must be true"
+  }
+
+  /** A package and its range, briefly: the root by its name, a range of every version as "every version of". */
+  fn terse(term: Term, allowEvery: Bool): String {
+    if term.package == root {
+      return root
+    }
+    if allowEvery && (term.versions.isAny() || term.versions == VersionSet.everyRelease) {
+      return "every version of {term.package}"
+    }
+    if term.versions.isAny() || term.versions == VersionSet.everyRelease {
+      return term.package
+    }
+    "{term.package} {term.versions}"
+  }
+}

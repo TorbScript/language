@@ -1,0 +1,172 @@
+/**
+ * [Requirement]: a `dependencies` line - `"acme/http:^1.2.3"` - taken apart into the package and the set of versions
+ * the text after `:` allows (docs/design/PROJECT.md section 6a).
+ *
+ *     requirement = "*" | comparator (" " comparator)*          every comparator holds
+ *     comparator  = ["^" | "~" | "=" | ">=" | ">" | "<=" | "<"] partial
+ *     partial     = number ["." number ["." number ["-" pre-release]]]
+ *
+ * A comparator without an operator is a caret, as in Cargo, and a line without a requirement allows every release.
+ * `^1.2.3` is `>=1.2.3 <2.0.0`, `^0.2.3` is `>=0.2.3 <0.3.0`, `^0.0.3` is `0.0.3` alone; `~1.2.3` is `>=1.2.3 <1.3.0`;
+ * a partial version stands for the range it leaves open (`^1.2` is `^1.2.0`, `=1.2` is `>=1.2.0 <1.3.0`). A
+ * pre-release is only allowed where a comparator names one, and then only pre-releases of that one release.
+ */
+
+use Version from "./version"
+use VersionSet from "./version-set"
+use packageNameOf from "./specifier"
+
+/** One dependency: the package, what was written after the `:`, and the versions it allows. */
+public type Requirement with Show {
+  package: String
+  /** The text after the `:`, as written; empty for none. */
+  written: String
+  versions: VersionSet
+
+  /** The line as `project.trb` writes it. */
+  fn show(): String {
+    if written.isEmpty() { package } else { "{package}:{written}" }
+  }
+}
+
+/**
+ * `"acme/http:^1.2.3"` taken apart.
+ *
+ * # Errors
+ *
+ * - What is wrong with the package name or with the requirement.
+ */
+public fn requirementOf(text: String): Result<Requirement, String> {
+  const (name, written) = match text.splitOnce(":") {
+    Some((before, after)) => {
+      if after.trim().isEmpty() {
+        return Fail "`{text}` has a `:` and no requirement after it: write one, `^1.2.3`, or leave out the `:`"
+      }
+      (before, after.trim())
+    }
+    None => (text, "")
+  }
+  const package = packageNameOf(name)?
+  if written.isEmpty() {
+    return Ok Requirement(package, "", VersionSet.everyRelease)
+  }
+  const versions = match versionsOf(written) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "`{text}`: {problem}"
+    }
+  }
+  Ok Requirement(package, written, versions)
+}
+
+/**
+ * The versions a requirement allows.
+ *
+ * # Errors
+ *
+ * - A comparator that is not one: an unknown operator, a number that is not one, a pre-release on a partial version.
+ */
+public fn versionsOf(written: String): Result<VersionSet, String> {
+  const text = written.trim()
+  if text == "*" {
+    return Ok VersionSet.everyRelease
+  }
+  var releases = VersionSet.everyRelease
+  var preReleases = VersionSet.preReleasesBetween Version.lowest, None
+  var allowed = VersionSet.none
+  var comparators = 0
+  for part in text.split(" ") {
+    if part.isEmpty() {
+      continue
+    }
+    const comparator = comparatorOf(part)?
+    comparators = comparators + 1
+    releases = releases.intersection VersionSet.releasesBetween(comparator.low, comparator.high)
+    preReleases = preReleases.intersection VersionSet.preReleasesBetween(comparator.low, comparator.high)
+    if const Some(release) = comparator.preReleasesOf {
+      allowed = allowed.union VersionSet.preReleasesBetween(Version(release.major, release.minor, release.patch, preRelease: ["0"]), Some(release))
+    }
+  }
+  if comparators == 0 {
+    return Fail "the requirement is empty: write a version such as `^1.2.3`, or leave out the `:`"
+  }
+  Ok releases.union(preReleases.intersection(allowed))
+}
+
+/** One comparator as a range of the whole order, and the release whose pre-releases it allows, if it names one. */
+type Comparator {
+  low: Version
+  high: Version?
+  preReleasesOf: Version?
+}
+
+fn comparatorOf(part: String): Result<Comparator, String> {
+  var operator = ""
+  for candidate in [">=", "<=", "^", "~", "=", ">", "<"] {
+    if part.startsWith(candidate) {
+      operator = candidate
+      break
+    }
+  }
+  const rest = part.dropping operator.chars().count()
+  const partial = partialOf(rest)?
+  const low = partial.low
+  const full = partial.fields == 3
+  const pre = if low.isPreRelease() { Some low.release() } else { None }
+  match operator {
+    "" | "^" => {
+      const high = if low.major > 0 || partial.fields == 1 {
+        Version.of(low.major + 1, 0, 0)
+      } else if low.minor > 0 || partial.fields == 2 {
+        Version.of(0, low.minor + 1, 0)
+      } else {
+        Version.of(0, 0, low.patch + 1)
+      }
+      Ok Comparator(low, Some(high), pre)
+    }
+    "~" => {
+      const high = if partial.fields == 1 { Version.of(low.major + 1, 0, 0) } else { Version.of(low.major, low.minor + 1, 0) }
+      Ok Comparator(low, Some(high), pre)
+    }
+    "=" => Ok Comparator(low, Some(partial.end()), pre)
+    ">=" => Ok Comparator(low, None, pre)
+    ">" => Ok Comparator(if full { low.successor() } else { partial.end() }, None, pre)
+    "<" => Ok Comparator(Version.lowest, Some(low), pre)
+    "<=" => Ok Comparator(Version.lowest, Some(partial.end()), pre)
+    _ => Fail "`{part}` has an operator that is not one of ^ ~ = >= > <= <"
+  }
+}
+
+/** `1`, `1.2` or `1.2.3[-pre]`: the lowest version it stands for, and how many numbers were written. */
+type Partial {
+  low: Version
+  fields: Int
+
+  /** The first version after the ones it stands for: `1.2` ends at `1.3.0`, `1.2.3` at `1.2.4`. */
+  fn end(): Version {
+    match fields {
+      1 => Version.of(low.major + 1, 0, 0)
+      2 => Version.of(low.major, low.minor + 1, 0)
+      _ => low.successor()
+    }
+  }
+}
+
+fn partialOf(text: String): Result<Partial, String> {
+  if text.isEmpty() {
+    return Fail "a comparator needs a version"
+  }
+  const numbers = text.substringBefore("-") ?? text
+  const fields = numbers.split(".").length()
+  if fields == 3 {
+    return Ok Partial(Version.tryFrom(text)?, 3)
+  }
+  if text.contains("-") {
+    return Fail "`{text}` has a pre-release, and a pre-release needs all three numbers"
+  }
+  if fields > 3 {
+    return Fail "`{text}` has more than three numbers"
+  }
+  const padded = if fields == 1 { "{text}.0.0" } else { "{text}.0" }
+  Ok Partial(Version.tryFrom(padded)?, fields)
+}

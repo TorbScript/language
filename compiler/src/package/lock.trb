@@ -1,0 +1,200 @@
+/**
+ * `project.lock.trb` (docs/design/PROJECT.md sections 8 and 11): the locked manifest. [readLock] reads one statically,
+ * without running anything - installing never runs code - and [renderLock] writes one deterministically: the same lock
+ * gives the same bytes on every machine, so the file can be reviewed in a diff and compared byte for byte.
+ *
+ *     // project.lock.trb - written by `torb add`, `torb remove`, `torb update` and `torb publish`. Do not edit.
+ *
+ *     settings "acme/json" {
+ *       version = "2.0.1"
+ *       license = "MIT"
+ *     }
+ *
+ *     graph {
+ *       package "acme/http", version: "1.2.5", registry: "https://packages.torb.dev", hash: "sha256:..." {
+ *         capabilities "network"
+ *       }
+ *       package "acme/local", path: "../local"
+ *     }
+ *
+ * The order is fixed everywhere: `language`, then the `settings` blocks by package, the lines inside one in the order of
+ * the vocabulary, then `graph` with its packages by name. Nothing about the machine is in it - no time, no absolute
+ * path, no tool build - and a `path:` is written relative to the lock.
+ */
+
+use settingsOf, quoted, quotedList from "./literal"
+use Manifest, manifestOf from "../project/manifest"
+
+/** One package of the resolved graph: a registry package pinned by version and tree hash, or a directory. */
+public type LockedPackage {
+  name: String
+  /** The exact version; empty for a `path:` package, which is listed rather than pinned. */
+  version: String = ""
+  /** The URL of the registry that answered, as the project binds the owner. */
+  registry: String = ""
+  /** The tree hash of the archive: `sha256:` and 64 lowercase hexadecimal digits. */
+  hash: String = ""
+  /** A `path:` package's directory, relative to the lock. */
+  path: String = ""
+  /** What the package touches by its own imports, as its index release says (RELEASE.md section 7.8). */
+  capabilities: List<String> = []
+
+  fn isPath(): Bool {
+    !path.isEmpty()
+  }
+}
+
+/** The evaluated settings of one package: what a consumer of it reads instead of its `project.trb`. */
+public type LockedSettings {
+  package: String
+  manifest: Manifest
+}
+
+/** The whole file. */
+public type Lock {
+  /** The `language` of the project the lock belongs to; empty where it says none. */
+  language: String = ""
+  settings: List<LockedSettings> = []
+  graph: List<LockedPackage> = []
+
+  fn locked(name: String): LockedPackage? {
+    graph.find({ _.name == name })
+  }
+
+  fn settingsOf(package: String): Manifest? {
+    settings.find({ _.package == package }).map({ _.manifest })
+  }
+}
+
+/**
+ * A lock read back, statically.
+ *
+ * # Errors
+ *
+ * - A file that does not parse, or a `package` line of the graph without a name, or with neither a version and a hash
+ *   nor a path.
+ */
+public fn readLock(text: String): Result<Lock, String> {
+  var lock = Lock()
+  for setting in settingsOf(text)? {
+    match setting.word {
+      "language" => {
+        lock = lock.copy(language: setting.first() ?? "")
+      }
+      "settings" => {
+        const package = setting.first() ?? ""
+        const manifest = manifestOf(setting.block).copy(name: package)
+        lock = lock.copy settings: lock.settings.appended(LockedSettings(package, manifest))
+      }
+      "graph" => {
+        for line in setting.block {
+          if line.word != "package" {
+            continue
+          }
+          const name = line.first() ?? ""
+          const locked = LockedPackage(
+            name,
+            version: line.labeled.get("version") ?? "",
+            registry: line.labeled.get("registry") ?? "",
+            hash: line.labeled.get("hash") ?? "",
+            path: line.labeled.get("path") ?? "",
+            capabilities: line.textsOf("capabilities"),
+          )
+          if name.isEmpty() || (!locked.isPath() && (locked.version.isEmpty() || locked.hash.isEmpty())) {
+            return Fail "project.lock.trb has a `package` line without a name, or without a version and a hash or a path"
+          }
+          lock = lock.copy graph: lock.graph.appended(locked)
+        }
+      }
+      _ => {}
+    }
+  }
+  Ok lock
+}
+
+/** The lock as its file: byte for byte the same for the same lock. */
+public fn renderLock(lock: Lock): String {
+  var lines = ["// project.lock.trb - written by `torb add`, `torb remove`, `torb update` and `torb publish`. Do not edit."]
+  if !lock.language.isEmpty() {
+    lines.append ""
+    lines.append "language = {quoted(lock.language)}"
+  }
+  var settings = lock.settings
+  settings.sort by: { _.package }
+  for entry in settings {
+    lines.append ""
+    lines.append "settings {quoted(entry.package)} \{"
+    for line in settingsLines(entry.manifest) {
+      lines.append "  {line}"
+    }
+    lines.append "\}"
+  }
+  var graph = lock.graph
+  graph.sort by: { _.name }
+  if !graph.isEmpty() {
+    lines.append ""
+    lines.append "graph \{"
+    for locked in graph {
+      lines.appendAll packageLines(locked)
+    }
+    lines.append "\}"
+  }
+  lines.map({ "{_}\n" }).toList().joined(separator: "")
+}
+
+fn packageLines(locked: LockedPackage): List<String> {
+  const head = if locked.isPath() {
+    "  package {quoted(locked.name)}, path: {quoted(locked.path)}"
+  } else {
+    const answered = if locked.registry.isEmpty() { "" } else { ", registry: {quoted(locked.registry)}" }
+    "  package {quoted(locked.name)}, version: {quoted(locked.version)}{answered}, hash: {quoted(locked.hash)}"
+  }
+  if locked.capabilities.isEmpty() {
+    return [head]
+  }
+  var sorted = locked.capabilities
+  sorted.sort({ _ })
+  ["{head} \{", "    capabilities {quotedList(sorted)}", "  \}"]
+}
+
+/**
+ * What a consumer needs of a package, as the literal lines that say it, in the order of the vocabulary
+ * (docs/design/PROJECT.md section 10): `language`, `prelude`, `dependencies`, `version`, `authors`, `description`,
+ * `license`, `repository`. No `source`, no `registry` and no `workspace`: where a package comes from is the building
+ * project's decision, and the tree is one the consumer does not have.
+ */
+public fn settingsLines(manifest: Manifest): List<String> {
+  var lines: List<String> = []
+  if !manifest.language.isEmpty() {
+    lines.append "language = {quoted(manifest.language)}"
+  }
+  if manifest.prelude != "std/prelude" {
+    lines.append "prelude = {quoted(manifest.prelude)}"
+  }
+  if !manifest.runtimeRequirements.isEmpty() || !manifest.developmentRequirements.isEmpty() {
+    lines.append "dependencies \{"
+    if !manifest.runtimeRequirements.isEmpty() {
+      lines.append "  runtime {quotedList(manifest.runtimeRequirements)}"
+    }
+    if !manifest.developmentRequirements.isEmpty() {
+      lines.append "  development {quotedList(manifest.developmentRequirements)}"
+    }
+    lines.append "\}"
+  }
+  if !manifest.version.isEmpty() {
+    lines.append "version = {quoted(manifest.version)}"
+  }
+  if !manifest.authors.isEmpty() {
+    lines.append "authors {quotedList(manifest.authors)}"
+  }
+  for (field, text) in [
+    ("description", manifest.description),
+    ("license", manifest.license),
+    ("repository", manifest.repository),
+  ] {
+    if !text.isEmpty() {
+      lines.append "{field} = {quoted(text)}"
+    }
+  }
+  lines
+}

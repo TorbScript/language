@@ -8,7 +8,12 @@ use SourceText, LineIndex from "../syntax/source"
 use parse from "../syntax/parser/parser"
 use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth from "./path"
 use SourceTree from "./source-tree"
-use Manifest, readManifest, manifestProblemsOf from "./manifest"
+use Manifest, RegistryBinding, readManifest, manifestProblemsOf from "./manifest"
+use Lock, readLock from "../package/lock"
+use packageDirectory from "../package/store"
+use requirementOf from "../package/requirement"
+use Version from "../package/version"
+use registryOf, bindingsOf from "../package/registry"
 
 /** One project: one `project.trb`, one package name, the files below its `src/` and its test directory. */
 public type Package {
@@ -19,6 +24,11 @@ public type Package {
   manifest: Manifest
   /** Every `.trb` file of the package, sorted: the modules it consists of. */
   files: List<String>
+  /**
+   * A package the workspace's `project.lock.trb` pins rather than one of its members: unpacked in the package manager's
+   * cache, or a `path:` package. What the build checks and never writes.
+   */
+  installed: Bool = false
 }
 
 /**
@@ -60,11 +70,139 @@ public fn findWorkspace(tree: SourceTree, path: String): Workspace {
   // Innermost first: the project the path belongs to, then everything it could be a member of
   const owners = manifests.filter({ isInside directory, _ }).toList().reversed()
   if const Some(project) = owners.first() {
-    const found = withNamedFile workspaceOf(tree, manifests, owners, project), tree, project, target
+    const members = withLockedPackages tree, workspaceOf(tree, manifests, owners, project)
+    const found = withNamedFile members, tree, project, target
     return withStandardLibrary tree, manifests, found
   }
   const files = if tree.exists(target) { [target] } else { tree.below directory }
   withStandardLibrary tree, manifests, Workspace([Package("", directory, Manifest(), files)])
+}
+
+/**
+ * The workspace with the packages its root's `project.lock.trb` pins (docs/design/PROJECT.md section 11): a registry
+ * package where it is unpacked in the cache, its manifest the `settings` of its own lock, and a `path:` package as the
+ * project it is. A problem for everything the build cannot take from the lock as it is - a dependency of a member that
+ * the lock does not pin, pins at a version the requirement does not allow, or pins from another registry than the one
+ * the owner is bound to, a locked package that is not installed, and a dependency of a locked package the lock lacks.
+ * The build reads the lock and never writes it: each problem names the command that does.
+ */
+fn withLockedPackages(tree: SourceTree, workspace: Workspace): Workspace {
+  const root = match workspace.packages.first() {
+    Some(found) => found.directory
+    None => {
+      return workspace
+    }
+  }
+  const lockPath = joinPath root, "project.lock.trb"
+  const lockText = tree.text lockPath
+  var problems = workspace.problems
+  var packages = workspace.packages
+  var lock = Lock()
+  if const Some(text) = lockText {
+    match readLock(text) {
+      Ok(found) => {
+        lock = found
+      }
+      Fail(problem) => {
+        problems.append "{tree.display(lockPath)}: {problem}"
+        return workspace.copy problems: problems
+      }
+    }
+  }
+  var lines: List<RegistryBinding> = []
+  for package in workspace.packages {
+    lines.appendAll package.manifest.registries
+  }
+  const bindings = match bindingsOf(lines) {
+    Ok(found) => found
+    Fail(problem) => {
+      problems.append problem
+      []
+    }
+  }
+  for locked in lock.graph {
+    if workspace.packageNamed(locked.name).isSome() {
+      continue
+    }
+    if locked.isPath() {
+      const directory = joinPath root, locked.path
+      if !tree.exists(joinPath(directory, "project.trb")) {
+        problems.append "project.lock.trb names `{locked.name}` at `{locked.path}`, which has no project.trb"
+        continue
+      }
+      packages.append packageAt(tree, directory).copy(installed: true)
+      continue
+    }
+    const directory = packageDirectory tree.cache(), locked.hash
+    const own = match tree.text(joinPath(directory, "project.lock.trb")) {
+      Some(text) => text
+      None => {
+        problems.append "{locked.name} {locked.version} is in project.lock.trb and not installed: run `torb install`"
+        continue
+      }
+    }
+    const settings = readLock(own).ok().flatMap({ _.settingsOf locked.name }) ?? Manifest()
+    const manifest = settings.copy name: locked.name, testInput: ""
+    packages.append Package(locked.name, directory, manifest, tree.below(joinPath(directory, "src")), installed: true)
+  }
+  const members = workspace.packages.map({ _.name }).filter({ !_.isEmpty() }).toList()
+  problems.appendAll lockProblems(workspace.packages, lock, lockText.isSome(), bindings)
+  for package in packages {
+    if !package.installed {
+      continue
+    }
+    for name in package.manifest.runtimeDependencies {
+      if !name.startsWith("std/") && lock.locked(name).isNone() && !members.contains(name) {
+        problems.append "`{package.name}` needs `{name}`, which project.lock.trb does not pin: run `torb update`"
+      }
+    }
+  }
+  workspace.copy packages: packages, problems: problems
+}
+
+/**
+ * Why `lock` does not do for the requirements of `members`: a dependency that is neither the toolchain's nor a member and
+ * that the lock does not pin, pins at a version the requirement does not allow, or pins from another registry than the
+ * one its owner is bound to. `hasLock` is whether there is a lock file at all, which the message says.
+ */
+public fn lockProblems(members: List<Package>, lock: Lock, hasLock: Bool, bindings: List<RegistryBinding>): List<String> {
+  var problems: List<String> = []
+  const names = members.map({ _.name }).filter({ !_.isEmpty() }).toList()
+  for package in members {
+    var written = package.manifest.runtimeRequirements
+    written.appendAll package.manifest.developmentRequirements
+    for line in written {
+      const requirement = match requirementOf(line) {
+        Ok(found) => found
+        Fail(_) => {
+          continue
+        }
+      }
+      if requirement.package.startsWith("std/") || names.contains(requirement.package) {
+        continue
+      }
+      const locked = match lock.locked(requirement.package) {
+        Some(found) => found
+        None => {
+          const why = if hasLock { "project.lock.trb does not pin it" } else { "there is no project.lock.trb" }
+          problems.append "`{package.name}` depends on `{line}`, and {why}: run `torb update`"
+          continue
+        }
+      }
+      if locked.isPath() {
+        continue
+      }
+      const pinned = Version.tryFrom(locked.version).ok()
+      if !(pinned.map({ requirement.versions.contains _ }) ?? false) {
+        problems.append "project.lock.trb pins {locked.name} {locked.version}, and `{package.name}` needs `{line}`: run `torb update {locked.name}`"
+      }
+      const bound = registryOf locked.name, bindings
+      if locked.registry != bound {
+        problems.append "project.lock.trb has {locked.name} from `{locked.registry}`, and its owner is bound to `{bound}`: run `torb update {locked.name}`"
+      }
+    }
+  }
+  problems
 }
 
 /** The workspace with a file that was named on its own added to its project, unless a package has it already. */

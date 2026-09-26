@@ -2,8 +2,9 @@
 
 **Status: partly implemented** — the toolchain reads the static subset of `project.trb` from the syntax tree and
 refuses one of its settings that is computed, and where a setting it uses is computed it evaluates the manifest in the
-sandbox of section 8 and reads that (docs/design/SCRIPTS.md slice 5, section 12's slice 7); profiles, targets and the
-lock file are not built.
+sandbox of section 8 and reads that (docs/design/SCRIPTS.md slice 5, section 12's slice 7); `torb publish` reads the
+evaluation too, and the package manager of milestone 8 resolves (section 6a), writes and reads `project.lock.trb`
+(section 11) and builds from it; profiles and targets are not built.
 
 **The names of the files say what a package produces, `project.trb` says what the names cannot, and a program is the
 one thing it says by hand.** A file called `lib.trb` is the library, a file called `main.trb` is the program, a file
@@ -29,6 +30,7 @@ second time, in a weaker language, and they go.
 - **[4. Programs](#4-programs)** — `program`, its three settings, and what `run` and `build` do with them
 - **[5. Profiles and targets](#5-profiles-and-targets)** — two words for two things, and where the binary lands
 - **[6. The specifier grammar](#6-the-specifier-grammar)** — what may stand in the quotes, and what is reserved
+- **[6a. Requirements and resolution](#6a-requirements-and-resolution)** — the text after `:`, pre-releases, and PubGrub, as built
 - **[7. Where a dependency comes from](#7-where-a-dependency-comes-from)** — names in source, locations in the manifest
 - **[8. What a project file may read](#8-what-a-project-file-may-read)** — files and the environment, and the locked manifest that keeps installing free of code
 - **[9. Resources, as far as the project file is concerned](#9-resources-as-far-as-the-project-file-is-concerned)** — the output layout and the file list; `docs/design/RESOURCES.md` has the rest
@@ -519,6 +521,60 @@ author writes. `use Config from "./config"` names a module and drops the `.trb`;
 writes it. They are different questions — one is about the source tree, the other about a file the program carries —
 and they stay different.
 
+## 6a. Requirements and resolution
+
+**Built (2026-09-26), `compiler/src/package/`.** The package manager's resolver is pure TorbScript over a fixture of
+index files in `compiler/tests/packages.test.trb`, and the whole cycle runs against a `file:` registry in
+`tools/packages.sh`, a gate of tier A.
+
+**The requirement grammar** - the text after the `:` of a `dependencies` line - is Cargo's, decided here because
+section 6 left it open:
+
+```text
+requirement = "*" | comparator (" " comparator)*          every comparator holds
+comparator  = ["^" | "~" | "=" | ">=" | ">" | "<=" | "<"] partial
+partial     = number ["." number ["." number ["-" pre-release]]]
+```
+
+- A comparator without an operator is a caret, and a line without `:` allows every release: `^1.2.3` is
+  `>=1.2.3 <2.0.0`, `^0.2.3` is `>=0.2.3 <0.3.0`, `^0.0.3` is `0.0.3` alone, `~1.2.3` is `>=1.2.3 <1.3.0`, and a partial
+  version stands for the range it leaves open (`=1.2` is `>=1.2.0 <1.3.0`). A `:` with nothing after it is an error.
+- **A pre-release is only chosen where a requirement names one, and then only pre-releases of that one release**
+  (`^1.2.3-beta.1` allows `1.2.3-beta.2` and every release up to 2.0.0, and not `1.3.0-beta.1`). A version set is
+  therefore two halves - releases and pre-releases - each a list of half-open intervals, so that complement,
+  intersection and union stay exact and the resolver's algebra holds. A version is semver 2.0.0 without build
+  metadata: two releases that differ only in `+build` would be one version to the resolver and two to a person.
+
+**The algorithm is PubGrub** (Natalie Weizenbaum, 2018: Dart's pub, uv, and `pubgrub-rs`), chosen over minimal
+version selection and over plain backtracking:
+
+| Candidate | For | Against |
+|---|---|---|
+| **PubGrub** — decided | the highest compatible version, which CONCEPT asks for; it learns an incompatibility from every conflict, so it never walks into the same dead end twice; and the learned incompatibilities are the derivation of a failure, which is written out as a numbered chain of "because" sentences | the most code of the three, and the error writer is half of it |
+| Minimal version selection (Go) | no solver at all; reproducible without a lock | picks the *lowest* version a requirement allows, which contradicts CONCEPT's "the highest compatible version"; an explanation is a list of requirements, not a reason |
+| Backtracking (Cargo's, historically) | small | exponential in the worst case, and "no solution" after trying everything is what users of every other package manager learn to fear |
+
+**Deterministic**: the next package is the one with the fewest allowed versions, ties by name; the version is the
+highest allowed - or the one the lock already has, where the constraints still allow it, which is how `torb add`,
+`torb remove` and `torb update <name>` keep every other package where it was. A release the index yanks, or one that
+needs a newer `language` than the toolchain's, is not chosen, unless the lock already pins it (docs/design/RELEASE.md
+section 7.3), and the explanation names it when it is why a range is empty.
+
+**Workspaces**: the root depends on every member, and every member and every `path:` package is a package of one
+version - its manifest's, `0.0.0` where it says none - whose requirements are its `runtime` and `development` lines
+(only `runtime` for a `path:` package and for a registry package). Two members that want what no version satisfies
+are explained through both.
+
+**One version per package in a graph, not one per major.** CONCEPT allows two majors of one package side by side. The
+resolver resolves one version per package, because the module identity of the checker and of both back ends is the
+package name: two majors would need a package identity of name and major and per-package resolution of `use`
+specifiers. It is the stricter subset, so nothing it resolves becomes wrong when two majors are allowed; the
+resolver's package would then be `(name, major)`.
+
+**Fetching the index first.** The resolver is pure, so every index a resolution may need is fetched before it runs:
+the index of every package any version of what is reached depends on. That over-fetches old versions' dependencies,
+and an index that is not there is a package with no versions, which the explanation names.
+
 ## 7. Where a dependency comes from
 
 **Decided: source files name packages, `project.trb` says where each package comes from, and `project.lock.trb` pins
@@ -590,6 +646,11 @@ source "acme/z", archive: "https://files.acme.test/z-1.0.tar.gz", hash: "..."
 A `source` overrides where a name resolves and never what it is called, so replacing a registry package with a local
 checkout during development touches one line and no source file. `revision` is required for `git:` — a branch name
 is not a version — and `hash` is required for `archive:`, because there is no registry to ask.
+
+**As built (2026-09-26):** `registry` and `source` are read statically and printed back by `Project.settings()`, and
+`path:` sources are resolved, locked as `path:` and built from their directory. `git:` and `archive:` sources type
+check and are refused by the resolver with a message that says so; a `file:` registry URL is relative to the root
+project of the workspace.
 
 ## 8. What a project file may read
 
@@ -1135,8 +1196,16 @@ and needs nothing.
 this document adds is that the same static subset (section 10) is what makes the writing half possible on a file that
 is code.
 
-The exact fields of `project.lock.trb` stay where CONCEPT left them — open, because there is no registry protocol to
-resolve against yet. What is decided here is what has to be pinned, not how it is written.
+**The exact fields are decided (2026-09-26)**, with the registry protocol of docs/design/RELEASE.md section 7.4, and
+are what docs/tooling/project-lock-trb.md shows: `package "<name>", version:, registry:, hash:` for a registry package,
+with an optional `capabilities` block, and `package "<name>", path:` for a `path:` one. **`registry:` is the URL the
+owner is bound to**, as the `registry` line writes it (`https://packages.torb.dev` for an unbound owner), not the
+owner's name the sketch of section 8 used: a binding that changes after locking is then a mismatch the build
+reports, which is the point of pinning the registry. `git:` and `archive:` rows are not written yet. The top-level
+`language` is the root project's `language`, and a `settings` block carries `language`, `prelude`, `dependencies`,
+`version`, `authors`, `description`, `license` and `repository` - no `program` lines and no `resource` list yet,
+because the toolchain reads neither, and no `from` section, because the sandbox does not record what an evaluation
+read yet.
 
 ## 12. Migration
 
@@ -1159,6 +1228,14 @@ every `.trb` file and nothing should be rebased across it.
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/design/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 
+**Where the slices stand (2026-09-26), from the package manager's round.** Slice 5's grammar exists as one function,
+`specifierOf` in `compiler/src/package/specifier.trb`, with a message per shape; the dependency lines and `torb add` use
+it, and the resolution of `use` does not yet. Slice 6 is half done: `source`, `registry`, `language`, `description`,
+`license` and `repository` are in `std/project` and in the static reader, without the plain-string diagnostic. Slice 8
+is the part the package manager needed: `Lock` with its `settings` and `graph`, the deterministic printer, `torb
+publish` writing the `settings` block from the evaluation and carrying both files in the archive, and the consumer side
+reading a dependency's `settings` instead of its `project.trb`; `torb lock` and `torb lock --check` are not built.
+
 **The prose.** `docs/tooling/project-trb.md` (the settings table is rewritten), `torb-build.md`, `torb-run.md`,
 `torb-test.md`, `docs/language/modules-and-packages/{packages,top-level-code,use,workspaces}.md`,
 `docs/standard-library/project.md`, `docs/glossary.md`'s "entry file" and "package", `docs/guide/modules-and-packages.md`,
@@ -1168,9 +1245,9 @@ already done, so that `docs check` never sees a design document nothing links to
 
 ## 13. What this is not
 
-- **Not a package manager.** There is no registry protocol here, no resolution algorithm and no exact shape for
-  `project.lock.trb`. What this document decides is what has to be *pinned* and where a location is *written*; how a
-  registry answers is CONCEPT's open question and stays one.
+- **Not the registry.** How a registry answers - the index, the archives, publishing - is docs/design/RELEASE.md
+  section 7. This document decides what is *pinned* and where a location is *written*, and section 6a what is
+  *resolved*.
 - **Not a build system.** There are no rules, no targets that depend on targets, no code generation and no hooks. A
   `project.trb` describes a package; it does not describe how to make one.
 - **Not a manifest that is a program you run.** A project file is code and section 8 lets it read, which is one step

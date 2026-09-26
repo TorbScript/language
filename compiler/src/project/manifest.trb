@@ -7,20 +7,54 @@
 use SourceFile, Statement, Expression, TextSegment from "../syntax/ast"
 use Span from "../syntax/source"
 
+/** `registry "acme", url: "https://packages.acme.test"`: where the packages of one owner come from. */
+public type RegistryBinding {
+  owner: String
+  url: String
+}
+
 /**
- * What the toolchain needs to know about a project. Names of dependencies are stored without their version
- * requirement (`"acme/http:^1.2.3"` is the package `acme/http`): resolving versions is the business of the package
- * manager, the front end only asks "may this project import that package".
+ * `source "acme/y", path: "../y"`: where one package comes from instead of its owner's registry
+ * (docs/design/PROJECT.md section 7).
+ */
+public type SourceBinding {
+  package: String
+  /** `path`, `git` or `archive`: the label the location was written with. */
+  kind: String
+  location: String
+  /** The `revision:` of a `git:` source, the `hash:` of an `archive:` source; empty for a `path:` source. */
+  pin: String = ""
+}
+
+/**
+ * What the toolchain needs to know about a project. The names of dependencies are stored without their version
+ * requirement as well (`"acme/http:^1.2.3"` is the package `acme/http`), because the front end only asks "may this
+ * project import that package"; the requirements as written are what the package manager resolves.
  */
 public type Manifest {
   /** `owner/name`. Empty if the `project.trb` does not say. */
   name: String = ""
   version: String = ""
+  /** `language = "0.3.0"`: the oldest language the project needs. Empty if it does not say. */
+  language: String = ""
+  /** What `torb publish` requires besides `name` and `version`, and what a registry shows. */
+  description: String = ""
+  license: String = ""
+  repository: String = ""
+  authors: List<String> = []
   /** The package whose public names are in scope in every file of the project. */
   prelude: String = "std/prelude"
   runtimeDependencies: List<String> = []
   /** Tests and tools. Never part of what dependents get. */
   developmentDependencies: List<String> = []
+  /** The `runtime` lines as written, `"acme/http:^1.2.3"`. */
+  runtimeRequirements: List<String> = []
+  /** The `development` lines as written. */
+  developmentRequirements: List<String> = []
+  /** Every `registry` line, in order. */
+  registries: List<RegistryBinding> = []
+  /** Every `source` line, in order. */
+  sources: List<SourceBinding> = []
   /** Patterns, each either a directory or `directory/*`. Empty for a project that is not a workspace. */
   workspaceMembers: List<String> = []
   buildInput: String = "src/main.trb"
@@ -74,6 +108,10 @@ public type Setting {
   word: String
   texts: List<String>
   block: List<Setting>
+  /** The string arguments written with a label, `url: "..."`, by label. */
+  labeled: Map<String, String> = [:]
+  /** Where the whole line stands in its file: what `torb add` and `torb remove` edit. */
+  span: Span = Span 0, 0
 
   fn first(): String? {
     texts.get 0
@@ -108,9 +146,14 @@ public type Setting {
  * standard library, and it covers every `project.trb` that exists so far.
  */
 public fn readManifest(file: SourceFile): Manifest {
+  manifestOf readSettings(file.statements)
+}
+
+/** The manifest the literal lines say: the whole of [readManifest] once the file is lines, and a lock's `settings` block. */
+public fn manifestOf(settings: List<Setting>): Manifest {
   var manifest = Manifest()
   var namesTestInput = false
-  for setting in readSettings(file.statements) {
+  for setting in settings {
     match setting.word {
       "name" => {
         if const Some(text) = setting.first() {
@@ -122,16 +165,61 @@ public fn readManifest(file: SourceFile): Manifest {
           manifest = manifest.copy version: text
         }
       }
+      "description" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy description: text
+        }
+      }
+      "license" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy license: text
+        }
+      }
+      "repository" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy repository: text
+        }
+      }
+      "authors" => {
+        manifest = manifest.copy authors: manifest.authors.appendedAll(setting.texts)
+      }
+      "language" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy language: text
+        }
+      }
       "prelude" => {
         if const Some(text) = setting.first() {
           manifest = manifest.copy prelude: text
         }
       }
       "dependencies" => {
+        const runtime = setting.textsOf "runtime"
+        const development = setting.textsOf "development"
         manifest = manifest.copy(
-          runtimeDependencies: setting.textsOf("runtime").map(packageNameOf).toList(),
-          developmentDependencies: setting.textsOf("development").map(packageNameOf).toList(),
+          runtimeDependencies: runtime.map(packageNameOf).toList(),
+          developmentDependencies: development.map(packageNameOf).toList(),
+          runtimeRequirements: runtime,
+          developmentRequirements: development,
         )
+      }
+      "registry" => {
+        if const Some(owner) = setting.first() {
+          const url = setting.labeled.get("url") ?? (setting.texts.get(1) ?? "")
+          manifest = manifest.copy registries: manifest.registries.appended(RegistryBinding(owner, url))
+        }
+      }
+      "source" => {
+        if const Some(package) = setting.first() {
+          for kind in ["path", "git", "archive"] {
+            if const Some(location) = setting.labeled.get(kind) {
+              const pin = setting.labeled.get("revision") ?? (setting.labeled.get("hash") ?? "")
+              const bound = SourceBinding package, kind, location, pin
+              manifest = manifest.copy sources: manifest.sources.appended(bound)
+              break
+            }
+          }
+        }
       }
       "workspace" => {
         manifest = manifest.copy workspaceMembers: setting.textsOf("members")
@@ -192,12 +280,15 @@ public fn readSettings(statements: List<Statement>): List<Setting> {
 }
 
 fn settingOf(statement: Statement): Setting? {
-  match statement.kind {
-    .Evaluate(expression) => settingOfCall expression
+  const setting = match statement.kind {
+    .Evaluate(expression) => settingOfCall(expression)?
     // `name = "x"`: a field written with `=`, read the same way a command call was until 2026-09-25
-    .Assign(target, value) => settingOfAssign target, value
-    _ => None
+    .Assign(target, value) => settingOfAssign(target, value)?
+    _ => {
+      return None
+    }
   }
+  Some setting.copy(span: statement.span)
 }
 
 fn settingOfCall(expression: Expression): Setting? {
@@ -215,11 +306,15 @@ fn settingOfCall(expression: Expression): Setting? {
   }
   var texts: List<String> = []
   var block: List<Setting> = []
+  var labeled: Map<String, String> = [:]
   for argument in arguments {
     match argument.value.kind {
       .TextLiteral(segments) => {
         if const Some(text) = plainText(segments) {
-          texts.append text
+          match argument.label {
+            Some(label) => labeled.set label.text, text
+            None => texts.append text
+          }
         }
       }
       // `workers 4`: an integer is read as it is written, and whoever reads the setting makes it a number
@@ -230,7 +325,7 @@ fn settingOfCall(expression: Expression): Setting? {
       _ => {}
     }
   }
-  Some Setting(word, texts, block)
+  Some Setting(word, texts, block, labeled)
 }
 
 /** `name = "x"`, `input = "src/main.trb"`: the field's own name is the word, its value the one text a field takes. */

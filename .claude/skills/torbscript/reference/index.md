@@ -187,7 +187,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/modules-and-packages/top-level-code.md` - **Top-level code** (reference): A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
 - `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
 - `language/modules-and-packages/visibility.md` - **Visibility** (reference): A top-level declaration is private to its file unless marked public, and a public declaration may not expose a type that is private to its own file.
-- `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects that check, build and test as a group; a shared project.lock.trb is designed for them but not read or written yet.
+- `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects that check, build and test as a group, and resolve their dependencies into one shared project.lock.trb.
 
 ## language/pattern-matching
 
@@ -270,9 +270,12 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## standard-library
 
+- `standard-library/archive.md` - **std/archive** (package): POSIX ustar archives - tarred writes entries as bytes that depend on nothing but the entries, untarred reads the regular files back and refuses links.
 - `standard-library/collections.md` - **std/collections** (package): The collection traits every signature talks about, and the implementations that only show up where one is built.
+- `standard-library/compression.md` - **std/compression** (package): DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
 - `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
+- `standard-library/digest.md` - **std/digest** (package): Sha256 and the Digest it answers - SHA-256 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
 - `standard-library/dns.md` - **std/dns** (package): Domain names with IDNA and the comparison of RFC 4343, DNS records as typed cases, and the RFC 1035 wire format with compression and EDNS0 - values with no natives and no capability, for the transports of std/network and std/http.
 - `standard-library/encoding.md` - **std/encoding** (package): Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
@@ -310,18 +313,23 @@ that answers the question. A page marked (planned) describes a feature that does
 ## tooling
 
 - `tooling/index.md` - **The toolchain** (index): The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
-- `tooling/project-lock-trb.md` - **project.lock.trb** (tooling, planned): The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
+- `tooling/project-lock-trb.md` - **project.lock.trb** (tooling): The locked manifest - the exact version, tree hash and registry of every package a workspace depends on, and the evaluated settings of a published package - written deterministically and read without running anything.
 - `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
 - `tooling/the-torb-command.md` - **The torb command** (tooling): Every subcommand of the toolchain, what it does today, and which of them are still planned.
+- `tooling/torb-add.md` - **torb add** (tooling): torb add writes a dependency into project.trb, resolves the workspace with it, writes project.lock.trb and installs what is new - or changes nothing and explains why there is no solution.
 - `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - `tooling/torb-canon.md` - **torb canon** (tooling): torb canon is deprecated - it runs torb format now, with a warning - and the formatter canon it enforced, every rule of it, is what torb format runs first, over the syntax tree and with a safety net.
 - `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - `tooling/torb-doc.md` - **torb doc** (tooling): torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
 - `tooling/torb-docs-source.md` - **torb docs source** (tooling): torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - `tooling/torb-format.md` - **torb format** (tooling): torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces and blank lines - and --check fails on every file that is not in it.
+- `tooling/torb-install.md` - **torb install** (tooling): torb install fetches every package project.lock.trb pins that is not in the cache yet, checks its tree hash before a file is written, and never changes the lock.
 - `tooling/torb-lint.md` - **torb lint** (tooling): torb lint reports the rules of style the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal - each with its id and, where it is certain, a fix.
 - `tooling/torb-new.md` - **torb new** (tooling): torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
+- `tooling/torb-publish.md` - **torb publish** (tooling): torb publish builds and checks the archive of a package exactly as a registry receives it, prints its tree hash and capabilities, and writes it into a registry that is a directory; publishing over the network comes later.
+- `tooling/torb-remove.md` - **torb remove** (tooling): torb remove takes a dependency out of project.trb, resolves the workspace again, and drops from project.lock.trb every package nothing needs any more.
 - `tooling/torb-repl.md` - **torb repl** (tooling): torb repl reads entries from standard input, checks each against the session, runs it in the bytecode VM and keeps what it binds and declares for the next entry - a typed session and a piped file behave the same.
 - `tooling/torb-run.md` - **torb run** (tooling): torb run runs a file or a project in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 - `tooling/torb-test.md` - **torb test** (tooling): torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.
+- `tooling/torb-update.md` - **torb update** (tooling): torb update resolves every package of the workspace, or only the named ones, to the highest version project.trb allows, writes project.lock.trb, and refuses an update that gains a capability unless --accept-capabilities says it is wanted.
 - `tooling/verifying-your-work.md` - **Verify your work** (tooling): The commands that decide whether TorbScript you wrote is correct and in the layout of the formatter, in the order to run them.

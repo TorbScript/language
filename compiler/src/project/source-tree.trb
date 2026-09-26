@@ -37,8 +37,18 @@ public type SourceTree {
    * resolved against (docs/design/RESOURCES.md section 6). A tree built in memory lists its resources in `files`.
    */
   private otherPaths: List<String> = []
+  /**
+   * The package manager's cache, where a package of a lock is unpacked (`<cache>/packages/<hash>`), or empty. See
+   * [SourceTree.cache].
+   */
+  private cacheValue: String = ""
 
-  static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = ""): SourceTree {
+  static fn of(
+    files: Map<String, String>,
+    base: String = ".",
+    standardLibrary: String = "",
+    cache: String = "",
+  ): SourceTree {
     var normalized: Map<String, String> = [:]
     for (path, text) in files {
       normalized.set normalizePath(path), text
@@ -46,7 +56,8 @@ public type SourceTree {
     var paths = normalized.keys().toList()
     paths.sort({ _ })
     const library = if standardLibrary.isEmpty() { "" } else { normalizePath standardLibrary }
-    Self normalized, paths, normalizePath(base), library
+    const cached = if cache.isEmpty() { "" } else { normalizePath cache }
+    Self normalized, paths, normalizePath(base), library, cacheValue: cached
   }
 
   /**
@@ -59,8 +70,9 @@ public type SourceTree {
     base: String,
     standardLibrary: String,
     others: List<String> = [],
+    cache: String = "",
   ): SourceTree {
-    const tree = SourceTree.of read, base, standardLibrary
+    const tree = SourceTree.of read, base, standardLibrary, cache
     var paths = tree.sortedPaths
     var names: Set<String> = Set.of()
     for path in listed {
@@ -73,7 +85,7 @@ public type SourceTree {
     paths.sort({ _ })
     var otherPaths = others.map(normalizePath).toList()
     otherPaths.sort({ _ })
-    Self tree.files, paths, tree.base, tree.standardLibraryValue, [:], Some(DiskFiles(names)), otherPaths
+    Self tree.files, paths, tree.base, tree.standardLibraryValue, [:], Some(DiskFiles(names)), otherPaths, tree.cacheValue
   }
 
   /**
@@ -93,6 +105,14 @@ public type SourceTree {
    */
   fn standardLibrary(): String {
     standardLibraryValue
+  }
+
+  /**
+   * The package manager's cache: a package a `project.lock.trb` pins is a package of the workspace where it is unpacked
+   * below it (`findWorkspace`). Empty for a tree built in memory, whose tests name the cache they unpack into.
+   */
+  fn cache(): String {
+    cacheValue
   }
 
   /** `None` if the file is not part of the tree. */
@@ -151,7 +171,7 @@ public type SourceTree {
     texts.set normalized, text
     var parsed = parsedFiles
     const _ = parsed.remove normalized
-    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths
+    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue
   }
 
   /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
@@ -163,7 +183,7 @@ public type SourceTree {
         parsed.set path, (source, parse(source))
       }
     }
-    Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths
+    Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue
   }
 
   /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */

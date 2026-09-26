@@ -48,6 +48,11 @@ torb format [path]...  Write sources in the layout of the language; --check only
 torb lint [path]...    The rules of style the checker leaves alone; --fix writes their fixes
 torb canon [path]...   Deprecated: runs torb format
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
+torb add <package>...  Add a dependency to project.trb, resolve, lock and install it
+torb remove <package>...  Remove a dependency from project.trb and project.lock.trb
+torb update [package]...  Resolve every package, or the named ones, to the highest version allowed
+torb install           Fetch and verify every package project.lock.trb pins into the cache
+torb publish           Build and check the archive of a package, and publish it (--dry-run: build only)
 ```
 
 `torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command below is
@@ -188,6 +193,16 @@ calls. With `--check` it prints nothing but a summary, and fails where the stati
 anything else out of those settings than out of the file itself; `tools/gates.sh a` runs it over every manifest of the
 repository.
 
+### `add`, `remove`, `update`, `install` and `publish`
+
+The package manager. `add`, `remove` and `update` edit `project.trb` where they must, resolve every member of the
+workspace together by PubGrub - the highest version every requirement allows, and an explanation where there is none -
+and write [project.lock.trb](project-lock-trb.md); `install` fetches what the lock pins into the cache and checks every
+tree hash; `publish` builds the archive of a package exactly as a registry receives it and writes it into a `file:`
+registry. Every one of them takes `--project <directory>` and `--offline`. See [torb add](torb-add.md),
+[torb remove](torb-remove.md), [torb update](torb-update.md), [torb install](torb-install.md) and
+[torb publish](torb-publish.md).
+
 ### `docs`
 
 Four commands over the documentation: `check` is the gate, `index` writes the generated part of every `index.md`, `skill`
@@ -207,7 +222,7 @@ These are in the design and not in the binary. A page about one of them carries 
 
 | Command | What it will do |
 |---------|-----------------|
-| `torb add`, `remove`, `update`, `audit` | The package manager and the advisory database |
+| `torb audit`, `yank`, `login`, `owner`, `vendor` | The rest of the package manager, the advisory database, and publishing to a registry on the network |
 
 ## Examples
 

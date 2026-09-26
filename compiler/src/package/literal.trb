@@ -1,0 +1,42 @@
+/**
+ * The two halves every file of the package manager shares: [settingsOf] reads the literal lines of a receiver script
+ * from its syntax tree without evaluating anything, and [quoted] writes a string back so that it reads the same.
+ */
+
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use Setting, readSettings from "../project/manifest"
+
+/**
+ * The literal `word argument..., label: "text" { block }` lines of a file, the same way `project.trb` is read.
+ *
+ * # Errors
+ *
+ * - The first syntax error of the file, with its offset: a file the toolchain wrote parses, so this is a file somebody
+ *   edited or cut off.
+ */
+public fn settingsOf(text: String): Result<List<Setting>, String> {
+  const parsed = parse SourceText.of(text)
+  if const Some(first) = parsed.diagnostics.first() {
+    return Fail "{first.message} (at byte {first.span.start})"
+  }
+  Ok readSettings(parsed.file.statements)
+}
+
+/** A string literal that reads back as `text`: the escapes of the lexer, and `\{` so that nothing is interpolated. */
+public fn quoted(text: String): String {
+  const escaped = text
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\{", "\\\{")
+    .replace("\}", "\\\}")
+    .replace("\n", "\\n")
+    .replace("\r", "\\r")
+    .replace("\t", "\\t")
+  "\"{escaped}\""
+}
+
+/** `"a", "b"`: the arguments of a variadic line. */
+public fn quotedList(texts: List<String>): String {
+  texts.map(quoted).toList().joined(separator: ", ")
+}

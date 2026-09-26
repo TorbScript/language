@@ -1,0 +1,697 @@
+/**
+ * The package manager's commands (docs/design/PROJECT.md sections 7, 8 and 11, docs/design/RELEASE.md section 7):
+ *
+ *     torb add <package>[@<requirement>]...    a dependency into project.trb, resolved, locked and installed
+ *     torb remove <package>...                 out of project.trb, and out of the lock where nothing needs it
+ *     torb update [<package>...]               every package, or the named ones, at the highest version allowed
+ *     torb install                             the packages the lock pins, fetched and verified into the cache
+ *     torb publish [--dry-run]                 the archive exactly as it is uploaded, checked; a `file:` registry is
+ *                                              written, a registry on the network is a later round
+ *
+ * `add`, `remove` and `update` are the only commands that write `project.lock.trb`, and `publish` writes its
+ * `settings` block; `install` never changes it. Resolution fails before anything is written, with PubGrub's explanation.
+ * An update that gains a capability is refused unless `--accept-capabilities` says it is wanted (CONCEPT, "Packages and
+ * the Supply Chain").
+ */
+
+use File from "std/fs"
+use SourceText, LineIndex from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use normalizePath, joinPath, isInside, relativePath from "../project/path"
+use readSourceTree from "../project/read"
+use SourceTree from "../project/source-tree"
+use Workspace, Package, findWorkspace, lockProblems from "../project/workspace"
+use Manifest, RegistryBinding, readManifest from "../project/manifest"
+use check from "../semantics/check"
+use evaluateManifests, manifestOfSettings from "../vm/manifest"
+use renderDiagnostic, renderProblem, counted from "./render"
+use Version, languageVersion from "../package/version"
+use VersionSet from "../package/version-set"
+use Requirement, requirementOf, versionsOf from "../package/requirement"
+use packageNameOf from "../package/specifier"
+use Candidate, resolve from "../package/resolve"
+use PackageIndex, IndexRelease, readIndex, candidatesOf, indexStart, renderRelease from "../package/index"
+use Lock, LockedPackage, LockedSettings, readLock, renderLock from "../package/lock"
+use registryOf, bindingsOf from "../package/registry"
+use FetchSettings, registryLocationOf, fetchIndex, fetchArchive from "../package/fetch"
+use isInstalled, install, writeBytes, writeText from "../package/store"
+use withRequirement, withoutRequirement from "../package/manifest-edit"
+use packed, unpacked, treeHash, capabilitiesOf from "../package/archive"
+use packageFiles, entriesOf from "../package/files"
+use TarEntry from "std/archive"
+
+/** What one of the commands was called with. */
+public type PackageOptions {
+  /** `add`, `remove`, `update`, `install` or `publish`. */
+  command: String
+  /** The packages named, as written. */
+  names: List<String> = []
+  /** `--development`: `add` writes a `development` line instead of a `runtime` one. */
+  development: Bool = false
+  /** `--offline`: no network; the index from the cache's copy, an archive only where it is unpacked already. */
+  offline: Bool = false
+  /** `--dry-run`: `publish` builds and checks the archive and uploads nothing. */
+  dryRun: Bool = false
+  /** `--accept-capabilities`: `update` takes versions that touch more than the locked ones did. */
+  acceptCapabilities: Bool = false
+  /** `--project <directory>`: the project to work on, instead of the one around the working directory. */
+  directory: String = "."
+}
+
+/**
+ * The options of `torb <command> <arguments>`.
+ *
+ * # Errors
+ *
+ * - A flag the command does not know, or a flag that needs a value and has none.
+ */
+public fn packageOptionsOf(command: String, arguments: List<String>): Result<PackageOptions, String> {
+  var options = PackageOptions command
+  var index = 0
+  while index < arguments.length() {
+    const argument = arguments[index]
+    index = index + 1
+    match argument {
+      "--development" => {
+        options = options.copy development: true
+      }
+      "--offline" => {
+        options = options.copy offline: true
+      }
+      "--dry-run" => {
+        options = options.copy dryRun: true
+      }
+      "--accept-capabilities" => {
+        options = options.copy acceptCapabilities: true
+      }
+      "--project" => {
+        const directory = match arguments.get(index) {
+          Some(found) => found
+          None => {
+            return Fail "`--project` needs a directory"
+          }
+        }
+        index = index + 1
+        options = options.copy directory: directory
+      }
+      _ => {
+        if argument.startsWith("--") {
+          return Fail "`torb {command}` has no flag `{argument}`"
+        }
+        options = options.copy names: options.names.appended(argument)
+      }
+    }
+  }
+  if (command == "add" || command == "remove") && options.names.isEmpty() {
+    return Fail "`torb {command}` needs a package: `torb {command} acme/json`"
+  }
+  if (command == "install" || command == "publish") && !options.names.isEmpty() {
+    return Fail "`torb {command}` takes no package: it works on the project"
+  }
+  Ok options
+}
+
+/** Runs the command; answers the exit code. */
+public fn runPackageCommand(options: PackageOptions): Int {
+  const context = match contextOf(options) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return 1
+    }
+  }
+  const outcome = match options.command {
+    "add" => runAdd context, options
+    "remove" => runRemove context, options
+    "update" => runUpdate context, options
+    "install" => runInstall context
+    "publish" => runPublish context, options
+    _ => Fail "`{options.command}` is not a command of the package manager"
+  }
+  match outcome {
+    Ok(code) => code
+    Fail(problem) => {
+      printError "error: {problem}"
+      1
+    }
+  }
+}
+
+/** The workspace a command works on, and where it works. */
+type Context {
+  tree: SourceTree
+  workspace: Workspace
+  /** The directory of the workspace root: where `project.lock.trb` is. */
+  root: String
+  /** The member the command was called in: what `add`, `remove` and `publish` change. */
+  target: Package
+  /** The members: every package of the workspace that is neither the toolchain's nor installed. */
+  members: List<Package>
+  bindings: List<RegistryBinding>
+  settings: FetchSettings
+}
+
+fn contextOf(options: PackageOptions): Result<Context, String> {
+  const tree = readSourceTree([options.directory]).mapError({ _.show() })?
+  const directory = normalizePath(File.absolutePath(options.directory).mapError({ _.show() })?)
+  const workspace = findWorkspace tree, directory
+  const root = match workspace.packages.first() {
+    Some(found) => found.directory
+    None => ""
+  }
+  if root.isEmpty() {
+    return Fail "there is no project.trb at or above `{options.directory}`: `torb new` makes a project"
+  }
+  const members = workspace.packages.filter({ !_.installed && !_.name.startsWith("std/") && !_.directory.isEmpty() }).toList()
+  var target = members[0]
+  for member in members {
+    if isInside(directory, member.directory) && member.directory.byteLength() > target.directory.byteLength() {
+      target = member
+    }
+  }
+  var lines: List<RegistryBinding> = []
+  for member in members {
+    lines.appendAll member.manifest.registries
+  }
+  const bindings = bindingsOf(lines)?
+  const cache = tree.cache()
+  if cache.isEmpty() {
+    return Fail "there is no cache directory: set TORB_CACHE, or HOME (LOCALAPPDATA on Windows)"
+  }
+  Ok Context(tree, workspace, root, target, members, bindings, FetchSettings(cache, offline: options.offline))
+}
+
+// --- add, remove, update, install --------------------------------------------------------------------------------
+
+fn runAdd(context: Context, options: PackageOptions): Result<Int, String> {
+  const manifestPath = joinPath context.target.directory, "project.trb"
+  var text = File.readText(manifestPath).mapError({ _.show() })?
+  const kind = if options.development { "development" } else { "runtime" }
+  for written in options.names {
+    const (name, requirement) = match written.splitOnce("@") {
+      Some((before, after)) => (before, Some(after))
+      None => (written, None)
+    }
+    const package = packageNameOf(name)?
+    if package.startsWith("std/") {
+      return Fail "`{package}` comes with the toolchain and is never a dependency"
+    }
+    const line = match requirement {
+      Some(given) => {
+        const _ = versionsOf(given).mapError({ "`{written}`: {_}" })?
+        "{package}:{given}"
+      }
+      None => {
+        if context.members.any({ _.name == package }) {
+          package
+        } else {
+          "{package}:^{newestRelease(context, package)?}"
+        }
+      }
+    }
+    text = withRequirement(text, kind, line, package)?
+  }
+  const edited = readManifest parse(SourceText.of(text)).file
+  const members = withManifest context.members, context.target.directory, edited
+  const before = lockOf context
+  const after = match resolved(context, members, lockedVersions(before, []))? {
+    Ok(found) => found
+    Fail(explanation) => {
+      printError explanation
+      printError "error: nothing was changed: the dependencies of project.trb have no solution"
+      return Ok 1
+    }
+  }
+  File.writeText(manifestPath, text).mapError({ _.show() })?
+  writeLock(context, after.copy(settings: before.settings))?
+  for written in options.names {
+    print "added {written} to {context.target.name}"
+  }
+  const _ = printChanges before, after
+  installAll context, after
+}
+
+fn runRemove(context: Context, options: PackageOptions): Result<Int, String> {
+  const manifestPath = joinPath context.target.directory, "project.trb"
+  var text = File.readText(manifestPath).mapError({ _.show() })?
+  for written in options.names {
+    const package = packageNameOf(written)?
+    const (without, found) = withoutRequirement(text, package)?
+    if !found {
+      return Fail "`{package}` is not a dependency of {context.target.name}"
+    }
+    text = without
+  }
+  const edited = readManifest parse(SourceText.of(text)).file
+  const members = withManifest context.members, context.target.directory, edited
+  const before = lockOf context
+  const after = match resolved(context, members, lockedVersions(before, []))? {
+    Ok(found) => found
+    Fail(explanation) => {
+      printError explanation
+      return Ok 1
+    }
+  }
+  File.writeText(manifestPath, text).mapError({ _.show() })?
+  writeLock(context, after.copy(settings: before.settings))?
+  for written in options.names {
+    print "removed {written} from {context.target.name}"
+  }
+  const _ = printChanges before, after
+  Ok 0
+}
+
+fn runUpdate(context: Context, options: PackageOptions): Result<Int, String> {
+  const before = lockOf context
+  for name in options.names {
+    if before.locked(name).isNone() {
+      return Fail "`{name}` is not in project.lock.trb: `torb add {name}` adds a dependency"
+    }
+  }
+  // Every package moves where none is named; the named ones move, and everything else stays where the lock has it
+  const preferred = if options.names.isEmpty() { [:] } else { lockedVersions before, options.names }
+  const after = match resolved(context, context.members, preferred)? {
+    Ok(found) => found
+    Fail(explanation) => {
+      printError explanation
+      return Ok 1
+    }
+  }
+  const gains = capabilityGains before, after
+  if !gains.isEmpty() && !options.acceptCapabilities {
+    for gain in gains {
+      printError "  {gain}"
+    }
+    printError "error: the update gains capabilities: nothing was changed. `--accept-capabilities` takes them"
+    return Ok 1
+  }
+  writeLock(context, after.copy(settings: before.settings))?
+  if !printChanges(before, after) {
+    print "project.lock.trb is current"
+  }
+  installAll context, after
+}
+
+fn runInstall(context: Context): Result<Int, String> {
+  const lockPath = joinPath context.root, "project.lock.trb"
+  if !File.exists(lockPath) {
+    return Fail "there is no project.lock.trb: `torb update` resolves project.trb and writes one"
+  }
+  const lock = readLock(File.readText(lockPath).mapError({ _.show() })?)?
+  const problems = lockProblems context.members, lock, true, context.bindings
+  if !problems.isEmpty() {
+    for problem in problems {
+      printError renderProblem(problem)
+    }
+    return Ok 1
+  }
+  installAll context, lock
+}
+
+/** The lock of the workspace, or an empty one where there is none yet. */
+fn lockOf(context: Context): Lock {
+  const text = File.readText(joinPath(context.root, "project.lock.trb")).ok() ?? ""
+  readLock(text).ok() ?? Lock()
+}
+
+fn writeLock(context: Context, lock: Lock): Result<Void, String> {
+  writeText joinPath(context.root, "project.lock.trb"), renderLock(lock)
+}
+
+/** The locked versions of every package but `moving`. */
+fn lockedVersions(lock: Lock, moving: List<String>): Map<String, Version> {
+  var versions: Map<String, Version> = [:]
+  for locked in lock.graph {
+    if locked.isPath() || moving.contains(locked.name) {
+      continue
+    }
+    if const Ok(version) = Version.tryFrom(locked.version) {
+      versions.set locked.name, version
+    }
+  }
+  versions
+}
+
+/** The members with one manifest replaced: what `add` and `remove` resolve before they write anything. */
+fn withManifest(members: List<Package>, directory: String, manifest: Manifest): List<Package> {
+  members.map({ if _.directory == directory { _.copy manifest: manifest.copy(name: _.name) } else { _ } }).toList()
+}
+
+/** The newest release of a package that may be chosen, and no pre-release: what `torb add acme/json` puts after `^`. */
+fn newestRelease(context: Context, package: String): Result<String, String> {
+  const location = registryLocationOf(registryOf(package, context.bindings), context.root)?
+  const text = match fetchIndex(location, package, context.settings)? {
+    Some(found) => found
+    None => {
+      return Fail "the registry {registryOf(package, context.bindings)} has no package `{package}`"
+    }
+  }
+  const index = readIndex(text, package)?
+  var newest: Version? = None
+  for candidate in candidatesOf(index, languageVersion) {
+    if candidate.excluded.isNone() && !candidate.version.isPreRelease() {
+      newest = Some candidate.version
+    }
+  }
+  match newest {
+    Some(found) => Ok found.show()
+    None => Fail "`{package}` has no release that may be chosen: write a requirement, `torb add {package}@<requirement>`"
+  }
+}
+
+/**
+ * The workspace resolved: its members, the `path:` packages they name, and the registry packages everything needs,
+ * with the versions of `preferred` kept where they still fit. The outer `Result` is a failure to fetch or read; the
+ * inner one is resolution's own answer, a lock or the explanation of why there is none.
+ */
+fn resolved(
+  context: Context,
+  members: List<Package>,
+  preferred: Map<String, Version>,
+): Result<Result<Lock, String>, String> {
+  const rootPackage = members.find({ _.directory == context.root }) ?? members[0]
+  const rootName = if rootPackage.name.isEmpty() { "the workspace" } else { rootPackage.name }
+  const memberNames = members.map({ _.name }).filter({ !_.isEmpty() }).toList()
+  // The `path:` packages, read from their own project.trb
+  var paths: Map<String, (directory: String, manifest: Manifest)> = [:]
+  for member in members {
+    for source in member.manifest.sources {
+      if source.kind != "path" {
+        return Fail "`source \"{source.package}\", {source.kind}:` is not resolved yet: only `path:` sources are"
+      }
+      const directory = joinPath member.directory, source.location
+      const text = File.readText(joinPath(directory, "project.trb")).mapError({ "the `path:` source of {source.package}: {_.show()}" })?
+      const manifest = readManifest parse(SourceText.of(text)).file
+      if manifest.name != source.package {
+        return Fail "the `path:` source `{source.location}` is the package `{manifest.name}`, not `{source.package}`"
+      }
+      paths.set source.package, (directory: directory, manifest: manifest)
+    }
+  }
+  var packages: Map<String, List<Candidate>> = [:]
+  var pending: List<String> = []
+  var rootDependencies: List<Requirement> = []
+  for member in members {
+    const needs = requirementsOf(member.manifest, true)?
+    if member.directory == rootPackage.directory {
+      rootDependencies.appendAll needs
+    } else {
+      rootDependencies.append Requirement(member.name, "", VersionSet.any)
+      packages.set member.name, [Candidate(versionOf(member.manifest), needs)]
+    }
+    pending.appendAll needs.map({ _.package })
+  }
+  for (name, found) in paths {
+    const needs = requirementsOf(found.manifest, false)?
+    packages.set name, [Candidate(versionOf(found.manifest), needs)]
+    pending.appendAll needs.map({ _.package })
+  }
+  // Every registry package any version of what is reached needs, each index fetched once
+  var indexes: Map<String, PackageIndex> = [:]
+  while const Some(name) = pending.removeAt(0) {
+    if packages.containsKey(name) || memberNames.contains(name) || paths.containsKey(name) {
+      continue
+    }
+    const url = registryOf name, context.bindings
+    const location = registryLocationOf(url, context.root)?
+    match fetchIndex(location, name, context.settings)? {
+      None => packages.set name, []
+      Some(text) => {
+        const index = readIndex(text, name).mapError({ "the index of {name} at {url}: {_}" })?
+        const candidates = candidatesOf index, languageVersion
+        packages.set name, candidates
+        indexes.set name, index
+        for candidate in candidates {
+          pending.appendAll candidate.dependencies.map({ _.package })
+        }
+      }
+    }
+  }
+  const resolution = match resolve(rootName, rootDependencies, packages, preferred) {
+    Ok(found) => found
+    Fail(explanation) => {
+      return Ok Fail(explanation)
+    }
+  }
+  var graph: List<LockedPackage> = []
+  for (name, version) in resolution.versions {
+    if memberNames.contains(name) {
+      continue
+    }
+    if const Some(found) = paths.get(name) {
+      graph.append LockedPackage(name, path: relativePath(context.root, found.directory))
+      continue
+    }
+    const release = indexes.get(name).flatMap({ _.release version })
+    if const Some(found) = release {
+      const url = registryOf name, context.bindings
+      graph.append LockedPackage(name, version: version.show(), registry: url, hash: found.hash, capabilities: found.capabilities)
+    }
+  }
+  Ok Ok(Lock(language: rootPackage.manifest.language, graph: graph))
+}
+
+/** A manifest's requirements the resolver sees: the toolchain's packages left out, `development` ones for members. */
+fn requirementsOf(manifest: Manifest, withDevelopment: Bool): Result<List<Requirement>, String> {
+  var written = manifest.runtimeRequirements
+  if withDevelopment {
+    written.appendAll manifest.developmentRequirements
+  }
+  var needs: List<Requirement> = []
+  for line in written {
+    const requirement = requirementOf(line).mapError({ "{manifest.name}: {_}" })?
+    if !requirement.package.startsWith("std/") {
+      needs.append requirement
+    }
+  }
+  Ok needs
+}
+
+/** The version a local package stands at: its manifest's, or `0.0.0` where it says none. */
+fn versionOf(manifest: Manifest): Version {
+  Version.tryFrom(manifest.version).ok() ?? Version(0, 0, 0)
+}
+
+/** Every registry package of the lock in the cache, fetched and verified where it is not there yet. */
+fn installAll(context: Context, lock: Lock): Result<Int, String> {
+  var fetched = 0
+  var cached = 0
+  var graph = lock.graph
+  graph.sort by: { _.name }
+  for locked in graph {
+    if locked.isPath() {
+      continue
+    }
+    if isInstalled(context.settings.cache, locked.hash) {
+      cached = cached + 1
+      continue
+    }
+    const location = registryLocationOf(locked.registry, context.root)?
+    const bytes = fetchArchive(location, locked.name, locked.version, context.settings)?
+    const entries = unpacked(bytes, locked.hash).mapError({ "{locked.name} {locked.version}: {_}" })?
+    install(context.settings.cache, locked.hash, entries)?
+    print "installed {locked.name} {locked.version}"
+    fetched = fetched + 1
+  }
+  print "{counted(fetched + cached, "package")} installed, {cached} of them already in the cache"
+  Ok 0
+}
+
+/** What changed between two locks, one line a package; `false` where nothing did. */
+fn printChanges(before: Lock, after: Lock): Bool {
+  var lines: List<String> = []
+  var graph = after.graph
+  graph.sort by: { _.name }
+  for locked in graph {
+    const shown = if locked.isPath() { "path {locked.path}" } else { locked.version }
+    const touches = if locked.capabilities.isEmpty() { "" } else { ", touches {locked.capabilities.joined(separator: ", ")}" }
+    match before.locked(locked.name) {
+      None => lines.append "  + {locked.name} {shown}{touches}"
+      Some(earlier) => {
+        if earlier.version != locked.version || earlier.path != locked.path {
+          const was = if earlier.isPath() { "path {earlier.path}" } else { earlier.version }
+          lines.append "  ~ {locked.name} {was} -> {shown}{touches}"
+        }
+      }
+    }
+  }
+  for earlier in before.graph {
+    if after.locked(earlier.name).isNone() {
+      lines.append "  - {earlier.name} {earlier.version}"
+    }
+  }
+  for line in lines {
+    print line
+  }
+  !lines.isEmpty()
+}
+
+/** The capabilities a package of `after` has that the same package of `before` did not: what an update must confirm. */
+fn capabilityGains(before: Lock, after: Lock): List<String> {
+  var gains: List<String> = []
+  for locked in after.graph {
+    const earlier = match before.locked(locked.name) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const gained = locked.capabilities.filter({ !earlier.capabilities.contains(_) }).toList()
+    if !gained.isEmpty() {
+      gains.append "{locked.name} {earlier.version} -> {locked.version} gains {gained.joined(separator: ", ")}"
+    }
+  }
+  gains
+}
+
+// --- publish -------------------------------------------------------------------------------------------------------
+
+fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
+  const package = context.target
+  const manifest = evaluatedManifest package
+  const problems = publishProblems manifest, context
+  if !problems.isEmpty() {
+    for problem in problems {
+      printError "error: {problem}"
+    }
+    printError "error: {manifest.name} cannot be published: nothing was built"
+    return Ok 1
+  }
+  const checkedFiles = checkedCount context.tree, package.directory
+  if checkedFiles < 0 {
+    printError "error: {manifest.name} does not check: `torb check {context.tree.display(package.directory)}` says where"
+    return Ok 1
+  }
+  const paths = packageFiles(package.directory).mapError({ _.show() })?
+  var entries = entriesOf(package.directory, paths.filter({ _ != "project.lock.trb" }).toList())?
+  const workspaceLock = lockOf context
+  const settings = LockedSettings manifest.name, manifest
+  const published = Lock language: manifest.language, settings: [settings], graph: workspaceLock.graph
+  entries.append TarEntry("project.lock.trb", renderLock(published).bytes().toList())
+  entries.sort by: { _.path }
+  const archive = packed(entries)?
+  const hash = treeHash entries
+  const reaches = capabilitiesOf entries
+  var size = 0
+  for entry in entries {
+    size = size + entry.bytes.length()
+  }
+  print "{manifest.name} {manifest.version}"
+  print "  checked:       {counted(checkedFiles, "file")}, no problems"
+  if reaches.isEmpty() {
+    print "  capabilities:  none - the package imports nothing that reaches the machine"
+  } else {
+    const shown = reaches.map({ "{_.capability} ({_.files.joined(separator: ", ")})" }).toList()
+    print "  capabilities:  {shown.joined(separator: ", ")}"
+  }
+  print "  files:         {entries.length()}, {size} bytes, archive {archive.length()} bytes"
+  print "  hash:          {hash}"
+  if options.dryRun {
+    print "nothing was uploaded (--dry-run)"
+    return Ok 0
+  }
+  const url = registryOf manifest.name, context.bindings
+  const directory = match registryLocationOf(url, context.root)? {
+    .Directory(found) => found
+    .Web(found) => {
+      printError "error: publishing to {found} is not built yet: the registry's write service comes in a later round (docs/design/RELEASE.md section 7.11). `--dry-run` builds and checks the archive, and a `file:` registry is written"
+      return Ok 1
+    }
+  }
+  const release = IndexRelease(
+    Version.tryFrom(manifest.version)?,
+    hash,
+    language: manifest.language,
+    dependencies: manifest.runtimeRequirements.filter({ !_.startsWith("std/") }).toList(),
+    capabilities: reaches.map({ _.capability }).toList(),
+  )
+  const indexPath = joinPath directory, "index/{manifest.name}.trb"
+  const archivePath = joinPath directory, "archives/{manifest.name}/{manifest.version}.tar.gz"
+  const existing = File.readText(indexPath).ok() ?? indexStart(manifest.name)
+  const index = readIndex(existing, manifest.name)?
+  if index.release(release.version).isSome() || File.exists(archivePath) {
+    return Fail "{manifest.name} {manifest.version} is published already, and a published version is never replaced"
+  }
+  writeBytes(archivePath, archive)?
+  writeText(indexPath, existing + renderRelease(release))?
+  var kept = workspaceLock.settings.filter({ _.package != manifest.name }).toList()
+  kept.append settings
+  writeLock(context, workspaceLock.copy(settings: kept))?
+  print "published {manifest.name} {manifest.version} to {url}"
+  Ok 0
+}
+
+/**
+ * The manifest as the evaluation in the sandbox answers it (docs/design/PROJECT.md section 8), which is what the
+ * `settings` block is printed from; the static reading where the evaluation is not possible.
+ */
+fn evaluatedManifest(package: Package): Manifest {
+  const manifestPath = joinPath package.directory, "project.trb"
+  const evaluated = match evaluateManifests([manifestPath]) {
+    Ok(Ok(found)) => found
+    _ => []
+  }
+  for entry in evaluated {
+    if const Ok(settings) = entry.evaluated {
+      return manifestOfSettings(settings).copy(name: package.name)
+    }
+  }
+  package.manifest
+}
+
+/** What `torb publish` refuses (RELEASE.md section 7.2, step 1): every missing or wrong setting at once. */
+fn publishProblems(manifest: Manifest, context: Context): List<String> {
+  var problems: List<String> = []
+  match packageNameOf(manifest.name) {
+    Ok(name) => {
+      if name.startsWith("std/") {
+        problems.append "`std` is the toolchain's owner, and nothing is published under it"
+      }
+    }
+    Fail(problem) => problems.append "`name`: {problem}"
+  }
+  if manifest.version.isEmpty() {
+    problems.append "`version` is required to publish"
+  } else if const Fail(problem) = Version.tryFrom(manifest.version) {
+    problems.append "`version`: {problem}"
+  }
+  if manifest.description.isEmpty() {
+    problems.append "`description` is required to publish: one sentence about the package"
+  }
+  if manifest.license.isEmpty() {
+    problems.append "`license` is required to publish, as an SPDX expression such as `\"MIT\"`"
+  }
+  const lock = lockOf context
+  for line in manifest.runtimeRequirements {
+    match requirementOf(line) {
+      Ok(requirement) => {
+        if lock.locked(requirement.package).map({ _.isPath() }) ?? false {
+          problems.append "`{requirement.package}` comes from a `path:` source, which nobody who installs the package has"
+        }
+      }
+      Fail(problem) => problems.append problem
+    }
+  }
+  problems
+}
+
+/** How many files of the package were checked, or -1 after printing the problems where it does not check. */
+fn checkedCount(tree: SourceTree, directory: String): Int {
+  const checked = check tree, [directory]
+  var problems = checked.problems.length()
+  for problem in checked.problems {
+    printError renderProblem(problem)
+  }
+  for file in checked.files {
+    problems = problems + file.diagnostics.length()
+    const lines = LineIndex.of file.text
+    for diagnostic in file.diagnostics {
+      printError renderDiagnostic(file.path, lines, diagnostic)
+      printError ""
+    }
+  }
+  if problems > 0 {
+    return 0 - 1
+  }
+  checked.files.length()
+}

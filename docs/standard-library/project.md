@@ -24,7 +24,7 @@ a project file is deterministic and has no IO, so evaluating it is nothing but r
 tool that reads a manifest programmatically imports them like anything else.
 
 ```trb fragment
-use Project, Dependencies, Build, Test, Tasks, Workspace, Registry from "std/project"
+use Project, Dependencies, Build, Test, Tasks, Workspace, Registry, Source from "std/project"
 ```
 
 ```trb check
@@ -43,6 +43,10 @@ print project.name
 public type Project {
   var name: String = ""
   var version: String = ""
+  var language: String = ""
+  var description: String = ""
+  var license: String = ""
+  var repository: String = ""
   var prelude: String = "std/prelude"
   var dependencies: Dependencies = Dependencies()
   var build: Build = Build()
@@ -52,11 +56,12 @@ public type Project {
 
   var fn authors(...names: String)
   var fn registry(owner: String, url: String)
+  var fn source(package: String, path: String = "", git: String = "", revision: String = "", archive: String = "", hash: String = "")
 }
 ```
 
 The receiver of `project.trb`. A setting is a `var` field (`name = "acme/shop"` writes it), a section is a field
-configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`). `name` is
+configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`, `source`). `name` is
 `owner/name` - owners are verified namespaces of a registry, so a bare name is not publishable. The fields are
 readable, which is what lets a project file compute from what it already said:
 `const binary = name.substringAfter("/") ?? name`.
@@ -134,6 +139,23 @@ public type Registry {
 ```
 
 An owner bound to a registry, so a public package can never take the place of a private one.
+
+### Source
+
+```trb fragment
+public type Source {
+  package: String
+  path: String = ""
+  git: String = ""
+  revision: String = ""
+  archive: String = ""
+  hash: String = ""
+}
+```
+
+Where one package comes from instead of the registry its owner is bound to: `source "acme/y", path: "../y"`. The
+package manager resolves a `path:` source today; `git:` (with `revision:`) and `archive:` (with `hash:`) type check and
+are refused by it ([project.lock.trb](../tooling/project-lock-trb.md)).
 
 ## Related
 

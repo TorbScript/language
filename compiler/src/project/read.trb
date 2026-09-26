@@ -8,6 +8,8 @@ use File, IoError from "std/fs"
 use normalizePath, parentPath, joinPath, pathDepth, pathName, isInside from "./path"
 use SourceTree from "./source-tree"
 use findStandardLibrary from "./toolchain"
+use readLock from "../package/lock"
+use cacheDirectory, packageDirectory, isInstalled from "../package/store"
 
 /**
  * The one place in the front end that does IO. It reads everything that could matter before anything is resolved:
@@ -42,7 +44,59 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   if !library.isEmpty() && !roots.any({ isInside library, _ }) {
     listBelow(listed, others, library)?
   }
-  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library, others)
+  const cache = cacheDirectory() ?? ""
+  readLockedPackages(files, listed, others, cache)?
+  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library, others, cache)
+}
+
+/**
+ * The packages every `project.lock.trb` that was read pins (docs/design/PROJECT.md section 11): a registry package
+ * where it is unpacked in the cache, with its own lock (whose `settings` is its manifest) and the modules below its
+ * `src/` - never its `project.trb`, which the toolchain does not read for a package it installed - and a `path:`
+ * package with its `project.trb` and everything below it. A package that is not unpacked is left out, and
+ * `findWorkspace` says so.
+ */
+fn readLockedPackages(
+  var files: Map<String, String>,
+  var listed: List<String>,
+  var others: List<String>,
+  cache: String,
+): Result<Void, IoError> {
+  var locks: List<String> = []
+  for (path, _) in files {
+    if pathName(path) == "project.lock.trb" {
+      locks.append path
+    }
+  }
+  for lockPath in locks {
+    const lock = match readLock(files.get(lockPath) ?? "") {
+      Ok(found) => found
+      Fail(_) => {
+        continue
+      }
+    }
+    for locked in lock.graph {
+      if locked.isPath() {
+        const directory = joinPath parentPath(lockPath), locked.path
+        const manifest = joinPath directory, "project.trb"
+        if File.exists(manifest) {
+          files.set(manifest, File.readText(manifest)?)
+          listBelow(listed, others, directory)?
+        }
+        continue
+      }
+      if cache.isEmpty() || !isInstalled(cache, locked.hash) {
+        continue
+      }
+      const directory = packageDirectory cache, locked.hash
+      const ownLock = joinPath directory, "project.lock.trb"
+      if File.exists(ownLock) {
+        files.set(ownLock, File.readText(ownLock)?)
+      }
+      listBelow(listed, others, joinPath(directory, "src"))?
+    }
+  }
+  Ok(void)
 }
 
 /** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
@@ -66,6 +120,11 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
     if File.exists(manifest) {
       files.set(manifest, File.readText(manifest)?)
       outermost = Some current
+      // The lock beside it is what says which installed packages belong to the workspace
+      const lock = joinPath current, "project.lock.trb"
+      if File.exists(lock) {
+        files.set(lock, File.readText(lock)?)
+      }
     }
     // Nothing above a skipped directory can have this one as a member, because members are never looked for
     // inside of one. A checkout below `.claude/worktrees` is a workspace of its own, not a part of the one above.

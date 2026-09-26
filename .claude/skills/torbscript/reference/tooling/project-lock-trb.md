@@ -1,79 +1,109 @@
 ---
 title: project.lock.trb
-summary: The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
+summary: The locked manifest - the exact version, tree hash and registry of every package a workspace depends on, and the evaluated settings of a published package - written deterministically and read without running anything.
 kind: tooling
-status: planned
+status: stable
 order: 100
 keywords:
   - project.lock.trb
   - lock file
   - dependency resolution
+  - tree hash
   - content hash
 source:
-  - CONCEPT.md#packages-and-the-supply-chain
-  - CONCEPT.md#projecttrb
+  - compiler/src/package/lock.trb
+  - compiler/src/project/workspace.trb
+  - docs/design/PROJECT.md#the-locked-manifest-installing-still-never-runs-code
 ---
 
-> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
-
-A [workspace](../language/modules-and-packages/workspaces.md) has one `project.lock.trb`, at its root, next to the
-root [`project.trb`](project-trb.md). It exists so that two checkouts of the same commit resolve every dependency to
-the exact same package, without asking a registry again.
+A [workspace](../language/modules-and-packages/workspaces.md) has one `project.lock.trb`, at its root, next to the root
+[`project.trb`](project-trb.md). It exists so that two checkouts of the same commit build every dependency from the
+exact same files, without asking a registry again. It is a receiver script of literals in the vocabulary of
+`project.trb`, and **the toolchain reads it statically and never evaluates it**: installing never runs code.
 
 ## Synopsis
 
-```text
-project.lock.trb   Written by `torb add`, `torb remove` and `torb update` (none of which exist yet)
+```trb fragment
+// project.lock.trb - written by `torb add`, `torb remove`, `torb update` and `torb publish`. Do not edit.
+
+language = "0.1.0"
+
+settings "acme/app" {
+  version = "0.1.0"
+  license = "MIT"
+}
+
+graph {
+  package "acme/json", version: "1.2.0", registry: "https://packages.torb.dev", hash: "sha256:9f2c..." {
+    capabilities "files"
+  }
+  package "acme/local", path: "../local"
+}
 ```
 
 ## What it does
 
-### What is specified
+### What each part pins
 
-`CONCEPT.md` names three facts about the file. It pins the exact version, content hash and registry of every
-package the workspace depends on, direct or transitive, so installing never has to guess. `torb run`, `build` and
-`test` read it and never write it, and refuse when it does not match `project.trb` - a dependency that was added to
-`project.trb` and not yet resolved is an error, not a silent re-resolution. Only `torb add`, `torb remove` and
-`torb update` write it, because resolving a version is a decision, not a side effect of running a program.
+| Part | What it says |
+|------|--------------|
+| `language` | The `language` of the root project, where it names one |
+| `settings "<package>" { }` | The evaluated settings of one package of the workspace, printed back as literals: what a consumer of the published package reads instead of its `project.trb`. Written by [`torb publish`](torb-publish.md) only |
+| `graph { }` | One `package` line per package the workspace depends on, direct or transitive |
+| `package "<name>", version:, registry:, hash:` | A registry package: the exact version, the registry that answered (the URL the owner is bound to, `https://packages.torb.dev` for an unbound owner), and the **tree hash** of its archive |
+| `package "<name>", path:` | A `source ... path:` package, listed rather than pinned: it is source the project owns, and a hash of it would change on every edit |
+| `capabilities "..."` | What the package touches by its own imports (`files`, `network`, `processes`, `environment`, ...), as its release in the index says |
 
-`compiler/src/semantics/checker/receiver.trb` quotes `CONCEPT.md`'s own description of the mechanism:
-"`project.trb` and `project.lock.trb` are exactly this mechanism with the receiver `Project`" - the same
-[receiver script](../language/configuration/receiver-scripts.md) kind, checked against the same
-[`Project`](../standard-library/project.md).
+**The tree hash** is `sha256:` over a listing of every file of the package - the SHA-256 of its bytes and its path,
+one line each, sorted by path. It is not the hash of the archive's bytes, so a mirror may recompress an archive without
+changing a lock. It is checked every time a package is installed, before anything is written into the cache.
 
-### What exists today
+### Who writes it, who reads it
 
-Nothing reads or writes `project.lock.trb`. A file by that name next to a `project.trb` is not treated as a receiver
-script the way `project.trb` itself is - it is invisible to `torb check` entirely, not even read as an ordinary
-module:
+| Command | The lock |
+|---------|----------|
+| [`torb add`](torb-add.md), [`torb remove`](torb-remove.md), [`torb update`](torb-update.md) | Resolve `project.trb` and write `graph` |
+| [`torb publish`](torb-publish.md) | Writes the `settings` block of the package it publishes |
+| [`torb install`](torb-install.md) | Reads it, fetches what is not in the cache yet, verifies every tree hash; never writes it |
+| `torb check`, `build`, `run`, `test` | Read `graph` and never write it; refuse where it does not match `project.trb` |
+
+The build takes a locked registry package from the package manager's cache, where [`torb install`](torb-install.md)
+unpacked it, and a `path:` package from its directory - each is then a package of the workspace like a member, so
+`use X from "acme/json"` resolves to it. **It refuses, with the command that fixes it**, where a member depends on a
+package the lock does not pin, pins at a version the requirement does not allow, or pins from another registry than
+the one the owner is bound to, and where a locked package is not installed:
 
 ```console
-$ torb check --statistics examples/tour
-../examples/tour/project.trb: 6 typed, 0 deferred
-14 files, no problems
+$ torb check app
+error: `acme/app` depends on `acme/json:^2.0.0`, and project.lock.trb pins acme/json 1.2.0: run `torb update acme/json`
 ```
 
-Adding a `project.lock.trb` next to `examples/tour/project.trb` and running the same command reports the same 14
-files: the new file is neither counted nor checked. `torb add`, `torb remove` and `torb update` - the only commands
-`CONCEPT.md` says may write it - do not exist either; see
-[The torb command](the-torb-command.md#what-is-still-planned).
+### Written the same way everywhere
 
-### What is not decided yet
+The same lock is the same bytes on every machine, so it can be reviewed in a diff and compared byte for byte: the parts
+in a fixed order, the `settings` blocks sorted by package and the lines inside one in the order of the vocabulary, the
+packages of `graph` sorted by name, nothing about the machine - no time, no absolute path, no tool build, a `path:`
+relative to the lock - hashes as `sha256:` and lowercase hexadecimal, UTF-8, LF, and exactly one trailing newline.
 
-The exact shape of the file - which settings it carries, and whether they are the same names as `project.trb`'s or a
-vocabulary of their own for a version, a hash and a registry per package - is an open question of `CONCEPT.md` itself,
-not only an implementation gap: no registry protocol exists to resolve against, so the file's fields cannot be pinned
-down before that does. This page will show the shape once `CONCEPT.md` fixes it.
+## Pitfalls
+
+**Do not edit it by hand.** A hand-edited version or hash is refused by the next install; `torb update` writes the
+file again from `project.trb`.
+
+**A `path:` package is not reproducible.** The lock names its directory and nothing about its content, which is the
+honest half of what a lock can promise about a directory somebody is editing - and why a package with a `path:`
+dependency cannot be published.
 
 ## Examples
 
-None: no command produces or consumes this file today, so there is nothing to run.
+`tools/packages.sh` runs the whole cycle against a `file:` registry and compares every file it writes with
+`tests/packages/transcript.expected`.
 
 ## Related
 
 - [project.trb](project-trb.md) - the manifest whose dependencies this file resolves.
-- [Packages](../language/modules-and-packages/packages.md) - `owner/name`, and the supply-chain rules the lock file
-  is part of.
+- [torb add](torb-add.md), [torb update](torb-update.md), [torb install](torb-install.md) - the commands that write
+  and read it.
 - [Workspaces](../language/modules-and-packages/workspaces.md) - the one lock file several members share.
-- [The torb command](the-torb-command.md) - `torb add`, `remove` and `update`, still planned.
+- [The torb command](the-torb-command.md) - every subcommand.
 

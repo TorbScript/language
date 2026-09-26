@@ -1,0 +1,201 @@
+/**
+ * `torb add` and `torb remove` edit the `dependencies { }` block of a `project.trb` as text, over its syntax tree
+ * (docs/design/PROJECT.md section 10: "they edit a `dependencies { }` block whose lines are plain calls"). Only the one
+ * string literal or the one line is touched, so comments, blank lines and the order of everything else stay as they
+ * were, and the line endings of the file are kept. A block that computes anything is refused rather than rewritten.
+ */
+
+use SourceText, Span from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use Statement, Argument from "../syntax/ast"
+use quoted from "./literal"
+
+/** One requirement literal of the block: which line it is on, and where it and its line stand. */
+type Found {
+  kind: String
+  statement: Statement
+  arguments: List<Argument>
+  index: Int
+}
+
+/**
+ * The text with `requirement` in the `kind` (`runtime` or `development`) line of its package: the literal of the same
+ * package replaced where there is one of that kind, and a new line at the end of the block otherwise - after the block is
+ * created, where the file has none.
+ *
+ * # Errors
+ *
+ * - A file that does not parse, two `dependencies` blocks, or a block with anything but `runtime` and `development`
+ *   lines of plain strings.
+ */
+public fn withRequirement(text: String, kind: String, requirement: String, package: String): Result<String, String> {
+  const newline = if text.contains("\r\n") { "\r\n" } else { "\n" }
+  const block = match dependenciesBlock(text)? {
+    Some(found) => found
+    None => {
+      const separator = if text.isEmpty() || text.endsWith("\n") { "" } else { newline }
+      return Ok "{text}{separator}{newline}dependencies \{{newline}  {kind} {quoted(requirement)}{newline}\}{newline}"
+    }
+  }
+  if const Some(found) = literalOf(block, package) {
+    if found.kind == kind {
+      const span = found.arguments[found.index].value.span
+      return Ok "{text.sliceBytes(0, span.start)}{quoted(requirement)}{text.sliceBytes(span.end, text.byteLength())}"
+    }
+    const (without, _) = withoutRequirement(text, package)?
+    return withRequirement without, kind, requirement, package
+  }
+  // The new line goes in front of the line of the closing brace, indented like the lines above it
+  const closing = block.span.end - 1
+  if text.byteAt(closing) != Some(125) {
+    return Fail "the `dependencies` block does not end in `\}`"
+  }
+  const lineStart = lineStartOf text, closing
+  const indentation = match block.lines.first() {
+    Some(first) => text.sliceBytes lineStartOf(text, first.span.start), first.span.start
+    None => "  "
+  }
+  const added = "{indentation}{kind} {quoted(requirement)}{newline}"
+  if text.sliceBytes(lineStart, closing).trim().isEmpty() {
+    return Ok "{text.sliceBytes(0, lineStart)}{added}{text.sliceBytes(lineStart, text.byteLength())}"
+  }
+  // `dependencies { runtime "a" }` on one line: the brace moves to a line of its own
+  Ok "{text.sliceBytes(0, closing)}{newline}{added}{text.sliceBytes(closing, text.byteLength())}"
+}
+
+/**
+ * The text without the requirement of `package`, and whether there was one: its literal taken out of its line, or the
+ * whole line where it was the only one.
+ *
+ * # Errors
+ *
+ * - What [withRequirement] refuses.
+ */
+public fn withoutRequirement(text: String, package: String): Result<(String, Bool), String> {
+  const block = match dependenciesBlock(text)? {
+    Some(found) => found
+    None => {
+      return Ok((text, false))
+    }
+  }
+  const found = match literalOf(block, package) {
+    Some(literal) => literal
+    None => {
+      return Ok((text, false))
+    }
+  }
+  if found.arguments.length() == 1 {
+    const start = lineStartOf text, found.statement.span.start
+    var end = found.statement.span.end
+    while end < text.byteLength() && text.byteAt(end) != Some(10) {
+      end = end + 1
+    }
+    const after = if end < text.byteLength() { end + 1 } else { end }
+    return Ok((text.sliceBytes(0, start) + text.sliceBytes(after, text.byteLength()), true))
+  }
+  const span = found.arguments[found.index].value.span
+  const (from, to) = if found.index == 0 {
+    (span.start, found.arguments[1].value.span.start)
+  } else {
+    (found.arguments[found.index - 1].value.span.end, span.end)
+  }
+  Ok((text.sliceBytes(0, from) + text.sliceBytes(to, text.byteLength()), true))
+}
+
+/** The `dependencies { }` block of a file: where it stands, and its lines. */
+type Block {
+  span: Span
+  lines: List<Statement>
+}
+
+fn dependenciesBlock(text: String): Result<Block?, String> {
+  const parsed = parse SourceText.of(text)
+  if const Some(first) = parsed.diagnostics.first() {
+    return Fail "project.trb does not parse: {first.message}"
+  }
+  var found: Block? = None
+  for statement in parsed.file.statements {
+    if const .Evaluate(expression) = statement.kind {
+      if const .Call(callee, arguments, _) = expression.kind {
+        if const .Name(word) = callee.kind {
+          if word == "dependencies" {
+            if found.isSome() {
+              return Fail "project.trb has two `dependencies` blocks: `torb add` and `torb remove` edit one"
+            }
+            const closure = match arguments.first().map({ _.value.kind }) {
+              Some(.Closure(body)) => body
+              _ => {
+                return Fail "`dependencies` is not followed by a block"
+              }
+            }
+            for line in closure.body.statements {
+              if !isPlainLine(line) {
+                return Fail "the `dependencies` block computes something, and `torb add` and `torb remove` only edit plain `runtime \"...\"` and `development \"...\"` lines"
+              }
+            }
+            found = Some Block(expression.span, closure.body.statements)
+          }
+        }
+      }
+    }
+  }
+  Ok found
+}
+
+/** `runtime "a", "b"` or `development "c"`, every argument a plain string. */
+fn isPlainLine(statement: Statement): Bool {
+  const (word, arguments) = match callOf(statement) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if word != "runtime" && word != "development" {
+    return false
+  }
+  arguments.all({ _.label.isNone() && !_.isSpread && plainTextOf(_).isSome() })
+}
+
+fn callOf(statement: Statement): (String, List<Argument>)? {
+  if const .Evaluate(expression) = statement.kind {
+    if const .Call(callee, arguments, _) = expression.kind {
+      if const .Name(word) = callee.kind {
+        return Some((word, arguments))
+      }
+    }
+  }
+  None
+}
+
+fn plainTextOf(argument: Argument): String? {
+  if const .TextLiteral(segments) = argument.value.kind {
+    if const [.Literal(text)] = segments {
+      return Some text
+    }
+  }
+  None
+}
+
+/** The literal of `package`'s requirement in the block, if any. */
+fn literalOf(block: Block, package: String): Found? {
+  for line in block.lines {
+    if const Some((word, arguments)) = callOf(line) {
+      for index in 0..arguments.length() {
+        const written = plainTextOf(arguments[index]) ?? ""
+        if (written.substringBefore(":") ?? written) == package {
+          return Some Found(word, line, arguments, index)
+        }
+      }
+    }
+  }
+  None
+}
+
+/** The offset of the first byte of the line `offset` is on. */
+fn lineStartOf(text: String, offset: Int): Int {
+  var at = offset
+  while at > 0 && text.byteAt(at - 1) != Some(10) {
+    at = at - 1
+  }
+  at
+}

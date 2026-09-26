@@ -56,8 +56,20 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   quick fix. The VS Code extension in `.vscode/extensions/torbscript` gets the client.
 - **The package manager**: the manifest that is evaluated, the lock file, `add`, `remove`, `update`, `publish`, and
   the registry at packages.torb.dev ([design/PROJECT.md](design/PROJECT.md) section 12,
-  [design/RELEASE.md](design/RELEASE.md) section 7). It needs an HTTP client with TLS, and TLS comes from the platform:
-  SChannel on Windows, the system's stack on macOS, OpenSSL where Linux has it.
+  [design/RELEASE.md](design/RELEASE.md) section 7). **The client is built (2026-09-26)**: `torb add`, `remove`,
+  `update`, `install` and `publish`, PubGrub resolution with its explanations (PROJECT.md section 6a),
+  `project.lock.trb` written deterministically and read by the build, archives with their tree hash checked on every
+  install, `curl`/`wget` or a `file:` registry, a content-addressed cache and `--offline`; `std/digest`,
+  `std/compression` and `std/archive` came with it (RELEASE.md section 7.13). **What is left:** the registry's write
+  service - accounts, owners, tokens, trusted publishing from CI, publish and yank over `/api/1` - and its
+  docker-compose deployment behind Traefik with the storage driver of URI.md section 11 (RELEASE.md section 7.11);
+  `torb publish` to a registry on the network, which refuses today; Ed25519 signatures and `config.trb`; `yank`,
+  `owner`, `login`, `audit`, `vendor` and `deprecate`; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
+  two majors of one package in one graph; `torb lock` and `lock --check`; the variables an evaluation read, printed by
+  `publish` and recorded in `from`; a synchronous `File.readBytes`/`writeBytes` (a new native, two commits and a seed
+  refresh), which replaces the `od`/PowerShell detour for archives, and a way for `torb` to wait for a task without
+  making its top level one, which lets the client use `std/http`. **A bug found on the way:** `std/network`'s name
+  resolution crashes a native program on Windows for a host that needs a DNS lookup (RELEASE.md section 7.13).
 - **`torb doc`** is built: the reference of a package as a static site or as JSON, and the examples of its doc
   comments as doc tests ([tooling/torb-doc.md](tooling/torb-doc.md)). What is left: `std/` has 218 public constructs
   without a doc comment, which `torb doc --check` counts and does not fail on yet; the `## Declarations` sections of

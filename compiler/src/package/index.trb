@@ -1,0 +1,199 @@
+/**
+ * The sparse index of a registry (docs/design/RELEASE.md section 7.4): one file per package, `index/<owner>/<name>.trb`,
+ * a receiver script of literals that is read statically and never evaluated, and only ever appended to - a release is
+ * a new block, a yank a new line.
+ *
+ *     package "acme/http"
+ *
+ *     release "1.2.5" {
+ *       hash "sha256:6f1c..."
+ *       language "0.1.0"
+ *       dependencies {
+ *         runtime "acme/json:^2.0.1"
+ *       }
+ *       capabilities "environment", "network"
+ *     }
+ *
+ *     yank "1.2.4", reason: "sends the proxy password in clear text"
+ */
+
+use Version from "./version"
+use Requirement, requirementOf from "./requirement"
+use Candidate from "./resolve"
+use settingsOf, quoted, quotedList from "./literal"
+use Setting from "../project/manifest"
+
+/** One published version: what resolution needs of it, and nothing else. */
+public type IndexRelease {
+  version: Version
+  /** The tree hash of the archive, `sha256:` and 64 lowercase hexadecimal digits (RELEASE.md section 7.2). */
+  hash: String
+  /** The oldest language the release needs; empty for none. */
+  language: String = ""
+  /** Its `runtime` requirements, as its `project.trb` writes them. */
+  dependencies: List<String> = []
+  /** What it touches by its own imports (RELEASE.md section 7.8), sorted. */
+  capabilities: List<String> = []
+  /** The registry's signature of the record; empty where the registry signs nothing, which a `file:` registry does not. */
+  signature: String = ""
+}
+
+/** A version withdrawn for new resolutions, with the reason a lock that pins it prints. */
+public type IndexYank {
+  version: Version
+  reason: String
+  signature: String = ""
+}
+
+/** Everything the index says about one package. */
+public type PackageIndex {
+  package: String
+  releases: List<IndexRelease> = []
+  yanks: List<IndexYank> = []
+
+  fn release(version: Version): IndexRelease? {
+    releases.find({ _.version == version })
+  }
+
+  fn yank(version: Version): IndexYank? {
+    yanks.find({ _.version == version })
+  }
+}
+
+/**
+ * The index file of a package, read statically.
+ *
+ * # Errors
+ *
+ * - A file that does not parse, names another package, has a release without a version or a hash, or has two releases
+ *   of one version.
+ */
+public fn readIndex(text: String, expected: String): Result<PackageIndex, String> {
+  var index = PackageIndex expected
+  var named = ""
+  for setting in settingsOf(text)? {
+    match setting.word {
+      "package" => {
+        named = setting.first() ?? ""
+      }
+      "release" => {
+        const release = releaseOf(setting)?
+        if index.release(release.version).isSome() {
+          return Fail "the index of {expected} has two releases of {release.version}"
+        }
+        index = index.copy releases: index.releases.appended(release)
+      }
+      "yank" => {
+        const version = versionOf(setting.first() ?? "")?
+        const yanked = IndexYank(version, setting.labeled.get("reason") ?? "", setting.labeled.get("signature") ?? "")
+        index = index.copy yanks: index.yanks.appended(yanked)
+      }
+      _ => {}
+    }
+  }
+  if named != expected {
+    return Fail "the index file of {expected} names `{named}`"
+  }
+  Ok index
+}
+
+fn releaseOf(setting: Setting): Result<IndexRelease, String> {
+  const version = versionOf(setting.first() ?? "")?
+  var release = IndexRelease version, ""
+  for line in setting.block {
+    const text = line.first() ?? ""
+    match line.word {
+      "hash" => {
+        release = release.copy hash: text
+      }
+      "language" => {
+        release = release.copy language: text
+      }
+      "dependencies" => {
+        release = release.copy dependencies: line.textsOf("runtime")
+      }
+      "capabilities" => {
+        release = release.copy capabilities: line.texts
+      }
+      "signature" => {
+        release = release.copy signature: text
+      }
+      _ => {}
+    }
+  }
+  if !release.hash.startsWith("sha256:") {
+    return Fail "the release {version} has no `hash \"sha256:...\"`"
+  }
+  Ok release
+}
+
+fn versionOf(text: String): Result<Version, String> {
+  match Version.tryFrom(text) {
+    Ok(version) => Ok version
+    Fail(problem) => Fail "the index has a release that is no version: {problem}"
+  }
+}
+
+/**
+ * The releases of an index as the resolver's candidates: a yanked release is excluded with its reason, and so is one
+ * that needs a newer language than `language` or has a dependency line that does not parse.
+ */
+public fn candidatesOf(index: PackageIndex, language: String): List<Candidate> {
+  const current = Version.tryFrom(language).ok()
+  var found: List<Candidate> = []
+  for release in index.releases {
+    var excluded: String? = None
+    var needs: List<Requirement> = []
+    for written in release.dependencies {
+      match requirementOf(written) {
+        Ok(requirement) => needs.append requirement
+        Fail(problem) => {
+          excluded = Some "has a dependency that does not parse: {problem}"
+        }
+      }
+    }
+    if const (Some(needed), Some(have)) = (Version.tryFrom(release.language).ok(), current) {
+      if needed > have {
+        excluded = Some "needs language {needed}, and this toolchain is {have}"
+      }
+    }
+    if const Some(yank) = index.yank(release.version) {
+      const why = if yank.reason.isEmpty() { "" } else { ": {yank.reason}" }
+      excluded = Some "is yanked{why}"
+    }
+    found.append Candidate(release.version, needs, excluded)
+  }
+  found
+}
+
+/** The first lines of a new index file: who wrote it, and which package it is about. */
+public fn indexStart(package: String): String {
+  "// index/{package}.trb - written by the registry. Lines are only ever appended.\n\npackage {quoted(package)}\n"
+}
+
+/** A release as the block that is appended for it, with the empty line in front of it. */
+public fn renderRelease(release: IndexRelease): String {
+  var lines = ["", "release {quoted(release.version.show())} \{", "  hash {quoted(release.hash)}"]
+  if !release.language.isEmpty() {
+    lines.append "  language {quoted(release.language)}"
+  }
+  if !release.dependencies.isEmpty() {
+    lines.append "  dependencies \{"
+    lines.append "    runtime {quotedList(release.dependencies)}"
+    lines.append "  \}"
+  }
+  if !release.capabilities.isEmpty() {
+    lines.append "  capabilities {quotedList(release.capabilities)}"
+  }
+  if !release.signature.isEmpty() {
+    lines.append "  signature {quoted(release.signature)}"
+  }
+  lines.append "\}"
+  lines.map({ "{_}\n" }).toList().joined(separator: "")
+}
+
+/** A yank as the line that is appended for it. */
+public fn renderYank(yank: IndexYank): String {
+  const signed = if yank.signature.isEmpty() { "" } else { ", signature: {quoted(yank.signature)}" }
+  "\nyank {quoted(yank.version.show())}, reason: {quoted(yank.reason)}{signed}\n"
+}
