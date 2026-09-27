@@ -55,11 +55,11 @@ extend<Value> Result<Value, ReadError> {
 fn nameOf(var reader: ByteReader, message: Bytes, part: String, scope: Scope): Result<DomainName, DnsError> {
   const at = reader.offset()
   const (name, end) = nameAt(message, at, part)?
-  if end - at > reader.remaining() {
-    return Fail scope.failure(part, at)
+  // A pointer may lead anywhere in the message, but the name itself has to end inside what the reader may read
+  match reader.skip(end - at) {
+    Ok(_) => Ok name
+    Fail(_) => Fail scope.failure(part, at)
   }
-  reader.skip(end - at)?
-  Ok name
 }
 
 /**
