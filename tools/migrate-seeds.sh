@@ -96,7 +96,10 @@ if [ "$forge_has_release" -eq 1 ] && forge assets seeds | grep -q -x 'seeds.txt'
 fi
 
 # The seeds GitHub lists and the forge does not, in GitHub's order (newest first)
-awk 'NR == FNR { listed[$1] = 1; next } !($1 in listed)' "$work/forge.entries" "$work/github.entries" >"$work/missing"
+# (by file name, not `NR == FNR`: the forge's list is empty before the first copy, and then every line of GitHub's would
+# count as the forge's)
+awk 'FILENAME == ARGV[1] { listed[$1] = 1; next } !($1 in listed)' "$work/forge.entries" "$work/github.entries" \
+  >"$work/missing"
 total=$(wc -l <"$work/github.entries" | tr -d ' ')
 missing=$(wc -l <"$work/missing" | tr -d ' ')
 say "$source_url/$github_repository lists $total seeds; the forge lacks $missing of them"

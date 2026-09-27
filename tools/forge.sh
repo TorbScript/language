@@ -196,14 +196,20 @@ if [ "$forge" = "github" ]; then
   printf '%s\n' "Accept: application/vnd.github+json" "X-GitHub-Api-Version: 2022-11-28" >>"$headers"
 fi
 
+# The same headers asking for an asset's bytes: GitHub answers the JSON of the asset while its JSON type is accepted,
+# and a second `Accept` beside the first does not replace it
+binary_headers="$work/headers.binary"
+grep -v '^Accept:' "$headers" >"$binary_headers" || true
+printf '%s\n' "Accept: application/octet-stream" >>"$binary_headers"
+
 # request <method> <url> <answer file> [curl arguments...]: prints the HTTP status, the answer goes to the file
 request() {
   method=$1
   target=$2
   answer=$3
   shift 3
-  curl -sS --retry 3 --retry-delay 2 -X "$method" -H @"$headers" -o "$answer" -w '%{http_code}' "$@" "$target" ||
-    fail "$method $target could not be sent"
+  curl -sS --retry 3 --retry-delay 2 -X "$method" -H @"${request_headers:-$headers}" -o "$answer" -w '%{http_code}' \
+    "$@" "$target" || fail "$method $target could not be sent"
 }
 
 # expect <status> <answer file> <wanted>...: fails with the answer when the status is none of the wanted ones
@@ -381,7 +387,9 @@ case "$command" in
       find_release "$tag" || fail "$repository has no release \`$tag\`"
       existing=$(asset_id "$work/release" "$asset")
       [ -n "$existing" ] || fail "the release \`$tag\` of $repository has no asset \`$asset\`"
-      status=$(request GET "$api/releases/assets/$existing" "$file" -L -H "Accept: application/octet-stream")
+      request_headers=$binary_headers
+      status=$(request GET "$api/releases/assets/$existing" "$file" -L)
+      request_headers=
       expect "$status" "$file" 200
     else
       status=$(request GET "$(public_url "$tag" "$asset")" "$file" -L)
