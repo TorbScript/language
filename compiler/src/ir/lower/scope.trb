@@ -158,7 +158,16 @@ public fn mayHoldClose(var lowering: Lowering, id: IrTypeId): Bool {
     return false
   }
   var search = Search()
-  holdsClose lowering, id, search
+  const answer = holdsClose lowering, id, search
+  // A `false` at the top is final for every type the walk entered, a revisited one included: all of them reached only
+  // types that answered `false`, because a `true` anywhere below would have made this one `true`. Without it every
+  // question about a type of a recursive family - the syntax tree of the compiler - walked the whole family again
+  if !answer {
+    for entered in search.entered {
+      lowering.closeHolding.set entered, false
+    }
+  }
+  answer
 }
 
 /** What the checker knows about `Close`, asked once per program. */
@@ -174,7 +183,9 @@ fn learnCloseFacts(var lowering: Lowering) {
 
 /** Where the walk over the types stands: the types it is still answering, and whether it came back to one of them. */
 type Search {
-  var visiting: List<Int> = []
+  var visiting: Set<Int> = []
+  /** Every type the walk entered, which a `false` at the top answers for all of them ([mayHoldClose]). */
+  var entered: List<Int> = []
   /** A `false` below a type that was revisited is not final: the type it came back to may still answer `true`. */
   var revisited: Bool = false
 }
@@ -190,7 +201,8 @@ fn holdsClose(var lowering: Lowering, id: IrTypeId, var search: Search): Bool {
   }
   const outer = search.revisited
   search.revisited = false
-  search.visiting.append id.value
+  search.visiting.insert id.value
+  search.entered.append id.value
   const answer = match lowering.program.typeAt(id) {
     .SharedObject(layout) => isCloseLayout(lowering, layout) || layoutHoldsClose(lowering, layout, search)
     .Record(layout) => layoutHoldsClose lowering, layout, search
@@ -204,8 +216,7 @@ fn holdsClose(var lowering: Lowering, id: IrTypeId, var search: Search): Bool {
     .Object(bounds) => anyCloseTrait(lowering, bounds) || anyTraitArgumentHolds(lowering, bounds, search)
     _ => false
   }
-  const last = search.visiting.length() - 1
-  const _ = search.visiting.removeAt last
+  const _ = search.visiting.remove id.value
   if answer || !search.revisited {
     lowering.closeHolding.set id.value, answer
   }
