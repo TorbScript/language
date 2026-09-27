@@ -16,6 +16,7 @@ use joinPath from "../project/path"
 use ModuleId, Module from "./module"
 use SymbolId, SymbolKind, Symbol, Symbols, Definition, declareModule from "./symbols"
 use Graph, resolveImport from "./graph"
+use specifierOf from "../package/specifier"
 
 /**
  * `use String.shout from "acme/text"`: a member another package attaches to a type it does not own.
@@ -443,6 +444,11 @@ fn checkImport(
       const target = match resolveImport(program.graph, program.workspace, id, path) {
         .Found(target) => target
         .NoModule(missing) => {
+          // A shape the grammar has a message for says what is wrong with it (docs/design/PROJECT.md section 6)
+          if const Fail(message) = specifierOf(path) {
+            diagnostics.append Diagnostic.error(message, at)
+            return
+          }
           diagnostics.append(
             Diagnostic.error("There is no module `{missing}`", at)
               .withNote("A path that starts with `./` or `../` is a file next to this one, without its extension")
@@ -450,6 +456,10 @@ fn checkImport(
           return
         }
         .NoPackage(name) => {
+          if const Fail(message) = specifierOf(path) {
+            diagnostics.append Diagnostic.error(message, at)
+            return
+          }
           diagnostics.append(
             Diagnostic.error("There is no package `{name}`", at)
               .withNote(

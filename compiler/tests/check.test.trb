@@ -102,6 +102,16 @@ group "Modules" {
     assert(problems("use Helper from \"./helper\"") == ["There is no module `./helper`"])
   }
 
+  test "a URL, a host-qualified owner and a file name with a dot each say what they are" {
+    const url = problems "use X from \"https://example.test/x\""
+    assert(url.length() == 1)
+    assert url[0].contains("is a URL (`https:`), and a module specifier cannot be one")
+    const hosted = problems "use X from \"github.com/project/x\""
+    assert hosted[0].contains("host-qualified owner, `github.com`")
+    const dotted = problems "use logo from \"./logo.png\""
+    assert dotted[0].contains("a module is named without its extension")
+  }
+
   test "a package that is not there" {
     assert(problems("use Client from \"acme/http\"") == ["There is no package `acme/http`"])
   }

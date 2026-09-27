@@ -1230,7 +1230,8 @@ every `.trb` file and nothing should be rebased across it.
 
 **Where the slices stand (2026-09-26), from the package manager's round.** Slice 5's grammar exists as one function,
 `specifierOf` in `compiler/src/package/specifier.trb`, with a message per shape; the dependency lines and `torb add` use
-it, and the resolution of `use` does not yet. Slice 6 is half done: `source`, `registry`, `language`, `description`,
+it, and a `use` that names no module or no package reports its message where it has one (a URL, a host-qualified
+owner, a dot in a component) - the climb out of the package is not checked yet. Slice 6 is half done: `source`, `registry`, `language`, `description`,
 `license` and `repository` are in `std/project` and in the static reader, without the plain-string diagnostic. Slice 8
 is the part the package manager needed: `Lock` with its `settings` and `graph`, the deterministic printer, `torb
 publish` writing the `settings` block from the evaluation and carrying both files in the archive, and the consumer side
