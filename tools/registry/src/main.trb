@@ -1,0 +1,32 @@
+/**
+ * `registry`: the write service of packages.torb.dev (docs/design/RELEASE.md sections 7.2, 7.4 and 7.11), the first
+ * real server program written in TorbScript. It opens the database - creating its tables where they are missing - and
+ * serves the API of `./api` until it is stopped. `tools/deploy/compose.example.yml` runs it behind Traefik, with a
+ * static file server in front of what it writes.
+ */
+
+use SocketAddress from "std/network"
+use Process from "std/process"
+use Server from "std/http"
+use Config from "./config"
+use Database from "./database"
+use Storages, FileStorage from "./storage"
+use Registry from "./registry"
+use handler from "./api"
+
+const config = Config.fromEnvironment()
+const database = Database config.database, program: config.sqlite
+match database.migrate().await() {
+  Ok(_) => void
+  Fail(problem) => {
+    printError "registry: the database {config.database} cannot be opened: {problem}"
+    Process.exit 1
+  }
+}
+// The drivers this deployment can reach, by scheme: `file:` today; an `s3:` driver is one more entry (URI.md section 11)
+const storage = Storages.of([FileStorage()])
+const registry = Registry.of config, database, storage
+const address = SocketAddress.tryFrom(config.listenAddress)?
+var server = Server.listen(address, handler(registry))?
+print "registry: listening on {server.localAddress()}, storing below {config.storage}, database {config.database}"
+server.serve().await()?

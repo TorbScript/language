@@ -1,0 +1,252 @@
+/**
+ * RSA signature verification of RFC 8017, the one algorithm a GitHub Actions OIDC token is signed with: `RS256`,
+ * RSASSA-PKCS1-v1_5 over SHA-256 (RFC 7518 section 3.3). Only the public operation - `signature ** exponent mod
+ * modulus` - is here: the registry never signs with RSA, so there is no private key, no padding to produce and nothing
+ * whose timing leaks a secret.
+ *
+ * The arithmetic is ordinary TorbScript over `Int`: a number is a list of 16-bit limbs, least significant first, so a
+ * product of two limbs plus the carries stays far below 2^63, and the modular multiplication is Montgomery's, which
+ * needs no division. Both back ends compute the same bits.
+ */
+
+use Sha256 from "std/digest"
+
+/** A public RSA key: the modulus and the exponent, as unsigned big-endian bytes (a JSON Web Key's `n` and `e`). */
+public type RsaPublicKey {
+  modulus: List<UInt8>
+  exponent: List<UInt8>
+}
+
+/** The limbs are 16 bits wide. */
+const limbBits = 16
+
+const limbMask = 65535
+
+/**
+ * DER of the `DigestInfo` that names SHA-256 (RFC 8017 section 9.2, note 1): what the padded message holds in front of
+ * the 32 bytes of the hash.
+ */
+const sha256DigestInfo: List<Int> = [48, 49, 48, 13, 6, 9, 96, 134, 72, 1, 101, 3, 4, 2, 1, 5, 0, 4, 32]
+
+/**
+ * Whether `signature` is `key`'s RSASSA-PKCS1-v1_5 signature with SHA-256 over `message`.
+ *
+ * Refuses rather than fails: a modulus shorter than 2048 bits, an even one, a signature of the wrong length or one not
+ * below the modulus are all `false`, as is every padding but the one exact encoding (RFC 8017 section 8.2.2 compares the
+ * whole encoded message, which is what rules out the forgeries of a lenient parser).
+ */
+public fn verifiesSha256(key: RsaPublicKey, message: List<UInt8>, signature: List<UInt8>): Bool {
+  const modulusBytes = withoutLeadingZeros key.modulus
+  const length = modulusBytes.length()
+  if length < 256 || signature.length() != length {
+    return false
+  }
+  if (Int.from(modulusBytes[length - 1]) & 1) == 0 {
+    return false
+  }
+  const modulus = limbsOf modulusBytes
+  const size = modulus.length()
+  const base = padded limbsOf(signature), size
+  if compareLimbs(base, modulus) >= 0 {
+    return false
+  }
+  const result = power base, limbsOf(withoutLeadingZeros(key.exponent)), modulus
+  const encoded = bytesOf result, length
+  const expected = encodedMessage Sha256.of(message).bytes, length
+  encoded == expected
+}
+
+/** EMSA-PKCS1-v1_5 (RFC 8017 section 9.2): `00 01 FF ... FF 00`, the `DigestInfo`, and the hash. */
+fn encodedMessage(hash: List<UInt8>, length: Int): List<UInt8> {
+  const tail = sha256DigestInfo.length() + hash.length()
+  var bytes: List<UInt8> = [byteOf(0), byteOf(1)]
+  for _ in 0..(length - tail - 3) {
+    bytes.append byteOf(255)
+  }
+  bytes.append byteOf(0)
+  for value in sha256DigestInfo {
+    bytes.append byteOf(value)
+  }
+  bytes.appendAll hash
+  bytes
+}
+
+/** `base ** exponent mod modulus`, by squaring and multiplying from the exponent's highest bit, in Montgomery form. */
+fn power(base: List<Int>, exponent: List<Int>, modulus: List<Int>): List<Int> {
+  const size = modulus.length()
+  const inverse = negatedInverse modulus[0]
+  const squared = rSquared modulus
+  const one = padded([1], size)
+  const montgomeryBase = montgomery base, squared, modulus, inverse
+  var accumulator = montgomery one, squared, modulus, inverse
+  var limb = exponent.length() - 1
+  while limb >= 0 {
+    var bit = limbBits - 1
+    while bit >= 0 {
+      accumulator = montgomery accumulator, accumulator, modulus, inverse
+      if ((exponent[limb] >> bit) & 1) == 1 {
+        accumulator = montgomery accumulator, montgomeryBase, modulus, inverse
+      }
+      bit = bit - 1
+    }
+    limb = limb - 1
+  }
+  montgomery accumulator, one, modulus, inverse
+}
+
+/**
+ * Montgomery's product `left * right / R mod modulus`, with `R = 2^(16 * size)` (the CIOS form: one limb of `left` at a
+ * time, reduced as it goes). Both factors are below the modulus, and so is the answer.
+ */
+fn montgomery(left: List<Int>, right: List<Int>, modulus: List<Int>, inverse: Int): List<Int> {
+  const size = modulus.length()
+  var sum: List<Int> = []
+  for _ in 0..(size + 2) {
+    sum.append 0
+  }
+  for index in 0..size {
+    const factor = left[index]
+    var carry = 0
+    for position in 0..size {
+      const value = sum[position] + factor * right[position] + carry
+      sum[position] = value & limbMask
+      carry = value >> limbBits
+    }
+    const top = sum[size] + carry
+    sum[size] = top & limbMask
+    sum[size + 1] = sum[size + 1] + (top >> limbBits)
+    const multiple = (sum[0] * inverse) & limbMask
+    var reduction = (sum[0] + multiple * modulus[0]) >> limbBits
+    for position in 1..size {
+      const value = sum[position] + multiple * modulus[position] + reduction
+      sum[position - 1] = value & limbMask
+      reduction = value >> limbBits
+    }
+    const last = sum[size] + reduction
+    sum[size - 1] = last & limbMask
+    sum[size] = sum[size + 1] + (last >> limbBits)
+    sum[size + 1] = 0
+  }
+  var result: List<Int> = []
+  for position in 0..(size + 1) {
+    result.append sum[position]
+  }
+  if compareLimbs(result, padded(modulus, size + 1)) >= 0 {
+    result = subtracted result, padded(modulus, size + 1)
+  }
+  padded result, size
+}
+
+/** `R^2 mod modulus`: one, doubled `2 * 16 * size` times, each doubling reduced by one subtraction at most. */
+fn rSquared(modulus: List<Int>): List<Int> {
+  const size = modulus.length()
+  const wide = padded(modulus, size + 1)
+  var value = padded([1], size + 1)
+  for _ in 0..(2 * limbBits * size) {
+    var carry = 0
+    for position in 0..(size + 1) {
+      const doubled = (value[position] << 1) | carry
+      value[position] = doubled & limbMask
+      carry = doubled >> limbBits
+    }
+    if compareLimbs(value, wide) >= 0 {
+      value = subtracted value, wide
+    }
+  }
+  padded value, size
+}
+
+/** `-modulus^-1 mod 2^16` of the lowest limb, by Newton's iteration: every step doubles the bits that are right. */
+fn negatedInverse(lowest: Int): Int {
+  var inverse = lowest
+  for _ in 0..4 {
+    inverse = (inverse * (2 - ((lowest * inverse) & limbMask))) & limbMask
+  }
+  (65536 - inverse) & limbMask
+}
+
+/** `left - right` for `left >= right`, both of one length. */
+fn subtracted(left: List<Int>, right: List<Int>): List<Int> {
+  var result: List<Int> = []
+  var borrow = 0
+  for position in 0..left.length() {
+    var value = left[position] - right[position] - borrow
+    if value < 0 {
+      value = value + 65536
+      borrow = 1
+    } else {
+      borrow = 0
+    }
+    result.append value
+  }
+  result
+}
+
+/** -1, 0 or 1 as `left` is below, equal to or above `right`; both of one length. */
+fn compareLimbs(left: List<Int>, right: List<Int>): Int {
+  var position = left.length() - 1
+  while position >= 0 {
+    if left[position] != right[position] {
+      return if left[position] < right[position] { 0 - 1 } else { 1 }
+    }
+    position = position - 1
+  }
+  0
+}
+
+/** The limbs of unsigned big-endian bytes, least significant first. */
+fn limbsOf(bytes: List<UInt8>): List<Int> {
+  var limbs: List<Int> = []
+  var position = bytes.length()
+  while position > 0 {
+    const low = Int.from bytes[position - 1]
+    const high = if position >= 2 { Int.from bytes[position - 2] } else { 0 }
+    limbs.append((high << 8) | low)
+    position = position - 2
+  }
+  if limbs.isEmpty() {
+    limbs.append 0
+  }
+  limbs
+}
+
+/** `length` big-endian bytes of the limbs. */
+fn bytesOf(limbs: List<Int>, length: Int): List<UInt8> {
+  var reversed: List<UInt8> = []
+  for limb in limbs {
+    reversed.append byteOf(limb)
+    reversed.append byteOf(limb >> 8)
+  }
+  var bytes: List<UInt8> = []
+  var position = length - 1
+  while position >= 0 {
+    bytes.append(if position < reversed.length() { reversed[position] } else { byteOf 0 })
+    position = position - 1
+  }
+  bytes
+}
+
+/** The limbs, with zeros above them up to `size`, or cut to `size` where the limbs above are zero. */
+fn padded(limbs: List<Int>, size: Int): List<Int> {
+  var result: List<Int> = []
+  for position in 0..size {
+    result.append(if position < limbs.length() { limbs[position] } else { 0 })
+  }
+  result
+}
+
+fn withoutLeadingZeros(bytes: List<UInt8>): List<UInt8> {
+  var start = 0
+  while start < bytes.length() - 1 && Int.from(bytes[start]) == 0 {
+    start = start + 1
+  }
+  var result: List<UInt8> = []
+  for position in start..bytes.length() {
+    result.append bytes[position]
+  }
+  result
+}
+
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

@@ -1,0 +1,50 @@
+/**
+ * Which owner and package names the registry takes (docs/design/RELEASE.md section 7.1): the segment grammar of
+ * PROJECT.md section 6, the reserved owners, and the rule that refuses a name which would confuse with one that exists.
+ *
+ * A name that would confuse is found through its **skeleton**: the name with its hyphens removed (JSR's rule,
+ * `acme-corp` against `acmecorp`) and the pairs ASCII cannot tell apart at a glance folded into one (`1` into `l`, `0`
+ * into `o`, `rn` into `m`). Two names with one skeleton are one name to a reader, so the database keeps the skeleton
+ * under a `UNIQUE` constraint and the second of them is refused - naming the first.
+ */
+
+use isSegment from "torbscript/compiler/package/specifier"
+
+/** The owners nobody creates through the API: the toolchain's own, and the project's. */
+public const reservedOwners = ["std", "torb", "torbscript"]
+
+/**
+ * Why `name` cannot be an owner, or `None`.
+ *
+ * `administrator` may take a reserved owner: that is how `torbscript` itself is created.
+ */
+public fn ownerProblem(name: String, administrator: Bool): String? {
+  if !isSegment(name) {
+    return Some "`{name}` is not an owner name: a lowercase letter, then lowercase letters, digits and `-`"
+  }
+  if name.contains(".") {
+    return Some "`{name}`: a dotted owner is reserved (docs/design/PROJECT.md section 6)"
+  }
+  if !administrator && reservedOwners.contains(name) {
+    return Some "`{name}` is reserved"
+  }
+  None
+}
+
+/** Why `name` cannot be the name part of a package, or `None`. */
+public fn packageNameProblem(name: String): String? {
+  if !isSegment(name) {
+    return Some "`{name}` is not a package name: a lowercase letter, then lowercase letters, digits and `-`"
+  }
+  None
+}
+
+/** The skeleton of a name: what is left once the differences a reader does not see are removed. */
+public fn skeletonOf(name: String): String {
+  name.replace("-", "").replace("rn", "m").replace("1", "l").replace("0", "o")
+}
+
+/** An account name is an owner name: every account is the person owner of the same name. */
+public fn accountProblem(name: String): String? {
+  ownerProblem name, false
+}

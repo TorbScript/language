@@ -1,0 +1,121 @@
+/**
+ * API tokens (docs/design/RELEASE.md section 7.6, "a stolen token"): what one looks like, how it is kept, and what it
+ * allows. A token is `torb_` and 64 hexadecimal digits - 256 bits of the system's randomness - shown once, when it is
+ * made, and stored only as its SHA-256. A token is high-entropy, so a plain hash is enough to make a stolen database
+ * useless for publishing (crates.io keeps its tokens the same way); a slow password hash buys nothing here.
+ *
+ * A token is scoped: to owners, to packages (`acme/http` or `acme/*`), to actions, and to a lifetime. An empty list of
+ * owners or packages means every one the account may act for; an empty list of actions means none.
+ */
+
+use Sha256 from "std/digest"
+use randomQueryIdentifier from "std/network"
+
+/** What a token may be allowed to do. */
+public const everyAction = ["publish", "yank", "owners", "tokens"]
+
+/** How a token is written: this, then 64 lowercase hexadecimal digits. */
+public const tokenPrefix = "torb_"
+
+/** What a token allows, as the database keeps it beside the hash. */
+public type Grant {
+  /** The token's id: what a listing shows and a revocation names. Not a secret. */
+  id: String
+  /** The account it acts for; a trusted publisher's token names its workflow (`github:...`). */
+  account: String
+  owners: List<String> = []
+  packages: List<String> = []
+  actions: List<String> = []
+  /** Whether the token was exchanged for a CI identity (RELEASE.md section 7.2, trusted publishing). */
+  trusted: Bool = false
+
+  /** Whether the token allows `action` at all. */
+  fn allowsAction(action: String): Bool {
+    actions.contains action
+  }
+
+  /** Whether the token allows `action` on the package `owner/name`. */
+  fn allowsPackage(action: String, package: String): Bool {
+    if !allowsAction(action) {
+      return false
+    }
+    const owner = ownerOf package
+    if !owners.isEmpty() && !owners.contains(owner) {
+      return false
+    }
+    packages.isEmpty() || packages.any({ pattern => patternMatches pattern, package })
+  }
+
+  /** Whether the token allows `action` on the owner `owner` itself - its members, its trusted publishers. */
+  fn allowsOwner(action: String, owner: String): Bool {
+    allowsAction(action) && (owners.isEmpty() || owners.contains(owner))
+  }
+}
+
+/** `acme` of `acme/http`. */
+public fn ownerOf(package: String): String {
+  match package.splitOnce("/") {
+    Some((owner, _)) => owner
+    None => package
+  }
+}
+
+/** `acme/http` against `acme/http`, or against `acme/*`. */
+public fn patternMatches(pattern: String, package: String): Bool {
+  if const Some(owner) = pattern.withoutSuffix("/*") {
+    return ownerOf(package) == owner
+  }
+  pattern == package
+}
+
+/** Why a scope a caller asked for cannot be granted, or `None`. */
+public fn scopeProblem(actions: List<String>, packages: List<String>): String? {
+  for action in actions {
+    if !everyAction.contains(action) {
+      return Some "`{action}` is not an action a token can have: {everyAction.joined(separator: ", ")}"
+    }
+  }
+  for pattern in packages {
+    if !pattern.contains("/") {
+      return Some "`{pattern}` is not a package: `owner/name`, or `owner/*`"
+    }
+  }
+  None
+}
+
+/** A new token: [tokenPrefix] and 256 random bits as hexadecimal. */
+public fn newToken(): String {
+  "{tokenPrefix}{randomHex(16)}"
+}
+
+/** A new token id: 64 random bits as hexadecimal, enough that two never meet. */
+public fn newTokenId(): String {
+  randomHex 4
+}
+
+/** What the database keeps of a token: the hexadecimal SHA-256 of its text. */
+public fn digestOf(token: String): String {
+  Sha256.of(token.bytes().toList()).hex()
+}
+
+/** Whether `text` has the shape of a token at all: the prefix and 64 hexadecimal digits. */
+public fn looksLikeToken(text: String): Bool {
+  match text.withoutPrefix(tokenPrefix) {
+    Some(rest) => rest.byteLength() == 64 && rest.chars().all({ (_ >= '0' && _ <= '9') || (_ >= 'a' && _ <= 'f') })
+    None => false
+  }
+}
+
+/** `count` draws of 16 bits of the system's randomness, as `4 * count` hexadecimal digits. */
+fn randomHex(count: Int): String {
+  const digits = "0123456789abcdef".chars().map({ _.show() }).toList()
+  var pieces: List<String> = []
+  for _ in 0..count {
+    const value = randomQueryIdentifier()
+    pieces.append digits[(value >> 12) & 15]
+    pieces.append digits[(value >> 8) & 15]
+    pieces.append digits[(value >> 4) & 15]
+    pieces.append digits[value & 15]
+  }
+  pieces.joined separator: ""
+}

@@ -1,0 +1,49 @@
+/**
+ * The index mirrored into a public git repository (docs/design/RELEASE.md sections 7.4 and 7.11): an archival export
+ * that doubles as a readable log of every release ever published. After every change of an index file the file is
+ * copied into a working copy of that repository, committed, and - where the operator wants it - pushed.
+ *
+ * `git` is run as a program, the way `release-sync` runs `curl`: there is no git in `std`, and the mirror is a copy
+ * whose loss costs nothing, so **a mirror that fails never fails the publish or the yank that caused it**. The failure
+ * is printed, and the next change commits the file whole again, which catches the mirror up.
+ */
+
+use File from "std/fs"
+use ran from "./program"
+
+/** Who the mirror's commits are by. */
+const committer = ["-c", "user.name=packages.torb.dev", "-c", "user.email=registry@torb.dev"]
+
+/**
+ * `text`, the whole index file of `package`, written into the working copy `directory` as `<owner>/<name>.trb` and
+ * committed with `message`; pushed where `push` says so.
+ */
+public fn mirrorIndex(directory: String, package: String, text: String, message: String, push: Bool): Task<Result<Void, String>> {
+  const relative = "{package}.trb"
+  const owner = package.splitOnce("/").map({ _.0 }) ?? package
+  File.createDirectory("{directory}/{owner}").mapError({ "the mirror {directory}: {_}" })?
+  File.writeText("{directory}/{relative}", text).mapError({ "the mirror {directory}: {_}" })?
+  git(directory, ["add", "--", relative]).await()?
+  var arguments = committer
+  arguments.appendAll(["commit", "--quiet", "-m", message, "--", relative])
+  git(directory, arguments).await()?
+  if push {
+    git(directory, ["push", "--quiet"]).await()?
+  }
+  Ok void
+}
+
+fn git(directory: String, arguments: List<String>): Task<Result<Void, String>> {
+  var all = ["-C", directory]
+  all.appendAll arguments
+  match ran("git", all).await() {
+    Fail(problem) => Fail "`git` could not be started: {problem}"
+    Ok(output) => {
+      if output.isSuccess() {
+        Ok void
+      } else {
+        Fail "git {arguments.joined(separator: " ")} failed: {output.standardError.trim()}"
+      }
+    }
+  }
+}

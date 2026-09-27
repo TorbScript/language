@@ -1,0 +1,94 @@
+/**
+ * The decisions about names and tokens that touch nothing: which owner and package names the registry takes, which of
+ * them would confuse a reader, and what a token's scopes allow.
+ */
+
+use test, group from "std/test"
+use ownerProblem, packageNameProblem, skeletonOf from "../src/names"
+use Grant, newToken, newTokenId, digestOf, looksLikeToken, patternMatches, scopeProblem from "../src/tokens"
+use sqlText from "../src/database"
+
+group "owner and package names" {
+  test "a segment is an owner" {
+    assert(ownerProblem("acme", false) == None)
+    assert(ownerProblem("acme-corp2", false) == None)
+  }
+
+  test "anything else is not" {
+    assert ownerProblem("Acme", false).isSome()
+    assert ownerProblem("2acme", false).isSome()
+    assert ownerProblem("acme.com", false).isSome()
+    assert ownerProblem("", false).isSome()
+    assert packageNameProblem("http_client").isSome()
+  }
+
+  test "a reserved owner is the operator's alone" {
+    assert ownerProblem("torbscript", false).isSome()
+    assert ownerProblem("std", false).isSome()
+    assert(ownerProblem("torbscript", true) == None)
+  }
+
+  test "names a reader cannot tell apart have one skeleton" {
+    assert(skeletonOf("acme-corp") == skeletonOf("acmecorp"))
+    assert(skeletonOf("he11o") == skeletonOf("hello"))
+    assert(skeletonOf("f0o") == skeletonOf("foo"))
+    assert(skeletonOf("modern") == skeletonOf("modem"))
+    assert(skeletonOf("acme") != skeletonOf("acne"))
+  }
+}
+
+group "tokens" {
+  test "a new token has its shape, and two are never one" {
+    const first = newToken()
+    const second = newToken()
+    assert looksLikeToken(first)
+    assert(first != second)
+    assert(newTokenId().byteLength() == 16)
+  }
+
+  test "the digest is SHA-256 in hexadecimal, and the token is not in it" {
+    const token = newToken()
+    const digest = digestOf token
+    assert(digest.byteLength() == 64)
+    assert(!digest.contains(token))
+    assert(digestOf(token) == digest)
+  }
+
+  test "a text that is not a token is not taken for one" {
+    assert(!looksLikeToken("torb_short"))
+    assert(!looksLikeToken("ghp_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+  }
+
+  test "the package patterns" {
+    assert patternMatches("acme/http", "acme/http")
+    assert patternMatches("acme/*", "acme/http")
+    assert(!patternMatches("acme/*", "acme-corp/http"))
+    assert(!patternMatches("acme/http", "acme/http2"))
+  }
+
+  test "what a grant allows" {
+    const everything = Grant "a", "ada", actions: ["publish", "yank"]
+    assert everything.allowsPackage("publish", "acme/http")
+    assert(!everything.allowsPackage("owners", "acme/http"))
+    const scoped = Grant "b", "ada", owners: ["acme"], packages: ["acme/http"], actions: ["publish"]
+    assert scoped.allowsPackage("publish", "acme/http")
+    assert(!scoped.allowsPackage("publish", "acme/json"))
+    assert(!scoped.allowsPackage("publish", "other/http"))
+    assert scoped.allowsOwner("publish", "acme")
+    assert(!scoped.allowsOwner("publish", "other"))
+  }
+
+  test "a scope that cannot be granted is named" {
+    assert(scopeProblem(["publish", "yank"], ["acme/*"]) == None)
+    assert scopeProblem(["delete"], []).isSome()
+    assert scopeProblem(["publish"], ["http"]).isSome()
+  }
+}
+
+group "SQL literals" {
+  test "a quote is doubled, and a control character is a space" {
+    assert(sqlText("o'brien") == "'o''brien'")
+    assert(sqlText("a\nb;") == "'a b;'")
+    assert(sqlText("'); DROP TABLE tokens; --") == "'''); DROP TABLE tokens; --'")
+  }
+}

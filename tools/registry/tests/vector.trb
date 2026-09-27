@@ -1,0 +1,31 @@
+/**
+ * A key and two tokens made once with Node's `crypto`, so the verification of this registry is checked against an
+ * implementation that is not its own: a 2048-bit RSA key (`test-key-1`), and two tokens with the claims of a GitHub
+ * Actions job of `acme/http` running `release.yml` for the tag `v1.2.5` in the environment `release`, signed `RS256`
+ * by it for the audience `packages.torb.dev`. [token] was issued at [issued] and lives 900 seconds; [lastingToken] has
+ * the same claims and expires in 2100, for the tests that run against the database's real clock.
+ */
+
+use JsonWebKey, JsonWebKeySet from "../src/oidc"
+
+public const modulus = "tA61gFvHLYjPP9Q9rPgfRJV-Wzq2r3RAxsqGgp2R2gT9P8zLH_-N4yZ7VKmCEulRF0K1yAVhvu__DaPBC6dsBwmXl1V95VmvhJGgxHIQefNB-QtQZU0IhheGVSXax2-ZADkQT52Btw3Hj-UFtPosrtR-xfAxW7beqJajQNHiazMS4OZbbyhHX4A19qcNuReYRYnogwss7dMDb3363WRLGbQFYG9LpKjObyBdNQQLRCIo7IQkl8XNxG7Re6tKUjpcB02Iy3JefwefyGFzpgT0HKScs9sv550xuYtNGkGIVQFwa_FDh4tTVwvVH3likFyRtKr7G0uf7UMVmvNUmuYj4Q"
+
+public const token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2V5LTEifQ.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwiYXVkIjoicGFja2FnZXMudG9yYi5kZXYiLCJzdWIiOiJyZXBvOmFjbWUvaHR0cDpyZWY6cmVmcy90YWdzL3YxLjIuNSIsInJlcG9zaXRvcnkiOiJhY21lL2h0dHAiLCJyZXBvc2l0b3J5X293bmVyIjoiYWNtZSIsInJlZiI6InJlZnMvdGFncy92MS4yLjUiLCJ3b3JrZmxvd19yZWYiOiJhY21lL2h0dHAvLmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3YxLjIuNSIsImpvYl93b3JrZmxvd19yZWYiOiJhY21lL2h0dHAvLmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3YxLjIuNSIsImVudmlyb25tZW50IjoicmVsZWFzZSIsImlhdCI6MTc5MDAwMDAwMCwibmJmIjoxNzkwMDAwMDAwLCJleHAiOjE3OTAwMDA5MDB9.hbQdUXQS1tUsBoiBEevOnMUyNSJHcs6E9mU6oupyrcNyjn2RfA-OlG8Nu8cGM85yPXFiKdFFToyOxWSZKpwhN3Wdremhz7vaqrsz6Gi23buOG5mXi3f9GDHaR4gn8prTG5GXxbTsV8s6spfwfAlzbvKxjNKGUZ8rPcuYwW0syW-HbXvkd-fPT6yuPvG84dOL99tfS9ekzrjIbFb-WB2zsbo7pcZtC38gjSuMzvtYS-voNiw8jzW-7xWbQ6NVqxebYEI2u9fhuKB9d1h5C2HpAYuPXtAsuNJ2zmWcyKtIeeqeS9kc86nSwSqm-wUh2W5h97bJyPJN7jNFbzoPdNupgQ"
+
+public const lastingToken = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InRlc3Qta2V5LTEifQ.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwiYXVkIjoicGFja2FnZXMudG9yYi5kZXYiLCJzdWIiOiJyZXBvOmFjbWUvaHR0cDpyZWY6cmVmcy90YWdzL3YxLjIuNSIsInJlcG9zaXRvcnkiOiJhY21lL2h0dHAiLCJyZXBvc2l0b3J5X293bmVyIjoiYWNtZSIsInJlZiI6InJlZnMvdGFncy92MS4yLjUiLCJ3b3JrZmxvd19yZWYiOiJhY21lL2h0dHAvLmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3YxLjIuNSIsImpvYl93b3JrZmxvd19yZWYiOiJhY21lL2h0dHAvLmdpdGh1Yi93b3JrZmxvd3MvcmVsZWFzZS55bWxAcmVmcy90YWdzL3YxLjIuNSIsImVudmlyb25tZW50IjoicmVsZWFzZSIsImlhdCI6MTc5MDAwMDAwMCwibmJmIjoxNzkwMDAwMDAwLCJleHAiOjQxMDI0NDQ4MDB9.DMtvAK3D1EQU4VmA5dtRpkZFcVSmDvSx4588Vd5JqokJ9y8aoQ-pvtJ52a5EvfVVqgKDccvHgFLdVU4HwoSOPY1BM_t8LFv7b4gtDrm8OOyCUnBMalvBb4RW51z2Cgpiyoln7hH16ass_os0eUE207xXTnJUZ2hvXOpstAdX9-zDHtTS4Ni8ATSAtFkQix6RzayA0KQfa6c62S-ncAdEoXs1-r1Uh2Qhfda-ESSeDQHuPZjIuPObXBvNsPP8el41yokR7dwa5hsgv0Ik3GA99sQqsFD0FgDawJoAxAC-4L-LWQfTjRnPxHROYE3PVU5UhA4Ac0RbQrRhIMSxrZaSbw"
+
+/** The second [token] was issued at. */
+public const issued = 1790000000
+
+/** The audience both tokens name. */
+public const audience = "packages.torb.dev"
+
+/** The key set of the test key. A function and not a constant: a constant of a record from another module does not build natively yet. */
+public fn keySet(): JsonWebKeySet {
+  JsonWebKeySet([JsonWebKey("RSA", kid: "test-key-1", alg: "RS256", n: modulus, e: "AQAB")])
+}
+
+/** The key set as an issuer's `/.well-known/jwks` answers it. */
+public fn keySetText(): String {
+  "\{\"keys\":[\{\"kty\":\"RSA\",\"kid\":\"test-key-1\",\"alg\":\"RS256\",\"use\":\"sig\",\"n\":\"{modulus}\",\"e\":\"AQAB\"\}]\}"
+}

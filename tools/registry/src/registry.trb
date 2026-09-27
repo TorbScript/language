@@ -1,0 +1,783 @@
+/**
+ * What the registry does, apart from HTTP (docs/design/RELEASE.md sections 7.1 to 7.4 and 7.6): accounts and owners,
+ * tokens, publishing, yanking and trusted publishing, each one a function of a caller and its arguments that answers a
+ * value or a [Refusal] - the status and the sentence the client prints.
+ *
+ * **Who may do what.** An account is a person and the person owner of the same name. An owner has members, each an
+ * `owner` or a `publisher`: a publisher may publish and yank the owner's packages, an owner may also change the members
+ * and the trusted publishers. A token acts for its account within its scopes (`./tokens`); the operator's token
+ * (`REGISTRY_ADMINISTRATOR_TOKEN`) creates accounts and reserved owners, and may act for anyone. A token exchanged for a
+ * CI identity may publish the one package it was exchanged for, and nothing else.
+ *
+ * **The index is written under one lock.** An index file is read, appended to and written whole, so two writers of one
+ * file must not overlap: every write of the storage holds [WriteLock], a flag on the one worker the server's loops run
+ * on (a handler that holds a shared object keeps them on one, `std/http`'s `Server.serve`). The lock is released by a
+ * `using`, which a cancellation closes too - a client that goes away mid-publish never leaves the lock held.
+ *
+ * **Recovery.** The index file is the truth of what is published, the database the truth of who may publish. A publish
+ * writes the archive, then the index, then the database row; a crash between them leaves at worst an archive nothing
+ * names - written over by the next attempt - or an index entry without its row, which the next attempt finds in the
+ * index, refuses as published, and repairs the row of.
+ */
+
+use Uri from "std/uri"
+use sleep from "std/time"
+use Json from "std/json"
+use Config from "./config"
+use Database, sqlText, sqlInteger, joinedColumn, splitColumn from "./database"
+use Storages, StorageFailure from "./storage"
+use Grant, everyAction, newToken, newTokenId, digestOf, looksLikeToken, ownerOf, scopeProblem from "./tokens"
+use ownerProblem, packageNameProblem, accountProblem, skeletonOf from "./names"
+use checkedUpload from "./upload"
+use mirrorIndex from "./mirror"
+use TrustedPublisher, JsonWebKeySet, verifiedClaims, publisherMatches, publisherName, fetchKeySet from "./oidc"
+use Version from "torbscript/compiler/package/version"
+use IndexYank, readIndex, indexStart, renderRelease, renderYank, renderUnyank from "torbscript/compiler/package/index"
+
+/** Why a request is not done: the HTTP status, and one sentence - or several, for an archive with several problems. */
+public type Refusal {
+  status: Int
+  messages: List<String>
+
+  static fn of(status: Int, message: String): Refusal {
+    Refusal status, [message]
+  }
+
+  fn message(): String {
+    messages.joined separator: "; "
+  }
+}
+
+/** Who is asking: the operator, an account through one of its tokens, or nobody. */
+public type Caller {
+  case Administrator
+  case Account(grant: Grant)
+  case Anonymous
+
+  /** The name the event log records. */
+  fn actor(): String {
+    match self {
+      .Administrator => "administrator"
+      .Account(grant) => grant.account
+      .Anonymous => "anonymous"
+    }
+  }
+}
+
+/** A new token, as it is shown the one time it is shown. */
+public type IssuedToken {
+  id: String
+  token: String
+  account: String
+  expires: Int
+}
+
+/** One member of an owner. */
+public type Member {
+  account: String
+  role: String
+}
+
+/** An owner as the API shows it. */
+public type OwnerView {
+  name: String
+  kind: String
+  members: List<Member>
+}
+
+/** A token as a listing shows it: everything but the secret, which is not kept. */
+public type TokenView {
+  id: String
+  name: String
+  owners: String
+  packages: String
+  actions: String
+  trusted: Int
+  created: Int
+  expires: Int
+}
+
+/** A package's trusted publishers, and whether tokens are switched off for it. */
+public type TrustedPublishing {
+  publishers: List<TrustedPublisher>
+  required: Bool = false
+}
+
+/** What a publish answers. */
+public type Published {
+  package: String
+  version: String
+  hash: String
+  capabilities: List<String>
+  files: Int
+}
+
+/** The one writer of the storage at a time; see the module's comment. */
+public shared type WriteLock {
+  private var held: Bool = false
+
+  /** Waits until nobody holds the lock, then holds it until the answer is closed. */
+  var fn acquire(): Task<Holding> {
+    while held {
+      sleep(0.01).await()
+    }
+    held = true
+    Holding self
+  }
+
+  /** Lets the next writer in. */
+  var fn release() {
+    held = false
+  }
+}
+
+/** The lock, held: closing it - at the end of the `using` that bound it, or by a cancellation - releases it. */
+public shared type Holding with Close {
+  private var lock: WriteLock
+
+  var fn close() {
+    lock.release()
+  }
+}
+
+type NameRow {
+  name: String
+}
+
+type RoleRow {
+  role: String
+}
+
+type OwnerRow {
+  name: String
+  kind: String
+}
+
+type PackageRow {
+  name: String
+  owner: String
+  trustedOnly: Int
+}
+
+type GrantRow {
+  id: String
+  account: String
+  owners: String
+  packages: String
+  actions: String
+  trusted: Int
+}
+
+type PublisherRow {
+  repository: String
+  workflow: String
+  environment: String
+}
+
+type CountRow {
+  count: Int
+}
+
+/** The registry: its configuration, its database, its storage and the lock of the storage. */
+public shared type Registry {
+  config: Config
+  database: Database
+  private var storage: Storages
+  private var lock: WriteLock
+
+  /** The registry over `database` and `storage`, with a lock of its own. */
+  static fn of(config: Config, database: Database, storage: Storages): Registry {
+    Registry config, database, storage, WriteLock()
+  }
+
+  // --- who is asking -------------------------------------------------------------------------------------------------
+
+  /**
+   * The caller an `Authorization` field names: `Bearer <token>`, the operator's token or one of an account's that is
+   * neither expired nor revoked; no field is [Caller.Anonymous].
+   */
+  fn callerOf(authorization: String?): Task<Result<Caller, Refusal>> {
+    const header = match authorization {
+      Some(found) => found.trim()
+      None => {
+        return Ok Caller.Anonymous
+      }
+    }
+    const token = (header.withoutPrefix("Bearer ") ?? (header.withoutPrefix("bearer ") ?? "")).trim()
+    if token.isEmpty() {
+      return Fail Refusal.of(401, "the Authorization field is not `Bearer <token>`")
+    }
+    if const Some(administrator) = config.administratorToken {
+      if digestOf(token) == digestOf(administrator) {
+        return Ok Caller.Administrator
+      }
+    }
+    if !looksLikeToken(token) {
+      return Fail Refusal.of(401, "that is not a token of this registry")
+    }
+    const rows = self.queried<GrantRow>(
+      "SELECT id, account, owners, packages, actions, trusted FROM tokens WHERE digest = {sqlText(digestOf(token))} AND expires > unixepoch();",
+    ).await()?
+    match rows.first() {
+      Some(row) => Ok Caller.Account(grantOf(row))
+      None => Fail Refusal.of(401, "the token is unknown, expired or revoked")
+    }
+  }
+
+  // --- accounts and owners -------------------------------------------------------------------------------------------
+
+  /**
+   * A new account, the person owner of its name, and a first token with every action for 90 days. The operator's
+   * alone: sign-up through GitHub, GitLab, Codeberg or a passkey (RELEASE.md section 7.1) is the web front's, later.
+   */
+  fn createAccount(caller: Caller, name: String): Task<Result<IssuedToken, Refusal>> {
+    if caller != Caller.Administrator {
+      return Fail Refusal.of(403, "only the operator creates accounts")
+    }
+    if const Some(problem) = accountProblem(name) {
+      return Fail Refusal.of(400, problem)
+    }
+    refuseConfusingOwner(name).await()?
+    const now = nowOf().await()?
+    const quotedName = sqlText name
+    const statements = """
+      BEGIN IMMEDIATE;
+      INSERT INTO accounts (name, created) VALUES ({quotedName}, {now});
+      INSERT INTO owners (name, skeleton, kind, created) VALUES ({quotedName}, {sqlText(skeletonOf(name))}, 'person', {now});
+      INSERT INTO members (owner, account, role) VALUES ({quotedName}, {quotedName}, 'owner');
+      COMMIT;
+      """
+    executed(statements).await()?
+    logged(caller, "create-account", name, "").await()?
+    issued(name, "first token", [], [], everyAction, false, now + 90 * 86400).await()
+  }
+
+  /**
+   * A new organisation owner with `founder` as its first `owner` member. An account creates one with a token that has
+   * the `owners` action, and becomes its founder; the operator names the founder and may take a reserved name.
+   */
+  fn createOrganisation(caller: Caller, name: String, founder: String?): Task<Result<OwnerView, Refusal>> {
+    const administrator = caller == Caller.Administrator
+    const first = match caller {
+      .Administrator => match founder {
+        Some(found) => found
+        None => {
+          return Fail Refusal.of(400, "the operator names the founding account: `account`")
+        }
+      }
+      .Account(grant) => {
+        if grant.trusted || !grant.allowsAction("owners") {
+          return Fail Refusal.of(403, "the token does not have the `owners` action")
+        }
+        grant.account
+      }
+      .Anonymous => {
+        return Fail Refusal.of(401, "creating an owner needs a token")
+      }
+    }
+    if const Some(problem) = ownerProblem(name, administrator) {
+      return Fail Refusal.of(400, problem)
+    }
+    if !accountExists(first).await()? {
+      return Fail Refusal.of(404, "there is no account `{first}`")
+    }
+    refuseConfusingOwner(name).await()?
+    const now = nowOf().await()?
+    const statements = """
+      BEGIN IMMEDIATE;
+      INSERT INTO owners (name, skeleton, kind, created) VALUES ({sqlText(name)}, {sqlText(skeletonOf(name))}, 'organisation', {now});
+      INSERT INTO members (owner, account, role) VALUES ({sqlText(name)}, {sqlText(first)}, 'owner');
+      COMMIT;
+      """
+    executed(statements).await()?
+    logged(caller, "create-owner", name, first).await()?
+    ownerView(name).await()
+  }
+
+  /** An owner and its members; anyone may ask. */
+  fn ownerView(name: String): Task<Result<OwnerView, Refusal>> {
+    const owners = self.queried<OwnerRow>("SELECT name, kind FROM owners WHERE name = {sqlText(name)};").await()?
+    const owner = match owners.first() {
+      Some(found) => found
+      None => {
+        return Fail Refusal.of(404, "there is no owner `{name}`")
+      }
+    }
+    const members = self.queried<Member>(
+      "SELECT account, role FROM members WHERE owner = {sqlText(name)} ORDER BY account;",
+    ).await()?
+    Ok OwnerView(owner.name, owner.kind, members)
+  }
+
+  /** Adds `account` to `owner` as `role`, or changes its role: an `owner` member's, or the operator's. */
+  fn setMember(caller: Caller, owner: String, account: String, role: String): Task<Result<OwnerView, Refusal>> {
+    if role != "owner" && role != "publisher" {
+      return Fail Refusal.of(400, "a member's role is `owner` or `publisher`, not `{role}`")
+    }
+    mayManage(caller, owner).await()?
+    if !accountExists(account).await()? {
+      return Fail Refusal.of(404, "there is no account `{account}`")
+    }
+    executed(
+      "INSERT INTO members (owner, account, role) VALUES ({sqlText(owner)}, {sqlText(account)}, {sqlText(role)}) ON CONFLICT (owner, account) DO UPDATE SET role = excluded.role;",
+    ).await()?
+    logged(caller, "set-member", owner, "{account} {role}").await()?
+    ownerView(owner).await()
+  }
+
+  /** Removes `account` from `owner` - never its last `owner` member, which would leave nobody to manage it. */
+  fn removeMember(caller: Caller, owner: String, account: String): Task<Result<OwnerView, Refusal>> {
+    mayManage(caller, owner).await()?
+    const view = ownerView(owner).await()?
+    const owners = view.members.filter({ _.role == "owner" }).toList()
+    if owners.length() == 1 && owners[0].account == account {
+      return Fail Refusal.of(409, "`{account}` is the last owner of `{owner}`: add another owner first")
+    }
+    executed("DELETE FROM members WHERE owner = {sqlText(owner)} AND account = {sqlText(account)};").await()?
+    logged(caller, "remove-member", owner, account).await()?
+    ownerView(owner).await()
+  }
+
+  // --- tokens --------------------------------------------------------------------------------------------------------
+
+  /**
+   * A new token for the caller's account - or, for the operator, for `account`. An account's token needs the `tokens`
+   * action, and a new token never has an action its maker does not.
+   */
+  fn createToken(
+    caller: Caller,
+    name: String,
+    account: String?,
+    owners: List<String>,
+    packages: List<String>,
+    actions: List<String>,
+    days: Int,
+  ): Task<Result<IssuedToken, Refusal>> {
+    if const Some(problem) = scopeProblem(actions, packages) {
+      return Fail Refusal.of(400, problem)
+    }
+    if days < 1 || days > 365 {
+      return Fail Refusal.of(400, "a token lives from 1 to 365 days, not {days}")
+    }
+    const holder = match caller {
+      .Administrator => match account {
+        Some(found) => found
+        None => {
+          return Fail Refusal.of(400, "the operator names the account the token is for: `account`")
+        }
+      }
+      .Account(grant) => {
+        if grant.trusted || !grant.allowsAction("tokens") {
+          return Fail Refusal.of(403, "the token does not have the `tokens` action")
+        }
+        for action in actions {
+          if !grant.allowsAction(action) {
+            return Fail Refusal.of(403, "the token cannot give the `{action}` action, which it does not have")
+          }
+        }
+        grant.account
+      }
+      .Anonymous => {
+        return Fail Refusal.of(401, "creating a token needs a token")
+      }
+    }
+    if !accountExists(holder).await()? {
+      return Fail Refusal.of(404, "there is no account `{holder}`")
+    }
+    const now = nowOf().await()?
+    const token = issued(holder, name, owners, packages, actions, false, now + days * 86400).await()?
+    logged(caller, "create-token", holder, token.id).await()?
+    Ok token
+  }
+
+  /** The tokens of the caller's account, without their secrets. */
+  fn tokens(caller: Caller): Task<Result<List<TokenView>, Refusal>> {
+    const account = accountOf(caller)?
+    self.queried<TokenView>(
+      "SELECT id, name, owners, packages, actions, trusted, created, expires FROM tokens WHERE account = {sqlText(account)} AND expires > unixepoch() ORDER BY created;",
+    ).await()
+  }
+
+  /** Revokes one of the caller's tokens: it stops working at once. */
+  fn revokeToken(caller: Caller, id: String): Task<Result<Void, Refusal>> {
+    const account = accountOf(caller)?
+    const found = self.queried<CountRow>(
+      "SELECT count(*) AS count FROM tokens WHERE id = {sqlText(id)} AND account = {sqlText(account)};",
+    ).await()?
+    if (found.first().map({ _.count }) ?? 0) == 0 {
+      return Fail Refusal.of(404, "the account `{account}` has no token `{id}`")
+    }
+    executed("DELETE FROM tokens WHERE id = {sqlText(id)} AND account = {sqlText(account)};").await()?
+    logged(caller, "revoke-token", account, id).await()
+  }
+
+  // --- publishing ----------------------------------------------------------------------------------------------------
+
+  /**
+   * Publishes `archive` as the release `version` of `owner/name` (RELEASE.md section 7.2): the caller may publish the
+   * package, the archive passes every check of `./upload`, the version is new - and then the archive, the index entry
+   * and the release row are written, and the index is mirrored.
+   */
+  fn publish(caller: Caller, owner: String, name: String, version: String, archive: List<UInt8>, hash: String): Task<Result<Published, Refusal>> {
+    const package = packageOf(owner, name)?
+    if const Fail(problem) = Version.tryFrom(version) {
+      return Fail Refusal.of(400, "`{version}` is not a version: {problem}")
+    }
+    const grant = mayWritePackage(caller, package, "publish").await()?
+    const upload = match checkedUpload(package, version, archive, hash) {
+      Ok(found) => found
+      Fail(problems) => {
+        return Fail Refusal(422, problems)
+      }
+    }
+    using holding = lock.acquire().await()
+    const indexUri = uriOf "index/{package}.trb"
+    const existing = textAt(indexUri).await()? ?? indexStart(package)
+    const index = readIndex(existing, package).mapError({ Refusal.of 500, "the index of {package} does not read: {_}" })?
+    if index.release(upload.release.version).isSome() {
+      recordRelease(package, version, hash, caller.actor()).await()?
+      return Fail Refusal.of(409, "{package} {version} is published already, and a published version is never replaced")
+    }
+    ensurePackage(package, owner).await()?
+    written(uriOf("archives/{package}/{version}.tar.gz"), archive).await()?
+    const text = existing + renderRelease(upload.release)
+    written(indexUri, text.bytes().toList()).await()?
+    recordRelease(package, version, hash, grant.map({ _.account }) ?? caller.actor()).await()?
+    logged(caller, "publish", package, "{version} {hash}").await()?
+    mirrored(package, text, "{package} {version}").await()
+    Ok Published(package, version, hash, upload.release.capabilities, upload.files)
+  }
+
+  /**
+   * Withdraws `version` for new resolutions with `reason`, or - `undo` - returns it (RELEASE.md section 7.3): a line
+   * appended to the index either way, never an edit of what is there.
+   */
+  fn yank(caller: Caller, owner: String, name: String, version: String, reason: String, undo: Bool): Task<Result<Void, Refusal>> {
+    const package = packageOf(owner, name)?
+    const parsed = match Version.tryFrom(version) {
+      Ok(found) => found
+      Fail(problem) => {
+        return Fail Refusal.of(400, "`{version}` is not a version: {problem}")
+      }
+    }
+    if !undo && reason.trim().isEmpty() {
+      return Fail Refusal.of(400, "a yank needs a reason: a lock that pins the version prints it")
+    }
+    const _ = mayWritePackage(caller, package, "yank").await()?
+    using holding = lock.acquire().await()
+    const indexUri = uriOf "index/{package}.trb"
+    const existing = match textAt(indexUri).await()? {
+      Some(found) => found
+      None => {
+        return Fail Refusal.of(404, "there is no package {package}")
+      }
+    }
+    const index = readIndex(existing, package).mapError({ Refusal.of 500, "the index of {package} does not read: {_}" })?
+    if index.release(parsed).isNone() {
+      return Fail Refusal.of(404, "{package} has no release {version}")
+    }
+    const yanked = index.yank(parsed).isSome()
+    if yanked != undo {
+      const state = if undo { "is not yanked" } else { "is yanked already" }
+      return Fail Refusal.of(409, "{package} {version} {state}")
+    }
+    const line = if undo { renderUnyank parsed } else { renderYank IndexYank(parsed, reason.trim()) }
+    const text = existing + line
+    written(indexUri, text.bytes().toList()).await()?
+    const flag = if undo { 0 } else { 1 }
+    executed(
+      "UPDATE releases SET yanked = {flag}, reason = {sqlText(if undo { "" } else { reason.trim() })} WHERE package = {sqlText(package)} AND version = {sqlText(version)};",
+    ).await()?
+    const what = if undo { "unyank" } else { "yank" }
+    logged(caller, what, package, "{version} {reason}").await()?
+    mirrored(package, text, "{what} {package} {version}").await()
+    Ok void
+  }
+
+  // --- trusted publishing --------------------------------------------------------------------------------------------
+
+  /** The trusted publishers of a package, and whether tokens are switched off for it; anyone may ask. */
+  fn trustedPublishing(owner: String, name: String): Task<Result<TrustedPublishing, Refusal>> {
+    const package = packageOf(owner, name)?
+    const rows = self.queried<PackageRow>(
+      "SELECT name, owner, trusted_only AS trustedOnly FROM packages WHERE name = {sqlText(package)};",
+    ).await()?
+    const required = rows.first().map({ _.trustedOnly == 1 }) ?? false
+    Ok TrustedPublishing(publishersOf(package).await()?, required)
+  }
+
+  /**
+   * Replaces the trusted publishers of `owner/name`, and switches tokens off for it where `required` says so. An `owner`
+   * member's, or the operator's. The package need not be published yet: configuring it reserves the name, so the first
+   * release can already come from CI.
+   */
+  fn setTrustedPublishing(caller: Caller, owner: String, name: String, settings: TrustedPublishing): Task<Result<TrustedPublishing, Refusal>> {
+    const package = packageOf(owner, name)?
+    mayManage(caller, owner).await()?
+    for publisher in settings.publishers {
+      if !publisher.repository.contains("/") || publisher.workflow.isEmpty() || publisher.workflow.contains("/") {
+        return Fail Refusal.of(400, "a trusted publisher is a repository `owner/name` and a workflow file name such as `release.yml`")
+      }
+    }
+    ensurePackage(package, owner).await()?
+    var statements: List<String> = ["BEGIN IMMEDIATE;", "DELETE FROM trusted_publishers WHERE package = {sqlText(package)};"]
+    for publisher in settings.publishers {
+      statements.append "INSERT OR IGNORE INTO trusted_publishers (package, repository, workflow, environment) VALUES ({sqlText(package)}, {sqlText(publisher.repository)}, {sqlText(publisher.workflow)}, {sqlText(publisher.environment)});"
+    }
+    const flag = if settings.required { 1 } else { 0 }
+    statements.append "UPDATE packages SET trusted_only = {flag} WHERE name = {sqlText(package)};"
+    statements.append "COMMIT;"
+    executed(statements.joined(separator: "\n")).await()?
+    logged(caller, "set-trusted-publishing", package, Json().encode(settings)).await()?
+    trustedPublishing(owner, name).await()
+  }
+
+  /**
+   * A short-lived token that may publish `package`, for a GitHub Actions job whose OIDC token verifies and matches one
+   * of the package's trusted publishers (RELEASE.md section 7.2).
+   */
+  fn exchange(token: String, package: String): Task<Result<IssuedToken, Refusal>> {
+    const owner = ownerOf package
+    const name = package.splitOnce("/").map({ _.1 }) ?? ""
+    const checked = packageOf(owner, name)?
+    const keys: JsonWebKeySet = match fetchKeySet(config.keySetUrl).await() {
+      Ok(found) => found
+      Fail(problem) => {
+        return Fail Refusal.of(503, problem)
+      }
+    }
+    const now = nowOf().await()?
+    const claims = verifiedClaims(token, keys, config.audience, now).mapError({ Refusal.of 401, _ })?
+    const publishers = publishersOf(checked).await()?
+    if publishers.isEmpty() {
+      return Fail Refusal.of(403, "{checked} has no trusted publisher: its owners configure one at /api/1/packages/{checked}/trusted-publishers")
+    }
+    if !publishers.any({ publisherMatches claims, _ }) {
+      return Fail Refusal.of(403, "{claims.jobWorkflowRef} (environment `{claims.environment}`) is not a trusted publisher of {checked}")
+    }
+    const account = publisherName claims
+    const issuedToken = issued(account, "trusted publishing", [owner], [checked], ["publish"], true, now + config.trustedTokenSeconds).await()?
+    logged(Caller.Anonymous, "exchange", checked, account).await()?
+    Ok issuedToken
+  }
+
+  // --- the pieces ----------------------------------------------------------------------------------------------------
+
+  /** The grant a package write needs, checked: the action, the scopes, the membership, and trusted-only packages. */
+  private fn mayWritePackage(caller: Caller, package: String, action: String): Task<Result<Grant?, Refusal>> {
+    const owner = ownerOf package
+    const owners = self.queried<OwnerRow>("SELECT name, kind FROM owners WHERE name = {sqlText(owner)};").await()?
+    if owners.isEmpty() {
+      return Fail Refusal.of(404, "there is no owner `{owner}` on this registry")
+    }
+    const grant = match caller {
+      .Administrator => {
+        return Ok None
+      }
+      .Account(found) => found
+      .Anonymous => {
+        return Fail Refusal.of(401, "{action} of {package} needs a token: TORB_TOKEN, or trusted publishing from CI")
+      }
+    }
+    if !grant.allowsPackage(action, package) {
+      return Fail Refusal.of(403, "the token may not {action} {package}")
+    }
+    const packages = self.queried<PackageRow>(
+      "SELECT name, owner, trusted_only AS trustedOnly FROM packages WHERE name = {sqlText(package)};",
+    ).await()?
+    if grant.trusted {
+      return Ok Some(grant)
+    }
+    if action == "publish" && (packages.first().map({ _.trustedOnly == 1 }) ?? false) {
+      return Fail Refusal.of(403, "{package} is published only by its trusted publishers: its owners switched tokens off")
+    }
+    const roles = self.queried<RoleRow>(
+      "SELECT role FROM members WHERE owner = {sqlText(owner)} AND account = {sqlText(grant.account)};",
+    ).await()?
+    if roles.isEmpty() {
+      return Fail Refusal.of(403, "`{grant.account}` is not a member of `{owner}`")
+    }
+    Ok Some(grant)
+  }
+
+  /** Whether the caller may change `owner` itself: an `owner` member with the `owners` action, or the operator. */
+  private fn mayManage(caller: Caller, owner: String): Task<Result<Void, Refusal>> {
+    const owners = self.queried<OwnerRow>("SELECT name, kind FROM owners WHERE name = {sqlText(owner)};").await()?
+    if owners.isEmpty() {
+      return Fail Refusal.of(404, "there is no owner `{owner}`")
+    }
+    const grant = match caller {
+      .Administrator => {
+        return Ok void
+      }
+      .Account(found) => found
+      .Anonymous => {
+        return Fail Refusal.of(401, "changing `{owner}` needs a token")
+      }
+    }
+    if grant.trusted || !grant.allowsOwner("owners", owner) {
+      return Fail Refusal.of(403, "the token does not have the `owners` action for `{owner}`")
+    }
+    const roles = self.queried<RoleRow>(
+      "SELECT role FROM members WHERE owner = {sqlText(owner)} AND account = {sqlText(grant.account)};",
+    ).await()?
+    if roles.first().map({ _.role }) != Some("owner") {
+      return Fail Refusal.of(403, "`{grant.account}` is not an owner of `{owner}`")
+    }
+    Ok void
+  }
+
+  /** The package's row, made where it is missing - refused where its name would confuse with another's. */
+  private fn ensurePackage(package: String, owner: String): Task<Result<Void, Refusal>> {
+    const found = self.queried<NameRow>("SELECT name FROM packages WHERE name = {sqlText(package)};").await()?
+    if !found.isEmpty() {
+      return Ok void
+    }
+    const skeleton = skeletonOf package
+    const confusing = self.queried<NameRow>("SELECT name FROM packages WHERE skeleton = {sqlText(skeleton)};").await()?
+    if const Some(other) = confusing.first() {
+      return Fail Refusal.of(409, "{package} would be confused with {other.name}, which exists")
+    }
+    const now = nowOf().await()?
+    executed(
+      "INSERT INTO packages (name, skeleton, owner, created) VALUES ({sqlText(package)}, {sqlText(skeleton)}, {sqlText(owner)}, {now});",
+    ).await()
+  }
+
+  /** The release's row, where it is not there yet. */
+  private fn recordRelease(package: String, version: String, hash: String, publisher: String): Task<Result<Void, Refusal>> {
+    const now = nowOf().await()?
+    executed(
+      "INSERT OR IGNORE INTO releases (package, version, hash, publisher, published) VALUES ({sqlText(package)}, {sqlText(version)}, {sqlText(hash)}, {sqlText(publisher)}, {now});",
+    ).await()
+  }
+
+  private fn refuseConfusingOwner(name: String): Task<Result<Void, Refusal>> {
+    const confusing = self.queried<NameRow>("SELECT name FROM owners WHERE skeleton = {sqlText(skeletonOf(name))};").await()?
+    match confusing.first() {
+      Some(other) => {
+        const why = if other.name == name { "exists already" } else { "would be confused with `{other.name}`, which exists" }
+        Fail Refusal.of(409, "`{name}` {why}")
+      }
+      None => Ok void
+    }
+  }
+
+  private fn accountExists(name: String): Task<Result<Bool, Refusal>> {
+    const found = self.queried<NameRow>("SELECT name FROM accounts WHERE name = {sqlText(name)};").await()?
+    Ok(!found.isEmpty())
+  }
+
+  private fn publishersOf(package: String): Task<Result<List<TrustedPublisher>, Refusal>> {
+    const rows = self.queried<PublisherRow>(
+      "SELECT repository, workflow, environment FROM trusted_publishers WHERE package = {sqlText(package)} ORDER BY repository, workflow;",
+    ).await()?
+    Ok rows.map({ TrustedPublisher _.repository, _.workflow, _.environment }).toList()
+  }
+
+  /** Stores a new token's digest and answers the token, which is never stored. */
+  private fn issued(
+    account: String,
+    name: String,
+    owners: List<String>,
+    packages: List<String>,
+    actions: List<String>,
+    trusted: Bool,
+    expires: Int,
+  ): Task<Result<IssuedToken, Refusal>> {
+    const token = newToken()
+    const id = newTokenId()
+    const now = nowOf().await()?
+    const flag = if trusted { 1 } else { 0 }
+    executed(
+      "INSERT INTO tokens (id, digest, account, name, owners, packages, actions, trusted, created, expires) VALUES ({sqlText(id)}, {sqlText(digestOf(token))}, {sqlText(account)}, {sqlText(name)}, {sqlText(joinedColumn(owners))}, {sqlText(joinedColumn(packages))}, {sqlText(joinedColumn(actions))}, {flag}, {now}, {sqlInteger(expires)});",
+    ).await()?
+    Ok IssuedToken(id, token, account, expires)
+  }
+
+  private fn logged(caller: Caller, action: String, subject: String, detail: String): Task<Result<Void, Refusal>> {
+    executed(
+      "INSERT INTO events (time, actor, action, subject, detail) VALUES (unixepoch(), {sqlText(caller.actor())}, {sqlText(action)}, {sqlText(subject)}, {sqlText(detail)});",
+    ).await()
+  }
+
+  /** The index mirrored, where a mirror is configured; a failure is printed and nothing else. */
+  private fn mirrored(package: String, text: String, message: String): Task<Void> {
+    if const Some(directory) = config.mirror {
+      if const Fail(problem) = mirrorIndex(directory, package, text, message, config.mirrorPush).await() {
+        printError "registry: the index mirror did not take {message}: {problem}"
+      }
+    }
+  }
+
+  private fn uriOf(relative: String): Uri {
+    const base = config.storage.withoutSuffix("/") ?? config.storage
+    match Uri.tryFrom("{base}/{relative}") {
+      Ok(uri) => uri
+      Fail(problem) => panic "REGISTRY_STORAGE `{config.storage}` does not make a URI with `{relative}`: {problem}"
+    }
+  }
+
+  /** The text stored at `uri`, or `None` where nothing is. */
+  private fn textAt(uri: Uri): Task<Result<String?, Refusal>> {
+    match storage.readText(uri).await() {
+      Ok(text) => Ok Some(text)
+      Fail(.NotFound(_)) => Ok None
+      Fail(problem) => Fail Refusal.of(500, problem.show())
+    }
+  }
+
+  private var fn written(uri: Uri, content: List<UInt8>): Task<Result<Void, Refusal>> {
+    storage.write(uri, content).await().mapError({ Refusal.of 500, _.show() })
+  }
+
+  private fn queried<Row: Decode>(sql: String): Task<Result<List<Row>, Refusal>> {
+    database.rows<Row>(sql).await().mapError({ Refusal.of 500, _ })
+  }
+
+  private fn executed(sql: String): Task<Result<Void, Refusal>> {
+    match database.run(sql).await() {
+      Ok(_) => Ok void
+      Fail(problem) => Fail Refusal.of(500, problem)
+    }
+  }
+
+  private fn nowOf(): Task<Result<Int, Refusal>> {
+    database.now().await().mapError({ Refusal.of 500, _ })
+  }
+}
+
+/** `owner/name`, both parts checked against the segment grammar. */
+fn packageOf(owner: String, name: String): Result<String, Refusal> {
+  if const Some(problem) = ownerProblem(owner, true) {
+    return Fail Refusal.of(400, problem)
+  }
+  if const Some(problem) = packageNameProblem(name) {
+    return Fail Refusal.of(400, problem)
+  }
+  Ok "{owner}/{name}"
+}
+
+fn accountOf(caller: Caller): Result<String, Refusal> {
+  match caller {
+    .Account(grant) => {
+      if grant.trusted {
+        return Fail Refusal.of(403, "a token of trusted publishing only publishes")
+      }
+      Ok grant.account
+    }
+    .Administrator => Fail Refusal.of(400, "the operator's token has no tokens of its own")
+    .Anonymous => Fail Refusal.of(401, "this needs a token")
+  }
+}
+
+fn grantOf(row: GrantRow): Grant {
+  Grant(
+    row.id,
+    row.account,
+    owners: splitColumn(row.owners),
+    packages: splitColumn(row.packages),
+    actions: splitColumn(row.actions),
+    trusted: row.trusted == 1,
+  )
+}

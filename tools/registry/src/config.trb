@@ -1,0 +1,50 @@
+/**
+ * What the registry needs, read once from the environment - the container's `compose.yml` and `.env` pass all of it
+ * (`tools/deploy/compose.example.yml`), which is where a secret belongs and a checked-in file does not.
+ */
+
+use Environment from "std/os"
+use githubIssuer from "./oidc"
+
+public type Config {
+  /** What the server binds: `host:port`, `0.0.0.0:8089` behind Traefik. */
+  listenAddress: String = "0.0.0.0:8089"
+  /** The `file:` (later `s3:`) URI the index and the archives are stored below: `<storage>/index/...`, `<storage>/archives/...`. */
+  storage: String = "file:///srv/torb/registry"
+  /** The SQLite file of accounts, owners, tokens and the release log. */
+  database: String = "/srv/torb/database/registry.db"
+  /** The SQLite shell that opens it. */
+  sqlite: String = "sqlite3"
+  /**
+   * The token of the operator: it creates accounts and reserved owners, which nothing else can. `None` switches all of
+   * that off; set it for the first account, and remove it again if nothing else is to be created.
+   */
+  administratorToken: String? = None
+  /** The audience a trusted publisher's OIDC token has to name: the registry's host. */
+  audience: String = "packages.torb.dev"
+  /** Where the issuer's key set is fetched from for every exchange. */
+  keySetUrl: String = "{githubIssuer}/.well-known/jwks"
+  /** How long a token exchanged for a CI identity lives, in seconds. */
+  trustedTokenSeconds: Int = 900
+  /** A git working copy the index is mirrored into after every change (RELEASE.md section 7.11); `None` for none. */
+  mirror: String? = None
+  /** Whether the mirror is pushed to its remote after each commit. */
+  mirrorPush: Bool = false
+
+  /** Every value from the environment, with the defaults above where a variable is not set. */
+  static fn fromEnvironment(): Config {
+    const defaults = Config()
+    Config(
+      listenAddress: Environment.get("REGISTRY_LISTEN") ?? defaults.listenAddress,
+      storage: Environment.get("REGISTRY_STORAGE") ?? defaults.storage,
+      database: Environment.get("REGISTRY_DATABASE") ?? defaults.database,
+      sqlite: Environment.get("REGISTRY_SQLITE") ?? defaults.sqlite,
+      administratorToken: Environment.get("REGISTRY_ADMINISTRATOR_TOKEN").filter({ !_.trim().isEmpty() }),
+      audience: Environment.get("REGISTRY_AUDIENCE") ?? defaults.audience,
+      keySetUrl: Environment.get("REGISTRY_OIDC_KEYS") ?? defaults.keySetUrl,
+      trustedTokenSeconds: Environment.get("REGISTRY_TRUSTED_TOKEN_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 900,
+      mirror: Environment.get("REGISTRY_MIRROR").filter({ !_.trim().isEmpty() }),
+      mirrorPush: Environment.get("REGISTRY_MIRROR_PUSH") == Some("1"),
+    )
+  }
+}

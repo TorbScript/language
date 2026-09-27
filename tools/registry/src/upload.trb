@@ -1,0 +1,74 @@
+/**
+ * An uploaded archive, checked the way docs/design/RELEASE.md section 7.2 says the registry checks one on receipt: it
+ * trusts nothing the client computed. The archive is unpacked within the limits, its tree hash recomputed, its lock's
+ * `settings` read **statically** - a `project.trb` is never evaluated here - and refused with exactly the words
+ * `torb publish --dry-run` uses, since both call the toolchain's own `publishProblems`. The capabilities are derived
+ * again from the imports. A package that fails to *check* is not refused: the server's toolchain may be another patch
+ * release, and a checker bug on the server must not block a publisher.
+ */
+
+use textOf from "std/stream"
+use unpacked, capabilitiesOf, archiveLimit from "torbscript/compiler/package/archive"
+use readLock from "torbscript/compiler/package/lock"
+use IndexRelease from "torbscript/compiler/package/index"
+use Version from "torbscript/compiler/package/version"
+use publishProblems, publishedDependencies from "torbscript/compiler/package/publish"
+
+/** A release that passed every check, and what the index says about it. */
+public type Upload {
+  package: String
+  release: IndexRelease
+  /** How many files the archive holds, for the answer. */
+  files: Int
+}
+
+/**
+ * The release `version` of `package` that `archive` holds, checked. `hash` is the tree hash the client says it computed
+ * (`Torb-Tree-Hash`): the archive is unpacked against it, so a claim that is not the archive's is refused. It is asked
+ * for rather than computed first because unpacking checks the sizes as it goes, and computing it beforehand would mean
+ * unpacking an archive of unknown size once without that check.
+ *
+ * # Errors
+ *
+ * - Every problem at once where the settings are wrong, and the first one otherwise: an archive above the limit or not
+ *   one the registry writes, a path that climbs out, a hash that is not the archive's, no lock or a lock without the
+ *   package's settings, settings of another version.
+ */
+public fn checkedUpload(package: String, version: String, archive: List<UInt8>, hash: String): Result<Upload, List<String>> {
+  if archive.length() > archiveLimit {
+    return Fail(["the archive has {archive.length()} bytes, and the registry takes at most {archiveLimit}"])
+  }
+  const entries = unpacked(archive, hash).mapError({ [_] })?
+  const lockText = match entries.find({ _.path == "project.lock.trb" }) {
+    Some(entry) => textOf(entry.bytes).mapError({ ["project.lock.trb is not UTF-8: {_}"] })?
+    None => {
+      return Fail(["the archive has no project.lock.trb: `torb publish` writes one with the package's settings"])
+    }
+  }
+  if entries.find({ _.path == "project.trb" }).isNone() {
+    return Fail(["the archive has no project.trb"])
+  }
+  const lock = readLock(lockText).mapError({ ["project.lock.trb: {_}"] })?
+  const manifest = match lock.settingsOf(package) {
+    Some(found) => found
+    None => {
+      return Fail(["project.lock.trb has no `settings \"{package}\"` block: the archive is not {package}"])
+    }
+  }
+  var problems = publishProblems manifest, lock
+  if manifest.version != version {
+    problems.append "the archive is version {manifest.version}, and it was sent as {version}"
+  }
+  if !problems.isEmpty() {
+    return Fail problems
+  }
+  const parsed = Version.tryFrom(version).mapError({ ["`{version}` is not a version: {_}"] })?
+  const release = IndexRelease(
+    parsed,
+    hash,
+    language: if manifest.language.isEmpty() { lock.language } else { manifest.language },
+    dependencies: publishedDependencies(manifest),
+    capabilities: capabilitiesOf(entries).map({ _.capability }).toList(),
+  )
+  Ok Upload(package, release, entries.length())
+}

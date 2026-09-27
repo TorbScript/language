@@ -1,0 +1,48 @@
+/**
+ * Running another program without stopping the server: `sqlite3`, `mv` and `git` are run through the pipes of a
+ * `Child`, whose every read and write is a task.
+ *
+ * Not `Process.run`: it hands its work to the blocking pool only where the closure it builds may cross to another
+ * thread, and one that captures a text built at run time - every command line here - runs on the worker that asked
+ * (`std/task`'s `offload`). The registry's handler holds shared objects, so every connection is served on that one
+ * worker, and a `Process.run` there would stall every request for as long as the program runs - and deadlock outright
+ * where the program is a client of this very server, as in the tests.
+ */
+
+use Process, ProcessOutput from "std/process"
+use IoError from "std/fs"
+use Bytes, textOf from "std/stream"
+
+/**
+ * Runs `program` with `arguments`, feeds it `input`, and answers its exit code and both streams once it ended.
+ *
+ * # Errors
+ *
+ * - The program cannot be started, or a pipe fails. A program that runs and fails is an exit code, not an error.
+ */
+public fn ran(program: String, arguments: List<String>, input: String = ""): Task<Result<ProcessOutput, IoError>> {
+  using child = Process.start(program, arguments)?
+  var feeding = child.input()
+  if !input.isEmpty() {
+    feeding.addText(input).await()?
+  }
+  feeding.end().await()?
+  var output = child.output()
+  const printed = output.toList().await()?
+  var errors = child.errors()
+  const complained = errors.toList().await()?
+  const code = child.wait().await()?
+  Ok ProcessOutput(code, textOfChunks(printed), textOfChunks(complained))
+}
+
+/** Chunks of a stream as one text; bytes that are not UTF-8 are replaced by what `textOf` says about them. */
+fn textOfChunks(chunks: List<Bytes>): String {
+  var bytes: List<UInt8> = []
+  for chunk in chunks {
+    bytes.appendAll chunk
+  }
+  match textOf(bytes) {
+    Ok(text) => text
+    Fail(problem) => "(not UTF-8: {problem})"
+  }
+}

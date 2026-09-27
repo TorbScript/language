@@ -1,0 +1,170 @@
+/**
+ * The registry's database: SQLite, reached through the `sqlite3` command-line shell (docs/design/RELEASE.md section
+ * 7.11, "SQLite with continuous backup is enough at launch").
+ *
+ * **Why the shell and not a binding.** `std` has no database driver, and a native binding to a vendored SQLite would be
+ * a new native - two commits and a seed refresh (CLAUDE.md) - plus a nine-megabyte C file in every build of this
+ * program. The shell is one Debian package in the container, the same way `release-sync` shells out to `curl` and
+ * `cosign`, and the file it writes is an ordinary SQLite database in WAL mode, so Litestream replicates it unchanged.
+ * A request costs one short process per statement batch, which a write service that sees a publish a minute does not
+ * notice. When `std` grows a driver, this module is the one that changes.
+ *
+ * **Every value goes in as a literal of [sqlText] or [sqlInteger]**: SQLite's string literal has exactly one escape,
+ * the doubled `'`, so quoting is complete; a control character, which could end a line of the shell's input, becomes a
+ * space.
+ * Statements are fed on standard input with `-bail`, so a batch stops at its first error, and a batch that opens a
+ * transaction and fails is rolled back when the shell exits.
+ */
+
+use ran from "./program"
+use Json from "std/json"
+
+/** A database file and the shell that opens it. */
+public type Database {
+  /** The SQLite file; `REGISTRY_DATABASE`, `/srv/torb/database/registry.db` in the container. */
+  path: String
+  /** The shell: `sqlite3`, or wherever `REGISTRY_SQLITE` says it is. */
+  program: String = "sqlite3"
+
+  /** Runs `sql` and answers what the shell printed: a JSON array per statement that returned rows. */
+  fn run(sql: String): Task<Result<String, String>> {
+    const script = ".timeout 5000\nPRAGMA foreign_keys = ON;\n{sql}\n"
+    match ran(program, ["-bail", "-json", path], input: script).await() {
+      Fail(problem) => Fail "`{program}` could not be started - the registry needs the SQLite shell: {problem}"
+      Ok(output) => {
+        if output.isSuccess() {
+          Ok output.standardOutput
+        } else {
+          Fail "the database refused: {output.standardError.trim()}"
+        }
+      }
+    }
+  }
+
+  /** Runs `sql`, whose last statement is one `SELECT`, and reads its rows as `Row`s. */
+  fn rows<Row: Decode>(sql: String): Task<Result<List<Row>, String>> {
+    const output = run(sql).await()?
+    const text = output.trim()
+    if text.isEmpty() {
+      return Ok([])
+    }
+    Json().decode<List<Row>>(text).mapError({ "the database answered what this program does not read: {_}" })
+  }
+
+  /** The seconds since 1970 by the database's clock: `std/time` measures durations, and this is the wall clock. */
+  fn now(): Task<Result<Int, String>> {
+    const found = self.rows<Clock>("SELECT unixepoch() AS seconds;").await()?
+    match found.first() {
+      Some(row) => Ok row.seconds
+      None => Fail "the database did not tell the time"
+    }
+  }
+
+  /** Creates the tables that are missing and switches the file to WAL, which Litestream replicates. */
+  fn migrate(): Task<Result<Void, String>> {
+    const _ = run(schema).await()?
+    Ok void
+  }
+}
+
+type Clock {
+  seconds: Int
+}
+
+/**
+ * `text` as an SQL string literal. A control character becomes a space: every name that reaches a statement was checked
+ * against its grammar before, and a free text - the reason of a yank - loses nothing a reader needs.
+ */
+public fn sqlText(text: String): String {
+  var characters: List<String> = []
+  for character in text.chars() {
+    const code = Int.from character
+    characters.append(if code < 32 || code == 127 { " " } else { character.show() })
+  }
+  "'{characters.joined(separator: "").replace("'", "''")}'"
+}
+
+/** `value` as an SQL integer literal. */
+public fn sqlInteger(value: Int): String {
+  "{value}"
+}
+
+/** The list as one text column: its items joined by a space, since no item of any list here has one. */
+public fn joinedColumn(items: List<String>): String {
+  items.joined separator: " "
+}
+
+/** A text column [joinedColumn] wrote, as its list. */
+public fn splitColumn(text: String): List<String> {
+  text.split(" ").filter({ !_.isEmpty() }).toList()
+}
+
+/**
+ * The tables. Every name is a primary key or unique where two rows would be one thing: a name's skeleton (so two names
+ * a reader cannot tell apart are refused by the database itself, docs/design/RELEASE.md section 7.1), a token's
+ * digest, a release's package and version.
+ */
+const schema = """
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE IF NOT EXISTS accounts (
+    name TEXT PRIMARY KEY,
+    created INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS owners (
+    name TEXT PRIMARY KEY,
+    skeleton TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    elsewhere TEXT NOT NULL DEFAULT '',
+    created INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS members (
+    owner TEXT NOT NULL REFERENCES owners(name),
+    account TEXT NOT NULL REFERENCES accounts(name),
+    role TEXT NOT NULL,
+    PRIMARY KEY (owner, account)
+  );
+  CREATE TABLE IF NOT EXISTS packages (
+    name TEXT PRIMARY KEY,
+    skeleton TEXT NOT NULL UNIQUE,
+    owner TEXT NOT NULL REFERENCES owners(name),
+    trusted_only INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS releases (
+    package TEXT NOT NULL REFERENCES packages(name),
+    version TEXT NOT NULL,
+    hash TEXT NOT NULL,
+    publisher TEXT NOT NULL,
+    published INTEGER NOT NULL,
+    yanked INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (package, version)
+  );
+  CREATE TABLE IF NOT EXISTS tokens (
+    id TEXT PRIMARY KEY,
+    digest TEXT NOT NULL UNIQUE,
+    account TEXT NOT NULL,
+    name TEXT NOT NULL,
+    owners TEXT NOT NULL DEFAULT '',
+    packages TEXT NOT NULL DEFAULT '',
+    actions TEXT NOT NULL DEFAULT '',
+    trusted INTEGER NOT NULL DEFAULT 0,
+    created INTEGER NOT NULL,
+    expires INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS trusted_publishers (
+    package TEXT NOT NULL REFERENCES packages(name),
+    repository TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    environment TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (package, repository, workflow, environment)
+  );
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time INTEGER NOT NULL,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT ''
+  );
+  """

@@ -1,0 +1,155 @@
+/**
+ * Trusted publishing without the network: a GitHub Actions token verified against a key set, and matched against a
+ * package's trusted publishers, with the key and the tokens `./vector` holds, which Node made.
+ */
+
+use test, group from "std/test"
+use base64Decoded, base64UrlEncoded from "../src/base64"
+use RsaPublicKey, verifiesSha256 from "../src/rsa"
+use JsonWebKey, JsonWebKeySet, TrustedPublisher, GitHubClaims, verifiedClaims, publisherMatches from "../src/oidc"
+use modulus, token, issued, audience, keySet from "./vector"
+
+/** The token with one segment replaced. */
+fn withSegment(index: Int, replacement: String): String {
+  var parts = token.split "."
+  parts[index] = replacement
+  parts.joined separator: "."
+}
+
+/** The bytes of a text. */
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes().toList()
+}
+
+group "Base64" {
+  test "reads both alphabets, with and without padding" {
+    assert(base64Decoded("aGVsbG8=") == Ok(bytesOf("hello")))
+    assert(base64Decoded("aGVsbG8") == Ok(bytesOf("hello")))
+    assert(base64Decoded("-_8") == Ok([UInt8.tryFrom(251).ok() ?? 0, UInt8.tryFrom(255).ok() ?? 0]))
+    assert(base64Decoded("+/8=") == base64Decoded("-_8"))
+  }
+
+  test "refuses what no encoder writes" {
+    assert base64Decoded("a").isError()
+    assert base64Decoded("aGV*").isError()
+    assert base64Decoded("aG=Vs").isError()
+  }
+
+  test "writes the URL-safe alphabet without padding, and reads it back" {
+    assert(base64UrlEncoded(bytesOf("hello")) == "aGVsbG8")
+    const bytes = bytesOf "any carnal pleas?>"
+    assert(base64Decoded(base64UrlEncoded(bytes)) == Ok(bytes))
+  }
+}
+
+group "RSASSA-PKCS1-v1_5 with SHA-256" {
+  const parts = token.split "."
+  const key = RsaPublicKey(base64Decoded(modulus).ok() ?? [], base64Decoded("AQAB").ok() ?? [])
+  const signature = base64Decoded(parts[2]).ok() ?? []
+  const signed = bytesOf "{parts[0]}.{parts[1]}"
+
+  test "a signature Node made verifies" {
+    assert verifiesSha256(key, signed, signature)
+  }
+
+  test "one changed byte of the message does not" {
+    assert(!verifiesSha256(key, bytesOf("{parts[0]}.{parts[1]}x"), signature))
+  }
+
+  test "one changed byte of the signature does not" {
+    var changed = signature
+    changed[100] = UInt8.tryFrom((Int.from(changed[100]) + 1) & 255).ok() ?? 0
+    assert(!verifiesSha256(key, signed, changed))
+  }
+
+  test "a signature of the wrong length, or a short modulus, is refused" {
+    assert(!verifiesSha256(key, signed, signature[0..255].toList()))
+    const short = RsaPublicKey key.modulus[0..128].toList(), key.exponent
+    assert(!verifiesSha256(short, signed, signature[0..128].toList()))
+  }
+}
+
+group "a GitHub Actions token" {
+  test "verifies, and its claims are read" {
+    match verifiedClaims(token, keySet(), audience, issued + 10) {
+      Ok(claims) => {
+        assert(claims.repository == "acme/http")
+        assert(claims.jobWorkflowRef == "acme/http/.github/workflows/release.yml@refs/tags/v1.2.5")
+        assert(claims.environment == "release")
+        assert(claims.ref == "refs/tags/v1.2.5")
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+
+  test "is refused once it expired, give or take a minute" {
+    assert verifiedClaims(token, keySet(), audience, issued + 900 + 60).isOk()
+    match verifiedClaims(token, keySet(), audience, issued + 900 + 61) {
+      Ok(_) => assert false
+      Fail(problem) => assert problem.contains("expired")
+    }
+  }
+
+  test "is refused before it is valid" {
+    assert verifiedClaims(token, keySet(), audience, issued - 3600).isError()
+  }
+
+  test "is refused for another audience" {
+    match verifiedClaims(token, keySet(), "packages.example.test", issued) {
+      Ok(_) => assert false
+      Fail(problem) => assert problem.contains("packages.example.test")
+    }
+  }
+
+  test "is refused with claims it was not signed with" {
+    const forged = base64UrlEncoded bytesOf("\{\"iss\":\"https://token.actions.githubusercontent.com\",\"aud\":\"packages.torb.dev\",\"exp\":1790000900,\"repository\":\"evil/http\"\}")
+    match verifiedClaims(withSegment(1, forged), keySet(), audience, issued) {
+      Ok(_) => assert false
+      Fail(problem) => assert problem.contains("does not verify")
+    }
+  }
+
+  test "is refused without a key of its kid, and with another algorithm" {
+    const otherKeys = JsonWebKeySet([JsonWebKey("RSA", kid: "another", n: modulus, e: "AQAB")])
+    assert verifiedClaims(token, otherKeys, audience, issued).isError()
+    const none = base64UrlEncoded bytesOf("\{\"alg\":\"none\",\"kid\":\"test-key-1\"\}")
+    match verifiedClaims(withSegment(0, none), keySet(), audience, issued) {
+      Ok(_) => assert false
+      Fail(problem) => assert problem.contains("`none`")
+    }
+  }
+
+  test "is refused when it is not three segments" {
+    assert verifiedClaims("abc.def", keySet(), audience, issued).isError()
+  }
+}
+
+group "matching a trusted publisher" {
+  const claims = GitHubClaims(
+    "https://token.actions.githubusercontent.com",
+    audience,
+    issued + 900,
+    repository: "acme/http",
+    jobWorkflowRef: "acme/http/.github/workflows/release.yml@refs/tags/v1.2.5",
+    environment: "release",
+  )
+
+  test "the repository and the workflow file" {
+    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml"))
+    assert publisherMatches(claims, TrustedPublisher("Acme/HTTP", "release.yml"))
+  }
+
+  test "another workflow of the same repository is not it" {
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "ci.yml")))
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release")))
+  }
+
+  test "another repository is not it" {
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http2", "release.yml")))
+  }
+
+  test "an environment, where one is named, has to be the job's" {
+    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "release"))
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "staging")))
+  }
+}

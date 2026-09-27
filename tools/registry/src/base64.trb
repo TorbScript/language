@@ -1,0 +1,109 @@
+/**
+ * Base64 of RFC 4648 in both alphabets: section 4's (`+`, `/`) and section 5's URL-safe one (`-`, `_`), which is what a
+ * JSON Web Token and a JSON Web Key are written in. Decoding takes either alphabet, with or without the `=` padding, so
+ * one function reads a token's segments and a key's modulus alike.
+ */
+
+const standardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+/**
+ * The bytes a Base64 text stands for.
+ *
+ * # Errors
+ *
+ * - A character of neither alphabet, padding anywhere but at the end, or a length no encoder writes.
+ */
+public fn base64Decoded(text: String): Result<List<UInt8>, String> {
+  var bytes: List<UInt8> = []
+  var word = 0
+  var count = 0
+  var padding = 0
+  for byte in text.bytes() {
+    const code = Int.from byte
+    if code == 61 {
+      padding = padding + 1
+      continue
+    }
+    if padding > 0 {
+      return Fail "Base64 has padding in the middle"
+    }
+    const value = valueOf code
+    if value < 0 {
+      return Fail "Base64 has a character outside its alphabet (code {code})"
+    }
+    word = (word << 6) | value
+    count = count + 1
+    if count == 4 {
+      bytes.append byteOf(word >> 16)
+      bytes.append byteOf(word >> 8)
+      bytes.append byteOf(word)
+      word = 0
+      count = 0
+    }
+  }
+  match count {
+    0 => void
+    2 => bytes.append byteOf(word >> 4)
+    3 => {
+      bytes.append byteOf(word >> 10)
+      bytes.append byteOf(word >> 2)
+    }
+    _ => {
+      return Fail "Base64 of a length no encoder writes"
+    }
+  }
+  Ok bytes
+}
+
+/** The URL-safe Base64 of `bytes`, without padding: how a token's segments are written. */
+public fn base64UrlEncoded(bytes: List<UInt8>): String {
+  const alphabet = standardAlphabet.chars().map({ _.show() }).toList()
+  var pieces: List<String> = []
+  var at = 0
+  while at < bytes.length() {
+    const first = Int.from bytes[at]
+    const second = if at + 1 < bytes.length() { Int.from bytes[at + 1] } else { 0 }
+    const third = if at + 2 < bytes.length() { Int.from bytes[at + 2] } else { 0 }
+    const word = (first << 16) | (second << 8) | third
+    pieces.append urlSafe(alphabet[(word >> 18) & 63])
+    pieces.append urlSafe(alphabet[(word >> 12) & 63])
+    if at + 1 < bytes.length() {
+      pieces.append urlSafe(alphabet[(word >> 6) & 63])
+    }
+    if at + 2 < bytes.length() {
+      pieces.append urlSafe(alphabet[word & 63])
+    }
+    at = at + 3
+  }
+  pieces.joined separator: ""
+}
+
+fn urlSafe(character: String): String {
+  match character {
+    "+" => "-"
+    "/" => "_"
+    _ => character
+  }
+}
+
+/** The six bits a character of either alphabet stands for, or -1. */
+fn valueOf(code: Int): Int {
+  if code >= 65 && code <= 90 {
+    return code - 65
+  }
+  if code >= 97 && code <= 122 {
+    return code - 71
+  }
+  if code >= 48 && code <= 57 {
+    return code + 4
+  }
+  match code {
+    43 | 45 => 62
+    47 | 95 => 63
+    _ => 0 - 1
+  }
+}
+
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

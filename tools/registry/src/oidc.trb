@@ -1,0 +1,191 @@
+/**
+ * Trusted publishing (docs/design/RELEASE.md section 7.2): a CI job proves who it is with the OpenID Connect token its
+ * CI system issued it, and the registry trades that for a short-lived token of its own - no stored secret on either
+ * side. GitHub Actions is the one provider so far; its tokens are JSON Web Tokens signed with `RS256` by a key that
+ * `https://token.actions.githubusercontent.com/.well-known/jwks` publishes.
+ *
+ * Everything that decides is a pure function of the token, the key set, the audience and the time, so the tests run it
+ * with a key of their own. Fetching the key set is the one call that reaches the network.
+ */
+
+use Json from "std/json"
+use Naming from "std/encoding"
+use Uri from "std/uri"
+use get as httpGet from "std/http"
+use Headers from "std/http"
+use textOf from "std/stream"
+use base64Decoded from "./base64"
+use RsaPublicKey, verifiesSha256 from "./rsa"
+
+/** Who issues GitHub Actions' tokens: the `iss` claim, and where the key set is published below it. */
+public const githubIssuer = "https://token.actions.githubusercontent.com"
+
+/** How far the clocks of GitHub and the registry may disagree, in seconds. */
+public const clockLeeway = 60
+
+/** One key of a JSON Web Key Set (RFC 7517): an RSA key's modulus `n` and exponent `e` in URL-safe Base64. */
+public type JsonWebKey {
+  kty: String
+  kid: String = ""
+  alg: String = ""
+  n: String = ""
+  e: String = ""
+}
+
+/** What the issuer's `/.well-known/jwks` answers. */
+public type JsonWebKeySet {
+  keys: List<JsonWebKey>
+}
+
+/** The header of a token: the algorithm, and which key of the set signed it. */
+type TokenHeader {
+  alg: String
+  kid: String = ""
+}
+
+/**
+ * The claims of a GitHub Actions token this registry reads (GitHub's "About security hardening with OpenID Connect").
+ * `jobWorkflowRef` is the workflow file that runs the job - `acme/http/.github/workflows/release.yml@refs/tags/v1.2.5`
+ * - which for a reusable workflow is the called one, and so the one a trusted publisher names.
+ */
+public type GitHubClaims {
+  iss: String
+  aud: String
+  exp: Int
+  nbf: Int = 0
+  iat: Int = 0
+  sub: String = ""
+  repository: String = ""
+  repositoryOwner: String = ""
+  ref: String = ""
+  workflowRef: String = ""
+  jobWorkflowRef: String = ""
+  environment: String = ""
+}
+
+/**
+ * A repository and workflow a package's owners allow to publish it without a token (RELEASE.md section 7.2), optionally
+ * only from one deployment environment - which is where GitHub's required reviewers hold a job.
+ */
+public type TrustedPublisher {
+  /** `owner/name` on GitHub. */
+  repository: String
+  /** The workflow's file name, `release.yml`, below `.github/workflows/`. */
+  workflow: String
+  /** The environment the job has to run in; empty for any. */
+  environment: String = ""
+}
+
+const json = Json naming: Naming.SnakeCase
+
+/**
+ * The claims of `token`, verified: its signature by a key of `keys`, its issuer GitHub's, its audience `audience`, and
+ * `now` (seconds since 1970) inside its lifetime give or take [clockLeeway].
+ *
+ * # Errors
+ *
+ * - What is wrong with it, in words a CI log can show: not three segments, an algorithm other than `RS256`, no key of
+ *   the set with its `kid`, a signature that does not verify, another issuer or audience, expired or not yet valid.
+ */
+public fn verifiedClaims(token: String, keys: JsonWebKeySet, audience: String, now: Int): Result<GitHubClaims, String> {
+  const parts = token.trim().split(".")
+  if parts.length() != 3 {
+    return Fail "the token is not a JSON Web Token: it has {parts.length()} segments, and one has 3"
+  }
+  const headerText = textOfSegment(parts[0], "header")?
+  const header = json.decode<TokenHeader>(headerText).mapError({ "the token's header is not JSON: {_}" })?
+  if header.alg != "RS256" {
+    return Fail "the token is signed with `{header.alg}`, and GitHub's tokens are `RS256`"
+  }
+  const signature = base64Decoded(parts[2]).mapError({ "the token's signature is not Base64: {_}" })?
+  const signed = "{parts[0]}.{parts[1]}".bytes().toList()
+  var candidates = keys.keys.filter({ _.kty == "RSA" && (header.kid.isEmpty() || _.kid == header.kid) }).toList()
+  if candidates.isEmpty() {
+    return Fail "no key of the issuer's key set is `{header.kid}`"
+  }
+  var verified = false
+  for key in candidates {
+    const modulus = base64Decoded(key.n).mapError({ "the key `{key.kid}` has a modulus that is not Base64: {_}" })?
+    const exponent = base64Decoded(key.e).mapError({ "the key `{key.kid}` has an exponent that is not Base64: {_}" })?
+    if verifiesSha256(RsaPublicKey(modulus, exponent), signed, signature) {
+      verified = true
+      break
+    }
+  }
+  if !verified {
+    return Fail "the token's signature does not verify"
+  }
+  const claimsText = textOfSegment(parts[1], "claims")?
+  const claims = json.decode<GitHubClaims>(claimsText).mapError({ "the token's claims are not what GitHub issues: {_}" })?
+  if claims.iss != githubIssuer {
+    return Fail "the token was issued by `{claims.iss}`, not by GitHub Actions"
+  }
+  if claims.aud != audience {
+    return Fail "the token is for `{claims.aud}`, and this registry is `{audience}`: request it with that audience"
+  }
+  if now > claims.exp + clockLeeway {
+    return Fail "the token expired {now - claims.exp} seconds ago"
+  }
+  if claims.nbf > now + clockLeeway {
+    return Fail "the token is not valid for another {claims.nbf - now} seconds"
+  }
+  Ok claims
+}
+
+/**
+ * Whether the job the claims describe is `publisher`: the same repository (GitHub's names ignore case), the workflow
+ * file below its `.github/workflows/`, and the environment where the publisher names one.
+ */
+public fn publisherMatches(claims: GitHubClaims, publisher: TrustedPublisher): Bool {
+  if claims.repository.toLowerCase() != publisher.repository.toLowerCase() {
+    return false
+  }
+  const prefix = "{publisher.repository}/.github/workflows/{publisher.workflow}@".toLowerCase()
+  if !claims.jobWorkflowRef.toLowerCase().startsWith(prefix) {
+    return false
+  }
+  publisher.environment.isEmpty() || claims.environment == publisher.environment
+}
+
+/** Who the claims say published: what the registry's log and the token's account record. */
+public fn publisherName(claims: GitHubClaims): String {
+  "github:{claims.jobWorkflowRef}"
+}
+
+/**
+ * The key set at `url` (GitHub's is [githubIssuer] followed by `/.well-known/jwks`), fetched fresh for every exchange:
+ * an exchange is rare, and a key GitHub rotated out must stop verifying at once.
+ */
+public fn fetchKeySet(url: String): Task<Result<JsonWebKeySet, String>> {
+  const uri = match Uri.tryFrom(url) {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "the key set URL `{url}` is not a URI: {problem}"
+    }
+  }
+  var headers = Headers()
+  headers.set "Accept", "application/json"
+  headers.set "User-Agent", "torbscript-registry"
+  var response = match httpGet(uri, headers: headers).await() {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "the key set could not be fetched from {url}: {problem}"
+    }
+  }
+  if !response.status.isSuccess() {
+    return Fail "the key set at {url} answered {response.status}"
+  }
+  const text = match response.body.text().await() {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail "the key set at {url} could not be read: {problem}"
+    }
+  }
+  json.decode<JsonWebKeySet>(text).mapError({ "the key set at {url} is not a JSON Web Key Set: {_}" })
+}
+
+/** A segment of the token as the UTF-8 text it encodes. */
+fn textOfSegment(segment: String, what: String): Result<String, String> {
+  const bytes = base64Decoded(segment).mapError({ "the token's {what} is not Base64: {_}" })?
+  textOf(bytes).mapError({ "the token's {what} is not UTF-8: {_}" })
+}

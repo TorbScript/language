@@ -1,0 +1,220 @@
+/**
+ * The HTTP API of the write service, `packages.torb.dev/api/1/...` (docs/design/RELEASE.md section 7.4). Everything it
+ * answers is JSON: `{"message": ...}` and the fields of the answer on success, `{"error": ..., "problems": [...]}`
+ * with the status of the refusal otherwise - `torb publish` prints `error`.
+ *
+ *     GET    /api/1/health                                         the service is up
+ *     POST   /api/1/accounts                        {name}         an account and its first token (the operator)
+ *     POST   /api/1/owners                          {name, account?}  an organisation
+ *     GET    /api/1/owners/<owner>                                 the owner and its members
+ *     PUT    /api/1/owners/<owner>/members/<account>  {role}       a member added, or its role changed
+ *     DELETE /api/1/owners/<owner>/members/<account>               a member removed
+ *     POST   /api/1/tokens                          {name, owners, packages, actions, days, account?}
+ *     GET    /api/1/tokens                                         the caller's tokens, without secrets
+ *     DELETE /api/1/tokens/<id>                                    a token revoked
+ *     PUT    /api/1/packages/<owner>/<name>/<version>              the archive: publish (`Torb-Tree-Hash` beside it)
+ *     POST   /api/1/packages/<owner>/<name>/<version>/yank  {reason}  a yank
+ *     DELETE /api/1/packages/<owner>/<name>/<version>/yank         the yank undone
+ *     GET    /api/1/packages/<owner>/<name>/trusted-publishers     who publishes it from CI
+ *     PUT    /api/1/packages/<owner>/<name>/trusted-publishers  {publishers, required}
+ *     POST   /api/1/trusted-publishing/github       {token, package}  an OIDC token traded for a short-lived one
+ *
+ * The static files - `/index`, `/archives`, `/docs` - are not this service's: a file server reads what it wrote.
+ */
+
+use Request, Response, Status, Handler, HttpError, Headers, Body from "std/http"
+use Json from "std/json"
+use Encode from "std/encoding"
+use archiveLimit from "torbscript/compiler/package/archive"
+use TrustedPublisher from "./oidc"
+use Registry, Refusal, Caller, IssuedToken, TrustedPublishing, TokenView, OwnerView from "./registry"
+
+/** The most a JSON request body may have: every request but a publish is a few fields. */
+const jsonLimit = 65536
+
+type AccountRequest {
+  name: String
+}
+
+type OwnerRequest {
+  name: String
+  account: String = ""
+}
+
+type MemberRequest {
+  role: String
+}
+
+type TokenRequest {
+  name: String = "token"
+  account: String = ""
+  owners: List<String> = []
+  packages: List<String> = []
+  actions: List<String> = ["publish"]
+  days: Int = 90
+}
+
+type YankRequest {
+  reason: String = ""
+}
+
+type ExchangeRequest {
+  token: String
+  package: String
+}
+
+type MessageAnswer {
+  message: String
+}
+
+type ErrorAnswer {
+  error: String
+  problems: List<String>
+}
+
+type TokenAnswer {
+  message: String
+  id: String
+  token: String
+  account: String
+  expires: Int
+}
+
+type PublishAnswer {
+  message: String
+  package: String
+  version: String
+  hash: String
+  capabilities: List<String>
+  files: Int
+}
+
+/** The handler `Server.listen` is given. */
+public fn handler(registry: Registry): Handler {
+  { request: Request => answered(registry, request).await() }
+}
+
+fn answered(registry: Registry, request: Request): Task<Result<Response, HttpError>> {
+  match routed(registry, request).await() {
+    Ok(response) => Ok response
+    Fail(refusal) => Ok json(refusal.status, ErrorAnswer(refusal.message(), refusal.messages))
+  }
+}
+
+fn routed(registry: Registry, request: Request): Task<Result<Response, Refusal>> {
+  const segments = request.segments()
+  if segments.length() < 2 || segments[0] != "api" || segments[1] != "1" {
+    return Fail Refusal.of(404, "nothing is at {request.path()}: the API is below /api/1/")
+  }
+  const route = segments[2..segments.length()].toList()
+  const method = request.method.name()
+  if route == ["health"] && method == "GET" {
+    return Ok json(200, MessageAnswer("ok"))
+  }
+  const caller = registry.callerOf(request.headers.get("Authorization")).await()?
+  match (method, route) {
+    ("POST", ["accounts"]) => {
+      const body = decoded<AccountRequest>(request).await()?
+      const token = registry.createAccount(caller, body.name).await()?
+      Ok json(201, tokenAnswer("the account `{body.name}` and its first token", token))
+    }
+    ("POST", ["owners"]) => {
+      const body = decoded<OwnerRequest>(request).await()?
+      const founder = if body.account.isEmpty() { None } else { Some body.account }
+      Ok json(201, registry.createOrganisation(caller, body.name, founder).await()?)
+    }
+    ("GET", ["owners", owner]) => Ok json(200, registry.ownerView(owner).await()?)
+    ("PUT", ["owners", owner, "members", account]) => {
+      const body = decoded<MemberRequest>(request).await()?
+      Ok json(200, registry.setMember(caller, owner, account, body.role).await()?)
+    }
+    ("DELETE", ["owners", owner, "members", account]) => {
+      Ok json(200, registry.removeMember(caller, owner, account).await()?)
+    }
+    ("POST", ["tokens"]) => {
+      const body = decoded<TokenRequest>(request).await()?
+      const account = if body.account.isEmpty() { None } else { Some body.account }
+      const token = registry.createToken(caller, body.name, account, body.owners, body.packages, body.actions, body.days).await()?
+      Ok json(201, tokenAnswer("a token for `{token.account}`: it is shown this once", token))
+    }
+    ("GET", ["tokens"]) => {
+      const tokens: List<TokenView> = registry.tokens(caller).await()?
+      Ok json(200, tokens)
+    }
+    ("DELETE", ["tokens", id]) => {
+      registry.revokeToken(caller, id).await()?
+      Ok json(200, MessageAnswer("the token {id} is revoked"))
+    }
+    ("PUT", ["packages", owner, name, "trusted-publishers"]) => {
+      const body = decoded<TrustedPublishing>(request).await()?
+      Ok json(200, registry.setTrustedPublishing(caller, owner, name, body).await()?)
+    }
+    ("PUT", ["packages", owner, name, version]) => {
+      const hash = match request.headers.get("Torb-Tree-Hash") {
+        Some(found) => found.trim()
+        None => {
+          return Fail Refusal.of(400, "a publish sends the tree hash of the archive in `Torb-Tree-Hash`, which `torb publish` does")
+        }
+      }
+      var body = request.body
+      const archive = match body.bytes(limit: archiveLimit).await() {
+        Ok(found) => found
+        Fail(_) => {
+          return Fail Refusal.of(413, "the archive has more than the {archiveLimit} bytes a package may have, or did not arrive whole")
+        }
+      }
+      const published = registry.publish(caller, owner, name, version, archive, hash).await()?
+      const reaches = if published.capabilities.isEmpty() { "nothing" } else { published.capabilities.joined separator: ", " }
+      Ok(json(
+        201,
+        PublishAnswer(
+          "published {published.package} {published.version} ({published.hash}, touches {reaches})",
+          published.package,
+          published.version,
+          published.hash,
+          published.capabilities,
+          published.files,
+        ),
+      ))
+    }
+    ("POST", ["packages", owner, name, version, "yank"]) => {
+      const body = decoded<YankRequest>(request).await()?
+      registry.yank(caller, owner, name, version, body.reason, false).await()?
+      Ok json(200, MessageAnswer("yanked {owner}/{name} {version}"))
+    }
+    ("DELETE", ["packages", owner, name, version, "yank"]) => {
+      registry.yank(caller, owner, name, version, "", true).await()?
+      Ok json(200, MessageAnswer("{owner}/{name} {version} is no longer yanked"))
+    }
+    ("GET", ["packages", owner, name, "trusted-publishers"]) => {
+      Ok json(200, registry.trustedPublishing(owner, name).await()?)
+    }
+    ("POST", ["trusted-publishing", "github"]) => {
+      const body = decoded<ExchangeRequest>(request).await()?
+      const token = registry.exchange(body.token, body.package).await()?
+      Ok json(200, tokenAnswer("a token that may publish {body.package} until {token.expires}", token))
+    }
+    _ => Fail Refusal.of(404, "the API has no {method} {request.path()}")
+  }
+}
+
+/** The request's body read as JSON of `Value`; a body that is not is a `400` that says why. */
+fn decoded<Value: Decode>(request: Request): Task<Result<Value, Refusal>> {
+  var body = request.body
+  const text = match body.text(limit: jsonLimit).await() {
+    Ok(found) => found
+    Fail(problem) => {
+      return Fail Refusal.of(400, "the body could not be read: {problem}")
+    }
+  }
+  Json().decode<Value>(text).mapError({ Refusal.of 400, "the body is not the JSON this call takes: {_}" })
+}
+
+fn tokenAnswer(message: String, token: IssuedToken): TokenAnswer {
+  TokenAnswer message, token.id, token.token, token.account, token.expires
+}
+
+/** A JSON answer with the status `code`. */
+fn json<Value: Encode>(code: Int, value: Value): Response {
+  Response.jsonOf(value, status: Status.of(code).ok() ?? Status.internalServerError)
+}

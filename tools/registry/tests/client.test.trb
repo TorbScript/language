@@ -1,0 +1,150 @@
+/**
+ * `torb publish` against the write service, over loopback: the toolchain's own client (`compiler/src/package/upload`)
+ * builds, checks and uploads a package to a registry this file serves, and the registry writes it into its `file:`
+ * storage. Once with a token, once again - which the registry refuses in words the client prints - and once without a
+ * token, which the client refuses before it sends anything.
+ *
+ * The `torb` driven is `REGISTRY_TEST_TORB`, or the `torb` running this test where that is the VM of `torb test`. Its
+ * environment is set through `env`, which POSIX systems and Git for Windows have. The database needs the SQLite shell,
+ * as in `./server.test.trb`.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use Environment, Directories from "std/os"
+use Path from "std/path"
+use Process from "std/process"
+use SocketAddress, IpAddress from "std/network"
+use Server, Method, Headers, Body, send from "std/http"
+use Uri from "std/uri"
+use Json from "std/json"
+use Config from "../src/config"
+use Database from "../src/database"
+use Storages, FileStorage from "../src/storage"
+use Registry from "../src/registry"
+use handler from "../src/api"
+use newTokenId from "../src/tokens"
+use ran from "../src/program"
+
+type TokenField {
+  token: String = ""
+}
+
+/** What a run of `torb` printed, both streams, and how it ended. */
+type Run {
+  code: Int
+  output: String
+}
+
+/** The `torb` this test drives. */
+fn torbPath(): String {
+  if const Some(given) = Environment.get("REGISTRY_TEST_TORB") {
+    return given
+  }
+  const running = Process.executablePath() ?? ""
+  const name = Path.from(running).name() ?? ""
+  if name == "torb" || name == "torb.exe" {
+    return running
+  }
+  panic "set REGISTRY_TEST_TORB to the torb to drive: this test runs as {running}"
+}
+
+/** `torb <arguments>` with the variables `settings` names, run to its end. */
+fn torb(settings: List<String>, arguments: List<String>): Task<Run> {
+  var all = settings
+  all.append torbPath()
+  all.appendAll arguments
+  match ran("env", all).await() {
+    Ok(output) => Run output.exitCode, "{output.standardOutput}{output.standardError}"
+    Fail(problem) => Run(0 - 1, "`env` could not be started: {problem}")
+  }
+}
+
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+fn post(base: String, path: String, token: String, body: String): Task<String> {
+  var headers = Headers()
+  headers.set "Authorization", "Bearer {token}"
+  headers.set "Content-Type", "application/json"
+  match send(Method.Post, uriOf("{base}{path}"), headers: headers, body: Body.from(body)).await() {
+    Fail(problem) => problem.show()
+    Ok(response) => {
+      var answer = response
+      answer.body.text().await().ok() ?? ""
+    }
+  }
+}
+
+const root = "{String.from(Directories.temporary())}/torb-registry-client-{newTokenId()}".replace("\\", "/")
+const package = "{root}/hello"
+File.createDirectory("{package}/src")?
+const administrator = "operator-{newTokenId()}"
+const storageUri = match Uri.tryFrom(Path.from("{root}/storage")) {
+  Ok(uri) => uri.show()
+  Fail(problem) => panic "{problem}"
+}
+const config = Config(
+  storage: storageUri,
+  database: "{root}/registry.db",
+  sqlite: Environment.get("REGISTRY_SQLITE") ?? "sqlite3",
+  administratorToken: Some(administrator),
+)
+const database = Database config.database, program: config.sqlite
+const migrated = database.migrate().await()
+var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(Registry.of(config, database, Storages.of([FileStorage()]))))?
+var serving = server.serve()
+const base = "http://{server.localAddress()}"
+
+const account = post(base, "/api/1/accounts", administrator, "\{\"name\":\"ada\"\}").await()
+const token = Json().decode<TokenField>(account).map({ _.token }).ok() ?? ""
+const owner = post(base, "/api/1/owners", token, "\{\"name\":\"acme\"\}").await()
+
+const manifest = """
+  name = "acme/hello"
+  version = "0.1.0"
+  description = "Says hello, to test the registry"
+  license = "MIT"
+
+  registry "acme", url: "{base}"
+  """
+File.writeText("{package}/project.trb", "{manifest}\n")?
+File.writeText("{package}/src/lib.trb", "/** The greeting. */\npublic fn greeting(): String \{\n  \"hello\"\n\}\n")?
+const cache = "TORB_CACHE={root}/cache"
+
+const published = torb([cache, "TORB_TOKEN={token}"], ["publish", "--project", package]).await()
+const indexText = File.readText("{root}/storage/index/acme/hello.trb").ok() ?? ""
+const archiveWritten = File.exists "{root}/storage/archives/acme/hello/0.1.0.tar.gz"
+const again = torb([cache, "TORB_TOKEN={token}"], ["publish", "--project", package]).await()
+const withoutToken = torb([cache, "TORB_TOKEN=", "ACTIONS_ID_TOKEN_REQUEST_URL="], ["publish", "--project", package]).await()
+serving.cancel()
+
+group "torb publish to the write service" {
+  test "the account and the owner to publish under exist" {
+    assert(migrated == Ok(void))
+    assert token.startsWith("torb_")
+    assert owner.contains("\"name\":\"acme\"")
+  }
+
+  test "a token publishes, and the registry writes the archive and the index" {
+    assert(published.code == 0)
+    assert published.output.contains("published acme/hello 0.1.0")
+    assert archiveWritten
+    assert indexText.contains("release \"0.1.0\"")
+  }
+
+  test "the registry's refusal is what the client prints" {
+    assert(again.code == 1)
+    assert again.output.contains("409")
+    assert again.output.contains("never replaced")
+  }
+
+  test "without a token or trusted publishing nothing is sent" {
+    assert(withoutToken.code == 1)
+    assert withoutToken.output.contains("TORB_TOKEN")
+  }
+}

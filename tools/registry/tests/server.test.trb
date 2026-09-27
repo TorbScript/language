@@ -1,0 +1,365 @@
+/**
+ * The write service end to end, over loopback: the registry's own server with a database in a temporary directory, a
+ * `file:` storage beside it, and a second server that plays GitHub's key set. Every request a client can make is made
+ * once the way it works and once the way it is refused - accounts and owners, tokens and their scopes, publishing,
+ * yanking, trusted publishing - and the index the registry wrote is read back with the client's own reader.
+ *
+ * A test body is no task and cannot `await()`, so the whole conversation runs at the top of the file and the tests
+ * look at what it answered. The database needs the SQLite shell: `sqlite3` on the `PATH`, or `REGISTRY_SQLITE`.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use Environment, Directories from "std/os"
+use Path from "std/path"
+use SocketAddress, IpAddress from "std/network"
+use Server, Request, Response, Status, HttpError, Method, Headers, Body, send from "std/http"
+use Uri from "std/uri"
+use Json from "std/json"
+use TarEntry from "std/archive"
+use Manifest from "torbscript/compiler/project/manifest"
+use Lock, LockedSettings, renderLock from "torbscript/compiler/package/lock"
+use packed, treeHash from "torbscript/compiler/package/archive"
+use readIndex from "torbscript/compiler/package/index"
+use Version from "torbscript/compiler/package/version"
+use Config from "../src/config"
+use Database from "../src/database"
+use Storages, FileStorage from "../src/storage"
+use Registry from "../src/registry"
+use handler from "../src/api"
+use newTokenId from "../src/tokens"
+use lastingToken, keySetText from "./vector"
+
+/** What one request answered: its status - 0 where it never got one - and its body. */
+type Step {
+  status: Int
+  body: String
+}
+
+/** The fields of a token's answer. */
+type TokenField {
+  id: String = ""
+  token: String = ""
+}
+
+/** The operator's token of this test. */
+const administrator = "operator-{newTokenId()}"
+
+/** An archive as `torb publish` makes it, and its tree hash. */
+type Archive {
+  bytes: List<UInt8>
+  hash: String
+}
+
+/** The archive of a package with one module, whose lock carries the settings `torb publish` writes. */
+fn archiveOf(package: String, version: String, description: String = "A package of the test", code: String = "public fn answer(): Int \{\n  42\n\}\n"): Archive {
+  const manifest = Manifest name: package, version: version, description: description, license: "MIT"
+  const lock = Lock settings: [LockedSettings(package, manifest)]
+  var entries = [
+    TarEntry("project.lock.trb", renderLock(lock).bytes().toList()),
+    TarEntry("project.trb", "name = \"{package}\"\nversion = \"{version}\"\n".bytes().toList()),
+    TarEntry("src/lib.trb", code.bytes().toList()),
+  ]
+  entries.sort by: { _.path }
+  match packed(entries) {
+    Ok(bytes) => Archive bytes, treeHash(entries)
+    Fail(problem) => panic "the test's archive does not pack: {problem}"
+  }
+}
+
+fn uriOf(text: String): Uri {
+  match Uri.tryFrom(text) {
+    Ok(uri) => uri
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** One request to the registry at `base`, with `token` as the bearer where it is not empty. */
+fn call(base: String, method: Method, path: String, token: String = "", body: Body = Body.empty(), hash: String = ""): Task<Step> {
+  var headers = Headers()
+  if !token.isEmpty() {
+    headers.set "Authorization", "Bearer {token}"
+  }
+  if !hash.isEmpty() {
+    headers.set "Torb-Tree-Hash", hash
+  }
+  headers.set "Content-Type", "application/json"
+  match send(method, uriOf("{base}{path}"), headers: headers, body: body).await() {
+    Fail(problem) => Step 0, problem.show()
+    Ok(response) => {
+      var answer = response
+      const text = answer.body.text().await().ok() ?? ""
+      Step answer.status.code(), text
+    }
+  }
+}
+
+fn publishing(base: String, token: String, package: String, version: String, archive: Archive): Task<Step> {
+  call(base, Method.Put, "/api/1/packages/{package}/{version}", token, Body.from(archive.bytes), archive.hash).await()
+}
+
+fn tokenOf(step: Step): String {
+  Json().decode<TokenField>(step.body).map({ _.token }).ok() ?? ""
+}
+
+/** GitHub's key set, served at any path. */
+fn keys(request: Request): Task<Result<Response, HttpError>> {
+  var headers = Headers()
+  headers.set "Content-Type", "application/json"
+  Ok Response(Status.ok, headers, Body.from(keySetText()))
+}
+
+// --- the registry, its database, its storage and the key set ------------------------------------------------------
+
+const root = "{String.from(Directories.temporary())}/torb-registry-test-{newTokenId()}".replace("\\", "/")
+File.createDirectory(root)?
+const storageUri = match Uri.tryFrom(Path.from("{root}/storage")) {
+  Ok(uri) => uri.show()
+  Fail(problem) => panic "{problem}"
+}
+var keyServer = Server.listen(SocketAddress(IpAddress.loopback, 0), keys)?
+var keyServing = keyServer.serve()
+const config = Config(
+  storage: storageUri,
+  database: "{root}/registry.db",
+  sqlite: Environment.get("REGISTRY_SQLITE") ?? "sqlite3",
+  administratorToken: Some(administrator),
+  keySetUrl: "http://{keyServer.localAddress()}/.well-known/jwks",
+)
+const database = Database config.database, program: config.sqlite
+const migrated = database.migrate().await()
+const registry = Registry.of config, database, Storages.of([FileStorage()])
+var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(registry))?
+var serving = server.serve()
+const base = "http://{server.localAddress()}"
+
+// --- accounts and owners --------------------------------------------------------------------------------------------
+
+const health = call(base, Method.Get, "/api/1/health").await()
+const anonymousAccount = call(base, Method.Post, "/api/1/accounts", body: Body.from("\{\"name\":\"eve\"\}")).await()
+const adaAccount = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"ada\"\}")).await()
+const ada = tokenOf adaAccount
+const bobAccount = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"bob\"\}")).await()
+const bob = tokenOf bobAccount
+const hyphenated = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"acme-corp\"\}")).await()
+const confusing = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"acmec0rp\"\}")).await()
+const reserved = call(base, Method.Post, "/api/1/owners", ada, Body.from("\{\"name\":\"torbscript\"\}")).await()
+const organisation = call(base, Method.Post, "/api/1/owners", ada, Body.from("\{\"name\":\"acme\"\}")).await()
+const badToken = call(base, Method.Get, "/api/1/tokens", "torb_0000000000000000000000000000000000000000000000000000000000000000").await()
+
+// --- publishing -----------------------------------------------------------------------------------------------------
+
+const json100 = archiveOf "acme/json", "1.0.0"
+const firstPublish = publishing(base, ada, "acme/json", "1.0.0", json100).await()
+const indexAfterFirst = File.readText("{root}/storage/index/acme/json.trb").ok() ?? ""
+const archiveWritten = File.exists "{root}/storage/archives/acme/json/1.0.0.tar.gz"
+const againPublish = publishing(base, ada, "acme/json", "1.0.0", json100).await()
+const anonymousPublish = publishing(base, "", "acme/json", "1.0.1", archiveOf("acme/json", "1.0.1")).await()
+const wrongHash = publishing(base, ada, "acme/json", "1.0.1", Archive(archiveOf("acme/json", "1.0.1").bytes, json100.hash)).await()
+const wrongVersion = publishing(base, ada, "acme/json", "1.0.2", archiveOf("acme/json", "1.0.1")).await()
+const noDescription = publishing(base, ada, "acme/json", "1.0.3", archiveOf("acme/json", "1.0.3", description: "")).await()
+const strangerPublish = publishing(base, bob, "acme/json", "1.1.0", archiveOf("acme/json", "1.1.0")).await()
+const addBob = call(base, Method.Put, "/api/1/owners/acme/members/bob", ada, Body.from("\{\"role\":\"publisher\"\}")).await()
+const bobAddsHimself = call(base, Method.Put, "/api/1/owners/acme/members/bob", bob, Body.from("\{\"role\":\"owner\"\}")).await()
+const memberPublish = publishing(base, bob, "acme/json", "1.1.0", archiveOf("acme/json", "1.1.0", code: "use File from \"std/fs\"\n\npublic fn exists(): Bool \{\n  File.exists(\"x\")\n\}\n")).await()
+const confusingPackage = publishing(base, ada, "acme/js0n", "1.0.0", archiveOf("acme/js0n", "1.0.0")).await()
+const ownerView = call(base, Method.Get, "/api/1/owners/acme").await()
+const lastOwner = call(base, Method.Delete, "/api/1/owners/acme/members/ada", ada).await()
+
+// --- yanking --------------------------------------------------------------------------------------------------------
+
+const yankWithoutReason = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\}")).await()
+const yank = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\"reason\":\"answers 41\"\}")).await()
+const yankAgain = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\"reason\":\"twice\"\}")).await()
+const yankMissing = call(base, Method.Post, "/api/1/packages/acme/json/9.9.9/yank", ada, Body.from("\{\"reason\":\"x\"\}")).await()
+const indexAfterYank = File.readText("{root}/storage/index/acme/json.trb").ok() ?? ""
+const unyank = call(base, Method.Delete, "/api/1/packages/acme/json/1.0.0/yank", ada).await()
+const indexAfterUnyank = File.readText("{root}/storage/index/acme/json.trb").ok() ?? ""
+
+// --- tokens ---------------------------------------------------------------------------------------------------------
+
+const scopedAnswer = call(base, Method.Post, "/api/1/tokens", ada, Body.from("\{\"name\":\"ci\",\"packages\":[\"acme/json\"],\"actions\":[\"publish\"],\"days\":30\}")).await()
+const scoped = tokenOf scopedAnswer
+const scopedYank = call(base, Method.Post, "/api/1/packages/acme/json/1.1.0/yank", scoped, Body.from("\{\"reason\":\"x\"\}")).await()
+const scopedTokens = call(base, Method.Post, "/api/1/tokens", scoped, Body.from("\{\"name\":\"more\"\}")).await()
+const widening = call(base, Method.Post, "/api/1/tokens", bob, Body.from("\{\"name\":\"x\",\"actions\":[\"publish\",\"launch\"]\}")).await()
+const listing = call(base, Method.Get, "/api/1/tokens", ada).await()
+const scopedId = Json().decode<TokenField>(scopedAnswer.body).map({ _.id }).ok() ?? ""
+const revoke = call(base, Method.Delete, "/api/1/tokens/{scopedId}", ada).await()
+const afterRevoke = publishing(base, scoped, "acme/json", "1.2.0", archiveOf("acme/json", "1.2.0")).await()
+
+// --- trusted publishing ---------------------------------------------------------------------------------------------
+
+const trustedByBob = call(base, Method.Put, "/api/1/packages/acme/http/trusted-publishers", bob, Body.from("\{\"publishers\":[]\}")).await()
+const trustedSettings = "\{\"publishers\":[\{\"repository\":\"acme/http\",\"workflow\":\"release.yml\",\"environment\":\"release\"\}],\"required\":true\}"
+const trusted = call(base, Method.Put, "/api/1/packages/acme/http/trusted-publishers", ada, Body.from(trustedSettings)).await()
+const trustedView = call(base, Method.Get, "/api/1/packages/acme/http/trusted-publishers").await()
+const exchangeBody = "\{\"token\":\"{lastingToken}\",\"package\":\"acme/http\"\}"
+const exchanged = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from(exchangeBody)).await()
+const shortLived = tokenOf exchanged
+const trustedPublish = publishing(base, shortLived, "acme/http", "1.2.5", archiveOf("acme/http", "1.2.5")).await()
+const trustedElsewhere = publishing(base, shortLived, "acme/json", "1.3.0", archiveOf("acme/json", "1.3.0")).await()
+const tokenPublish = publishing(base, ada, "acme/http", "1.2.6", archiveOf("acme/http", "1.2.6")).await()
+const untrustedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"{lastingToken}\",\"package\":\"acme/json\"\}")).await()
+const forgedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"a.b.c\",\"package\":\"acme/http\"\}")).await()
+
+serving.cancel()
+keyServing.cancel()
+
+// --- what it answered -----------------------------------------------------------------------------------------------
+
+group "the service and its database" {
+  test "the database opens, and the service is up" {
+    assert(migrated == Ok(void))
+    assert(health.status == 200)
+  }
+}
+
+group "accounts and owners" {
+  test "only the operator creates accounts, and the first token comes with the account" {
+    assert(anonymousAccount.status == 403)
+    assert(adaAccount.status == 201)
+    assert ada.startsWith("torb_")
+  }
+
+  test "a name a reader would confuse with an existing one is refused" {
+    assert(hyphenated.status == 201)
+    assert(confusing.status == 409)
+    assert confusing.body.contains("acme-corp")
+  }
+
+  test "a reserved owner is the operator's, and an account founds an organisation" {
+    assert(reserved.status == 400)
+    assert(organisation.status == 201)
+    assert organisation.body.contains("\"kind\":\"organisation\"")
+  }
+
+  test "an owner adds a member; a publisher does not change the members" {
+    assert(addBob.status == 200)
+    assert(bobAddsHimself.status == 403)
+    assert ownerView.body.contains("\{\"account\":\"bob\",\"role\":\"publisher\"\}")
+  }
+
+  test "the last owner stays" {
+    assert(lastOwner.status == 409)
+  }
+
+  test "a token the registry never issued is refused" {
+    assert(badToken.status == 401)
+  }
+}
+
+group "publishing" {
+  test "a member publishes, and the archive and the index are written" {
+    assert(firstPublish.status == 201)
+    assert archiveWritten
+    match readIndex(indexAfterFirst, "acme/json") {
+      Ok(index) => {
+        const release = index.release(Version.tryFrom("1.0.0").ok() ?? Version(0, 0, 0))
+        assert(release.map({ _.hash }) == Some(json100.hash))
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+
+  test "a published version is never replaced" {
+    assert(againPublish.status == 409)
+    assert againPublish.body.contains("never replaced")
+  }
+
+  test "nobody publishes without a token, and nobody publishes for an owner who is not theirs" {
+    assert(anonymousPublish.status == 401)
+    assert(strangerPublish.status == 403)
+    assert strangerPublish.body.contains("not a member")
+  }
+
+  test "the archive is checked as torb publish checks it" {
+    assert(wrongHash.status == 422)
+    assert wrongHash.body.contains("tree hash")
+    assert(wrongVersion.status == 422)
+    assert wrongVersion.body.contains("sent as 1.0.2")
+    assert(noDescription.status == 422)
+    assert noDescription.body.contains("`description` is required to publish")
+  }
+
+  test "a publisher publishes, and the capabilities are derived from the imports" {
+    assert(memberPublish.status == 201)
+    assert memberPublish.body.contains("\"capabilities\":[\"files\"]")
+  }
+
+  test "a package name a reader would confuse is refused" {
+    assert(confusingPackage.status == 409)
+    assert confusingPackage.body.contains("acme/json")
+  }
+}
+
+group "yanking" {
+  test "a yank needs a reason, and a version the index has" {
+    assert(yankWithoutReason.status == 400)
+    assert(yank.status == 200)
+    assert(yankAgain.status == 409)
+    assert(yankMissing.status == 404)
+  }
+
+  test "a yank and its undoing are lines appended to the index" {
+    assert indexAfterYank.startsWith(indexAfterFirst)
+    assert indexAfterYank.contains("yank \"1.0.0\", reason: \"answers 41\"")
+    const version = Version.tryFrom("1.0.0").ok() ?? Version(0, 0, 0)
+    assert(readIndex(indexAfterYank, "acme/json").map({ _.yank(version).isSome() }) == Ok(true))
+    assert(unyank.status == 200)
+    assert indexAfterUnyank.startsWith(indexAfterYank)
+    assert(readIndex(indexAfterUnyank, "acme/json").map({ _.yank(version).isSome() }) == Ok(false))
+  }
+}
+
+group "tokens" {
+  test "a scoped token does what its scopes say and nothing else" {
+    assert(scopedAnswer.status == 201)
+    assert(scopedYank.status == 403)
+    assert(scopedTokens.status == 403)
+  }
+
+  test "a token never gives an action its maker lacks, or one that does not exist" {
+    assert(widening.status == 400)
+  }
+
+  test "a listing shows the tokens without their secrets" {
+    assert(listing.status == 200)
+    assert listing.body.contains("\"name\":\"ci\"")
+    assert(!listing.body.contains(scoped))
+  }
+
+  test "a revoked token stops working at once" {
+    assert(revoke.status == 200)
+    assert(afterRevoke.status == 401)
+  }
+}
+
+group "trusted publishing" {
+  test "only an owner configures it" {
+    assert(trustedByBob.status == 403)
+    assert(trusted.status == 200)
+    assert trustedView.body.contains("\"workflow\":\"release.yml\"")
+    assert trustedView.body.contains("\"required\":true")
+  }
+
+  test "a job's token that matches is traded for a short-lived one, which publishes" {
+    assert(exchanged.status == 200)
+    assert shortLived.startsWith("torb_")
+    assert(trustedPublish.status == 201)
+  }
+
+  test "the short-lived token publishes its one package, and nothing else" {
+    assert(trustedElsewhere.status == 403)
+  }
+
+  test "tokens are switched off where the owners require trusted publishing" {
+    assert(tokenPublish.status == 403)
+    assert tokenPublish.body.contains("trusted publishers")
+  }
+
+  test "a package without a trusted publisher, and a token that does not verify, get nothing" {
+    assert(untrustedExchange.status == 403)
+    assert(forgedExchange.status == 401)
+  }
+}
