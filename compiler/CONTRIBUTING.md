@@ -128,6 +128,11 @@ Conventional Commit that builds) or squashed into one commit, and `main` only mo
 change that needs a seed refresh stay two commits. `sh tools/check-commits.sh <base>` checks a range - no merge
 commit, every subject a Conventional Commit - and CI runs it on every push and pull request.
 
+**Landing.** `sh tools/land.sh` lands finished branches together: `prepare <name> <branch>...` picks their commits onto
+a landing worktree beside the checkout, `build` bootstraps it and writes the generated files (the natives table, the docs
+indexes, the skill) and the format again, `gates` runs both tiers on a gate slot of its own, and `publish` moves `main`
+there, refreshes and publishes the seed and pushes. A conflict in a generated file is never resolved by hand.
+
 **The seed.** `seed/` holds `torb(.exe)` and `program.c`, is not in git, and exists only in the main checkout of this
 machine; a worktree has none and bootstraps with `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh` (a
 relative `TORB_SEED` works too). After a merge whose tier A is green, `sh tools/refresh-seed.sh` in the main checkout
