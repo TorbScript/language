@@ -1,0 +1,33 @@
+/**
+ * A compile-time constant the checker wraps into `Some` or `Ok` is the case, not its payload. `static port: Int? = 80`
+ * is `Some(80)` (the fifth coercion, docs/language/types/conversions.md), and the constant evaluator builds exactly that
+ * static value - the `Some` of an `Option<Int>`, a record inside the `Some` of its `Option`, a wrapped field of a
+ * record, and the `Ok` of a `Result` whose failure is text. Built as the bare payload, the value had the layout of the
+ * payload under the type of the case: the C of the static did not compile, and the VM read a tag out of the payload.
+ */
+type Point {
+  x: Int
+  y: Int
+}
+
+type Place {
+  name: String
+  at: Point?
+}
+
+type Defaults {
+  static port: Int? = 80
+  static origin: Point? = Point x: 1, y: 2
+  static home: Place = Place name: "home", at: Point(x: 3, y: 4)
+  static title: String? = "defaults"
+  static answer: Result<Int, String> = 42
+  static pair: (Int?, Bool) = (7, true)
+}
+
+print Defaults.port
+print Defaults.origin
+print Defaults.home
+print Defaults.title
+print Defaults.answer
+print Defaults.pair
+print((Defaults.port ?? 0) + (Defaults.origin?.y ?? 0))

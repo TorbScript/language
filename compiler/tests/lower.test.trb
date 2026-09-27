@@ -475,6 +475,30 @@ group "The top level of a file" {
     assert(!textOf(source).contains("cellRead"))
   }
 
+  /**
+   * `static port: Int? = 80` is the `Some(80)` the checker wraps the value into, and a case is no static data: the
+   * constant is built once where it is read, around the value. Answering the payload as the static put an `Int` under
+   * the type of an `Option<Int>`, which neither back end could read.
+   */
+  test "a constant the checker wraps into `Some` is the case, built where it is read" {
+    const source = raw"""
+      type Defaults {
+        static port: Int? = 80
+      }
+
+      fn portOrZero(): Int {
+        Defaults.port ?? 0
+      }
+
+      const _ = portOrZero()
+      """
+    const text = textOf source
+    const option = "T_std_x2f_prelude_types_Option__Int64"
+    assert text.contains("constant fn t_acme_x2f_app_main_Defaults_port() -> Variant({option})")
+    assert text.contains("%1 = construct {option}.Some (%0 borrowed)")
+    assert(!text.contains("static s_acme_x2f_app_main_Defaults_port"))
+  }
+
   test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
     const source = raw"""
       var counter = 0

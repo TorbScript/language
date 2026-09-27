@@ -53,6 +53,10 @@ public const smallestInteger = -9223372036854775807 - 1
  * Every part of it takes the type the checker recorded for it, and nothing here decides one: the checker walks the
  * initializer of an annotated top-level `const` as well, so `const minimum: Int8 = -128` has its `Int8` on the literal
  * and the range check reads it from there.
+ *
+ * It is the value of the expression itself, before a wrap the checker recorded around it: the lowering asks it for a
+ * literal and builds the `Some` or the `Ok` around the answer itself (`lowerWrappedValue`). What a constant *holds* is
+ * [heldConstant].
  */
 public fn evaluateConstant(var lowering: Lowering, expression: Expression): ConstantValue? {
   const annotation = typeAtSpan(lowering, expression.span)?
@@ -70,6 +74,32 @@ public fn evaluateConstant(var lowering: Lowering, expression: Expression): Cons
     .Call(_, arguments, _) => callConstant lowering, expression, arguments, annotation
     _ => None
   }
+}
+
+/**
+ * The value a constant holds: the initializer of a `const`, or a field or an item of an aggregate one builds.
+ *
+ * Where the checker wrapped the value into `Some` or `Ok` (`Adaptation.Wrap`, the fifth coercion) the constant is that
+ * case - `static port: Int? = 80` is the `Some(80)` of an `Option<Int>` - and a case is never static data
+ * (`isStaticLayout`). So it is not one here: the constant is built where it is read, and the lowering builds the case
+ * around the value there (`lowerWrappedValue`). Answering the payload instead put an `Int` under the type of an
+ * `Option<Int>`: the C of the static did not compile, and the VM read a tag out of the payload.
+ */
+fn heldConstant(var lowering: Lowering, expression: Expression): ConstantValue? {
+  if isWrapped(lowering, expression) {
+    return None
+  }
+  evaluateConstant lowering, expression
+}
+
+/** Whether the checker wraps the value of an expression into `Some` or `Ok` (`Adaptation.Wrap`). */
+fn isWrapped(var lowering: Lowering, expression: Expression): Bool {
+  for adaptation in lowering.checker.adaptationsAt(lowering.module, expression.span) {
+    if const .Wrap(_) = adaptation {
+      return true
+    }
+  }
+  false
 }
 
 /** `-3` is one literal and not a negation of `3`, exactly as the checker reads it, so the range check sees the value. */
@@ -585,7 +615,7 @@ fn aggregateConstant(
   }
   var fields: List<StaticId> = []
   for index in 0..items.length() {
-    const value = evaluateConstant(lowering, items[index].value)?
+    const value = heldConstant(lowering, items[index].value)?
     fields.append internStatic(lowering, value.contents, value.annotation)
   }
   ConstantValue StaticContents.Aggregate(layout, 0, fields), annotation
@@ -620,7 +650,7 @@ fn callConstant(
       if position < 0 || position >= count {
         return None
       }
-      const value = evaluateConstant(lowering, arguments[index].value)?
+      const value = heldConstant(lowering, arguments[index].value)?
       const field = internStatic lowering, value.contents, value.annotation
       fields.set position, field
     }
@@ -905,7 +935,7 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
   enterModule lowering, site.module
   lowering.substitution = instance.mapping
   lowering.nanConstantAllowed = isNamedNaNConstant path
-  const value = evaluateConstant lowering, binding.value
+  const value = heldConstant lowering, binding.value
   lowering.module = outer
   lowering.substitution = around
   lowering.nanConstantAllowed = allowedNaNBefore
