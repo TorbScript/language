@@ -483,12 +483,8 @@ public type ManifestProblem {
  */
 const staticWords = ["language", "name", "prelude", "dependencies", "source", "registry", "workspace", "program"]
 
-/**
- * Settings the toolchain does not read at all: computing one never makes it evaluate the file. `build { }` and the
- * `input` of `test { }` are read by nobody since the names of the files decide (PROJECT.md section 3), and
- * [manifestNotesOf] says so.
- */
-const unreadWords = ["authors", "description", "license", "repository", "resources", "build", "test"]
+/** Settings the toolchain does not read at all: computing one never makes it evaluate the file. */
+const unreadWords = ["authors", "description", "license", "repository", "resources", "test"]
 
 /** Every setting of the file the toolchain reads before it can run anything, where one is not a literal. */
 public fn manifestProblemsOf(file: SourceFile): List<ManifestProblem> {
@@ -500,58 +496,6 @@ public fn manifestProblemsOf(file: SourceFile): List<ManifestProblem> {
     }
   }
   found
-}
-
-/**
- * The lines of the file that are accepted and read by nobody any more, each with why: a `build { }` block and the
- * `input` of a `test { }` block, which said what the names of the files say (docs/design/PROJECT.md section 3).
- * `torb check` prints them as notes; they go, with `Build` and `Test.input` of `std/project`, once no manifest
- * of the repository writes them.
- */
-public fn manifestNotesOf(file: SourceFile): List<ManifestProblem> {
-  var found: List<ManifestProblem> = []
-  for statement in file.statements {
-    const word = wordOf(statement) ?? ""
-    if word == "build" {
-      found.append(ManifestProblem(
-        statement.span,
-        "`build \{ \}` is deprecated and read by nobody",
-        "A file called `src/main.trb` is the program and `src/lib.trb` the library; another program is a line:"
-          + " `program \"migrate\", entry: \"tools/migrate.trb\"`",
-      ))
-    } else if word == "test" && blockNames(statement, "input") {
-      found.append(ManifestProblem(
-        statement.span,
-        "`test \{ input \}` is deprecated and read by nobody",
-        "A file called `*.test.trb` is a test wherever it lies in the package, and `torb test` finds it",
-      ))
-    }
-  }
-  found
-}
-
-/** Whether the block of a setting has a `word` line. */
-fn blockNames(statement: Statement, word: String): Bool {
-  const arguments = match statement.kind {
-    .Evaluate(expression) => {
-      if const .Call(_, given, _) = expression.kind {
-        given
-      } else {
-        return false
-      }
-    }
-    _ => {
-      return false
-    }
-  }
-  for argument in arguments {
-    if const .Closure(closure) = argument.value.kind {
-      if closure.body.statements.any({ wordOf(_) == Some(word) }) {
-        return true
-      }
-    }
-  }
-  false
 }
 
 /**

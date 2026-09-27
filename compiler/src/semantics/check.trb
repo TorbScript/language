@@ -9,7 +9,7 @@ use Diagnostic from "../syntax/diagnostic"
 use parse from "../syntax/parser/parser"
 use normalizePath, isInside, joinPath from "../project/path"
 use SourceTree from "../project/source-tree"
-use Workspace, Package, findWorkspace, manifestNoteLines from "../project/workspace"
+use Workspace, Package, findWorkspace from "../project/workspace"
 use ModuleId from "./module"
 use SymbolId from "./symbols"
 use Graph, buildGraph, resolveImport, programPackagesOf from "./graph"
@@ -40,8 +40,6 @@ public type Checked {
   requested: List<ModuleId>
   /** What the type checker knows: every type by id, the type of every type position, and every signature it built */
   checker: Checker
-  /** What is accepted and read by nobody, such as a deprecated line of a manifest: `torb check` prints it as a note */
-  notes: List<String> = []
 }
 
 /**
@@ -149,14 +147,7 @@ public fn check(
     }
   }
   files.sort({ _.path })
-  // What a manifest that was asked for says and nobody reads
-  var notes: List<String> = []
-  for package in packages {
-    if !package.directory.isEmpty() && isRequested(targets, joinPath(package.directory, "project.trb")) {
-      notes.appendAll manifestNoteLines(tree, package.directory)
-    }
-  }
-  Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked, notes
+  Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
 }
 
 /**

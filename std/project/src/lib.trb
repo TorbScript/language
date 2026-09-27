@@ -90,23 +90,8 @@ public type Profile {
   }
 }
 
-/**
- * Deprecated: nothing reads it. A file called `src/main.trb` is the program and `src/lib.trb` the library, another
- * program is a [Project.program] line, and where a binary goes is its `output` (docs/design/PROJECT.md section 4).
- */
-public type Build {
-  /** `"dev"` or `"release"`. */
-  var target: String = "dev"
-  /** The entry file. */
-  var input: String = "src/main.trb"
-  /** Where the built program goes, interpolated eagerly against `target` and the script's own bindings. */
-  var output: String = ""
-}
-
 /** What `torb test` runs: every file called `*.test.trb` in the package. */
 public type Test {
-  /** Deprecated: nothing reads it, because a file called `*.test.trb` is a test wherever it lies in the package. */
-  var input: String = "tests"
   /** The share of lines a test run has to cover, in percent. `0` asks for nothing. */
   var coverageThreshold: Int = 0
 }
@@ -138,10 +123,11 @@ public type Workspace {
 
 /**
  * The receiver of `project.trb`. A setting is a `var` field (`name = "acme/shop"` writes it), a section is a field
- * that is configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`).
+ * that is configured in place (`tasks { ... }`), and only what is more than that is a method (`authors`, `registry`,
+ * `program`, `profile`).
  *
  * The fields are readable, which is what lets a project file compute from what it has already said:
- * `const binary = name.substringAfter("/") ?? name`.
+ * `description = "The {name} package"`.
  */
 public type Project {
   /** `owner/name`. Owners are verified namespaces of a registry, so a bare name is not publishable. */
@@ -160,8 +146,6 @@ public type Project {
   var prelude: String = "std/prelude"
   /** What the project needs, split into what dependents get and what stays inside the project. */
   var dependencies: Dependencies = Dependencies()
-  /** Deprecated and read by nobody: see [Build]. */
-  var build: Build = Build()
   /** What `torb test` runs. */
   var test: Test = Test()
   /** How the program's tasks run: the workers of its pool and the threads of its blocking pool. */
@@ -256,21 +240,7 @@ public type Project {
       needs.append "  development {quotedList(dependencies.developmentRequirements)}"
     }
     appendSection lines, "dependencies", needs
-    var builds: List<String> = []
-    if build.target != "dev" {
-      builds.append "  target = {quoted(build.target)}"
-    }
-    if build.input != "src/main.trb" {
-      builds.append "  input = {quoted(build.input)}"
-    }
-    if !build.output.isEmpty() {
-      builds.append "  output = {quoted(build.output)}"
-    }
-    appendSection lines, "build", builds
     var tests: List<String> = []
-    if test.input != "tests" {
-      tests.append "  input = {quoted(test.input)}"
-    }
     if test.coverageThreshold != 0 {
       tests.append "  coverageThreshold = {test.coverageThreshold}"
     }

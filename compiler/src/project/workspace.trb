@@ -9,7 +9,7 @@ use parse from "../syntax/parser/parser"
 use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth, relativePath from "./path"
 use SourceTree from "./source-tree"
 use Manifest, RegistryBinding, ManifestProblem, readManifest, readSettings from "./manifest"
-use manifestProblemsOf, manifestNotesOf, profileProblemsOf from "./manifest"
+use manifestProblemsOf, profileProblemsOf from "./manifest"
 use programProblemsOf from "./programs"
 use Lock, readLock from "../package/lock"
 use packageDirectory from "../package/store"
@@ -336,23 +336,7 @@ fn manifestProblemLines(tree: SourceTree, directory: String): List<String> {
   found.map({ renderedProblem tree.display(path), lines, _ }).toList()
 }
 
-/**
- * The lines of the `project.trb` of a directory that are accepted and read by nobody, each with its place: what
- * `torb check` prints as a note where it checks that manifest.
- */
-public fn manifestNoteLines(tree: SourceTree, directory: String): List<String> {
-  const path = joinPath directory, "project.trb"
-  const text = match tree.text(path) {
-    Some(found) => found
-    None => {
-      return []
-    }
-  }
-  const lines = LineIndex.of text
-  manifestNotesOf(parse(SourceText.of(text)).file).map({ renderedProblem tree.display(path), lines, _ }).toList()
-}
-
-/** A problem of a manifest as the text `torb check` prints after `error:` or `note:`. */
+/** A problem of a manifest as the text `torb check` prints after `error:`. */
 fn renderedProblem(path: String, lines: LineIndex, problem: ManifestProblem): String {
   const (line, column) = lines.lineAndColumn problem.span.start
   const place = "{problem.message}\n --> {path}:{line}:{column}"

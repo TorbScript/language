@@ -9,8 +9,8 @@ use normalizePath, parentPath, pathName, joinPath, isInside, pathDepth, relative
 use embeddedPathOf, commonDirectoryOf from "../src/project/path"
 use SourceTree from "../src/project/source-tree"
 use Manifest, ProgramLine, ProfileSettings, readManifest, readSettings from "../src/project/manifest"
-use manifestProblemsOf, manifestNotesOf, needsEvaluation from "../src/project/manifest"
-use findWorkspace, manifestNoteLines from "../src/project/workspace"
+use manifestProblemsOf, needsEvaluation from "../src/project/manifest"
+use findWorkspace from "../src/project/workspace"
 use programsOf, programProblemsOf from "../src/project/programs"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
@@ -26,11 +26,6 @@ fn problemsOf(text: String): List<String> {
 
 fn evaluates(text: String): Bool {
   needsEvaluation parse(SourceText.of(text)).file
-}
-
-/** What the static reader accepts and reads nobody: the message of every note. */
-fn notesOf(text: String): List<String> {
-  manifestNotesOf(parse(SourceText.of(text)).file).map({ _.message }).toList()
 }
 
 /**
@@ -178,14 +173,10 @@ group "Manifest" {
     assert(manifest.name == "acme/app")
   }
 
-  test "`build \{ \}` and `test \{ input \}` are accepted, read by nobody, and noted" {
+  test "`build \{ \}` and `test \{ input \}` are read by nobody: the names of the files say what they said" {
     const text = "name = \"acme/app\"\nbuild \{\n  input = \"src/lib.trb\"\n\}\ntest \{\n  input = \".\"\n\}\n"
     assert(manifestOf(text) == manifestOf("name = \"acme/app\""))
-    assert(
-      notesOf(text)
-        == ["`build \{ \}` is deprecated and read by nobody", "`test \{ input \}` is deprecated and read by nobody"],
-    )
-    assert notesOf("test \{\n  coverageThreshold = 80\n\}").isEmpty()
+    // The receiver has neither any more, which the checker says, with what took their place (receivers.test.trb)
     assert problemsOf(text).isEmpty()
   }
 
@@ -230,7 +221,6 @@ group "Manifest" {
     assert evaluates("tasks \{\n  workers = cores / 2\n\}")
     assert evaluates("profile \"release\" \{\n  optimize = level\n\}")
     assert(!evaluates("profile \"release\" \{\n  optimize = 3\n\}"))
-    assert(!evaluates("build \{\n  output = \"build/\{target\}/app\"\n\}"))
     assert evaluates("if Environment.get(\"CI\").isSome() \{\n  version = \"ci\"\n\}")
   }
 }
@@ -271,11 +261,7 @@ group "Workspaces" {
   }
 
   test "a directory that belongs to no project has its loose files as a package, and each project below it" {
-    const files = [
-      "notes.trb": "",
-      "hello/project.trb": "name = \"acme/hello\"",
-      "hello/src/main.trb": "",
-    ]
+    const files = ["notes.trb": "", "hello/project.trb": "name = \"acme/hello\"", "hello/src/main.trb": ""]
     assert(packagesOf(files, ".") == [": notes.trb", "acme/hello: hello/src/main.trb"])
   }
 
@@ -333,15 +319,6 @@ group "Workspaces" {
       "`torb` renames the default program, and there is no `src/main.trb`\n --> project.trb:3:1\n  = A program with an entry of its own names it: `program \"torb\", entry: \"tools/torb.trb\"`",
     ]
     assert(found.problems == expected)
-  }
-
-  test "a deprecated line of a manifest is a note, not a problem" {
-    const tree = SourceTree.of(["project.trb": "name = \"acme/app\"\ntest \{\n  input = \".\"\n\}\n"])
-    const problems = findWorkspace(tree, ".").problems
-    assert problems.isEmpty()
-    const notes = manifestNoteLines tree, "."
-    assert(notes.length() == 1)
-    assert notes[0].startsWith("`test \{ input \}` is deprecated and read by nobody\n --> project.trb:2:1")
   }
 
   test "a computed static setting of a manifest is a problem of the workspace, with its place" {
