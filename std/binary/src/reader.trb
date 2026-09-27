@@ -152,13 +152,33 @@ public type ByteReader {
 
   /** The next two bytes as a `UInt16`, in `order` or the reader's. */
   var fn uint16(order: ByteOrder? = None): Result<UInt16, ReadError> {
-    const value = unsigned(2, order ?? self.order, "a UInt16")?
+    // The widths every format reads most are written out, without the loop of `unsigned`
+    const available = input.length() - cursor
+    if available < 2 {
+      return Fail ReadError.Truncated(base + cursor, "a UInt16", 2, available)
+    }
+    const first = Int.from input[cursor]
+    const second = Int.from input[cursor + 1]
+    cursor = cursor + 2
+    const value = if (order ?? self.order) == ByteOrder.BigEndian { first << 8 | second } else { second << 8 | first }
     Ok(UInt16.tryFrom(value).ok() ?? 0)
   }
 
   /** The next four bytes as a `UInt32`, in `order` or the reader's. */
   var fn uint32(order: ByteOrder? = None): Result<UInt32, ReadError> {
-    Ok word32(unsigned(4, order ?? self.order, "a UInt32")?)
+    const available = input.length() - cursor
+    if available < 4 {
+      return Fail ReadError.Truncated(base + cursor, "a UInt32", 4, available)
+    }
+    const first = Int.from input[cursor]
+    const second = Int.from input[cursor + 1]
+    const third = Int.from input[cursor + 2]
+    const fourth = Int.from input[cursor + 3]
+    cursor = cursor + 4
+    if (order ?? self.order) == ByteOrder.BigEndian {
+      return Ok word32(first << 24 | second << 16 | third << 8 | fourth)
+    }
+    Ok word32(fourth << 24 | third << 16 | second << 8 | first)
   }
 
   /** The next eight bytes as a `UInt64`, in `order` or the reader's. */
