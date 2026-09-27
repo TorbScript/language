@@ -72,6 +72,7 @@ fn printUsage() {
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)"
   printError "                         --embed-vm: a native binary of the VM that runs the program's bytecode"
+  printError "                         --timings: the wall time of every step, the passes of the checker first"
   printError "  torb run [path|name] [...]  Run a file, the only program below a directory, or the one named, in the VM"
   printError "                         everything behind the path is the program's own Process.arguments()"
   printError "                         --native: in front of the path, build it into build/run/ and run the binary"
@@ -439,6 +440,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
   var paths: List<String> = []
   var onlyC = false
   var embedsMachine = false
+  var withTimings = false
   var output = ""
   var wantsOutput = false
   var target: BuildTarget? = None
@@ -468,6 +470,10 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
     }
     if argument == "--embed-vm" {
       embedsMachine = true
+      continue
+    }
+    if argument == "--timings" {
+      withTimings = true
       continue
     }
     if argument == "--output" {
@@ -502,6 +508,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
     target: target,
     embedsMachine: embedsMachine,
     program: program,
+    withTimings: withTimings,
   )
 }
 

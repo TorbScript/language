@@ -33,6 +33,7 @@ torb build [path | name]    Compile every program below the path, or the one nam
     --output <file>          Where the binary goes, the C next to it (one program)
     --target <os>-<arch>     What the program is built for (default: this machine), with --emit-c for another one
     --embed-vm               A native binary of the VM that runs the program's bytecode, as torb run does
+    --timings                The wall time of every step on standard error, the passes of the checker first
 ```
 
 ## What it does
@@ -149,6 +150,25 @@ by a path the program was compiled with. The interpreter is built from the toolc
 $ torb build --embed-vm examples/config-dsl --output build/config-dsl
 $ build/config-dsl
 Listening on 0.0.0.0:8443 (tls: true)
+```
+
+### `--timings`
+
+Prints the wall time of every step on standard error, in the order they ran: the passes of the checker as
+[`torb check --timings`](torb-check.md) prints them, indented, then checking, lowering, ownership, verifying, emitting and writing the C, and compiling and linking it. It is what says
+where the time of a build goes before anybody guesses:
+
+```console
+$ torb build --timings --emit-c tests/conformance/adts.trb --output build/adts
+  lexing, parsing and the module graph: 2310 ms
+  bodies: 180 ms
+checking: 2790 ms
+lowering: 420 ms
+ownership: 3 ms
+verifying: 3 ms
+emitting the C: 160 ms
+writing the C: 2 ms
+wrote build/program.c
 ```
 
 ### `--profile`

@@ -32,6 +32,7 @@ use findRuntime, threadArguments from "../project/toolchain"
 use BuildTarget, hostTarget from "../project/target"
 use ModuleId from "../semantics/module"
 use check, Checked from "../semantics/check"
+use Stopwatch from "../semantics/checker/check"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use Lowering from "../ir/lower/context"
@@ -135,6 +136,8 @@ public type BuildOptions {
   program: String = ""
   /** The command a message tells the user to run again: `build`, or `run` for what `torb run --native` builds. */
   command: String = "build"
+  /** `--timings`: the wall time of every step on standard error, the passes of the checker first. */
+  withTimings: Bool = false
 }
 
 /** Exit codes of `torb build`. */
@@ -161,7 +164,15 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
  * its generated entry with, a file that exists only in the tree.
  */
 public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOptions): Result<Int, IoError> {
-  const checked = check tree, requested, false, true
+  var clock = Stopwatch options.withTimings
+  clock.start()
+  const checked = check tree, requested, options.withTimings, true
+  if options.withTimings {
+    for timing in checked.checker.timings {
+      printError "  {timing.pass}: {timing.milliseconds} ms"
+    }
+  }
+  noteTiming options, "checking", clock.taken()
   const reported = reportChecked checked
   if reported > 0 {
     printError "{counted(reported, "problem")}, nothing was built"
@@ -260,15 +271,18 @@ fn buildProgram(
     const (sources, root) = programSourcesOf tree, requested, checked, hosted
     lowering = lowerWorkspace checker, paths, modules, false, target, false, sources, root
   }
+  noteTiming options, "lowering", clock.taken()
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
   insertOwnership lowering.program
+  noteTiming options, "ownership", clock.taken()
   const entries = programEntriesOf lowering, checked, tree, modules, options
   const found = reportLowering checked, tree, lowering
   if found > 0 {
     printError "{counted(found, "problem")} the native back end cannot compile yet, nothing was built"
     return buildFailedCode
   }
+  noteTiming options, "verifying", clock.taken()
   const emission = emitProgram lowering.program, entries
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
@@ -280,12 +294,14 @@ fn buildProgram(
   File.createDirectory(directory)?
   const source = joinPath directory, "program.c"
   const text = emittedText emission
+  noteTiming options, "emitting the C", clock.taken()
   File.writeText(source, text)?
   // What says which program this is without reading it again: `torb run` keys its cache on the one beside `torb`
   File.writeText(joinPath(directory, identityFileName), "{text.hash()}")?
   // The same C cut into units that compile in parallel, where the program is large enough (docs/BACKEND.md 4.1)
   const units = emittedUnits emission, forcedUnitCount()
   const program = writeUnits(directory, source, text, units)?
+  noteTiming options, "writing the C", clock.taken()
   if options.onlyC {
     if options.saysWhatItWrote {
       print "wrote {source}"
@@ -300,7 +316,16 @@ fn buildProgram(
   const hostsScripts = text.contains scriptHostSymbolPrefix
   const hostsMachine = text.contains(machineKernelSymbol) || hostsScripts
   const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
-  compile program, binary, options, CompileProfile(options.profile, settings), usesTls, hostsMachine, pool, hostsScripts
+  const compiled = compile(program, binary, options, CompileProfile(options.profile, settings), usesTls, hostsMachine, pool, hostsScripts)?
+  noteTiming options, "compiling and linking the C", clock.taken()
+  compiled
+}
+
+/** One line of `torb build --timings`, on standard error so that it never mixes with what the command prints. */
+fn noteTiming(options: BuildOptions, step: String, milliseconds: Int64) {
+  if options.withTimings {
+    printError "{step}: {milliseconds} ms"
+  }
 }
 
 /**
