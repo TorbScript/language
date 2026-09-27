@@ -1,0 +1,135 @@
+# torb.dev and packages.torb.dev on one root server (docs/design/RELEASE.md section 7.11), from the images the release
+# workflow pushes to GHCR, behind the Traefik that already runs on the machine: nothing here opens a port or asks for a
+# certificate - the containers join Traefik's network and say with labels which host and path is theirs.
+#
+#   torb.dev, www.torb.dev          -> site          install.sh, install.ps1, /docs/..., /download/... (release-sync's)
+#   torb.dev/webhook                -> release-sync  GitHub's "release published" webhook
+#   packages.torb.dev               -> site          /index, /archives, /docs - the registry's files (behind a CDN)
+#   packages.torb.dev/api           -> registry      publish, yank, owners, tokens, trusted publishing
+#
+# Once: copy this file to `compose.yml` and `.env.example` to `.env` beside it (never commit `.env`), fill in `.env`,
+# `docker login ghcr.io` while the repository is private, then `docker compose up -d`. An update is
+# `docker compose pull && docker compose up -d`. docs/contributing/releasing.md, "The root server", has every step.
+#
+# Writers and readers of /srv/torb (`TORB_DATA`): release-sync is the only writer of download/, the registry the only
+# writer of registry/, database/ and index-mirror/; the site only reads. CI never pushes to this machine - it pulls.
+
+name: torb
+
+x-traefik: &traefik
+  traefik.enable: "true"
+  traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+
+services:
+  site:
+    image: ghcr.io/torbscript/site:${TORB_VERSION:-latest}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    volumes:
+      - ${TORB_DATA:-/srv/torb}/download:/srv/torb/download:ro
+      - ${TORB_DATA:-/srv/torb}/registry:/srv/torb/registry:ro
+    networks:
+      - traefik
+    labels:
+      <<: *traefik
+      traefik.http.services.torb-site.loadbalancer.server.port: "80"
+      traefik.http.routers.torb-site.rule: Host(`torb.dev`) || Host(`www.torb.dev`)
+      traefik.http.routers.torb-site.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.torb-site.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.torb-site.service: torb-site
+      traefik.http.routers.torb-packages.rule: Host(`packages.torb.dev`)
+      traefik.http.routers.torb-packages.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.torb-packages.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.torb-packages.service: torb-site
+
+  release-sync:
+    image: ghcr.io/torbscript/release-sync:${TORB_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      RELEASE_SYNC_REPOSITORY: ${RELEASE_SYNC_REPOSITORY:-TorbScript/language}
+      RELEASE_SYNC_TOKEN: ${RELEASE_SYNC_TOKEN}
+      RELEASE_SYNC_WEBHOOK_SECRET: ${RELEASE_SYNC_WEBHOOK_SECRET}
+      RELEASE_SYNC_ROOT: /srv/torb
+      RELEASE_SYNC_LISTEN: 0.0.0.0:8088
+      RELEASE_SYNC_POLL_SECONDS: "300"
+    volumes:
+      - ${TORB_DATA:-/srv/torb}/download:/srv/torb/download
+    networks:
+      - traefik
+    labels:
+      <<: *traefik
+      traefik.http.services.torb-release-sync.loadbalancer.server.port: "8088"
+      # Longer than the site's rule, so Traefik gives it the higher priority
+      traefik.http.routers.torb-release-sync.rule: Host(`torb.dev`) && Path(`/webhook`)
+      traefik.http.routers.torb-release-sync.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.torb-release-sync.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.torb-release-sync.service: torb-release-sync
+
+  registry:
+    image: ghcr.io/torbscript/registry:${TORB_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      REGISTRY_LISTEN: 0.0.0.0:8089
+      REGISTRY_STORAGE: file:///srv/torb/registry
+      REGISTRY_DATABASE: /srv/torb/database/registry.db
+      REGISTRY_AUDIENCE: packages.torb.dev
+      # Set it to create the first accounts, then remove it again (docs/contributing/releasing.md)
+      REGISTRY_ADMINISTRATOR_TOKEN: ${REGISTRY_ADMINISTRATOR_TOKEN:-}
+      # A clone of the public index repository; empty switches the mirror off
+      REGISTRY_MIRROR: ${REGISTRY_MIRROR:-}
+      REGISTRY_MIRROR_PUSH: ${REGISTRY_MIRROR_PUSH:-0}
+    volumes:
+      - ${TORB_DATA:-/srv/torb}/registry:/srv/torb/registry
+      - ${TORB_DATA:-/srv/torb}/database:/srv/torb/database
+      - ${TORB_DATA:-/srv/torb}/index-mirror:/srv/torb/index-mirror
+    networks:
+      - traefik
+    labels:
+      <<: *traefik
+      traefik.http.services.torb-registry.loadbalancer.server.port: "8089"
+      traefik.http.routers.torb-registry.rule: Host(`packages.torb.dev`) && PathPrefix(`/api`)
+      traefik.http.routers.torb-registry.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.torb-registry.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      traefik.http.routers.torb-registry.service: torb-registry
+
+  # The registry's database, replicated continuously to object storage at another provider (litestream.yml). SQLite
+  # in WAL mode, which the registry switches it to; Litestream only reads the file and its WAL.
+  litestream:
+    image: litestream/litestream:0.5.17
+    restart: unless-stopped
+    command: replicate -config /etc/litestream.yml
+    environment:
+      LITESTREAM_ACCESS_KEY_ID: ${BACKUP_ACCESS_KEY_ID}
+      LITESTREAM_SECRET_ACCESS_KEY: ${BACKUP_SECRET_ACCESS_KEY}
+      BACKUP_BUCKET: ${BACKUP_BUCKET}
+      BACKUP_ENDPOINT: ${BACKUP_ENDPOINT}
+      BACKUP_REGION: ${BACKUP_REGION:-auto}
+    volumes:
+      - ${TORB_DATA:-/srv/torb}/database:/srv/torb/database
+      - ./litestream.yml:/etc/litestream.yml:ro
+
+  # The files, nightly, with restic to the same object storage - run by the host's cron, not kept running:
+  #   17 3 * * *  cd /opt/torb && docker compose --profile backup run --rm backup >> /var/log/torb-backup.log 2>&1
+  # backup.sh says what it keeps. The database is Litestream's, so restic leaves it out.
+  backup:
+    image: restic/restic:0.19.1
+    profiles:
+      - backup
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      RESTIC_REPOSITORY: s3:${BACKUP_ENDPOINT}/${BACKUP_BUCKET}/restic
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD}
+      AWS_ACCESS_KEY_ID: ${BACKUP_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${BACKUP_REGION:-auto}
+    volumes:
+      - ${TORB_DATA:-/srv/torb}:/srv/torb:ro
+      - ./backup.sh:/backup.sh:ro
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK:-traefik}
+    external: true

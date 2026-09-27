@@ -1,0 +1,21 @@
+# Litestream (tools/deploy/compose.example.yml, service `litestream`): the registry's SQLite database replicated
+# continuously to S3-compatible object storage at another provider than the server's (docs/design/RELEASE.md section
+# 7.11, "backups off the server"). Litestream expands ${VARIABLE} from its environment, which compose fills from `.env`;
+# the credentials are LITESTREAM_ACCESS_KEY_ID and LITESTREAM_SECRET_ACCESS_KEY, read by Litestream itself.
+#
+# Restoring, on a machine with the same `.env`, before the registry starts:
+#
+#   docker compose run --rm litestream restore -config /etc/litestream.yml /srv/torb/database/registry.db
+
+dbs:
+  - path: /srv/torb/database/registry.db
+    replica:
+      type: s3
+      bucket: ${BACKUP_BUCKET}
+      path: litestream/registry.db
+      endpoint: ${BACKUP_ENDPOINT}
+      region: ${BACKUP_REGION}
+      # Every change is on the replica within seconds; a snapshot a day, kept for thirty days
+      sync-interval: 10s
+      snapshot-interval: 24h
+      retention: 720h
