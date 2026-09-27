@@ -24,6 +24,7 @@ use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Express
 use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
 use ForeignDeclaration, TypeReference, TraitClause from "../../syntax/ast"
 use joinPath from "../../project/path"
+use libraryEntry from "../../project/programs"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
@@ -523,10 +524,11 @@ fn checkAppliedBounds(var checker: Checker, module: ModuleId, annotation: TypeId
 }
 
 /**
- * Where top-level code is allowed: an entry file (`src/main.trb`), a script, a receiver script and a
- * `tests/*.test.trb` file - and every file that nothing imports, because that is what the rule is *for*: an imported
- * module consists of declarations only, so there is no initialization order and a cyclic import is harmless. The
- * `src/lib.trb` of a named package is always a module, because it is what other packages import.
+ * Where top-level code is allowed: an entry file (`src/main.trb`, or the `entry` of a `program` line), a script, a
+ * receiver script and a `*.test.trb` file - and every file that nothing imports, because that is what the rule is
+ * *for*: an imported module consists of declarations only, so there is no initialization order and a cyclic import is
+ * harmless. The `src/lib.trb` of a named package is always a module, because it is what other packages import, and
+ * the names of the files decide both (docs/design/PROJECT.md section 3): nothing a manifest says makes it an entry.
  */
 public fn allowsTopLevelCode(var checker: Checker, module: ModuleId): Bool {
   if checker.program.graph.at(module).isEntry {
@@ -541,7 +543,7 @@ public fn allowsTopLevelCode(var checker: Checker, module: ModuleId): Bool {
 fn isLibraryModule(var checker: Checker, module: ModuleId): Bool {
   const found = checker.program.graph.at module
   const package = checker.program.workspace.packages[found.package]
-  !package.name.isEmpty() && found.path == joinPath(package.directory, "src/lib.trb")
+  !package.name.isEmpty() && found.path == joinPath(package.directory, libraryEntry)
 }
 
 fn isImported(var checker: Checker, module: ModuleId): Bool {

@@ -6,16 +6,21 @@
 
 use SourceText, LineIndex from "../syntax/source"
 use parse from "../syntax/parser/parser"
-use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth from "./path"
+use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth, relativePath from "./path"
 use SourceTree from "./source-tree"
-use Manifest, RegistryBinding, readManifest, manifestProblemsOf from "./manifest"
+use Manifest, RegistryBinding, ManifestProblem, readManifest, readSettings from "./manifest"
+use manifestProblemsOf, manifestNotesOf, profileProblemsOf from "./manifest"
+use programProblemsOf from "./programs"
 use Lock, readLock from "../package/lock"
 use packageDirectory from "../package/store"
 use requirementOf from "../package/requirement"
 use Version from "../package/version"
 use registryOf, bindingsOf from "../package/registry"
 
-/** One project: one `project.trb`, one package name, the files below its `src/` and its test directory. */
+/**
+ * One project: one `project.trb`, one package name, and its files - every `.trb` file below its directory that is not
+ * inside a nested package (docs/design/PROJECT.md section 3).
+ */
 public type Package {
   /** `owner/name` from `project.trb`. Empty if the project does not say, which makes it unimportable. */
   name: String
@@ -59,8 +64,8 @@ public type Workspace {
  * project the path belongs to. A project that nobody lists is its own workspace, and a file below no `project.trb`
  * at all becomes a package of its own, checked with the default prelude.
  *
- * A file that is named on its own is a module of the project around it even where it lies outside of `src/` and the
- * test directory, so `torb check scratch.trb` checks it instead of finding nothing. A workspace that has no standard
+ * A file that is named on its own is a module of the project around it even where the package does not reach it - in a
+ * hidden or a `build` directory - so `torb check .scratch/try.trb` checks it instead of finding nothing. A workspace that has no standard
  * library of its own gets the packages of the toolchain's (`SourceTree.standardLibrary`).
  */
 public fn findWorkspace(tree: SourceTree, path: String): Workspace {
@@ -130,7 +135,7 @@ fn withLockedPackages(tree: SourceTree, workspace: Workspace): Workspace {
         problems.append "project.lock.trb names `{locked.name}` at `{locked.path}`, which has no project.trb"
         continue
       }
-      packages.append packageAt(tree, directory).copy(installed: true)
+      packages.append packageAt(tree, directory, manifestDirectories(tree)).copy(installed: true)
       continue
     }
     const directory = packageDirectory tree.cache(), locked.hash
@@ -142,7 +147,7 @@ fn withLockedPackages(tree: SourceTree, workspace: Workspace): Workspace {
       }
     }
     const settings = readLock(own).ok().flatMap({ _.settingsOf locked.name }) ?? Manifest()
-    const manifest = settings.copy name: locked.name, testInput: ""
+    const manifest = settings.copy name: locked.name
     packages.append Package(locked.name, directory, manifest, tree.below(joinPath(directory, "src")), installed: true)
   }
   const members = workspace.packages.map({ _.name }).filter({ !_.isEmpty() }).toList()
@@ -246,7 +251,7 @@ fn withStandardLibrary(tree: SourceTree, manifests: List<String>, workspace: Wor
   }
   var packages = workspace.packages
   for directory in manifests.filter({ parentPath(_) == library }) {
-    const package = packageAt tree, directory
+    const package = packageAt tree, directory, manifests
     if !packages.any({ _.directory == directory || (!package.name.isEmpty() && _.name == package.name) }) {
       packages.append package
     }
@@ -286,12 +291,13 @@ fn workspaceOf(tree: SourceTree, manifests: List<String>, owners: List<String>, 
   for directory in directories {
     problems.appendAll manifestProblemLines(tree, directory)
   }
-  Workspace(directories.map({ packageAt tree, _ }).toList(), problems)
+  Workspace(directories.map({ packageAt tree, _, manifests }).toList(), problems)
 }
 
 /**
- * A setting of the `project.trb` of a directory that the toolchain reads before it can run anything, where it is
- * computed (docs/design/PROJECT.md section 10): refused, with the file, the line and the column of the value.
+ * What is wrong with the `project.trb` of a directory before anything is checked, each with the file, the line and the
+ * column: a setting the toolchain reads before it can run anything that is computed (docs/design/PROJECT.md section
+ * 10), a `program` line the tree contradicts (section 4), a `profile` block that is no profile (section 5).
  */
 fn manifestProblemLines(tree: SourceTree, directory: String): List<String> {
   const path = joinPath directory, "project.trb"
@@ -301,18 +307,40 @@ fn manifestProblemLines(tree: SourceTree, directory: String): List<String> {
       return []
     }
   }
-  const source = SourceText.of text
-  const problems = manifestProblemsOf parse(source).file
-  if problems.isEmpty() {
-    return []
+  const file = parse(SourceText.of(text)).file
+  const settings = readSettings file.statements
+  const name = readManifest(file).name
+  var found = manifestProblemsOf file
+  found.appendAll programProblemsOf(tree, directory, name, settings)
+  found.appendAll profileProblemsOf(settings)
+  const lines = LineIndex.of text
+  found.map({ renderedProblem tree.display(path), lines, _ }).toList()
+}
+
+/**
+ * The lines of the `project.trb` of a directory that are accepted and read by nobody, each with its place: what
+ * `torb check` prints as a note where it checks that manifest.
+ */
+public fn manifestNoteLines(tree: SourceTree, directory: String): List<String> {
+  const path = joinPath directory, "project.trb"
+  const text = match tree.text(path) {
+    Some(found) => found
+    None => {
+      return []
+    }
   }
   const lines = LineIndex.of text
-  var found: List<String> = []
-  for problem in problems {
-    const (line, column) = lines.lineAndColumn problem.span.start
-    found.append "{problem.message}\n --> {tree.display(path)}:{line}:{column}\n  = {problem.note}"
+  manifestNotesOf(parse(SourceText.of(text)).file).map({ renderedProblem tree.display(path), lines, _ }).toList()
+}
+
+/** A problem of a manifest as the text `torb check` prints after `error:` or `note:`. */
+fn renderedProblem(path: String, lines: LineIndex, problem: ManifestProblem): String {
+  const (line, column) = lines.lineAndColumn problem.span.start
+  const place = "{problem.message}\n --> {path}:{line}:{column}"
+  if problem.note.isEmpty() {
+    return place
   }
-  found
+  "{place}\n  = {problem.note}"
 }
 
 /** `members "std/*", "compiler"`: a pattern is a directory, or `directory/*` for every project directly below it. */
@@ -344,25 +372,48 @@ fn expandMembers(
   members
 }
 
-fn packageAt(tree: SourceTree, directory: String): Package {
+/**
+ * The package in `directory`: every `.trb` file below it that is not inside a nested package - a directory of
+ * `manifests` below it - skipping hidden directories, `build`, `target` and `node_modules`
+ * (docs/design/PROJECT.md section 3). One rule instead of `src/` plus a test directory: a file of `tools/` is a
+ * file of the package as much as one of `src/` is.
+ */
+fn packageAt(tree: SourceTree, directory: String, manifests: List<String>): Package {
   const manifest = manifestOf tree, directory
-  var files = tree.below joinPath(directory, "src")
-  // No test directory is no test directory, and not the whole project: `joinPath(directory, "")` is the directory
-  var tests: List<String> = []
-  if !manifest.testInput.isEmpty() {
-    tests = tree.below joinPath(directory, manifest.testInput)
-  }
-  for file in tests {
-    // A `project.trb` is never an ordinary module, whatever `test { input }` sweeps in: it declares the package and
-    // its scope is "the prelude, and nothing else", so it is a receiver script or it is nothing
-    if pathName(file) == "project.trb" {
-      continue
-    }
-    if !files.contains(file) {
+  const nested = manifests.filter({ _ != directory && isInside(_, directory) }).toList()
+  var files: List<String> = []
+  for file in tree.below(directory) {
+    if isFileOfPackage(file, directory, nested) {
       files.append file
     }
   }
   Package manifest.name, directory, manifest, files
+}
+
+/** The directories a package does not reach into: what a tool writes, what a tool keeps, and what is hidden. */
+const skippedDirectories = ["build", "target", "node_modules"]
+
+/**
+ * Whether a file below the directory of a package is one of its files. `project.trb` and `project.lock.trb` never
+ * are: the one declares the package and is a receiver script whose scope is the prelude alone, the other is written by
+ * the toolchain.
+ */
+fn isFileOfPackage(file: String, directory: String, nested: List<String>): Bool {
+  const name = pathName file
+  if !name.endsWith(".trb") || name == "project.trb" || name == "project.lock.trb" {
+    return false
+  }
+  if nested.any({ isInside file, _ }) {
+    return false
+  }
+  const inside = relativePath(directory, file).split("/").toList()
+  for index in 0..(inside.length() - 1) {
+    const component = inside[index]
+    if component.startsWith(".") || skippedDirectories.contains(component) {
+      return false
+    }
+  }
+  true
 }
 
 /** The `project.trb` of a directory, read from its syntax tree. An unreadable one is an empty manifest. */

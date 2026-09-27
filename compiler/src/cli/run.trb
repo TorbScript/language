@@ -23,7 +23,10 @@ use runInMachine from "../vm/run"
 
 /** What `torb run` needs from the command line. */
 public type RunOptions {
-  /** The entry file, or a project directory, whose `build { input }` says which file that is. */
+  /**
+   * The entry file, or a directory whose only program is run (docs/design/PROJECT.md section 4): `.` where the
+   * command line names a program instead, or nothing at all.
+   */
   path: String
   /**
    * Everything written behind the path. `run` reads none of it: it is what the program reads back out of
@@ -42,6 +45,8 @@ public type RunOptions {
   usesMachine: Bool = true
   /** `--timings`: what every step up to the program's first instruction took, on standard error (the VM only). */
   withTimings: Bool = false
+  /** `torb run migrate`: the program of that name below `path`; empty for the only one. */
+  program: String = ""
 }
 
 /** The exit code of the whole command: the program's own, or what went wrong before it started. */
@@ -51,15 +56,24 @@ public fn runProgram(options: RunOptions): Result<Int, IoError> {
     return buildFailedCode
   }
   if options.usesMachine {
-    return runInMachine options.path, options.arguments, options.withTimings
+    return runInMachine options.path, options.program, options.arguments, options.withTimings
   }
   const entry = normalizePath(File.absolutePath(options.path)?)
   const tree = readSourceTree([options.path])?
-  const key = cacheKeyOf tree, entry, toolchainKeyOf([options.path])
+  // The name of a program is part of the key: two programs below one directory are two binaries
+  const key = cacheKeyOf tree, entry, combineHashes(toolchainKeyOf([options.path]), options.program.hash())
   const directory = joinPath cacheDirectoryOf(entry), "{options.profile.name()}/{key}"
-  const output = joinPath directory, binaryNameOf(entry)
+  const name = if options.program.isEmpty() { binaryNameOf entry } else { options.program }
+  const output = joinPath directory, name
   if const None = builtBinary(output) {
-    const built = build(BuildOptions([options.path], output: output, saysWhatItWrote: false, profile: options.profile))?
+    const built = build(BuildOptions(
+      [options.path],
+      output: output,
+      saysWhatItWrote: false,
+      profile: options.profile,
+      program: options.program,
+      command: "run",
+    ))?
     if built != 0 {
       return built
     }

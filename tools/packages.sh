@@ -83,8 +83,8 @@ step check app
 step add acme/json --project app
 show app/project.trb
 show app/project.lock.trb
-step run app
-step run --native app
+step run ./app
+step run --native ./app
 
 step publish --project sources/json-1.1.0
 # A package with a dependency is checked against its own lock before it is published
@@ -92,7 +92,7 @@ step publish --dry-run --project sources/text-1.0.0
 step update --project sources/text-1.0.0
 step publish --project sources/text-1.0.0
 step update --project app
-step run app
+step run ./app
 step add acme/text --project app
 show app/project.lock.trb
 
@@ -103,7 +103,7 @@ show app/project.trb
 step publish --project sources/json-1.2.0
 step update --project app
 step update acme/json --accept-capabilities --project app
-step run app
+step run ./app
 step remove acme/text --project app
 show app/project.lock.trb
 

@@ -27,7 +27,7 @@ use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
-use TestOptions, runTests from "./cli/test"
+use TestOptions, runTests, defaultTestPath from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
@@ -65,14 +65,14 @@ fn printUsage() {
   printError "                         --timings: the wall time of every pass, in the order they ran"
   printError "                         --every-target: lower every program and test once per target, without C"
   printError "                         --partial: every operation that can panic and that the compiler did not prove"
-  printError "  torb build [path]      Compile an entry file to a native binary through C"
+  printError "  torb build [path|name] Compile every program below the path, or the one named, through C"
   printError "                         --profile dev|release: how hard the C compiler optimizes (default: release)"
   printError "                         --release: the same as --profile release"
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)"
   printError "                         --embed-vm: a native binary of the VM that runs the program's bytecode"
-  printError "  torb run <path> [...]  Run a file or a project in the bytecode VM, which needs no C compiler"
+  printError "  torb run [path|name] [...]  Run a file, the only program below a directory, or the one named, in the VM"
   printError "                         everything behind the path is the program's own Process.arguments()"
   printError "                         --native: in front of the path, build it into build/run/ and run the binary"
   printError "                         --profile dev|release, --release: build it natively with that profile"
@@ -94,6 +94,8 @@ fn printUsage() {
   printError "                         --accept-capabilities: take versions that touch more than the locked ones"
   printError "  torb install           Fetch and verify every package project.lock.trb pins into the cache"
   printError "  torb publish           Build, check and publish the archive of a package (`--dry-run`: build only)"
+  printError "  torb lock              Write the settings of every member into project.lock.trb, from its evaluation"
+  printError "                         --check: write nothing, fail where the file is not what torb lock writes"
   printError "                         every package command: --project <directory>, --offline"
   printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
   printError "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory"
@@ -190,6 +192,9 @@ fn checkProjects(
   for problem in checked.problems {
     printError renderProblem(problem)
   }
+  for note in checked.notes {
+    printError "note: {note}"
+  }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
       continue
@@ -209,8 +214,8 @@ fn checkProjects(
       named.append "`{path}`"
     }
     printError "error: {named.joined(separator: ", ")} holds no TorbScript file to check"
-    printError "  a file is checked when it is named, or lies below `src/` or the test directory of a project"
-    return problems + 1
+    printError "  a file is checked when it is named, or is one of the files of a project: a `.trb` file below its directory"
+    return Ok(problems + 1)
   }
   if problems == 0 {
     print "{counted(checked.files.length(), "file")}, no problems"
@@ -420,8 +425,17 @@ fn profileChoiceOf(arguments: List<String>, fallback: Profile): ProfileChoice? {
 }
 
 /**
- * `torb build [path] [--profile dev|release] [--emit-c] [--output <file>]`, `release` unless told otherwise. A cache
- * and an output path read from `project.trb` are not implemented yet, so this is the whole command line for now.
+ * Whether an argument of `torb run` or `torb build` is a path rather than the name of a program
+ * (docs/design/PROJECT.md section 4): it has a `/` or a `\`, ends in `.trb`, or is `.` or `..`. A program's name
+ * is a segment, so the two readings never overlap, and nothing has to be asked of the disk to tell them apart.
+ */
+fn isPathArgument(argument: String): Bool {
+  argument == "." || argument == ".." || argument.contains("/") || argument.contains("\\") || argument.endsWith(".trb")
+}
+
+/**
+ * `torb build [path | name]... [--profile dev|release] [--emit-c] [--output <file>] [--target <os>-<arch>]`,
+ * `release` unless told otherwise: every program below the paths, or the one named.
  */
 fn buildOptionsOf(arguments: List<String>): BuildOptions? {
   const choice = profileChoiceOf(arguments, Profile.Release)?
@@ -432,6 +446,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
   var wantsOutput = false
   var target: BuildTarget? = None
   var wantsTarget = false
+  var program = ""
   for argument in choice.rest {
     if wantsOutput {
       output = argument
@@ -466,14 +481,31 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
       wantsTarget = true
       continue
     }
-    paths.append argument
+    if isPathArgument(argument) {
+      paths.append argument
+      continue
+    }
+    if !program.isEmpty() {
+      printError "error: `torb build` builds every program or one of them, and `{program}` and `{argument}` are two"
+      printError "  a directory or a file is written as a path: `./{argument}`"
+      return None
+    }
+    program = argument
   }
   if wantsTarget {
     printError "error: `--target` needs a name such as `linux-x64`"
     return None
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
-  BuildOptions given, onlyC, output, profile: choice.profile, target: target, embedsMachine: embedsMachine
+  Some(BuildOptions(
+    given,
+    onlyC,
+    output,
+    profile: choice.profile,
+    target: target,
+    embedsMachine: embedsMachine,
+    program: program,
+  ))
 }
 
 /**
@@ -508,14 +540,16 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     }
     paths.append argument
   }
-  const given = if paths.isEmpty() { ["tests"] } else { paths }
-  TestOptions given, choice.profile, usesMachine
+  const given = if paths.isEmpty() { [defaultTestPath()] } else { paths }
+  Some TestOptions(given, choice.profile, usesMachine)
 }
 
 /**
- * `torb run [--native] [--profile dev|release] <path> [argument]...`: in the VM unless told otherwise; `--native` or a
- * profile builds the program, `dev` unless the profile says `release`. The flags of `run` come in front of the path,
- * because everything behind it is the program's. `None` without a path or with a name that is no profile.
+ * `torb run [--native] [--profile dev|release] [<path> | <name>] [argument]...`: in the VM unless told otherwise;
+ * `--native` or a profile builds the program, `dev` unless the profile says `release`. The flags of `run` come in
+ * front of the path, because everything behind it is the program's. Without a path it runs the only program below the
+ * working directory, and a name that is no path is a program's (docs/design/PROJECT.md section 4). `None` for a name
+ * that is no profile.
  */
 fn runOptionsOf(arguments: List<String>): RunOptions? {
   var profile = Profile.Dev
@@ -554,8 +588,12 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     usesMachine = false
     index = index + 2
   }
-  const path = arguments.get(index)?
-  RunOptions path, arguments.skip(index + 1).toList(), profile, usesMachine, withTimings
+  const given = arguments.get(index) ?? "."
+  const rest = arguments.skip(index + 1).toList()
+  if isPathArgument(given) {
+    return Some RunOptions(given, rest, profile, usesMachine, withTimings)
+  }
+  Some RunOptions(".", rest, profile, usesMachine, withTimings, program: given)
 }
 
 /**
@@ -711,7 +749,7 @@ match Process.arguments() {
       Process.exit code
     }
   }
-  [command, ...more] if ["add", "remove", "update", "install", "publish"].contains(command) => {
+  [command, ...more] if ["add", "remove", "update", "install", "publish", "lock"].contains(command) => {
     const options = match packageOptionsOf(command, more) {
       Ok(found) => found
       Fail(problem) => {

@@ -15,6 +15,7 @@ use editDistance from "../resolve-types"
 use TypeId, TypeForm, FunctionForm, ParameterId, Bound from "./type"
 use Checker, Resolution, Dispatch, Adaptation, LocalKind, Candidate, BindingId, Capture from "./context"
 use DefaultSource from "./context"
+use ScriptReceiver from "../module"
 use lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
 use constructorOf, memberNames, caseNamed, caseNamesOf, fieldsOf, typeNameOf, argumentMapping from "./member"
 use typeSignatureOf from "./signature"
@@ -612,12 +613,36 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
   // fix is exact - the parameter is implicit under `_`, and naming it is what makes `value` a name in this body
   if const Some(hint) = implicitParameterHint(checker, text) {
     problem = problem.withNote hint
+  } else if const Some(retired) = retiredSettingNote(checker, text) {
+    problem = problem.withNote retired
   } else if checker.receiverType.isSome() {
     problem = problem.withNote(
       "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)",
     )
   }
   checker.reportHere problem
+}
+
+/**
+ * What a setting `project.trb` used to have says in its place (docs/design/PROJECT.md section 12, slice 2): `build { }`
+ * and the `input` of `test { }` said what the names of the files say, and went. `None` for every other name, and for
+ * a file that is no project file.
+ */
+fn retiredSettingNote(var checker: Checker, text: String): String? {
+  if !(checker.program.graph.at(checker.module).receiver == Some(ScriptReceiver.ProjectFile)) {
+    return None
+  }
+  const receiver = checker.describe(checker.receiverType?)
+  if receiver == "Project" && text == "build" {
+    return Some(
+      "`build \{ \}` is gone: a file called `src/main.trb` is the program and `src/lib.trb` the library, another"
+        + " program is a line - `program \"migrate\", entry: \"tools/migrate.trb\"` - and `output:` says where it goes",
+    )
+  }
+  if receiver == "Test" && text == "input" {
+    return Some "`test \{ input \}` is gone: a file called `*.test.trb` is a test wherever it lies in the package"
+  }
+  None
 }
 
 /**

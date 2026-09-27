@@ -8,8 +8,10 @@ use test, group from "std/test"
 use normalizePath, parentPath, pathName, joinPath, isInside, pathDepth, relativePath from "../src/project/path"
 use embeddedPathOf, commonDirectoryOf from "../src/project/path"
 use SourceTree from "../src/project/source-tree"
-use Manifest, readManifest, manifestProblemsOf, needsEvaluation from "../src/project/manifest"
-use findWorkspace from "../src/project/workspace"
+use Manifest, ProgramLine, ProfileSettings, readManifest, readSettings from "../src/project/manifest"
+use manifestProblemsOf, manifestNotesOf, needsEvaluation from "../src/project/manifest"
+use findWorkspace, manifestNoteLines from "../src/project/workspace"
+use programsOf, programProblemsOf from "../src/project/programs"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
 
@@ -24,6 +26,27 @@ fn problemsOf(text: String): List<String> {
 
 fn evaluates(text: String): Bool {
   needsEvaluation parse(SourceText.of(text)).file
+}
+
+/** What the static reader accepts and reads nobody: the message of every note. */
+fn notesOf(text: String): List<String> {
+  manifestNotesOf(parse(SourceText.of(text)).file).map({ _.message }).toList()
+}
+
+/**
+ * What is wrong with the `program` lines of `manifest`, the `project.trb` of `acme/app` in `app/` beside its
+ * `src/main.trb`, `src/lib.trb` and `tools/migrate.trb`: every message.
+ */
+fn programProblems(manifest: String): List<String> {
+  const files = [
+    "app/project.trb": manifest,
+    "app/src/main.trb": "",
+    "app/src/lib.trb": "",
+    "app/tools/migrate.trb": "",
+  ]
+  const tree = SourceTree.of files
+  const settings = readSettings parse(SourceText.of(manifest)).file.statements
+  programProblemsOf(tree, "app", "acme/app", settings).map({ _.message }).toList()
 }
 
 /** The name and the files of every package of the workspace a path belongs to, in the order the toolchain sees them. */
@@ -92,26 +115,55 @@ group "Manifest" {
   test "settings, blocks and dependencies" {
     const manifest = manifestOf(
       "name \"acme/shop\"\nversion \"1.4.0\"\nprelude \"acme/teaching\"\n"
-        + "dependencies \{\n  runtime \"acme/http:^1.2.3\"\n  development \"acme/mock-server:^3.4.5\"\n\}\n"
-        + "build \{\n  input \"src/api.trb\"\n  output \"build/api\"\n\}\ntest \{\n  input \"spec\"\n\}\n",
+        + "dependencies \{\n  runtime \"acme/http:^1.2.3\"\n  development \"acme/mock-server:^3.4.5\"\n\}\n",
     )
     assert(manifest.name == "acme/shop")
     assert(manifest.version == "1.4.0")
     assert(manifest.prelude == "acme/teaching")
     assert(manifest.runtimeDependencies == ["acme/http"])
     assert(manifest.developmentDependencies == ["acme/mock-server"])
-    assert(manifest.buildInput == "src/api.trb")
-    assert(manifest.testInput == "spec")
     assert manifest.dependsOn("acme/http")
     assert(!manifest.dependsOn("acme/other"))
   }
 
-  test "the defaults are the layout of a project" {
+  test "the defaults are the layout of a project, and the names of the files say the rest" {
     const manifest = manifestOf "name \"acme/app\""
     assert(manifest.prelude == "std/prelude")
-    assert(manifest.buildInput == "src/main.trb")
-    assert(manifest.testInput == "tests")
+    assert manifest.programs.isEmpty()
+    assert manifest.profiles.isEmpty()
     assert(!manifest.isWorkspace())
+  }
+
+  test "`program` lines are read in order, an entry and an output where they are written" {
+    const manifest = manifestOf(
+      raw"""
+        name = "acme/shop"
+        program "torb"
+        program "migrate", entry: "tools/migrate.trb", output: "dist/migrate"
+        """,
+    )
+    const expected = [ProgramLine("torb"), ProgramLine("migrate", "tools/migrate.trb", "dist/migrate")]
+    assert(manifest.programs == expected)
+    assert manifest.programs[0].renamesDefault()
+  }
+
+  test "a `profile` block is read over the defaults of its profile" {
+    const manifest = manifestOf "profile \"release\" \{\n  optimize = 3\n  debugInformation = true\n\}\n"
+    assert(manifest.profiles == [ProfileSettings("release", 3, debugInformation: true)])
+    assert(manifest.profileNamed("release").optimize == 3)
+    assert(manifest.profileNamed("dev") == ProfileSettings.named("dev"))
+    assert manifest.configures("release")
+    assert(!manifest.configures("dev"))
+    // Written as the default is the default: the evaluation, which prints what differs, reads the same
+    assert(manifestOf("profile \"release\" \{\n  optimize = 2\n\}").profiles == [ProfileSettings.named("release")])
+  }
+
+  test "a profile that is none, twice, or outside 0 to 3 is a problem" {
+    assert manifestOf("profile \"release\" \{\}").profileProblem().isNone()
+    const fast = manifestOf("profile \"fast\" \{\}").profileProblem()
+    assert(fast == Some("`fast` is no profile: the profiles are `dev` and `release`"))
+    assert manifestOf("profile \"dev\" \{\}\nprofile \"dev\" \{\}").profileProblem().isSome()
+    assert manifestOf("profile \"dev\" \{\n  optimize = 4\n\}").profileProblem().isSome()
   }
 
   test "everything the toolchain does not know is ignored silently" {
@@ -126,9 +178,15 @@ group "Manifest" {
     assert(manifest.name == "acme/app")
   }
 
-  test "a workspace has no test directory unless it names one" {
-    assert(manifestOf("workspace \{ members \"std/*\" \}").testInput == "")
-    assert(manifestOf("workspace \{ members \"std/*\" \}\ntest \{ input \".\" \}").testInput == ".")
+  test "`build \{ \}` and `test \{ input \}` are accepted, read by nobody, and noted" {
+    const text = "name = \"acme/app\"\nbuild \{\n  input = \"src/lib.trb\"\n\}\ntest \{\n  input = \".\"\n\}\n"
+    assert(manifestOf(text) == manifestOf("name = \"acme/app\""))
+    assert(
+      notesOf(text)
+        == ["`build \{ \}` is deprecated and read by nobody", "`test \{ input \}` is deprecated and read by nobody"],
+    )
+    assert notesOf("test \{\n  coverageThreshold = 80\n\}").isEmpty()
+    assert problemsOf(text).isEmpty()
   }
 
   test "tasks \{ workers, blocking \} are read as numbers, and one outside 1 to 1024 is a problem" {
@@ -152,7 +210,11 @@ group "Manifest" {
     assert(
       problemsOf("dependencies \{\n  runtime \"acme/\{name\}\"\n\}") == ["`dependencies` has to be a plain string"],
     )
-    assert(problemsOf("build \{\n  input = entry\n\}") == ["`build \{ input \}` has to be a plain string"])
+    assert(problemsOf("source \"acme/x\", path: \"../\{name\}\"") == ["`source` has to be a plain string"])
+    assert(problemsOf("registry \"acme\", url: base + \"/index\"") == ["`registry` has to be a plain string"])
+    assert(problemsOf("language = current") == ["`language` has to be a plain string"])
+    const program = "The name, the `entry` and the `output` of a `program` have to be plain strings"
+    assert(problemsOf("program \"migrate\", entry: \"tools/\{name\}.trb\"") == [program])
     // A setting that may be computed is no problem, and neither is anything else of a block that is not `input`
     assert problemsOf("name = \"acme/app\"\nversion = tag ?? \"0.0.0\"\ntest \{\n  coverageThreshold = threshold\n\}").isEmpty()
     const problem = manifestProblemsOf(parse(SourceText.of("\nname = prefix + \"/app\"")).file)[0]
@@ -166,6 +228,9 @@ group "Manifest" {
     assert(!evaluates("name = \"acme/\{suffix\}\""))
     assert evaluates("version = Environment.get(\"CI_COMMIT_TAG\") ?? \"0.0.0\"")
     assert evaluates("tasks \{\n  workers = cores / 2\n\}")
+    assert evaluates("profile \"release\" \{\n  optimize = level\n\}")
+    assert(!evaluates("profile \"release\" \{\n  optimize = 3\n\}"))
+    assert(!evaluates("build \{\n  output = \"build/\{target\}/app\"\n\}"))
     assert evaluates("if Environment.get(\"CI\").isSome() \{\n  version = \"ci\"\n\}")
   }
 }
@@ -187,7 +252,7 @@ group "Workspaces" {
     assert(
       packagesOf(workspace, ".")
         == [
-          "acme/all: ",
+          "acme/all: elsewhere/script.trb",
           "acme/api: packages/api/src/lib.trb",
           "acme/core: packages/core/src/lib.trb, packages/core/tests/core.test.trb",
           "acme/importer: tools/importer/src/main.trb",
@@ -208,6 +273,26 @@ group "Workspaces" {
   test "a file named on its own is a module of the project around it" {
     const packages = packagesOf workspace, "elsewhere/script.trb"
     assert(packages[0] == "acme/all: elsewhere/script.trb")
+    const hidden = packagesOf(["project.trb": "name \"acme/app\"", ".scratch/try.trb": ""], ".scratch/try.trb")
+    assert(hidden == ["acme/app: .scratch/try.trb"])
+  }
+
+  test "a package is every .trb file below it, apart from nested packages, what tools write, and its manifests" {
+    const files = [
+      "project.trb": "name \"acme/shop\"",
+      "project.lock.trb": "",
+      "src/lib.trb": "",
+      "tools/migrate.trb": "",
+      "tests/shop.test.trb": "",
+      "notes.md": "",
+      "build/dev/generated.trb": "",
+      "node_modules/x/y.trb": "",
+      "target/z.trb": "",
+      ".cache/w.trb": "",
+      "vendor/other/project.trb": "name \"acme/other\"",
+      "vendor/other/src/lib.trb": "",
+    ]
+    assert(packagesOf(files, ".")[0] == "acme/shop: src/lib.trb, tests/shop.test.trb, tools/migrate.trb")
   }
 
   test "a workspace without a standard library gets the toolchain's" {
@@ -233,6 +318,23 @@ group "Workspaces" {
     assert(found.problems == ["The workspace member pattern `packages/*` of . matches no project"])
   }
 
+  test "a program line the tree contradicts is a problem of the workspace, with its place" {
+    const found = findWorkspace SourceTree.of(["project.trb": "name = \"acme/app\"\n\nprogram \"torb\"\n"]), "."
+    const expected = [
+      "`torb` renames the default program, and there is no `src/main.trb`\n --> project.trb:3:1\n  = A program with an entry of its own names it: `program \"torb\", entry: \"tools/torb.trb\"`",
+    ]
+    assert(found.problems == expected)
+  }
+
+  test "a deprecated line of a manifest is a note, not a problem" {
+    const tree = SourceTree.of(["project.trb": "name = \"acme/app\"\ntest \{\n  input = \".\"\n\}\n"])
+    const problems = findWorkspace(tree, ".").problems
+    assert problems.isEmpty()
+    const notes = manifestNoteLines tree, "."
+    assert(notes.length() == 1)
+    assert notes[0].startsWith("`test \{ input \}` is deprecated and read by nobody\n --> project.trb:2:1")
+  }
+
   test "a computed static setting of a manifest is a problem of the workspace, with its place" {
     const found = findWorkspace(
       SourceTree.of(["project.trb": "const suffix = \"shop\"\n\nname = \"acme/\{suffix\}\""]),
@@ -242,5 +344,48 @@ group "Workspaces" {
       "`name` has to be a plain string\n --> project.trb:3:8\n  = The toolchain reads `name` before it can run anything, so it cannot be computed",
     ]
     assert(found.problems == expected)
+  }
+}
+
+group "Programs" {
+  test "src/main.trb is the program named after the package, and a line renames it or adds one" {
+    const tree = SourceTree.of(["app/src/main.trb": "", "app/tools/migrate.trb": ""])
+    const plain = programsOf tree, "app", "acme/app", manifestOf("name = \"acme/app\"")
+    assert(plain.map({ "{_.name} {_.entry}" }).toList() == ["app app/src/main.trb"])
+    const manifest = manifestOf "program \"torb\", output: \"dist/torb\"\nprogram \"migrate\", entry: \"tools/migrate.trb\""
+    const both = programsOf tree, "app", "acme/app", manifest
+    assert(
+      both.map({ "{_.name} {_.entry} {_.output}" }).toList()
+        == ["torb app/src/main.trb dist/torb", "migrate app/tools/migrate.trb "],
+    )
+  }
+
+  test "a library has no program" {
+    assert programsOf(SourceTree.of(["lib/src/lib.trb": ""]), "lib", "acme/lib", Manifest()).isEmpty()
+  }
+
+  test "section 4's mistakes are each a problem at the line" {
+    assert programProblems("program \"migrate\", entry: \"tools/migrate.trb\"").isEmpty()
+    const twice = "program \"migrate\", entry: \"tools/migrate.trb\"\nprogram \"migrate\", entry: \"tools/migrate.trb\""
+    assert(programProblems(twice) == ["There are two programs called `migrate`"])
+    const default = "program \"app\", entry: \"tools/migrate.trb\""
+    assert(programProblems(default) == ["There are two programs called `app`"])
+    const renames = "program \"torb\"\nprogram \"cli\""
+    assert(programProblems(renames) == ["`torb` and `cli` both rename the default program"])
+    const missing = "program \"migrate\", entry: \"tools/nothing.trb\""
+    assert(programProblems(missing) == ["The entry `tools/nothing.trb` of the program `migrate` is not a file"])
+    const outside = "program \"migrate\", entry: \"../tools/migrate.trb\""
+    assert(
+      programProblems(outside) == ["The entry `../tools/migrate.trb` of the program `migrate` is outside `acme/app`"],
+    )
+    const library = "program \"lib\", entry: \"src/lib.trb\""
+    assert(
+      programProblems(library)
+        == ["`src/lib.trb` is the library of `acme/app`, so it cannot be the entry of a program"],
+    )
+    const upper = "program \"Migrate\", entry: \"tools/migrate.trb\""
+    assert(programProblems(upper) == ["`Migrate` is no program name"])
+    const away = "program \"migrate\", entry: \"tools/migrate.trb\", output: \"../dist/migrate\""
+    assert(programProblems(away) == ["The output `../dist/migrate` of the program `migrate` is outside `acme/app`"])
   }
 }

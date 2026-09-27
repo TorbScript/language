@@ -1,9 +1,11 @@
 /**
  * `torb build`: a checked program to a native binary, through one C file and whatever C compiler is on the machine.
  *
- * This is the minimum path: two profiles ([Profile]), no cache of its own, no `project.trb` output path. `torb run`
- * (build into a cache and execute) and `torb test` (every `*.test.trb` as one binary) are additions on top of it, never
- * a rewrite of it, and a `profile` block and a `build { output }` read from the manifest will be the same.
+ * A directory builds every program below it (docs/design/PROJECT.md section 4): the `src/main.trb` of each package and
+ * every `program` line, each into `build/<profile>/<program>` of its package or the `output` its line names, with
+ * what the package's `profile` block says ([ProfileSettings]). A package without a program is a library, which is
+ * checked and builds nothing. `torb run` (build into a cache and execute) and `torb test` (every `*.test.trb` as one
+ * binary) are additions on top of it, never a rewrite of it.
  *
  * A program the size of the compiler is written as several units besides its one `program.c`, and every C file of the
  * build is compiled at the same time into an object that a cache keeps ([compileInParallel], docs/BACKEND.md 4.1). A
@@ -19,8 +21,12 @@ use File, IoError from "std/fs"
 use Environment from "std/os"
 use Process, ProcessOutput from "std/process"
 use LineIndex from "../syntax/source"
-use normalizePath, parentPath, joinPath, pathName from "../project/path"
+use normalizePath, parentPath, joinPath, pathName, isInside from "../project/path"
 use SourceTree from "../project/source-tree"
+use Manifest, ProfileSettings from "../project/manifest"
+use Package from "../project/workspace"
+use PackageProgram, programsOf from "../project/programs"
+use programOfEntry from "../semantics/graph"
 use readSourceTree, absolutePaths from "../project/read"
 use findRuntime, threadArguments from "../project/toolchain"
 use BuildTarget, hostTarget from "../project/target"
@@ -125,6 +131,10 @@ public type BuildOptions {
    * 11), so a program that loads receiver scripts ships as one executable.
    */
   embedsMachine: Bool = false
+  /** `torb build <name>`: the program of that name; empty for every program below the paths. */
+  program: String = ""
+  /** The command a message tells the user to run again: `build`, or `run` for what `torb run --native` builds. */
+  command: String = "build"
 }
 
 /** Exit codes of `torb build`. */
@@ -157,14 +167,75 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     printError "{counted(reported, "problem")}, nothing was built"
     return buildFailedCode
   }
-  const modules = match entryModulesOf(checked, tree, options) {
-    Some(found) => found
-    None => {
-      printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
-      return buildFailedCode
+  if options.isTestRun {
+    const modules = match entryModulesOf(checked, tree, options) {
+      Some(found) => found
+      None => {
+        printError "error: no test file (`*.test.trb`) below {options.paths.joined(", ")}"
+        return Ok buildFailedCode
+      }
+    }
+    return buildProgram tree, requested, options, checked, modules, normalizePath(options.output)
+  }
+  const programs = match chosenPrograms(checked, tree, requested, options) {
+    .Chosen(found) => found
+    .Libraries(what) => {
+      // A library builds nothing, which is no error; a library that is to be run is one
+      if options.command == "run" {
+        printError "error: {what}: there is nothing to run"
+        return Ok buildFailedCode
+      }
+      if options.saysWhatItWrote {
+        print "{what}: checked, nothing to build"
+      }
+      return Ok 0
+    }
+    .Refused(message) => {
+      printError "error: {message}"
+      return Ok buildFailedCode
     }
   }
-  const pool = match poolOf(checked, modules[0]) {
+  if programs.length() > 1 && (!options.output.isEmpty() || options.onlyC) {
+    const flag = if options.onlyC { "--emit-c" } else { "--output" }
+    printError "error: {nameOne(programs, options)}"
+    if options.command == "build" {
+      printError "  `{flag}` is for one program"
+    }
+    return Ok buildFailedCode
+  }
+  for program in programs {
+    const code = buildProgram(tree, requested, options, checked, [program.module], program.binary)?
+    if code != 0 {
+      return Ok code
+    }
+  }
+  Ok 0
+}
+
+/** One program - or, in a test run, every test file as one - built into `binary`. */
+fn buildProgram(
+  tree: SourceTree,
+  requested: List<String>,
+  options: BuildOptions,
+  checked: Checked,
+  modules: List<ModuleId>,
+  binary: String,
+): Result<Int, IoError> {
+  const manifest = match manifestOfEntry(checked, modules[0]) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok buildFailedCode
+    }
+  }
+  const pool = match poolOfManifest(checked, modules[0], manifest) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok buildFailedCode
+    }
+  }
+  const settings = match profileSettingsOf(checked, modules[0], manifest, options.profile) {
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
@@ -205,7 +276,6 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     }
     return buildFailedCode
   }
-  const binary = outputPathOf checked, modules[0], options
   const directory = parentPath binary
   File.createDirectory(directory)?
   const source = joinPath directory, "program.c"
@@ -230,7 +300,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   const hostsScripts = text.contains scriptHostSymbolPrefix
   const hostsMachine = text.contains(machineKernelSymbol) || hostsScripts
   const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
-  compile program, binary, options, usesTls, hostsMachine, pool, hostsScripts
+  compile program, binary, options, CompileProfile(options.profile, settings), usesTls, hostsMachine, pool, hostsScripts
 }
 
 /**
@@ -310,17 +380,66 @@ fn writeUnits(directory: String, source: String, text: String, units: EmittedUni
  * evaluated in the sandboxed VM (docs/design/SCRIPTS.md slice 5).
  */
 public fn poolOf(checked: Checked, entry: ModuleId): Result<(workers: Int, blocking: Int), String> {
+  poolOfManifest(checked, entry, manifestOfEntry(checked, entry)?)
+}
+
+/**
+ * The manifest of the package the entry belongs to as the toolchain uses it: read statically, and evaluated in the
+ * sandboxed VM where a setting the build reads is computed (docs/design/SCRIPTS.md slice 5).
+ */
+public fn manifestOfEntry(checked: Checked, entry: ModuleId): Result<Manifest, String> {
   const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
-  const manifest = if package.directory.isEmpty() {
-    package.manifest
-  } else {
-    manifestOfProject(package.directory, package.manifest)?
+  if package.directory.isEmpty() {
+    return Ok package.manifest
   }
+  manifestOfProject package.directory, package.manifest
+}
+
+/** [poolOf] of a manifest that is read already. */
+fn poolOfManifest(
+  checked: Checked,
+  entry: ModuleId,
+  manifest: Manifest,
+): Result<(workers: Int, blocking: Int), String> {
   if const Some(problem) = manifest.poolProblem() {
-    const manifestPath = if package.directory.isEmpty() { "project.trb" } else { joinPath package.directory, "project.trb" }
-    return Fail "{manifestPath}: {problem}"
+    return Fail "{manifestPathOf(checked, entry)}: {problem}"
   }
   manifest.pool()
+}
+
+fn manifestPathOf(checked: Checked, entry: ModuleId): String {
+  const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
+  if package.directory.isEmpty() { "project.trb" } else { joinPath package.directory, "project.trb" }
+}
+
+/**
+ * The profile as the project of the entry builds it (docs/design/PROJECT.md section 5): its own `profile` block, or
+ * else the one of the workspace root around it - a member inherits the root's profiles - or else the defaults of the
+ * profile. A block that is no profile, or whose level is outside 0 to 3, is why nothing is built.
+ */
+fn profileSettingsOf(
+  checked: Checked,
+  entry: ModuleId,
+  manifest: Manifest,
+  profile: Profile,
+): Result<ProfileSettings, String> {
+  if const Some(problem) = manifest.profileProblem() {
+    return Fail "{manifestPathOf(checked, entry)}: {problem}"
+  }
+  const name = profile.name()
+  if manifest.configures(name) {
+    return Ok manifest.profileNamed(name)
+  }
+  const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
+  if !package.directory.isEmpty() {
+    for other in checked.program.workspace.packages {
+      const isRoot = other.manifest.isWorkspace() && !other.directory.isEmpty() && other.directory != package.directory
+      if isRoot && isInside(package.directory, other.directory) && other.manifest.configures(name) {
+        return Ok other.manifest.profileNamed(name)
+      }
+    }
+  }
+  Ok ProfileSettings.named(name)
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -390,18 +509,13 @@ fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
 // --- Where the output goes ------------------------------------------------------------------------------------------
 
 /**
- * The modules whose top-level code the generated `main` runs, in the order it runs them.
- *
- * A build has exactly one - the entry file. A **test run** has one per `*.test.trb` of what was named, sorted by the
- * path the way it is written on the command line, which is the order `torb test` reports files in
- * (docs/tooling/the-torb-command.md). A module of the directory that is not a test file - a harness, a fixture - is
- * not an entry and is compiled in only where a test file imports it.
+ * The modules whose top-level code the generated `main` of a **test run** runs, in the order it runs them: one per
+ * `*.test.trb` of what was named, sorted by the path the way it is written on the command line, which is the order
+ * `torb test` reports files in (docs/tooling/the-torb-command.md). A module of the directory that is not a test file -
+ * a harness, a fixture - is not an entry and is compiled in only where a test file imports it. A build that is no test
+ * run has its programs from [chosenPrograms].
  */
 public fn entryModulesOf(checked: Checked, tree: SourceTree, options: BuildOptions): List<ModuleId>? {
-  if !options.isTestRun {
-    const only: List<ModuleId> = [entryModuleOf(checked)?]
-    return only
-  }
   var byPath: Map<String, ModuleId> = [:]
   var paths: List<String> = []
   for module in checked.requested {
@@ -453,37 +567,184 @@ fn programEntriesOf(
   entries
 }
 
-/**
- * The entry file: the one requested module, or the `build { input }` of the project that was named. A workspace with
- * several members has no single entry, and building every member in dependency order is not implemented yet.
- */
-fn entryModuleOf(checked: Checked): ModuleId? {
-  if const [only] = checked.requested {
-    return only
-  }
-  for module in checked.requested {
-    const inside = checked.program.graph.at module
-    const package = checked.program.workspace.packages[inside.package]
-    if inside.path == joinPath(package.directory, package.manifest.buildInput) {
-      return module
-    }
-  }
-  None
+/** One program a build writes: the module whose top-level code it runs, and the binary it goes into. */
+public type ChosenProgram {
+  module: ModuleId
+  /** The binary, normalized: `--output`, the `output` of its `program` line, or `build/<profile>/<name>`. */
+  binary: String
+  /** The name of the program; for a file that is no program's entry, the file's name without its extension. */
+  name: String
+  /** The package it belongs to, as its name or its directory: what a message about several programs names. */
+  owner: String
+}
+
+/** What a build writes: programs, nothing because every package is a library, or nothing because of a mistake. */
+public type ProgramChoice {
+  case Chosen(programs: List<ChosenProgram>)
+  /**
+   * Every package below the paths is a library: checked, and there is nothing to build, which is no error. `what` says
+   * which: `std/text is a library`.
+   */
+  case Libraries(what: String)
+  case Refused(message: String)
 }
 
 /**
- * `<project>/build/<profile>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }`
- * out of the manifest is not implemented yet; the shape of the default path already matches what it would produce.
+ * The programs `torb build` writes (docs/design/PROJECT.md section 4). A file named directly is the one program,
+ * whatever it is: a script, or the entry of a program, which then keeps its name and its `output`. A directory is every
+ * program below it - the `src/main.trb` of each package and every `program` line with an `entry`, in that order - or
+ * the one `--program`'s name picks. A directory of packages with no program builds nothing, and says so.
  */
-public fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
+public fn chosenPrograms(
+  checked: Checked,
+  tree: SourceTree,
+  requested: List<String>,
+  options: BuildOptions,
+): ProgramChoice {
+  const workspace = checked.program.workspace
+  const graph = checked.program.graph
+  const named = requested.map(normalizePath).toList()
+  const files = named.filter({ tree.exists _ }).toList()
+  if options.program.isEmpty() && !files.isEmpty() {
+    if files.length() > 1 {
+      return ProgramChoice.Refused "`torb {options.command}` builds one file at a time, and {files.length()} were named"
+    }
+    const module = match graph.moduleAt(files[0]) {
+      Some(found) => found
+      None => {
+        return ProgramChoice.Refused "`{tree.display(files[0])}` is not a file of any package"
+      }
+    }
+    const package = workspace.packages[graph.at(module).package]
+    if const Some(name) = programOfEntry(package, files[0]) {
+      if const Some(program) = programsOfPackage(tree, package).find({ _.name == name }) {
+        return ProgramChoice.Chosen([chosenOf(module, package, program, options)])
+      }
+    }
+    const name = binaryNameOf files[0]
+    const directory = if package.directory.isEmpty() { parentPath files[0] } else { package.directory }
+    const binary = binaryPathOf directory, name, "", options
+    return ProgramChoice.Chosen([ChosenProgram(module, binary, name, ownerOf(package))])
+  }
+  var every: List<ChosenProgram> = []
+  // The packages below a named directory, and the innermost one a named directory lies in: what a library says
+  var below: List<String> = []
+  var around = ""
+  var aroundDepth = 0 - 1
+  for package in workspace.packages {
+    if package.installed || package.directory.isEmpty() {
+      continue
+    }
+    const isBelow = named.any({ isInside package.directory, _ })
+    const isAround = named.any({ isInside _, package.directory })
+    if !isBelow && !isAround {
+      continue
+    }
+    for program in programsOfPackage(tree, package) {
+      if named.any({ isInside program.entry, _ }) {
+        if const Some(module) = graph.moduleAt(program.entry) {
+          every.append chosenOf(module, package, program, options)
+        }
+      }
+    }
+    if package.name.isEmpty() {
+      continue
+    }
+    if isBelow {
+      below.append package.name
+    } else if package.directory.byteLength() > aroundDepth {
+      around = package.name
+      aroundDepth = package.directory.byteLength()
+    }
+  }
+  const libraries = if below.isEmpty() && !around.isEmpty() { [around] } else { below }
+  if !options.program.isEmpty() {
+    const picked = every.filter({ _.name == options.program }).toList()
+    if picked.isEmpty() {
+      const known = if every.isEmpty() { "none" } else { every.map({ _.name }).toList().joined(separator: ", ") }
+      return ProgramChoice.Refused(
+        "There is no program `{options.program}` here\n  = the programs are: {known}"
+          + "\n  = a directory or a file is written as a path: `./{options.program}`",
+      )
+    }
+    if picked.length() > 1 {
+      const owners = picked.map({ _.owner }).toList().joined(separator: ", ")
+      return ProgramChoice.Refused "`{options.program}` is a program of {owners}: name its package's directory instead"
+    }
+    return ProgramChoice.Chosen picked
+  }
+  if every.isEmpty() {
+    if const [only] = libraries {
+      return ProgramChoice.Libraries "{only} is a library"
+    }
+    if !libraries.isEmpty() {
+      const shown = options.paths.joined separator: ", "
+      return ProgramChoice.Libraries "every package below {shown} is a library"
+    }
+    // A directory of scripts that belongs to no package: the one file there is, as a file named directly would be
+    if const [only] = checked.requested {
+      const path = graph.at(only).path
+      const name = binaryNameOf path
+      const binary = binaryPathOf parentPath(path), name, "", options
+      return ProgramChoice.Chosen([ChosenProgram(only, binary, name, "")])
+    }
+    return ProgramChoice.Refused "`torb {options.command}` needs a program. Name the file, or a project that has a `src/main.trb`"
+  }
+  // With `--output` every program would go to one place, and the caller says to name one instead
+  const count = if options.output.isEmpty() { every.length() } else { 0 }
+  for index in 0..count {
+    for other in 0..index {
+      if every[index].binary == every[other].binary {
+        const shown = tree.display every[index].binary
+        return ProgramChoice.Refused "`{every[other].name}` and `{every[index].name}` both build to `{shown}`"
+      }
+    }
+  }
+  ProgramChoice.Chosen every
+}
+
+/** The error of several programs where one has to be named: `acme/shop has 3 programs. Name one: ...`, and their names. */
+public fn nameOne(programs: List<ChosenProgram>, options: BuildOptions): String {
+  const owners = programs.map({ _.owner }).toList()
+  const first = owners.first() ?? ""
+  const place = if owners.all({ _ == first }) && !first.isEmpty() { first } else { options.paths.joined separator: ", " }
+  const names = programs.map({ _.name }).toList().joined(separator: ", ")
+  const example = programs.first().map({ _.name }) ?? "<name>"
+  "{place} has {counted(programs.length(), "program")}. Name one: `torb {options.command} {example}`\n  = {names}"
+}
+
+fn programsOfPackage(tree: SourceTree, package: Package): List<PackageProgram> {
+  programsOf tree, package.directory, package.name, package.manifest
+}
+
+fn chosenOf(module: ModuleId, package: Package, program: PackageProgram, options: BuildOptions): ChosenProgram {
+  const binary = binaryPathOf package.directory, program.name, program.output, options
+  ChosenProgram module, binary, program.name, ownerOf(package)
+}
+
+fn ownerOf(package: Package): String {
+  if package.name.isEmpty() { package.directory } else { package.name }
+}
+
+/**
+ * Where a program's binary goes (docs/design/PROJECT.md section 5): `--output`, else the `output` of its `program`
+ * line taken literally below the project, else `build/<profile>/<name>` - and `build/<target>/<profile>/<name>` for
+ * a `--target` that is not this machine, so two targets never write over each other.
+ */
+fn binaryPathOf(directory: String, name: String, output: String, options: BuildOptions): String {
   if !options.output.isEmpty() {
     return normalizePath options.output
   }
-  const inside = checked.program.graph.at module
-  const package = checked.program.workspace.packages[inside.package]
-  const name = binaryNameOf inside.path
-  const directory = if package.directory.isEmpty() { parentPath inside.path } else { package.directory }
-  joinPath directory, "build/{options.profile.name()}/{name}"
+  if !output.isEmpty() {
+    return joinPath directory, output
+  }
+  const profile = options.profile.name()
+  if const Some(target) = options.target {
+    if target != hostTarget() {
+      return joinPath directory, "build/{target.name()}/{profile}/{name}"
+    }
+  }
+  joinPath directory, "build/{profile}/{name}"
 }
 
 /** The name of the binary: the entry file without its extension. */
@@ -696,10 +957,44 @@ fn objectsIn(directory: String, suffix: String): Result<List<String>, IoError> {
   objects
 }
 
+/**
+ * How the C compiler compiles one program: the profile the command line chose, and what the project's `profile` block
+ * made of it (docs/design/PROJECT.md section 5). The C is the same under every profile; only the flags differ.
+ */
+type CompileProfile {
+  profile: Profile
+  settings: ProfileSettings
+
+  /** `-O1` in `dev`, `-O2` in `release`, or what `optimize` says. */
+  fn optimization(): String {
+    "-O{settings.optimize}"
+  }
+
+  /** `-g` where the project asks for debug information, `-g0` where it does not. */
+  fn debugging(): String {
+    if settings.debugInformation { "-g" } else { "-g0" }
+  }
+
+  /** The same two for MSVC, which has no third level of optimization. */
+  fn microsoftFlags(): List<String> {
+    const optimization = match settings.optimize {
+      0 => "/Od"
+      1 => "/O1"
+      _ => "/O2"
+    }
+    if settings.debugInformation { [optimization, "/Zi"] } else { [optimization] }
+  }
+
+  fn macros(): List<String> {
+    profile.macros()
+  }
+}
+
 fn compile(
   program: ProgramSources,
   binary: String,
   options: BuildOptions,
+  flavor: CompileProfile,
   usesTls: Bool,
   hostsMachine: Bool,
   pool: (workers: Int, blocking: Int),
@@ -759,7 +1054,7 @@ fn compile(
     None
   } else {
     const parts = CompileParts runtimeSources, flags, objects
-    compileInParallel(compiler, program, binary, runtime, parts, options.profile)?
+    compileInParallel(compiler, program, binary, runtime, parts, flavor)?
   }
   const attempt = match parallel {
     Some(found) => Ok found
@@ -767,7 +1062,7 @@ fn compile(
       var sources = runtimeSources
       sources.appendAll flags
       sources.appendAll objects
-      const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
+      const arguments = compilerArguments compiler, source, binary, runtime, sources, flavor
       runCompiler compiler, arguments, source, program.size, runtime
     }
   }
@@ -868,7 +1163,7 @@ fn compileInParallel(
   binary: String,
   runtime: String,
   parts: CompileParts,
-  profile: Profile,
+  profile: CompileProfile,
 ): Result<ProcessOutput?, IoError> {
   const tools = joinPath parentPath(runtime), "tools"
   const script = joinPath tools, "build-units.sh"
@@ -876,15 +1171,8 @@ fn compileInParallel(
     return Ok None
   }
   const cache = objectCacheOf runtime, binary
-  var flags = [
-    "-std=c11",
-    profile.optimization(),
-    "-g0",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-I{joinPath(runtime, "include")}",
-  ]
+  const include = "-I{joinPath(runtime, "include")}"
+  var flags = ["-std=c11", profile.optimization(), profile.debugging(), "-Wall", "-Wextra", "-Werror", include]
   for macro in profile.macros() {
     flags.append "-D{macro}"
   }
@@ -940,7 +1228,7 @@ fn compileInParallel(
   inputs.appendAll threadArguments()
   inputs.append "-lm"
   if optimizesAcross {
-    inputs.appendAll([profile.optimization(), "-g0", "-Wall", "-Wextra", "-Werror"])
+    inputs.appendAll([profile.optimization(), profile.debugging(), "-Wall", "-Wextra", "-Werror"])
   }
   for argument in [compiler.command, "-o", binary] {
     lines.append "link\t{argument}"
@@ -1046,15 +1334,13 @@ fn compilerArguments(
   binary: String,
   runtime: String,
   sources: List<String>,
-  profile: Profile,
+  profile: CompileProfile,
 ): List<String> {
   if compiler.isMicrosoft {
-    const optimization = match profile {
-      .Dev => "/O1"
-      .Release => "/O2"
-    }
     const include = joinPath runtime, "include"
-    var arguments = ["/std:c11", optimization, "/W3", "/WX", "/nologo", "/I{include}", "/Fe{binary}"]
+    var arguments = ["/std:c11"]
+    arguments.appendAll profile.microsoftFlags()
+    arguments.appendAll(["/W3", "/WX", "/nologo", "/I{include}", "/Fe{binary}"])
     for macro in profile.macros() {
       arguments.append "/D{macro}"
     }
@@ -1065,7 +1351,7 @@ fn compilerArguments(
   var arguments = [
     "-std=c11",
     profile.optimization(),
-    "-g0",
+    profile.debugging(),
     "-Wall",
     "-Wextra",
     "-Werror",

@@ -1,0 +1,140 @@
+/**
+ * The programs of a package (docs/design/PROJECT.md section 4): `src/main.trb`, named after the package or renamed by a
+ * `program` line without an `entry`, and every `program` line with one. [programsOf] lists them for `torb build` and
+ * `torb run`, and [programProblemsOf] says what is wrong with the lines of a manifest before anything is checked.
+ */
+
+use normalizePath, joinPath, pathName from "./path"
+use SourceTree from "./source-tree"
+use Manifest, Setting, ManifestProblem from "./manifest"
+use isSegment from "../package/specifier"
+
+/** The file whose top-level code the default program is, relative to its package. */
+public const defaultEntry = "src/main.trb"
+
+/** The file that makes a package a library, relative to it. */
+public const libraryEntry = "src/lib.trb"
+
+/** One program of a package. */
+public type PackageProgram {
+  /** The name of the program and of its binary, and what `torb run` and `torb build` are given. */
+  name: String
+  /** The entry file, normalized as the tree spells it. */
+  entry: String
+  /** The `output` of its `program` line, relative to the project; empty for the default path. */
+  output: String = ""
+}
+
+/**
+ * The programs of the package in `directory`: `src/main.trb` first where the tree has it, then every `program` line
+ * with an `entry`, in the order the manifest declares them - which is the order `torb build` builds them in.
+ */
+public fn programsOf(tree: SourceTree, directory: String, name: String, manifest: Manifest): List<PackageProgram> {
+  var programs: List<PackageProgram> = []
+  const main = joinPath directory, defaultEntry
+  if tree.exists(main) {
+    const renamed = manifest.programs.find({ _.renamesDefault() })
+    const called = renamed.map({ _.name }) ?? shortNameOf(name, directory)
+    programs.append PackageProgram(called, main, renamed.map({ _.output }) ?? "")
+  }
+  for line in manifest.programs {
+    if !line.renamesDefault() {
+      programs.append PackageProgram(line.name, joinPath(directory, line.entry), line.output)
+    }
+  }
+  programs
+}
+
+/** `acme/shop` is `shop`: the name of the default program. A package without a name is called after its directory. */
+public fn shortNameOf(name: String, directory: String): String {
+  if name.isEmpty() {
+    return pathName directory
+  }
+  name.substringAfter("/") ?? name
+}
+
+/**
+ * Whether a path written in a `program` line leaves the project: `..` at its start, or a path of its own root. The
+ * check is on the text, as every path of a manifest is (docs/design/PATH.md section 7).
+ */
+fn leavesProject(path: String): Bool {
+  const normalized = normalizePath path
+  normalized == ".." || normalized.startsWith("../") || normalized.startsWith("/") || normalized.contains(":")
+}
+
+/**
+ * What is wrong with the `program` lines of the manifest of the package in `directory`, each at its line
+ * (docs/design/PROJECT.md section 4): a name that is no segment, two programs of one name, two lines that rename the
+ * default program, a rename without `src/main.trb`, and an `entry` that leaves the project, is the library or is no
+ * file. An `output` that leaves the project is refused as well: a build writes below the project and nowhere else.
+ */
+public fn programProblemsOf(
+  tree: SourceTree,
+  directory: String,
+  name: String,
+  settings: List<Setting>,
+): List<ManifestProblem> {
+  var found: List<ManifestProblem> = []
+  const lines = settings.filter({ _.word == "program" }).toList()
+  const hasMain = tree.exists joinPath(directory, defaultEntry)
+  const shown = if name.isEmpty() { pathName directory } else { name }
+  const renames = lines.any({ !_.texts.isEmpty() && (_.labeled.get("entry") ?? "").isEmpty() })
+  var names: List<String> = []
+  if hasMain && !renames {
+    names.append shortNameOf(name, directory)
+  }
+  var renaming: String? = None
+  for line in lines {
+    // A name that is not a plain string is the static reader's problem, and there is nothing to check here
+    const program = match line.first() {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const entry = line.labeled.get("entry") ?? ""
+    const output = line.labeled.get("output") ?? ""
+    if !isSegment(program) {
+      found.append(ManifestProblem(
+        line.span,
+        "`{program}` is no program name",
+        "A program is named like a package: lowercase letters, digits and `-`, so `torb run <name>` is never a path",
+      ))
+    } else if names.contains(program) {
+      found.append ManifestProblem(line.span, "There are two programs called `{program}`", "")
+    }
+    names.append program
+    if !output.isEmpty() && leavesProject(output) {
+      found.append(ManifestProblem(
+        line.span,
+        "The output `{output}` of the program `{program}` is outside `{shown}`",
+        "",
+      ))
+    }
+    if entry.isEmpty() {
+      if const Some(other) = renaming {
+        found.append ManifestProblem(line.span, "`{other}` and `{program}` both rename the default program", "")
+      } else if !hasMain {
+        found.append(ManifestProblem(
+          line.span,
+          "`{program}` renames the default program, and there is no `src/main.trb`",
+          "A program with an entry of its own names it: `program \"{program}\", entry: \"tools/{program}.trb\"`",
+        ))
+      }
+      renaming = Some program
+      continue
+    }
+    if leavesProject(entry) {
+      found.append ManifestProblem(line.span, "The entry `{entry}` of the program `{program}` is outside `{shown}`", "")
+    } else if normalizePath(entry) == libraryEntry {
+      found.append(ManifestProblem(
+        line.span,
+        "`src/lib.trb` is the library of `{shown}`, so it cannot be the entry of a program",
+        "",
+      ))
+    } else if !tree.exists(joinPath(directory, entry)) {
+      found.append ManifestProblem(line.span, "The entry `{entry}` of the program `{program}` is not a file", "")
+    }
+  }
+  found
+}

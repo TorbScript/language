@@ -27,6 +27,50 @@ public type SourceBinding {
 }
 
 /**
+ * `program "migrate", entry: "tools/migrate.trb"`: a program of the package beyond the `src/main.trb` that needs no
+ * line (docs/design/PROJECT.md section 4). A line without an `entry` renames that default program.
+ */
+public type ProgramLine {
+  /** The name of the program, of its binary, and of the argument to `torb run` and `torb build`. */
+  name: String
+  /** The file whose top-level code the program is, relative to the project. Empty renames `src/main.trb`. */
+  entry: String = ""
+  /** Where the binary goes, relative to the project and taken literally. Empty is `build/<profile>/<name>`. */
+  output: String = ""
+
+  fn renamesDefault(): Bool {
+    entry.isEmpty()
+  }
+}
+
+/**
+ * How one of the two profiles builds (docs/design/PROJECT.md section 5): what a `profile "release" { optimize = 3 }`
+ * block says, over the profile's own defaults. What a manifest reads is always the whole profile, so two manifests that
+ * say the same thing in two ways read the same.
+ */
+public type ProfileSettings {
+  /** `dev` or `release`: there is no third. */
+  name: String
+  /** How hard the C compiler optimizes, 0 to 3. */
+  optimize: Int
+  /** Whether the binary carries debug information for a debugger. */
+  debugInformation: Bool = false
+  /** Whether a panic prints the frames that led to it: read, and ignored until the runtime prints frames. */
+  panicFrames: Bool = false
+
+  /** The profile where no `profile` block says otherwise: `dev` at `-O1` with frames, `release` at `-O2` without. */
+  static fn named(name: String): Self {
+    if name == "release" {
+      return Self name, optimize: 2
+    }
+    Self name, optimize: 1, panicFrames: true
+  }
+}
+
+/** The names a `profile` block may have. */
+public const profileNames = ["dev", "release"]
+
+/**
  * What the toolchain needs to know about a project. The names of dependencies are stored without their version
  * requirement as well (`"acme/http:^1.2.3"` is the package `acme/http`), because the front end only asks "may this
  * project import that package"; the requirements as written are what the package manager resolves.
@@ -57,12 +101,10 @@ public type Manifest {
   sources: List<SourceBinding> = []
   /** Patterns, each either a directory or `directory/*`. Empty for a project that is not a workspace. */
   workspaceMembers: List<String> = []
-  buildInput: String = "src/main.trb"
-  /**
-   * The test directory, relative to the project. Empty for none, which is what a workspace manifest has unless it
-   * says `test { input }`: its tests belong to its members, and a `tests/` beside it is theirs or another workspace's.
-   */
-  testInput: String = "tests"
+  /** Every `program` line, in order: the programs beyond `src/main.trb`, and a new name for it. */
+  programs: List<ProgramLine> = []
+  /** Every `profile` block, in order, each read over the defaults of its profile. */
+  profiles: List<ProfileSettings> = []
   /**
    * `tasks { workers = 4 }`: how many workers the program's pool runs, where `TORB_WORKERS` does not say
    * (docs/design/CONCURRENCY.md section 3). `None` for the core count.
@@ -97,6 +139,34 @@ public type Manifest {
   /** The two numbers of `tasks { ... }` for the runtime, 0 for one the manifest does not name. */
   fn pool(): (workers: Int, blocking: Int) {
     (workers: workers ?? 0, blocking: blocking ?? 0)
+  }
+
+  /** Whether a `profile` block of the name is in the file: a member without one takes its workspace root's. */
+  fn configures(profile: String): Bool {
+    profiles.any({ _.name == profile })
+  }
+
+  /** The profile as this project builds it: its `profile` block, or the defaults of the profile. */
+  fn profileNamed(name: String): ProfileSettings {
+    profiles.find({ _.name == name }) ?? ProfileSettings.named(name)
+  }
+
+  /** What is wrong with the `profile` blocks: a name that is no profile, a second block of one, a level outside 0 to 3. */
+  fn profileProblem(): String? {
+    var seen: List<String> = []
+    for configured in profiles {
+      if !profileNames.contains(configured.name) {
+        return Some "`{configured.name}` is no profile: the profiles are `dev` and `release`"
+      }
+      if seen.contains(configured.name) {
+        return Some "There are two `profile \"{configured.name}\"` blocks"
+      }
+      seen.append configured.name
+      if configured.optimize < 0 || configured.optimize > 3 {
+        return Some "`optimize = {configured.optimize}` of `profile \"{configured.name}\"` is outside 0 to 3"
+      }
+    }
+    None
   }
 }
 
@@ -152,7 +222,6 @@ public fn readManifest(file: SourceFile): Manifest {
 /** The manifest the literal lines say: the whole of [readManifest] once the file is lines, and a lock's `settings` block. */
 public fn manifestOf(settings: List<Setting>): Manifest {
   var manifest = Manifest()
-  var namesTestInput = false
   for setting in settings {
     match setting.word {
       "name" => {
@@ -224,15 +293,16 @@ public fn manifestOf(settings: List<Setting>): Manifest {
       "workspace" => {
         manifest = manifest.copy workspaceMembers: setting.textsOf("members")
       }
-      "build" => {
-        if const Some(text) = firstTextOf(setting, "input") {
-          manifest = manifest.copy buildInput: text
+      "program" => {
+        if const Some(name) = setting.first() {
+          const entry = setting.labeled.get("entry") ?? ""
+          const output = setting.labeled.get("output") ?? ""
+          manifest = manifest.copy programs: manifest.programs.appended(ProgramLine(name, entry, output))
         }
       }
-      "test" => {
-        if const Some(text) = firstTextOf(setting, "input") {
-          manifest = manifest.copy testInput: text
-          namesTestInput = true
+      "profile" => {
+        if const Some(name) = setting.first() {
+          manifest = manifest.copy profiles: manifest.profiles.appended(profileOf(name, setting))
         }
       }
       "tasks" => {
@@ -246,10 +316,55 @@ public fn manifestOf(settings: List<Setting>): Manifest {
       _ => {}
     }
   }
-  if manifest.isWorkspace() && !namesTestInput {
-    manifest = manifest.copy testInput: ""
-  }
   manifest
+}
+
+/** `profile "release" { optimize = 3 }` over the defaults of the profile; a value of the wrong kind is left out. */
+fn profileOf(name: String, setting: Setting): ProfileSettings {
+  var profile = ProfileSettings.named name
+  if const Some(text) = firstTextOf(setting, "optimize") {
+    profile = profile.copy optimize: numberOf(text, invalid: -1)
+  }
+  if const Some(text) = firstTextOf(setting, "debugInformation") {
+    if const Some(value) = truthOf(text) {
+      profile = profile.copy debugInformation: value
+    }
+  }
+  if const Some(text) = firstTextOf(setting, "panicFrames") {
+    if const Some(value) = truthOf(text) {
+      profile = profile.copy panicFrames: value
+    }
+  }
+  profile
+}
+
+/**
+ * What is wrong with the `profile` blocks of a manifest (docs/design/PROJECT.md section 5): the first problem
+ * [Manifest.profileProblem] finds, at the line of the block that has it.
+ */
+public fn profileProblemsOf(settings: List<Setting>): List<ManifestProblem> {
+  var profiles: List<ProfileSettings> = []
+  for setting in settings {
+    if setting.word != "profile" {
+      continue
+    }
+    if const Some(name) = setting.first() {
+      profiles.append profileOf(name, setting)
+      if const Some(problem) = Manifest(profiles: profiles).profileProblem() {
+        return [ManifestProblem(setting.span, problem, "")]
+      }
+    }
+  }
+  []
+}
+
+/** `true` and `false` as the static reader keeps them. */
+fn truthOf(text: String): Bool? {
+  match text {
+    "true" => Some true
+    "false" => Some false
+    _ => None
+  }
 }
 
 /** The first string argument of a `word` line inside the block of the setting. */
@@ -258,9 +373,9 @@ fn firstTextOf(setting: Setting, word: String): String? {
   found.first()
 }
 
-/** An integer literal as it was written, `1_024` included; one that is no integer reads as 0, which is refused. */
-fn numberOf(text: String): Int {
-  Int.tryFrom(text.replace("_", "")).ok() ?? 0
+/** An integer literal as it was written, `1_024` included; one that is no integer reads as `invalid`, which is refused. */
+fn numberOf(text: String, invalid: Int = 0): Int {
+  Int.tryFrom(text.replace("_", "")).ok() ?? invalid
 }
 
 /** `"acme/http:^1.2.3"` is the package `acme/http`. */
@@ -339,6 +454,8 @@ fn settingOfAssign(target: Expression, value: Expression): Setting? {
   const text = match value.kind {
     .TextLiteral(segments) => plainText(segments)?
     .IntegerLiteral(written) => written
+    // `debugInformation = true`: a truth value is kept as it is written, and whoever reads the setting makes it one
+    .BoolLiteral(value) => "{value}"
     _ => {
       return None
     }
@@ -361,16 +478,17 @@ public type ManifestProblem {
 
 /**
  * The settings the toolchain reads from the syntax tree alone: it needs them before anything is checked, so they are
- * literals (PROJECT.md section 10, the first nine rows). `build { input }` and `test { input }` are the entry files,
- * which the checker needs as well.
+ * literals (PROJECT.md section 10, the first nine rows). `program` is among them because its `entry` decides which
+ * files may hold top-level code.
  */
 const staticWords = ["language", "name", "prelude", "dependencies", "source", "registry", "workspace", "program"]
 
-/** The blocks whose `input` is static: which files are entry files. */
-const inputWords = ["build", "test"]
-
-/** Settings the toolchain does not read at all: computing one never makes it evaluate the file. */
-const unreadWords = ["authors", "description", "license", "repository", "profile", "resources"]
+/**
+ * Settings the toolchain does not read at all: computing one never makes it evaluate the file. `build { }` and the
+ * `input` of `test { }` are read by nobody since the names of the files decide (PROJECT.md section 3), and
+ * [manifestNotesOf] says so.
+ */
+const unreadWords = ["authors", "description", "license", "repository", "resources", "build", "test"]
 
 /** Every setting of the file the toolchain reads before it can run anything, where one is not a literal. */
 public fn manifestProblemsOf(file: SourceFile): List<ManifestProblem> {
@@ -379,18 +497,69 @@ public fn manifestProblemsOf(file: SourceFile): List<ManifestProblem> {
     const word = wordOf(statement) ?? ""
     if staticWords.contains(word) {
       staticProblemsOf statement, word, found
-    } else if inputWords.contains(word) {
-      inputProblemsOf statement, word, found
     }
   }
   found
 }
 
 /**
- * Whether the toolchain has to evaluate the file to know a setting it uses (SCRIPTS.md slice 5): a `version` or a
- * `tasks { ... }` that is not a literal, or a line that is no setting at all - an `if`, a loop, a call of something
- * else - which may configure anything. A `use`, a `const` and a computed setting the toolchain does not read change
- * nothing it reads; a computed static setting is refused ([manifestProblemsOf]) and never evaluated.
+ * The lines of the file that are accepted and read by nobody any more, each with why: a `build { }` block and the
+ * `input` of a `test { }` block, which said what the names of the files say (docs/design/PROJECT.md section 3).
+ * `torb check` prints them as notes; they go, with `Build` and `Test.input` of `std/project`, once no manifest
+ * of the repository writes them.
+ */
+public fn manifestNotesOf(file: SourceFile): List<ManifestProblem> {
+  var found: List<ManifestProblem> = []
+  for statement in file.statements {
+    const word = wordOf(statement) ?? ""
+    if word == "build" {
+      found.append(ManifestProblem(
+        statement.span,
+        "`build \{ \}` is deprecated and read by nobody",
+        "A file called `src/main.trb` is the program and `src/lib.trb` the library; another program is a line:"
+          + " `program \"migrate\", entry: \"tools/migrate.trb\"`",
+      ))
+    } else if word == "test" && blockNames(statement, "input") {
+      found.append(ManifestProblem(
+        statement.span,
+        "`test \{ input \}` is deprecated and read by nobody",
+        "A file called `*.test.trb` is a test wherever it lies in the package, and `torb test` finds it",
+      ))
+    }
+  }
+  found
+}
+
+/** Whether the block of a setting has a `word` line. */
+fn blockNames(statement: Statement, word: String): Bool {
+  const arguments = match statement.kind {
+    .Evaluate(expression) => {
+      if const .Call(_, given, _) = expression.kind {
+        given
+      } else {
+        return false
+      }
+    }
+    _ => {
+      return false
+    }
+  }
+  for argument in arguments {
+    if const .Closure(closure) = argument.value.kind {
+      if closure.body.statements.any({ wordOf(_) == Some(word) }) {
+        return true
+      }
+    }
+  }
+  false
+}
+
+/**
+ * Whether the toolchain has to evaluate the file to know a setting it uses (SCRIPTS.md slice 5): a `version`, a
+ * `tasks { ... }` or a `profile` block that is not a literal, or a line that is no setting at all - an `if`, a loop,
+ * a call of something else - which may configure anything. A `use`, a `const` and a computed setting the toolchain
+ * does not read change nothing it reads; a computed static setting is refused ([manifestProblemsOf]) and never
+ * evaluated.
  */
 public fn needsEvaluation(file: SourceFile): Bool {
   for statement in file.statements {
@@ -407,10 +576,6 @@ public fn needsEvaluation(file: SourceFile): Bool {
       }
     }
     if staticWords.contains(word) || unreadWords.contains(word) {
-      continue
-    }
-    if inputWords.contains(word) {
-      // Only `input` is read, and it is static; `test { coverageThreshold = threshold }` is nothing the toolchain uses
       continue
     }
     if !isLiteralStatement(statement) {
@@ -495,49 +660,31 @@ fn isLiteral(expression: Expression): Bool {
   match expression.kind {
     .TextLiteral(segments) => plainText(segments).isSome()
     .IntegerLiteral(_) => true
+    .BoolLiteral(_) => true
     _ => false
   }
 }
 
 fn staticProblemsOf(statement: Statement, word: String, var found: List<ManifestProblem>) {
-  if const Some(span) = firstComputedOf(statement) {
-    found.append(ManifestProblem(
-      span,
-      "`{word}` has to be a plain string",
-      "The toolchain reads `{word}` before it can run anything, so it cannot be computed",
-    ))
-  }
-}
-
-/** `build { input = ... }`, `test { input = ... }`: the entry files, which the checker needs before it checks any. */
-fn inputProblemsOf(statement: Statement, word: String, var found: List<ManifestProblem>) {
-  const arguments = match statement.kind {
-    .Evaluate(expression) => {
-      if const .Call(_, given, _) = expression.kind {
-        given
-      } else {
-        return
-      }
-    }
-    _ => {
+  const span = match firstComputedOf(statement) {
+    Some(found) => found
+    None => {
       return
     }
   }
-  for argument in arguments {
-    if const .Closure(closure) = argument.value.kind {
-      for inner in closure.body.statements {
-        if wordOf(inner) == "input" {
-          if const Some(span) = firstComputedOf(inner) {
-            found.append(ManifestProblem(
-              span,
-              "`{word} \{ input \}` has to be a plain string",
-              "It names the entry files, which the checker needs before it can run anything",
-            ))
-          }
-        }
-      }
-    }
+  if word == "program" {
+    found.append(ManifestProblem(
+      span,
+      "The name, the `entry` and the `output` of a `program` have to be plain strings",
+      "The toolchain reads them before it can run anything: the entry decides which files may hold top-level code",
+    ))
+    return
   }
+  found.append(ManifestProblem(
+    span,
+    "`{word}` has to be a plain string",
+    "The toolchain reads `{word}` before it can run anything, so it cannot be computed",
+  ))
 }
 
 /** `None` for a string with `{...}` in it: what it means depends on evaluation. */

@@ -484,6 +484,26 @@ fn checkImport(
           )
           return
         }
+        .OutsidePackage(written, package) => {
+          diagnostics.append(
+            Diagnostic.error("`{written}` leaves `{package}`", at)
+              .withNote(
+                "A relative path names a file of the same package. Another package is imported by its name:"
+                  + " `\"owner/name/path\"`, and it has to be a dependency",
+              ),
+          )
+          return
+        }
+        .Entry(written, program) => {
+          diagnostics.append(
+            Diagnostic.error("`{written}` is the entry of the program `{program}`, so nothing can import it", at)
+              .withNote(
+                "A file that may hold top-level code is never importable. What two programs share belongs in a module"
+                  + " of the package, which both import",
+              ),
+          )
+          return
+        }
       }
       match usage.items {
         .Names(items) => {

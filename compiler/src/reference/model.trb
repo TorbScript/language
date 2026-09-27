@@ -20,6 +20,7 @@ use lex from "../syntax/lexer"
 use Declaration, Member, Field, Parameter, Visibility, TypeReference, Block from "../syntax/ast"
 use joinPath, isInside, normalizePath from "../project/path"
 use Package from "../project/workspace"
+use libraryEntry, defaultEntry from "../project/programs"
 use Checked from "../semantics/check"
 use Module, ModuleId from "../semantics/module"
 use SymbolId, Definition from "../semantics/symbols"
@@ -248,7 +249,9 @@ type ReferenceBuilder {
   var fn package(index: Int): DocumentedPackage {
     const package = checked.program.workspace.packages[index]
     const name = packageNameOf package
-    const entry = checked.program.graph.moduleAt joinPath(package.directory, package.manifest.buildInput)
+    // The library where there is one, the program where there is none: what the names of the files say it is
+    const library = checked.program.graph.moduleAt joinPath(package.directory, libraryEntry)
+    const entry = if library.isSome() { library } else { checked.program.graph.moduleAt joinPath(package.directory, defaultEntry) }
     const exported = exportedSymbols entry
     var modules: List<DocumentedModule> = []
     var doc = ""
@@ -327,7 +330,7 @@ fn packageNameOf(package: Package): String {
   }
 }
 
-/** A file of the package that a user of it reads: not a test, and not the manifest. */
+/** A file of the package that a user of it reads: a module below its `src/`, and not a test or the manifest. */
 fn isDocumentedFile(package: Package, module: Module): Bool {
   if module.receiver.isSome() {
     return false
@@ -335,11 +338,7 @@ fn isDocumentedFile(package: Package, module: Module): Bool {
   if module.path.endsWith(".test.trb") {
     return false
   }
-  const tests = package.manifest.testInput
-  if !tests.isEmpty() && !package.directory.isEmpty() && isInside(module.path, joinPath(package.directory, tests)) {
-    return false
-  }
-  true
+  package.directory.isEmpty() || isInside(module.path, joinPath(package.directory, "src"))
 }
 
 /** `option` for `std/core/src/option.trb`, `unicode.tables` for `src/unicode/tables.trb`: the page name of a file. */

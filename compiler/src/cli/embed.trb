@@ -15,7 +15,7 @@ use findCompilerSources from "../project/toolchain"
 use check from "../semantics/check"
 use programText from "../vm/embed"
 use bytecodeOf, reportChecked from "../vm/run"
-use BuildOptions, buildTree, buildFailedCode, entryModulesOf, outputPathOf, poolOf from "./build"
+use BuildOptions, buildTree, buildFailedCode, chosenPrograms, nameOne, poolOf from "./build"
 
 /** The exit code of `torb build --embed-vm`: `build`'s own for the binary of the VM, or why nothing was built. */
 public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
@@ -24,17 +24,28 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
     return buildFailedCode
   }
   const tree = readSourceTree(options.paths)?
-  const checked = check(tree, absolutePaths(options.paths)?, false, true)
+  const requested = absolutePaths(options.paths)?
+  const checked = check tree, requested, false, true
   if reportChecked(checked) > 0 {
     return buildFailedCode
   }
-  const modules = match entryModulesOf(checked, tree, options) {
-    Some(found) => found
-    None => {
-      printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
-      return buildFailedCode
+  const chosen = match chosenPrograms(checked, tree, requested, options) {
+    .Chosen(found) => found
+    .Libraries(what) => {
+      printError "error: {what}, and `--embed-vm` needs a program"
+      return Ok buildFailedCode
+    }
+    .Refused(message) => {
+      printError "error: {message}"
+      return Ok buildFailedCode
     }
   }
+  if chosen.length() > 1 {
+    printError "error: {nameOne(chosen, options)}"
+    printError "  `--embed-vm` builds one program"
+    return Ok buildFailedCode
+  }
+  const modules = [chosen[0].module]
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
@@ -60,8 +71,7 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   const source = "use runEmbedded from \"./embed\"\n\nrunEmbedded \"{text}\", {pool.workers}, {pool.blocking}\n"
   const sources = readSourceTree([compiler])?
   const around = sources.withFile entry, source
-  const output = outputPathOf checked, modules[0], options
-  buildTree around, [entry], options.copy(paths: [entry], output: output, embedsMachine: false)
+  buildTree around, [entry], options.copy(paths: [entry], output: chosen[0].binary, embedsMachine: false, program: "")
 }
 
 /** The text as the body of a string literal of TorbScript: a backslash, a quote and the braces escaped. */

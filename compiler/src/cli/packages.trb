@@ -7,9 +7,11 @@
  *     torb install                             the packages the lock pins, fetched and verified into the cache
  *     torb publish [--dry-run]                 the archive exactly as it is uploaded, checked; a `file:` registry is
  *                                              written, a registry on the network is sent it (`../package/upload`)
+ *     torb lock [--check]                      the `settings` block of every member written from its evaluation, the
+ *                                              graph as it is; `--check` compares instead, byte for byte
  *
- * `add`, `remove` and `update` are the only commands that write `project.lock.trb`, and `publish` writes its
- * `settings` block; `install` never changes it. Resolution fails before anything is written, with PubGrub's explanation.
+ * `add`, `remove` and `update` are the only commands that write the `graph` of `project.lock.trb`, and `publish`
+ * and `lock` write its `settings` blocks; `install` never changes it. Resolution fails before anything is written, with PubGrub's explanation.
  * An update that gains a capability is refused unless `--accept-capabilities` says it is wanted (CONCEPT, "Packages and
  * the Supply Chain").
  */
@@ -44,7 +46,7 @@ use TarEntry from "std/archive"
 
 /** What one of the commands was called with. */
 public type PackageOptions {
-  /** `add`, `remove`, `update`, `install` or `publish`. */
+  /** `add`, `remove`, `update`, `install`, `publish` or `lock`. */
   command: String
   /** The packages named, as written. */
   names: List<String> = []
@@ -58,6 +60,8 @@ public type PackageOptions {
   acceptCapabilities: Bool = false
   /** `--project <directory>`: the project to work on, instead of the one around the working directory. */
   directory: String = "."
+  /** `--check`: `lock` writes nothing, and fails where the file is not what it would write. */
+  checks: Bool = false
 }
 
 /**
@@ -86,6 +90,9 @@ public fn packageOptionsOf(command: String, arguments: List<String>): Result<Pac
       "--accept-capabilities" => {
         options = options.copy acceptCapabilities: true
       }
+      "--check" if command == "lock" => {
+        options = options.copy checks: true
+      }
       "--project" => {
         const directory = match arguments.get(index) {
           Some(found) => found
@@ -107,7 +114,7 @@ public fn packageOptionsOf(command: String, arguments: List<String>): Result<Pac
   if (command == "add" || command == "remove") && options.names.isEmpty() {
     return Fail "`torb {command}` needs a package: `torb {command} acme/json`"
   }
-  if (command == "install" || command == "publish") && !options.names.isEmpty() {
+  if (command == "install" || command == "publish" || command == "lock") && !options.names.isEmpty() {
     return Fail "`torb {command}` takes no package: it works on the project"
   }
   options
@@ -128,6 +135,7 @@ public fn runPackageCommand(options: PackageOptions): Int {
     "update" => runUpdate context, options
     "install" => runInstall context
     "publish" => runPublish context, options
+    "lock" => runLock context, options
     _ => Fail "`{options.command}` is not a command of the package manager"
   }
   match outcome {
@@ -554,6 +562,72 @@ fn capabilityGains(before: Lock, after: Lock): List<String> {
     }
   }
   gains
+}
+
+// --- lock ----------------------------------------------------------------------------------------------------------
+
+/**
+ * `torb lock` (docs/design/PROJECT.md section 8): the lock of the workspace with a `settings` block for every member,
+ * printed from its evaluated manifest, and its `graph` as it is - which only `add`, `remove` and `update` change, so
+ * a graph that does not do for `project.trb` is refused with the command that fixes it. `--check` writes nothing and
+ * compares what it would write with the file byte for byte: writing the lock is deterministic, and the gate is what
+ * says so.
+ */
+fn runLock(context: Context, options: PackageOptions): Result<Int, String> {
+  const lockPath = joinPath context.root, "project.lock.trb"
+  const before = File.readText(lockPath).ok()
+  const lock = readLock(before ?? "")?
+  const problems = lockProblems context.members, lock, before.isSome(), context.bindings
+  if !problems.isEmpty() {
+    for problem in problems {
+      printError renderProblem(problem)
+    }
+    return Ok 1
+  }
+  var settings: List<LockedSettings> = []
+  for member in context.members {
+    if !member.name.isEmpty() {
+      settings.append LockedSettings(member.name, evaluatedManifest(member))
+    }
+  }
+  const language = context.workspace.packages.first().map({ _.manifest.language }) ?? ""
+  const written = renderLock lock.copy(language: language, settings: settings)
+  const shown = context.tree.display lockPath
+  if before == Some(written) {
+    print "{shown} is current"
+    return Ok 0
+  }
+  if options.checks {
+    printError "error: {shown} is not what `torb lock` writes"
+    for line in differingLines(before ?? "", written) {
+      printError "  {line}"
+    }
+    printError "  `torb lock --project {context.tree.display(context.root)}` writes it"
+    return Ok 1
+  }
+  writeText(lockPath, written)?
+  print "wrote {shown}"
+  Ok 0
+}
+
+/** Where two texts part, line by line: the first few lines that differ, each as it is on disk and as it is written. */
+fn differingLines(before: String, after: String): List<String> {
+  const old = before.lines().toList()
+  const new = after.lines().toList()
+  var found: List<String> = []
+  for index in 0..old.length().max(new.length()) {
+    const was = old.get index
+    const becomes = new.get index
+    if was == becomes {
+      continue
+    }
+    if found.length() >= 10 {
+      found.append "..."
+      break
+    }
+    found.append "line {index + 1}: on disk {was.map({ "`{_}`" }) ?? "nothing"}, written {becomes.map({ "`{_}`" }) ?? "nothing"}"
+  }
+  found
 }
 
 // --- publish -------------------------------------------------------------------------------------------------------

@@ -32,16 +32,22 @@ use scriptReceiverOf, moduleOfImport from "../semantics/checker/receiver"
 use runProgram, ScriptLoader, LoadedScript, ScriptStop from "./interpret"
 use SourceTree from "../project/source-tree"
 use ModuleId from "../semantics/module"
-use BuildOptions, entryModulesOf, poolOf from "../cli/build"
+use BuildOptions, entryModulesOf, poolOf, chosenPrograms, nameOne from "../cli/build"
 
 /** The exit code of a program that could not be run at all: the one `torb build` answers for a refused program. */
 const refusedCode = 1
 
 /**
- * Runs the program at `path` in the VM. Answers the exit code when the program ends by running off the end of its
- * top-level code; `Process.exit` and a panic end the process directly.
+ * Runs the program at `path` in the VM: the file, or the only program below the directory, or the one called
+ * `program` (docs/design/PROJECT.md section 4). Answers the exit code when the program ends by running off the end of
+ * its top-level code; `Process.exit` and a panic end the process directly.
  */
-public fn runInMachine(path: String, arguments: List<String>, withTimings: Bool = false): Result<Int, IoError> {
+public fn runInMachine(
+  path: String,
+  program: String,
+  arguments: List<String>,
+  withTimings: Bool = false,
+): Result<Int, IoError> {
   const clock = RunClock(isOn: withTimings, last: if withTimings { Clock.milliseconds() } else { 0 })
   const tree = readSourceTree([path])?
   clock.lap "reading the files"
@@ -55,14 +61,25 @@ public fn runInMachine(path: String, arguments: List<String>, withTimings: Bool 
   if reportChecked(checked) > 0 {
     return refusedCode
   }
-  const module = match checked.requested.first() {
-    Some(found) => found
-    None => {
-      printError "error: `torb run --vm` needs one entry file"
-      return refusedCode
+  const options = BuildOptions([path], program: program, command: "run")
+  const module = match chosenPrograms(checked, tree, requested, options) {
+    .Chosen(found) => {
+      if found.length() > 1 {
+        printError "error: {nameOne(found, options)}"
+        return Ok refusedCode
+      }
+      found[0].module
+    }
+    .Libraries(what) => {
+      printError "error: {what}: there is nothing to run"
+      return Ok refusedCode
+    }
+    .Refused(message) => {
+      printError "error: {message}"
+      return Ok refusedCode
     }
   }
-  const executable = normalizePath(File.absolutePath(path)?)
+  const executable = checked.program.graph.at(module).path
   runModules checked, tree, [module], arguments, false, executable, requested, clock
 }
 

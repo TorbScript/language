@@ -9,6 +9,7 @@ use Parsed from "../syntax/parser/parser"
 use SourceFile from "../syntax/ast"
 use SourceTree from "../project/source-tree"
 use Workspace, Package from "../project/workspace"
+use defaultEntry, shortNameOf from "../project/programs"
 use ModuleId, Module, ScriptReceiver from "./module"
 use scriptLoadsOf, RuntimeScript from "./scripts"
 
@@ -236,11 +237,30 @@ fn addRuntimeScripts(tree: SourceTree, var modules: List<Module>, scripts: List<
   }
 }
 
-/** A script that belongs to no project is always an entry: nobody imports it. */
+/**
+ * Whether a file may hold top-level code because of what it is (docs/design/PROJECT.md section 3): a script that
+ * belongs to no project - nobody imports it - the default program `src/main.trb`, the `entry` of a `program` line,
+ * and a test. The names of the files decide and the manifest adds only the entries it declares: `src/lib.trb` is the
+ * library, and never an entry.
+ */
 fn isEntryFile(package: Package, path: String): Bool {
-  package.name.isEmpty()
-    || path == joinPath(package.directory, package.manifest.buildInput)
-    || path.endsWith(".test.trb")
+  package.name.isEmpty() || path.endsWith(".test.trb") || programOfEntry(package, path).isSome()
+}
+
+/**
+ * The program whose entry the file is: `src/main.trb` of the package, named after it or after the `program` line
+ * that renames it, or the `entry` of one of its `program` lines. `None` for every other file.
+ */
+public fn programOfEntry(package: Package, path: String): String? {
+  if package.directory.isEmpty() {
+    return None
+  }
+  if path == joinPath(package.directory, defaultEntry) {
+    const renamed = package.manifest.programs.find({ _.renamesDefault() })
+    return Some(renamed.map({ _.name }) ?? shortNameOf(package.name, package.directory))
+  }
+  const line = package.manifest.programs.find({ !_.renamesDefault() && joinPath(package.directory, _.entry) == path })?
+  Some line.name
 }
 
 /**
@@ -311,6 +331,13 @@ public type Import {
   /** The package is there, but the importing project does not depend on it */
   case NotADependency(name: String)
   case NoModuleInPackage(package: String, path: String)
+  /**
+   * A relative path that climbs out of the package of the importing file, or names a file of another package below it:
+   * a package is imported by its name (docs/design/PROJECT.md section 6)
+   */
+  case OutsidePackage(path: String, package: String)
+  /** The file is the entry of a program, and a program is not importable (docs/design/PROJECT.md section 3) */
+  case Entry(path: String, program: String)
 }
 
 /**
@@ -319,11 +346,25 @@ public type Import {
  */
 public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path: String): Import {
   const module = graph.at(from)
+  const importer = workspace.packages[module.package]
   if path.startsWith("./") || path.startsWith("../") {
     const target = "{joinPath(parentPath(module.path), path)}.trb"
+    // A script that belongs to no project has no package to stay inside
+    const isPackaged = !importer.name.isEmpty() && !importer.directory.isEmpty()
+    if isPackaged && !isInside(target, importer.directory) {
+      return Import.OutsidePackage path, importer.name
+    }
     // A receiver script is not a module anybody imports: it is a body, checked against a receiver type
     if const Some(id) = graph.moduleAt(target) {
-      if graph.at(id).receiver.isNone() {
+      const found = graph.at id
+      if found.receiver.isNone() {
+        const owner = workspace.packages[found.package]
+        if isPackaged && found.package != module.package && !owner.name.isEmpty() {
+          return Import.OutsidePackage path, importer.name
+        }
+        if const Some(program) = programOfEntry(owner, target) {
+          return Import.Entry path, program
+        }
         return Import.Found id
       }
     }
@@ -348,7 +389,15 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
   } else {
     "src/{segments.skip(2).joined(separator: "/")}.trb"
   }
-  if const Some(id) = graph.moduleAt(joinPath(package.directory, inside)) {
+  const target = joinPath package.directory, inside
+  if const Some(program) = programOfEntry(package, target) {
+    return Import.Entry path, program
+  }
+  // `"owner/name/main"` names a program whether or not the file is there (docs/design/PROJECT.md section 3)
+  if segments.length() > 2 && segments.last() == Some("main") {
+    return Import.Entry path, shortNameOf(package.name, package.directory)
+  }
+  if const Some(id) = graph.moduleAt(target) {
     return Import.Found id
   }
   Import.NoModuleInPackage name, path

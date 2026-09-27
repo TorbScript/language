@@ -19,7 +19,7 @@
 
 use File, IoError from "std/fs"
 use Process from "std/process"
-use normalizePath, joinPath, parentPath from "../project/path"
+use normalizePath, joinPath, parentPath, pathName, pathDepth from "../project/path"
 use BuildOptions, Profile, build, buildFailedCode from "./build"
 use testInMachine from "../vm/run"
 
@@ -31,9 +31,9 @@ public type TestOptions {
   /**
    * The directories and files the test files are looked for below. Several are one run and therefore **one** binary:
    * `torb test std/collections/tests std/text/tests` builds both packages together and prints one report over both,
-   * in the order the paths sort in. The default is `tests` beside the working directory.
+   * in the order the paths sort in. The default is the package the working directory is in ([defaultTestPath]).
    */
-  paths: List<String> = ["tests"]
+  paths: List<String> = ["."]
   /** `--profile`: `dev` unless told otherwise, because a suite is run once per build and the C compiler is the wait */
   profile: Profile = Profile.Dev
   /**
@@ -44,12 +44,32 @@ public type TestOptions {
   usesMachine: Bool = true
 }
 
+/**
+ * What `torb test` runs where no path is named: the package the working directory is in - the innermost directory
+ * above it with a `project.trb` - because a file called `*.test.trb` is a test wherever it lies in the package
+ * (docs/design/PROJECT.md section 3). The working directory itself where no project is above it.
+ */
+public fn defaultTestPath(): String {
+  var current = "."
+  loop {
+    if File.exists(joinPath(current, "project.trb")) {
+      return current
+    }
+    // A checkout below `.claude/worktrees` is a project of its own, as `readSourceTree` sees it
+    const absolute = normalizePath(File.absolutePath(current).ok() ?? current)
+    if pathName(absolute).startsWith(".") || pathDepth(parentPath(absolute)) < 1 || parentPath(absolute) == absolute {
+      return "."
+    }
+    current = joinPath current, ".."
+  }
+}
+
 /** The exit code of the whole command: what the test binary answered, or what went wrong before it ran. */
 public fn runTests(options: TestOptions): Result<Int, IoError> {
   if options.usesMachine {
     return testInMachine options.paths
   }
-  const first = options.paths.first() ?? "tests"
+  const first = options.paths.first() ?? "."
   // Where a run of several packages puts its binary: the first path is the one the command line names first, and the
   // key of the cache the binary is not - a test run is asked for, so it is built
   // A single test file names no directory of its own, so its binary goes beside it

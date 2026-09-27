@@ -1,8 +1,8 @@
 /**
- * The vocabulary of `project.trb`: [Project], [Dependencies], [Build], [Test], [Tasks], [Workspace], [Registry] and
- * [Source]. A project file is a receiver script against [Project], so everything a project can say about itself is a
- * `var` field or a method of the types here - and nothing else is needed to write one, because a setting is written
- * `name = "acme/shop"` and a section `build { ... }`.
+ * The vocabulary of `project.trb`: [Project], [Dependencies], [Program], [Profile], [Test], [Tasks], [Workspace],
+ * [Registry] and [Source]. A project file is a receiver script against [Project], so everything a project can say about
+ * itself is a `var` field or a method of the types here - and nothing else is needed to write one, because a setting is
+ * written `name = "acme/shop"` and a section `tasks { ... }`.
  *
  * The types are ordinary data, not `native`: a project file is deterministic and has no IO, so evaluating it is
  * nothing but running these members. This is what makes a `project.trb` *type check* against a real sandbox, with the
@@ -53,7 +53,47 @@ public type Dependencies {
   }
 }
 
-/** What `torb build` produces. `output` is interpolated eagerly, so it reads `target` and the script's own bindings. */
+/**
+ * A program of the package beyond the `src/main.trb` that needs no line (docs/design/PROJECT.md section 4):
+ * `program "migrate", entry: "tools/migrate.trb"`. A line without an `entry` renames that default program:
+ * `program "torb"`.
+ */
+public type Program {
+  /** The name of the program, of its binary, and of the argument to `torb run` and `torb build`. */
+  name: String
+  /** The file whose top-level code the program is, relative to the project. Empty renames `src/main.trb`. */
+  entry: String = ""
+  /** Where the binary goes, relative to the project and taken literally. Empty is `build/<profile>/<name>`. */
+  output: String = ""
+}
+
+/**
+ * How one of the two profiles builds (docs/design/PROJECT.md section 5): `profile "release" { optimize = 3 }`. The
+ * profiles are `dev` and `release` and there is no third; a setting the back end does not have yet is read and ignored.
+ */
+public type Profile {
+  /** `dev` or `release`. */
+  name: String
+  /** How hard the C compiler optimizes, 0 to 3: `1` in `dev`, `2` in `release`. */
+  var optimize: Int = 1
+  /** Whether the binary carries debug information for a debugger: in neither profile unless a block says so. */
+  var debugInformation: Bool = false
+  /** Whether a panic prints the frames that led to it: in `dev`, not in `release`. Read, and ignored for now. */
+  var panicFrames: Bool = true
+
+  /** The profile where no block says otherwise. */
+  static fn named(name: String): Self {
+    if name == "release" {
+      return Self name, optimize: 2, panicFrames: false
+    }
+    Self name
+  }
+}
+
+/**
+ * Deprecated: nothing reads it. A file called `src/main.trb` is the program and `src/lib.trb` the library, another
+ * program is a [Project.program] line, and where a binary goes is its `output` (docs/design/PROJECT.md section 4).
+ */
 public type Build {
   /** `"dev"` or `"release"`. */
   var target: String = "dev"
@@ -63,9 +103,9 @@ public type Build {
   var output: String = ""
 }
 
-/** What `torb test` runs. */
+/** What `torb test` runs: every file called `*.test.trb` in the package. */
 public type Test {
-  /** Where the tests are. */
+  /** Deprecated: nothing reads it, because a file called `*.test.trb` is a test wherever it lies in the package. */
   var input: String = "tests"
   /** The share of lines a test run has to cover, in percent. `0` asks for nothing. */
   var coverageThreshold: Int = 0
@@ -120,7 +160,7 @@ public type Project {
   var prelude: String = "std/prelude"
   /** What the project needs, split into what dependents get and what stays inside the project. */
   var dependencies: Dependencies = Dependencies()
-  /** What `torb build` produces. */
+  /** Deprecated and read by nobody: see [Build]. */
   var build: Build = Build()
   /** What `torb test` runs. */
   var test: Test = Test()
@@ -134,6 +174,10 @@ public type Project {
   private(var) registries: List<Registry> = []
   /** The locations [Project.source] added. */
   private(var) sources: List<Source> = []
+  /** The programs [Project.program] declared, in order. */
+  private(var) programs: List<Program> = []
+  /** The profiles [Project.profile] configured, in order. */
+  private(var) profiles: List<Profile> = []
 
   /** Names the people or organizations behind the project: `authors "Ada Lovelace"`. */
   var fn authors(...names: String) {
@@ -159,6 +203,21 @@ public type Project {
     hash: String = "",
   ) {
     sources.append Source(package, path, git, revision, archive, hash)
+  }
+
+  /**
+   * Declares a program beyond `src/main.trb`: `program "migrate", entry: "tools/migrate.trb"`, or renames that one:
+   * `program "torb"`. The three are read before anything runs, so they are plain strings.
+   */
+  var fn program(name: String, entry: String = "", output: String = "") {
+    programs.append Program(name, entry, output)
+  }
+
+  /** Configures one of the two profiles: `profile "release" { optimize = 3 }`. */
+  var fn profile(name: String, configure: (var self: Profile) => Void) {
+    var configured = Profile.named name
+    configure configured
+    profiles.append configured
   }
 
   /**
@@ -248,6 +307,19 @@ public type Project {
       }
       lines.append "source {arguments.joined(separator: ", ")}"
     }
+    for declared in programs {
+      var arguments = [quoted(declared.name)]
+      if !declared.entry.isEmpty() {
+        arguments.append "entry: {quoted(declared.entry)}"
+      }
+      if !declared.output.isEmpty() {
+        arguments.append "output: {quoted(declared.output)}"
+      }
+      lines.append "program {arguments.joined(separator: ", ")}"
+    }
+    for configured in profiles {
+      appendProfile lines, configured
+    }
     lines.map({ "{_}\n" }).toList().joined(separator: "")
   }
 }
@@ -261,6 +333,27 @@ public fn evaluated(script: (var self: Project) => Void): String {
   var project = Project()
   script project
   project.settings()
+}
+
+/**
+ * `profile "release" {`, what differs from the profile's defaults, `}` - written even where nothing differs, because
+ * the block is what the file said.
+ */
+fn appendProfile(var lines: List<String>, configured: Profile) {
+  const standard = Profile.named configured.name
+  var inside: List<String> = []
+  if configured.optimize != standard.optimize {
+    inside.append "  optimize = {configured.optimize}"
+  }
+  if configured.debugInformation != standard.debugInformation {
+    inside.append "  debugInformation = {configured.debugInformation}"
+  }
+  if configured.panicFrames != standard.panicFrames {
+    inside.append "  panicFrames = {configured.panicFrames}"
+  }
+  lines.append "profile {quoted(configured.name)} \{"
+  lines.appendAll inside
+  lines.append "\}"
 }
 
 /** `word {`, the lines, `}` - and nothing at all where there are no lines. */
