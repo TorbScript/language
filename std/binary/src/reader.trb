@@ -53,7 +53,8 @@ public type ByteReader {
 
   /** The end of what this reader may read: the end of its window, or of `input`. */
   private fn limit(): Int {
-    if windowEnd < input.length() { windowEnd } else { input.length() }
+    const length = input.length()
+    if windowEnd < length { windowEnd } else { length }
   }
 
   /** The next byte to read, counted from the start of this reader's bytes: 0 for a reader that has read nothing. */
@@ -117,20 +118,25 @@ public type ByteReader {
 
   /** The next `width` bytes, at most 4, as a number without a sign in `order`. */
   private var fn unsigned(width: Int, order: ByteOrder, expected: String): Result<Int, ReadError> {
+    // The list is read through a local, which a read of a field in the loop would retain and release every time
+    const bytes = input
     const available = limit() - cursor
     if width > available {
       return Fail ReadError.Truncated(cursor, expected, width, available)
     }
     var value = 0
-    if order == ByteOrder.BigEndian {
-      for index in 0..width {
-        value = (value << 8) | Int.from(input[cursor + index])
+    match order {
+      .BigEndian => {
+        for index in 0..width {
+          value = (value << 8) | Int.from(bytes[cursor + index])
+        }
       }
-    } else {
-      var index = width - 1
-      while index >= 0 {
-        value = (value << 8) | Int.from(input[cursor + index])
-        index = index - 1
+      .LittleEndian => {
+        var index = width - 1
+        while index >= 0 {
+          value = (value << 8) | Int.from(bytes[cursor + index])
+          index = index - 1
+        }
       }
     }
     cursor = cursor + width
@@ -145,18 +151,19 @@ public type ByteReader {
     }
     const first = unsigned(4, order, expected)?
     const second = unsigned(4, order, expected)?
-    if order == ByteOrder.BigEndian {
-      return Ok((first << 32) | second)
+    match order {
+      .BigEndian => Ok((first << 32) | second)
+      .LittleEndian => Ok((second << 32) | first)
     }
-    Ok((second << 32) | first)
   }
 
   /** The next byte. */
   var fn uint8(): Result<UInt8, ReadError> {
-    if cursor >= limit() {
+    const bytes = input
+    if cursor >= windowEnd || cursor >= bytes.length() {
       return Fail ReadError.Truncated(cursor, "a UInt8", 1, 0)
     }
-    const value = input[cursor]
+    const value = bytes[cursor]
     cursor = cursor + 1
     Ok value
   }
@@ -164,32 +171,42 @@ public type ByteReader {
   /** The next two bytes as a `UInt16`, in `order` or the reader's. */
   var fn uint16(order: ByteOrder? = None): Result<UInt16, ReadError> {
     // The widths every format reads most are written out, without the loop of `unsigned`
-    const available = limit() - cursor
+    const bytes = input
+    const length = bytes.length()
+    const available = (if windowEnd < length { windowEnd } else { length }) - cursor
     if available < 2 {
       return Fail ReadError.Truncated(cursor, "a UInt16", 2, available)
     }
-    const first = Int.from input[cursor]
-    const second = Int.from input[cursor + 1]
+    const first = Int.from bytes[cursor]
+    const second = Int.from bytes[cursor + 1]
     cursor = cursor + 2
-    const value = if (order ?? self.order) == ByteOrder.BigEndian { first << 8 | second } else { second << 8 | first }
-    Ok(UInt16.tryFrom(value).ok() ?? 0)
+    const value = match order ?? self.order {
+      .BigEndian => first << 8 | second
+      .LittleEndian => second << 8 | first
+    }
+    match UInt16.tryFrom(value) {
+      Ok(number) => Ok number
+      Fail(_) => Ok 0
+    }
   }
 
   /** The next four bytes as a `UInt32`, in `order` or the reader's. */
   var fn uint32(order: ByteOrder? = None): Result<UInt32, ReadError> {
-    const available = limit() - cursor
+    const bytes = input
+    const length = bytes.length()
+    const available = (if windowEnd < length { windowEnd } else { length }) - cursor
     if available < 4 {
       return Fail ReadError.Truncated(cursor, "a UInt32", 4, available)
     }
-    const first = Int.from input[cursor]
-    const second = Int.from input[cursor + 1]
-    const third = Int.from input[cursor + 2]
-    const fourth = Int.from input[cursor + 3]
+    const first = Int.from bytes[cursor]
+    const second = Int.from bytes[cursor + 1]
+    const third = Int.from bytes[cursor + 2]
+    const fourth = Int.from bytes[cursor + 3]
     cursor = cursor + 4
-    if (order ?? self.order) == ByteOrder.BigEndian {
-      return Ok word32(first << 24 | second << 16 | third << 8 | fourth)
+    match order ?? self.order {
+      .BigEndian => Ok word32(first << 24 | second << 16 | third << 8 | fourth)
+      .LittleEndian => Ok word32(fourth << 24 | third << 16 | second << 8 | first)
     }
-    Ok word32(fourth << 24 | third << 16 | second << 8 | first)
   }
 
   /** The next eight bytes as a `UInt64`, in `order` or the reader's. */
