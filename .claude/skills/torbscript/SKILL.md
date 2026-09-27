@@ -206,8 +206,8 @@ torb docs check docs                The documentation gate
 
 1. **`check`** first. It resolves every name and types every expression, so it finds the mistakes that matter: an
    undeclared name, a wrong type, a non-exhaustive `match`, a change that cannot be seen, a `var` that is missing.
-2. **`format --check`** second. It reports every file whose call form, indentation, spaces or blank lines are not in the
-   layout. Run plain `format` to write it rather than fixing it by hand - it edits over the syntax tree and re-parses, so
+2. **`format --check`** second. It reports every file whose call form, indentation, spaces, blank lines or line breaks
+   are not in the layout. Run plain `format` to write it rather than fixing it by hand - it edits over the syntax tree and re-parses, so
    it cannot change what a program means.
 3. **`test`** last, when there are tests. One process per file, as many at a time as the machine has cores.
 
@@ -221,7 +221,7 @@ positive of the checker is a bug in the checker.
 | `parse` | A semicolon, an unclosed brace, a command call in the wrong position, a `{` where a block was meant |
 | `check` | An undeclared name, a wrong type, a missing `var`, a non-exhaustive `match`, an unreachable arm, a dead change, a discarded result, a visibility violation |
 | `check --statistics` | Expressions that have no type yet, reported as `deferred`. The number has to be 0 |
-| `format --check` | A parenthesized call that should be a command, a command that should have parentheses, a multi-line string that is not indented, a line indented wrong, a missing or extra space, a second blank line |
+| `format --check` | A parenthesized call that should be a command, a command that should have parentheses, a multi-line string that is not indented, a line indented wrong, a missing or extra space, a second blank line, a line over 120 columns that a line break makes fit, a broken call that fits on one line again |
 | `lint` | The own name of a type instead of `Self`, a `Bool` field named as a question, an unread binding, an unlabeled literal option |
 | `test` | Everything a test asserts, including the exact text of a diagnostic |
 | `docs check` | A page of `docs/` whose front matter, sections, links, headings or code blocks are wrong |

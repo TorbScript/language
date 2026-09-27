@@ -1,6 +1,9 @@
 /**
- * Text in, text out for `torb format`: the layout of indentation, spaces and blank lines, over the rules of the canon,
- * and that a second run changes nothing.
+ * Text in, text out for `torb format`: the layout of indentation, spaces and blank lines, the width of 120 columns,
+ * over the rules of the canon, and that a second run changes nothing.
+ *
+ * A comment inside of a construct keeps the formatter from joining it, which is how the tests of the indentation keep
+ * a construct over several lines that would fit on one.
  */
 
 use test, group from "std/test"
@@ -38,12 +41,15 @@ group "Indentation" {
 
   test "a line opens one level however many brackets it opens" {
     keeps "fn f() \{\n  list.sort(\{ left =>\n    left\n  \})\n\}\n"
-    formats "fn f() \{\n  list.sort(\{ left =>\n        left\n      \})\n\}\n", "fn f() \{\n  list.sort(\{ left =>\n    left\n  \})\n\}\n"
+    formats(
+      "fn f() \{\n  list.sort(\{ left =>\n        left\n      \})\n\}\n",
+      "fn f() \{\n  list.sort(\{ left =>\n    left\n  \})\n\}\n",
+    )
   }
 
   test "the arguments of a call over several lines" {
-    keeps "const x = f(\n  a,\n  b,\n)\n"
-    formats "const x = f(\n      a,\n   b,\n)\n", "const x = f(\n  a,\n  b,\n)\n"
+    keeps "const x = f(\n  a, // first\n  b,\n)\n"
+    formats "const x = f(\n      a, // first\n   b,\n)\n", "const x = f(\n  a, // first\n  b,\n)\n"
   }
 
   test "a long parameter list that hangs is indented by one level, and the body by one" {
@@ -51,23 +57,26 @@ group "Indentation" {
       "fn register(owner: String, kind: Int,\n             size: Int) \{\n  stop()\n\}\n",
       "fn register(owner: String, kind: Int,\n  size: Int) \{\n  stop()\n\}\n",
     )
-    keeps "fn register(\n  owner: String,\n  kind: Int,\n) \{\n  stop()\n\}\n"
+    keeps "fn register(\n  owner: String, // who\n  kind: Int,\n) \{\n  stop()\n\}\n"
   }
 
   test "a line that continues the one before is one level deeper, and so is every further one" {
-    formats "const ready = first\n&& second\n&& third\n", "const ready = first\n  && second\n  && third\n"
+    formats(
+      "const ready = first && second\n&& third\n&& fourth\n",
+      "const ready = first && second\n  && third\n  && fourth\n",
+    )
     formats "const text = \"a\" +\n\"b\"\n", "const text = \"a\" +\n  \"b\"\n"
-    keeps "const names = items\n  .filter(\{ _.ready \})\n  .map(\{ _.name \})\n"
+    keeps "const names = items\n  .filter(\{ _.ready \})\n"
   }
 
   test "the block of a head over several lines is one level deeper than the head's first line" {
-    keeps "fn f() \{\n  if first\n    && second \{\n    stop()\n  \}\n\}\n"
-    keeps "fn f() \{\n  while first\n    && second \{\n    stop()\n  \}\n\}\n"
+    keeps "fn f() \{\n  if first && second\n    && third \{\n    stop()\n  \}\n\}\n"
+    keeps "fn f() \{\n  while first && second\n    && third \{\n    stop()\n  \}\n\}\n"
   }
 
   test "a continuation inside a call that goes on from the line of its `(`" {
-    keeps "fn f() \{\n  report(\"first\"\n    + \"second\")\n\}\n"
-    keeps "fn f() \{\n  print(\n    \"first\"\n      + \"second\"\n  )\n\}\n"
+    keeps "fn f() \{\n  report(\"first\" // one\n    + \"second\")\n\}\n"
+    keeps "fn f() \{\n  print(\n    \"first\" // one\n      + \"second\",\n  )\n\}\n"
   }
 
   test "an arm of a match that starts with `.` is no continuation" {
@@ -176,6 +185,218 @@ group "Spaces" {
     formats "server \{ port=8080 \}\n", "server \{ port = 8080 \}\n"
     formats "test \"adds\"\{\n  stop()\n\}\n", "test \"adds\" \{\n  stop()\n\}\n"
     keeps "const doubled = numbers.map \{ value => value * 2 \}\n"
+  }
+}
+
+group "The width of 120 columns" {
+  test "a line of exactly 120 columns stays, and one of 121 breaks" {
+    const fits = "b".repeat(96)
+    keeps "const values = [alpha, {fits}]\n"
+    const long = "b".repeat(97)
+    formats "const values = [alpha, {long}]\n", "const values = [\n  alpha,\n  {long},\n]\n"
+  }
+
+  test "a column is a character: one of two bytes and a wide one of three bytes are one column each" {
+    const umlauts = "\u{E4}".repeat(95)
+    keeps "const values = [\"{umlauts}\", beta]\n"
+    const more = "\u{E4}".repeat(96)
+    formats "const values = [\"{more}\", beta]\n", "const values = [\n  \"{more}\",\n  beta,\n]\n"
+    const wide = "\u{6F22}".repeat(95)
+    keeps "const values = [\"{wide}\", beta]\n"
+  }
+
+  test "the arguments of a call" {
+    const name = "a".repeat(90)
+    formats(
+      "const result = compute(first, {name}, last)\n",
+      "const result = compute(\n  first,\n  {name},\n  last,\n)\n",
+    )
+  }
+
+  test "a command call gets its parentheses when it breaks" {
+    const name = "a".repeat(100)
+    formats(
+      "fn f() \{\n  report first, {name}, last\n\}\n",
+      "fn f() \{\n  report(\n    first,\n    {name},\n    last,\n  )\n\}\n",
+    )
+  }
+
+  test "a parameter list, and the block behind it" {
+    const name = "a".repeat(90)
+    formats(
+      "fn register(owner: String, {name}: Int, size: Int) \{\n  stop()\n\}\n",
+      "fn register(\n  owner: String,\n  {name}: Int,\n  size: Int,\n) \{\n  stop()\n\}\n",
+    )
+  }
+
+  test "a list, a map and a tuple" {
+    const name = "a".repeat(100)
+    formats "const values = [first, {name}]\n", "const values = [\n  first,\n  {name},\n]\n"
+    formats "const table = [\"first\": 1, \"{name}\": 2]\n", "const table = [\n  \"first\": 1,\n  \"{name}\": 2,\n]\n"
+    formats "const pair = (first, {name}, last)\n", "const pair = (\n  first,\n  {name},\n  last,\n)\n"
+  }
+
+  test "type arguments, the outer list first" {
+    const name = "A".repeat(100)
+    formats(
+      "const lookup: Map<String, List<{name}>> = [:]\n",
+      "const lookup: Map<\n  String,\n  List<{name}>,\n> = [:]\n",
+    )
+  }
+
+  test "a with list: the with and every trait start a line" {
+    const name = "A".repeat(100)
+    formats(
+      "type Box with Show, Hash, {name}, Equals \{\n  value: Int\n\}\n",
+      "type Box\n  with Show,\n  Hash,\n  {name},\n  Equals \{\n  value: Int\n\}\n",
+    )
+  }
+
+  test "a chain of method calls breaks in front of each call" {
+    const name = "a".repeat(62)
+    formats(
+      "const names = items.filter(\{ _.ready \}).map(\{ _.{name} \}).toList()\n",
+      "const names = items\n  .filter(\{ _.ready \})\n  .map(\{ _.{name} \})\n  .toList()\n",
+    )
+    formats(
+      "const text = File.readText(path).lines().map(\{ _.{name} \}).toList()\n",
+      "const text = File.readText(path)\n  .lines()\n  .map(\{ _.{name} \})\n  .toList()\n",
+    )
+  }
+
+  test "a run of operators breaks in front of each, and `-` only inside of brackets" {
+    const name = "a".repeat(90)
+    formats "const ready = first && {name} && last\n", "const ready = first\n  && {name}\n  && last\n"
+    keeps "const total = first - {name} - last\n"
+    const longer = "a".repeat(110)
+    formats(
+      "const total = compute(first - {longer} - last)\n",
+      "const total = compute(\n  first\n    - {longer}\n    - last,\n)\n",
+    )
+  }
+
+  test "a line that is still too long inside of a broken one breaks again" {
+    const name = "a".repeat(110)
+    formats(
+      "const outer = combine(first, transform({name}, second, third))\n",
+      "const outer = combine(\n  first,\n  transform(\n    {name},\n    second,\n    third,\n  ),\n)\n",
+    )
+  }
+
+  test "a line no break makes fit stays as it is" {
+    const text = "s".repeat(130)
+    keeps "const values = [\"{text}\", beta]\n"
+    const message = "m".repeat(110)
+    keeps "fn f() \{\n  if ready \{\n    printError \"{message}\"\n  \}\n\}\n"
+    const name = "a".repeat(100)
+    keeps "const text = if check(first, {name}) \{ first \} else \{ second \}\n"
+    keeps "const values = items.map(\{ compute first, {name}, last \})\n"
+  }
+
+  test "a comment is never moved: not from between tokens, and not from behind the code" {
+    const name = "a".repeat(100)
+    keeps "const values = [alpha, /* note */ {name}]\n"
+    const note = "n".repeat(120)
+    keeps "const values = [alpha, beta] // {note}\n"
+    keeps "const values = [\n  // the first\n  alpha,\n  beta,\n]\n"
+  }
+
+  test "a file with CRLF breaks and joins with CRLF" {
+    const long = "b".repeat(97)
+    formats "const values = [alpha, {long}]\r\n", "const values = [\r\n  alpha,\r\n  {long},\r\n]\r\n"
+    formats "const values = [\r\n  alpha,\r\n  beta,\r\n]\r\n", "const values = [alpha, beta]\r\n"
+  }
+}
+
+group "A call hugs its only argument" {
+  test "a command whose only argument is a call gets parentheses, and only the inner list breaks" {
+    const name = "a".repeat(100)
+    formats(
+      "fn f() \{\n  problems.append Problem(first, {name}, last)\n\}\n",
+      "fn f() \{\n  problems.append(Problem(\n    first,\n    {name},\n    last,\n  ))\n\}\n",
+    )
+    formats(
+      "fn f(): Result<Int, Problem> \{\n  return Fail Problem(first, {name})\n\}\n",
+      "fn f(): Result<Int, Problem> \{\n  return Fail(Problem(\n    first,\n    {name},\n  ))\n\}\n",
+    )
+  }
+
+  test "a list literal is hugged too" {
+    const name = "a".repeat(100)
+    formats "const value = Some([first, {name}])\n", "const value = Some([\n  first,\n  {name},\n])\n"
+  }
+
+  test "calls of one argument inside of each other hug down to the innermost list" {
+    const name = "a".repeat(100)
+    formats "const value = Ok(Some(Pair(first, {name})))\n", "const value = Ok(Some(Pair(\n  first,\n  {name},\n)))\n"
+  }
+
+  test "a hugged call joins again once it fits, and becomes a command where the canon says so" {
+    formats(
+      "fn f() \{\n  problems.append(Problem(\n    first,\n    second,\n  ))\n\}\n",
+      "fn f() \{\n  problems.append Problem(first, second)\n\}\n",
+    )
+  }
+
+  test "a call broken one argument per line is hugged where that fits" {
+    const name = "a".repeat(100)
+    formats(
+      "fn f() \{\n  report(\n    Problem(first, {name}, last),\n  )\n\}\n",
+      "fn f() \{\n  report(Problem(\n    first,\n    {name},\n    last,\n  ))\n\}\n",
+    )
+  }
+
+  test "where the line up to the inner bracket is too long, the call breaks on its own" {
+    const binding = "b".repeat(50)
+    const outer = "c".repeat(40)
+    const inner = "D".repeat(40)
+    formats(
+      "const {binding} = {outer}({inner}(first, second))\n",
+      "const {binding} = {outer}(\n  {inner}(first, second),\n)\n",
+    )
+  }
+}
+
+group "Joining what fits again" {
+  test "a construct in the shape the formatter breaks into joins once it fits" {
+    formats "const values = [\n  alpha,\n  beta,\n]\n", "const values = [alpha, beta]\n"
+    formats "const x = [\n  [\n    a,\n    b,\n  ],\n  c,\n]\n", "const x = [[a, b], c]\n"
+    formats(
+      "const names = items\n  .filter(\{ _.ready \})\n  .map(\{ _.name \})\n",
+      "const names = items.filter(\{ _.ready \}).map(\{ _.name \})\n",
+    )
+    formats "const ready = first\n  && second\n  && third\n", "const ready = first && second && third\n"
+  }
+
+  test "a call that joins is written as a command where the canon says so" {
+    formats "const x = compute(\n  first,\n  second,\n)\n", "const x = compute first, second\n"
+    const name = "a".repeat(106)
+    formats "report(\n  first,\n  {name},\n)\n", "report first, {name}\n"
+    keeps "report first, {name}\n"
+    const longer = "a".repeat(107)
+    formats "report first, {longer}\n", "report(\n  first,\n  {longer},\n)\n"
+  }
+
+  test "a construct that would be 121 columns on one line stays broken" {
+    const fits = "b".repeat(96)
+    formats "const values = [\n  alpha,\n  {fits},\n]\n", "const values = [alpha, {fits}]\n"
+    const long = "b".repeat(97)
+    keeps "const values = [\n  alpha,\n  {long},\n]\n"
+  }
+
+  test "a line break of the author's in another shape is kept" {
+    keeps "const x = compute(first,\n  second)\n"
+    keeps "const ready = first && second\n  && third\n"
+  }
+
+  test "never across a comment" {
+    keeps "const x = compute(\n  first, // why\n  second,\n)\n"
+    keeps "const values = [\n  alpha,\n  /* why */ beta,\n]\n"
+  }
+
+  test "a trailing comma stands exactly where the closing bracket starts a line" {
+    formats "const x = [a, b,]\n", "const x = [a, b]\n"
+    formats "const x = compute(first, // why\n  second\n)\n", "const x = compute(first, // why\n  second,\n)\n"
   }
 }
 

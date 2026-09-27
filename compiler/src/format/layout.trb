@@ -3,11 +3,11 @@
  * lines, and the end of the file - computed from the tokens of the lexer and the syntax tree, never from a regular
  * expression.
  *
- * **What it keeps.** Every line break between two tokens is the author's: a line is never joined with the next one
- * and never broken in two, so a long call stays laid out the way it was written. A comment stays where it was, a
- * multi-line string and a multi-line comment are one piece whose text is not looked into (the rule `strings` of the
- * canon indents a string afterwards), and every line break the file writes is the first one it has: a file with CRLF
- * stays CRLF.
+ * **What it keeps.** Every line break between two tokens: this half never joins a line with the next one and never
+ * breaks one in two - fitting lines into the width is the work of `./width`, which runs on what this half wrote. A
+ * comment stays where it was, a multi-line string and a multi-line comment are one piece whose text is not looked
+ * into (the rule `strings` of the canon indents a string afterwards), and every line break the file writes is the
+ * first one it has: a file with CRLF stays CRLF.
  *
  * **What it decides.**
  *
@@ -59,7 +59,7 @@ public fn laidOut(source: String): String? {
   const start = if hasMark { byteOrderMark.byteLength() } else { 0 }
   const pieces = piecesOf(source, tokens, start)?
   const lines = linesOf pieces
-  const indents = indentationsOf lines, tokens, marks.closureArrows
+  const indents = indentationsOf lines, tokens, marks
   const lineEnding = lineEndingOf source
   var parts: List<String> = []
   if hasMark {
@@ -82,7 +82,7 @@ public fn laidOut(source: String): String? {
 }
 
 /** The first line break of the file, which is the one every line break of the layout is written with. */
-fn lineEndingOf(source: String): String {
+public fn lineEndingOf(source: String): String {
   match source.byteOffsetOf("\n") {
     Some(at) if at > 0 && source.byteAt(at - 1) == 13 => "\r\n"
     _ => "\n"
@@ -238,11 +238,11 @@ fn startsWithClosing(line: Line, tokens: List<Token>): Bool {
   }
 }
 
-fn isOpening(kind: TokenKind): Bool {
+public fn isOpening(kind: TokenKind): Bool {
   kind == TokenKind.ParenOpen || kind == TokenKind.BracketOpen || kind == TokenKind.BraceOpen
 }
 
-fn isClosing(kind: TokenKind): Bool {
+public fn isClosing(kind: TokenKind): Bool {
   kind == TokenKind.ParenClose || kind == TokenKind.BracketClose || kind == TokenKind.BraceClose
 }
 
@@ -267,8 +267,12 @@ type Context {
   var headed: Bool = false
 }
 
-/** The level of indentation of every line. */
-fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int>): List<Int> {
+/**
+ * The level of indentation of every line. The `<` of type arguments that ends a line opens a level like a bracket,
+ * and the `>` that starts a line closes it: the shape `torb format` breaks a long list of type arguments into.
+ */
+fn indentationsOf(lines: List<Line>, tokens: List<Token>, marks: Marks): List<Int> {
+  const closureArrows = marks.closureArrows
   var indents: List<Int> = []
   var current = Context(opener: TokenKind.EndOfFile, content: 0, itemIndent: 0, line: -1)
   var outer: List<Context> = []
@@ -283,9 +287,10 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
       continue
     }
     const first = tokens[code[0]].kind
+    const closesAngle = marks.roles[code[0]] == Role.AngleClosing && current.opener == TokenKind.Less
     var indent = current.content
     var continues = false
-    if isClosing(first) {
+    if isClosing(first) || closesAngle {
       indent = current.content - 1
     } else {
       continues = continuesTheLineBefore current, first
@@ -296,7 +301,7 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
         current.headed = startsWithHeadKeyword tokens, code
       }
     }
-    const commentIndent = if isClosing(first) { indent + 1 } else { indent }
+    const commentIndent = if isClosing(first) || closesAngle { indent + 1 } else { indent }
     for waitingLine in waiting {
       indents[waitingLine] = commentIndent
     }
@@ -309,7 +314,8 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
       if kind == TokenKind.Reserved(Keyword.Match) && isMatchKeyword(tokens, code, position) {
         pendingMatch = outer.length()
       }
-      if isOpening(kind) {
+      const opensAngle = marks.roles[index] == Role.AngleOpening && isLast
+      if isOpening(kind) || opensAngle {
         const holdsArms = kind == TokenKind.BraceOpen && pendingMatch == outer.length()
         if holdsArms {
           pendingMatch = None
@@ -321,7 +327,7 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
         const itemIndent = if isLast { content } else { content - 1 }
         outer.append current
         current = Context opener: kind, content: content, itemIndent: itemIndent, holdsArms: holdsArms, line: lineIndex
-      } else if isClosing(kind) {
+      } else if isClosing(kind) || (position == 0 && closesAngle) {
         const closed = current
         if const Some(enclosing) = outer.removeAt(outer.length() - 1) {
           current = enclosing
@@ -350,10 +356,13 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
 /**
  * Whether a line that starts with `first` continues the item of the line before it. In a list that is every line the
  * line before did not end with `,`; in a block and at the top level of a file it is what the lexer decides as well:
- * the line starts with an operator or a `.` (unless it is an arm of a `match`), or the one before ends with one.
+ * the line starts with an operator or a `.` (unless it is an arm of a `match`), or the one before ends with one -
+ * a `,` too (a `with` list over several lines), except behind an arm of a `match`.
  */
 fn continuesTheLineBefore(current: Context, first: TokenKind): Bool {
-  const isList = current.opener == TokenKind.ParenOpen || current.opener == TokenKind.BracketOpen
+  const isList = current.opener == TokenKind.ParenOpen
+    || current.opener == TokenKind.BracketOpen
+    || current.opener == TokenKind.Less
   if isList {
     return match current.last {
       Some(kind) => kind != TokenKind.Comma
@@ -366,7 +375,9 @@ fn continuesTheLineBefore(current: Context, first: TokenKind): Bool {
     return true
   }
   match current.last {
-    Some(kind) => kind.continuesLineAfter() && kind != TokenKind.Comma && !current.lastEndsParameters
+    Some(kind) => kind.continuesLineAfter()
+      && (kind != TokenKind.Comma || !current.holdsArms)
+      && !current.lastEndsParameters
     None => false
   }
 }
@@ -405,7 +416,7 @@ fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>): Bool {
 // --- Spaces -----------------------------------------------------------------------------------------------------------
 
 /** What a token is to the spaces around it. */
-type Role {
+public type Role {
   /** A name, a keyword, a literal */
   case Word
   case Opening
@@ -431,12 +442,12 @@ type Role {
 }
 
 /** The role of every token, and the indices of the `=>` behind the parameters of a closure. */
-type Marks {
+public type Marks {
   roles: List<Role>
   closureArrows: Set<Int>
 }
 
-fn marksOf(
+public fn marksOf(
   tokens: List<Token>,
   infixOperators: List<Int>,
   prefixOperators: List<Int>,
@@ -508,7 +519,7 @@ fn roleOf(kind: TokenKind): Role {
 }
 
 /** The kinds of token an infix operator of an expression is written with. */
-fn isInfixKind(kind: TokenKind): Bool {
+public fn isInfixKind(kind: TokenKind): Bool {
   match kind {
     .EqualEqual | .BangEqual | .Less | .LessEqual | .Greater | .GreaterEqual | .AndAnd | .OrOr => true
     .Pipe | .Ampersand | .Caret | .LessLess | .Plus | .Minus | .Star | .StarStar | .Slash | .Percent => true
@@ -521,8 +532,8 @@ fn isPrefixKind(kind: TokenKind): Bool {
   kind == TokenKind.Minus || kind == TokenKind.Bang || kind == TokenKind.Tilde
 }
 
-/** Whether an operand can end with a token of this kind, so that a `-` behind it infixTokens. */
-fn endsOperand(kind: TokenKind): Bool {
+/** Whether an operand can end with a token of this kind, so that a `-` behind it subtracts. */
+public fn endsOperand(kind: TokenKind): Bool {
   match kind {
     .Identifier | .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true
     .ParenClose | .BracketClose | .Question => true
@@ -536,7 +547,7 @@ fn endsOperand(kind: TokenKind): Bool {
  * `None` where the offset lies inside of a token - the expression of an interpolation, whose tokens are not the file's
  * - or the token there is of a kind the test does not accept.
  */
-fn firstTokenFrom(tokens: List<Token>, offset: Int, accepts: (TokenKind) => Bool): Int? {
+public fn firstTokenFrom(tokens: List<Token>, offset: Int, accepts: (TokenKind) => Bool): Int? {
   var low = 0
   var high = tokens.length()
   while low < high {
@@ -565,7 +576,7 @@ fn firstTokenFrom(tokens: List<Token>, offset: Int, accepts: (TokenKind) => Bool
 }
 
 /** Whether one space stands between two tokens of a line. */
-fn spaced(left: Role, leftKind: TokenKind, right: Role, rightKind: TokenKind): Bool {
+public fn spaced(left: Role, leftKind: TokenKind, right: Role, rightKind: TokenKind): Bool {
   if right == Role.Comma || right == Role.Colon {
     return false
   }
@@ -620,7 +631,7 @@ fn spaced(left: Role, leftKind: TokenKind, right: Role, rightKind: TokenKind): B
  * (`event.match(pattern)`, `fn match(pattern: String)`), so an argument list follows it without a space, as it follows
  * any other name.
  */
-fn spacingKindOf(tokens: List<Token>, index: Int): TokenKind {
+public fn spacingKindOf(tokens: List<Token>, index: Int): TokenKind {
   const kind = tokens[index].kind
   if const .Reserved(_) = kind {
     if index > 0 {
@@ -634,7 +645,14 @@ fn spacingKindOf(tokens: List<Token>, index: Int): TokenKind {
 }
 
 /** The pieces of one line, each with the spaces in front of it that the layout decides. */
-fn renderLine(var parts: List<String>, source: String, line: Line, indent: Int, tokens: List<Token>, roles: List<Role>) {
+fn renderLine(
+  var parts: List<String>,
+  source: String,
+  line: Line,
+  indent: Int,
+  tokens: List<Token>,
+  roles: List<Role>,
+) {
   for (position, piece) in line.pieces.indexed() {
     if position > 0 {
       const previous = line.pieces[position - 1]

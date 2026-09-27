@@ -42,10 +42,10 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
 
 **Goal: the tools a user expects around a language that is meant to be used.**
 
-- **`torb format`** - **built**: every rule of the canon, then indentation, spaces and blank lines, over the syntax
-  tree with the safety net of the canon; `format --check` is the tier A gate, and `torb canon` is a deprecated alias of
-  it. **Left:** where a long line breaks - the formatter keeps every line break between two tokens and holds no width
-  yet ([tooling/torb-format.md](tooling/torb-format.md)).
+- **`torb format`** - **built**: every rule of the canon, then indentation, spaces, blank lines and a width of 120
+  columns - a long line breaks at the outermost bracket that makes it fit, and what the formatter broke joins again
+  once it fits - over the syntax tree with the safety net of the canon; `format --check` is the tier A gate, and
+  `torb canon` is a deprecated alias of it ([tooling/torb-format.md](tooling/torb-format.md)).
 - **`torb lint`** - **built**, with `--fix` as the migration tool for every breaking change before 1.0 and for every
   deprecation after it: the rules `self-name`, `question-field`, `unread-binding` and `labeled-literal`. **Left:** a
   place in the manifest to choose rules (only `--rule`/`--skip` today), the rules named and not built (a closure that

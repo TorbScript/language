@@ -11,7 +11,7 @@
 use Span from "../syntax/source"
 use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
 use FunctionDeclaration, Binding, Condition, Block, Argument, Expression, ExpressionKind from "../syntax/ast"
-use Pattern, PatternKind from "../syntax/ast"
+use Pattern, PatternKind, InfixOperator from "../syntax/ast"
 
 /** One call of the tree: whether it stands in command position, and whether its callee could be a field. */
 public type CallSite {
@@ -53,6 +53,36 @@ public type Sites {
   var implicitMembers: List<Int> = []
   /** Where the parameters of every closure that has some end: its `=>` is the first one after it. */
   var closureArrows: List<Int> = []
+  /** Where the target of every expression with type arguments ends (`decode<Config>`): its `<` is the first token after it. */
+  var genericArguments: List<Int> = []
+  /**
+   * Every chain of at least two method calls, the one `torb format` breaks in front of each `.`. A chain that is part
+   * of a longer one is listed too, after it.
+   */
+  var chains: List<ChainSite> = []
+  /**
+   * Every run of infix operators of one precedence (`a && b && c`), the one `torb format` breaks in front of each
+   * operator. A run inside a longer one of the same precedence is listed too, after it.
+   */
+  var operatorRuns: List<OperatorRun> = []
+}
+
+/**
+ * A chain of method calls: `items.filter(...).map(...)`. The head is the value the chain starts with, with the
+ * members it reads before its first call; each group is a method call and whatever follows it up to the next one.
+ * Behind a name that starts with a capital letter - a type, a case, a module - the first call belongs to the head:
+ * `File.readText(path)`, `CExpression.Call(...)`.
+ */
+public type ChainSite {
+  span: Span
+  /** Where the name of the method that starts each group starts: its `.` is the token in front of it */
+  groups: List<Int>
+}
+
+/** A run of infix operators of one precedence, and where the operand in front of each operator ends. */
+public type OperatorRun {
+  span: Span
+  operands: List<Int>
 }
 
 public fn walk(file: SourceFile): Sites {
@@ -210,7 +240,11 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
         }
       }
     }
-    .Generic(target, _) => walkExpression sites, fields, target, isCommandPosition: false
+    .Generic(target, _) => {
+      sites.genericArguments.append target.span.end
+      recordChain sites, node
+      walkExpression sites, fields, target, isCommandPosition: false
+    }
     .TupleLiteral(items) | .ListLiteral(items) => walkArguments sites, fields, items
     .MapLiteral(entries) => {
       for (key, value) in entries {
@@ -218,8 +252,12 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
         walkExpression sites, fields, value, isCommandPosition: false
       }
     }
-    .Member(target, _, _) => walkExpression sites, fields, target, isCommandPosition: false
+    .Member(target, _, _) => {
+      recordChain sites, node
+      walkExpression sites, fields, target, isCommandPosition: false
+    }
     .Index(target, index) => {
+      recordChain sites, node
       walkExpression sites, fields, target, isCommandPosition: false
       walkExpression sites, fields, index, isCommandPosition: false
     }
@@ -229,6 +267,7 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
         None => false
       }
       sites.calls.append CallSite(node, isCommandPosition, calleeCouldBeAField)
+      recordChain sites, node
       walkExpression sites, fields, callee, isCommandPosition: false
       walkArguments sites, fields, arguments
     }
@@ -236,8 +275,13 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
       sites.prefixOperators.append node.span.start
       walkExpression sites, fields, operand, isCommandPosition: false
     }
-    .Binary(_, left, right) => {
+    .Binary(operator, left, right) => {
       sites.infixOperators.append left.span.end
+      var operands: List<Int> = []
+      collectOperands left, powerOf(operator), operands
+      operands.append left.span.end
+      collectOperands right, powerOf(operator), operands
+      sites.operatorRuns.append OperatorRun(node.span, operands)
       walkExpression sites, fields, left, isCommandPosition: false
       walkExpression sites, fields, right, isCommandPosition: false
     }
@@ -251,7 +295,10 @@ fn walkExpression(var sites: Sites, fields: List<String>, node: Expression, isCo
         None => {}
       }
     }
-    .Try(inner) => walkExpression sites, fields, inner, isCommandPosition: false
+    .Try(inner) => {
+      recordChain sites, node
+      walkExpression sites, fields, inner, isCommandPosition: false
+    }
     .Closure(closure) => {
       for parameter in closure.parameters {
         walkPattern sites, fields, parameter.pattern
@@ -365,5 +412,122 @@ fn isSelfValue(target: Expression): Bool {
   match target.kind {
     .Name(text) if text == "self" => true
     _ => false
+  }
+}
+
+// --- Chains and runs of operators -------------------------------------------------------------------------------------
+
+/** One step of a chain of postfix operations. */
+type ChainStep {
+  /** `.name`, with where the name starts */
+  case Member(name: Int)
+  case Call
+  /** An index, a `?` or type arguments */
+  case Other
+}
+
+/**
+ * The chain a postfix expression ends, if it has at least two method calls behind its head. A target in parentheses
+ * ends the chain: `(a.b).c()` is a chain of one call on `(a.b)`.
+ */
+fn recordChain(var sites: Sites, node: Expression) {
+  var steps: List<ChainStep> = []
+  const base = chainSteps node, steps
+  var groups: List<Int> = []
+  for (index, step) in steps.indexed() {
+    match step {
+      .Member(name) => {
+        if index + 1 < steps.length() && isCall(steps[index + 1]) {
+          groups.append name
+        }
+      }
+      _ => {}
+    }
+  }
+  if startsWithCapital(base) && !groups.isEmpty() {
+    const _ = groups.removeAt 0
+  }
+  if groups.length() >= 2 {
+    sites.chains.append ChainSite(node.span, groups)
+  }
+}
+
+fn isCall(step: ChainStep): Bool {
+  match step {
+    .Call => true
+    _ => false
+  }
+}
+
+/** The steps of a chain, from its base on, and the base. */
+fn chainSteps(node: Expression, var steps: List<ChainStep>): Expression {
+  match node.kind {
+    .Member(target, name, _) if target.span.start == node.span.start => {
+      const base = chainSteps target, steps
+      steps.append ChainStep.Member(name.span.start)
+      base
+    }
+    .Call(callee, _, _) if callee.span.start == node.span.start => {
+      const base = chainSteps callee, steps
+      steps.append ChainStep.Call
+      base
+    }
+    .Index(target, _) if target.span.start == node.span.start => {
+      const base = chainSteps target, steps
+      steps.append ChainStep.Other
+      base
+    }
+    .Generic(target, _) if target.span.start == node.span.start => {
+      const base = chainSteps target, steps
+      steps.append ChainStep.Other
+      base
+    }
+    .Try(inner) if inner.span.start == node.span.start => {
+      const base = chainSteps inner, steps
+      steps.append ChainStep.Other
+      base
+    }
+    _ => node
+  }
+}
+
+fn startsWithCapital(base: Expression): Bool {
+  match base.kind {
+    .Name(text) => {
+      match text.chars().first() {
+        Some(character) => character.toUpperCase() == character && character.isLetter()
+        None => false
+      }
+    }
+    _ => false
+  }
+}
+
+/**
+ * The ends of the operands of a run of operators of one precedence below `node`. An operand in parentheses is one
+ * operand: its span starts at the `(`, while the left operand inside of it starts behind it.
+ */
+fn collectOperands(node: Expression, power: Int, var operands: List<Int>) {
+  match node.kind {
+    .Binary(operator, left, right) if powerOf(operator) == power && left.span.start == node.span.start => {
+      collectOperands left, power, operands
+      operands.append left.span.end
+      collectOperands right, power, operands
+    }
+    _ => {}
+  }
+}
+
+/** How tightly an infix operator binds, as the Pratt loop of the parser has it. */
+fn powerOf(operator: InfixOperator): Int {
+  match operator {
+    .Or => 1
+    .And => 2
+    .Equal | .NotEqual | .Less | .LessOrEqual | .Greater | .GreaterOrEqual => 3
+    .Coalesce => 4
+    .Add | .Subtract | .BitwiseOr | .BitwiseExclusiveOr => 6
+    .Multiply | .Divide | .Remainder | .BitwiseAnd => 7
+    .ShiftLeft | .ShiftRight => 8
+    .Power => 9
   }
 }

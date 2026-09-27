@@ -1,6 +1,6 @@
 ---
 title: torb format
-summary: torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces and blank lines - and --check fails on every file that is not in it.
+summary: torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces, blank lines and a width of 120 columns - and --check fails on every file that is not in it.
 kind: tooling
 status: stable
 order: 120
@@ -10,15 +10,19 @@ keywords:
   - layout
   - format --check
   - indentation
+  - line width
+  - trailing comma
 source:
   - CONCEPT.md#formatter-canon
   - compiler/src/format/command.trb
   - compiler/src/format/layout.trb
+  - compiler/src/format/width.trb
 ---
 
 `format` is the formatter of `torb`, milestone 8's replacement for [`torb canon`](torb-canon.md). It runs every rule
-of the canon, then lays out the file: indentation, the spaces between tokens, blank lines and the end of the file. There
-is no option: the layout is decided once, for every program, and a file is either in it or not.
+of the canon, then lays out the file: indentation, the spaces between tokens, blank lines, the end of the file, and a
+width of 120 columns that it breaks long lines to and joins short ones back into. There is no option: the layout is
+decided once, for every program, and a file is either in it or not.
 
 ## Synopsis
 
@@ -57,16 +61,19 @@ and `while true {` becomes `loop {`. Each edit is applied on its own and parsed 
 
 ```trb
 fn describe(items: List<Int>, limit: Int): String {
-  const count = items
-    .filter({ _ > limit })
-    .count()
-  if count > 10
-    && limit > 0 {
-    return "many"
+  const count = items.filter({ _ > limit }).count()
+  const label = "{count} of " +
+    "{items.length()}"
+  if count > 10 && limit > 0
+    && !items.isEmpty() {
+    return "many: {label}"
   }
-  "{count}"
+  label
 }
 ```
+
+Both breaks in there are the author's, and they stay: neither is in the shape the width breaks into (see below), so
+the width leaves them alone.
 
 **Spaces** between the tokens of a line:
 
@@ -90,11 +97,145 @@ syntax tree, not guessed from the spaces around it.
 bracket and none in front of a line that starts with a closing one. The file ends with exactly one line break, and no
 line ends with a space.
 
+### Then the width
+
+A line holds at most **120 columns**. A column is a character - a Unicode scalar value, what `String.chars()` counts -
+whatever its width on a screen: `a`, `ä` and the wide `漢` are one column each, and so is a combining mark. The line
+break is not counted, and neither is the carriage return of a CRLF. Characters and not the width on a screen, because
+the lines that hold wide characters are strings and comments, which are never broken anyway; a count of characters is
+the column every editor shows and every diagnostic of `torb` names, and it needs no table of East Asian widths that
+changes with each version of Unicode.
+
+**What breaks.** Five kinds of construct, each into one shape:
+
+| Construct | Broken into |
+|-----------|-------------|
+| A bracketed list: the arguments of a call, the parameters of a function or a case, a list, map or tuple, a pattern, the type arguments and type parameters of a type | One item per line, one level deeper than the line the construct starts on, the closing bracket on a line of its own at the level of that line, a comma behind the last item |
+| The arguments of a command call | Parentheses first, then the shape of a call |
+| A chain of at least two method calls | A line break in front of the `.` of every call, one level deeper |
+| A run of infix operators of one precedence | A line break in front of every operator, one level deeper |
+| A `with` list | The `with` and every trait behind it start a line, one level deeper |
+
+```trb
+fn register(
+  owner: String,
+  kind: RegistrationKind,
+  capacity: Int,
+  description: String,
+  notify: (Registration) => Void,
+): Registration {
+  const accepted = registrations
+    .filter({ _.owner == owner && _.kind == kind })
+    .sorted({ _.capacity })
+    .take(capacity)
+    .toList()
+  if accepted.isEmpty() && description.isEmpty() && kind != RegistrationKind.Temporary
+    || capacity > maximumCapacityOfTheRegistry {
+    report(
+      "no registration for {owner} accepted",
+      severity: Severity.Warning,
+      context: [owner, description, kind.show(), capacity.show()],
+    )
+  }
+  Registration owner, kind, capacity, description
+}
+```
+
+`report` was written `report "no registration...", severity: ...`: a command call that breaks gets its parentheses,
+which the canon writes for a call over several lines anyway.
+
+**Where a long line breaks.** At the outermost construct whose break makes every line that comes out of it fit -
+breaking what is inside of it again where one of those lines is still too long. Constructs inside of each other are
+tried from the outside in, and of two side by side the wider one first: a function's parameters before the type
+arguments of its result, the run of `||` above before the `&&` inside of it, the arguments of `combine` below before
+those of `transform`.
+
+```trb
+const outer = combine(
+  firstArgumentOfTheOuterCall,
+  transform(
+    innerFirstArgumentOfTransform,
+    innerSecondArgumentOfTransform,
+    innerThirdArgumentOfTransform,
+    innerFourthArgument,
+    innerFifthArgument,
+  ),
+)
+```
+
+**A call hugs its only argument.** Where the only argument of a call is another call - a constructor or a case too -
+or a list or map literal, the two brackets stay together on the line and only the inner list breaks, one level deeper
+than that line; both closing brackets share the last line. The call has no item of its own to put on a line, so the
+hug saves the two lines the outer brackets would take, as Prettier and rustfmt do:
+
+```trb
+fn check(path: String, number: Int, line: String) {
+  var problems: List<DocumentationProblem> = []
+  if line.startsWith(" ") {
+    problems.append(DocumentationProblem(
+      path,
+      number,
+      "An indented line in the front matter belongs to a list item and has to start with `- `",
+    ))
+  }
+}
+```
+
+That line was `problems.append DocumentationProblem(path, number, "...")`: a command that hugs gets its parentheses.
+The same holds for `Fail(Problem(` ... `))`, `Ok(`, `Some([` ... `])`, and for calls of one argument inside of each
+other, which hug down to the innermost list (`Ok(Some(Pair(` ... `)))`). Where the line up to the inner bracket does not
+fit, the call breaks on its own instead, with the inner call on a line of its own. A hugged call joins again like any
+other broken list once it fits, and a call broken one argument per line whose argument could be hugged is hugged.
+
+**A line no break makes fit stays exactly as it is** - not half broken:
+
+- **A string is never broken**, and a string wider than the room it has keeps its line long. A list of nothing but one
+  token - `printError "..."`, `[name]` - is never broken either: the break would only move the string one line down.
+- **A comment is never moved**: a comment behind the code stays behind the last token of the line, and a line with a
+  comment between its tokens is not broken at all.
+- **A block is never broken and never joined.** `{ ... }` on one line stays on one line - a closure, a one-line `if` or
+  `match` expression, a trailing closure - and so does everything inside of it and in the head in front of it.
+- **A `use` is never broken**: its names have no brackets. Split a `use` that is too long into two of the same file.
+- **A chain directly in the body of a `match`** is not broken: there a line that starts with `.` is an arm.
+- **A run of `-`, `<`, `>`, `|` or `>>` breaks only inside of `(...)` and `[...]`**, because the lexer only continues a
+  line that starts with an operator that needs a left side: a line that starts with `-` is a statement of its own.
+
+**The head of a chain** is the value it starts with and the members it reads before its first call:
+`self.items.filter(...)` breaks in front of `.filter`. Behind a name that starts with a capital letter - a type, a
+case - the first call belongs to the head too: `File.readText(path)`, `CExpression.Call(...)`.
+
+**What joins again.** A construct in exactly the shape the width breaks it into - with nothing inside of it but
+constructs in that shape, no comment and no multi-line string - is joined into one line once that line fits, and a call
+the canon then writes as a command is measured as the command, one column shorter:
+
+```trb
+const x = compute(
+  first,
+  second,
+)
+```
+
+becomes `const x = compute first, second`. Every other line break of the author's is kept, as `gofmt` keeps them and
+unlike `prettier`, which joins what fits: a call that hangs (`compute(first,` and `second)` below it), a run of
+operators broken in front of some of them, a chain broken behind its first call. A line break the author chose is only
+touched once its line is too long, which keeps the diffs small: a change that makes a list one item longer changes one
+line, not the shape of the call around it.
+
+**Trailing commas.** A bracketed list has a comma behind its last item exactly when its closing bracket starts a line:
+the width writes one where it breaks a list, takes it away where it joins one, and does both for a list the author
+broke. Every list the width breaks takes one - the parser reads every bracketed list with a trailing comma allowed, and
+`(a,)` is `a`, not a tuple of one. What would not take one is never broken: the type arguments of an expression
+(`decode<Config>(text)`), an index, and the arguments of a command call, which get parentheses first.
+
+**A command call** that breaks gets its parentheses (`print(` ... `)`) rather than going on over a continuation line: a
+command runs to the end of its line, so a continuation would have to be read from the commas, and the canon writes a
+call over several lines with parentheses anyway. A command that writes a field of the type it stands in (`port 8080`,
+"property commands") is never touched, because there the parentheses change what the call means.
+
 ### What it keeps
 
-- **Every line break between two tokens.** A line is never joined with the next one and never broken in two, so a call
-  that runs over several lines stays laid out the way it was written - and a line that is too long stays too long. Where
-  a long line breaks is not decided yet (see below).
+- **Every line break between two tokens that the width does not own.** The width breaks a line only where it is too
+  long and joins only what stands in its own shape; every other line break stays where the author put it.
 - **Comments**, where they are. A comment on a line of its own takes the level of the line after it; a block comment
   that runs over several lines moves with its first line, and so does its margin of `*`.
 - **The inside of every string**, interpolations included: a string is one token, and only the rule `strings` of the
@@ -108,21 +249,14 @@ The layout of every file is checked the way the canon checks an edit: the file i
 comes out - with every span and every call style erased - has to be the tree that went in. If it is not, the layout of
 that file is dropped and reported as `dropped`, because a formatter that would change what a program means is a bug.
 
-The whole of it - canon, layout, and the rule `strings` again where the layout moved a line - runs until the text stays
-as it is, which is what makes it idempotent: a second run over its output changes nothing.
+The whole of it - canon, layout, width, and the rule `strings` again where the layout moved a line - runs until the
+text stays as it is, which is what makes it idempotent: a second run over its output changes nothing.
 
 ### Exit codes
 
 `0` when nothing needs to change, or after writing. `--check` exits `1` when a file would change, so it composes with a
 shell's `&&` and with continuous integration the same way [`check`](torb-check.md) does. Either way `1` when a safety
 net dropped something. An argument `format` does not recognize prints its usage and exits `2`.
-
-### What is not decided
-
-**Where a long line breaks.** `torb format` owns the layout of a line but not the line breaks between lines: it has no
-width it holds a line to and never reflows a call. Breaking a line is the one layout decision that changes the shape of
-a whole construct - which arguments go on their own line, where a chain of calls breaks - and it is left to the author
-until the language decides on a width and on the shape a broken call takes.
 
 ## Examples
 

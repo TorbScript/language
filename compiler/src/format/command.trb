@@ -1,7 +1,7 @@
 /**
  * `torb format`: writes TorbScript sources in the one layout of the language - the canon of the formatter (a call is a
- * command wherever the grammar allows it, a multi-line string is indented, and the three rules that rewrite the tree)
- * and the layout of `./layout` (indentation, spaces, blank lines).
+ * command wherever the grammar allows it, a multi-line string is indented, and the three rules that rewrite the tree),
+ * the layout of `./layout` (indentation, spaces, blank lines) and the width of `./width` (120 columns).
  *
  * ```text
  * torb format [--check] [path]...
@@ -20,6 +20,7 @@
 use File, IoError from "std/fs"
 use rewrite, Rule, canonicalText from "../canon/command"
 use laidOut from "./layout"
+use fitted, maximumWidth from "./width"
 use counted from "../cli/render"
 
 /** `torb format --help` */
@@ -34,7 +35,8 @@ public fn formatUsage(): String {
     "  command where the grammar allows it, a multi-line `\"\"\"` string is indented, `.None` becomes `None` for an",
     "  imported case, an unread binding of a refutable pattern becomes `_`, `while true \{` becomes `loop \{` - and then",
     "  the layout: two spaces per level, the spaces between tokens, at most one blank line in a row, one line break at",
-    "  the end. Line breaks between tokens, comments and each file's line endings are kept.",
+    "  the end, and a width of 120 columns: a longer line breaks at the outermost bracket that makes it fit, and what",
+    "  the formatter broke joins again once it fits. Strings, comments and each file's line endings are kept.",
     "",
     "  --check   Write nothing, list the files that would change, leave with 1 if there is one",
   ].joined(separator: "\n")
@@ -152,7 +154,20 @@ fn formattedOnce(source: String): Formatted {
   }
   result.dropped.appendAll canon.dropped
   var text = canon.text
-  match laidOut(text) {
+  const laid = match laidOut(text) {
+    Some(found) => {
+      match fitted(found) {
+        Some(fitting) => Some fitting
+        None => {
+          result.dropped.append "fitting the lines into {maximumWidth} columns made the file stop parsing"
+          result.text = text
+          return result
+        }
+      }
+    }
+    None => None
+  }
+  match laid {
     Some(laid) if laid != text => {
       if canonicalText(laid) == canonicalText(text) {
         const strings = rewrite laid, [Rule.Strings]

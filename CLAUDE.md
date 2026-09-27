@@ -18,6 +18,7 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
 - A false positive of the checker is a checker bug. `torb check` of a path that reaches no file is an error.
 - `torb format --check .` is a tier A gate; `torb format <path>` writes the layout (the canon plus indentation, spaces
   and blank lines). `torb canon` is a deprecated alias of it. `torb lint <path>` reports the style rules, not a gate.
+  `torb format` holds lines to 120 columns: a longer line breaks at the outermost bracket, what fits joins again.
 
 ## Checking a scratch program
 

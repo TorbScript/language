@@ -52,7 +52,7 @@ fn editForCall(source: String, tokens: List<Token>, site: CallSite): Edit? {
         return None
       }
       match style {
-        .Parentheses => toCommand source, tokens, site, callee, arguments
+        .Parentheses => toCommand source, tokens, site, callee, arguments, asWritten: true
         .Command => toParentheses source, tokens, site, callee, arguments
       }
     }
@@ -60,8 +60,39 @@ fn editForCall(source: String, tokens: List<Token>, site: CallSite): Edit? {
   }
 }
 
-/** `f(a, b)` becomes `f a, b`, and `f(a) { ... }` becomes `f a { ... }`. */
-fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expression, arguments: List<Argument>): Edit? {
+/**
+ * Whether a call with parentheses that runs over several lines is written as a command once `torb format` joins it
+ * into one line without its trailing comma - which makes it one column shorter than it measures now.
+ */
+public fn becomesCommand(source: String, tokens: List<Token>, site: CallSite): Bool {
+  if site.calleeCouldBeAField {
+    return false
+  }
+  match site.call.kind {
+    .Call(callee, arguments, .Parentheses) => toCommand(
+      source,
+      tokens,
+      site,
+      callee,
+      arguments,
+      asWritten: false,
+    ).isSome()
+    _ => false
+  }
+}
+
+/**
+ * `f(a, b)` becomes `f a, b`, and `f(a) { ... }` becomes `f a { ... }`. With `asWritten` false the arguments are
+ * taken as if they stood on one line without a trailing comma.
+ */
+fn toCommand(
+  source: String,
+  tokens: List<Token>,
+  site: CallSite,
+  callee: Expression,
+  arguments: List<Argument>,
+  asWritten: Bool,
+): Edit? {
   if !site.isCommandPosition || !isCommandPath(callee) || !isWrittenAsACommandPath(tokens, callee.span) {
     return None
   }
@@ -85,12 +116,16 @@ fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expres
   }
   // A `{` inside the parentheses belongs to a closure, an `if` or a `match` there. Without the parentheses the
   // parser would read it as the trailing closure of the command instead.
-  const hasBraceInside = tokens.any({ _.kind == TokenKind.BraceOpen && _.span.start > open.start && _.span.start < close.start })
+  const hasBraceInside = tokens.any(
+    { _.kind == TokenKind.BraceOpen && _.span.start > open.start && _.span.start < close.start },
+  )
   if hasBraceInside {
     return None
   }
   // Nothing between the last argument and the `)` (a trailing comma, a space, a comment), and all on one line
-  if close.start != last.value.span.end || source.sliceBytes(callee.span.end, close.end).contains("\n") {
+  const isOnOneLine = close.start == last.value.span.end
+    && !source.sliceBytes(callee.span.end, close.end).contains("\n")
+  if asWritten && !isOnOneLine {
     return None
   }
   // A command call swallows what follows a comma as another argument: the arms of a `match` on one line, a field of
@@ -107,7 +142,13 @@ fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expres
 }
 
 /** `f a, b` becomes `f(a, b)` where a condition of K2 does not hold: a nested call, an operator in an argument, or arguments over several lines. */
-fn toParentheses(source: String, tokens: List<Token>, site: CallSite, callee: Expression, arguments: List<Argument>): Edit? {
+fn toParentheses(
+  source: String,
+  tokens: List<Token>,
+  site: CallSite,
+  callee: Expression,
+  arguments: List<Argument>,
+): Edit? {
   // A command call in the source has no `(` behind its callee, at least one argument, and a callee that is a path
   const plain = arguments[0..plainArguments(tokens, arguments, callee.span.end)]
   const first = plain.first()?
@@ -124,7 +165,10 @@ fn toParentheses(source: String, tokens: List<Token>, site: CallSite, callee: Ex
   if between.isEmpty() || !isOnlySpaces {
     return None
   }
-  const replacements = [Replacement(callee.span.end, argumentStart(first), "("), Replacement(argumentsEnd, argumentsEnd, ")")]
+  const replacements = [
+    Replacement(callee.span.end, argumentStart(first), "("),
+    Replacement(argumentsEnd, argumentsEnd, ")"),
+  ]
   Edit EditKind.ToParentheses, site.call.span.start, replacements
 }
 

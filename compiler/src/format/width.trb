@@ -1,0 +1,1346 @@
+/**
+ * The width half of `torb format`: a line holds at most 120 columns wherever a line break can make it fit, and what
+ * the formatter would break is joined again once it fits.
+ *
+ * **Columns.** A column is a character - a Unicode scalar value, what `String.chars()` counts - whatever its width on
+ * a screen: a wide East Asian character is one column, and so is a combining mark. The line break is not counted, and
+ * neither is the carriage return of a CRLF.
+ *
+ * **What breaks.** Five kinds of construct, found in the syntax tree and the tokens:
+ *
+ * - a bracketed list: the arguments of a call, the parameters of a function, a list, map or tuple, the fields of a
+ *   case or a pattern, the type arguments and type parameters of a type - one item per line, one level deeper than the
+ *   line the construct starts on, the closing bracket on a line of its own, and a trailing comma behind the last item;
+ * - the arguments of a command call, which get parentheses and then break like a call's (`print(` ... `)`);
+ * - a `with` list: the `with` and every trait behind it start a line, one level deeper;
+ * - a chain of at least two method calls, broken in front of the `.` of each call, one level deeper;
+ * - a run of infix operators of one precedence, broken in front of each operator, one level deeper.
+ *
+ * **Where a long line breaks** ([breakEdits]): at the outermost construct whose break makes every line that comes out
+ * fit, breaking what is inside of it again where a line is still too long. Constructs inside of each other are tried
+ * from the outside in; of two side by side, the wider one first. A call whose only argument is a call or a list literal
+ * hugs it: the two brackets stay together and only the inner list breaks (`append(Problem(` ... `))`). A line that no
+ * break makes fit - a long string, a long comment behind the code, a name wider than the room it has - stays exactly
+ * as it is, and so does a line with a comment between its tokens or inside of a block of one line (`{ ... }` is never
+ * broken).
+ *
+ * **What joins** ([joinEdits]): a construct in exactly the shape the formatter breaks it into, with nothing inside of
+ * it but constructs in that shape, no comment and no multi-line string, whose joined line fits. Every other line break
+ * of the author's is kept.
+ *
+ * **Trailing commas.** A bracketed list has a comma behind its last item exactly when its closing bracket starts a
+ * line.
+ */
+
+use SourceText from "../syntax/source"
+use Token, TokenKind, Keyword from "../syntax/token"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use Argument, ExpressionKind, CallStyle from "../syntax/ast"
+use walk, Sites, CallSite, ChainSite, OperatorRun from "../canon/walk"
+use Replacement from "../canon/edit"
+use becomesCommand from "../canon/calls"
+use rewrite, Rule from "../canon/command"
+use laidOut, lineEndingOf, Role, marksOf, spaced, spacingKindOf from "./layout"
+use endsOperand, firstTokenFrom, isInfixKind, isOpening, isClosing from "./layout"
+
+/** The most columns a line holds. */
+public const maximumWidth = 120
+
+/** The columns of one level of indentation. */
+const levelWidth = 2
+
+/** How many rounds of joining run before the width stops looking for more. */
+const maximumJoinRounds = 8
+
+/**
+ * A laid-out source fitted into the width: what the formatter broke and fits again is joined, round by round, then
+ * every line that is too long is broken where that makes it fit, and the result is laid out again. `None` where a
+ * step does not parse, which is a bug of the formatter.
+ */
+public fn fitted(source: String): String? {
+  const lineEnding = lineEndingOf source
+  var text = source
+  var sheet = sheetOf(text)?
+  var round = 0
+  loop {
+    const joins = joinEdits sheet
+    if joins.isEmpty() || round == maximumJoinRounds {
+      break
+    }
+    text = laidOut(applied(text, joins, lineEnding))?
+    sheet = sheetOf(text)?
+    round = round + 1
+  }
+  // A call that joined is written as a command where the canon says so before the lines are measured for breaking
+  if round > 0 {
+    const commands = rewrite(text, [Rule.Calls]).text
+    if commands != text {
+      text = laidOut(commands)?
+      sheet = sheetOf(text)?
+    }
+  }
+  const breaks = breakEdits sheet
+  if breaks.isEmpty() {
+    return text
+  }
+  laidOut applied(text, breaks, lineEnding)
+}
+
+/** The replacements, which never overlap, applied to the text, each line break of them written as the file's. */
+fn applied(text: String, replacements: List<Replacement>, lineEnding: String): String {
+  var sorted = replacements
+  sorted.sort({ (_.start, _.end) })
+  var parts: List<String> = []
+  var cursor = 0
+  for replacement in sorted {
+    if replacement.start < cursor {
+      continue
+    }
+    parts.append text.sliceBytes(cursor, replacement.start)
+    parts.append replacement.text.replace("\n", lineEnding)
+    cursor = replacement.end
+  }
+  parts.append text.sliceBytes(cursor, text.byteLength())
+  parts.joined separator: ""
+}
+
+// --- The sheet --------------------------------------------------------------------------------------------------------
+
+/** What the width breaks and joins. */
+type ConstructKind {
+  /** `(...)`, `[...]` and the `<...>` of a type: one item per line between the brackets */
+  case Bracketed
+  /** The arguments of a command call, which get parentheses when they break */
+  case Command
+  /** A `with` list: the `with` and every trait behind it start a line */
+  case Traits
+  /** A chain of method calls, broken in front of the `.` of each call */
+  case Chain
+  /** A run of infix operators of one precedence, broken in front of each operator */
+  case Operators
+}
+
+type Construct {
+  kind: ConstructKind
+  /** The first and the last of its tokens */
+  first: Int
+  last: Int
+  /** Bracketed: the opening bracket. Command: the last token of the callee. Traits: the `with`. */
+  opener: Int = -1
+  /** Bracketed: the closing bracket. Command: the last token of the last argument. */
+  closer: Int = -1
+  /** The first token of every item; of a chain the `.` of every call, of operators every operator */
+  starts: List<Int>
+  /** Bracketed: the comma behind the last item */
+  trailingComma: Int? = None
+  /** Bracketed: the parentheses behind a callee - the arguments of a call, the parameters of a function */
+  isCall: Bool = false
+}
+
+/** A laid-out source, measured: its tokens, their lines and columns, and every construct the width may break. */
+type Sheet {
+  source: String
+  /** The tokens of the lexer with the line breaks it keeps: what the rules of the canon read */
+  lexed: List<Token>
+  /** The tokens without the line breaks: what every index of the sheet counts */
+  tokens: List<Token>
+  roles: List<Role>
+  closureArrows: Set<Int>
+  /** The bracket that closes or opens each bracket, -1 for every other token */
+  partner: List<Int>
+  /** The innermost bracket each token stands in, -1 at the top level */
+  enclosing: List<Int>
+  /** The `{` of every `match`, inside of which a line that starts with `.` is an arm */
+  matchBodies: Set<Int>
+  startLines: List<Int>
+  endLines: List<Int>
+  startColumns: List<Int>
+  endColumns: List<Int>
+  /** How many comments stand in front of each token */
+  comments: List<Int>
+  /** The columns of every line, and how many spaces it starts with */
+  lineWidths: List<Int>
+  lineIndents: List<Int>
+  /** Every call with parentheses, by where its `(` starts */
+  parenthesizedCalls: Map<Int, CallSite>
+  /** Every construct the width may break or join, ordered by its first token and the outer one first */
+  var constructs: List<Construct> = []
+  /** The index in [constructs] of every bracketed list, by its closing bracket */
+  var bracketedByCloser: Map<Int, Int> = [:]
+}
+
+/** Walks the bytes of a source once and measures where every token starts and ends. */
+type Measure {
+  var at: Int = 0
+  var line: Int = 0
+  var column: Int = 0
+  var indent: Int = 0
+  var isLeading: Bool = true
+  var comments: Int = 0
+  var startLines: List<Int> = []
+  var endLines: List<Int> = []
+  var startColumns: List<Int> = []
+  var endColumns: List<Int> = []
+  var commentCounts: List<Int> = []
+  var lineWidths: List<Int> = []
+  var lineIndents: List<Int> = []
+
+  var fn step(source: String) {
+    const byte = source.byteAt(at) ?? 0
+    at = at + 1
+    if byte == 10 {
+      breakLine()
+      return
+    }
+    // The carriage return of a CRLF and the continuation bytes of UTF-8 are no columns of their own
+    if byte == 13 || (byte >= 128 && byte < 192) {
+      return
+    }
+    column = column + 1
+    if isLeading && byte == 32 {
+      indent = indent + 1
+    } else {
+      isLeading = false
+    }
+  }
+
+  var fn breakLine() {
+    lineWidths.append column
+    lineIndents.append indent
+    line = line + 1
+    column = 0
+    indent = 0
+    isLeading = true
+  }
+
+  var fn scanTo(source: String, end: Int) {
+    while at < end {
+      step source
+    }
+  }
+
+  /** Across the white space and the comments in front of a token. */
+  var fn scanGap(source: String, end: Int) {
+    while at < end {
+      const isSlash = source.byteAt(at) == 47
+      const next = source.byteAt(at + 1)
+      if isSlash && next == 47 {
+        comments = comments + 1
+        while at < end && source.byteAt(at) != 10 {
+          step source
+        }
+      } else if isSlash && next == 42 {
+        comments = comments + 1
+        const close = match source.sliceBytes(at + 2, end).byteOffsetOf("*/") {
+          Some(found) => at + 2 + found + 2
+          None => end
+        }
+        scanTo source, close
+      } else {
+        step source
+      }
+    }
+  }
+
+  var fn startToken() {
+    startLines.append line
+    startColumns.append column
+    commentCounts.append comments
+  }
+
+  var fn endToken() {
+    endLines.append line
+    endColumns.append column
+  }
+}
+
+/** The sheet of a laid-out source, or `None` where it does not parse without a diagnostic. */
+fn sheetOf(source: String): Sheet? {
+  const text = SourceText.of source
+  const parsed = parse text
+  if !parsed.diagnostics.isEmpty() {
+    return None
+  }
+  const lexed = lex(text).tokens
+  var tokens: List<Token> = []
+  for token in lexed {
+    if token.kind != TokenKind.Newline && token.kind != TokenKind.EndOfFile {
+      tokens.append token
+    }
+  }
+  const sites = walk parsed.file
+  const marks = marksOf tokens, sites.infixOperators, sites.prefixOperators, sites.implicitMembers, sites.closureArrows
+  var measure = Measure()
+  for token in tokens {
+    measure.scanGap source, token.span.start
+    measure.startToken()
+    measure.scanTo source, token.span.end
+    measure.endToken()
+  }
+  measure.scanGap source, source.byteLength()
+  measure.breakLine()
+
+  var partner: List<Int> = []
+  var enclosing: List<Int> = []
+  var matchBodies: Set<Int> = Set.of()
+  var stack: List<Int> = []
+  var pendingMatch: Int? = None
+  for (index, token) in tokens.indexed() {
+    partner.append(-1)
+    enclosing.append(stack.last() ?? -1)
+    const kind = token.kind
+    if kind == TokenKind.Reserved(Keyword.Match) && isMatchKeyword(tokens, index) {
+      pendingMatch = stack.length()
+    }
+    if isOpening(kind) || marks.roles[index] == Role.AngleOpening {
+      if kind == TokenKind.BraceOpen && pendingMatch == stack.length() {
+        matchBodies.insert index
+        pendingMatch = None
+      }
+      stack.append index
+    } else if isClosing(kind) {
+      // An angle bracket that never closed was a comparison after all
+      while const Some(top) = stack.last() {
+        if tokens[top].kind != TokenKind.Less {
+          break
+        }
+        const _ = stack.removeAt(stack.length() - 1)
+      }
+      if const Some(top) = stack.removeAt(stack.length() - 1) {
+        partner[top] = index
+        partner[index] = top
+      }
+    } else if marks.roles[index] == Role.AngleClosing {
+      if const Some(top) = stack.last() {
+        if tokens[top].kind == TokenKind.Less {
+          const _ = stack.removeAt(stack.length() - 1)
+          partner[top] = index
+          partner[index] = top
+        }
+      }
+    }
+  }
+
+  var parenthesizedCalls: Map<Int, CallSite> = [:]
+  for site in sites.calls {
+    match site.call.kind {
+      .Call(callee, _, .Parentheses) => parenthesizedCalls.set callee.span.end, site
+      _ => {}
+    }
+  }
+  var sheet = Sheet(
+    source: source,
+    lexed: lexed,
+    tokens: tokens,
+    roles: marks.roles,
+    closureArrows: marks.closureArrows,
+    partner: partner,
+    enclosing: enclosing,
+    matchBodies: matchBodies,
+    startLines: measure.startLines,
+    endLines: measure.endLines,
+    startColumns: measure.startColumns,
+    endColumns: measure.endColumns,
+    comments: measure.commentCounts,
+    lineWidths: measure.lineWidths,
+    lineIndents: measure.lineIndents,
+    parenthesizedCalls: parenthesizedCalls,
+  )
+  sheet.constructs = constructsOf sheet, sites
+  for (index, construct) in sheet.constructs.indexed() {
+    if construct.kind == ConstructKind.Bracketed {
+      sheet.bracketedByCloser.set construct.closer, index
+    }
+  }
+  sheet
+}
+
+/** Whether the `match` at this index is the keyword and not a name (`text.match(...)`, `fn match`, `match: value`). */
+fn isMatchKeyword(tokens: List<Token>, index: Int): Bool {
+  if index > 0 {
+    const before = tokens[index - 1].kind
+    if before == TokenKind.Dot || before == TokenKind.QuestionDot || before == TokenKind.Reserved(Keyword.Fn) {
+      return false
+    }
+  }
+  tokens.get(index + 1)?.kind != TokenKind.Colon
+}
+
+/** Whether a token is the first one of its line. */
+fn startsLine(sheet: Sheet, index: Int): Bool {
+  index == 0 || sheet.startLines[index] > sheet.endLines[index - 1]
+}
+
+/** The innermost `(`, `[` or `{` a token stands in, -1 at the top level. */
+fn innermostBracket(sheet: Sheet, index: Int): Int {
+  var bracket = sheet.enclosing[index]
+  while bracket >= 0 && sheet.roles[bracket] == Role.AngleOpening {
+    bracket = sheet.enclosing[bracket]
+  }
+  bracket
+}
+
+fn isListBracket(sheet: Sheet, bracket: Int): Bool {
+  bracket >= 0
+    && (sheet.tokens[bracket].kind == TokenKind.ParenOpen || sheet.tokens[bracket].kind == TokenKind.BracketOpen)
+}
+
+/** The index of the token that starts exactly at an offset. */
+fn tokenAt(sheet: Sheet, offset: Int): Int? {
+  const index = partitionPoint sheet.tokens, offset
+  if index < sheet.tokens.length() && sheet.tokens[index].span.start == offset {
+    return index
+  }
+  None
+}
+
+/** The index of the last token that starts in front of an offset: the one an expression that ends there ends with. */
+fn tokenBefore(sheet: Sheet, offset: Int): Int? {
+  const index = partitionPoint sheet.tokens, offset
+  if index == 0 {
+    return None
+  }
+  index - 1
+}
+
+/** The index of the first token whose span does not start before `offset`. */
+fn partitionPoint(tokens: List<Token>, offset: Int): Int {
+  var low = 0
+  var high = tokens.length()
+  while low < high {
+    const middle = (low + high) / 2
+    if tokens[middle].span.start < offset {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  low
+}
+
+// --- The constructs ---------------------------------------------------------------------------------------------------
+
+fn constructsOf(sheet: Sheet, sites: Sites): List<Construct> {
+  var found: List<Construct> = []
+  var generics: Set<Int> = Set.of()
+  for offset in sites.genericArguments {
+    if const Some(index) = firstTokenFrom(sheet.tokens, offset, { _ == TokenKind.Less }) {
+      generics.insert index
+    }
+  }
+  for (index, token) in sheet.tokens.indexed() {
+    if const Some(construct) = bracketedAt(sheet, index, generics) {
+      found.append construct
+    }
+    if token.kind == TokenKind.Reserved(Keyword.With) {
+      if const Some(construct) = traitsAt(sheet, index) {
+        found.append construct
+      }
+    }
+  }
+  for site in sites.calls {
+    if const Some(construct) = commandOf(sheet, site) {
+      found.append construct
+    }
+  }
+  // A chain or a run that is part of a longer one comes after it, and is not one of its own
+  var seenGroups: Set<Int> = Set.of()
+  for chain in sites.chains {
+    if seenGroups.contains(chain.groups[0]) {
+      continue
+    }
+    for group in chain.groups {
+      seenGroups.insert group
+    }
+    if const Some(construct) = chainOf(sheet, chain) {
+      found.append construct
+    }
+  }
+  var seenOperands: Set<Int> = Set.of()
+  for run in sites.operatorRuns {
+    if seenOperands.contains(run.operands[0]) {
+      continue
+    }
+    for operand in run.operands {
+      seenOperands.insert operand
+    }
+    if const Some(construct) = operatorsOf(sheet, run) {
+      found.append construct
+    }
+  }
+  found.sort({ (_.first, -_.last) })
+  found
+}
+
+/**
+ * The list a bracket opens, if it is one: not the index of `values[index]`, not the parentheses that group one
+ * expression, and not the type arguments of an expression (`decode<Config>(text)`), which take no trailing comma.
+ */
+fn bracketedAt(sheet: Sheet, opener: Int, generics: Set<Int>): Construct? {
+  const kind = sheet.tokens[opener].kind
+  const isAngle = sheet.roles[opener] == Role.AngleOpening
+  if kind != TokenKind.ParenOpen && kind != TokenKind.BracketOpen && !isAngle {
+    return None
+  }
+  const closer = sheet.partner[opener]
+  if closer <= opener + 1 {
+    return None
+  }
+  const before = opener - 1
+  const followsOperand = before >= 0
+    && (endsOperand(sheet.tokens[before].kind) || sheet.roles[before] == Role.AngleClosing)
+  if (kind == TokenKind.BracketOpen && followsOperand) || (isAngle && generics.contains(opener)) {
+    return None
+  }
+  if kind == TokenKind.BracketOpen && closer == opener + 2 && sheet.tokens[opener + 1].kind == TokenKind.Colon {
+    return None
+  }
+  const commas = commasBetween(sheet, opener + 1, closer - 1)
+  if kind == TokenKind.ParenOpen && !followsOperand && commas.isEmpty() {
+    return None
+  }
+  const trailingComma = if sheet.tokens[closer - 1].kind == TokenKind.Comma { Some(closer - 1) } else { None }
+  var starts = [opener + 1]
+  for comma in commas {
+    if comma + 1 < closer {
+      starts.append(comma + 1)
+    }
+  }
+  Construct(
+    kind: ConstructKind.Bracketed,
+    first: opener,
+    last: closer,
+    opener: opener,
+    closer: closer,
+    starts: starts,
+    trailingComma: trailingComma,
+    isCall: kind == TokenKind.ParenOpen && followsOperand,
+  )
+}
+
+/** The commas between two tokens that are not inside of a bracket between them. */
+fn commasBetween(sheet: Sheet, from: Int, to: Int): List<Int> {
+  var commas: List<Int> = []
+  var index = from
+  while index <= to {
+    const other = sheet.partner[index]
+    if other > index {
+      index = other + 1
+      continue
+    }
+    if sheet.tokens[index].kind == TokenKind.Comma {
+      commas.append index
+    }
+    index = index + 1
+  }
+  commas
+}
+
+/** The traits behind a `with`, up to the `{` or the `where` of the declaration or the end of its head. */
+fn traitsAt(sheet: Sheet, keyword: Int): Construct? {
+  var starts = [keyword + 1]
+  var last = keyword
+  var index = keyword + 1
+  while index < sheet.tokens.length() {
+    const kind = sheet.tokens[index].kind
+    if kind == TokenKind.BraceOpen || kind == TokenKind.Reserved(Keyword.Where) {
+      break
+    }
+    // A line break that does not follow a comma ends the head: a declaration without a body
+    if index > keyword + 1 && startsLine(sheet, index) && sheet.tokens[index - 1].kind != TokenKind.Comma {
+      break
+    }
+    if kind == TokenKind.Comma {
+      starts.append(index + 1)
+    }
+    last = index
+    const other = sheet.partner[index]
+    if other > index {
+      last = other
+      index = other + 1
+    } else {
+      index = index + 1
+    }
+  }
+  if last == keyword || sheet.tokens[last].kind == TokenKind.Comma {
+    return None
+  }
+  // The line break in front of the `with` is one of the list's, so the list starts with the token in front of it
+  Construct(kind: ConstructKind.Traits, first: keyword - 1, last: last, opener: keyword, closer: last, starts: starts)
+}
+
+/** The arguments of a command call, without its trailing closure. A command that writes a field is left alone. */
+fn commandOf(sheet: Sheet, site: CallSite): Construct? {
+  if site.calleeCouldBeAField {
+    return None
+  }
+  const (callee, arguments) = match site.call.kind {
+    .Call(callee, arguments, .Command) => (callee, arguments)
+    _ => {
+      return None
+    }
+  }
+  const plain = plainArgumentsOf sheet, arguments
+  const firstArgument = plain.first()?
+  const lastArgument = plain.last()?
+  const first = tokenAt(sheet, site.call.span.start)?
+  const opener = tokenBefore(sheet, callee.span.end)?
+  const start = tokenAt(sheet, argumentStart(firstArgument))?
+  const closer = tokenBefore(sheet, lastArgument.value.span.end)?
+  if start != opener + 1 || closer < start {
+    return None
+  }
+  var starts = [start]
+  for comma in commasBetween(sheet, start, closer) {
+    starts.append(comma + 1)
+  }
+  Construct kind: ConstructKind.Command, first: first, last: closer, opener: opener, closer: closer, starts: starts
+}
+
+/** The arguments of a call without the trailing closure behind them: `f a { ... }`, but not `f a, { ... }`. */
+fn plainArgumentsOf(sheet: Sheet, arguments: List<Argument>): List<Argument> {
+  const last = match arguments.last() {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const isClosure = match last.value.kind {
+    .Closure(_) => true
+    _ => false
+  }
+  if !isClosure || last.label.isSome() || last.isSpread {
+    return arguments
+  }
+  const isAfterComma = match tokenAt(sheet, last.value.span.start) {
+    Some(index) => index > 0 && sheet.tokens[index - 1].kind == TokenKind.Comma
+    None => false
+  }
+  if isAfterComma {
+    return arguments
+  }
+  var plain: List<Argument> = []
+  for (index, argument) in arguments.indexed() {
+    if index + 1 < arguments.length() {
+      plain.append argument
+    }
+  }
+  plain
+}
+
+/** Where an argument starts: at its label, if it has one. */
+fn argumentStart(argument: Argument): Int {
+  match argument.label {
+    Some(label) => label.span.start
+    None => argument.value.span.start
+  }
+}
+
+/**
+ * A chain of method calls. Directly in the body of a `match` it is not broken: there a line that starts with `.` is an
+ * arm.
+ */
+fn chainOf(sheet: Sheet, chain: ChainSite): Construct? {
+  const first = tokenAt(sheet, chain.span.start)?
+  const last = tokenBefore(sheet, chain.span.end)?
+  var dots: List<Int> = []
+  for group in chain.groups {
+    const name = tokenAt(sheet, group)?
+    const kind = sheet.tokens[name - 1].kind
+    if kind != TokenKind.Dot && kind != TokenKind.QuestionDot {
+      return None
+    }
+    dots.append(name - 1)
+  }
+  if sheet.matchBodies.contains(innermostBracket(sheet, dots[0])) {
+    return None
+  }
+  Construct kind: ConstructKind.Chain, first: first, last: last, starts: dots
+}
+
+/**
+ * A run of operators of one precedence. Outside of `(...)` and `[...]` a line only continues in front of an operator
+ * the lexer knows to need a left side, so a run of `-`, `<`, `>`, `|` or `>>` breaks only inside of brackets.
+ */
+fn operatorsOf(sheet: Sheet, run: OperatorRun): Construct? {
+  const first = tokenAt(sheet, run.span.start)?
+  const last = tokenBefore(sheet, run.span.end)?
+  var operators: List<Int> = []
+  for operand in run.operands {
+    operators.append(firstTokenFrom(sheet.tokens, operand, isInfixKind)?)
+  }
+  if !isListBracket(sheet, innermostBracket(sheet, operators[0])) {
+    for operator in operators {
+      if !sheet.tokens[operator].kind.continuesLineBefore() {
+        return None
+      }
+    }
+  }
+  Construct kind: ConstructKind.Operators, first: first, last: last, starts: operators
+}
+
+/**
+ * The list a call hugs: the arguments of the call or the list literal that is its only argument, and nothing but a
+ * callee in front of it (`append(Problem(...))`, `Some([...])`, `Fail(.Missing(...))`). `None` for every other
+ * construct.
+ */
+fn huggedList(sheet: Sheet, construct: Construct): Construct? {
+  const isCallList = construct.kind == ConstructKind.Command
+    || (construct.kind == ConstructKind.Bracketed && construct.isCall)
+  if !isCallList || construct.starts.length() != 1 {
+    return None
+  }
+  const start = construct.starts[0]
+  const end = if construct.kind == ConstructKind.Command {
+    construct.closer
+  } else {
+    (construct.trailingComma ?? construct.closer) - 1
+  }
+  const inner = sheet.constructs[sheet.bracketedByCloser.get(end)?]
+  if inner.opener < start || (inner.opener > start && !inner.isCall) {
+    return None
+  }
+  // In front of the inner bracket: a callee, which is names, dots and type arguments
+  var index = start
+  while index < inner.opener {
+    if sheet.roles[index] == Role.AngleOpening && sheet.partner[index] > index {
+      index = sheet.partner[index] + 1
+      continue
+    }
+    const isPath = match sheet.tokens[index].kind {
+      .Identifier | .Dot | .Reserved(_) => true
+      _ => false
+    }
+    if !isPath {
+      return None
+    }
+    index = index + 1
+  }
+  inner
+}
+
+/** The tokens a broken construct starts a line with. A command call has none: it gets parentheses first. */
+fn breaksOf(construct: Construct): List<Int> {
+  match construct.kind {
+    .Bracketed => {
+      var breaks = construct.starts
+      breaks.append construct.closer
+      breaks
+    }
+    .Traits => lineStartsOf construct
+    .Chain | .Operators => construct.starts
+    .Command => []
+  }
+}
+
+/** The first token of every line a broken chain, run or `with` list has after its head. */
+fn lineStartsOf(construct: Construct): List<Int> {
+  if construct.kind != ConstructKind.Traits {
+    return construct.starts
+  }
+  var starts = [construct.opener]
+  for (index, start) in construct.starts.indexed() {
+    if index > 0 {
+      starts.append start
+    }
+  }
+  starts
+}
+
+// --- Joining ----------------------------------------------------------------------------------------------------------
+
+/** Whether a construct stands in exactly the shape the formatter breaks it into. */
+fn isShaped(sheet: Sheet, construct: Construct): Bool {
+  const breaks = breaksOf construct
+  !breaks.isEmpty() && breaks.all({ startsLine sheet, _ })
+}
+
+/**
+ * What joins in this round, and the trailing commas to write or to take away. Constructs whose lines touch one that
+ * joins wait for the next round, because the columns they were measured in change. A call broken one argument per line
+ * that would be hugged joins too, however long, and the break that follows hugs it.
+ */
+fn joinEdits(sheet: Sheet): List<Replacement> {
+  var shaped: List<Construct> = []
+  for construct in sheet.constructs {
+    if isShaped(sheet, construct) {
+      shaped.append construct
+    }
+  }
+  var edits: List<Replacement> = []
+  var taken: List<(Int, Int)> = []
+  for construct in shaped {
+    const from = sheet.startLines[construct.first]
+    const to = sheet.endLines[construct.last]
+    if overlaps(taken, from, to) {
+      continue
+    }
+    var inside: List<Construct> = []
+    for other in shaped {
+      if other.first >= construct.first && other.last <= construct.last {
+        inside.append other
+      }
+    }
+    if !isJoinable(sheet, construct, inside) {
+      continue
+    }
+    if joinedWidth(sheet, construct, inside) > maximumWidth && !wouldHug(sheet, construct) {
+      continue
+    }
+    edits.appendAll joinReplacements(sheet, construct, inside)
+    taken.append((from, to))
+  }
+  for construct in sheet.constructs {
+    if construct.kind != ConstructKind.Bracketed {
+      continue
+    }
+    if overlaps(taken, sheet.startLines[construct.first], sheet.endLines[construct.last]) {
+      continue
+    }
+    if const Some(edit) = trailingCommaEdit(sheet, construct) {
+      edits.append edit
+    }
+  }
+  edits
+}
+
+fn overlaps(taken: List<(Int, Int)>, from: Int, to: Int): Bool {
+  taken.any({ _.0 <= to && from <= _.1 })
+}
+
+/**
+ * Whether every line break inside of a construct is one the formatter makes - of the construct or of one in the same
+ * shape inside of it - with no comment and no multi-line string anywhere in it.
+ */
+fn isJoinable(sheet: Sheet, construct: Construct, inside: List<Construct>): Bool {
+  if sheet.comments[construct.last] != sheet.comments[construct.first] {
+    return false
+  }
+  var owned: Set<Int> = Set.of()
+  for other in inside {
+    for index in breaksOf(other) {
+      owned.insert index
+    }
+  }
+  for index in construct.first..=construct.last {
+    if sheet.startLines[index] != sheet.endLines[index] {
+      return false
+    }
+    if index > construct.first && startsLine(sheet, index) && !owned.contains(index) {
+      return false
+    }
+  }
+  true
+}
+
+/** The trailing commas of the lists that join. */
+fn trailingCommasOf(inside: List<Construct>): List<Int> {
+  var commas: List<Int> = []
+  for construct in inside {
+    if const Some(comma) = construct.trailingComma {
+      commas.append comma
+    }
+  }
+  commas
+}
+
+/**
+ * The columns of the line a construct joins into: what stands in front of it on its first line, the construct on one
+ * line without trailing commas, and what follows it on its last line. A call the canon then writes as a command is one
+ * column shorter.
+ */
+fn joinedWidth(sheet: Sheet, construct: Construct, inside: List<Construct>): Int {
+  const removed = trailingCommasOf inside
+  var width = sheet.startColumns[construct.first]
+  var previous = -1
+  for index in construct.first..=construct.last {
+    if removed.contains(index) {
+      continue
+    }
+    width = width + sheet.endColumns[index] - sheet.startColumns[index]
+    if previous >= 0 {
+      const left = spacingKindOf sheet.tokens, previous
+      if spaced(sheet.roles[previous], left, sheet.roles[index], sheet.tokens[index].kind) {
+        width = width + 1
+      }
+    }
+    previous = index
+  }
+  width = width + sheet.lineWidths[sheet.endLines[construct.last]] - sheet.endColumns[construct.last]
+  if construct.kind == ConstructKind.Bracketed && becomesCommandOnceJoined(sheet, construct) {
+    width = width - 1
+  }
+  width
+}
+
+/**
+ * Whether a list that joins leaves a call on one line that the canon writes as a command: its own call, or the call
+ * that hugs it - `append(Problem(` ... `))` joins into `append Problem(...)`.
+ */
+fn becomesCommandOnceJoined(sheet: Sheet, construct: Construct): Bool {
+  var opener = construct.opener
+  var closer = construct.closer
+  loop {
+    if sheet.tokens[opener].kind == TokenKind.ParenOpen {
+      if const Some(site) = sheet.parenthesizedCalls.get(sheet.tokens[opener].span.start) {
+        if becomesCommand(sheet.source, sheet.lexed, site) {
+          return true
+        }
+      }
+    }
+    // The bracket around it, if it closes right behind it and opens on the same line: a call that hugs it
+    const outer = sheet.enclosing[opener]
+    if outer < 0 || sheet.partner[outer] != closer + 1 || sheet.startLines[outer] != sheet.startLines[opener] {
+      return false
+    }
+    opener = outer
+    closer = closer + 1
+  }
+}
+
+/**
+ * Whether a call in the shape the formatter breaks into, which is too wide to join, would be hugged instead: its only
+ * argument is a list, and the line up to that list's bracket and the line of both closing brackets fit. Its items fit
+ * as they are, because they stand at the same level or deeper now.
+ */
+fn wouldHug(sheet: Sheet, construct: Construct): Bool {
+  const inner = match huggedList(sheet, construct) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const start = construct.starts[0]
+  if sheet.startLines[inner.opener] != sheet.startLines[start] || !isShaped(sheet, construct) {
+    return false
+  }
+  const head = sheet.endColumns[construct.opener] + sheet.endColumns[inner.opener] - sheet.startColumns[start]
+  const line = sheet.startLines[construct.opener]
+  const rest = sheet.lineWidths[sheet.endLines[construct.closer]] - sheet.endColumns[construct.closer]
+  head <= maximumWidth && sheet.lineIndents[line] + 2 + rest <= maximumWidth
+}
+
+fn joinReplacements(sheet: Sheet, construct: Construct, inside: List<Construct>): List<Replacement> {
+  var edits: List<Replacement> = []
+  for comma in trailingCommasOf(inside) {
+    const span = sheet.tokens[comma].span
+    edits.append Replacement(span.start, span.end, "")
+  }
+  for index in (construct.first + 1)..=construct.last {
+    if startsLine(sheet, index) {
+      edits.append Replacement(sheet.tokens[index - 1].span.end, sheet.tokens[index].span.start, " ")
+    }
+  }
+  edits
+}
+
+/** A comma behind the last item exactly where the closing bracket starts a line. */
+fn trailingCommaEdit(sheet: Sheet, construct: Construct): Replacement? {
+  const closesOnItsOwnLine = startsLine sheet, construct.closer
+  match construct.trailingComma {
+    Some(comma) if !closesOnItsOwnLine => {
+      const span = sheet.tokens[comma].span
+      Replacement span.start, span.end, ""
+    }
+    None if closesOnItsOwnLine => {
+      const end = sheet.tokens[construct.closer - 1].span.end
+      Replacement end, end, ","
+    }
+    _ => None
+  }
+}
+
+// --- Breaking ---------------------------------------------------------------------------------------------------------
+
+/** A line as the planner sees it: tokens of one line of the text, and what the breaks around it add. */
+type Segment {
+  /** The columns of its indentation */
+  indent: Int
+  /** The indentation of a line that continues it */
+  continuation: Int
+  first: Int
+  last: Int
+  /** Columns in front of the first token besides the indentation: the `)` a broken command closes with */
+  prefix: Int
+  /** Columns behind the last token: a `,` or a `(` a break writes, a comment behind the code */
+  suffix: Int
+}
+
+fn widthOf(sheet: Sheet, segment: Segment): Int {
+  var width = segment.indent + segment.prefix + segment.suffix
+  if segment.first <= segment.last {
+    width = width + sheet.endColumns[segment.last] - sheet.startColumns[segment.first]
+  }
+  width
+}
+
+/** The line breaks that make every line that is too long fit, where some do. */
+fn breakEdits(sheet: Sheet): List<Replacement> {
+  var edits: List<Replacement> = []
+  var failures: Set<String> = Set.of()
+  const count = sheet.tokens.length()
+  var first = 0
+  while first < count {
+    const line = sheet.startLines[first]
+    var last = first
+    while last + 1 < count && sheet.startLines[last + 1] == line {
+      last = last + 1
+    }
+    if sheet.lineWidths[line] > maximumWidth {
+      if const Some(segment) = segmentOfLine(sheet, first, last) {
+        if const Some(found) = plan(sheet, segment, failures) {
+          edits.appendAll found
+        }
+      }
+    }
+    first = last + 1
+  }
+  edits
+}
+
+/**
+ * The segment of a whole line. `None` where something the planner does not measure stands on it: a comment or the end
+ * of a string in front of its first token, a comment between its tokens, a string that goes on below it.
+ */
+fn segmentOfLine(sheet: Sheet, first: Int, last: Int): Segment? {
+  const line = sheet.startLines[first]
+  const indent = sheet.lineIndents[line]
+  if sheet.startColumns[first] != indent || (first > 0 && sheet.endLines[first - 1] == line) {
+    return None
+  }
+  if sheet.endLines[last] != line || sheet.comments[last] != sheet.comments[first] {
+    return None
+  }
+  const continuation = if continuesLine(sheet, first) { indent } else { indent + levelWidth }
+  Segment(indent, continuation, first, last, prefix: 0, suffix: sheet.lineWidths[line] - sheet.endColumns[last])
+}
+
+/** Whether the line a token starts continues the one before it, the way the layout decides it. */
+fn continuesLine(sheet: Sheet, first: Int): Bool {
+  if first == 0 {
+    return false
+  }
+  const kind = sheet.tokens[first].kind
+  const bracket = innermostBracket sheet, first
+  const startsArm = kind == TokenKind.Dot && sheet.matchBodies.contains(bracket)
+  if kind.continuesLineBefore() && kind != TokenKind.Reserved(Keyword.Else) && !startsArm {
+    return true
+  }
+  const previous = first - 1
+  const previousKind = sheet.tokens[previous].kind
+  if isListBracket(sheet, bracket) {
+    return previousKind != TokenKind.Comma && previous != bracket
+  }
+  if previousKind == TokenKind.Comma {
+    return !sheet.matchBodies.contains(bracket)
+  }
+  previousKind.continuesLineAfter() && !sheet.closureArrows.contains(previous)
+}
+
+/**
+ * The line breaks that make a segment and every line it breaks into fit, or `None` where none do. The constructs
+ * inside of it are tried from the outside in, and the lines a break makes are planned the same way.
+ */
+fn plan(sheet: Sheet, segment: Segment, var failures: Set<String>): List<Replacement>? {
+  if widthOf(sheet, segment) <= maximumWidth {
+    return []
+  }
+  if segment.first > segment.last {
+    return None
+  }
+  // A token wider than the room any line of it has cannot be helped by a break: a long string stays long
+  for index in segment.first..=segment.last {
+    if segment.indent + sheet.endColumns[index] - sheet.startColumns[index] > maximumWidth {
+      return None
+    }
+  }
+  const key = "{segment.indent} {segment.continuation} {segment.first} {segment.last} {segment.prefix} {segment.suffix}"
+  if failures.contains(key) {
+    return None
+  }
+  for choice in choicesIn(sheet, segment) {
+    var edits = ownEdits sheet, choice
+    var fits = true
+    for line in linesOf(sheet, segment, choice) {
+      match plan(sheet, line, failures) {
+        Some(found) => edits.appendAll found
+        None => {
+          fits = false
+          break
+        }
+      }
+    }
+    if fits {
+      return edits
+    }
+  }
+  failures.insert key
+  None
+}
+
+/**
+ * One way to break a segment: a construct, or the list a call hugs - with the call, whose brackets stay on the line,
+ * and a command gets its parentheses.
+ */
+type Choice {
+  construct: Construct
+  hugging: Construct? = None
+}
+
+/**
+ * The ways to break a segment, in the order they are tried: the constructs the outer first, and a call that hugs a
+ * list with the innermost list it hugs, then the lists around that, then the call's own break.
+ */
+fn choicesIn(sheet: Sheet, segment: Segment): List<Choice> {
+  var choices: List<Choice> = []
+  for construct in candidatesIn(sheet, segment) {
+    var hugged: List<Construct> = []
+    var inner = huggedList sheet, construct
+    while const Some(found) = inner {
+      if !isSingleToken(found) {
+        hugged.append found
+      }
+      inner = huggedList sheet, found
+    }
+    var index = hugged.length() - 1
+    while index >= 0 {
+      choices.append Choice(hugged[index], hugging: construct)
+      index = index - 1
+    }
+    choices.append Choice(construct)
+  }
+  choices
+}
+
+/** The constructs of a segment that may break, the outer ones first and of two side by side the wider one. */
+fn candidatesIn(sheet: Sheet, segment: Segment): List<Construct> {
+  var inside: List<Construct> = []
+  var index = firstConstructFrom sheet, segment.first
+  while index < sheet.constructs.length() && sheet.constructs[index].first <= segment.last {
+    const construct = sheet.constructs[index]
+    const isBreakable = !isInOneLineBlock(sheet, construct) && !isSingleToken(construct)
+    if construct.last <= segment.last && isBreakable && !isInHeadOfOneLineBlock(sheet, construct, segment) {
+      inside.append construct
+    }
+    index = index + 1
+  }
+  var keyed: List<(Int, Int, Int)> = []
+  for (position, construct) in inside.indexed() {
+    var depth = 0
+    for other in inside {
+      const contains = other.first <= construct.first && construct.last <= other.last
+      if contains && (other.first != construct.first || other.last != construct.last) {
+        depth = depth + 1
+      }
+    }
+    const width = sheet.endColumns[construct.last] - sheet.startColumns[construct.first]
+    keyed.append((depth, -width, position))
+  }
+  keyed.sort({ _ })
+  var ranked: List<Construct> = []
+  for entry in keyed {
+    ranked.append inside[entry.2]
+  }
+  ranked
+}
+
+fn firstConstructFrom(sheet: Sheet, token: Int): Int {
+  var low = 0
+  var high = sheet.constructs.length()
+  while low < high {
+    const middle = (low + high) / 2
+    if sheet.constructs[middle].first < token {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  low
+}
+
+/**
+ * Whether a list holds nothing but one token - a string, a name, a number. Breaking it would only move that token to
+ * a line of its own, so a call of one long string stays on the line it is on.
+ */
+fn isSingleToken(construct: Construct): Bool {
+  match construct.kind {
+    .Bracketed => construct.starts.length() == 1
+      && construct.starts[0] == (construct.trailingComma ?? construct.closer) - 1
+    .Command => construct.starts.length() == 1 && construct.starts[0] == construct.closer
+    _ => false
+  }
+}
+
+/**
+ * Whether a construct stands in front of a block of one line on the same level - in the head of an `if`, a `match`
+ * or a `while` whose block is one line, or in front of a trailing closure of one line. Blocks are never broken, and a
+ * head broken in front of one would leave the block hanging behind its closing bracket.
+ */
+fn isInHeadOfOneLineBlock(sheet: Sheet, construct: Construct, segment: Segment): Bool {
+  const level = sheet.enclosing[construct.first]
+  var index = construct.last + 1
+  while index <= segment.last {
+    const other = sheet.partner[index]
+    if sheet.tokens[index].kind == TokenKind.BraceOpen && sheet.enclosing[index] == level {
+      return other >= 0 && sheet.startLines[other] == sheet.startLines[index]
+    }
+    if other > index {
+      index = other + 1
+    } else {
+      index = index + 1
+    }
+  }
+  false
+}
+
+/** Whether a construct stands in a block of one line - a closure, an `if` - which the formatter never breaks. */
+fn isInOneLineBlock(sheet: Sheet, construct: Construct): Bool {
+  var bracket = sheet.enclosing[construct.first]
+  while bracket >= 0 {
+    if sheet.tokens[bracket].kind == TokenKind.BraceOpen {
+      const closer = sheet.partner[bracket]
+      return closer >= 0 && sheet.startLines[closer] == sheet.startLines[bracket]
+    }
+    bracket = sheet.enclosing[bracket]
+  }
+  false
+}
+
+/** The lines a segment breaks into. A command that hugs a list writes a `)` behind it on the last line. */
+fn linesOf(sheet: Sheet, segment: Segment, choice: Choice): List<Segment> {
+  var lines = linesOfConstruct sheet, segment, choice.construct
+  if const Some(outer) = choice.hugging {
+    if outer.kind == ConstructKind.Command {
+      const last = lines.length() - 1
+      lines[last] = lines[last].copy(prefix: lines[last].prefix + 1)
+    }
+  }
+  lines
+}
+
+/** The lines a segment breaks into when a construct of it breaks. */
+fn linesOfConstruct(sheet: Sheet, segment: Segment, construct: Construct): List<Segment> {
+  const inner = segment.indent + levelWidth
+  match construct.kind {
+    .Bracketed | .Command => {
+      const isCommand = construct.kind == ConstructKind.Command
+      var lines = [
+        Segment(
+          segment.indent,
+          segment.continuation,
+          segment.first,
+          construct.opener,
+          prefix: segment.prefix,
+          suffix: if isCommand { 1 } else { 0 },
+        ),
+      ]
+      const count = construct.starts.length()
+      for (index, start) in construct.starts.indexed() {
+        const isLast = index + 1 == count
+        var end = construct.closer - 1
+        var suffix = 0
+        if !isLast {
+          end = construct.starts[index + 1] - 1
+        } else if isCommand {
+          end = construct.closer
+          suffix = 1
+        } else if const Some(comma) = construct.trailingComma {
+          end = comma
+        } else {
+          suffix = 1
+        }
+        lines.append Segment(inner, inner + levelWidth, start, end, prefix: 0, suffix: suffix)
+      }
+      if isCommand {
+        const next = construct.closer + 1
+        var prefix = 1
+        if next <= segment.last
+          && spaced(Role.Closing, TokenKind.ParenClose, sheet.roles[next], sheet.tokens[next].kind) {
+          prefix = 2
+        }
+        lines.append(Segment(
+          segment.indent,
+          segment.continuation,
+          next,
+          segment.last,
+          prefix: prefix,
+          suffix: segment.suffix,
+        ))
+      } else {
+        lines.append(Segment(
+          segment.indent,
+          segment.continuation,
+          construct.closer,
+          segment.last,
+          prefix: 0,
+          suffix: segment.suffix,
+        ))
+      }
+      lines
+    }
+    .Traits | .Chain | .Operators => {
+      const starts = lineStartsOf construct
+      var lines = [Segment(segment.indent, segment.continuation, segment.first, starts[0] - 1, segment.prefix, 0)]
+      const count = starts.length()
+      for (index, start) in starts.indexed() {
+        const isLast = index + 1 == count
+        const end = if isLast { segment.last } else { starts[index + 1] - 1 }
+        const suffix = if isLast { segment.suffix } else { 0 }
+        lines.append Segment(segment.continuation, segment.continuation, start, end, prefix: 0, suffix: suffix)
+      }
+      lines
+    }
+  }
+}
+
+/** The line breaks of a choice, and the parentheses of a command that hugs a list. */
+fn ownEdits(sheet: Sheet, choice: Choice): List<Replacement> {
+  var edits = constructEdits sheet, choice.construct
+  if const Some(outer) = choice.hugging {
+    if outer.kind == ConstructKind.Command {
+      edits.append gapBefore(sheet, outer.starts[0], "(")
+      const end = sheet.tokens[outer.closer].span.end
+      edits.append Replacement(end, end, ")")
+    }
+  }
+  edits
+}
+
+/** The line breaks of a construct itself, and the parentheses and the trailing comma they bring along. */
+fn constructEdits(sheet: Sheet, construct: Construct): List<Replacement> {
+  var edits: List<Replacement> = []
+  match construct.kind {
+    .Bracketed => {
+      for start in construct.starts {
+        edits.append gapBefore(sheet, start, "\n")
+      }
+      if construct.trailingComma.isSome() {
+        edits.append gapBefore(sheet, construct.closer, "\n")
+      } else {
+        edits.append gapBefore(sheet, construct.closer, ",\n")
+      }
+    }
+    .Command => {
+      edits.append gapBefore(sheet, construct.starts[0], "(\n")
+      for (index, start) in construct.starts.indexed() {
+        if index > 0 {
+          edits.append gapBefore(sheet, start, "\n")
+        }
+      }
+      const end = sheet.tokens[construct.closer].span.end
+      edits.append Replacement(end, end, ",\n)")
+    }
+    .Traits | .Chain | .Operators => {
+      for start in lineStartsOf(construct) {
+        edits.append gapBefore(sheet, start, "\n")
+      }
+    }
+  }
+  edits
+}
+
+/** What stands between a token and the one in front of it, replaced. */
+fn gapBefore(sheet: Sheet, index: Int, text: String): Replacement {
+  Replacement sheet.tokens[index - 1].span.end, sheet.tokens[index].span.start, text
+}
