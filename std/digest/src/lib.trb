@@ -48,7 +48,7 @@ public type Digest with Show {
  */
 public type Sha256 {
   /** The eight words of the state, each below 2^32. */
-  private var state: List<Int> = initialState
+  private var state: Array<Int, 8> = initialState
   /** The bytes of a block that is not full yet: fewer than 64. */
   private var pending: List<UInt8> = []
   /** Every byte added so far. */
@@ -124,14 +124,7 @@ public type Sha256 {
       const small1 = rotated(late, 17) ^ rotated(late, 19) ^ (late >> 10)
       schedule[index] = (schedule[index - 16] + small0 + schedule[index - 7] + small1) & wordMask
     }
-    var a = state[0]
-    var b = state[1]
-    var c = state[2]
-    var d = state[3]
-    var e = state[4]
-    var f = state[5]
-    var g = state[6]
-    var h = state[7]
+    var [a, b, c, d, e, f, g, h] = state
     for index in 0..64 {
       const big1 = rotated(e, 6) ^ rotated(e, 11) ^ rotated(e, 25)
       const choice = (e & f) ^ ((~e & wordMask) & g)
@@ -169,7 +162,9 @@ const wordMask = 0xFFFFFFFF
 const hexDigits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
 
 /** The first 32 bits of the fractional parts of the square roots of the first eight primes. */
-const initialState = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+const initialState: Array<Int, 8> = [
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+]
 
 /** The first 32 bits of the fractional parts of the cube roots of the first 64 primes. */
 const roundConstants: Array<Int, 64> = [
