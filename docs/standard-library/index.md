@@ -61,6 +61,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/network](network.md)** - Name resolution and DNS lookups, TCP - a listener, and a stream whose two directions are a Source and a Sink of Bytes - and UDP datagrams, over the address values of std/ip, which it re-exports.
 - **[std/tls](tls.md)** - TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 - **[std/http](http.md)** - HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
+- **[std/binary](binary.md)** - ByteReader, ByteWriter, BitReader and BitWriter - numbers of every width in either byte order, IEEE 754 floats, LEB128, runs of bytes and text, read with a ReadError instead of a panic and written into a growable buffer.
 - **[std/digest](digest.md)** - Sha256 and the Digest it answers - SHA-256 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
 - **[std/compression](compression.md)** - DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - **[std/archive](archive.md)** - POSIX ustar archives - tarred writes entries as bytes that depend on nothing but the entries, untarred reads the regular files back and refuses links.

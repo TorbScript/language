@@ -23,6 +23,7 @@ documents:
   - RELEASE.md
   - NETWORK.md
   - DNS.md
+  - BINARY.md
   - WEB.md
   - REPL.md
   - PANICS.md
@@ -80,6 +81,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Releasing TorbScript**
 - **Networking, TLS and HTTP**
 - **The Domain Name System**
+- **Binary Formats**
 - **Web: Handlers, HTML and a Live UI**
 - **The REPL**
 - **Panics**

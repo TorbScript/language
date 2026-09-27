@@ -271,6 +271,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## standard-library
 
 - `standard-library/archive.md` - **std/archive** (package): POSIX ustar archives - tarred writes entries as bytes that depend on nothing but the entries, untarred reads the regular files back and refuses links.
+- `standard-library/binary.md` - **std/binary** (package): ByteReader, ByteWriter, BitReader and BitWriter - numbers of every width in either byte order, IEEE 754 floats, LEB128, runs of bytes and text, read with a ReadError instead of a panic and written into a growable buffer.
 - `standard-library/collections.md` - **std/collections** (package): The collection traits every signature talks about, and the implementations that only show up where one is built.
 - `standard-library/compression.md` - **std/compression** (package): DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.

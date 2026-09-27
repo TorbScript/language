@@ -193,6 +193,7 @@ worth, what it risks, and the test that pins it.
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
 | 15 | The stack check | 1-3% on a recursion of three operations; a frame counter was 1.74x | one comparison with the stack limit at entry | **done** |
+| 16 | A range of a trait-typed list runs the default `slice` | a copy of the range, one call per item, where `ArrayList` shares the storage in O(1) | the override of a default member reached through the witness table | medium |
 
 ### F1. `x = f(x)` is a move, because the assignment defines the slot
 
@@ -887,6 +888,27 @@ comparison with the real limit is what turns that crash into a panic with exit c
 reaches the guard page, and so does a recursion inside the runtime itself (a `D_` drop function over a very deep
 value). A thread other than the main one needs its own limit when tasks get threads of their own.
 
+### F16. A range of a trait-typed list runs the default `slice`, which copies
+
+**Pattern.** `bytes[from..to]` where `bytes: Bytes` - `List<UInt8>`, a trait. Every binary format reads a run of bytes
+this way, and `std/dns` did for every label and every record's data before `std/binary` (docs/design/BINARY.md
+section 4).
+
+**What is generated.** A call of the default member `List.slice`: it copies the receiver, `clear()`s the copy and
+`append`s the items of the range one by one, each an indirect call and a `torb_make_unique`. `ArrayList.slice` - an
+offset and a length over the same storage, `torb_list_slice`, O(1) and no allocation - is never reached: the C of
+`benchmarks/binary-formats.trb` has no call of `ArrayList.sliceBetween` at all. A default member is not a slot of the
+witness table (BACKEND.md, "Witness tables"), and the override in `ArrayList` does not make it one here.
+
+**What it costs.** The first `ByteReader.limited` took a range of its input for every DNS record: 412 432 allocations
+more than the hand-written reader over the benchmark's 72 000 records, all of them the copied data. A reader that holds
+the same input and a window of it brought the count back to within 32 of the hand-written one.
+
+**Where the fix goes.** The witness table of `List` for `ArrayList` (and `TrieList`) carries the override of `slice`,
+or the devirtualization of F2 turns the call into the direct one where the payload is known. **Worth**: every range of
+`Bytes` in the standard library, O(n) copies to O(1). **Risk**: a range then keeps its whole storage alive, which is
+what `torb_list_compact` is for.
+
 ---
 
 ## 4. The benchmark table
@@ -981,6 +1003,32 @@ Four things this table does not say on its own:
   sides and moves them by different amounts. Read the allocation column first; the microseconds are there so a later run
   can be compared against the same shape of number, measured the same way.
 - **Nothing here is a gate.** Section 6 says which of these numbers should become one and in which shape.
+
+### 4.1 The standard library against itself: binary formats
+
+`benchmarks/binary-formats.trb` has no C twin: it measures the migration of `std/dns`, `std/compression`,
+`std/archive` and `std/digest` onto `std/binary` (docs/design/BINARY.md) by building the same program against the
+`std/` before and after it. The two binaries run alternately, pinned to one core at high priority; seconds, the fastest
+of the runs and their median.
+
+| Measure | before, fastest | after, fastest | before, median | after, median |
+|---------|----------------:|---------------:|---------------:|--------------:|
+| DNS: 72 000 records decoded, sweep 1 | 1.944 | 2.051 | 2.190 | 2.373 |
+| DNS: the same, sweep 2 | 2.394 | 2.410 | 2.762 | 2.745 |
+| DNS alone, 144 000 records, processor time, 25 runs | 4.438 | 4.313 | 5.297 | 5.422 |
+| gzip: 1 MB deflated, sweep 1 | 0.552 | 0.526 | 0.618 | 0.616 |
+| gzip: the same, sweep 2 | 0.619 | 0.638 | 0.763 | 0.759 |
+| gzip: 4 MB inflated, sweep 1 | 0.334 | 0.325 | 0.412 | 0.388 |
+| gzip: the same, sweep 2 | 0.383 | 0.406 | 0.483 | 0.465 |
+| SHA-256 of 4 MB, sweep 1 | 0.170 | 0.163 | 0.196 | 0.195 |
+| SHA-256, sweep 2 | 0.184 | 0.209 | 0.232 | 0.230 |
+
+Windows 11, 16 cores, gcc 13.2.0, `torb build` (release, `-O2`), 21 runs per sweep, on a machine that other gate runs
+shared: the same binary moved by 10 to 20% between sweeps, and **no row separates before from after** - the sign of the
+difference flips between the fastest and the median and between the sweeps, from -3% to +8% on the DNS and from -6%
+to +6% on gzip. The column that does not move, the allocation count of the whole program, is **20 587 696 before and
+20 587 652 after**, and the bytes allocated went from 691.6 to 689.8 MB. SHA-256 still reads its blocks straight from the
+list (decision 9 of docs/design/BINARY.md), so its rows measure the writes of `finished` and the machine.
 
 ---
 
