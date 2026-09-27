@@ -15,6 +15,8 @@
  *     }
  *
  *     yank "1.2.4", reason: "sends the proxy password in clear text"
+ *
+ * A yank is undone by a later `unyank "1.2.4"` line, never by removing the first one.
  */
 
 use Version from "./version"
@@ -87,6 +89,10 @@ public fn readIndex(text: String, expected: String): Result<PackageIndex, String
         const version = versionOf(setting.first() ?? "")?
         const yanked = IndexYank(version, setting.labeled.get("reason") ?? "", setting.labeled.get("signature") ?? "")
         index = index.copy yanks: index.yanks.appended(yanked)
+      }
+      "unyank" => {
+        const version = versionOf(setting.first() ?? "")?
+        index = index.copy yanks: index.yanks.filter({ _.version != version }).toList()
       }
       _ => {}
     }
@@ -196,4 +202,12 @@ public fn renderRelease(release: IndexRelease): String {
 public fn renderYank(yank: IndexYank): String {
   const signed = if yank.signature.isEmpty() { "" } else { ", signature: {quoted(yank.signature)}" }
   "\nyank {quoted(yank.version.show())}, reason: {quoted(yank.reason)}{signed}\n"
+}
+
+/**
+ * A yank undone (`torb yank --undo`, RELEASE.md section 7.3) as the line that is appended for it: the file stays
+ * append-only, and the last of a version's `yank` and `unyank` lines is the one that holds.
+ */
+public fn renderUnyank(version: Version): String {
+  "\nunyank {quoted(version.show())}\n"
 }

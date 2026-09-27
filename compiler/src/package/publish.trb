@@ -1,0 +1,52 @@
+/**
+ * What `torb publish` refuses (docs/design/RELEASE.md section 7.2, step 1), as one function of the settings and the
+ * lock - so the client and the registry's write service (`tools/registry`) refuse the same things with the same words:
+ * the client before it builds an archive, the registry once more on receipt, from the settings the archive's own lock
+ * holds, because it trusts nothing the client decided.
+ */
+
+use Manifest from "../project/manifest"
+use Version from "./version"
+use requirementOf from "./requirement"
+use packageNameOf from "./specifier"
+use Lock from "./lock"
+
+/** Every missing or wrong setting of `manifest` at once, and every dependency `lock` takes from a directory. */
+public fn publishProblems(manifest: Manifest, lock: Lock): List<String> {
+  var problems: List<String> = []
+  match packageNameOf(manifest.name) {
+    Ok(name) => {
+      if name.startsWith("std/") {
+        problems.append "`std` is the toolchain's owner, and nothing is published under it"
+      }
+    }
+    Fail(problem) => problems.append "`name`: {problem}"
+  }
+  if manifest.version.isEmpty() {
+    problems.append "`version` is required to publish"
+  } else if const Fail(problem) = Version.tryFrom(manifest.version) {
+    problems.append "`version`: {problem}"
+  }
+  if manifest.description.isEmpty() {
+    problems.append "`description` is required to publish: one sentence about the package"
+  }
+  if manifest.license.isEmpty() {
+    problems.append "`license` is required to publish, as an SPDX expression such as `\"MIT\"`"
+  }
+  for line in manifest.runtimeRequirements {
+    match requirementOf(line) {
+      Ok(requirement) => {
+        if lock.locked(requirement.package).map({ _.isPath() }) ?? false {
+          problems.append "`{requirement.package}` comes from a `path:` source, which nobody who installs the package has"
+        }
+      }
+      Fail(problem) => problems.append problem
+    }
+  }
+  problems
+}
+
+/** The runtime requirements a release's index entry lists: every one but the toolchain's own. */
+public fn publishedDependencies(manifest: Manifest): List<String> {
+  manifest.runtimeRequirements.filter({ !_.startsWith("std/") }).toList()
+}

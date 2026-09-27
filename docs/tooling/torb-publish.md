@@ -1,6 +1,6 @@
 ---
 title: torb publish
-summary: torb publish builds and checks the archive of a package exactly as a registry receives it, prints its tree hash and capabilities, and writes it into a registry that is a directory; publishing over the network comes later.
+summary: torb publish builds and checks a package's archive as a registry receives it, prints its tree hash and capabilities, and writes it into a directory registry or uploads it with a token or through trusted publishing.
 kind: tooling
 status: stable
 order: 106
@@ -10,16 +10,22 @@ keywords:
   - archive
   - capabilities
   - dry run
+  - TORB_TOKEN
+  - trusted publishing
 source:
   - compiler/src/cli/packages.trb
   - compiler/src/package/archive.trb
   - compiler/src/package/files.trb
+  - compiler/src/package/publish.trb
+  - compiler/src/package/upload.trb
+  - tools/registry
 ---
 
 `publish` turns a package into the archive a registry holds (docs/design/RELEASE.md section 7.2) and checks everything
 a registry would refuse before anything leaves the machine. `--dry-run` stops once the archive is built. Without it,
-the release is written into a `file:` registry; **publishing to a registry on the network is not built yet** - the
-registry's write service is a later round - and says so.
+the release is written into a `file:` registry, or sent to the write service of a registry on the network
+(`tools/registry`, the service behind packages.torb.dev), which checks it once more and refuses in words this command
+prints.
 
 ## Synopsis
 
@@ -56,8 +62,36 @@ nothing was uploaded (--dry-run)
 6. **The upload.** For a `file:` registry, the archive goes to `archives/<owner>/<name>/<version>.tar.gz` and the release
    is appended to `index/<owner>/<name>.trb`; the `settings` block of the package is written into the workspace's
    `project.lock.trb`. A version that is published already is refused: a published version is never replaced.
+   For a registry on the network (`https://...`), the archive is sent with
+   `PUT <registry>/api/1/packages/<owner>/<name>/<version>` and its tree hash in `Torb-Tree-Hash`, through `curl`
+   (else `wget`, or the one `TORB_FETCH` names). The registry unpacks it, reads the settings of its lock, refuses what
+   this command refuses, and writes the archive and the index entry; its answer is printed, and the `settings` block
+   goes into the workspace's lock as for `file:`.
+
+### The token
+
+A registry on the network needs to know who publishes:
+
+- **`TORB_TOKEN`**: a token of the registry whose actions include `publish` and whose scopes include the package. It
+  is sent in a header that `curl` reads from a file, never on a command line.
+- **Trusted publishing**, where `TORB_TOKEN` is not set and the command runs in a GitHub Actions job with
+  `permissions: id-token: write`: the job's OpenID Connect token is requested from GitHub with the registry's host as
+  its audience (`TORB_AUDIENCE` names another) and exchanged at `/api/1/trusted-publishing/github` for a token that
+  lives fifteen minutes and publishes this one package. The package's owners configure which repository, workflow file
+  and environment may do that, and no secret is stored anywhere.
+
+Without either, nothing is sent:
+
+```console
+$ torb publish
+error: publishing to https://packages.torb.dev needs a token: set TORB_TOKEN to a token of the registry that may publish acme/json, or publish from a GitHub Actions job with `permissions: id-token: write` and a trusted publisher the owners of acme/json configured
+```
 
 ## Pitfalls
+
+**The registry trusts nothing the client computed.** It recomputes the tree hash, reads the settings from the archive's
+own lock - never by evaluating a `project.trb` - and derives the capabilities again, so a refusal on the server is the
+refusal `--dry-run` shows locally. It does not *check* the package: its toolchain may be another patch release.
 
 **The capability summary is what the package's own imports reach**: `files` for `std/fs`, `network` for `std/http`,
 `std/network` and `std/tls`, `processes`, `environment`, `the operating system`, `clock`, `scripts`, and `foreign

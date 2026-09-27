@@ -6,7 +6,7 @@
  *     torb update [<package>...]               every package, or the named ones, at the highest version allowed
  *     torb install                             the packages the lock pins, fetched and verified into the cache
  *     torb publish [--dry-run]                 the archive exactly as it is uploaded, checked; a `file:` registry is
- *                                              written, a registry on the network is a later round
+ *                                              written, a registry on the network is sent it (`../package/upload`)
  *
  * `add`, `remove` and `update` are the only commands that write `project.lock.trb`, and `publish` writes its
  * `settings` block; `install` never changes it. Resolution fails before anything is written, with PubGrub's explanation.
@@ -38,6 +38,8 @@ use isInstalled, install, writeBytes, writeText from "../package/store"
 use withRequirement, withoutRequirement from "../package/manifest-edit"
 use packed, unpacked, treeHash, capabilitiesOf from "../package/archive"
 use packageFiles, entriesOf from "../package/files"
+use publishProblems, publishedDependencies from "../package/publish"
+use uploadRelease from "../package/upload"
 use TarEntry from "std/archive"
 
 /** What one of the commands was called with. */
@@ -549,7 +551,7 @@ fn capabilityGains(before: Lock, after: Lock): List<String> {
 fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
   const package = context.target
   const manifest = evaluatedManifest package
-  const problems = publishProblems manifest, context
+  const problems = publishProblems manifest, lockOf(context)
   if !problems.isEmpty() {
     for problem in problems {
       printError "error: {problem}"
@@ -591,18 +593,24 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
     return Ok 0
   }
   const url = registryOf manifest.name, context.bindings
+  var kept = workspaceLock.settings.filter({ _.package != manifest.name }).toList()
+  kept.append settings
   const directory = match registryLocationOf(url, context.root)? {
     .Directory(found) => found
     .Web(found) => {
-      printError "error: publishing to {found} is not built yet: the registry's write service comes in a later round (docs/design/RELEASE.md section 7.11). `--dry-run` builds and checks the archive, and a `file:` registry is written"
-      return Ok 1
+      // The write service re-reads everything from the archive (RELEASE.md section 7.2), so the archive and its tree
+      // hash are all that is sent; the registry's own sentence is what is printed
+      const said = uploadRelease(found, manifest.name, manifest.version, archive, hash, context.settings.cache)?
+      writeLock(context, workspaceLock.copy(settings: kept))?
+      print said
+      return Ok 0
     }
   }
   const release = IndexRelease(
     Version.tryFrom(manifest.version)?,
     hash,
     language: manifest.language,
-    dependencies: manifest.runtimeRequirements.filter({ !_.startsWith("std/") }).toList(),
+    dependencies: publishedDependencies(manifest),
     capabilities: reaches.map({ _.capability }).toList(),
   )
   const indexPath = joinPath directory, "index/{manifest.name}.trb"
@@ -614,8 +622,6 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
   }
   writeBytes(archivePath, archive)?
   writeText(indexPath, existing + renderRelease(release))?
-  var kept = workspaceLock.settings.filter({ _.package != manifest.name }).toList()
-  kept.append settings
   writeLock(context, workspaceLock.copy(settings: kept))?
   print "published {manifest.name} {manifest.version} to {url}"
   Ok 0
@@ -637,42 +643,6 @@ fn evaluatedManifest(package: Package): Manifest {
     }
   }
   package.manifest
-}
-
-/** What `torb publish` refuses (RELEASE.md section 7.2, step 1): every missing or wrong setting at once. */
-fn publishProblems(manifest: Manifest, context: Context): List<String> {
-  var problems: List<String> = []
-  match packageNameOf(manifest.name) {
-    Ok(name) => {
-      if name.startsWith("std/") {
-        problems.append "`std` is the toolchain's owner, and nothing is published under it"
-      }
-    }
-    Fail(problem) => problems.append "`name`: {problem}"
-  }
-  if manifest.version.isEmpty() {
-    problems.append "`version` is required to publish"
-  } else if const Fail(problem) = Version.tryFrom(manifest.version) {
-    problems.append "`version`: {problem}"
-  }
-  if manifest.description.isEmpty() {
-    problems.append "`description` is required to publish: one sentence about the package"
-  }
-  if manifest.license.isEmpty() {
-    problems.append "`license` is required to publish, as an SPDX expression such as `\"MIT\"`"
-  }
-  const lock = lockOf context
-  for line in manifest.runtimeRequirements {
-    match requirementOf(line) {
-      Ok(requirement) => {
-        if lock.locked(requirement.package).map({ _.isPath() }) ?? false {
-          problems.append "`{requirement.package}` comes from a `path:` source, which nobody who installs the package has"
-        }
-      }
-      Fail(problem) => problems.append problem
-    }
-  }
-  problems
 }
 
 /** How many files of the package were checked, or -1 after printing the problems where it does not check. */

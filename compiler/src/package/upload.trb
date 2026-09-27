@@ -1,0 +1,233 @@
+/**
+ * `torb publish` to a registry on the network (docs/design/RELEASE.md sections 7.2 and 7.6): the archive `PUT` to the
+ * write service's `/api/1/packages/<owner>/<name>/<version>`, with its tree hash beside it and a token in front of it.
+ *
+ * **The token** is `TORB_TOKEN` where it is set - a token of the registry with the `publish` action. Where it is not
+ * and the command runs in a GitHub Actions job with `id-token: write`, the job's OpenID Connect token is requested from
+ * GitHub for the registry's host as the audience and exchanged at `/api/1/trusted-publishing/github` for a token that
+ * lives for minutes and may publish this one package: **trusted publishing**, with no secret stored anywhere.
+ *
+ * **The network is `curl`, else `wget`**, as for fetching (`./fetch`), and for the same two reasons: `torb` cannot wait
+ * for a task, and every request of `std/http` is one. The token never appears on a command line: `curl` reads its
+ * header from a file (`-H @file`), which is emptied again once the request is done.
+ */
+
+use File from "std/fs"
+use Environment from "std/os"
+use Process from "std/process"
+use Json from "std/json"
+use writeBytes, writeText from "./store"
+
+/** What the write service answers, success or not: one sentence for a person, and a token where one was asked for. */
+type Answer {
+  message: String = ""
+  error: String = ""
+  token: String = ""
+}
+
+/** What GitHub's token endpoint answers a job. */
+type IdentityAnswer {
+  value: String = ""
+}
+
+/** What the exchange of trusted publishing is sent. */
+type Exchange {
+  token: String
+  package: String
+}
+
+/** One request's outcome: the status and the body as text. */
+type Reply {
+  status: Int
+  body: String
+}
+
+/**
+ * Uploads `archive`, the release `version` of `package` with the tree hash `hash`, to the registry at `url`. Answers
+ * the registry's own sentence about it.
+ *
+ * # Errors
+ *
+ * - No token and no trusted publishing to fall back on, a registry that cannot be reached, and every refusal of the
+ *   registry, in its words: a token that may not publish the package, a version published already, an archive whose
+ *   settings, hash or size the registry does not take.
+ */
+public fn uploadRelease(
+  url: String,
+  package: String,
+  version: String,
+  archive: List<UInt8>,
+  hash: String,
+  work: String,
+): Result<String, String> {
+  const token = tokenFor(url, package, work)?
+  const archivePath = "{work}/upload/{package.replace("/", "-")}-{version}.tar.gz"
+  writeBytes(archivePath, archive)?
+  const headers = [
+    "Authorization: Bearer {token}",
+    "Content-Type: application/gzip",
+    "Torb-Tree-Hash: {hash}",
+  ]
+  const reply = request("PUT", "{url}/api/1/packages/{package}/{version}", headers, Some(archivePath), work)?
+  const answer = answerOf reply.body
+  if reply.status < 200 || reply.status > 299 {
+    const said = if answer.error.isEmpty() { reply.body.trim() } else { answer.error }
+    return Fail "{url} refused {package} {version} ({reply.status}): {said}"
+  }
+  Ok(if answer.message.isEmpty() { "published {package} {version} to {url}" } else { answer.message })
+}
+
+/**
+ * The token to publish with: `TORB_TOKEN`, or one exchanged for the GitHub Actions job's identity.
+ *
+ * # Errors
+ *
+ * - Neither is there, or the exchange is refused.
+ */
+fn tokenFor(url: String, package: String, work: String): Result<String, String> {
+  if const Some(given) = Environment.get("TORB_TOKEN") {
+    if !given.trim().isEmpty() {
+      return Ok given.trim()
+    }
+  }
+  const requestUrl = Environment.get("ACTIONS_ID_TOKEN_REQUEST_URL") ?? ""
+  const requestToken = Environment.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN") ?? ""
+  if requestUrl.isEmpty() || requestToken.isEmpty() {
+    return Fail "publishing to {url} needs a token: set TORB_TOKEN to a token of the registry that may publish {package}, or publish from a GitHub Actions job with `permissions: id-token: write` and a trusted publisher the owners of {package} configured"
+  }
+  const audience = Environment.get("TORB_AUDIENCE") ?? hostOf(url)
+  const separator = if requestUrl.contains("?") { "&" } else { "?" }
+  const identity = request(
+    "GET",
+    "{requestUrl}{separator}audience={audience}",
+    ["Authorization: bearer {requestToken}", "Accept: application/json"],
+    None,
+    work,
+  )?
+  if identity.status != 200 {
+    return Fail "GitHub did not issue the job's identity token ({identity.status}): {identity.body.trim()}"
+  }
+  const jobToken = Json().decode<IdentityAnswer>(identity.body).map({ _.value }).ok() ?? ""
+  if jobToken.isEmpty() {
+    return Fail "GitHub's answer holds no identity token: {identity.body.trim()}"
+  }
+  const bodyPath = "{work}/upload/exchange.json"
+  writeText(bodyPath, Json().encode(Exchange(jobToken, package)))?
+  const exchanged = request(
+    "POST",
+    "{url}/api/1/trusted-publishing/github",
+    ["Content-Type: application/json", "Accept: application/json"],
+    Some(bodyPath),
+    work,
+  )
+  writeText(bodyPath, "")?
+  const reply = exchanged?
+  const answer = answerOf reply.body
+  if reply.status != 200 || answer.token.isEmpty() {
+    const said = if answer.error.isEmpty() { reply.body.trim() } else { answer.error }
+    return Fail "{url} did not trust this job to publish {package} ({reply.status}): {said}"
+  }
+  Ok answer.token
+}
+
+/** `https://packages.torb.dev` -> `packages.torb.dev`: the audience a registry expects by default. */
+fn hostOf(url: String): String {
+  const rest = url.withoutPrefix("https://") ?? (url.withoutPrefix("http://") ?? url)
+  match rest.splitOnce("/") {
+    Some((host, _)) => host
+    None => rest
+  }
+}
+
+fn answerOf(body: String): Answer {
+  Json().decode<Answer>(body).ok() ?? Answer()
+}
+
+/**
+ * One HTTP request through `curl`, else `wget` (or the one `TORB_FETCH` names): the headers go through a file, the body
+ * is a file where there is one.
+ */
+fn request(method: String, url: String, headers: List<String>, body: String?, work: String): Result<Reply, String> {
+  if const Fail(problem) = File.createDirectory("{work}/upload") {
+    return Fail problem.show()
+  }
+  const chosen = Environment.get("TORB_FETCH") ?? ""
+  const tools = match chosen {
+    "" => ["curl", "wget"]
+    "curl" | "wget" => [chosen]
+    _ => {
+      return Fail "TORB_FETCH is `{chosen}`: it can be `curl` or `wget`"
+    }
+  }
+  const headerPath = "{work}/upload/headers"
+  const answerPath = "{work}/upload/answer"
+  writeText(headerPath, headers.map({ "{_}\n" }).toList().joined(separator: ""))?
+  writeText(answerPath, "")?
+  var outcome: Result<Reply, String>? = None
+  for tool in tools {
+    outcome = requestThrough tool, method, url, headers, headerPath, body, answerPath
+    if outcome.isSome() {
+      break
+    }
+  }
+  writeText(headerPath, "")?
+  outcome ?? Fail("a request to {url} needs `curl` or `wget`, and neither could be started")
+}
+
+/** One program's request; `None` where the program cannot be started at all, so the next one is tried. */
+fn requestThrough(
+  tool: String,
+  method: String,
+  url: String,
+  headers: List<String>,
+  headerPath: String,
+  body: String?,
+  answerPath: String,
+): Result<Reply, String>? {
+  var arguments: List<String> = []
+  if tool == "curl" {
+    arguments = ["-sS", "-X", method, "-H", "@{headerPath}", "-o", answerPath, "-w", "%\{http_code\}"]
+    if const Some(path) = body {
+      arguments.appendAll(["--data-binary", "@{path}"])
+    }
+  } else {
+    arguments = ["-q", "-S", "--content-on-error", "--method={method}", "-O", answerPath]
+    for header in headers {
+      arguments.append "--header={header}"
+    }
+    if const Some(path) = body {
+      arguments.append "--body-file={path}"
+    }
+  }
+  arguments.append url
+  const output = match Process.runBlocking(tool, arguments) {
+    Ok(found) => found
+    Fail(_) => {
+      return None
+    }
+  }
+  const text = File.readText(answerPath).ok() ?? ""
+  if tool == "curl" {
+    return match Int.tryFrom(output.standardOutput.trim()) {
+      Ok(status) => {
+        if status == 0 {
+          Some Fail("{url} could not be reached: {output.standardError.trim()}")
+        } else {
+          Some Ok(Reply(status, text))
+        }
+      }
+      Fail(_) => Some Fail("{url} could not be reached: {output.standardError.trim()}")
+    }
+  }
+  var status = 0
+  for line in output.standardError.lines() {
+    const words = line.trim().split(" ").filter({ !_.isEmpty() }).toList()
+    if words.length() >= 2 && words[0].startsWith("HTTP/") {
+      status = Int.tryFrom(words[1]).ok() ?? status
+    }
+  }
+  if status == 0 {
+    return Some Fail("{url} could not be reached: {output.standardError.trim()}")
+  }
+  Some Ok(Reply(status, text))
+}
