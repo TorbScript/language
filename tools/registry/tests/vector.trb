@@ -4,6 +4,10 @@
  * Actions job of `acme/http` running `release.yml` for the tag `v1.2.5` in the environment `release`, signed `RS256`
  * by it for the audience `packages.torb.dev`. [token] was issued at [issued] and lives 900 seconds; [lastingToken] has
  * the same claims and expires in 2100, for the tests that run against the database's real clock.
+ *
+ * The same for Forgejo Actions: a second key (`test-key-2`) and [forgejoToken], the claims of a job of `acme/http`
+ * on the Forgejo `git.example.test` running `release.yml` for the tag `v1.2.5` on a push, issued at [issued] by
+ * `https://git.example.test/api/actions` for the audience `packages.torb.dev` and expiring in 2100.
  */
 
 use JsonWebKey, JsonWebKeySet from "../src/oidc"
@@ -28,4 +32,28 @@ public fn keySet(): JsonWebKeySet {
 /** The key set as an issuer's `/.well-known/jwks` answers it. */
 public fn keySetText(): String {
   "\{\"keys\":[\{\"kty\":\"RSA\",\"kid\":\"test-key-1\",\"alg\":\"RS256\",\"use\":\"sig\",\"n\":\"{modulus}\",\"e\":\"AQAB\"\}]\}"
+}
+
+/** The modulus of the Forgejo test key, `test-key-2`. */
+public const forgejoModulus = "tEHxig4MB5xe13I80rvub4i5KCAemm0sPiFYuf4GfGVy_Hm487accByb2T9wA8d2GP_LTf4_Ge0bmMydmx9dlttfFrhI_plKqwokLq582wijZUs_xlGIRE8DGP3W4e65tzRmhGyTrLU6RfmYaQO2WHgp1cPVckfEjH-1jZyMH8ZLITxW_7f5laDJ0omn9WMrgntwkcbxM0zaXXgv4Z58gwgjn1jQVdTiLlBpDlgmPDOkbJtrbP3xMWAcic6Lcm035faitiGHGZyfySIGHhp_Xt0J6WOAecAWb14eSfjMrIUujqi3Uf3VYain3iiISNB9VQxfQoM1RXgb5zpzEvq_cQ"
+
+/** A Forgejo Actions token of `acme/http`'s `release.yml` for `refs/tags/v1.2.5`, signed by `test-key-2`. */
+public const forgejoToken = "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LTIiLCJ0eXAiOiJKV1QifQ.eyJhY3RvciI6ImFkYSIsImFjdG9yX2lkIjoiMyIsImF1ZCI6InBhY2thZ2VzLnRvcmIuZGV2IiwiYmFzZV9yZWYiOiIiLCJldmVudF9uYW1lIjoicHVzaCIsImV4cCI6NDEwMjQ0NDgwMCwiaGVhZF9yZWYiOiIiLCJpYXQiOjE3OTAwMDAwMDAsImlzcyI6Imh0dHBzOi8vZ2l0LmV4YW1wbGUudGVzdC9hcGkvYWN0aW9ucyIsIm5iZiI6MTc5MDAwMDAwMCwicmVmIjoicmVmcy90YWdzL3YxLjIuNSIsInJlZl9wcm90ZWN0ZWQiOiJmYWxzZSIsInJlZl90eXBlIjoidGFnIiwicmVwb3NpdG9yeSI6ImFjbWUvaHR0cCIsInJlcG9zaXRvcnlfaWQiOiI3IiwicmVwb3NpdG9yeV9vd25lciI6ImFjbWUiLCJyZXBvc2l0b3J5X293bmVyX2lkIjoiMiIsInJ1bl9hdHRlbXB0IjoiMSIsInJ1bl9pZCI6IjQxIiwicnVuX251bWJlciI6IjEyIiwic2hhIjoiNDE0MGExOWEyZTFkMWQ4NjViYmU1YjllN2VlMTNlMDBjOGM1ZjZhOSIsInN1YiI6InJlcG86YWNtZS0yL2h0dHAtNzpyZWY6cmVmcy90YWdzL3YxLjIuNSIsIndvcmtmbG93IjoicmVsZWFzZS55bWwiLCJ3b3JrZmxvd19yZWYiOiJhY21lL2h0dHAvLmZvcmdlam8vd29ya2Zsb3dzL3JlbGVhc2UueW1sQHJlZnMvdGFncy92MS4yLjUifQ.d_qCqGLbrPw3aBflVpUBk4gAugUYeoiNWG8u8LN8g8K1qJ_rFvCXCylAjEeDpFANnrgbC7g7WrXj1lm3Kwdht24Fjtq6v72F29uEll3MjJ5S_A6Yy75OJlcRSfZGPDGKrb1QQ2a1fNe20iDrKeIPWESuWYJwDpcyydPdflDcY6O-itwlrpQx9DR4eHJzrXoCDniqgFt99oIb6cb4JvdJ094jZOqrsouUDGAcH8qouj5JCr4pl866ioQZ5cShvfYjWCv7HeSn8DRx8JTW9AXXedLWOiw3wYLakRKE3ekI3XsCSNMYodJNekxPWdwUP96YEu5uCPCXPQdFVDoOSis8mQ"
+
+/** Who issued [forgejoToken]: the Forgejo at `git.example.test`. */
+public const forgejoIssuer = "https://git.example.test/api/actions"
+
+/** The key set of the Forgejo test key. */
+public fn forgejoKeySet(): JsonWebKeySet {
+  JsonWebKeySet([JsonWebKey("RSA", kid: "test-key-2", alg: "RS256", n: forgejoModulus, e: "AQAB")])
+}
+
+/** The Forgejo key set as its `/api/actions/.well-known/keys` answers it. */
+public fn forgejoKeySetText(): String {
+  "\{\"keys\":[\{\"alg\":\"RS256\",\"e\":\"AQAB\",\"kid\":\"test-key-2\",\"kty\":\"RSA\",\"n\":\"{forgejoModulus}\",\"use\":\"sig\"\}]\}"
+}
+
+/** The discovery document of the Forgejo, its key set at `keys`. */
+public fn forgejoDiscoveryText(keys: String): String {
+  "\{\"issuer\":\"{forgejoIssuer}\",\"jwks_uri\":\"{keys}\",\"id_token_signing_alg_values_supported\":[\"RS256\"]\}"
 }

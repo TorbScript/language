@@ -1,11 +1,14 @@
 /**
  * Trusted publishing (docs/design/RELEASE.md section 7.2): a CI job proves who it is with the OpenID Connect token its
  * CI system issued it, and the registry trades that for a short-lived token of its own - no stored secret on either
- * side. GitHub Actions is the one provider so far; its tokens are JSON Web Tokens signed with `RS256` by a key that
- * `https://token.actions.githubusercontent.com/.well-known/jwks` publishes.
+ * side. Two kinds of issuer are trusted: GitHub Actions, whose tokens `https://token.actions.githubusercontent.com`
+ * signs, and Forgejo Actions of the forges the configuration names - git.torb.dev by default - whose issuer is
+ * `https://<host>/api/actions` and whose key set its `/.well-known/openid-configuration` points at. Both sign JSON Web
+ * Tokens with `RS256`.
  *
- * Everything that decides is a pure function of the token, the key set, the audience and the time, so the tests run it
- * with a key of their own. Fetching the key set is the one call that reaches the network.
+ * Everything that decides is a pure function of the token, the key set, the issuer, the audience and the time, so the
+ * tests run it with keys of their own. Fetching the discovery document and the key set are the calls that reach the
+ * network.
  */
 
 use Json from "std/json"
@@ -20,7 +23,7 @@ use RsaPublicKey, verifiesSha256 from "./rsa"
 /** Who issues GitHub Actions' tokens: the `iss` claim, and where the key set is published below it. */
 public const githubIssuer = "https://token.actions.githubusercontent.com"
 
-/** How far the clocks of GitHub and the registry may disagree, in seconds. */
+/** How far the clocks of a CI system and the registry may disagree, in seconds. */
 public const clockLeeway = 60
 
 /** One key of a JSON Web Key Set (RFC 7517): an RSA key's modulus `n` and exponent `e` in URL-safe Base64. */
@@ -32,9 +35,15 @@ public type JsonWebKey {
   e: String = ""
 }
 
-/** What the issuer's `/.well-known/jwks` answers. */
+/** What an issuer's key set URL answers. */
 public type JsonWebKeySet {
   keys: List<JsonWebKey>
+}
+
+/** What an issuer's `/.well-known/openid-configuration` answers, as much of it as this reads. */
+type Discovery {
+  issuer: String
+  jwksUri: String
 }
 
 /** The header of a token: the algorithm, and which key of the set signed it. */
@@ -43,12 +52,65 @@ type TokenHeader {
   kid: String = ""
 }
 
+/** The one claim read before a token is verified: who says they issued it, which picks the key set to verify it with. */
+type IssuerClaim {
+  iss: String = ""
+}
+
 /**
- * The claims of a GitHub Actions token this registry reads (GitHub's "About security hardening with OpenID Connect").
- * `jobWorkflowRef` is the workflow file that runs the job - `acme/http/.github/workflows/release.yml@refs/tags/v1.2.5`
- * - which for a reusable workflow is the called one, and so the one a trusted publisher names.
+ * An issuer the registry takes tokens from. GitHub Actions is one; every Forgejo the configuration names is another.
  */
-public type GitHubClaims {
+public type TrustedIssuer {
+  /** The `iss` of its tokens. */
+  issuer: String
+  /**
+   * The host a trusted publisher's repository names it by - `git.torb.dev` in `git.torb.dev/acme/http` - and empty for
+   * GitHub, whose repositories are written `acme/http`.
+   */
+  host: String = ""
+  /** Where its key set is; empty to read it from the discovery document. */
+  keySetUrl: String = ""
+  /** Where its discovery document is; empty for `<issuer>/.well-known/openid-configuration`. */
+  discoveryUrl: String = ""
+
+  /** GitHub Actions, its key set at `url`. */
+  static fn github(url: String): Self {
+    Self githubIssuer, keySetUrl: url
+  }
+
+  /** The Forgejo whose issuer is `issuer`, `https://<host>/api/actions`; `None` for a URL that is not that shape. */
+  static fn forgejo(issuer: String): Self? {
+    const rest = issuer.trim().withoutPrefix("https://")?
+    const host = rest.withoutSuffix("/api/actions")?
+    if host.isEmpty() || host.contains("/") {
+      return None
+    }
+    Some Self(issuer.trim(), host: host)
+  }
+
+  /** Whether this is GitHub Actions. */
+  fn isGithub(): Bool {
+    host.isEmpty()
+  }
+
+  /** The discovery document's URL. */
+  fn discovery(): String {
+    if discoveryUrl.isEmpty() {
+      "{issuer}/.well-known/openid-configuration"
+    } else {
+      discoveryUrl
+    }
+  }
+}
+
+/**
+ * The claims of a CI token this registry reads - GitHub's ("About security hardening with OpenID Connect") and
+ * Forgejo's (the claims of `enable-openid-connect`), which share most names. GitHub's `jobWorkflowRef` is the workflow
+ * file that runs the job - `acme/http/.github/workflows/release.yml@refs/tags/v1.2.5` - which for a reusable workflow
+ * is the called one, and so the one a trusted publisher names; Forgejo names the file in `workflow`, `release.yml`, and
+ * has no `environment`.
+ */
+public type IdentityClaims {
   iss: String
   aud: String
   exp: Int
@@ -58,28 +120,63 @@ public type GitHubClaims {
   repository: String = ""
   repositoryOwner: String = ""
   ref: String = ""
+  workflow: String = ""
   workflowRef: String = ""
   jobWorkflowRef: String = ""
   environment: String = ""
+  eventName: String = ""
 }
 
 /**
- * A repository and workflow a package's owners allow to publish it without a token (RELEASE.md section 7.2), optionally
- * only from one deployment environment - which is where GitHub's required reviewers hold a job.
+ * A repository and workflow a package's owners allow to publish it without a token (RELEASE.md section 7.2): on GitHub,
+ * optionally only from one deployment environment - which is where GitHub's required reviewers hold a job - and on
+ * either, optionally only from one ref.
  */
 public type TrustedPublisher {
-  /** `owner/name` on GitHub. */
+  /**
+   * `owner/name` on GitHub; `<host>/owner/name` on a Forgejo the registry trusts, e.g.
+   * `git.torb.dev/torbscript/language`.
+   */
   repository: String
-  /** The workflow's file name, `release.yml`, below `.github/workflows/`. */
+  /** The workflow's file name, `release.yml`, below `.github/workflows/` or `.forgejo/workflows/`. */
   workflow: String
-  /** The environment the job has to run in; empty for any. */
+  /** The GitHub environment the job has to run in; empty for any. Forgejo's tokens name none. */
   environment: String = ""
+  /** The ref the job has to run for - `refs/tags/v1.2.5`, or `refs/tags/v*` for every ref it starts - empty for any. */
+  ref: String = ""
+
+  /** The host of a Forgejo repository, `git.torb.dev`; empty for a GitHub one. */
+  fn host(): String {
+    const parts = repository.split("/").toList()
+    if parts.length() == 3 {
+      parts[0]
+    } else {
+      ""
+    }
+  }
 }
 
 const json = Json naming: Naming.SnakeCase
 
 /**
- * The claims of `token`, verified: its signature by a key of `keys`, its issuer GitHub's, its audience `audience`, and
+ * Who a token says issued it, read without verifying anything: it chooses the issuer, and so the key set, the token is
+ * then verified with - and [verifiedClaims] checks the claim once more after the signature.
+ */
+public fn issuerOf(token: String): Result<String, String> {
+  const parts = token.trim().split(".").toList()
+  if parts.length() != 3 {
+    return Fail "the token is not a JSON Web Token: it has {parts.length()} segments, and one has 3"
+  }
+  const claimsText = textOfSegment(parts[1], "claims")?
+  const claim = json.decode<IssuerClaim>(claimsText).mapError({ "the token's claims are not JSON: {_}" })?
+  if claim.iss.isEmpty() {
+    return Fail "the token names no issuer"
+  }
+  Ok claim.iss
+}
+
+/**
+ * The claims of `token`, verified: its signature by a key of `keys`, its issuer `issuer`, its audience `audience`, and
  * `now` (seconds since 1970) inside its lifetime give or take [clockLeeway].
  *
  * # Errors
@@ -87,15 +184,15 @@ const json = Json naming: Naming.SnakeCase
  * - What is wrong with it, in words a CI log can show: not three segments, an algorithm other than `RS256`, no key of
  *   the set with its `kid`, a signature that does not verify, another issuer or audience, expired or not yet valid.
  */
-public fn verifiedClaims(token: String, keys: JsonWebKeySet, audience: String, now: Int): Result<GitHubClaims, String> {
-  const parts = token.trim().split(".")
+public fn verifiedClaims(token: String, keys: JsonWebKeySet, issuer: String, audience: String, now: Int): Result<IdentityClaims, String> {
+  const parts = token.trim().split(".").toList()
   if parts.length() != 3 {
     return Fail "the token is not a JSON Web Token: it has {parts.length()} segments, and one has 3"
   }
   const headerText = textOfSegment(parts[0], "header")?
   const header = json.decode<TokenHeader>(headerText).mapError({ "the token's header is not JSON: {_}" })?
   if header.alg != "RS256" {
-    return Fail "the token is signed with `{header.alg}`, and GitHub's tokens are `RS256`"
+    return Fail "the token is signed with `{header.alg}`, and the tokens of GitHub and Forgejo Actions are `RS256`"
   }
   const signature = base64Decoded(parts[2]).mapError({ "the token's signature is not Base64: {_}" })?
   const signed = "{parts[0]}.{parts[1]}".bytes().toList()
@@ -116,9 +213,9 @@ public fn verifiedClaims(token: String, keys: JsonWebKeySet, audience: String, n
     return Fail "the token's signature does not verify"
   }
   const claimsText = textOfSegment(parts[1], "claims")?
-  const claims = json.decode<GitHubClaims>(claimsText).mapError({ "the token's claims are not what GitHub issues: {_}" })?
-  if claims.iss != githubIssuer {
-    return Fail "the token was issued by `{claims.iss}`, not by GitHub Actions"
+  const claims = json.decode<IdentityClaims>(claimsText).mapError({ "the token's claims are not what a CI system issues: {_}" })?
+  if claims.iss != issuer {
+    return Fail "the token was issued by `{claims.iss}`, not by `{issuer}`"
   }
   if claims.aud != audience {
     return Fail "the token is for `{claims.aud}`, and this registry is `{audience}`: request it with that audience"
@@ -133,34 +230,95 @@ public fn verifiedClaims(token: String, keys: JsonWebKeySet, audience: String, n
 }
 
 /**
- * Whether the job the claims describe is `publisher`: the same repository (GitHub's names ignore case), the workflow
- * file below its `.github/workflows/`, and the environment where the publisher names one.
+ * Whether the job the claims describe, issued by `issuer`, is `publisher`. On GitHub: the same repository (its names
+ * ignore case), the workflow file below its `.github/workflows/`, and the environment where the publisher names one.
+ * On a Forgejo: the publisher's repository is that Forgejo's host followed by the job's repository, and the job's
+ * workflow file is the publisher's. On either, the job's ref where the publisher names one.
  */
-public fn publisherMatches(claims: GitHubClaims, publisher: TrustedPublisher): Bool {
-  if claims.repository.toLowerCase() != publisher.repository.toLowerCase() {
+public fn publisherMatches(claims: IdentityClaims, publisher: TrustedPublisher, issuer: TrustedIssuer): Bool {
+  if !refMatches(claims.ref, publisher.ref) {
     return false
   }
-  const prefix = "{publisher.repository}/.github/workflows/{publisher.workflow}@".toLowerCase()
-  if !claims.jobWorkflowRef.toLowerCase().startsWith(prefix) {
+  if issuer.isGithub() {
+    if !publisher.host().isEmpty() || claims.repository.toLowerCase() != publisher.repository.toLowerCase() {
+      return false
+    }
+    const prefix = "{publisher.repository}/.github/workflows/{publisher.workflow}@".toLowerCase()
+    if !claims.jobWorkflowRef.toLowerCase().startsWith(prefix) {
+      return false
+    }
+    return publisher.environment.isEmpty() || claims.environment == publisher.environment
+  }
+  if publisher.host().toLowerCase() != issuer.host.toLowerCase() || !publisher.environment.isEmpty() {
     return false
   }
-  publisher.environment.isEmpty() || claims.environment == publisher.environment
+  if publisher.repository.toLowerCase() != "{issuer.host}/{claims.repository}".toLowerCase() {
+    return false
+  }
+  !claims.workflow.isEmpty() && claims.workflow == publisher.workflow
+}
+
+/** Whether `ref` is what a publisher's `wanted` names: any ref where it names none, a prefix where it ends in `*`. */
+public fn refMatches(ref: String, wanted: String): Bool {
+  if wanted.isEmpty() {
+    return true
+  }
+  match wanted.withoutSuffix("*") {
+    Some(prefix) => ref.startsWith prefix
+    None => ref == wanted
+  }
 }
 
 /** Who the claims say published: what the registry's log and the token's account record. */
-public fn publisherName(claims: GitHubClaims): String {
-  "github:{claims.jobWorkflowRef}"
+public fn publisherName(claims: IdentityClaims, issuer: TrustedIssuer): String {
+  if issuer.isGithub() {
+    "github:{claims.jobWorkflowRef}"
+  } else {
+    "forgejo:{issuer.host}/{claims.workflowRef}"
+  }
+}
+
+/** The job the claims describe, in the words of a refusal. */
+public fn describedJob(claims: IdentityClaims, issuer: TrustedIssuer): String {
+  if issuer.isGithub() {
+    "{claims.jobWorkflowRef} (environment `{claims.environment}`)"
+  } else {
+    "{issuer.host}/{claims.workflowRef}"
+  }
 }
 
 /**
- * The key set at `url` (GitHub's is [githubIssuer] followed by `/.well-known/jwks`), fetched fresh for every exchange:
- * an exchange is rare, and a key GitHub rotated out must stop verifying at once.
+ * The URL of the key set of `issuer`: its own where it names one, and otherwise the `jwks_uri` of its discovery
+ * document - whose `issuer` has to be the one asked about, or the document is not that issuer's.
+ */
+public fn keySetUrlOf(issuer: TrustedIssuer): Task<Result<String, String>> {
+  if !issuer.keySetUrl.isEmpty() {
+    return Ok issuer.keySetUrl
+  }
+  const url = issuer.discovery()
+  const text = fetched(url, "the discovery document of {issuer.issuer}").await()?
+  const discovery = json.decode<Discovery>(text).mapError({ "the discovery document at {url} is not what an issuer publishes: {_}" })?
+  if discovery.issuer != issuer.issuer {
+    return Fail "the discovery document at {url} is of `{discovery.issuer}`, not of `{issuer.issuer}`"
+  }
+  Ok discovery.jwksUri
+}
+
+/**
+ * The key set at `url`, fetched fresh for every exchange: an exchange is rare, and a key an issuer rotated out must
+ * stop verifying at once.
  */
 public fn fetchKeySet(url: String): Task<Result<JsonWebKeySet, String>> {
+  const text = fetched(url, "the key set").await()?
+  json.decode<JsonWebKeySet>(text).mapError({ "the key set at {url} is not a JSON Web Key Set: {_}" })
+}
+
+/** The body of a `GET` of `url` that answered a success; `what` names it in a failure. */
+fn fetched(url: String, what: String): Task<Result<String, String>> {
   const uri = match Uri.tryFrom(url) {
     Ok(found) => found
     Fail(problem) => {
-      return Fail "the key set URL `{url}` is not a URI: {problem}"
+      return Fail "the URL `{url}` of {what} is not a URI: {problem}"
     }
   }
   var headers = Headers()
@@ -169,19 +327,16 @@ public fn fetchKeySet(url: String): Task<Result<JsonWebKeySet, String>> {
   var response = match httpGet(uri, headers: headers).await() {
     Ok(found) => found
     Fail(problem) => {
-      return Fail "the key set could not be fetched from {url}: {problem}"
+      return Fail "{what} could not be fetched from {url}: {problem}"
     }
   }
   if !response.status.isSuccess() {
-    return Fail "the key set at {url} answered {response.status}"
+    return Fail "{what} at {url} answered {response.status}"
   }
-  const text = match response.body.text().await() {
-    Ok(found) => found
-    Fail(problem) => {
-      return Fail "the key set at {url} could not be read: {problem}"
-    }
+  match response.body.text().await() {
+    Ok(found) => Ok found
+    Fail(problem) => Fail "{what} at {url} could not be read: {problem}"
   }
-  json.decode<JsonWebKeySet>(text).mapError({ "the key set at {url} is not a JSON Web Key Set: {_}" })
 }
 
 /** A segment of the token as the UTF-8 text it encodes. */

@@ -30,7 +30,7 @@ use Grant, everyAction, newToken, newTokenId, digestOf, looksLikeToken, ownerOf,
 use ownerProblem, packageNameProblem, accountProblem, skeletonOf from "./names"
 use checkedUpload from "./upload"
 use mirrorIndex from "./mirror"
-use TrustedPublisher, JsonWebKeySet, verifiedClaims, publisherMatches, publisherName, fetchKeySet from "./oidc"
+use TrustedPublisher, TrustedIssuer, JsonWebKeySet, githubIssuer, issuerOf, verifiedClaims, publisherMatches, publisherName, describedJob, keySetUrlOf, fetchKeySet from "./oidc"
 use Version from "torbscript/compiler/package/version"
 use IndexYank, readIndex, indexStart, renderRelease, renderYank, renderUnyank from "torbscript/compiler/package/index"
 
@@ -172,6 +172,7 @@ type PublisherRow {
   repository: String
   workflow: String
   environment: String
+  ref: String = ""
 }
 
 type CountRow {
@@ -515,14 +516,25 @@ public shared type Registry {
     const package = packageOf(owner, name)?
     mayManage(caller, owner).await()?
     for publisher in settings.publishers {
-      if !publisher.repository.contains("/") || publisher.workflow.isEmpty() || publisher.workflow.contains("/") {
-        return Fail Refusal.of(400, "a trusted publisher is a repository `owner/name` and a workflow file name such as `release.yml`")
+      const segments = publisher.repository.split("/").toList()
+      if segments.length() < 2 || segments.length() > 3 || segments.any({ _.isEmpty() }) || publisher.workflow.isEmpty() || publisher.workflow.contains("/") {
+        return Fail Refusal.of(400, "a trusted publisher is a repository - `owner/name` on GitHub, `<host>/owner/name` on a Forgejo - and a workflow file name such as `release.yml`")
+      }
+      const host = publisher.host()
+      if !host.isEmpty() {
+        if !config.forgejoIssuers.any({ _.host.toLowerCase() == host.toLowerCase() }) {
+          const trusted = config.forgejoIssuers.map({ _.host }).toList().joined(separator: ", ")
+          return Fail Refusal.of(400, "{host} is not a forge this registry takes tokens from (it takes GitHub Actions and Forgejo Actions of: {trusted})")
+        }
+        if !publisher.environment.isEmpty() {
+          return Fail Refusal.of(400, "the tokens of Forgejo Actions name no environment: restrict {publisher.repository} with a `ref` such as `refs/tags/v*` instead")
+        }
       }
     }
     ensurePackage(package, owner).await()?
     var statements: List<String> = ["BEGIN IMMEDIATE;", "DELETE FROM trusted_publishers WHERE package = {sqlText(package)};"]
     for publisher in settings.publishers {
-      statements.append "INSERT OR IGNORE INTO trusted_publishers (package, repository, workflow, environment) VALUES ({sqlText(package)}, {sqlText(publisher.repository)}, {sqlText(publisher.workflow)}, {sqlText(publisher.environment)});"
+      statements.append "INSERT OR IGNORE INTO trusted_publishers (package, repository, workflow, environment, ref) VALUES ({sqlText(package)}, {sqlText(publisher.repository)}, {sqlText(publisher.workflow)}, {sqlText(publisher.environment)}, {sqlText(publisher.ref)});"
     }
     const flag = if settings.required { 1 } else { 0 }
     statements.append "UPDATE packages SET trusted_only = {flag} WHERE name = {sqlText(package)};"
@@ -533,29 +545,42 @@ public shared type Registry {
   }
 
   /**
-   * A short-lived token that may publish `package`, for a GitHub Actions job whose OIDC token verifies and matches one
-   * of the package's trusted publishers (RELEASE.md section 7.2).
+   * A short-lived token that may publish `package`, for a CI job - of GitHub Actions or of a Forgejo the registry
+   * trusts - whose OIDC token verifies and matches one of the package's trusted publishers (RELEASE.md section 7.2).
    */
   fn exchange(token: String, package: String): Task<Result<IssuedToken, Refusal>> {
     const owner = ownerOf package
     const name = package.splitOnce("/").map({ _.1 }) ?? ""
     const checked = packageOf(owner, name)?
-    const keys: JsonWebKeySet = match fetchKeySet(config.keySetUrl).await() {
+    const claimedIssuer = issuerOf(token).mapError({ Refusal.of 401, _ })?
+    const issuer = match trustedIssuer(claimedIssuer) {
+      Some(found) => found
+      None => {
+        return Fail Refusal.of(401, "the token was issued by `{claimedIssuer}`, and this registry takes tokens of GitHub Actions and of the Forgejo Actions of {config.forgejoIssuers.map({ _.host }).toList().joined(separator: ", ")}")
+      }
+    }
+    const keySetUrl = match keySetUrlOf(issuer).await() {
+      Ok(found) => found
+      Fail(problem) => {
+        return Fail Refusal.of(503, problem)
+      }
+    }
+    const keys: JsonWebKeySet = match fetchKeySet(keySetUrl).await() {
       Ok(found) => found
       Fail(problem) => {
         return Fail Refusal.of(503, problem)
       }
     }
     const now = nowOf().await()?
-    const claims = verifiedClaims(token, keys, config.audience, now).mapError({ Refusal.of 401, _ })?
+    const claims = verifiedClaims(token, keys, issuer.issuer, config.audience, now).mapError({ Refusal.of 401, _ })?
     const publishers = publishersOf(checked).await()?
     if publishers.isEmpty() {
       return Fail Refusal.of(403, "{checked} has no trusted publisher: its owners configure one at /api/1/packages/{checked}/trusted-publishers")
     }
-    if !publishers.any({ publisherMatches claims, _ }) {
-      return Fail Refusal.of(403, "{claims.jobWorkflowRef} (environment `{claims.environment}`) is not a trusted publisher of {checked}")
+    if !publishers.any({ publisherMatches claims, _, issuer }) {
+      return Fail Refusal.of(403, "{describedJob(claims, issuer)} is not a trusted publisher of {checked}")
     }
-    const account = publisherName claims
+    const account = publisherName claims, issuer
     const issuedToken = issued(account, "trusted publishing", [owner], [checked], ["publish"], true, now + config.trustedTokenSeconds).await()?
     logged(Caller.Anonymous, "exchange", checked, account).await()?
     Ok issuedToken
@@ -670,9 +695,17 @@ public shared type Registry {
 
   private fn publishersOf(package: String): Task<Result<List<TrustedPublisher>, Refusal>> {
     const rows = self.queried<PublisherRow>(
-      "SELECT repository, workflow, environment FROM trusted_publishers WHERE package = {sqlText(package)} ORDER BY repository, workflow;",
+      "SELECT repository, workflow, environment, ref FROM trusted_publishers WHERE package = {sqlText(package)} ORDER BY repository, workflow, ref;",
     ).await()?
-    Ok rows.map({ TrustedPublisher _.repository, _.workflow, _.environment }).toList()
+    Ok rows.map({ TrustedPublisher _.repository, _.workflow, _.environment, _.ref }).toList()
+  }
+
+  /** The issuer `iss` names, where the registry trusts it: GitHub Actions, or a Forgejo of the configuration. */
+  private fn trustedIssuer(iss: String): TrustedIssuer? {
+    if iss == githubIssuer {
+      return Some TrustedIssuer.github(config.keySetUrl)
+    }
+    config.forgejoIssuers.filter({ _.issuer == iss }).toList().first()
   }
 
   /** Stores a new token's digest and answers the token, which is never stored. */

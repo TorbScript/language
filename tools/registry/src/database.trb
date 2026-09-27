@@ -60,15 +60,26 @@ public type Database {
     }
   }
 
-  /** Creates the tables that are missing and switches the file to WAL, which Litestream replicates. */
+  /**
+   * Creates the tables that are missing and switches the file to WAL, which Litestream replicates. A database made
+   * before trusted publishers had a `ref` gets the column, empty - any ref, which is what those rows meant.
+   */
   fn migrate(): Task<Result<Void, String>> {
     const _ = run(schema).await()?
+    const columns = self.rows<Column>("SELECT name FROM pragma_table_info('trusted_publishers');").await()?
+    if !columns.any({ _.name == "ref" }) {
+      const _ = run("ALTER TABLE trusted_publishers ADD COLUMN ref TEXT NOT NULL DEFAULT '';").await()?
+    }
     Ok void
   }
 }
 
 type Clock {
   seconds: Int
+}
+
+type Column {
+  name: String
 }
 
 /**
@@ -157,7 +168,8 @@ const schema = """
     repository TEXT NOT NULL,
     workflow TEXT NOT NULL,
     environment TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (package, repository, workflow, environment)
+    ref TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (package, repository, workflow, environment, ref)
   );
   CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

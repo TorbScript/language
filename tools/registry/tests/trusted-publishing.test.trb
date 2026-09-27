@@ -1,13 +1,15 @@
 /**
- * Trusted publishing without the network: a GitHub Actions token verified against a key set, and matched against a
- * package's trusted publishers, with the key and the tokens `./vector` holds, which Node made.
+ * Trusted publishing without the network: a token of GitHub Actions and one of Forgejo Actions verified against their
+ * key sets, and matched against a package's trusted publishers, with the keys and the tokens `./vector` holds, which
+ * Node made.
  */
 
 use test, group from "std/test"
 use base64Decoded, base64UrlEncoded from "../src/base64"
 use RsaPublicKey, verifiesSha256 from "../src/rsa"
-use JsonWebKey, JsonWebKeySet, TrustedPublisher, GitHubClaims, verifiedClaims, publisherMatches from "../src/oidc"
-use modulus, token, issued, audience, keySet from "./vector"
+use JsonWebKey, JsonWebKeySet, TrustedPublisher, TrustedIssuer, IdentityClaims, githubIssuer, issuerOf, verifiedClaims, publisherMatches, publisherName, refMatches from "../src/oidc"
+use forgejoIssuersOf from "../src/config"
+use modulus, token, issued, audience, keySet, forgejoToken, forgejoIssuer, forgejoKeySet from "./vector"
 
 /** The token with one segment replaced. */
 fn withSegment(index: Int, replacement: String): String {
@@ -71,7 +73,7 @@ group "RSASSA-PKCS1-v1_5 with SHA-256" {
 
 group "a GitHub Actions token" {
   test "verifies, and its claims are read" {
-    match verifiedClaims(token, keySet(), audience, issued + 10) {
+    match verifiedClaims(token, keySet(), githubIssuer, audience, issued + 10) {
       Ok(claims) => {
         assert(claims.repository == "acme/http")
         assert(claims.jobWorkflowRef == "acme/http/.github/workflows/release.yml@refs/tags/v1.2.5")
@@ -83,19 +85,19 @@ group "a GitHub Actions token" {
   }
 
   test "is refused once it expired, give or take a minute" {
-    assert verifiedClaims(token, keySet(), audience, issued + 900 + 60).isOk()
-    match verifiedClaims(token, keySet(), audience, issued + 900 + 61) {
+    assert verifiedClaims(token, keySet(), githubIssuer, audience, issued + 900 + 60).isOk()
+    match verifiedClaims(token, keySet(), githubIssuer, audience, issued + 900 + 61) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("expired")
     }
   }
 
   test "is refused before it is valid" {
-    assert verifiedClaims(token, keySet(), audience, issued - 3600).isError()
+    assert verifiedClaims(token, keySet(), githubIssuer, audience, issued - 3600).isError()
   }
 
   test "is refused for another audience" {
-    match verifiedClaims(token, keySet(), "packages.example.test", issued) {
+    match verifiedClaims(token, keySet(), githubIssuer, "packages.example.test", issued) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("packages.example.test")
     }
@@ -103,7 +105,7 @@ group "a GitHub Actions token" {
 
   test "is refused with claims it was not signed with" {
     const forged = base64UrlEncoded bytesOf("\{\"iss\":\"https://token.actions.githubusercontent.com\",\"aud\":\"packages.torb.dev\",\"exp\":1790000900,\"repository\":\"evil/http\"\}")
-    match verifiedClaims(withSegment(1, forged), keySet(), audience, issued) {
+    match verifiedClaims(withSegment(1, forged), keySet(), githubIssuer, audience, issued) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("does not verify")
     }
@@ -111,21 +113,22 @@ group "a GitHub Actions token" {
 
   test "is refused without a key of its kid, and with another algorithm" {
     const otherKeys = JsonWebKeySet([JsonWebKey("RSA", kid: "another", n: modulus, e: "AQAB")])
-    assert verifiedClaims(token, otherKeys, audience, issued).isError()
+    assert verifiedClaims(token, otherKeys, githubIssuer, audience, issued).isError()
     const none = base64UrlEncoded bytesOf("\{\"alg\":\"none\",\"kid\":\"test-key-1\"\}")
-    match verifiedClaims(withSegment(0, none), keySet(), audience, issued) {
+    match verifiedClaims(withSegment(0, none), keySet(), githubIssuer, audience, issued) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("`none`")
     }
   }
 
   test "is refused when it is not three segments" {
-    assert verifiedClaims("abc.def", keySet(), audience, issued).isError()
+    assert verifiedClaims("abc.def", keySet(), githubIssuer, audience, issued).isError()
   }
 }
 
 group "matching a trusted publisher" {
-  const claims = GitHubClaims(
+  const github = TrustedIssuer.github "unused"
+  const claims = IdentityClaims(
     "https://token.actions.githubusercontent.com",
     audience,
     issued + 900,
@@ -135,21 +138,131 @@ group "matching a trusted publisher" {
   )
 
   test "the repository and the workflow file" {
-    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml"))
-    assert publisherMatches(claims, TrustedPublisher("Acme/HTTP", "release.yml"))
+    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml"), github)
+    assert publisherMatches(claims, TrustedPublisher("Acme/HTTP", "release.yml"), github)
   }
 
   test "another workflow of the same repository is not it" {
-    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "ci.yml")))
-    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release")))
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "ci.yml"), github))
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release"), github))
   }
 
   test "another repository is not it" {
-    assert(!publisherMatches(claims, TrustedPublisher("acme/http2", "release.yml")))
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http2", "release.yml"), github))
   }
 
   test "an environment, where one is named, has to be the job's" {
-    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "release"))
-    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "staging")))
+    assert publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "release"), github)
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release.yml", "staging"), github))
+  }
+
+  test "a repository of a Forgejo is never a publisher for a GitHub token" {
+    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml"), github))
+  }
+}
+
+group "a Forgejo Actions token" {
+  test "verifies against the Forgejo's key set, and its claims are read" {
+    match verifiedClaims(forgejoToken, forgejoKeySet(), forgejoIssuer, audience, issued + 10) {
+      Ok(claims) => {
+        assert(claims.repository == "acme/http")
+        assert(claims.workflow == "release.yml")
+        assert(claims.workflowRef == "acme/http/.forgejo/workflows/release.yml@refs/tags/v1.2.5")
+        assert(claims.ref == "refs/tags/v1.2.5")
+        assert(claims.eventName == "push")
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+
+  test "names its issuer before it is verified" {
+    assert(issuerOf(forgejoToken) == Ok(forgejoIssuer))
+    assert(issuerOf(token) == Ok(githubIssuer))
+    assert issuerOf("abc.def").isError()
+  }
+
+  test "is refused as a token of another issuer, and with GitHub's key set" {
+    match verifiedClaims(forgejoToken, forgejoKeySet(), githubIssuer, audience, issued + 10) {
+      Ok(_) => assert false
+      Fail(problem) => assert problem.contains("git.example.test")
+    }
+    assert verifiedClaims(forgejoToken, keySet(), forgejoIssuer, audience, issued + 10).isError()
+  }
+}
+
+group "a Forgejo the registry trusts" {
+  test "is named by its issuer https://<host>/api/actions" {
+    match TrustedIssuer.forgejo("https://git.torb.dev/api/actions") {
+      Some(issuer) => {
+        assert(issuer.host == "git.torb.dev")
+        assert(!issuer.isGithub())
+        assert(issuer.discovery() == "https://git.torb.dev/api/actions/.well-known/openid-configuration")
+      }
+      None => assert false
+    }
+  }
+
+  test "an issuer of another shape is none" {
+    assert TrustedIssuer.forgejo("http://git.torb.dev/api/actions").isNone()
+    assert TrustedIssuer.forgejo("https://git.torb.dev/api").isNone()
+    assert TrustedIssuer.forgejo("https://git.torb.dev/sub/api/actions").isNone()
+  }
+
+  test "REGISTRY_FORGEJO_ISSUERS: separated by spaces or commas, and a wrong one left out" {
+    const issuers = forgejoIssuersOf "https://git.torb.dev/api/actions, https://codeberg.org/api/actions git.example.test"
+    assert(issuers.map({ _.host }).toList() == ["git.torb.dev", "codeberg.org"])
+    assert forgejoIssuersOf("").isEmpty()
+  }
+}
+
+group "matching a trusted publisher of a Forgejo" {
+  const forgejo = TrustedIssuer.forgejo(forgejoIssuer) ?? TrustedIssuer.github("unused")
+  const claims = IdentityClaims(
+    forgejoIssuer,
+    audience,
+    4102444800,
+    repository: "acme/http",
+    ref: "refs/tags/v1.2.5",
+    workflow: "release.yml",
+    workflowRef: "acme/http/.forgejo/workflows/release.yml@refs/tags/v1.2.5",
+  )
+
+  test "the host, the repository and the workflow file" {
+    assert publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml"), forgejo)
+    assert publisherMatches(claims, TrustedPublisher("Git.Example.Test/Acme/HTTP", "release.yml"), forgejo)
+  }
+
+  test "the same repository on GitHub or on another Forgejo is not it" {
+    assert(!publisherMatches(claims, TrustedPublisher("acme/http", "release.yml"), forgejo))
+    assert(!publisherMatches(claims, TrustedPublisher("codeberg.org/acme/http", "release.yml"), forgejo))
+  }
+
+  test "another workflow is not it" {
+    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "ci.yml"), forgejo))
+  }
+
+  test "a publisher that names an environment never matches: Forgejo's tokens name none" {
+    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", "release"), forgejo))
+  }
+
+  test "a ref, where one is named, exactly or by its prefix" {
+    assert publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v*"), forgejo)
+    assert publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v1.2.5"), forgejo)
+    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/heads/main"), forgejo))
+  }
+
+  test "a GitHub token is never a publisher of a Forgejo" {
+    const github = TrustedIssuer.github "unused"
+    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml"), github))
+  }
+
+  test "the publisher's name says which forge" {
+    assert(publisherName(claims, forgejo) == "forgejo:git.example.test/acme/http/.forgejo/workflows/release.yml@refs/tags/v1.2.5")
+  }
+
+  test "refMatches: any ref where none is named, a prefix where it ends in *" {
+    assert refMatches("refs/heads/main", "")
+    assert refMatches("refs/tags/v2.0.0", "refs/tags/*")
+    assert(!refMatches("refs/tags/v2.0.0", "refs/tags/v1*"))
   }
 }

@@ -2,7 +2,7 @@
 
 The write service of packages.torb.dev ([RELEASE.md section 7](../../docs/design/RELEASE.md#7-the-registry)): the one
 program that writes the registry's files. Reading - the sparse index, the archives, the documentation - is static files
-behind a CDN, served by `ghcr.io/torbscript/site`; a client needs this service only to publish. It is the first real
+behind a CDN, served by `cr.torb.dev/torbscript/site`; a client needs this service only to publish. It is the first real
 server program written in TorbScript: `std/http`'s server, a SQLite database, and the index and archives written
 through a storage driver.
 
@@ -24,10 +24,10 @@ through a storage driver.
 | `DELETE /api/1/packages/<owner>/<name>/<version>/yank` | a member with `yank` | the yank undone |
 | `GET /api/1/packages/<owner>/<name>/trusted-publishers` | anyone | who publishes it from CI, and whether tokens are off for it |
 | `PUT /api/1/packages/<owner>/<name>/trusted-publishers {publishers, required}` | an owner | the trusted publishers replaced; `required` switches tokens off for the package |
-| `POST /api/1/trusted-publishing/github {token, package}` | a CI job | its GitHub Actions OIDC token traded for a token that publishes `package` for fifteen minutes |
+| `POST /api/1/trusted-publishing {token, package}` | a CI job | its OIDC token of GitHub Actions or of a trusted Forgejo's Actions traded for a token that publishes `package` for fifteen minutes; `.../trusted-publishing/github` is the same call |
 
 Every answer is JSON; a refusal is `{"error": ..., "problems": [...]}` with its status. `torb publish`
-(`compiler/src/package/upload.trb`) is the client: `TORB_TOKEN`, or trusted publishing from a GitHub Actions job.
+(`compiler/src/package/upload.trb`) is the client: `TORB_TOKEN`, or trusted publishing from a GitHub Actions or Forgejo Actions job.
 
 **A publish is checked as `torb publish --dry-run` checks it, with the same code.** The registry depends on the
 compiler as a `path:` package and calls its `unpacked`, `readLock`, `publishProblems`, `capabilitiesOf` and index
@@ -35,11 +35,16 @@ writer, so the tree hash, the limits (10 MiB, 64 MiB unpacked, 10 000 files), th
 drift apart from the client's. It trusts nothing the client computed and never evaluates a `project.trb`; it does not
 check the package, because its toolchain may be another patch release.
 
-**Trusted publishing** verifies the job's token itself: `RS256` over the key set GitHub publishes at
-`https://token.actions.githubusercontent.com/.well-known/jwks` (fetched for every exchange), the issuer, the audience
-(`packages.torb.dev`), the lifetime give or take a minute, and then the claims against the package's trusted
-publishers - the repository, the workflow file below `.github/workflows/` (`job_workflow_ref`, so a reusable workflow
-is named by the called file), and the environment where one is configured.
+**Trusted publishing** verifies the job's token itself. Its `iss` picks the issuer: GitHub Actions
+(`https://token.actions.githubusercontent.com`, key set at `/.well-known/jwks`) or a Forgejo of
+`REGISTRY_FORGEJO_ISSUERS` (`https://git.torb.dev/api/actions` by default; its key set is the `jwks_uri` of its
+`/.well-known/openid-configuration`). The key set is fetched for every exchange, then come `RS256`, the issuer, the
+audience (`packages.torb.dev`) and the lifetime give or take a minute, and then the claims against the package's
+trusted publishers. A publisher on GitHub is `owner/name`: the repository, the workflow file below `.github/workflows/`
+(`job_workflow_ref`, so a reusable workflow is named by the called file) and the environment where one is configured.
+A publisher on a Forgejo is `<host>/owner/name` - `git.torb.dev/torbscript/language` - with the workflow file
+(`workflow`); Forgejo's tokens name no environment, so such a publisher names none. Either may name a `ref`,
+`refs/tags/v1.2.5` or `refs/tags/v*` for every ref it starts.
 
 ## Configuration
 
@@ -53,7 +58,8 @@ Everything comes from the environment (`tools/deploy/compose.example.yml` sets i
 | `REGISTRY_SQLITE` | `sqlite3` | the SQLite shell |
 | `REGISTRY_ADMINISTRATOR_TOKEN` | none | the operator's token: creates accounts and reserved owners. Set it while creating them, then remove it |
 | `REGISTRY_AUDIENCE` | `packages.torb.dev` | the audience a trusted publisher's token has to name |
-| `REGISTRY_OIDC_KEYS` | GitHub's key set | where the issuer's keys are fetched |
+| `REGISTRY_OIDC_KEYS` | GitHub's key set | where GitHub Actions' keys are fetched |
+| `REGISTRY_FORGEJO_ISSUERS` | `https://git.torb.dev/api/actions` | the Forgejo instances whose Actions may publish, by issuer, separated by spaces or commas; empty for none |
 | `REGISTRY_TRUSTED_TOKEN_SECONDS` | `900` | how long an exchanged token lives |
 | `REGISTRY_MIRROR` | none | a git working copy the index is mirrored into after every change |
 | `REGISTRY_MIRROR_PUSH` | `0` | `1` pushes the mirror after each commit |
@@ -98,7 +104,8 @@ $ torb test tools/registry/tests
 ```
 
 The tests need the SQLite shell on the `PATH` (or `REGISTRY_SQLITE`): `tests/server.test.trb` runs the registry and a
-stand-in for GitHub's key set over loopback, with a database and a `file:` storage in a temporary directory, and
+stand-in for GitHub's key set and a Forgejo's discovery document over loopback, with a database and a `file:` storage in a temporary directory, and
 makes every call once the way it works and once the way it is refused; `tests/client.test.trb` drives `torb publish`
 against it (`REGISTRY_TEST_TORB` names the `torb`, which `torb test` in the VM is itself). The container image is
-`tools/deploy/Dockerfile.registry`, built by `.github/workflows/images.yml` from each release.
+`tools/deploy/Dockerfile.registry`, built by `.forgejo/workflows/images.yml` from each release and pushed to
+`cr.torb.dev/torbscript/registry`.

@@ -17,7 +17,9 @@
  *     DELETE /api/1/packages/<owner>/<name>/<version>/yank         the yank undone
  *     GET    /api/1/packages/<owner>/<name>/trusted-publishers     who publishes it from CI
  *     PUT    /api/1/packages/<owner>/<name>/trusted-publishers  {publishers, required}
- *     POST   /api/1/trusted-publishing/github       {token, package}  an OIDC token traded for a short-lived one
+ *     POST   /api/1/trusted-publishing              {token, package}  an OIDC token of GitHub or Forgejo Actions
+ *                                                                  traded for a short-lived one; `.../github` is the
+ *                                                                  same call under the name the first clients use
  *
  * The static files - `/index`, `/archives`, `/docs` - are not this service's: a file server reads what it wrote.
  */
@@ -189,7 +191,7 @@ fn routed(registry: Registry, request: Request): Task<Result<Response, Refusal>>
     ("GET", ["packages", owner, name, "trusted-publishers"]) => {
       Ok json(200, registry.trustedPublishing(owner, name).await()?)
     }
-    ("POST", ["trusted-publishing", "github"]) => {
+    ("POST", ["trusted-publishing"]) | ("POST", ["trusted-publishing", "github"]) => {
       const body = decoded<ExchangeRequest>(request).await()?
       const token = registry.exchange(body.token, body.package).await()?
       Ok json(200, tokenAnswer("a token that may publish {body.package} until {token.expires}", token))

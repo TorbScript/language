@@ -28,7 +28,8 @@ use Storage, FileStorage from "std/storage"
 use Registry from "../src/registry"
 use handler from "../src/api"
 use newTokenId from "../src/tokens"
-use lastingToken, keySetText from "./vector"
+use lastingToken, keySetText, forgejoToken, forgejoIssuer, forgejoKeySetText, forgejoDiscoveryText from "./vector"
+use TrustedIssuer from "../src/oidc"
 
 /** What one request answered: its status - 0 where it never got one - and its body. */
 type Step {
@@ -102,11 +103,20 @@ fn tokenOf(step: Step): String {
   Json().decode<TokenField>(step.body).map({ _.token }).ok() ?? ""
 }
 
-/** GitHub's key set, served at any path. */
+/**
+ * The issuers' side: a Forgejo's discovery document and key set below `/forgejo/`, and GitHub's key set at any other
+ * path.
+ */
 fn keys(request: Request): Task<Result<Response, HttpError>> {
   var headers = Headers()
   headers.set "Content-Type", "application/json"
-  Ok Response(Status.ok, headers, Body.from(keySetText()))
+  const host = request.headers.get("Host") ?? ""
+  const text = match request.path() {
+    "/forgejo/.well-known/openid-configuration" => forgejoDiscoveryText "http://{host}/forgejo/keys"
+    "/forgejo/keys" => forgejoKeySetText()
+    _ => keySetText()
+  }
+  Ok Response(Status.ok, headers, Body.from(text))
 }
 
 // --- the registry, its database, its storage and the key set ------------------------------------------------------
@@ -125,6 +135,13 @@ const config = Config(
   sqlite: Environment.get("REGISTRY_SQLITE") ?? "sqlite3",
   administratorToken: Some(administrator),
   keySetUrl: "http://{keyServer.localAddress()}/.well-known/jwks",
+  forgejoIssuers: [
+    TrustedIssuer(
+      forgejoIssuer,
+      host: "git.example.test",
+      discoveryUrl: "http://{keyServer.localAddress()}/forgejo/.well-known/openid-configuration",
+    ),
+  ],
 )
 const database = Database config.database, program: config.sqlite
 const migrated = database.migrate().await()
@@ -202,6 +219,15 @@ const trustedElsewhere = publishing(base, shortLived, "acme/json", "1.3.0", arch
 const tokenPublish = publishing(base, ada, "acme/http", "1.2.6", archiveOf("acme/http", "1.2.6")).await()
 const untrustedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"{lastingToken}\",\"package\":\"acme/json\"\}")).await()
 const forgedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"a.b.c\",\"package\":\"acme/http\"\}")).await()
+
+// A Forgejo's Actions: its key set found through its discovery document, and the neutral path of the exchange
+const forgejoSettings = "\{\"publishers\":[\{\"repository\":\"git.example.test/acme/http\",\"workflow\":\"release.yml\",\"ref\":\"refs/tags/v*\"\}]\}"
+const forgejoTrusted = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from(forgejoSettings)).await()
+const forgejoWithEnvironment = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from("\{\"publishers\":[\{\"repository\":\"git.example.test/acme/http\",\"workflow\":\"release.yml\",\"environment\":\"release\"\}]\}")).await()
+const unknownForge = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from("\{\"publishers\":[\{\"repository\":\"git.elsewhere.test/acme/http\",\"workflow\":\"release.yml\"\}]\}")).await()
+const forgejoExchanged = call(base, Method.Post, "/api/1/trusted-publishing", body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/forged\"\}")).await()
+const forgejoPublish = publishing(base, tokenOf(forgejoExchanged), "acme/forged", "1.2.5", archiveOf("acme/forged", "1.2.5")).await()
+const forgejoForGithubPackage = call(base, Method.Post, "/api/1/trusted-publishing", body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/http\"\}")).await()
 
 serving.cancel()
 keyServing.cancel()
@@ -361,5 +387,22 @@ group "trusted publishing" {
   test "a package without a trusted publisher, and a token that does not verify, get nothing" {
     assert(untrustedExchange.status == 403)
     assert(forgedExchange.status == 401)
+  }
+
+  test "a Forgejo publisher is its host and repository, restricted by a ref and never by an environment" {
+    assert(forgejoTrusted.status == 200)
+    assert forgejoTrusted.body.contains("\"ref\":\"refs/tags/v*\"")
+    assert(forgejoWithEnvironment.status == 400)
+    assert(unknownForge.status == 400)
+    assert unknownForge.body.contains("git.example.test")
+  }
+
+  test "a Forgejo Actions token, its keys found through the discovery document, publishes its package" {
+    assert(forgejoExchanged.status == 200)
+    assert(forgejoPublish.status == 201)
+  }
+
+  test "a Forgejo token is no trusted publisher of a package whose publisher is on GitHub" {
+    assert(forgejoForGithubPackage.status == 403)
   }
 }

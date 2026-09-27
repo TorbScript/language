@@ -74,17 +74,19 @@ A registry on the network needs to know who publishes:
 
 - **`TORB_TOKEN`**: a token of the registry whose actions include `publish` and whose scopes include the package. It
   is sent in a header that `curl` reads from a file, never on a command line.
-- **Trusted publishing**, where `TORB_TOKEN` is not set and the command runs in a GitHub Actions job with
-  `permissions: id-token: write`: the job's OpenID Connect token is requested from GitHub with the registry's host as
-  its audience (`TORB_AUDIENCE` names another) and exchanged at `/api/1/trusted-publishing/github` for a token that
-  lives fifteen minutes and publishes this one package. The package's owners configure which repository, workflow file
-  and environment may do that, and no secret is stored anywhere.
+- **Trusted publishing**, where `TORB_TOKEN` is not set and the command runs in a CI job that may ask for an OpenID
+  Connect token - a GitHub Actions job with `permissions: id-token: write`, or a Forgejo Actions job with
+  `enable-openid-connect: true` on a forge the registry trusts (git.torb.dev): the job's token is requested with the
+  registry's host as its audience (`TORB_AUDIENCE` names another) and exchanged at `/api/1/trusted-publishing` for a
+  token that lives fifteen minutes and publishes this one package. The package's owners configure which repository
+  (`acme/http` on GitHub, `git.torb.dev/acme/http` on the forge), workflow file, ref and - on GitHub - environment may
+  do that, and no secret is stored anywhere.
 
 Without either, nothing is sent:
 
 ```console
 $ torb publish
-error: publishing to https://packages.torb.dev needs a token: set TORB_TOKEN to a token of the registry that may publish acme/json, or publish from a GitHub Actions job with `permissions: id-token: write` and a trusted publisher the owners of acme/json configured
+error: publishing to https://packages.torb.dev needs a token: set TORB_TOKEN to a token of the registry that may publish acme/json, or publish from a CI job that may ask for an identity token (GitHub Actions: `permissions: id-token: write`, Forgejo Actions: `enable-openid-connect: true`) and a trusted publisher the owners of acme/json configured
 ```
 
 ## Pitfalls

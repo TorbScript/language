@@ -4,7 +4,7 @@
  */
 
 use Environment from "std/os"
-use githubIssuer from "./oidc"
+use githubIssuer, TrustedIssuer from "./oidc"
 
 public type Config {
   /** What the server binds: `host:port`, `0.0.0.0:8089` behind Traefik. */
@@ -22,8 +22,14 @@ public type Config {
   administratorToken: String? = None
   /** The audience a trusted publisher's OIDC token has to name: the registry's host. */
   audience: String = "packages.torb.dev"
-  /** Where the issuer's key set is fetched from for every exchange. */
+  /** Where GitHub Actions' key set is fetched from for every exchange. */
   keySetUrl: String = "{githubIssuer}/.well-known/jwks"
+  /**
+   * The Forgejo instances whose Actions may publish, each by its issuer `https://<host>/api/actions`: git.torb.dev
+   * unless `REGISTRY_FORGEJO_ISSUERS` names others (separated by spaces or commas; empty for none). Their key sets are
+   * found through their discovery documents.
+   */
+  forgejoIssuers: List<TrustedIssuer> = [TrustedIssuer("https://git.torb.dev/api/actions", host: "git.torb.dev")]
   /** How long a token exchanged for a CI identity lives, in seconds. */
   trustedTokenSeconds: Int = 900
   /** A git working copy the index is mirrored into after every change (RELEASE.md section 7.11); `None` for none. */
@@ -32,9 +38,9 @@ public type Config {
   mirrorPush: Bool = false
 
   /** Every value from the environment, with the defaults above where a variable is not set. */
-  static fn fromEnvironment(): Config {
-    const defaults = Config()
-    Config(
+  static fn fromEnvironment(): Self {
+    const defaults = Self()
+    Self(
       listenAddress: Environment.get("REGISTRY_LISTEN") ?? defaults.listenAddress,
       storage: Environment.get("REGISTRY_STORAGE") ?? defaults.storage,
       database: Environment.get("REGISTRY_DATABASE") ?? defaults.database,
@@ -42,9 +48,28 @@ public type Config {
       administratorToken: Environment.get("REGISTRY_ADMINISTRATOR_TOKEN").filter({ !_.trim().isEmpty() }),
       audience: Environment.get("REGISTRY_AUDIENCE") ?? defaults.audience,
       keySetUrl: Environment.get("REGISTRY_OIDC_KEYS") ?? defaults.keySetUrl,
+      forgejoIssuers: Environment.get("REGISTRY_FORGEJO_ISSUERS").map(forgejoIssuersOf) ?? defaults.forgejoIssuers,
       trustedTokenSeconds: Environment.get("REGISTRY_TRUSTED_TOKEN_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 900,
       mirror: Environment.get("REGISTRY_MIRROR").filter({ !_.trim().isEmpty() }),
       mirrorPush: Environment.get("REGISTRY_MIRROR_PUSH") == Some("1"),
     )
   }
+}
+
+/**
+ * The issuers `REGISTRY_FORGEJO_ISSUERS` names, separated by spaces or commas. One that is not `https://<host>/api/actions`
+ * is left out, and said so on standard error: a typo must not trust something else.
+ */
+public fn forgejoIssuersOf(text: String): List<TrustedIssuer> {
+  var issuers: List<TrustedIssuer> = []
+  for word in text.replace(",", " ").split(" ") {
+    if word.trim().isEmpty() {
+      continue
+    }
+    match TrustedIssuer.forgejo(word) {
+      Some(issuer) => issuers.append issuer
+      None => printError "registry: REGISTRY_FORGEJO_ISSUERS names `{word}`, which is not https://<host>/api/actions - left out"
+    }
+  }
+  issuers
 }
