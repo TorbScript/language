@@ -23,6 +23,7 @@ use FunctionBuilder, emit from "../build"
 use payloadLayoutName from "../mangle"
 use instantiateTrait from "../instantiate"
 use witnessTableOf, boundIndexOf, memberMappingOf, traitMemberNamed, ownerNameOf, isInTable from "../witness"
+use isSelfAnswerSlot from "../witness"
 use providerOfMember from "../witness"
 use narrowingPathOf from "../witness"
 use isClosedType from "../instances"
@@ -400,6 +401,16 @@ fn dynamicDispatch(
   // A `static fn` is never in a table - object safety keeps it out, there being no value to take it from - so
   // `Source.from(items)` through the trait's name is its default body, whatever an implementation writes for it
   const isDynamic = isInTable(lowering, bounds, target, member) && takesSelf(lowering, member)
+  // A member that answers exactly `Self` and that an implementation answers itself - `List.slice`, which `ArrayList`
+  // answers in O(1) - gets a slot behind the fixed members once it is called, the way a member with type parameters of
+  // its own does (docs/PERFORMANCE.md, F16). It needs a bound that declares it, which is where the slot goes
+  if !isDynamic && typeArguments.isEmpty() && isSelfAnswerSlot(lowering, member) {
+    for one in bounds {
+      if traitMemberNamed(lowering, one, name) == member {
+        return Dispatched member, mapping, bound, "", None, true, bounds, target
+      }
+    }
+  }
   if !isDynamic {
     const identifier = signatureOf lowering.checker, member
     if !lowering.checker.signature(identifier).hasBody {

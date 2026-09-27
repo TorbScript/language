@@ -193,7 +193,7 @@ worth, what it risks, and the test that pins it.
 | 13 | Reference counts cannot be inlined | measured: -14% to +9%, no decision | nothing yet | - |
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
 | 15 | The stack check | 1-3% on a recursion of three operations; a frame counter was 1.74x | one comparison with the stack limit at entry | **done** |
-| 16 | A range of a trait-typed list runs the default `slice` | a copy of the range, one call per item, where `ArrayList` shares the storage in O(1) | the override of a default member reached through the witness table | medium |
+| 16 | A range of a trait-typed list runs the default `slice` | was a copy of the range, one call per item, where `ArrayList` shares the storage in O(1) | a slot for a member that answers `Self`, added once it is called | **done** |
 
 ### F1. `x = f(x)` is a move, because the assignment defines the slot
 
@@ -888,7 +888,28 @@ comparison with the real limit is what turns that crash into a panic with exit c
 reaches the guard page, and so does a recursion inside the runtime itself (a `D_` drop function over a very deep
 value). A thread other than the main one needs its own limit when tasks get threads of their own.
 
-### F16. A range of a trait-typed list runs the default `slice`, which copies
+### F16. A range of a trait-typed list reaches the list's own `slice`
+
+**Done (2026-09-27).** The findings below were written before; what was done, and what it measured:
+
+- **A member that answers exactly `Self` gets a slot of the table once the program calls it** on a trait-typed value,
+  behind the fixed members, the way a member with type parameters of its own does (docs/BACKEND.md 1.4). The slot
+  points at `t_answer__<member>_<table>`, which calls the implementation's member - `ArrayList.slice` - and boxes its
+  answer with that very table: on a trait-typed receiver `Self` is the receiver's own trait type, and the answer is a
+  payload of the receiver's type again. A receiver of several bounds gets its own tables put around the payload at the
+  call site. Where the devirtualization knows the payload, the call is the direct one.
+- **Lazy, because the fixed slot was measured first.** A `slice` in every table of `List` and of its supertrait `Slice`
+  instantiated `ArrayList.slice` and two functions around it for every item type of a program, sliced or not: the
+  compiler's C grew by 5.5% (69.97 to 73.81 MB). The lazy slot grows it by 0.1% (70.03 MB), for the sixteen item
+  types the compiler really slices.
+- **`benchmarks/binary-formats.trb`** (section 4.1), the same `std/` built by the compiler before and after: the
+  allocation count of the whole program went from **20 587 650 to 19 298 507** (1 289 143 fewer, 6.3%), the bytes
+  allocated from 689.8 to 652.9 MB, and the DNS decoding - the ranges of `ByteReader.bytes` and of every text a record
+  holds - from 2.065 to 1.957 seconds (fastest of 21 alternating runs, pinned to one core at high priority) and from
+  2.272 to 2.084 (median), and 1.983 to 1.889 and 2.166 to 2.061 in a second sweep. gzip and SHA-256 did not move.
+  `tests/conformance/list-slice-override.trb` pins the behaviour in both back ends.
+
+What follows is the finding as it was written.
 
 **Pattern.** `bytes[from..to]` where `bytes: Bytes` - `List<UInt8>`, a trait. Every binary format reads a run of bytes
 this way, and `std/dns` did for every label and every record's data before `std/binary` (docs/design/BINARY.md

@@ -173,6 +173,77 @@ group "Trait-typed values" {
   }
 
   /**
+   * A member that answers exactly `Self` is a slot as well (docs/PERFORMANCE.md, F16). On a trait-typed receiver `Self`
+   * is the trait type, so the slot points at a function that calls the implementation's member and boxes its answer
+   * with the very table it sits in - which is what makes `bytes[from..to]` on a `List<UInt8>` reach the O(1)
+   * `ArrayList.slice` instead of the default that copies. The call site is an ordinary member call.
+   */
+  test "a member that answers `Self` is a slot whose function boxes the answer with its table" {
+    const source = raw"""
+      trait Grown {
+        fn grown(): Self
+      }
+
+      type Square with Grown {
+        side: Int
+
+        fn grown(): Self {
+          Square(side + 1)
+        }
+      }
+
+      type Circle with Grown {
+        radius: Int
+
+        fn grown(): Self {
+          Circle(radius * 2)
+        }
+      }
+
+      fn grownOf(value: Grown): Grown {
+        value.grown()
+      }
+
+      fn used(): Int {
+        const _ = grownOf(Square(1))
+        const _ = grownOf(Circle(1))
+        0
+      }
+      """
+    assert(unsupportedIn(source) == [])
+    assert(
+      irOf(source, "t_acme_x2f_app_main_grownOf") == raw"""
+        fn t_acme_x2f_app_main_grownOf(value: Object(Grown) borrowed) -> Object(Grown) {
+          slot %0 parameter value: Object(Grown)
+          slot %1 temporary: Object(Grown)
+        b0: # acme/app/src/main.trb:21 body
+          %1 = callWitness value %0 bound 0 member 0()
+          return %1 borrowed
+        }"""
+    )
+    const answer = "t_answer__t_acme_x2f_app_main_Square_grown_w_acme_x2f_app_main_Grown__T_acme_x2f_app_main_Square"
+    const text = textOf source
+    assert(
+      text.contains(
+        "witness w_acme_x2f_app_main_Grown__T_acme_x2f_app_main_Square Grown for Record(T_acme_x2f_app_main_Square)"
+          + " members({answer}) nested()"
+      )
+    )
+    assert(
+      irOf(source, answer) == raw"""
+        fn t_answer__t_acme_x2f_app_main_Square_grown_w_acme_x2f_app_main_Grown__T_acme_x2f_app_main_Square(self: Record(T_acme_x2f_app_main_Square) borrowed) -> Object(Grown) {
+          slot %0 parameter self: Record(T_acme_x2f_app_main_Square)
+          slot %1 temporary: Record(T_acme_x2f_app_main_Square)
+          slot %2 temporary: Object(Grown)
+        b0: # acme/app/src/main.trb:8 answers Self
+          %1 = call t_acme_x2f_app_main_Square_grown(%0 borrowed) at acme/app/src/main.trb:8:6
+          %2 = traitValue %1 owned tables(table w_acme_x2f_app_main_Grown__T_acme_x2f_app_main_Square)
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  /**
    * "Overridden" is asked **per trait**: a member of the same name on a type that does not implement the trait
    * overrides nothing. `Headers.all(name)` of `std/http` is written on a type that is a `Show` and an `Equals`, and
    * reading it as an override put `Iterate.all` and `Iterate.any` into every table of `Iterate` in every program that

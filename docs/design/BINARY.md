@@ -90,22 +90,21 @@ that turns a `ReadError` into the `DnsError` of that part.
 
 ## 4. What a range of bytes costs
 
-**Today a range of a `Bytes` value is a copy.** `Bytes` is `List<UInt8>`, a trait; `bytes[from..to]` on a value of that
-type reaches the default member `List.slice`, which empties a copy of the list and appends the items one by one. The
-runtime can do better - `ArrayList.slice` shares the storage (`torb_list_slice`, an offset and a length, O(1)) - but a
-call through the trait-typed value does not reach that override: the generated C of the benchmark of section 7 has no
-call of `ArrayList.sliceBetween` at all, and every range is the default's loop. That is a finding for the back end
-(the override of a default member through a witness table), recorded in section 10.
+**A range of a `Bytes` value shares the storage.** `Bytes` is `List<UInt8>`, a trait, and `bytes[from..to]` on a value
+of that type is a call through its witness table that reaches `ArrayList.slice` - an offset and a length over the same
+storage, `torb_list_slice`, O(1). When this package was written it reached the default member `List.slice` instead,
+which empties a copy of the list and appends the items one by one; the back end closed that on 2026-09-27
+(docs/PERFORMANCE.md, finding 16), and the benchmark of section 7 allocated 1 289 143 blocks fewer for it.
 
-So the reader is built not to need ranges:
+The reader was built not to need ranges, and it still does not:
 
 - **`limited(count)` copies nothing.** A limited reader holds the same `input` and a window of it (its first and its
   end byte), so reading the data of a DNS record through one costs the reader and nothing else. The first version
   sliced `input`, and the allocation count of the DNS benchmark showed it: 412 432 allocations more than the
   hand-written reader, all of them record data copied; with the window it is the same count to within 32.
 - **`bytes(count)` is a range**, because what it answers has to be a `Bytes` of its own; a format that only looks at the
-  bytes uses a limited reader instead. When the back end reaches `ArrayList.slice`, `bytes` shares the storage without a
-  change here - and then keeps the whole of `input` alive for as long as the answer lives, which is what a range does.
+  bytes uses a limited reader instead. It shares the storage of `input`, and so keeps the whole of `input` alive for as
+  long as the answer lives, which is what a range does.
 
 ## 5. Writing bytes
 
@@ -227,9 +226,6 @@ nothing else holds, so reading it changes it in place instead of copying it firs
 
 ## 10. Open
 
-- **The override of a default member through a trait-typed value.** `List.slice` of a `Bytes` value runs the default
-  and copies, where `ArrayList.slice` shares the storage (section 4); once the witness table reaches the override,
-  `ByteReader.bytes` stops copying with no change here. A back-end finding for docs/PERFORMANCE.md.
 - **An implicit case through an `Option`.** `order: .LittleEndian` for a parameter of type `ByteOrder?` could resolve in
   `ByteOrder`, as Swift does; the checker says `Option<ByteOrder>` has no case `LittleEndian` today.
 - **`Float32` and the bit patterns.** When `Float32` has arithmetic and a conversion from `Float64`, `float32()` can

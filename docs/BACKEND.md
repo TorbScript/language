@@ -267,6 +267,18 @@ no `.Forwarded` that reaches an `.Object` can be monomorphized. The lowering fol
   the witnesses of the trait's own generic parameters. Default members are *not* in the table: a call of a default
   member is a call of the monomorphic instance of the default body with the table passed in. Gap 14 (`by` forwards
   the required members only) falls out of this for free.
+- **A member that answers exactly `Self` gets a slot once the program calls it** (decided 2026-09-27,
+  [docs/PERFORMANCE.md](PERFORMANCE.md) finding 16). On a trait-typed receiver `Self` is the receiver's own trait
+  type, and the implementation's answer is a payload of the receiver's type again, so the receiver's tables fit it. The
+  slot is appended behind the fixed members the way one of a member with type parameters of its own is
+  (`genericSlotOf`), and it points at `t_answer__<member>_<table>`, which calls the implementation's member and boxes
+  its answer with that very table (`selfAnswerOf` in `ir/witness.trb`). A receiver of several bounds gets its own
+  tables put around the payload at the call site, a narrowing `TraitValue`. It covers a required member (`negate`) and
+  a default some implementation overrides (`List.slice`, which `ArrayList` answers in O(1)); a default nothing
+  overrides stays the erased instance of its body, and a member that takes a second `Self` stays out. The slot is
+  lazy because a fixed one was measured first: a `slice` in every table of `List` and of its supertrait `Slice` grew
+  the compiler's C by 5.5% (69.97 to 73.81 MB, 2278 functions more), for a member only a few item types are sliced
+  with. The lazy slot costs it 0.1% (70.03 MB, 37 functions more, for the sixteen item types it slices).
 - **Derived implementations** (`Show`, `Equals`, `Hash`, `copy`, `Encode`, `Decode`, `From` of a wrapping case, the
   members of a literal type) have no source. The lowering generates their bodies from the layout, one instance per
   monomorphic type, keyed by `(DerivedId, type)`. `derive.trb` in the checker says *which* members; `lower/derive.trb`

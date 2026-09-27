@@ -24,7 +24,7 @@ use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry, DerivedKind, ArrayOperation, loadScriptFunction, ScriptTableKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
-use IrType, StaticContents from "../ir"
+use IrType, StaticContents, WitnessSource, WitnessRoot, owned from "../ir"
 use LiteralValue from "../../semantics/checker/type"
 use Intrinsic, NumericKind from "../ir"
 use RuntimeKind, ElementId from "../ir"
@@ -34,7 +34,7 @@ use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique, putB
 use FunctionBuilder, emit, addTemporary from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
-use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf from "../witness"
+use memberInValue, genericMemberInValue, derivedKindOf, generatedKindOf, answersSelf, isSelfAnswerSlot from "../witness"
 use generatedFunctionOf, literalConversionOf, isKeyedContainer from "./derive"
 use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
@@ -695,11 +695,15 @@ fn lowerWitnessCall(
   }
   const bounds = dispatched.bounds
   const member = dispatched.member
-  // A member with type parameters of its own sits in the slot of the arguments this call decided
-  const located = if dispatched.ownArguments.isEmpty() {
-    memberInValue lowering, bounds, subject, receiver, member
-  } else {
+  // A member with type parameters of its own sits in the slot of the arguments this call decided, and one that answers
+  // `Self` in the one slot it gets once the program calls it (`isSelfAnswerSlot`)
+  const located = if !dispatched.ownArguments.isEmpty() {
     genericMemberInValue lowering, bounds, subject, receiver, member, dispatched.ownArguments, at
+  } else if isSelfAnswerSlot(lowering, member) {
+    const none: List<TypeId> = []
+    genericMemberInValue lowering, bounds, subject, receiver, member, none, at
+  } else {
+    memberInValue lowering, bounds, subject, receiver, member
   }
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
@@ -734,6 +738,29 @@ fn lowerWitnessCall(
     }
   }
   const target = valueSlot lowering, builder, destination, annotation
+  // A slot that answers `Self` answers a value of its own table's trait, boxed with that one table (`selfAnswerOf`). A
+  // receiver of several bounds is a value of all of them, and so is the answer: its payload goes into the receiver's
+  // own tables, which fit because the payload is of the receiver's type again
+  if answersSelf(lowering, member) {
+    const index = match found.source.root {
+      .Value(_, position) => position
+      _ => 0
+    }
+    const own = irTypeOfClosed lowering, lowering.checker.types.intern(TypeForm.Traits([bounds[index]]))
+    if own != annotation {
+      const answered = addTemporary builder, own
+      emit builder, Instruction.CallWitness(answered, found.source, found.member, given, location)
+      var tables: List<WitnessSource> = []
+      if const .Object(held) = lowering.program.typeAt(annotation) {
+        for position in 0..held.length() {
+          const steps: List<Int> = []
+          tables.append WitnessSource(WitnessRoot.Value(receiver, position), steps)
+        }
+      }
+      emit builder, Instruction.TraitValue(target, owned(answered), tables)
+      return target
+    }
+  }
   emit builder, Instruction.CallWitness(target, found.source, found.member, given, location)
   target
 }

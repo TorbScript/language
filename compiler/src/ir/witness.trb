@@ -18,21 +18,24 @@
 
 use Span from "../syntax/source"
 use SymbolId from "../semantics/symbols"
-use TypeId, ParameterId, Signature, ImplementationId from "../semantics/checker/type"
+use TypeId, TypeForm, ParameterId, Signature, ImplementationId from "../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../semantics/checker/signature"
 use sameType from "../semantics/checker/unify"
 use witnessFor, supertraitsOfBound, memberOfImplementation, matchTypePattern from "../semantics/checker/implementation"
 use traitArgumentsOf, defaultInClosureOf from "../semantics/checker/implementation"
 use DerivedKind from "../backend/c/natives"
 use TraitId, FunctionId, Slot, Reference, WitnessTable, WitnessTableId from "./ir"
-use WitnessSource, WitnessRoot from "./ir"
-use witnessTableName from "./mangle"
+use WitnessSource, WitnessRoot, IrSignature, Instruction, Terminator, Argument, BlockId from "./ir"
+use borrowed, referenced from "./ir"
+use witnessTableName, selfAnswerName from "./mangle"
 use instantiateTrait from "./instantiate"
 use instanceFor, isClosedType from "./instances"
+use newFunction, addTemporary, emit, terminate, finishFunction, setBlockLocation from "./build"
 use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
 use GenericSlot, TableSource from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
-use nativeFunctionOf, needsNativeWrapper from "./lower/native"
+use nativeFunctionOf, needsNativeWrapper, declarationLocationOf from "./lower/native"
+use lowerTraitValue from "./lower/generic"
 
 /**
  * The static table of one concrete type and one trait, built once. Both types have to be closed: a table is named after
@@ -77,7 +80,89 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
   }
   const added = lowering.program.addWitnessTable WitnessTable(name, applied, target, found, nested)
   lowering.tableSources.set added.value, TableSource(subject, bound, implementation)
+  adaptSelfAnswers lowering, added, subject, bound, at
   added
+}
+
+/**
+ * The slots of a new table that answer `Self` point at a function that boxes the answer, once the table exists.
+ *
+ * `List.slice` answers `Self`, and on a trait-typed receiver `Self` is the trait type: the implementation's own member
+ * answers an `ArrayList<UInt8>`, and what the call site holds afterwards is a `List<UInt8>` - the same payload type as
+ * the receiver's, so the same tables apply to it. The function a slot points at therefore calls the member and boxes its
+ * answer with this very table ([selfAnswerOf]), which is why it can only be built after the table was added: until then
+ * the slot holds the member itself. The slots are the ones behind the fixed members ([isSelfAnswerSlot]).
+ */
+fn adaptSelfAnswers(var lowering: Lowering, table: WitnessTableId, subject: TypeId, bound: TypeId, at: Span) {
+  const fixed = tableMembersOf(lowering, bound, subject).length()
+  const slots = lowering.genericSlots.get(traitIdOf(lowering, bound).value) ?? []
+  for index in 0..slots.length() {
+    if !slots[index].arguments.isEmpty() || !answersSelf(lowering, slots[index].member) {
+      continue
+    }
+    const current = lowering.program.witnessTableAt table
+    const position = fixed + index
+    const member = slots[index].member
+    const answer = match selfAnswerOf(lowering, current.members[position], member, table, subject, bound, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    var patched = current.members
+    patched.set position, answer
+    lowering.program.witnessTables.set table.value, current.copy(members: patched)
+  }
+}
+
+/**
+ * The function a slot that answers `Self` points at: the implementation's member, and its answer boxed as a value of the
+ * table's trait. Its receiver and its parameters are the member's, so the thunk of the table unwraps the payload for it
+ * exactly as for any other member.
+ *
+ * What it answers is a trait-typed value with **one** bound, the table's; a receiver of several bounds
+ * (`List<UInt8> & Show`) gets the tables of its own put around the payload at the call site (`lowerWitnessCall`), which
+ * is where they are in hand.
+ */
+fn selfAnswerOf(
+  var lowering: Lowering,
+  member: FunctionId,
+  declared: SymbolId,
+  table: WitnessTableId,
+  subject: TypeId,
+  bound: TypeId,
+  at: Span,
+): FunctionId? {
+  const wrapped = lowering.program.functionAt member
+  const name = selfAnswerName wrapped.name, lowering.program.witnessTableAt(table).name
+  const result = irTypeOfClosed lowering, lowering.checker.types.intern(TypeForm.Traits([bound]))
+  const signature = IrSignature wrapped.signature.parameters, result
+  const origin = wrapped.origin ?? declared
+  var builder = newFunction name, origin, signature, "answers Self"
+  const location = declarationLocationOf lowering, origin
+  setBlockLocation builder, BlockId(0), location
+  var given: List<Argument> = []
+  for index in 0..signature.parameters.length() {
+    if signature.parameters[index].isReference {
+      given.append referenced(Reference(Slot(index), []))
+      continue
+    }
+    given.append borrowed(Slot(index))
+  }
+  const answered = addTemporary builder, wrapped.signature.result
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(answered, member, given, empty, location)
+  const boxed = addTemporary builder, result
+  if !lowerTraitValue(lowering, builder, boxed, answered, [bound], subject, at) {
+    // The slot would hold the member itself, which answers the payload and not the boxed value a call site reads: a
+    // program with such a table must not be emitted, however silently the table was asked for
+    const shown = lowering.checker.symbolAt(declared).name
+    const owner = lowering.program.witnessTableAt(table).name
+    lowering.program.problems.append "`{shown}` of `{owner}` answers `Self`, and its answer could not be boxed"
+    return None
+  }
+  terminate builder, Terminator.Return(borrowed(boxed))
+  finishFunction lowering.program, builder
 }
 
 /**
@@ -632,6 +717,13 @@ public type TableMember {
  * and one with generic parameters of its own, whose call would need witnesses appended. A call of one through a table is
  * therefore a clean "the member is not in the table" finding and never a wrong call.
  *
+ * Two kinds of them get a slot behind the fixed members once the program calls one on a trait-typed value: a member with
+ * type parameters of its own, one slot per list of arguments ([genericSlotOf]), and a member that answers **exactly**
+ * `Self` and takes no second one ([isSelfAnswerSlot]) - on a trait-typed receiver `Self` is the receiver's own trait
+ * type, so the answer is a payload of the receiver's type again and the receiver's tables fit it. That slot points at a
+ * function that boxes the implementation's answer ([selfAnswerOf]), which is what makes `bytes[from..to]` on a `Bytes`
+ * reach the O(1) `ArrayList.slice` instead of the default that copies.
+ *
  * A **`var self`** member *is* in a table: its thunk takes the address of the payload inside the box, and the caller
  * makes that box unique first, which is what the `size` and the two helpers in the table are for. Without it
  * `List.append`, `Map.set`, `Set.insert` and `Iterator.next` would be unreachable on a trait-typed value, and every
@@ -917,6 +1009,72 @@ fn isTableMember(var lowering: Lowering, member: SymbolId, inherited: Int): Bool
   false
 }
 
+/**
+ * Whether a call of this member on a trait-typed value goes through a slot of the table: a member that answers exactly
+ * `Self` and takes no second one, which some implementation of the program answers itself - a required member, or a
+ * default an implementation overrides (`List.slice`, which `ArrayList` answers in O(1)).
+ *
+ * Such a slot is not one of the fixed members of every table. It is added the way a member with type parameters of its
+ * own is (`genericSlotOf`), once the program calls it: a table of `List<Item>` is built for every item type of the
+ * program, and a slot of `slice` in each of them would instantiate `ArrayList.slice` and the function around it for
+ * every one, called or not. The function it points at boxes the implementation's answer with the table ([selfAnswerOf]).
+ */
+public fn isSelfAnswerSlot(var lowering: Lowering, member: SymbolId): Bool {
+  if !answersSelf(lowering, member) {
+    return false
+  }
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  if !signature.takesSelf || !signature.bounds.isEmpty() || anySelfParameter(lowering, signature) {
+    return false
+  }
+  if !signature.hasBody {
+    return true
+  }
+  isOverriddenDefault lowering, member, lowering.checker.symbolAt(member).name
+}
+
+/** Whether a parameter of a member of a trait mentions the trait's `Self`: a second value of the concrete type. */
+fn anySelfParameter(var lowering: Lowering, signature: Signature): Bool {
+  const owner = match signature.owner {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Parameter(parameter) = lowering.checker.types.form(owner) {
+    return anyParameterMentions lowering, signature, parameter
+  }
+  false
+}
+
+/**
+ * Whether a member of a trait answers exactly `Self` - `List.slice`, `Negate.negate` - which puts its slot behind a
+ * function that boxes the answer ([selfAnswerOf]) and makes the call site read it as a value of the receiver's type.
+ */
+public fn answersSelf(var lowering: Lowering, member: SymbolId): Bool {
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const owner = match signature.owner {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if const .Parameter(parameter) = lowering.checker.types.form(owner) {
+    return isSelfOf lowering, signature.form.result, parameter
+  }
+  false
+}
+
+/** Whether a type is the parameter itself, and not a type that mentions it. */
+fn isSelfOf(var lowering: Lowering, id: TypeId, parameter: ParameterId): Bool {
+  if const .Parameter(found) = lowering.checker.types.form(id) {
+    return found == parameter
+  }
+  false
+}
+
 fn anyParameterMentions(var lowering: Lowering, signature: Signature, parameter: ParameterId): Bool {
   for one in signature.form.parameters {
     if mentionsSelfElsewhere(lowering, one.annotation, parameter) {
@@ -1055,10 +1213,15 @@ public fn genericSlotOf(
       reportUnsupported lowering, "a witness table whose members do not line up with its trait", at
       return None
     }
-    const built = genericMemberFunctionOf(lowering, source.subject, source.bound, source.implementation, slot, at)?
-    var members = table.members
+    var built = genericMemberFunctionOf(lowering, source.subject, source.bound, source.implementation, slot, at)?
+    // A member that answers `Self` is reached through the function that boxes its answer with this table
+    if arguments.isEmpty() && answersSelf(lowering, member) {
+      const tableId = WitnessTableId index
+      built = selfAnswerOf(lowering, built, member, tableId, source.subject, source.bound, at)?
+    }
+    var members = lowering.program.witnessTables[index].members
     members.append built
-    lowering.program.witnessTables.set index, table.copy(members: members)
+    lowering.program.witnessTables.set index, lowering.program.witnessTables[index].copy(members: members)
   }
   position
 }

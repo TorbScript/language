@@ -853,9 +853,9 @@ fn emitCheck(
  * **A list is not a layout**, so an item is no `PathStep`: a `List<Item>` value is a trait-typed one (5.6's note) and
  * reading from it is a call through its witness table, exactly as `a[key]` is (`at` is `Indexed.at`, whose default body
  * decides what an index out of range does - and here nothing is ever out of range, because the length was tested on the
- * way in). That is also why `[first, ...rest]` copies: `Slice.slice` answers `Self` and is therefore not in the table of
- * a trait-typed value at all (5.6), while `skip` and `toList` are ordinary members of `Iterate`. A value has no
- * identity, so a copy of the rest is not observable - only its cost is, which is the same cost `toList()` has anywhere.
+ * way in). The rest is `skip` and `toList`, ordinary members of `Iterate`, and so a copy even where `Slice.slice` could
+ * share the storage (see [restSlotOf]). A value has no identity, so a copy of the rest is not observable - only its cost
+ * is, which is the same cost `toList()` has anywhere.
  */
 fn emitLengthTest(
   var lowering: Lowering,
@@ -1058,9 +1058,9 @@ fn itemFromEndOf(
 /**
  * `[first, ...rest]`: the items from `index` on, as a list of their own - `skip(index).toList()`.
  *
- * Both are members of `Iterate`, which is what makes this work on a trait-typed value at all: `Slice.slice` answers
- * `Self` and is therefore not in a witness table (5.6's rule about object safety), so there is no way to *share* the
- * storage from here. A copy is what the language can express, and value semantics make it indistinguishable.
+ * Both are members of `Iterate`, which is what makes this work on every subject a list pattern takes. `Slice.slice`
+ * would share the storage of a list - it has a slot in the witness table since it answers exactly `Self`
+ * (docs/PERFORMANCE.md, F16) - but the rest is written as a copy, and value semantics make the two indistinguishable.
  */
 fn restSlotOf(
   var lowering: Lowering,

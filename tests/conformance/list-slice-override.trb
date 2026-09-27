@@ -1,0 +1,83 @@
+/**
+ * A range of a trait-typed list runs the list's own `slice`. `Bytes` is `List<UInt8>`, a trait, so `bytes[from..to]`
+ * is a call through the witness table of the value, and the slot of `slice` reaches `ArrayList.slice` - the part shares
+ * the storage of the whole until one of the two is written - instead of the default of `List`, which copies item by
+ * item (docs/PERFORMANCE.md, F16). The sharing is not observable: a write to the part never reaches the whole, and a
+ * write to the whole never reaches the part, which is what this pins beside the items themselves.
+ *
+ * The slot is the one every member that answers exactly `Self` gets: a required member of a trait of the program is
+ * reached the same way, and a receiver of two bounds (`Grown & Named`) keeps both of them in what it answers.
+ */
+use Bytes from "std/stream"
+
+fn window(bytes: Bytes, from: Int, to: Int): Bytes {
+  bytes[from..to]
+}
+
+fn middle(names: List<String>): List<String> {
+  names[1..names.length() - 1]
+}
+
+trait Grown {
+  fn grown(): Self
+  fn size(): Int
+}
+
+trait Named {
+  fn name(): String
+}
+
+type Square with Grown, Named {
+  side: Int
+
+  fn grown(): Self {
+    Self(side + 1)
+  }
+
+  fn size(): Int {
+    side * side
+  }
+
+  fn name(): String {
+    "square of {side}"
+  }
+}
+
+type Row with Grown {
+  cells: List<Int>
+
+  fn grown(): Self {
+    Self cells.appended(0)
+  }
+
+  fn size(): Int {
+    cells.length()
+  }
+}
+
+fn described(shape: Grown & Named): String {
+  const next = shape.grown()
+  "{shape.name()} grows into the {next.name()}, of size {next.size()}"
+}
+
+var bytes: Bytes = [1, 2, 3, 4, 5, 6]
+var part = window bytes, 1, 4
+print part
+part[0] = 20
+bytes[2] = 30
+print "part {part}, whole {bytes}"
+print window(bytes, 0, 0).isEmpty()
+print bytes.part(4..6)
+print bytes.part(4..7)
+
+var names: List<String> = ["ada", "alan", "grace", "edsger"]
+var inner = middle names
+inner.append "barbara"
+print "inner {inner}, names {names}"
+
+const shapes: List<Grown> = [Square(2), Row([1, 2])]
+for shape in shapes {
+  const next = shape.grown()
+  print "{shape.size()} grows to {next.size()}, then to {next.grown().size()}"
+}
+print described(Square(3))

@@ -217,10 +217,10 @@ public trait List<Item>
    * `numbers[1..3]`: the items of that part, as a list of the same kind.
    *
    * `ArrayList` answers it **natively**, where it is O(1) and shares the storage - which is what a slice of a concrete
-   * list is. This default is what a **trait-typed** `List<Item>` reaches, because a member whose result is `Self` is in no
-   * witness table: the thunk of one would have to box that result, and it cannot know the other bounds of the value it was
-   * called on (`List<Item> & Show` would need a table the thunk has erased). So the shared default runs there, and it
-   * costs one copy of the part - which is the price of not knowing the implementation, and not a different answer.
+   * list is - and a **trait-typed** `List<Item>` reaches that answer too: a member that answers exactly `Self` has a slot
+   * in the witness table, whose function boxes the implementation's answer with the table, and the call site puts it
+   * into the receiver's own tables (docs/PERFORMANCE.md, F16). This default is what a list that does not answer it
+   * itself runs, and it costs one copy of the part.
    *
    * # Examples
    *
@@ -607,8 +607,8 @@ public native type ArrayList<Item>
   }
 
   /**
-   * The O(1) slice: it shares storage with the receiver until one of the two is written. See [List.slice] for the
-   * shared default a trait-typed `List` reaches instead.
+   * The O(1) slice: it shares storage with the receiver until one of the two is written, whether the list is reached as
+   * an `ArrayList` or as a trait-typed `List` (see [List.slice]).
    *
    * A list whose items may hold an object with a destructor gets a copy instead, so that an item the slice left out
    * closes when the list it came from is gone (docs/design/DESTRUCTORS.md 2a).

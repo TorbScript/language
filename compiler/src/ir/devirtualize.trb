@@ -834,6 +834,9 @@ fn poisonArguments(var peeling: Peeling, places: Locations, index: Int, argument
  * What a box says about the slot it wrote: the type of its payload, and the tables it was built with. A payload that is
  * **itself** a trait-typed value is a narrowing coercion - a `List<Item>` handed on as an `Iterate<Item>` - and
  * neither side of one can lose its box, because the tables of the narrower value are read out of the wider one.
+ *
+ * Neither can a value whose tables are read, whatever the box holds: the answer of a member that answers `Self` is put
+ * into the tables of its receiver (`lowerWitnessCall`), and a receiver that lost its box would have none to read.
  */
 fn collectTraitValue(
   var peeling: Peeling,
@@ -844,6 +847,12 @@ fn collectTraitValue(
   value: Argument,
   tables: List<WitnessSource>,
 ) {
+  for source in tables {
+    if const .Value(place, _) = source.root {
+      const read = slotLocation places, index, place.base
+      poison peeling, read
+    }
+  }
   const answer = slotLocation places, index, target
   const inner = slotLocation places, index, value.slot
   if inner >= 0 {
