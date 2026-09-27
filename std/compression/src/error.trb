@@ -1,5 +1,7 @@
 /** [CompressionError]: what reading compressed bytes fails with. */
 
+use ReadError from "std/binary"
+
 /** Compressed bytes that break their format: what is wrong, and the byte of the input where it was found. */
 public type CompressionError with Show, Error {
   reason: String
@@ -8,5 +10,21 @@ public type CompressionError with Show, Error {
 
   fn show(): String {
     "{reason} (at byte {offset})"
+  }
+}
+
+/**
+ * A read of `std/binary` that ran out of compressed bytes. Only DEFLATE reads bits, so bits that are missing are a stream
+ * that ends in the middle of a block, at the end of the input: the byte the missing bits start in plus the whole bytes
+ * that were left. The gzip header and trailer name what they were reading themselves.
+ */
+extend CompressionError with From<ReadError> {
+  static fn from(value: ReadError): CompressionError {
+    match value {
+      .TruncatedBits(offset, _, available) => {
+        CompressionError("the stream ends in the middle of a block", offset + available / 8)
+      }
+      _ => CompressionError value.show(), value.offset()
+    }
   }
 }

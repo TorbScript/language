@@ -3,6 +3,7 @@
  * time, which is short and exact rather than fast.
  */
 
+use BitOrder, BitReader from "std/binary"
 use Bytes from "std/stream"
 use CompressionError from "./error"
 
@@ -17,7 +18,11 @@ public fn inflated(bytes: Bytes): Result<Bytes, CompressionError> {
  * and the next member after that.
  */
 public fn inflatedFrom(bytes: Bytes, start: Int): Result<(Bytes, Int), CompressionError> {
-  var reader = BitReader bytes, at: start
+  if start > bytes.length() {
+    return Fail CompressionError("the stream ends in the middle of a block", start)
+  }
+  var reader = BitReader bytes, order: BitOrder.LeastSignificantFirst
+  reader.seek(start)?
   var output: List<UInt8> = []
   loop {
     const last = reader.bits(1)?
@@ -33,47 +38,14 @@ public fn inflatedFrom(bytes: Bytes, start: Int): Result<(Bytes, Int), Compressi
         blockCodes(reader, lengths, distances, output)?
       }
       _ => {
-        return Fail CompressionError("a block of the reserved type 3", reader.at)
+        return Fail CompressionError("a block of the reserved type 3", reader.position())
       }
     }
     if last == 1 {
       break
     }
   }
-  Ok((output, reader.at))
-}
-
-/** The bits of a stream, least significant first, as DEFLATE packs them. */
-type BitReader {
-  bytes: Bytes
-  /** The next byte to load. */
-  var at: Int = 0
-  /** Bits loaded and not read yet, the next one lowest. */
-  var buffer: Int = 0
-  /** How many bits `buffer` holds: always fewer than 8 between two reads. */
-  var count: Int = 0
-
-  /** The next `need` bits as a number, the first of them lowest. */
-  var fn bits(need: Int): Result<Int, CompressionError> {
-    while count < need {
-      if at >= bytes.length() {
-        return Fail CompressionError("the stream ends in the middle of a block", at)
-      }
-      buffer = buffer | (Int.from(bytes[at]) << count)
-      at = at + 1
-      count = count + 8
-    }
-    const value = buffer & ((1 << need) - 1)
-    buffer = buffer >> need
-    count = count - need
-    Ok value
-  }
-
-  /** Drops the rest of the current byte: a stored block starts at a byte boundary. */
-  var fn align() {
-    buffer = 0
-    count = 0
-  }
+  Ok((output, reader.position()))
 }
 
 /** A canonical Huffman code: how many codes each length has, and the symbols in code order. */
@@ -130,29 +102,29 @@ type Huffman {
       first = (first + count) << 1
       code = code << 1
     }
-    Fail CompressionError("a code that no symbol has", reader.at)
+    Fail CompressionError("a code that no symbol has", reader.position())
   }
 }
 
 /** A stored block: its length, the length's complement, and that many bytes as they are. */
 fn storedBlock(var reader: BitReader, var output: List<UInt8>): Result<Void, CompressionError> {
-  reader.align()
-  const at = reader.at
-  if at + 4 > reader.bytes.length() {
+  reader.alignToByte()
+  const at = reader.position()
+  if reader.remaining() < 32 {
     return Fail CompressionError("the stream ends in the header of a stored block", at)
   }
-  const length = Int.from(reader.bytes[at]) | (Int.from(reader.bytes[at + 1]) << 8)
-  const complement = Int.from(reader.bytes[at + 2]) | (Int.from(reader.bytes[at + 3]) << 8)
+  // After the alignment the two numbers are whole bytes, and the least significant order reads them little endian
+  const length = reader.bits(16)?
+  const complement = reader.bits(16)?
   if length != (~complement & 0xFFFF) {
     return Fail CompressionError("a stored block whose length and complement disagree", at)
   }
-  if at + 4 + length > reader.bytes.length() {
-    return Fail CompressionError("the stream ends inside a stored block", at)
+  match reader.bytes(length) {
+    Ok(stored) => output.appendAll stored
+    Fail(_) => {
+      return Fail CompressionError("the stream ends inside a stored block", at)
+    }
   }
-  for index in 0..length {
-    output.append reader.bytes[at + 4 + index]
-  }
-  reader.at = at + 4 + length
   Ok void
 }
 
@@ -173,15 +145,15 @@ fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionEr
   const distanceCount = reader.bits(5)? + 1
   const codeCount = reader.bits(4)? + 4
   if literalCount > 286 || distanceCount > 30 {
-    return Fail CompressionError("a dynamic block with more codes than DEFLATE has", reader.at)
+    return Fail CompressionError("a dynamic block with more codes than DEFLATE has", reader.position())
   }
   var codeLengths = List.filled 19, 0
   for index in 0..codeCount {
     codeLengths[codeLengthOrder[index]] = reader.bits(3)?
   }
-  const (lengthCode, lengthLeft) = Huffman.of(codeLengths, reader.at)?
+  const (lengthCode, lengthLeft) = Huffman.of(codeLengths, reader.position())?
   if lengthLeft != 0 {
-    return Fail CompressionError("an incomplete code for the code lengths", reader.at)
+    return Fail CompressionError("an incomplete code for the code lengths", reader.position())
   }
   const total = literalCount + distanceCount
   var lengths: List<Int> = []
@@ -197,7 +169,7 @@ fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionEr
       repeated = match lengths.last() {
         Some(previous) => previous
         None => {
-          return Fail CompressionError("a repeat of the previous length before the first one", reader.at)
+          return Fail CompressionError("a repeat of the previous length before the first one", reader.position())
         }
       }
       times = 3 + reader.bits(2)?
@@ -207,24 +179,24 @@ fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionEr
       times = 11 + reader.bits(7)?
     }
     if lengths.length() + times > total {
-      return Fail CompressionError("a repeat that runs past the code lengths", reader.at)
+      return Fail CompressionError("a repeat that runs past the code lengths", reader.position())
     }
     for _ in 0..times {
       lengths.append repeated
     }
   }
   if lengths[256] == 0 {
-    return Fail CompressionError("a dynamic block without an end-of-block code", reader.at)
+    return Fail CompressionError("a dynamic block without an end-of-block code", reader.position())
   }
   const literalLengths = lengths[0..literalCount]
-  const (literals, literalLeft) = Huffman.of(literalLengths, reader.at)?
+  const (literals, literalLeft) = Huffman.of(literalLengths, reader.position())?
   if literalLeft != 0 && literalCount != literals.counts[0] + literals.counts[1] {
-    return Fail CompressionError("an incomplete code for the literals and lengths", reader.at)
+    return Fail CompressionError("an incomplete code for the literals and lengths", reader.position())
   }
   const distanceLengths = lengths[literalCount..total]
-  const (distances, distanceLeft) = Huffman.of(distanceLengths, reader.at)?
+  const (distances, distanceLeft) = Huffman.of(distanceLengths, reader.position())?
   if distanceLeft != 0 && distanceCount != distances.counts[0] + distances.counts[1] {
-    return Fail CompressionError("an incomplete code for the distances", reader.at)
+    return Fail CompressionError("an incomplete code for the distances", reader.position())
   }
   Ok((literals, distances))
 }
@@ -247,16 +219,16 @@ fn blockCodes(
     }
     const lengthIndex = symbol - 257
     if lengthIndex >= 29 {
-      return Fail CompressionError("a length symbol that DEFLATE does not have", reader.at)
+      return Fail CompressionError("a length symbol that DEFLATE does not have", reader.position())
     }
     const length = lengthBase[lengthIndex] + reader.bits(lengthExtra[lengthIndex])?
     const distanceIndex = distances.decode(reader)?
     if distanceIndex >= 30 {
-      return Fail CompressionError("a distance symbol that DEFLATE does not have", reader.at)
+      return Fail CompressionError("a distance symbol that DEFLATE does not have", reader.position())
     }
     const distance = distanceBase[distanceIndex] + reader.bits(distanceExtra[distanceIndex])?
     if distance > output.length() {
-      return Fail CompressionError("a distance back past the start of the output", reader.at)
+      return Fail CompressionError("a distance back past the start of the output", reader.position())
     }
     const start = output.length() - distance
     for index in 0..length {

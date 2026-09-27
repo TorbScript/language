@@ -4,15 +4,16 @@
  * alone.
  */
 
+use BitOrder, BitWriter from "std/binary"
 use Bytes from "std/stream"
 use lengthBase, lengthExtra, distanceBase, distanceExtra from "./inflate"
 
 /** `bytes` as a raw DEFLATE stream: one final block of the fixed Huffman codes. */
 public fn deflated(bytes: Bytes): Bytes {
-  var writer = BitWriter()
+  var writer = BitWriter order: BitOrder.LeastSignificantFirst
   // The final block, of the fixed codes
-  writer.write 1, 1
-  writer.write 1, 2
+  writer.bits 1, 1
+  writer.bits 1, 2
   const total = bytes.length()
   var heads = List.filled(hashSize, 0 - 1)
   var previous = List.filled(windowSize, 0 - 1)
@@ -46,21 +47,20 @@ public fn deflated(bytes: Bytes): Bytes {
       }
     }
     if bestLength >= 3 {
-      writer.writeLength bestLength
-      writer.writeDistance bestDistance
+      writeLength writer, bestLength
+      writeDistance writer, bestDistance
       for position in at..(at + bestLength) {
         insert bytes, position, heads, previous
       }
       at = at + bestLength
     } else {
-      writer.writeLiteral Int.from(bytes[at])
+      writeLiteral writer, Int.from(bytes[at])
       insert bytes, at, heads, previous
       at = at + 1
     }
   }
-  writer.writeLiteral 256
-  writer.flush()
-  writer.output
+  writeLiteral writer, 256
+  writer.bytes()
 }
 
 /** Records `position` as the newest start of its three bytes. */
@@ -79,73 +79,46 @@ fn hashAt(bytes: Bytes, position: Int): Int {
   (first ^ second ^ Int.from(bytes[position + 2])) & (hashSize - 1)
 }
 
-/** Bits into bytes, least significant first - and a Huffman code, which DEFLATE writes most significant first. */
-type BitWriter {
-  var output: List<UInt8> = []
-  var buffer: Int = 0
-  var count: Int = 0
-
-  /** The lowest `width` bits of `value`, the lowest first. */
-  var fn write(value: Int, width: Int) {
-    buffer = buffer | (value << count)
-    count = count + width
-    while count >= 8 {
-      output.append(UInt8.tryFrom(buffer & 255).ok() ?? 0)
-      buffer = buffer >> 8
-      count = count - 8
-    }
+/** A Huffman code of `width` bits, its highest bit first: DEFLATE packs its codes the other way round from its numbers. */
+fn writeCode(var writer: BitWriter, code: Int, width: Int) {
+  var reversed = 0
+  for index in 0..width {
+    reversed = (reversed << 1) | ((code >> index) & 1)
   }
+  writer.bits reversed, width
+}
 
-  /** A Huffman code of `width` bits, its highest bit first. */
-  var fn writeCode(code: Int, width: Int) {
-    var reversed = 0
-    for index in 0..width {
-      reversed = (reversed << 1) | ((code >> index) & 1)
-    }
-    write reversed, width
+/** A literal byte, or 256 for the end of the block, in the fixed code of RFC 1951 section 3.2.6. */
+fn writeLiteral(var writer: BitWriter, symbol: Int) {
+  if symbol < 144 {
+    writeCode(writer, 0x30 + symbol, 8)
+  } else if symbol < 256 {
+    writeCode(writer, 0x190 + symbol - 144, 9)
+  } else if symbol < 280 {
+    writeCode(writer, symbol - 256, 7)
+  } else {
+    writeCode(writer, 0xC0 + symbol - 280, 8)
   }
+}
 
-  /** A literal byte, or 256 for the end of the block, in the fixed code of RFC 1951 section 3.2.6. */
-  var fn writeLiteral(symbol: Int) {
-    if symbol < 144 {
-      writeCode(0x30 + symbol, 8)
-    } else if symbol < 256 {
-      writeCode(0x190 + symbol - 144, 9)
-    } else if symbol < 280 {
-      writeCode(symbol - 256, 7)
-    } else {
-      writeCode(0xC0 + symbol - 280, 8)
-    }
+/** A match length from 3 to 258: its symbol, then its extra bits. */
+fn writeLength(var writer: BitWriter, length: Int) {
+  var index = lengthBase.length() - 1
+  while lengthBase[index] > length {
+    index = index - 1
   }
+  writeLiteral(writer, 257 + index)
+  writer.bits(length - lengthBase[index], lengthExtra[index])
+}
 
-  /** A match length from 3 to 258: its symbol, then its extra bits. */
-  var fn writeLength(length: Int) {
-    var index = lengthBase.length() - 1
-    while lengthBase[index] > length {
-      index = index - 1
-    }
-    writeLiteral(257 + index)
-    write(length - lengthBase[index], lengthExtra[index])
+/** A match distance from 1 to 32768: its five-bit code, then its extra bits. */
+fn writeDistance(var writer: BitWriter, distance: Int) {
+  var index = distanceBase.length() - 1
+  while distanceBase[index] > distance {
+    index = index - 1
   }
-
-  /** A match distance from 1 to 32768: its five-bit code, then its extra bits. */
-  var fn writeDistance(distance: Int) {
-    var index = distanceBase.length() - 1
-    while distanceBase[index] > distance {
-      index = index - 1
-    }
-    writeCode index, 5
-    write(distance - distanceBase[index], distanceExtra[index])
-  }
-
-  /** The last byte, filled up with zero bits. */
-  var fn flush() {
-    if count > 0 {
-      output.append(UInt8.tryFrom(buffer & 255).ok() ?? 0)
-      buffer = 0
-      count = 0
-    }
-  }
+  writeCode writer, index, 5
+  writer.bits(distance - distanceBase[index], distanceExtra[index])
 }
 
 /** How far back a match may reach. */
