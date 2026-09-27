@@ -271,7 +271,7 @@ way the body of such a `fn` does.
 use Source, Sink from "std/stream"
 
 fn ints(): Source<Int, ChannelClosed> {
-  Source<Int, ChannelClosed>.produce { sink =>
+  Source.produce { sink =>
     sink.add(1).await()?
     Ok void
   }
