@@ -4,6 +4,7 @@
  * never panics, whatever the bytes are.
  */
 
+use ReadError from "std/binary"
 use RecordType from "./codes"
 
 /** Why a name, a message or a response was refused. Every case says where, so a log line can be checked by hand. */
@@ -38,6 +39,20 @@ public type DnsError with Show, Error {
       .InvalidMessage(offset, reason) => "not a DNS message at byte {offset}: {reason}"
       .Unencodable(reason) => "the message cannot be encoded: {reason}"
       .UnexpectedResponse(reason) => "not the response to the query: {reason}"
+    }
+  }
+}
+
+/**
+ * A read of `std/binary` that failed on the bytes of a message: where they end is a truncated message, and anything else
+ * is a message that is not one. The codec names the part the bytes end in itself; this is what `?` answers where no part
+ * is named.
+ */
+extend DnsError with From<ReadError> {
+  static fn from(value: ReadError): DnsError {
+    match value {
+      .Truncated(offset, expected, ...) => DnsError.Truncated offset, expected
+      _ => DnsError.InvalidMessage value.offset(), value.show()
     }
   }
 }

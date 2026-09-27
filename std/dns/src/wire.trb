@@ -3,10 +3,12 @@
  * 4.1.4), the EDNS0 record of RFC 6891, and the query and response helpers a transport needs - so that `std/network`,
  * `std/tls` and `std/http` only move bytes (docs/design/DNS.md section 2).
  *
- * Reading never indexes past what it checked: every read goes through a [Reader] that answers a [DnsError] where the
- * bytes end, so bytes from the network cannot make it panic.
+ * Reading never indexes past what it checked: every read goes through a `ByteReader` of `std/binary`, whose failure
+ * becomes a [DnsError] that names the part of the message the bytes end in, so bytes from the network cannot make it
+ * panic. Writing goes into a `ByteWriter`, whose width types make every field's range a check at the caller.
  */
 
+use ByteReader, ByteWriter, ReadError from "std/binary"
 use Ipv4Address, Ipv6Address from "std/ip"
 use textOf from "std/stream"
 use Operation, RecordClass, RecordType, ResponseCode from "./codes"
@@ -20,18 +22,12 @@ const offeredPayload = 1232
 
 // --- Reading ---------------------------------------------------------------------------------------------------------
 
-/** A position in a message and the end it may not read past. */
-type Reader {
-  /** The whole message: a compression pointer may point anywhere in it. */
-  bytes: Bytes
-  /** The next byte to read. */
-  var position: Int
-  /** The first byte this reader may not read: the end of the message, or of the data of one record. */
-  limit: Int
+/** What a read that runs out of bytes is inside: the sections of the message, or the data of one record. */
+type Scope {
   /** The type whose data is read, or `None` for the sections of the message. */
-  recordType: RecordType?
+  recordType: RecordType? = None
   /** Where the data of the record starts, which a failure inside of it names. */
-  start: Int
+  start: Int = 0
 
   /** Where the bytes end inside of `part`, which starts at `at`. */
   fn failure(part: String, at: Int): DnsError {
@@ -40,44 +36,30 @@ type Reader {
       None => DnsError.Truncated at, part
     }
   }
+}
 
-  /** How many bytes are left before the limit. */
-  fn remaining(): Int {
-    limit - position
-  }
+/** The sections of the message: a read that runs out of bytes there is a truncated message. */
+const sections = Scope()
 
-  /** The next `count` bytes. */
-  var fn take(count: Int, part: String): Result<Bytes, DnsError> {
-    if count > limit - position {
-      return Fail failure(part, position)
+extend<Value> Result<Value, ReadError> {
+  /** What was read, or the failure of `scope` that says the bytes end inside `part`. */
+  fn inside(part: String, scope: Scope): Result<Value, DnsError> {
+    match self {
+      Ok(value) => Ok value
+      Fail(problem) => Fail scope.failure(part, problem.offset())
     }
-    const taken = bytes[position..(position + count)]
-    position = position + count
-    Ok taken
   }
+}
 
-  /** The next `width` bytes as a number without a sign, most significant first. */
-  var fn integer(width: Int, part: String): Result<Int, DnsError> {
-    if width > limit - position {
-      return Fail failure(part, position)
-    }
-    var value = 0
-    for index in 0..width {
-      value = value << 8 | Int.from(bytes[position + index])
-    }
-    position = position + width
-    Ok value
+/** The next name of `reader`, following compression pointers anywhere in `message`, and `reader` moved past it. */
+fn nameOf(var reader: ByteReader, message: Bytes, part: String, scope: Scope): Result<DomainName, DnsError> {
+  const at = reader.offset()
+  const (name, end) = nameAt(message, at, part)?
+  if end - at > reader.remaining() {
+    return Fail scope.failure(part, at)
   }
-
-  /** The next name, following compression pointers anywhere in the message. */
-  var fn name(part: String): Result<DomainName, DnsError> {
-    const (name, end) = nameAt(bytes, position, part)?
-    if end > limit {
-      return Fail failure(part, position)
-    }
-    position = end
-    Ok name
-  }
+  reader.skip(end - at)?
+  Ok name
 }
 
 /**
@@ -138,93 +120,89 @@ fn nameAt(bytes: Bytes, start: Int, part: String): Result<(DomainName, Int), Dns
   Ok((name, end))
 }
 
-/** The fixed part of a record: its owner, type, class, time to live, and where its data starts and how long it is. */
+/** The fixed part of a record: its owner, type, class and time to live, and a reader over its data. */
 type Entry {
   name: DomainName
   typeCode: Int
   classCode: Int
   timeToLive: Int
-  start: Int
-  length: Int
+  data: ByteReader
 }
 
 /** The next record's fixed part, and the reader moved past its data. */
-fn entryOf(var reader: Reader): Result<Entry, DnsError> {
-  const name = reader.name("the owner of a record")?
-  const typeCode = reader.integer(2, "the type of a record")?
-  const classCode = reader.integer(2, "the class of a record")?
-  const timeToLive = reader.integer(4, "the time to live of a record")?
-  const length = reader.integer(2, "the data length of a record")?
-  const start = reader.position
-  if length > reader.remaining() {
-    return Fail DnsError.Truncated(start, "the data of a {RecordType.of(typeCode)} record")
-  }
-  reader.position = start + length
-  Ok Entry(name, typeCode, classCode, timeToLive, start, length)
+fn entryOf(var reader: ByteReader, message: Bytes): Result<Entry, DnsError> {
+  const name = nameOf(reader, message, "the owner of a record", sections)?
+  const typeCode = Int.from(reader.uint16().inside("the type of a record", sections)?)
+  const classCode = Int.from(reader.uint16().inside("the class of a record", sections)?)
+  const timeToLive = Int.from(reader.uint32().inside("the time to live of a record", sections)?)
+  const length = Int.from(reader.uint16().inside("the data length of a record", sections)?)
+  const data = reader.limited(length).inside("the data of a {RecordType.of(typeCode)} record", sections)?
+  Ok Entry(name, typeCode, classCode, timeToLive, data)
 }
 
 /** The record of an entry of the answer or the authority section, where an OPT record is refused. */
-fn recordOf(bytes: Bytes, entry: Entry): Result<Record, DnsError> {
+fn recordOf(message: Bytes, entry: Entry): Result<Record, DnsError> {
   const recordType = RecordType.of entry.typeCode
   if recordType == RecordType.Opt {
-    return Fail DnsError.InvalidMessage(entry.start, "an OPT record belongs to the additional section (RFC 6891)")
+    return Fail DnsError.InvalidMessage(entry.data.offset(), "an OPT record belongs to the additional section (RFC 6891)")
   }
-  const data = dataOf(bytes, recordType, entry.start, entry.length)?
+  const data = dataOf(message, recordType, entry.data)?
   Ok Record(entry.name, RecordClass.of(entry.classCode), entry.timeToLive, data)
 }
 
 /** Reads a whole message. */
 public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
-  var reader = Reader bytes, 0, bytes.length(), None, 0
-  const identifier = reader.integer(2, "the header")?
-  const flags = reader.integer(2, "the header")?
-  const questionCount = reader.integer(2, "the header")?
-  const answerCount = reader.integer(2, "the header")?
-  const authorityCount = reader.integer(2, "the header")?
-  const additionalCount = reader.integer(2, "the header")?
+  var reader = ByteReader bytes
+  const identifier = Int.from(reader.uint16().inside("the header", sections)?)
+  const flags = Int.from(reader.uint16().inside("the header", sections)?)
+  const questionCount = Int.from(reader.uint16().inside("the header", sections)?)
+  const answerCount = Int.from(reader.uint16().inside("the header", sections)?)
+  const authorityCount = Int.from(reader.uint16().inside("the header", sections)?)
+  const additionalCount = Int.from(reader.uint16().inside("the header", sections)?)
   var questions: List<Question> = []
   for _ in 0..questionCount {
-    const name = reader.name("a question")?
-    const typeCode = reader.integer(2, "a question")?
-    const classCode = reader.integer(2, "a question")?
+    const name = nameOf(reader, bytes, "a question", sections)?
+    const typeCode = Int.from(reader.uint16().inside("a question", sections)?)
+    const classCode = Int.from(reader.uint16().inside("a question", sections)?)
     questions.append Question(name, RecordType.of(typeCode), RecordClass.of(classCode))
   }
   var answers: List<Record> = []
   for _ in 0..answerCount {
-    const entry = entryOf(reader)?
+    const entry = entryOf(reader, bytes)?
     answers.append(recordOf(bytes, entry)?)
   }
   var authority: List<Record> = []
   for _ in 0..authorityCount {
-    const entry = entryOf(reader)?
+    const entry = entryOf(reader, bytes)?
     authority.append(recordOf(bytes, entry)?)
   }
   var additional: List<Record> = []
   var edns: Edns? = None
   var extendedCode = 0
   for _ in 0..additionalCount {
-    const entry = entryOf(reader)?
+    const entry = entryOf(reader, bytes)?
     if entry.typeCode != 41 {
       additional.append(recordOf(bytes, entry)?)
       continue
     }
+    const start = entry.data.offset()
     if edns.isSome() {
-      return Fail DnsError.InvalidMessage(entry.start, "a second OPT record (RFC 6891 section 6.1.1)")
+      return Fail DnsError.InvalidMessage(start, "a second OPT record (RFC 6891 section 6.1.1)")
     }
     if !entry.name.isRoot() {
-      return Fail DnsError.InvalidMessage(entry.start, "the owner of an OPT record is the root (RFC 6891 6.1.2)")
+      return Fail DnsError.InvalidMessage(start, "the owner of an OPT record is the root (RFC 6891 6.1.2)")
     }
     extendedCode = entry.timeToLive >> 24 & 255
     edns = Some(Edns(
       payloadSize: entry.classCode,
       version: entry.timeToLive >> 16 & 255,
       dnssecOk: entry.timeToLive >> 15 & 1 == 1,
-      options: optionsOf(bytes, entry)?,
+      options: optionsOf(entry)?,
     ))
   }
-  if reader.position < bytes.length() {
-    const reason = "the message is {bytes.length()} bytes long and ends after {reader.position}"
-    return Fail DnsError.InvalidMessage(reader.position, reason)
+  if reader.remaining() > 0 {
+    const reason = "the message is {bytes.length()} bytes long and ends after {reader.position()}"
+    return Fail DnsError.InvalidMessage(reader.position(), reason)
   }
   Ok(Message(
     identifier: identifier,
@@ -246,26 +224,30 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
 }
 
 /** The options of an OPT record: a code, a length and that many bytes, until the data ends. */
-fn optionsOf(bytes: Bytes, entry: Entry): Result<List<EdnsOption>, DnsError> {
-  var reader = Reader(bytes, entry.start, entry.start + entry.length, Some(RecordType.Opt), entry.start)
+fn optionsOf(entry: Entry): Result<List<EdnsOption>, DnsError> {
+  var reader = entry.data
+  const scope = Scope Some(RecordType.Opt), reader.offset()
   var options: List<EdnsOption> = []
   while reader.remaining() > 0 {
-    const code = reader.integer(2, "an option code")?
-    const length = reader.integer(2, "an option length")?
-    options.append EdnsOption(code, reader.take(length, "the data of an option")?)
+    const code = Int.from(reader.uint16().inside("an option code", scope)?)
+    const length = Int.from(reader.uint16().inside("an option length", scope)?)
+    options.append EdnsOption(code, reader.bytes(length).inside("the data of an option", scope)?)
   }
   Ok options
 }
 
-/** The data of a record of `recordType` that starts at `start` and is `length` bytes long. */
-fn dataOf(bytes: Bytes, recordType: RecordType, start: Int, length: Int): Result<RecordData, DnsError> {
-  var reader = Reader(bytes, start, start + length, Some(recordType), start)
-  const data = match recordType {
+/** The data of a record of `recordType`, which `reader` holds and nothing else. */
+fn dataOf(message: Bytes, recordType: RecordType, data: ByteReader): Result<RecordData, DnsError> {
+  var reader = data
+  const start = reader.offset()
+  const length = reader.remaining()
+  const scope = Scope Some(recordType), start
+  const decoded = match recordType {
     .A => {
       if length != 4 {
         return Fail DnsError.InvalidRecord(recordType, start, "an A record holds 4 bytes, not {length}")
       }
-      const octets = reader.take(4, "an IPv4 address")?
+      const octets = reader.bytes(4).inside("an IPv4 address", scope)?
       RecordData.A Ipv4Address.of(octets[0], octets[1], octets[2], octets[3])
     }
     .Aaaa => {
@@ -274,7 +256,7 @@ fn dataOf(bytes: Bytes, recordType: RecordType, start: Int, length: Int): Result
       }
       var segments: List<Int> = []
       for _ in 0..8 {
-        segments.append(reader.integer(2, "an IPv6 address")?)
+        segments.append Int.from(reader.uint16().inside("an IPv6 address", scope)?)
       }
       match Ipv6Address.of(segments) {
         Ok(address) => RecordData.Aaaa address
@@ -283,62 +265,62 @@ fn dataOf(bytes: Bytes, recordType: RecordType, start: Int, length: Int): Result
         }
       }
     }
-    .Cname => RecordData.Cname(reader.name("the canonical name")?)
-    .Ns => RecordData.Ns(reader.name("the name server")?)
-    .Ptr => RecordData.Ptr(reader.name("the target")?)
+    .Cname => RecordData.Cname(nameOf(reader, message, "the canonical name", scope)?)
+    .Ns => RecordData.Ns(nameOf(reader, message, "the name server", scope)?)
+    .Ptr => RecordData.Ptr(nameOf(reader, message, "the target", scope)?)
     .Mx => {
-      const preference = reader.integer(2, "the preference")?
-      RecordData.Mx(preference, reader.name("the exchange")?)
+      const preference = Int.from(reader.uint16().inside("the preference", scope)?)
+      RecordData.Mx(preference, nameOf(reader, message, "the exchange", scope)?)
     }
     .Txt => {
       var strings: List<Bytes> = []
       while reader.remaining() > 0 {
-        const size = reader.integer(1, "a text string")?
-        strings.append(reader.take(size, "a text string")?)
+        const size = Int.from(reader.uint8().inside("a text string", scope)?)
+        strings.append(reader.bytes(size).inside("a text string", scope)?)
       }
       RecordData.Txt strings
     }
     .Srv => {
-      const priority = reader.integer(2, "the priority")?
-      const weight = reader.integer(2, "the weight")?
-      const port = reader.integer(2, "the port")?
-      RecordData.Srv(priority, weight, port, reader.name("the target")?)
+      const priority = Int.from(reader.uint16().inside("the priority", scope)?)
+      const weight = Int.from(reader.uint16().inside("the weight", scope)?)
+      const port = Int.from(reader.uint16().inside("the port", scope)?)
+      RecordData.Srv(priority, weight, port, nameOf(reader, message, "the target", scope)?)
     }
     .Soa => {
-      const primaryServer = reader.name("the primary server")?
-      const responsibleMailbox = reader.name("the responsible mailbox")?
-      const serial = reader.integer(4, "the serial")?
-      const refresh = reader.integer(4, "the refresh interval")?
-      const retry = reader.integer(4, "the retry interval")?
-      const expire = reader.integer(4, "the expire interval")?
-      const minimum = reader.integer(4, "the minimum")?
+      const primaryServer = nameOf(reader, message, "the primary server", scope)?
+      const responsibleMailbox = nameOf(reader, message, "the responsible mailbox", scope)?
+      const serial = Int.from(reader.uint32().inside("the serial", scope)?)
+      const refresh = Int.from(reader.uint32().inside("the refresh interval", scope)?)
+      const retry = Int.from(reader.uint32().inside("the retry interval", scope)?)
+      const expire = Int.from(reader.uint32().inside("the expire interval", scope)?)
+      const minimum = Int.from(reader.uint32().inside("the minimum", scope)?)
       RecordData.Soa primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum
     }
     .Caa => {
-      const flags = reader.integer(1, "the flags")?
-      const tagLength = reader.integer(1, "the tag length")?
-      const tag = reader.take(tagLength, "the tag")?
+      const flags = Int.from(reader.uint8().inside("the flags", scope)?)
+      const tagLength = Int.from(reader.uint8().inside("the tag length", scope)?)
+      const tag = reader.bytes(tagLength).inside("the tag", scope)?
       if tag.isEmpty() || !tag.all({ isAlphanumeric Int.from(_) }) {
         return Fail DnsError.InvalidRecord(recordType, start, "a CAA tag is ASCII letters and digits (RFC 8659)")
       }
       const text = textOf(tag) ?? ""
-      RecordData.Caa(flags, text, reader.take(reader.remaining(), "the value")?)
+      RecordData.Caa(flags, text, reader.bytes(reader.remaining()).inside("the value", scope)?)
     }
     .Svcb => {
-      const (priority, target, parameters) = bindingOf(reader, recordType, start)?
+      const (priority, target, parameters) = bindingOf(reader, message, recordType, scope)?
       RecordData.Svcb priority, target, parameters
     }
     .Https => {
-      const (priority, target, parameters) = bindingOf(reader, recordType, start)?
+      const (priority, target, parameters) = bindingOf(reader, message, recordType, scope)?
       RecordData.Https priority, target, parameters
     }
-    _ => RecordData.Unknown(recordType, reader.take(length, "the data")?)
+    _ => RecordData.Unknown(recordType, reader.bytes(length).inside("the data", scope)?)
   }
   if reader.remaining() > 0 {
-    const reason = "the data is {length} bytes long and ends after {reader.position - start}"
+    const reason = "the data is {length} bytes long and ends after {reader.position()}"
     return Fail DnsError.InvalidRecord(recordType, start, reason)
   }
-  Ok data
+  Ok decoded
 }
 
 /** An ASCII letter or digit. */
@@ -348,23 +330,25 @@ fn isAlphanumeric(code: Int): Bool {
 
 /** The priority, target and parameters of an SVCB or HTTPS record, the keys strictly increasing (RFC 9460 2.2). */
 fn bindingOf(
-  var reader: Reader,
+  var reader: ByteReader,
+  message: Bytes,
   recordType: RecordType,
-  start: Int,
+  scope: Scope,
 ): Result<(Int, DomainName, List<ServiceParameter>), DnsError> {
-  const priority = reader.integer(2, "the priority")?
-  const target = reader.name("the target")?
+  const priority = Int.from(reader.uint16().inside("the priority", scope)?)
+  const target = nameOf(reader, message, "the target", scope)?
   var parameters: List<ServiceParameter> = []
   var previous = -1
   while reader.remaining() > 0 {
-    const key = reader.integer(2, "a parameter key")?
-    const length = reader.integer(2, "a parameter length")?
-    const value = reader.take(length, "a parameter value")?
+    const key = Int.from(reader.uint16().inside("a parameter key", scope)?)
+    const length = Int.from(reader.uint16().inside("a parameter length", scope)?)
+    const value = reader.bytes(length).inside("a parameter value", scope)?
     if key <= previous {
-      return Fail DnsError.InvalidRecord(recordType, start, "the parameter keys do not increase (RFC 9460 section 2.2)")
+      const reason = "the parameter keys do not increase (RFC 9460 section 2.2)"
+      return Fail DnsError.InvalidRecord(recordType, scope.start, reason)
     }
     previous = key
-    parameters.append(parameterOf(recordType, start, key, value)?)
+    parameters.append(parameterOf(recordType, scope.start, key, value)?)
   }
   Ok((priority, target, parameters))
 }
@@ -372,34 +356,32 @@ fn bindingOf(
 /** One service parameter, typed where RFC 9460 defines its key. */
 fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Result<ServiceParameter, DnsError> {
   const broken = DnsError.InvalidRecord recordType, start, "the value of the parameter `{key}` does not fit its key"
+  var reader = ByteReader value
   match key {
     0 => {
       if value.isEmpty() || value.length() % 2 != 0 {
         return Fail broken
       }
       var keys: List<Int> = []
-      var index = 0
-      while index < value.length() {
-        keys.append(Int.from(value[index]) << 8 | Int.from(value[index + 1]))
-        index = index + 2
+      while reader.remaining() > 0 {
+        keys.append Int.from(reader.uint16().mapError({ _ => broken })?)
       }
       Ok ServiceParameter.Mandatory(keys)
     }
     1 => {
       var protocols: List<String> = []
-      var index = 0
-      while index < value.length() {
-        const size = Int.from value[index]
-        if size == 0 || index + 1 + size > value.length() {
+      while reader.remaining() > 0 {
+        const size = Int.from(reader.uint8().mapError({ _ => broken })?)
+        if size == 0 {
           return Fail broken
         }
-        match textOf(value[(index + 1)..(index + 1 + size)]) {
+        const protocol = reader.bytes(size).mapError({ _ => broken })?
+        match textOf(protocol) {
           Ok(text) => protocols.append text
           Fail(_) => {
             return Ok ServiceParameter.Other(key, value)
           }
         }
-        index = index + 1 + size
       }
       if protocols.isEmpty() {
         return Fail broken
@@ -416,17 +398,16 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
       if value.length() != 2 {
         return Fail broken
       }
-      Ok ServiceParameter.Port(Int.from(value[0]) << 8 | Int.from(value[1]))
+      Ok ServiceParameter.Port(Int.from(reader.uint16().mapError({ _ => broken })?))
     }
     4 => {
       if value.isEmpty() || value.length() % 4 != 0 {
         return Fail broken
       }
       var addresses: List<Ipv4Address> = []
-      var index = 0
-      while index < value.length() {
-        addresses.append Ipv4Address.of(value[index], value[index + 1], value[index + 2], value[index + 3])
-        index = index + 4
+      while reader.remaining() > 0 {
+        const octets = reader.bytes(4).mapError({ _ => broken })?
+        addresses.append Ipv4Address.of(octets[0], octets[1], octets[2], octets[3])
       }
       Ok ServiceParameter.Ipv4Hint(addresses)
     }
@@ -436,11 +417,10 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
         return Fail broken
       }
       var addresses: List<Ipv6Address> = []
-      var index = 0
-      while index < value.length() {
+      while reader.remaining() > 0 {
         var segments: List<Int> = []
-        for segment in 0..8 {
-          segments.append(Int.from(value[index + 2 * segment]) << 8 | Int.from(value[index + 2 * segment + 1]))
+        for _ in 0..8 {
+          segments.append Int.from(reader.uint16().mapError({ _ => broken })?)
         }
         match Ipv6Address.of(segments) {
           Ok(address) => addresses.append address
@@ -448,7 +428,6 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
             return Fail broken
           }
         }
-        index = index + 16
       }
       Ok ServiceParameter.Ipv6Hint(addresses)
     }
@@ -458,28 +437,38 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
 
 // --- Writing ---------------------------------------------------------------------------------------------------------
 
-/** The bytes written so far, and where each name already written starts, for compression. */
-type Writer {
-  var output: Bytes = []
+/**
+ * `value` as the width type of its field, or the refusal that names `what`: the one range check in front of every
+ * field whose number comes from a caller.
+ */
+fn narrowed<Width: TryFrom<Int, NumberRangeError> & Integer & Into<Int>>(
+  value: Int,
+  what: String,
+): Result<Width, DnsError> {
+  match Width.tryFrom(value) {
+    Ok(width) => Ok width
+    Fail(_) => {
+      const largest: Int = Width.maximum.into()
+      Fail DnsError.Unencodable("{what} is {value}, outside 0 to {largest}")
+    }
+  }
+}
+
+/** The lowest sixteen bits of `value`, for a number this file has already checked or means to cut. */
+fn lowest16(value: Int): UInt16 {
+  UInt16.tryFrom(value & 65535).ok() ?? 0
+}
+
+/** The lowest eight bits of `value`. */
+fn lowest8(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}
+
+/** The bytes of a message written so far, and where each name already written starts, for compression. */
+type MessageWriter {
+  var output: ByteWriter = ByteWriter()
   /** Every name written at an offset a pointer can reach (below 16384), by its first offset. */
   var offsets: Map<DomainName, Int> = [:]
-
-  /** One byte: the lowest eight bits of `value`. */
-  var fn byte(value: Int) {
-    output.append(UInt8.tryFrom(value & 255) ?? 0)
-  }
-
-  /** Two bytes, most significant first: the lowest sixteen bits of `value`. */
-  var fn integer16(value: Int) {
-    byte(value >> 8)
-    byte value
-  }
-
-  /** Four bytes, most significant first. */
-  var fn integer32(value: Int) {
-    integer16(value >> 16)
-    integer16 value
-  }
 
   /** `name`, ending in a pointer to an earlier occurrence of its longest suffix where `compressed` allows one. */
   var fn name(name: DomainName, compressed: Bool) {
@@ -487,7 +476,7 @@ type Writer {
     while !current.isRoot() {
       if compressed {
         if const Some(offset) = offsets.get(current) {
-          integer16(49152 | offset)
+          output.uint16 lowest16(49152 | offset)
           return
         }
       }
@@ -495,31 +484,16 @@ type Writer {
         offsets[current] = output.length()
       }
       const label = current.labels()[0]
-      byte label.length()
-      output.appendAll label
+      output.uint8 lowest8(label.length())
+      output.append label
       current = current.parent() ?? DomainName.root
     }
-    byte 0
+    output.uint8 0
   }
-}
-
-/** Nothing where `value` fits into `bits` bits without a sign, and otherwise the refusal that names `what`. */
-fn fits(value: Int, bits: Int, what: String): Result<Void, DnsError> {
-  const largest = (1 << bits) - 1
-  if value < 0 || value > largest {
-    return Fail DnsError.Unencodable("{what} is {value}, outside 0 to {largest}")
-  }
-  Ok void
-}
-
-/** `value` where it fits into `bits` bits without a sign, and otherwise the refusal that names `what`. */
-fn fitting(value: Int, bits: Int, what: String): Result<Int, DnsError> {
-  fits(value, bits, what)?
-  Ok value
 }
 
 /** The header: identifier, flags and the four counts. */
-fn writeHeader(var writer: Writer, message: Message, additionalCount: Int) {
+fn writeHeader(var output: ByteWriter, message: Message, additionalCount: Int) {
   var flags = message.operation.code() << 11 | message.responseCode.code() & 15
   for (bit, set) in [
     (15, message.kind == MessageKind.Response),
@@ -534,77 +508,72 @@ fn writeHeader(var writer: Writer, message: Message, additionalCount: Int) {
       flags = flags | 1 << bit
     }
   }
-  writer.integer16 message.identifier
-  writer.integer16 flags
-  writer.integer16 message.questions.length()
-  writer.integer16 message.answers.length()
-  writer.integer16 message.authority.length()
-  writer.integer16 additionalCount
+  output.uint16 lowest16(message.identifier)
+  output.uint16 lowest16(flags)
+  output.uint16 lowest16(message.questions.length())
+  output.uint16 lowest16(message.answers.length())
+  output.uint16 lowest16(message.authority.length())
+  output.uint16 lowest16(additionalCount)
 }
 
 /** A question, its name compressed. */
-fn writeQuestion(var writer: Writer, question: Question) {
+fn writeQuestion(var writer: MessageWriter, question: Question) {
   writer.name question.name, true
-  writer.integer16 question.recordType.code()
-  writer.integer16 question.recordClass.code()
+  writer.output.uint16 lowest16(question.recordType.code())
+  writer.output.uint16 lowest16(question.recordClass.code())
 }
 
 /** The EDNS0 record: the root, type 41, the payload size as its class, and the extended code, version and DO bit. */
-fn writeEdns(var writer: Writer, edns: Edns, extendedCode: Int) {
-  writer.byte 0
-  writer.integer16 41
-  writer.integer16 edns.payloadSize
-  writer.byte extendedCode
-  writer.byte edns.version
-  writer.integer16(if edns.dnssecOk { 32768 } else { 0 })
-  var length = 0
+fn writeEdns(var output: ByteWriter, edns: Edns, extendedCode: Int) {
+  output.uint8 0
+  output.uint16 41
+  output.uint16 lowest16(edns.payloadSize)
+  output.uint8 lowest8(extendedCode)
+  output.uint8 lowest8(edns.version)
+  output.uint16(if edns.dnssecOk { 32768 } else { 0 })
+  const mark = output.reserve16()
   for option in edns.options {
-    length = length + 4 + option.data.length()
+    output.uint16 lowest16(option.code)
+    output.uint16 lowest16(option.data.length())
+    output.append option.data
   }
-  writer.integer16 length
-  for option in edns.options {
-    writer.integer16 option.code
-    writer.integer16 option.data.length()
-    writer.output.appendAll option.data
-  }
+  output.patch mark, lowest16(output.lengthAfter(mark))
 }
 
 /** A record: its owner compressed, the fixed part, and its data with the length in front. */
-fn writeRecord(var writer: Writer, record: Record): Result<Void, DnsError> {
+fn writeRecord(var writer: MessageWriter, record: Record): Result<Void, DnsError> {
   writer.name record.name, true
-  writer.integer16 record.recordType().code()
-  writer.integer16 record.recordClass.code()
-  writer.integer32(fitting(record.timeToLive, 32, "the time to live of a record")?)
-  const lengthAt = writer.output.length()
-  writer.integer16 0
+  writer.output.uint16 lowest16(record.recordType().code())
+  writer.output.uint16 lowest16(record.recordClass.code())
+  writer.output.uint32(narrowed(record.timeToLive, "the time to live of a record")?)
+  const mark = writer.output.reserve16()
   writeData(writer, record.data)?
-  const length = writer.output.length() - lengthAt - 2
+  const length = writer.output.lengthAfter mark
   if length > 65535 {
     return Fail DnsError.Unencodable("the data of a {record.recordType()} record is {length} bytes, more than 65535")
   }
-  writer.output[lengthAt] = UInt8.tryFrom(length >> 8) ?? 0
-  writer.output[lengthAt + 1] = UInt8.tryFrom(length & 255) ?? 0
+  writer.output.patch mark, lowest16(length)
   Ok void
 }
 
 /** The data of a record, checked against the bits of its fields. */
-fn writeData(var writer: Writer, data: RecordData): Result<Void, DnsError> {
+fn writeData(var writer: MessageWriter, data: RecordData): Result<Void, DnsError> {
   match data {
     .A(address) => {
       for octet in address.octets() {
-        writer.byte octet
+        writer.output.uint8 lowest8(octet)
       }
     }
     .Aaaa(address) => {
       for segment in address.segments() {
-        writer.integer16 segment
+        writer.output.uint16 lowest16(segment)
       }
     }
     .Cname(target) => writer.name target, true
     .Ns(server) => writer.name server, true
     .Ptr(target) => writer.name target, true
     .Mx(preference, exchange) => {
-      writer.integer16(fitting(preference, 16, "the preference of an MX record")?)
+      writer.output.uint16(narrowed(preference, "the preference of an MX record")?)
       writer.name exchange, true
     }
     .Txt(strings) => {
@@ -612,34 +581,34 @@ fn writeData(var writer: Writer, data: RecordData): Result<Void, DnsError> {
         if string.length() > 255 {
           return Fail DnsError.Unencodable("a text string is {string.length()} bytes, and one holds at most 255")
         }
-        writer.byte string.length()
-        writer.output.appendAll string
+        writer.output.uint8 lowest8(string.length())
+        writer.output.append string
       }
     }
     .Srv(priority, weight, port, target) => {
-      writer.integer16(fitting(priority, 16, "the priority of an SRV record")?)
-      writer.integer16(fitting(weight, 16, "the weight of an SRV record")?)
-      writer.integer16(fitting(port, 16, "the port of an SRV record")?)
+      writer.output.uint16(narrowed(priority, "the priority of an SRV record")?)
+      writer.output.uint16(narrowed(weight, "the weight of an SRV record")?)
+      writer.output.uint16(narrowed(port, "the port of an SRV record")?)
       writer.name target, false
     }
     .Soa(primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum) => {
       writer.name primaryServer, true
       writer.name responsibleMailbox, true
-      writer.integer32(fitting(serial, 32, "the serial of an SOA record")?)
-      writer.integer32(fitting(refresh, 32, "the refresh interval of an SOA record")?)
-      writer.integer32(fitting(retry, 32, "the retry interval of an SOA record")?)
-      writer.integer32(fitting(expire, 32, "the expire interval of an SOA record")?)
-      writer.integer32(fitting(minimum, 32, "the minimum of an SOA record")?)
+      writer.output.uint32(narrowed(serial, "the serial of an SOA record")?)
+      writer.output.uint32(narrowed(refresh, "the refresh interval of an SOA record")?)
+      writer.output.uint32(narrowed(retry, "the retry interval of an SOA record")?)
+      writer.output.uint32(narrowed(expire, "the expire interval of an SOA record")?)
+      writer.output.uint32(narrowed(minimum, "the minimum of an SOA record")?)
     }
     .Caa(flags, tag, value) => {
-      writer.byte(fitting(flags, 8, "the flags of a CAA record")?)
+      writer.output.uint8(narrowed(flags, "the flags of a CAA record")?)
       const tagBytes = tag.bytes().toList()
       if tagBytes.isEmpty() || tagBytes.length() > 255 || !tagBytes.all({ isAlphanumeric Int.from(_) }) {
         return Fail DnsError.Unencodable("the CAA tag `{tag}` is not ASCII letters and digits (RFC 8659)")
       }
-      writer.byte tagBytes.length()
-      writer.output.appendAll tagBytes
-      writer.output.appendAll value
+      writer.output.uint8 lowest8(tagBytes.length())
+      writer.output.append tagBytes
+      writer.output.append value
     }
     .Svcb(priority, target, parameters) => writeBinding(writer, priority, target, parameters)?
     .Https(priority, target, parameters) => writeBinding(writer, priority, target, parameters)?
@@ -647,7 +616,7 @@ fn writeData(var writer: Writer, data: RecordData): Result<Void, DnsError> {
       if recordType == RecordType.Opt {
         return Fail DnsError.Unencodable("an OPT record is written from `Message.edns`, not as a record")
       }
-      writer.output.appendAll bytes
+      writer.output.append bytes
     }
   }
   Ok void
@@ -655,41 +624,41 @@ fn writeData(var writer: Writer, data: RecordData): Result<Void, DnsError> {
 
 /** The data of an SVCB or HTTPS record: the target uncompressed (RFC 9460 section 2.2), the parameters by key. */
 fn writeBinding(
-  var writer: Writer,
+  var writer: MessageWriter,
   priority: Int,
   target: DomainName,
   parameters: List<ServiceParameter>,
 ): Result<Void, DnsError> {
-  writer.integer16(fitting(priority, 16, "the priority of a service binding")?)
+  writer.output.uint16(narrowed(priority, "the priority of a service binding")?)
   writer.name target, false
   var previous = -1
   for parameter in parameters.sorted(by: { _.key() }) {
-    const key = fitting(parameter.key(), 16, "the key of a service parameter")?
-    if key == previous {
+    const key: UInt16 = narrowed(parameter.key(), "the key of a service parameter")?
+    if Int.from(key) == previous {
       return Fail DnsError.Unencodable("two service parameters with the key {key}")
     }
-    previous = key
+    previous = Int.from key
     const value = parameterValue(parameter)?
     if value.length() > 65535 {
       return Fail DnsError.Unencodable("the value of the service parameter {key} is longer than 65535 bytes")
     }
-    writer.integer16 key
-    writer.integer16 value.length()
-    writer.output.appendAll value
+    writer.output.uint16 key
+    writer.output.uint16 lowest16(value.length())
+    writer.output.append value
   }
   Ok void
 }
 
 /** The value of a service parameter as bytes, checked. */
 fn parameterValue(parameter: ServiceParameter): Result<Bytes, DnsError> {
-  var value = Writer()
+  var value = ByteWriter()
   match parameter {
     .Mandatory(keys) => {
       if keys.isEmpty() {
         return Fail DnsError.Unencodable("a `mandatory` parameter names at least one key")
       }
       for key in keys {
-        value.integer16(fitting(key, 16, "a key of a `mandatory` parameter")?)
+        value.uint16(narrowed(key, "a key of a `mandatory` parameter")?)
       }
     }
     .Alpn(protocols) => {
@@ -701,39 +670,50 @@ fn parameterValue(parameter: ServiceParameter): Result<Bytes, DnsError> {
         if size == 0 || size > 255 {
           return Fail DnsError.Unencodable("the protocol `{protocol}` is not 1 to 255 bytes")
         }
-        value.byte size
-        value.output.appendAll protocol.bytes()
+        value.uint8 lowest8(size)
+        value.text protocol
       }
     }
     .NoDefaultAlpn => {}
-    .Port(port) => value.integer16(fitting(port, 16, "the port of a service binding")?)
+    .Port(port) => value.uint16(narrowed(port, "the port of a service binding")?)
     .Ipv4Hint(addresses) => {
       if addresses.isEmpty() {
         return Fail DnsError.Unencodable("an `ipv4hint` parameter names at least one address")
       }
       for address in addresses {
-        value.integer32 address.number()
+        for octet in address.octets() {
+          value.uint8 lowest8(octet)
+        }
       }
     }
-    .EncryptedClientHello(configurations) => value.output.appendAll configurations
+    .EncryptedClientHello(configurations) => value.append configurations
     .Ipv6Hint(addresses) => {
       if addresses.isEmpty() {
         return Fail DnsError.Unencodable("an `ipv6hint` parameter names at least one address")
       }
       for address in addresses {
         for segment in address.segments() {
-          value.integer16 segment
+          value.uint16 lowest16(segment)
         }
       }
     }
-    .Other(_, bytes) => value.output.appendAll bytes
+    .Other(_, bytes) => value.append bytes
   }
-  Ok value.output
+  Ok value.bytes()
+}
+
+/** Nothing where `value` fits the width type of its field, and otherwise the refusal that names `what`. */
+fn checked<Width: TryFrom<Int, NumberRangeError> & Integer & Into<Int>>(
+  value: Int,
+  what: String,
+): Result<Void, DnsError> {
+  const _fitting: Width = narrowed(value, what)?
+  Ok void
 }
 
 /** Writes a whole message, checked. */
 public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
-  fits(message.identifier, 16, "the identifier")?
+  checked<UInt16>(message.identifier, "the identifier")?
   for (count, section) in [
     (message.questions.length(), "question"),
     (message.answers.length(), "answer"),
@@ -748,11 +728,11 @@ public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
   var additionalCount = message.additional.length()
   match message.edns {
     Some(edns) => {
-      fits(edns.payloadSize, 16, "the payload size of the EDNS0 record")?
-      fits(edns.version, 8, "the EDNS version")?
+      checked<UInt16>(edns.payloadSize, "the payload size of the EDNS0 record")?
+      checked<UInt8>(edns.version, "the EDNS version")?
       for option in edns.options {
-        fits(option.code, 16, "the code of an EDNS0 option")?
-        fits(option.data.length(), 16, "the length of an EDNS0 option")?
+        checked<UInt16>(option.code, "the code of an EDNS0 option")?
+        checked<UInt16>(option.data.length(), "the length of an EDNS0 option")?
       }
       additionalCount = additionalCount + 1
     }
@@ -762,9 +742,9 @@ public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
       }
     }
   }
-  fits(additionalCount, 16, "the number of additional records")?
-  var writer = Writer()
-  writeHeader writer, message, additionalCount
+  checked<UInt16>(additionalCount, "the number of additional records")?
+  var writer = MessageWriter()
+  writeHeader writer.output, message, additionalCount
   for question in message.questions {
     writeQuestion writer, question
   }
@@ -774,9 +754,9 @@ public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
     }
   }
   if const Some(edns) = message.edns {
-    writeEdns writer, edns, extendedCode
+    writeEdns writer.output, edns, extendedCode
   }
-  Ok writer.output
+  Ok writer.output.bytes()
 }
 
 // --- Queries and responses -------------------------------------------------------------------------------------------
@@ -805,11 +785,11 @@ public fn query(
     recursionDesired: recursionDesired,
     questions: [Question(name, recordType)],
   )
-  var writer = Writer()
-  writeHeader writer, message, 1
+  var writer = MessageWriter()
+  writeHeader writer.output, message, 1
   writeQuestion writer, message.questions[0]
-  writeEdns writer, Edns(payloadSize: offeredPayload, dnssecOk: dnssecOk), 0
-  writer.output
+  writeEdns writer.output, Edns(payloadSize: offeredPayload, dnssecOk: dnssecOk), 0
+  writer.output.bytes()
 }
 
 /**
