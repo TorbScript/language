@@ -40,9 +40,14 @@ Plus two things that are checked on the built program alone, because there is no
   any machine is in it.
 
 `tools/conformance.sh` is the runner (`sh tools/conformance.sh`, `sh tools/gates.sh b`), and a C compiler is what it
-needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses). It runs four programs at a time (`--jobs N` or `TORB_CONFORMANCE_JOBS`,
-never more than the machine has processors), and before each one it waits while less than `$TORB_MINIMUM_FREE_MB`
-(default 2048) of memory is available, for at most five minutes.
+needs (`$TORB_CC`, `clang`, `gcc`, `cc` - the order `torb build` uses). It runs one program per processor and per
+768 MiB of memory at a time (`--jobs N` or `TORB_CONFORMANCE_JOBS`, never more than the machine has processors;
+`tools/gates.sh` hands it its share), and before each one it waits while less than `$TORB_MINIMUM_FREE_MB` (default
+2048) of memory is available, for at most five minutes. The slowest programs start first: every run records each
+program's wall time in `torb-conformance-timings/native.txt` or `vm.txt` under the system's temporary directory
+(`$TORB_CONFORMANCE_TIMINGS` names another directory), and the next run - in any checkout of the machine - starts them
+longest first, a program without a time before all of them, so the run does not end on one long program while the other
+processors idle. The last line of a run names its five slowest programs.
 
 ## What is *not* compared
 

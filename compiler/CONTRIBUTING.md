@@ -190,8 +190,10 @@ more; if it does, lower `TORB_BUILD_SLOTS` and retry alone.
 `torb-gate-slots/slot-<n>` beside the build slots, held from the first gate to the last and taken over when its holder
 died (or after six hours). A run inside a slot takes no second one (`TORB_GATE_SLOT_HELD=1`), so the bootstrap of a
 gate run never waits for itself. Six gate runs at once once exhausted the machine's processes (`fork: Resource
-temporarily unavailable`); a run that waits says so in one line. The conformance runner keeps to two programs at a
-time and waits while the machine has less than 2 GiB of memory free.
+temporarily unavailable`); a run that waits says so in one line. The conformance runner starts one program per
+processor and per 768 MiB of memory unless the gates give it fewer, the slowest of the last run first (the times are in
+`torb-conformance-timings/` beside the slots, one file per back end, shared by every checkout), and waits before each
+while the machine has less than 2 GiB of memory free.
 
 **The memory limit.** Every binary of the `dev` profile - the compiler's test suite, the std packages' tests, `torb
 run --native` - and every program the VM runs stops at the smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was

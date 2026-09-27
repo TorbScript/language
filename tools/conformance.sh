@@ -32,6 +32,15 @@
 # which only the VM runs. The leak gate applies as it does natively - the kernel counts the
 # program's blocks apart from torb's own - and so does a `.workers` file: the VM's tasks run on the pool of `torb`,
 # with as many workers as it names and again with one. The two checks of the C do not apply to it.
+#
+# **How many at a time, and in which order.** One program per processor and per 768 MiB of memory (`tools/machine.sh`)
+# unless `--jobs` or `$TORB_CONFORMANCE_JOBS` says otherwise, and never more than the machine has processors: building
+# a program is the compiler's front end and a C compile, one processor each. The slowest programs start first:
+# the wall time of every program's last run is kept per back end in `torb-conformance-timings/` under the system's
+# temporary directory (`$TORB_CONFORMANCE_TIMINGS` names another directory), shared by every checkout of the machine,
+# and the next run starts them longest first, a program without a time before all of them - so the run does not end
+# with one long program on one processor while the others idle. Without the file the order is the names'. The two
+# programs that build something once per checkout go first always (below, at `pinned`).
 
 set -eu
 
@@ -94,6 +103,7 @@ run_one() {
   mkdir -p "$work/again"
   result="$CONFORMANCE_SCRATCH/results/$name"
   wait_for_room
+  began=$(date +%s)
 
   target="$work/prog"
   if ! "$CONFORMANCE_TORB" build "$program" --output "$target" >"$work/build.log" 2>&1; then
@@ -314,6 +324,7 @@ run_one_vm() {
   result="$CONFORMANCE_SCRATCH/results/$name"
   absolute="$CONFORMANCE_ROOT/$program"
   wait_for_room
+  began=$(date +%s)
 
   # The workers of the pool `torb` runs the program's tasks on: one, unless a `.workers` file names how many - and then
   # once more with one, which has to print the same bytes, exactly as the native run does
@@ -422,21 +433,35 @@ $(cat "$work/leak.stderr")"
   fi
 }
 
+# The wall time of one program, from after `wait_for_room` to its result, for the order of the next run
+record_time() {
+  name=$(printf '%s' "$1" | sed 's#[/\\]#_#g; s/\.trb$//')
+  printf '%s %s\n' "$(($(date +%s) - began))" "$1" >"$CONFORMANCE_SCRATCH/times/$name"
+}
+
 if [ "${1-}" = "--run-one" ]; then
+  began=$(date +%s)
   run_one "$2"
+  record_time "$2"
   exit 0
 fi
 
 if [ "${1-}" = "--run-one-vm" ]; then
+  began=$(date +%s)
   run_one_vm "$2"
+  record_time "$2"
   exit 0
 fi
 
 # ----------------------------------------------------------------------------- the driver ---------------------------
 
-# Four at a time: the machine this suite runs on has sixteen threads, and `wait_for_room` holds a program back while
-# memory is short. `TORB_CONFORMANCE_JOBS` or `--jobs` says otherwise.
-jobs=${TORB_CONFORMANCE_JOBS:-4}
+. "$root/tools/machine.sh"
+processors=$(machine_processors)
+
+# One program per processor, and no more than one per 768 MiB of memory: a program is a front end and a C compile of a
+# few hundred MiB each, and `wait_for_room` still holds one back while memory is short. `TORB_CONFORMANCE_JOBS` or
+# `--jobs` says otherwise.
+jobs=${TORB_CONFORMANCE_JOBS:-$(machine_jobs 768)}
 filter=""
 update=0
 machine=0
@@ -486,10 +511,6 @@ done
 case "$jobs" in
   '' | *[!0-9]* | 0) fail "--jobs needs a whole number above zero, and it is \`$jobs\`" ;;
 esac
-processors=$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 1)
-case "$processors" in
-  '' | *[!0-9]* | 0) processors=1 ;;
-esac
 if [ "$jobs" -gt "$processors" ]; then
   jobs=$processors
 fi
@@ -533,10 +554,74 @@ sort -o "$list" "$list"
 
 total=$(wc -l <"$list" | tr -d ' ')
 [ "$total" -gt 0 ] || fail "no programs matched"
+if [ "$jobs" -gt "$total" ]; then
+  jobs=$total
+fi
+
+# The times of the last run, per back end, for every checkout of this machine: `xargs` starts the programs in the order
+# of the list, so the longest go first, and one that has no time yet (a new program) before them
+timings_directory=${TORB_CONFORMANCE_TIMINGS-}
+if [ -z "$timings_directory" ]; then
+  temporary=${TMPDIR:-${TEMP:-${TMP:-/tmp}}}
+  # Git Bash hands a `TEMP` of Windows over as `C:\Users\...`; every checkout has to arrive at the same directory
+  if command -v cygpath >/dev/null 2>&1; then
+    temporary=$(cygpath -u "$temporary")
+  fi
+  timings_directory="$temporary/torb-conformance-timings"
+fi
+if [ "$machine" = "1" ]; then
+  timings="$timings_directory/vm.txt"
+else
+  timings="$timings_directory/native.txt"
+fi
+known=/dev/null
+if [ -s "$timings" ]; then
+  known=$timings
+fi
+# Two programs start first whatever the times say, because what they cost depends on the checkout and not on the
+# program: `sandbox-crossing.trb` builds the script host of the checkout (`build/script-host/`, the compiler's size of
+# C, once per change of the compiler's sources - ten minutes on a loaded machine, and last in the order of the names),
+# and `dns-over-tls.trb` compiles mbedTLS into `build/vendor/` once per checkout (minutes, on one processor).
+pinned=" tests/conformance/sandbox-crossing.trb tests/conformance/dns-over-tls.trb "
+awk -v pinned="$pinned" '
+  FILENAME == ARGV[1] { seconds[$2] = $1; next }
+  {
+    if (index(pinned, " " $0 " ") > 0) {
+      key = 2000000
+    } else if ($0 in seconds) {
+      key = seconds[$0]
+    } else {
+      key = 1000000
+    }
+    print key, $0
+  }' "$known" "$list" | sort -k1,1nr -k2,2 | cut -d' ' -f2- >"$list.ordered"
+mv -f "$list.ordered" "$list"
+# Every other program that links mbedTLS (it uses std/tls or std/http) reuses those objects, but one that starts while
+# they are still being compiled compiles a copy of its own - measured: three copies at once, five minutes each. So
+# natively they wait until six programs per job have started, which is about as long as the compile takes.
+if [ "$machine" = "0" ]; then
+  # shellcheck disable=SC2046
+  held=" $(grep -lE 'from "std/(tls|http)"' $(cat "$list") 2>/dev/null | tr '\n' ' ') "
+  awk -v held="$held" -v pinned="$pinned" -v from=$((jobs * 6)) '
+    index(held, " " $0 " ") > 0 && index(pinned, " " $0 " ") == 0 && started < from {
+      waiting[++count] = $0
+      next
+    }
+    {
+      print
+      started += 1
+      if (started == from) {
+        for (position = 1; position <= count; position += 1) print waiting[position]
+        count = 0
+      }
+    }
+    END { for (position = 1; position <= count; position += 1) print waiting[position] }' "$list" >"$list.ordered"
+  mv -f "$list.ordered" "$list"
+fi
 
 scratch=$(mktemp -d)
 trap 'rm -f "$list"; rm -rf "$scratch"' EXIT
-mkdir -p "$scratch/work" "$scratch/results"
+mkdir -p "$scratch/work" "$scratch/results" "$scratch/times"
 
 export CONFORMANCE_SCRATCH="$scratch"
 export CONFORMANCE_TORB="$torb"
@@ -560,6 +645,28 @@ set +e
 cat "$list" | xargs -P "$jobs" -I{} sh "$0" "$runner" {}
 set -e
 elapsed=$(($(date +%s) - started))
+
+# This run's times replace the old ones of the same programs; the others keep theirs. Written beside the file and moved
+# over it, so two runs that finish together each leave a whole file. A directory that cannot be written costs the order
+# of the next run, never this one.
+fresh="$scratch/timings"
+for file in "$scratch"/times/*; do
+  if [ -f "$file" ]; then
+    cat "$file"
+  fi
+done >"$fresh"
+if [ -s "$fresh" ] && mkdir -p "$timings_directory" 2>/dev/null; then
+  if {
+    cat "$fresh"
+    if [ -f "$timings" ]; then
+      awk 'NR == FNR { seen[$2] = 1; next } !($2 in seen)' "$fresh" "$timings"
+    fi
+  } | sort -k2,2 >"$timings.$$" 2>/dev/null; then
+    mv -f "$timings.$$" "$timings" 2>/dev/null || true
+  fi
+  rm -f "$timings.$$"
+fi
+slowest=$(sort -k1,1nr "$fresh" | head -n 5 | awk '{ printf "%s%s %ss", (NR > 1 ? ", " : ""), $2, $1 }')
 
 passed=0
 failed=0
@@ -600,4 +707,7 @@ if [ "$update" = "1" ]; then
 fi
 
 say "$passed passed, $failed failed (${elapsed}s, $total programs, $skipped skipped)"
+if [ -n "$slowest" ]; then
+  say "slowest: $slowest"
+fi
 [ "$failed" -eq 0 ]
