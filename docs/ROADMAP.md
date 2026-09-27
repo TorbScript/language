@@ -127,7 +127,8 @@ the natives that exist.** In this order, because each part stands on the one bef
    `removeDirectory`, `rename`, `copy`, `walk`, `metadata` and `linkMetadata` with `Metadata`, `FileKind` and
    `Permissions`, `setPermissions`, symbolic links, temporary files and directories and `writeBytesAtomically` - one
    text form on every system, converted in `runtime/platform.c`, so the compiler's C stays the same for every target
-   (the package manager reads and writes its archives with them, and its `od`/PowerShell detour is gone);
+   (the package manager reads and writes its archives with them, and its `od`/PowerShell detour is gone; `torb upgrade`
+   hashes with `std/digest` and places, links and mirrors the toolchain with them, running only `curl` and `tar`);
    `std/time` has `Timestamp`; a `var` file handed to a `var Sink` parameter builds in both back ends; and `std/storage`
    has `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` and `MemoryStorage` over `Schemes` of `std/uri`
    (URI.md slice 12). **Left:** S3 and WebDAV as packages of their own; the `Into<Path>` signatures of PATH.md slice 2;

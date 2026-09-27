@@ -315,9 +315,11 @@ upgrade --list` (below) sorts every line of the manifest instead, because it sho
 ```
 
 Windows has no per-user symlink without a privilege most machines do not grant, so its "one in use" is a copy at
-`%LOCALAPPDATA%\Programs\torb` (on the `PATH`) that `torb upgrade` replaces with `robocopy /MIR`, renaming the running
-`torb.exe` out of the way first - section 5's "the running `torb.exe` cannot be overwritten; it can be renamed",
-exactly as decided above.
+`%LOCALAPPDATA%\Programs\torb` (on the `PATH`) that `torb upgrade` mirrors from the new toolchain - every file copied
+over, whatever the new toolchain lacks removed, what `robocopy /MIR` would do - after renaming the copy's `torb.exe`,
+which may be the one running or another `torb` started from the copy, to `torb.exe.replaced` - section 5's "the
+running `torb.exe` cannot be overwritten; it can be renamed", exactly as decided above. The renamed executable is
+removed with the rest of what the new toolchain lacks, or, while it still runs, by the next upgrade renaming over it.
 
 **`install.trb`'s fields are written `key = "value"`, one per line** - a format of its own, chosen because it is not a
 `project.trb` (nothing here is evaluated, and it is read before a version of the toolchain is even chosen) and not the
@@ -327,12 +329,24 @@ lock's literal-call format either (PROJECT.md section 8), which is for a graph, 
 never implicit, refuses naming the package manager's command when `install.trb` says another method (`brew upgrade
 torb`, `winget upgrade TorbScript.Torb`, `scoop update torb`), and `--list` shows what is installed (from
 `~/.torb/toolchains`) beside what the channel offers (from `versions.txt`), each release marked once it is installed
-and once more if it is the active one. Downloading, hashing and unpacking shell out to `curl`/`wget`, `sha256sum`/
-`shasum`/`certutil` and `tar` (Windows included: `tar` and `curl` have shipped with Windows since 1803, so the
-download and extraction of `torb upgrade` need no PowerShell at all) - the same tools `tools/fetch-seed.sh` already
-assumes on every target - because `std/fs` had no raw byte read or write, rename, copy or delete when it was written.
-It has them since 2026-09-27 (`readBytes`, `rename`, `copy`, symbolic links); moving `torb upgrade` onto them and onto
-`std/digest` is a round of its own, because nothing short of a packaged release tests it.
+and once more if it is the active one. Only downloading and unpacking run programs, `curl`/`wget` and `tar` (Windows
+included: `tar` and `curl` have shipped with Windows since 1803, so `torb upgrade` needs no PowerShell at all) - the
+same tools `tools/fetch-seed.sh` already assumes on every target. `std/http` answers a task, which the compiler cannot
+wait for, and `std/archive` reads the ustar of a package, not the GNU `tar` of a release (paths of more than 100
+bytes, the executable bit of `bin/torb`). Everything else is the standard library since 2026-09-27, the same code on
+every target - the system is asked at run time, so the compiler's C stays one file for every machine:
+
+- **Hashing** is `std/digest`'s `Sha256` over the archive, read whole with `File.readBytes` (`File.chunks()` answers
+  tasks, and an archive is some megabytes), where it was `sha256sum`, `shasum` or PowerShell's `Get-FileHash`.
+- **Placing**: the archive is unpacked into `<home>/tmp-<version>/` and renamed into `toolchains/<version>` in one
+  step, so a download or an unpack that fails never leaves half a toolchain the next `torb upgrade` would take for an
+  installed one; the scratch directory is removed afterwards, and emptied first where a stopped run left one.
+- **Switching** on POSIX makes the new link as `bin/torb.next` and renames it over `bin/torb`
+  (`File.createSymbolicLink`, `File.rename`), where it was `ln -sfn`: a `torb` started meanwhile finds the old
+  toolchain or the new one, never none. On Windows `File.rename` sets the copy's executable aside and `File.walk`,
+  `copy` and `remove` mirror the copy, where it was `cmd /c move` and `robocopy`.
+- **`active` and `install.trb`** are written with `File.writeTextAtomically`, so they hold the old value or the new
+  one and never a part of either.
 
 **Package manager channels** (winget, Scoop, a Homebrew tap - the preview's choice, section 5's table): rendered from
 `tools/homebrew/torb.rb.template` and `tools/scoop/torb.json.template` by `tools/render-package-manifests.sh` (its
@@ -352,8 +366,12 @@ call this job. What the owner sets up once for these three is
 locally packed archive through `TORB_INSTALL_BASE_URL=file://...` and `TORB_INSTALL_TARGET`, the PowerShell parser
 over `install.ps1`, and a run of it against a local HTTP server for the same fake channel. `compiler/tests/upgrade.
 test.trb` covers the pure parts of `torb upgrade` (parsing `install.trb` and `versions.txt`, comparing versions,
-reading `SHA256SUMS`) as ordinary tests; the network and shell-out parts are exercised by the manual runs above, since
-neither a packaged release nor a second machine exists yet to run them against for real.
+reading `SHA256SUMS`) and, each in a temporary directory, hashing a file, unpacking with the system's `tar` and placing
+the toolchain, switching the link, and setting aside and mirroring the Windows copy. A whole `torb upgrade` - `--list`,
+an install, a hash that does not match, an upgrade run by the copy's own `torb.exe`, an installed version made the one
+in use again, `--channel nightly`, and the refusal for winget - ran on Windows on 2026-09-27 against a `file://` base
+URL (`TORB_UPGRADE_BASE_URL`) with `LOCALAPPDATA` pointing into a scratch directory, which is how it is repeated. The
+POSIX branch beyond its tests, and a release on torb.dev, wait for a packaged release and a second machine.
 
 ## 6. The website
 

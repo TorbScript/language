@@ -16,18 +16,21 @@
  * `torb.exe` cannot be replaced in place - `%LOCALAPPDATA%\Programs\torb` is a copy instead of a symlink, and
  * upgrading it renames the running executable out of the way first.
  *
- * Downloading and unpacking shell out to `curl` (or `wget`) and `tar`, on every target including Windows (both have
- * shipped with it since 1803) - the same tools `tools/fetch-seed.sh` already assumes - because `std/fs` had no raw
- * byte read or write and no rename, copy or delete when this was written; it has them now (`File.readBytes`,
- * `File.rename`, symbolic links), and moving this file onto them is its own round (docs/design/RELEASE.md). Hashing is
- * `sha256sum`/`shasum -a 256` on POSIX and PowerShell's `Get-FileHash` on Windows, never `certutil`: its extra lines
- * are in the console's own code page, which is not always UTF-8, and `Process.run` insists on UTF-8 output.
+ * Only downloading and unpacking run programs: `curl` (or `wget`) and `tar`, on every target including Windows (both
+ * have shipped with it since 1803) - the same tools `tools/fetch-seed.sh` already assumes. `std/http` answers a task,
+ * which the compiler cannot wait for, and `std/archive` reads the ustar of a package, not the GNU `tar` of a release
+ * (its paths of more than 100 bytes, the executable bit of `bin/torb`). Everything else is the standard library, the
+ * same code on every system: `std/digest` hashes the archive, the unpacked toolchain is renamed into
+ * `<home>/toolchains` whole, the symbolic link is replaced by renaming a new one over it (POSIX) or the copy is
+ * mirrored file by file (Windows), and `active` and `install.trb` are replaced atomically.
  */
 
-use File from "std/fs"
+use File, IoError from "std/fs"
+use Sha256 from "std/digest"
 use Process from "std/process"
 use Environment, OsError from "std/os"
 use hostTarget from "../project/target"
+use parentPath from "../project/path"
 
 /** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
 public type UpgradeOptions {
@@ -209,14 +212,10 @@ public fn torbHome(): Result<String, OsError> {
   }
 }
 
-/** Where the toolchain in use lives: `<home>/bin` on POSIX, `%LOCALAPPDATA%\Programs\torb\bin` on Windows. */
-fn activeBinDirectory(home: String): Result<String, OsError> {
-  if onWindows() {
-    const local = variableOf("LOCALAPPDATA")?
-    "{local}/Programs/torb/bin"
-  } else {
-    "{home}/bin"
-  }
+/** `%LOCALAPPDATA%\Programs\torb`: the copy of the toolchain in use on Windows, whose `bin` is on the user `PATH`. */
+fn windowsCopyDirectory(): Result<String, OsError> {
+  const local = variableOf("LOCALAPPDATA")?
+  "{local}/Programs/torb"
 }
 
 /** Whether `torb` runs on Windows, asked at run time (see [torbHome]). */
@@ -255,7 +254,7 @@ fn activeVersion(home: String): String? {
   File.readText("{home}/active").ok().map({ _.trim() })
 }
 
-// --------------------------------------------------------------------------------------------- shelling out (I/O)
+// ---------------------------------------------------------------------------------------- running programs (I/O)
 
 /** Runs `program` to its end and answers its standard output, trimmed - or the one line that says why it failed. */
 fn captured(program: String, arguments: List<String>): Result<String, String> {
@@ -284,45 +283,14 @@ fn download(url: String, destination: String): Result<Void, String> {
   }
 }
 
-/** `sha256sum`/`shasum -a 256` on POSIX, PowerShell's `Get-FileHash` on Windows - lower case, without the file name. */
-fn sha256Of(path: String): Result<String, String> {
-  if onWindows() {
-    // Not `certutil`: its extra lines are in the console's own code page, and a German or Japanese Windows prints
-    // them outside ASCII, which `Process.run` cannot read back as text (it insists on UTF-8, correctly). One
-    // PowerShell expression whose only output is the hex itself sidesteps the question of which code page it is in.
-    const script = "(Get-FileHash -LiteralPath '{path}' -Algorithm SHA256).Hash"
-    match captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]) {
-      Fail(message) => Fail message
-      Ok(hex) => hex.trim().toLowerCase()
-    }
-  } else {
-    match captured("sha256sum", [path]) {
-      Ok(text) => firstWord text
-      Fail(sha256sumFailure) => {
-        match captured("shasum", ["-a", "256", path]) {
-          Ok(text) => firstWord text
-          Fail(_) => Fail sha256sumFailure
-        }
-      }
-    }
-  }
-}
-
-fn firstWord(text: String): String {
-  text.split(" ").filter({ !_.isEmpty() }).toList().first() ?? text
-}
-
-/** `<archive>` (already downloaded to `path`) unpacked to `destination`, its one top-level directory stripped. */
-fn extract(path: String, destination: String): Result<Void, String> {
-  match File.createDirectory(destination) {
-    Fail(error) => Fail error.show()
-    Ok(_) => {
-      match captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination]) {
-        Ok(_) => Ok(void)
-        Fail(message) => Fail message
-      }
-    }
-  }
+/**
+ * `<archive>` (already downloaded to `path`) unpacked to `destination`, its one top-level directory stripped - by the
+ * system's `tar`, which on Windows is the `bsdtar` of `System32`, found before any other on the `PATH`.
+ */
+public fn extract(path: String, destination: String): Result<Void, String> {
+  File.createDirectory(destination).mapError({ _.show() })?
+  const _ = captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination])?
+  Ok void
 }
 
 /** The SHA-256 of `file` inside `sums` (the text of `SHA256SUMS`), a leading `*` (binary mode) stripped. */
@@ -343,38 +311,115 @@ public fn expectedHash(sums: String, file: String): String? {
   None
 }
 
-/** Makes `version` the one `<home>/bin/torb` (POSIX) or `%LOCALAPPDATA%\Programs\torb` (Windows) resolves to. */
+// ------------------------------------------------------------------------------------------------------ the files
+
+/**
+ * The SHA-256 of the file at `path` in lowercase hexadecimal, the spelling of `SHA256SUMS`.
+ *
+ * # Pitfalls
+ *
+ * - The file is read whole: `File.chunks()` answers tasks, which the compiler has none to wait in, and an archive of
+ *   the toolchain is some megabytes.
+ */
+public fn sha256Of(path: String): Result<String, String> {
+  match File.readBytes(path) {
+    Ok(bytes) => Sha256.of(bytes).hex()
+    Fail(error) => Fail "{path} could not be hashed: {error.show()}"
+  }
+}
+
+/**
+ * Moves the unpacked toolchain `directory` to `toolchain`, creating the directory above it: one rename, so
+ * `<home>/toolchains` never holds half a toolchain that the next `torb upgrade` would take for an installed one. Both
+ * lie below `<home>`, on one volume.
+ */
+public fn placeToolchain(directory: String, toolchain: String): Result<Void, IoError> {
+  File.createDirectory(parentPath(toolchain))?
+  File.rename directory, toolchain
+}
+
+/**
+ * POSIX: points `<home>/bin/torb` at `bin/torb` of `<home>/toolchains/<version>`, by the relative target
+ * `tools/install.sh`'s `ln -sfn` writes. The new link is made beside the old one and renamed over it, so a `torb`
+ * started meanwhile finds the old toolchain or the new one, never none.
+ */
+public fn linkActive(home: String, version: String): Result<Void, IoError> {
+  const bin = "{home}/bin"
+  File.createDirectory(bin)?
+  const staged = "{bin}/torb.next"
+  // What an upgrade that stopped halfway left behind; `linkMetadata`, because `exists` follows a link that dangles
+  if File.linkMetadata(staged).isOk() {
+    File.remove(staged)?
+  }
+  File.createSymbolicLink(staged, "../toolchains/{version}/bin/torb")?
+  File.rename staged, "{bin}/torb"
+}
+
+/**
+ * Windows: renames `bin/torb.exe` of the copy `directory` to `torb.exe.replaced`, since an executable that runs - this
+ * `torb`, or any other started from the copy - cannot be replaced or removed there, only renamed; one that does not run
+ * is renamed alike, and [mirrorDirectory] removes it. What an earlier upgrade set aside is replaced, which fails only
+ * while that `torb` still runs, and then before anything of the copy has changed. A copy without one is left alone.
+ */
+public fn setAsideExecutable(directory: String): Result<Void, IoError> {
+  const executable = "{directory}/bin/torb.exe"
+  if !File.exists(executable) {
+    return Ok void
+  }
+  File.rename executable, "{executable}.replaced"
+}
+
+/**
+ * Windows: makes `target` a copy of `source`, what `robocopy /MIR` does - every directory and file of `source` created
+ * or replaced in `target`, then whatever `target` holds that `source` does not removed.
+ *
+ * # Pitfalls
+ *
+ * - Removing what is left over is best effort: the one entry that cannot be removed is the `torb.exe.replaced` of
+ *   [setAsideExecutable] while it still runs, and the next upgrade replaces it.
+ */
+public fn mirrorDirectory(source: String, target: String): Result<Void, IoError> {
+  File.createDirectory(target)?
+  const entries = File.walk(source)?
+  for entry in entries {
+    const from = "{source}/{entry}"
+    const to = "{target}/{entry}"
+    if File.isDirectory(from) {
+      if File.exists(to) && !File.isDirectory(to) {
+        File.remove(to)?
+      }
+      File.createDirectory(to)?
+    } else {
+      if File.isDirectory(to) {
+        File.removeDirectory(to)?
+      }
+      File.copy(from, to)?
+    }
+  }
+  const wanted = entries.toSet()
+  const present = File.walk(target)?
+  // A walk names a directory before what is in it, so backwards every directory comes after its contents
+  for entry in present.reversed() {
+    if !wanted.contains(entry) {
+      const _ = File.remove "{target}/{entry}"
+    }
+  }
+  Ok void
+}
+
+/**
+ * Makes `version` the one `<home>/bin/torb` (POSIX) or `%LOCALAPPDATA%\Programs\torb` (Windows) resolves to, and
+ * records it in `<home>/active`.
+ */
 fn activate(home: String, version: String): Result<Void, String> {
-  const toolchain = "{home}/toolchains/{version}"
   if onWindows() {
-    const active = match activeBinDirectory(home) {
-      Ok(path) => "{path}/.."
-      Fail(error) => { return Fail error.show() }
-    }
-    // A running torb.exe cannot be overwritten, only renamed; the rename is best effort, since the process that
-    // matters is the one holding the file open, which may not be this one
-    const running = Process.executablePath() ?? ""
-    if running.startsWith(active) {
-      const _ = Process.run "cmd", ["/c", "move", "/y", running, "{running}.replaced"]
-    }
-    // robocopy answers 0-7 for success (1 alone means "files copied"), so a `Fail` from `Process.run`'s plain
-    // exitCode == 0 check is not trusted here - the result is not inspected, only that the command was tried
-    const _ = Process.run "robocopy", [toolchain, active, "/MIR"]
+    const activeCopy = windowsCopyDirectory().mapError({ _.show() })?
+    setAsideExecutable(activeCopy).mapError({ _.show() })?
+    mirrorDirectory("{home}/toolchains/{version}", activeCopy).mapError({ _.show() })?
   } else {
-    const bin = "{home}/bin"
-    match File.createDirectory(bin) {
-      Fail(error) => { return Fail error.show() }
-      Ok(_) => void
-    }
-    match captured("ln", ["-sfn", "../toolchains/{version}/bin/torb", "{bin}/torb"]) {
-      Fail(message) => { return Fail message }
-      Ok(_) => void
-    }
+    linkActive(home, version).mapError({ _.show() })?
   }
-  match File.writeText("{home}/active", version) {
-    Fail(error) => Fail error.show()
-    Ok(_) => Ok(void)
-  }
+  File.writeTextAtomically("{home}/active", version).mapError({ _.show() })
 }
 
 // -------------------------------------------------------------------------------------------------- the manifest
@@ -452,116 +497,76 @@ fn printAvailable(home: String, channel: String): Int {
 
 /** `torb upgrade [<version>] [--channel <name>]`: installs it, and makes it the one in use. */
 fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Int {
+  match upgraded(home, info, options) {
+    Ok(_) => 0
+    Fail(message) => {
+      printError "error: {message}"
+      1
+    }
+  }
+}
+
+fn upgraded(home: String, info: InstallInfo, options: UpgradeOptions): Result<Void, String> {
   const channel = options.channel ?? info.channel
   const version = match options.version {
     Some(named) => named
     None => {
-      match fetchText(baseUrl(), "versions.txt") {
-        Fail(message) => {
-          printError "error: {message}"
-          return 1
-        }
-        Ok(text) => {
-          match newestOf(parseVersionsManifest(text), channel) {
-            None => {
-              printError "error: no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
-              return 1
-            }
-            Some(entry) => entry.version
-          }
+      const text = fetchText(baseUrl(), "versions.txt")?
+      match newestOf(parseVersionsManifest(text), channel) {
+        Some(entry) => entry.version
+        None => {
+          return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
         }
       }
     }
   }
   if options.channel.isSome() && options.channel != info.channel {
     const updated = InstallInfo channel, info.method
-    match File.writeText("{home}/install.trb", renderInstallInfo(updated)) {
-      Fail(error) => {
-        printError "error: {error.show()}"
-        return 1
-      }
-      Ok(_) => print "channel switched to \"{channel}\""
-    }
+    File.writeTextAtomically("{home}/install.trb", renderInstallInfo(updated)).mapError({ _.show() })?
+    print "channel switched to \"{channel}\""
   }
-  const toolchain = "{home}/toolchains/{version}"
-  if File.exists(toolchain) {
+  if File.exists("{home}/toolchains/{version}") {
     print "{version} is already installed; making it the one in use"
-    return match activate(home, version) {
-      Fail(message) => {
-        printError "error: {message}"
-        1
-      }
-      Ok(_) => 0
-    }
+    return activate home, version
   }
   print "installing TorbScript {version} ({hostTarget().name()})"
+  // A directory of its own for the download, emptied first where an upgrade that stopped halfway left one behind
   const scratch = "{home}/tmp-{version}"
-  match File.createDirectory(scratch) {
-    Fail(error) => {
-      printError "error: {error.show()}"
-      return 1
-    }
-    Ok(_) => void
-  }
+  File.removeDirectory(scratch).mapError({ _.show() })?
+  File.createDirectory(scratch).mapError({ _.show() })?
+  const outcome = install home, version, scratch
+  const _ = File.removeDirectory scratch
+  outcome?
+  activate(home, version)?
+  print "TorbScript {version} is installed and in use"
+  Ok void
+}
+
+/**
+ * Downloads the archive of `version` and its `SHA256SUMS` into `scratch`, checks the hash, unpacks the archive there
+ * and moves the result to `<home>/toolchains/<version>`.
+ */
+fn install(home: String, version: String, scratch: String): Result<Void, String> {
   const archive = "torb-{version}-{hostTarget().name()}.tar.gz"
   const archivePath = "{scratch}/{archive}"
   const sumsPath = "{scratch}/SHA256SUMS"
-  match download("{baseUrl()}/{version}/{archive}", archivePath) {
-    Fail(message) => {
-      printError "error: {message}"
-      return 1
-    }
-    Ok(_) => void
-  }
-  match download("{baseUrl()}/{version}/SHA256SUMS", sumsPath) {
-    Fail(message) => {
-      printError "error: {message}"
-      return 1
-    }
-    Ok(_) => void
-  }
-  const sums = match File.readText(sumsPath) {
-    Ok(text) => text
-    Fail(error) => {
-      printError "error: {error.show()}"
-      return 1
-    }
-  }
+  download("{baseUrl()}/{version}/{archive}", archivePath)?
+  download("{baseUrl()}/{version}/SHA256SUMS", sumsPath)?
+  const sums = File.readText(sumsPath).mapError({ _.show() })?
   const expected = match expectedHash(sums, archive) {
     Some(hash) => hash
     None => {
-      printError "error: {archive} is not listed in SHA256SUMS"
-      return 1
+      return Fail "{archive} is not listed in SHA256SUMS"
     }
   }
-  const actual = match sha256Of(archivePath) {
-    Ok(hash) => hash
-    Fail(message) => {
-      printError "error: {message}"
-      return 1
-    }
-  }
+  const actual = sha256Of(archivePath)?
   if actual.toLowerCase() != expected.toLowerCase() {
-    printError "error: {archive}: expected sha256 {expected}, got {actual}"
-    return 1
+    return Fail "{archive}: expected sha256 {expected}, got {actual}"
   }
   print "sha256 verified"
-  match extract(archivePath, toolchain) {
-    Fail(message) => {
-      printError "error: {message}"
-      return 1
-    }
-    Ok(_) => void
-  }
-  match activate(home, version) {
-    Fail(message) => {
-      printError "error: {message}"
-      return 1
-    }
-    Ok(_) => void
-  }
-  print "TorbScript {version} is installed and in use"
-  0
+  const unpacked = "{scratch}/toolchain"
+  extract(archivePath, unpacked)?
+  placeToolchain(unpacked, "{home}/toolchains/{version}").mapError({ _.show() })
 }
 
 /** `torb upgrade`, in every form section 5 of RELEASE.md gives it. */

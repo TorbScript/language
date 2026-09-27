@@ -1,14 +1,39 @@
 /**
- * Tests for the pure parts of `torb upgrade` (compiler/src/cli/upgrade.trb): the `install.trb` format, the
- * `versions.txt` manifest, version comparison and sorting, and picking a hash out of `SHA256SUMS` - everything that
- * does not shell out or reach the network, and so can run as an ordinary test.
+ * Tests for `torb upgrade` (compiler/src/cli/upgrade.trb): the pure parts - the `install.trb` format, the
+ * `versions.txt` manifest, version comparison and sorting, picking a hash out of `SHA256SUMS` - and, each in a
+ * temporary directory of its own, what it does to files: hashing one, unpacking an archive with the system's `tar` and
+ * placing the toolchain, switching the symbolic link of POSIX, and setting the running `torb.exe` aside and mirroring
+ * the copy of Windows.
+ *
+ * Not here: downloading, and a whole upgrade from `versions.txt` to the toolchain in use. Both need a release on a
+ * server and a home to install into, and `torb upgrade` takes its home from `HOME` or `LOCALAPPDATA`, which a test must
+ * not point at the machine's own toolchain.
  */
 
 use test, group from "std/test"
+use File from "std/fs"
+use TarEntry, tarred from "std/archive"
+use gzipped from "std/compression"
+use hostTarget, TargetSystem from "../src/project/target"
+use parentPath from "../src/project/path"
 use InstallInfo, ReleaseEntry from "../src/cli/upgrade"
 use parseInstallInfo, renderInstallInfo from "../src/cli/upgrade"
 use parseVersionsManifest, compareVersions, releasesOf, newestOf from "../src/cli/upgrade"
 use packageManagerCommand, expectedHash from "../src/cli/upgrade"
+use sha256Of, extract, placeToolchain, linkActive, setAsideExecutable, mirrorDirectory from "../src/cli/upgrade"
+
+/** A new, empty directory in the system's directory for temporary files, for one test, which removes it again. */
+fn scratch(): String {
+  File.createTemporaryDirectory(prefix: "torb-upgrade-test-").expect("a temporary directory")
+}
+
+/** Writes every `(path, text)` below `root`, creating the directories above it. */
+fn populate(root: String, files: List<(String, String)>) {
+  for (path, text) in files {
+    File.createDirectory(parentPath("{root}/{path}")).expect("the directory of {path}")
+    File.writeText("{root}/{path}", text).expect(path)
+  }
+}
 
 group "install.trb" {
   test "parses channel and method written with =" {
@@ -114,5 +139,151 @@ group "reading SHA256SUMS" {
 
   test "answers None for a file the sums do not list" {
     assert(expectedHash(sums, "torb-0.4.0-macos-arm64.tar.gz") == None)
+  }
+}
+
+group "hashing a download" {
+  test "a file's SHA-256 in the lowercase hex of SHA256SUMS" {
+    const directory = scratch()
+    File.writeText("{directory}/abc", "abc").expect("a file")
+    assert(sha256Of("{directory}/abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "a file of many blocks: a million times a" {
+    const directory = scratch()
+    File.writeText("{directory}/million", "a".repeat(1000000)).expect("a file")
+    assert(sha256Of("{directory}/million") == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "a file that is not there fails, naming it" {
+    const directory = scratch()
+    match sha256Of("{directory}/missing") {
+      Ok(hash) => panic "hashed a missing file: {hash}"
+      Fail(message) => assert message.startsWith("{directory}/missing could not be hashed: ")
+    }
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+}
+
+group "unpacking and placing a toolchain" {
+  test "the archive loses its top directory and the toolchain is moved into place whole" {
+    const directory = scratch()
+    const entries = [
+      TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList()),
+      TarEntry("torb-9.9.9-test/std/prelude/project.trb", "name = \"std/prelude\"\n".bytes().toList()),
+    ]
+    File.writeBytes("{directory}/archive.tar.gz", gzipped(tarred(entries).expect("an archive"))).expect("the archive")
+    extract("{directory}/archive.tar.gz", "{directory}/unpacked").expect("the archive unpacked")
+    const toolchain = "{directory}/home/toolchains/9.9.9"
+    placeToolchain("{directory}/unpacked", toolchain).expect("the toolchain placed")
+    assert(!File.exists("{directory}/unpacked"))
+    assert(File.walk(toolchain) == ["bin", "bin/torb", "std", "std/prelude", "std/prelude/project.trb"])
+    assert(File.readText("{toolchain}/bin/torb") == "binary")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "an archive that is no archive fails and names tar" {
+    const directory = scratch()
+    File.writeText("{directory}/archive.tar.gz", "not gzip").expect("the file")
+    match extract("{directory}/archive.tar.gz", "{directory}/unpacked") {
+      Ok(_) => panic "unpacked what is no archive"
+      Fail(message) => assert message.startsWith("tar ")
+    }
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+}
+
+group "the symbolic link of POSIX" {
+  test "bin/torb points at the version, and switching renames a new link over it" {
+    const home = scratch()
+    populate home, [("toolchains/1.0.0/bin/torb", "one"), ("toolchains/2.0.0/bin/torb", "two")]
+    match linkActive(home, "1.0.0") {
+      Fail(problem) => {
+        // Windows lets a program create one only in developer mode or with the privilege to, and `torb upgrade`
+        // links only on POSIX
+        match hostTarget().system {
+          .Windows => assert problem.message.contains("not permitted")
+          .Linux | .MacOs | .FreeBsd => panic "no symbolic link: {problem}"
+        }
+      }
+      Ok(_) => {
+        assert(File.symbolicLinkTarget("{home}/bin/torb") == "../toolchains/1.0.0/bin/torb")
+        assert(File.readText("{home}/bin/torb") == "one")
+        // A link an upgrade that stopped halfway left behind, dangling, is replaced
+        File.createSymbolicLink("{home}/bin/torb.next", "../toolchains/gone/bin/torb").expect("a stale link")
+        linkActive(home, "2.0.0").expect("the link switched")
+        assert(File.readText("{home}/bin/torb") == "two")
+        assert(File.list("{home}/bin") == ["torb"])
+      }
+    }
+    File.removeDirectory(home).expect("the directory removed")
+  }
+}
+
+group "the copy of Windows" {
+  test "the executable of the copy is renamed, over what an earlier upgrade set aside" {
+    const directory = scratch()
+    populate directory, [("bin/torb.exe", "current"), ("bin/torb.exe.replaced", "earlier")]
+    setAsideExecutable(directory).expect("set aside")
+    assert(!File.exists("{directory}/bin/torb.exe"))
+    assert(File.readText("{directory}/bin/torb.exe.replaced") == "current")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "a copy without an executable, or no copy at all, is left alone" {
+    const directory = scratch()
+    populate directory, [("copy/std/a.trb", "a")]
+    setAsideExecutable("{directory}/copy").expect("left alone")
+    setAsideExecutable("{directory}/missing").expect("left alone")
+    assert(File.walk(directory) == ["copy", "copy/std", "copy/std/a.trb"])
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "set aside, then mirrored: the new executable, and what was set aside removed while nothing runs it" {
+    const directory = scratch()
+    populate "{directory}/toolchain", [("bin/torb.exe", "new")]
+    populate "{directory}/copy", [("bin/torb.exe", "old")]
+    setAsideExecutable("{directory}/copy").expect("set aside")
+    mirrorDirectory("{directory}/toolchain", "{directory}/copy").expect("mirrored")
+    assert(File.walk("{directory}/copy") == ["bin", "bin/torb.exe"])
+    assert(File.readText("{directory}/copy/bin/torb.exe") == "new")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "the copy ends up with exactly the toolchain's files, the new contents in the old places" {
+    const directory = scratch()
+    populate "{directory}/toolchain", [("bin/torb.exe", "new"), ("std/a.trb", "a"), ("std/sub/b.trb", "b")]
+    populate("{directory}/copy", [
+      ("bin/torb.exe", "old"),
+      ("std/a.trb", "old a"),
+      ("std/gone/c.trb", "c"),
+      ("stale.txt", "stale"),
+    ])
+    mirrorDirectory("{directory}/toolchain", "{directory}/copy").expect("mirrored")
+    assert(File.walk("{directory}/copy") == File.walk("{directory}/toolchain"))
+    assert(File.readText("{directory}/copy/bin/torb.exe") == "new")
+    assert(File.readText("{directory}/copy/std/a.trb") == "a")
+    assert(File.readText("{directory}/copy/std/sub/b.trb") == "b")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "a file where the toolchain has a directory, and the other way round, is replaced" {
+    const directory = scratch()
+    populate "{directory}/toolchain", [("lib/x.trb", "x"), ("notes", "a file")]
+    populate "{directory}/copy", [("lib", "a file"), ("notes/inner", "a directory")]
+    mirrorDirectory("{directory}/toolchain", "{directory}/copy").expect("mirrored")
+    assert(File.walk("{directory}/copy") == ["lib", "lib/x.trb", "notes"])
+    assert(File.readText("{directory}/copy/notes") == "a file")
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "a copy that is not there yet is made" {
+    const directory = scratch()
+    populate "{directory}/toolchain", [("bin/torb.exe", "new")]
+    mirrorDirectory("{directory}/toolchain", "{directory}/Programs/torb").expect("mirrored")
+    assert(File.readText("{directory}/Programs/torb/bin/torb.exe") == "new")
+    File.removeDirectory(directory).expect("the directory removed")
   }
 }
