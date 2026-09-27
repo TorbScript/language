@@ -1,0 +1,70 @@
+/** [ReadError]: why a read of a `ByteReader` or a `BitReader` did not answer a value. */
+
+/**
+ * Why a read failed, and the byte where it happened. Every case names an **offset**: counted from the start of the bytes
+ * the outermost reader was made from, so a limited reader names the same byte its parent would, and a log line can be
+ * checked against a hex dump by hand.
+ *
+ * A format converts it into its own error through `From`, so that `?` works in a function that answers that error:
+ *
+ *     extend ImageError with From<ReadError> {
+ *       static fn from(value: ReadError): ImageError {
+ *         ImageError.Broken(value.show())
+ *       }
+ *     }
+ */
+public type ReadError with Show, Error {
+  /** `needed` bytes for `expected` at `offset`, and only `available` were left. */
+  case Truncated(offset: Int, expected: String, needed: Int, available: Int)
+  /** `needed` bits at `offset` of a `BitReader`, and only `available` were left. */
+  case TruncatedBits(offset: Int, needed: Int, available: Int)
+  /** A text that is to end in a NUL byte starts at `offset`, and none of the `available` bytes left is one. */
+  case Unterminated(offset: Int, available: Int)
+  /** A variable-length integer at `offset` is still going after the most bytes `expected` can have. */
+  case Overlong(offset: Int, expected: String)
+  /** A variable-length integer at `offset` holds a value that `expected` cannot hold. */
+  case Overflow(offset: Int, expected: String)
+  /** Text that is not UTF-8: `offset` is the first byte that breaks it. */
+  case InvalidText(offset: Int)
+  /** A position that is not inside a reader of `length` bytes was asked for while it stood at `offset`. */
+  case OutOfRange(offset: Int, position: Int, length: Int)
+
+  /** The byte the failure names, counted from the start of the outermost reader's bytes. */
+  fn offset(): Int {
+    match self {
+      .Truncated(offset, ...) => offset
+      .TruncatedBits(offset, ...) => offset
+      .Unterminated(offset, ...) => offset
+      .Overlong(offset, ...) => offset
+      .Overflow(offset, ...) => offset
+      .InvalidText(offset) => offset
+      .OutOfRange(offset, ...) => offset
+    }
+  }
+
+  /** One line: what was expected, where, and what was there instead. */
+  fn show(): String {
+    match self {
+      .Truncated(offset, expected, needed, available) => {
+        "truncated at byte {offset}: {counted(needed, "byte")} for {expected}, {available} left"
+      }
+      .TruncatedBits(offset, needed, available) => {
+        "truncated at byte {offset}: {counted(needed, "bit")}, {available} left"
+      }
+      .Unterminated(offset, available) => {
+        "unterminated text at byte {offset}: no NUL in the {counted(available, "byte")} left"
+      }
+      .Overlong(offset, expected) => "overlong at byte {offset}: {expected} has at most 10 bytes"
+      .Overflow(offset, expected) => "overflow at byte {offset}: the value does not fit {expected}"
+      .InvalidText(offset) => "invalid UTF-8 at byte {offset}"
+      .OutOfRange(offset, position, length) => {
+        "out of range at byte {offset}: position {position} of a reader of {counted(length, "byte")}"
+      }
+    }
+  }
+}
+
+/** `1 byte`, `2 bytes`: a count and its unit. */
+fn counted(count: Int, unit: String): String {
+  if count == 1 { "1 {unit}" } else { "{count} {unit}s" }
+}

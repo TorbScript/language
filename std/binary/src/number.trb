@@ -1,0 +1,191 @@
+/**
+ * The conversions between the width types and the 64 bits of an `Int` that the readers and the writers compute in, and
+ * the IEEE 754 bit patterns of a `Float64` - ordinary TorbScript, with no native.
+ *
+ * A `UInt64` above the largest `Int` has no `Int` of the same value, so the readers carry its 64 bits as the `Int` with
+ * the same bits (its *pattern*): negative exactly where the highest bit is set.
+ */
+
+/** The `Int` whose 64 bits are the bits of `value`. */
+public fn patternOf(value: UInt64): Int {
+  const low = Int.tryFrom(value & 0x7FFFFFFFFFFFFFFF).ok() ?? 0
+  if value > 0x7FFFFFFFFFFFFFFF { low | Int.minimum } else { low }
+}
+
+/** The `UInt64` whose 64 bits are the bits of `pattern`. */
+public fn unsignedOf(pattern: Int): UInt64 {
+  const low = UInt64.tryFrom(pattern & Int.maximum).ok() ?? 0
+  if pattern < 0 { low | 0x8000000000000000 } else { low }
+}
+
+/** `value` below 2^32 as a `UInt32`; the callers mask it first. */
+public fn word32(value: Int): UInt32 {
+  UInt32.tryFrom(value).ok() ?? 0
+}
+
+/** The lowest eight bits of `value` as a byte. */
+public fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}
+
+/**
+ * 2 to the power of `exponent`, from -1022 to 1023: squares of 2 or of 1/2 multiplied together, every one of them a
+ * power of two and so exact, where `**` would be the C library's `pow` and only as exact as that is.
+ */
+fn powerOfTwo(exponent: Int): Float64 {
+  var base = if exponent < 0 { 0.5 } else { 2.0 }
+  var rest = if exponent < 0 { -exponent } else { exponent }
+  var result = 1.0
+  while rest > 0 {
+    if rest & 1 == 1 {
+      result = result * base
+    }
+    rest = rest >> 1
+    if rest > 0 {
+      base = base * base
+    }
+  }
+  result
+}
+
+/** `value` times 2 to the power of `exponent`, from -2044 to 2046, exact wherever the product is a `Float64`. */
+fn scaled(value: Float64, exponent: Int): Float64 {
+  if exponent < -1022 || exponent > 1023 {
+    // Two factors that are each a normal number, so only the last product can leave the normal range, and it is exact
+    // or rounded once
+    const half = exponent / 2
+    return value * powerOfTwo(half) * powerOfTwo(exponent - half)
+  }
+  value * powerOfTwo(exponent)
+}
+
+/**
+ * The exponent `e` of a finite `magnitude` above zero, with `2^e <= magnitude < 2^(e + 1)`, and the magnitude divided
+ * by `2^e`, which is from 1 to below 2. Every step multiplies by a power of two, so nothing is rounded.
+ */
+fn normalized(magnitude: Float64): (Int, Float64) {
+  var exponent = 0
+  var value = magnitude
+  const large = powerOfTwo 64
+  const small = powerOfTwo(-64)
+  while value >= large {
+    value = value * small
+    exponent = exponent + 64
+  }
+  while value < small {
+    value = value * large
+    exponent = exponent - 64
+  }
+  while value >= 2.0 {
+    value = value * 0.5
+    exponent = exponent + 1
+  }
+  while value < 1.0 {
+    value = value * 2.0
+    exponent = exponent - 1
+  }
+  (exponent, value)
+}
+
+/** Whether `value` has its sign bit set: below zero, or the negative zero. */
+fn isNegative(value: Float64): Bool {
+  value < 0.0 || (value == 0.0 && 1.0 / value < 0.0)
+}
+
+/** The whole number a `Float64` holds exactly, below 2^53. */
+fn wholeOf(value: Float64): Int {
+  Int.tryFrom(value).ok() ?? 0
+}
+
+/** The binary64 of a `Float64`: sign, 11 bits of exponent and 52 of fraction. A `nan` is the quiet `0x7FF8000000000000`. */
+public fn float64Pattern(value: Float64): Int {
+  if value != value {
+    return 0x7FF8000000000000
+  }
+  const sign = if isNegative(value) { Int.minimum } else { 0 }
+  const magnitude = if value < 0.0 { -value } else { value }
+  if magnitude == 0.0 {
+    return sign
+  }
+  if magnitude == Float64.infinity {
+    return sign | 0x7FF0000000000000
+  }
+  const (exponent, fraction) = normalized magnitude
+  if exponent < -1022 {
+    return sign | wholeOf(scaled(magnitude, 1074))
+  }
+  const mantissa = wholeOf scaled(fraction - 1.0, 52)
+  sign | ((exponent + 1023) << 52) | mantissa
+}
+
+/** The `Float64` of a binary64 pattern. Every `nan` pattern is [Float64.nan]: its payload is not kept. */
+public fn float64OfPattern(pattern: Int): Float64 {
+  const exponent = (pattern >> 52) & 0x7FF
+  const mantissa = pattern & 0xFFFFFFFFFFFFF
+  const magnitude = if exponent == 0x7FF {
+    if mantissa == 0 { Float64.infinity } else { Float64.nan }
+  } else if exponent == 0 {
+    scaled(Float64.from(mantissa), -1074)
+  } else {
+    scaled(Float64.from(mantissa | 0x10000000000000), exponent - 1075)
+  }
+  if pattern < 0 { -magnitude } else { magnitude }
+}
+
+/** A whole number from 0 to below 2^25 rounded to the nearest one, and to the even one of two that are as near. */
+fn roundedEven(value: Float64): Int {
+  const floor = value.floor()
+  const whole = wholeOf floor
+  const rest = value - floor
+  if rest > 0.5 || (rest == 0.5 && whole & 1 == 1) { whole + 1 } else { whole }
+}
+
+/**
+ * The binary32 nearest to a `Float64`, rounded to the even one of two that are as near, as IEEE 754 rounds by default:
+ * what is too large for one is an infinity, what is too small a zero. A `nan` is the quiet `0x7FC00000`.
+ */
+public fn float32Pattern(value: Float64): Int {
+  if value != value {
+    return 0x7FC00000
+  }
+  const sign = if isNegative(value) { 0x80000000 } else { 0 }
+  const magnitude = if value < 0.0 { -value } else { value }
+  if magnitude == 0.0 {
+    return sign
+  }
+  if magnitude == Float64.infinity {
+    return sign | 0x7F800000
+  }
+  const (exponent, fraction) = normalized magnitude
+  if exponent > 127 {
+    return sign | 0x7F800000
+  }
+  if exponent < -126 {
+    // A subnormal, in units of 2^-149; rounding up to 2^23 of them is the smallest normal number, whose bits these are
+    return sign | roundedEven(scaled(magnitude, 149))
+  }
+  var significand = roundedEven scaled(fraction, 23)
+  var biased = exponent + 127
+  if significand == 0x1000000 {
+    significand = 0x800000
+    biased = biased + 1
+  }
+  if biased >= 255 {
+    return sign | 0x7F800000
+  }
+  sign | (biased << 23) | (significand & 0x7FFFFF)
+}
+
+/** The `Float64` of a binary32 pattern in the lowest 32 bits, which it holds exactly. A `nan` loses its payload. */
+public fn float32OfPattern(pattern: Int): Float64 {
+  const exponent = (pattern >> 23) & 0xFF
+  const mantissa = pattern & 0x7FFFFF
+  const magnitude = if exponent == 0xFF {
+    if mantissa == 0 { Float64.infinity } else { Float64.nan }
+  } else if exponent == 0 {
+    scaled(Float64.from(mantissa), -149)
+  } else {
+    scaled(Float64.from(mantissa | 0x800000), exponent - 150)
+  }
+  if pattern & 0x80000000 != 0 { -magnitude } else { magnitude }
+}

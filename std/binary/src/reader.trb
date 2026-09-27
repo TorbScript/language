@@ -1,0 +1,372 @@
+/** [ByteReader]: typed reads from a cursor over bytes, each of which answers a [ReadError] where the bytes end. */
+
+use ByteOrder from "std/core"
+use Bytes, textOf from "std/stream"
+use ReadError from "./error"
+use float32OfPattern, float64OfPattern, unsignedOf, word32 from "./number"
+
+/**
+ * How a variable-length integer with a sign is written. Both are LEB128 underneath: seven bits to a byte, the lowest
+ * first, the highest bit of a byte set where another follows.
+ */
+public type SignedEncoding with Show, Equals, Hash {
+  /**
+   * Two's complement, the sign bit of the last byte repeated upwards: signed LEB128 of WebAssembly and DWARF. `-1` is
+   * the one byte `7f`.
+   */
+  case SignExtended
+  /**
+   * `0, -1, 1, -2, ...` mapped to `0, 1, 2, 3, ...` and then written unsigned: protobuf's `sint32` and `sint64`. `-1` is
+   * the one byte `01`.
+   */
+  case Zigzag
+}
+
+/**
+ * A cursor over bytes that reads numbers, runs of bytes and text from them, and answers a [ReadError] instead of
+ * reading past the end: bytes from a file or the network cannot make it panic.
+ *
+ * Every read moves the cursor past what it read, and a read that fails moves nothing. The byte order is the reader's,
+ * big endian unless it was made with another, and every read of a number can name its own:
+ *
+ *     var reader = ByteReader [0x12, 0x34, 0x78, 0x56]
+ *     print reader.uint16()
+ *     print reader.uint16(order: Some(.LittleEndian))
+ *
+ * A reader is a value: a copy reads on from where the original stood without moving it, which is how a format looks
+ * ahead. [ByteReader.limited] answers a reader over the next bytes only, for a record whose length comes first.
+ */
+public type ByteReader {
+  /** The bytes this reader reads: for a limited reader, only the bytes it was limited to. */
+  input: Bytes
+  /** The byte order of every read of a number that does not name one. */
+  order: ByteOrder = ByteOrder.BigEndian
+  /** Where `input` starts in the bytes of the outermost reader, which every offset is counted from. */
+  private base: Int = 0
+  /** The next byte to read, counted from the start of `input`. */
+  private var cursor: Int = 0
+
+  /** The next byte to read, counted from the start of this reader's bytes: 0 for a reader that has read nothing. */
+  fn position(): Int {
+    cursor
+  }
+
+  /**
+   * The next byte to read, counted from the start of the bytes of the outermost reader - the offset a [ReadError]
+   * names. It is [ByteReader.position] for a reader that is not limited.
+   */
+  fn offset(): Int {
+    base + cursor
+  }
+
+  /** How many bytes are left to read. */
+  fn remaining(): Int {
+    input.length() - cursor
+  }
+
+  /**
+   * Moves the cursor to `position`, counted from the start of this reader's bytes; the end itself is a position too.
+   *
+   * # Errors
+   *
+   * - [ReadError.OutOfRange] for a position below zero or past the end.
+   */
+  var fn seek(position: Int): Result<Void, ReadError> {
+    if position < 0 || position > input.length() {
+      return Fail ReadError.OutOfRange(base + cursor, position, input.length())
+    }
+    cursor = position
+    Ok void
+  }
+
+  /**
+   * Moves the cursor past the next `count` bytes without reading them.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where fewer than `count` are left, [ReadError.OutOfRange] for a count below zero.
+   */
+  var fn skip(count: Int): Result<Void, ReadError> {
+    ensure(count, "skipped bytes")?
+    cursor = cursor + count
+    Ok void
+  }
+
+  /** Nothing where `count` bytes are left, and otherwise the failure that names `expected`. */
+  private fn ensure(count: Int, expected: String): Result<Void, ReadError> {
+    if count < 0 {
+      return Fail ReadError.OutOfRange(base + cursor, cursor + count, input.length())
+    }
+    const available = input.length() - cursor
+    if count > available {
+      return Fail ReadError.Truncated(base + cursor, expected, count, available)
+    }
+    Ok void
+  }
+
+  /** The next `width` bytes, at most 4, as a number without a sign in `order`. */
+  private var fn unsigned(width: Int, order: ByteOrder, expected: String): Result<Int, ReadError> {
+    const available = input.length() - cursor
+    if width > available {
+      return Fail ReadError.Truncated(base + cursor, expected, width, available)
+    }
+    var value = 0
+    if order == ByteOrder.BigEndian {
+      for index in 0..width {
+        value = (value << 8) | Int.from(input[cursor + index])
+      }
+    } else {
+      var index = width - 1
+      while index >= 0 {
+        value = (value << 8) | Int.from(input[cursor + index])
+        index = index - 1
+      }
+    }
+    cursor = cursor + width
+    Ok value
+  }
+
+  /** The next 8 bytes in `order` as the `Int` with their 64 bits. */
+  private var fn pattern64(order: ByteOrder, expected: String): Result<Int, ReadError> {
+    const available = input.length() - cursor
+    if available < 8 {
+      return Fail ReadError.Truncated(base + cursor, expected, 8, available)
+    }
+    const first = unsigned(4, order, expected)?
+    const second = unsigned(4, order, expected)?
+    if order == ByteOrder.BigEndian {
+      return Ok((first << 32) | second)
+    }
+    Ok((second << 32) | first)
+  }
+
+  /** The next byte. */
+  var fn uint8(): Result<UInt8, ReadError> {
+    if cursor >= input.length() {
+      return Fail ReadError.Truncated(base + cursor, "a UInt8", 1, 0)
+    }
+    const value = input[cursor]
+    cursor = cursor + 1
+    Ok value
+  }
+
+  /** The next two bytes as a `UInt16`, in `order` or the reader's. */
+  var fn uint16(order: ByteOrder? = None): Result<UInt16, ReadError> {
+    const value = unsigned(2, order ?? self.order, "a UInt16")?
+    Ok(UInt16.tryFrom(value).ok() ?? 0)
+  }
+
+  /** The next four bytes as a `UInt32`, in `order` or the reader's. */
+  var fn uint32(order: ByteOrder? = None): Result<UInt32, ReadError> {
+    Ok word32(unsigned(4, order ?? self.order, "a UInt32")?)
+  }
+
+  /** The next eight bytes as a `UInt64`, in `order` or the reader's. */
+  var fn uint64(order: ByteOrder? = None): Result<UInt64, ReadError> {
+    Ok unsignedOf(pattern64(order ?? self.order, "a UInt64")?)
+  }
+
+  /** The next byte as an `Int8`, in two's complement. */
+  var fn int8(): Result<Int8, ReadError> {
+    const value = unsigned(1, ByteOrder.BigEndian, "an Int8")?
+    Ok(Int8.tryFrom(if value >= 0x80 { value - 0x100 } else { value }).ok() ?? 0)
+  }
+
+  /** The next two bytes as an `Int16`, in two's complement and in `order` or the reader's. */
+  var fn int16(order: ByteOrder? = None): Result<Int16, ReadError> {
+    const value = unsigned(2, order ?? self.order, "an Int16")?
+    Ok(Int16.tryFrom(if value >= 0x8000 { value - 0x10000 } else { value }).ok() ?? 0)
+  }
+
+  /** The next four bytes as an `Int32`, in two's complement and in `order` or the reader's. */
+  var fn int32(order: ByteOrder? = None): Result<Int32, ReadError> {
+    const value = unsigned(4, order ?? self.order, "an Int32")?
+    Ok(Int32.tryFrom(if value >= 0x80000000 { value - 0x100000000 } else { value }).ok() ?? 0)
+  }
+
+  /** The next eight bytes as an `Int64`, in two's complement and in `order` or the reader's. */
+  var fn int64(order: ByteOrder? = None): Result<Int64, ReadError> {
+    pattern64(order ?? self.order, "an Int64")
+  }
+
+  /**
+   * The next four bytes as an IEEE 754 binary32, in `order` or the reader's, widened to the `Float64` that holds it
+   * exactly. A `nan` reads as [Float64.nan], without its payload.
+   */
+  var fn float32(order: ByteOrder? = None): Result<Float64, ReadError> {
+    Ok float32OfPattern(unsigned(4, order ?? self.order, "a Float32")?)
+  }
+
+  /** The next eight bytes as an IEEE 754 binary64, in `order` or the reader's. A `nan` reads without its payload. */
+  var fn float64(order: ByteOrder? = None): Result<Float64, ReadError> {
+    Ok float64OfPattern(pattern64(order ?? self.order, "a Float64")?)
+  }
+
+  /**
+   * An unsigned LEB128 of at most 10 bytes: protobuf's varint, WebAssembly's `u32` and `u64`. A longer encoding of a
+   * small value (`80 00` for 0) is read, as both formats allow.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where the bytes end before the last byte of the number.
+   * - [ReadError.Overlong] for a tenth byte that says another follows, [ReadError.Overflow] for one above 1.
+   */
+  var fn varUInt(): Result<UInt64, ReadError> {
+    const start = cursor
+    var value = 0
+    var shift = 0
+    loop {
+      if cursor >= input.length() {
+        const read = cursor - start
+        cursor = start
+        return Fail ReadError.Truncated(base + start, "a variable-length UInt64", read + 1, read)
+      }
+      const byte = Int.from input[cursor]
+      cursor = cursor + 1
+      if shift == 63 {
+        if byte & 0x80 != 0 {
+          cursor = start
+          return Fail ReadError.Overlong(base + start, "a variable-length UInt64")
+        }
+        if byte > 1 {
+          cursor = start
+          return Fail ReadError.Overflow(base + start, "a variable-length UInt64")
+        }
+        return Ok unsignedOf(value | (byte << 63))
+      }
+      value = value | ((byte & 0x7F) << shift)
+      if byte & 0x80 == 0 {
+        return Ok unsignedOf(value)
+      }
+      shift = shift + 7
+    }
+  }
+
+  /**
+   * A signed LEB128 of at most 10 bytes, in `encoding`: sign-extended by default, as WebAssembly and DWARF write it, or
+   * zigzag, as protobuf's `sint64` does.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where the bytes end before the last byte of the number.
+   * - [ReadError.Overlong] for a tenth byte that says another follows, [ReadError.Overflow] for a value outside an
+   *   `Int64`.
+   */
+  var fn varInt(encoding: SignedEncoding = SignedEncoding.SignExtended): Result<Int64, ReadError> {
+    const start = cursor
+    var value = 0
+    var shift = 0
+    loop {
+      if cursor >= input.length() {
+        const read = cursor - start
+        cursor = start
+        return Fail ReadError.Truncated(base + start, "a variable-length Int64", read + 1, read)
+      }
+      const byte = Int.from input[cursor]
+      cursor = cursor + 1
+      if shift == 63 {
+        if byte & 0x80 != 0 {
+          cursor = start
+          return Fail ReadError.Overlong(base + start, "a variable-length Int64")
+        }
+        // The tenth byte holds bit 63 alone: zigzag's highest bit, or the sign repeated through all seven bits
+        const fits = if encoding == SignedEncoding.Zigzag { byte <= 1 } else { byte == 0 || byte == 0x7F }
+        if !fits {
+          cursor = start
+          return Fail ReadError.Overflow(base + start, "a variable-length Int64")
+        }
+        value = value | ((byte & 1) << 63)
+        break
+      }
+      value = value | ((byte & 0x7F) << shift)
+      shift = shift + 7
+      if byte & 0x80 == 0 {
+        if encoding == SignedEncoding.SignExtended && byte & 0x40 != 0 && shift < 64 {
+          value = value | (-1 << shift)
+        }
+        break
+      }
+    }
+    if encoding == SignedEncoding.Zigzag {
+      // `value` is the unsigned number's 64 bits: half of it, and the lowest bit says whether it is negative
+      const half = (value >> 1) & Int.maximum
+      return Ok(if value & 1 == 0 { half } else { -half - 1 })
+    }
+    Ok value
+  }
+
+  /**
+   * The next `count` bytes. In a native binary a range of a list shares the list's storage, so this copies nothing -
+   * and it keeps the whole of `input` alive for as long as the answer is.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where fewer than `count` are left, [ReadError.OutOfRange] for a count below zero.
+   */
+  var fn bytes(count: Int): Result<Bytes, ReadError> {
+    ensure(count, "a run of bytes")?
+    const taken = input[cursor..(cursor + count)]
+    cursor = cursor + count
+    Ok taken
+  }
+
+  /**
+   * A reader over the next `count` bytes only, in this reader's order, and this reader moved past them: for a record
+   * whose length comes first. The limited reader counts its positions from 0, and its offsets from where the outermost
+   * reader starts.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where fewer than `count` are left, [ReadError.OutOfRange] for a count below zero.
+   */
+  var fn limited(count: Int): Result<Self, ReadError> {
+    ensure(count, "a limited reader")?
+    const inner = Self(input[cursor..(cursor + count)], order, base + cursor, 0)
+    cursor = cursor + count
+    Ok inner
+  }
+
+  /**
+   * The next `count` bytes as UTF-8 text.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where fewer than `count` are left, [ReadError.OutOfRange] for a count below zero.
+   * - [ReadError.InvalidText] where they are not UTF-8, at the byte that breaks it; the cursor stays in front.
+   */
+  var fn text(count: Int): Result<String, ReadError> {
+    ensure(count, "a text")?
+    match textOf(input[cursor..(cursor + count)]) {
+      Ok(text) => {
+        cursor = cursor + count
+        Ok text
+      }
+      Fail(problem) => Fail ReadError.InvalidText(base + cursor + problem.offset)
+    }
+  }
+
+  /**
+   * The UTF-8 text up to the next NUL byte, which is read too and is not part of the text: C's strings, gzip's file
+   * name.
+   *
+   * # Errors
+   *
+   * - [ReadError.Unterminated] where no NUL is left, [ReadError.InvalidText] where the bytes are not UTF-8.
+   */
+  var fn terminatedText(): Result<String, ReadError> {
+    var end = cursor
+    while end < input.length() && input[end] != 0 {
+      end = end + 1
+    }
+    if end >= input.length() {
+      return Fail ReadError.Unterminated(base + cursor, input.length() - cursor)
+    }
+    match textOf(input[cursor..end]) {
+      Ok(text) => {
+        cursor = end + 1
+        Ok text
+      }
+      Fail(problem) => Fail ReadError.InvalidText(base + cursor + problem.offset)
+    }
+  }
+}

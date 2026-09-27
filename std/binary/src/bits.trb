@@ -1,0 +1,255 @@
+/** [BitReader] and [BitWriter]: numbers of any width up to 56 bits, packed into bytes in a [BitOrder]. */
+
+use Bytes from "std/stream"
+use ReadError from "./error"
+use byteOf from "./number"
+
+/** Which bit of a byte comes first, and so which bit of a number read from several of them is its lowest. */
+public type BitOrder with Show, Equals, Hash {
+  /**
+   * The lowest bit of a byte first, and the first bit read is the lowest of the number: DEFLATE, GIF's LZW, most
+   * little-endian formats.
+   */
+  case LeastSignificantFirst
+  /**
+   * The highest bit of a byte first, and the first bit read is the highest of the number: JPEG, H.264, the samples of
+   * PNG and PBM, and most network headers.
+   */
+  case MostSignificantFirst
+}
+
+/**
+ * The bits of bytes, read as numbers of 0 to 56 bits in a [BitOrder] - most significant first unless it was made with
+ * another. A read answers a [ReadError] instead of reading past the end, and moves nothing then.
+ *
+ *     var reader = BitReader([0b1011_0010], order: .MostSignificantFirst)
+ *     print reader.bits(3)
+ *     print reader.bit()
+ *
+ * The reader loads a byte when a read needs one of its bits, and fewer than eight bits wait between two reads, so
+ * [BitReader.position] is a byte boundary a format can go on from after [BitReader.alignToByte].
+ */
+public type BitReader {
+  /** The bytes this reader reads. */
+  input: Bytes
+  /** Which bit of a byte is read first. */
+  order: BitOrder = BitOrder.MostSignificantFirst
+  /** The next byte to load. */
+  private var cursor: Int = 0
+  /** Bits loaded and not read yet: for the least significant order the next one is the lowest, otherwise the highest. */
+  private var buffer: Int = 0
+  /** How many bits `buffer` holds: fewer than eight between two reads. */
+  private var count: Int = 0
+
+  /**
+   * How many bytes the reader has started: the byte the next bit comes from is the one before it while bits of that
+   * byte are left, and after [BitReader.alignToByte] it is the next byte to read.
+   */
+  fn position(): Int {
+    cursor
+  }
+
+  /** How many bits are left to read. */
+  fn remaining(): Int {
+    count + (input.length() - cursor) * 8
+  }
+
+  /**
+   * The next `width` bits as a number, from 0 to 56 of them. In the least significant order the first bit read is the
+   * lowest of the number, in the most significant order the highest.
+   *
+   * # Panics
+   *
+   * - For a width below 0 or above 56: a mistake of the caller, not of the bytes.
+   *
+   * # Errors
+   *
+   * - [ReadError.TruncatedBits] where fewer than `width` bits are left.
+   */
+  var fn bits(width: Int): Result<Int, ReadError> {
+    if count < width {
+      if width > 56 || width < 0 {
+        panic "BitReader.bits reads 0 to 56 bits at a time, not {width}"
+      }
+      const needed = (width - count + 7) / 8
+      if needed > input.length() - cursor {
+        return Fail ReadError.TruncatedBits(cursor, width, count + (input.length() - cursor) * 8)
+      }
+      if order == BitOrder.LeastSignificantFirst {
+        while count < width {
+          buffer = buffer | (Int.from(input[cursor]) << count)
+          cursor = cursor + 1
+          count = count + 8
+        }
+      } else {
+        while count < width {
+          buffer = (buffer << 8) | Int.from(input[cursor])
+          cursor = cursor + 1
+          count = count + 8
+        }
+      }
+    }
+    const mask = (1 << width) - 1
+    count = count - width
+    if order == BitOrder.LeastSignificantFirst {
+      const value = buffer & mask
+      buffer = buffer >> width
+      return Ok value
+    }
+    const value = (buffer >> count) & mask
+    buffer = buffer & ((1 << count) - 1)
+    Ok value
+  }
+
+  /**
+   * Whether the next bit is set.
+   *
+   * # Errors
+   *
+   * - [ReadError.TruncatedBits] where no bit is left.
+   */
+  var fn bit(): Result<Bool, ReadError> {
+    if count == 0 {
+      if cursor >= input.length() {
+        return Fail ReadError.TruncatedBits(cursor, 1, 0)
+      }
+      buffer = Int.from input[cursor]
+      cursor = cursor + 1
+      count = 8
+    }
+    count = count - 1
+    if order == BitOrder.LeastSignificantFirst {
+      const set = buffer & 1 == 1
+      buffer = buffer >> 1
+      return Ok set
+    }
+    const set = (buffer >> count) & 1 == 1
+    buffer = buffer & ((1 << count) - 1)
+    Ok set
+  }
+
+  /** Drops the bits left of the byte the last read came from, so the next read starts at a byte boundary. */
+  var fn alignToByte() {
+    buffer = 0
+    count = 0
+  }
+
+  /**
+   * The next `count` whole bytes, after the bits left of the current byte are dropped as [BitReader.alignToByte] drops
+   * them: the stored block of DEFLATE.
+   *
+   * # Errors
+   *
+   * - [ReadError.Truncated] where fewer than `count` bytes are left, [ReadError.OutOfRange] for a count below zero.
+   */
+  var fn bytes(count: Int): Result<Bytes, ReadError> {
+    alignToByte()
+    if count < 0 {
+      return Fail ReadError.OutOfRange(cursor, cursor + count, input.length())
+    }
+    const available = input.length() - cursor
+    if count > available {
+      return Fail ReadError.Truncated(cursor, "a run of bytes", count, available)
+    }
+    const taken = input[cursor..(cursor + count)]
+    cursor = cursor + count
+    Ok taken
+  }
+}
+
+/**
+ * Numbers of 0 to 56 bits packed into bytes in a [BitOrder], most significant first unless it was made with another.
+ *
+ *     var writer = BitWriter(order: .LeastSignificantFirst)
+ *     writer.bits 5, 3
+ *     writer.bit true
+ *     print writer.bytes()
+ *
+ * A byte that is not full yet is kept back, and [BitWriter.bytes] answers it filled up with zero bits.
+ */
+public type BitWriter {
+  /** Which bit of a byte is written first. */
+  order: BitOrder = BitOrder.MostSignificantFirst
+  /** The full bytes written so far. */
+  private var output: Bytes = []
+  /** Bits written and not yet a full byte, in the same arrangement as a reader's buffer. */
+  private var buffer: Int = 0
+  /** How many bits `buffer` holds: fewer than eight between two writes. */
+  private var count: Int = 0
+
+  /** How many bits have been written. */
+  fn length(): Int {
+    output.length() * 8 + count
+  }
+
+  /**
+   * The lowest `width` bits of `value`, from 0 to 56 of them: in the least significant order its lowest bit first, in
+   * the most significant order its highest bit first.
+   *
+   * # Panics
+   *
+   * - For a width below 0 or above 56.
+   */
+  var fn bits(value: Int, width: Int) {
+    if width > 56 || width < 0 {
+      panic "BitWriter.bits writes 0 to 56 bits at a time, not {width}"
+    }
+    const masked = value & ((1 << width) - 1)
+    if order == BitOrder.LeastSignificantFirst {
+      buffer = buffer | (masked << count)
+      count = count + width
+      while count >= 8 {
+        output.append byteOf(buffer)
+        buffer = buffer >> 8
+        count = count - 8
+      }
+      return
+    }
+    buffer = (buffer << width) | masked
+    count = count + width
+    while count >= 8 {
+      count = count - 8
+      output.append byteOf(buffer >> count)
+    }
+    buffer = buffer & ((1 << count) - 1)
+  }
+
+  /** One bit: 1 where `value` is true. */
+  var fn bit(value: Bool) {
+    const one = if value { 1 } else { 0 }
+    if order == BitOrder.LeastSignificantFirst {
+      buffer = buffer | (one << count)
+      count = count + 1
+      if count == 8 {
+        output.append byteOf(buffer)
+        buffer = 0
+        count = 0
+      }
+      return
+    }
+    buffer = (buffer << 1) | one
+    count = count + 1
+    if count == 8 {
+      output.append byteOf(buffer)
+      buffer = 0
+      count = 0
+    }
+  }
+
+  /** Fills the byte that is not full yet with zero bits, so the next write starts at a byte boundary. */
+  var fn alignToByte() {
+    if count > 0 {
+      const last = if order == BitOrder.LeastSignificantFirst { buffer } else { buffer << (8 - count) }
+      output.append byteOf(last)
+      buffer = 0
+      count = 0
+    }
+  }
+
+  /** Everything written so far, a byte that is not full yet filled up with zero bits. The writer is unchanged. */
+  fn bytes(): Bytes {
+    var copy = self
+    copy.alignToByte()
+    copy.output
+  }
+}

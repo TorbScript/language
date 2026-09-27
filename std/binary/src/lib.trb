@@ -1,0 +1,32 @@
+/**
+ * Binary formats read and written: [ByteReader] and [ByteWriter] for numbers of every width in either byte order,
+ * IEEE 754 floats, LEB128 integers, runs of bytes and text; [BitReader] and [BitWriter] for numbers packed into bits in
+ * either [BitOrder]. What `std/dns`, `std/compression` and `std/archive` read their formats with
+ * (docs/design/BINARY.md).
+ *
+ * **A read never panics.** Every read answers a `Result` whose failure is a [ReadError] that names the byte and what was
+ * expected there, so bytes from a file or the network are read without a check in front of every read; a format turns
+ * it into its own error through `From`, and `?` does the rest. **A write never fails**: the signatures take width
+ * types, so a value that does not fit a field is refused where the caller narrows it, with `tryInto()`.
+ *
+ * Ordinary TorbScript over `List<UInt8>`, with no native.
+ *
+ * # Examples
+ *
+ *     use ByteReader, ByteWriter from "std/binary"
+ *
+ *     var writer = ByteWriter()
+ *     writer.uint16 443
+ *     writer.varUInt 300
+ *     writer.terminatedText "host"
+ *     var reader = ByteReader writer.bytes()
+ *     print reader.uint16()
+ *     print reader.varUInt()
+ *     print reader.terminatedText()
+ */
+
+public use ReadError from "./error"
+public use ByteReader, SignedEncoding from "./reader"
+public use ByteWriter, Mark from "./writer"
+public use BitOrder, BitReader, BitWriter from "./bits"
+public use ByteOrder from "std/core"

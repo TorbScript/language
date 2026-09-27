@@ -1,0 +1,294 @@
+/**
+ * `ByteReader`: every width in both byte orders, the float bit patterns, LEB128 at its edges, limited readers inside
+ * each other, seeking, text, and the failures each one answers instead of reading past the end.
+ */
+
+use test, group from "std/test"
+use ByteOrder, ByteReader, ReadError, SignedEncoding from "../src/lib"
+
+const counting: List<UInt8> = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+
+const highBits: List<UInt8> = [0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8]
+
+/** The reader over `bytes`, little endian. */
+fn little(bytes: List<UInt8>): ByteReader {
+  ByteReader bytes, order: ByteOrder.LittleEndian
+}
+
+group "numbers without a sign" {
+  test "every width, big endian" {
+    var reader = ByteReader counting
+    assert(reader.uint8() == Ok(1))
+    assert(reader.uint16() == Ok(0x0203))
+    assert(reader.uint32() == Ok(0x04050607))
+    assert(reader.remaining() == 1)
+    var wide = ByteReader counting
+    assert(wide.uint64() == Ok(0x0102030405060708))
+    var top = ByteReader highBits
+    assert(top.uint64() == Ok(0xFFFEFDFCFBFAF9F8))
+  }
+
+  test "every width, little endian" {
+    var reader = little counting
+    assert(reader.uint8() == Ok(1))
+    assert(reader.uint16() == Ok(0x0302))
+    assert(reader.uint32() == Ok(0x07060504))
+    var wide = little counting
+    assert(wide.uint64() == Ok(0x0807060504030201))
+    var top = little highBits
+    assert(top.uint64() == Ok(0xF8F9FAFBFCFDFEFF))
+  }
+
+  test "a read names its own order" {
+    var reader = ByteReader counting
+    assert(reader.uint16(order: Some(.LittleEndian)) == Ok(0x0201))
+    assert(reader.uint16() == Ok(0x0304))
+    assert(reader.uint32(order: Some(.LittleEndian)) == Ok(0x08070605))
+  }
+}
+
+group "numbers with a sign" {
+  test "two's complement of every width, big endian" {
+    var reader = ByteReader highBits
+    assert(reader.int8() == Ok(-1))
+    assert(reader.int16() == Ok(-259))
+    assert(reader.int32() == Ok(-50595079))
+    var wide = ByteReader highBits
+    assert(wide.int64() == Ok(-283686952306184))
+    var positive = ByteReader counting
+    assert(positive.int64() == Ok(0x0102030405060708))
+  }
+
+  test "two's complement of every width, little endian" {
+    var reader = little highBits
+    assert(reader.int8() == Ok(-1))
+    assert(reader.int16() == Ok(-514))
+    assert(reader.int32() == Ok(-100992004))
+    var wide = little highBits
+    assert(wide.int64() == Ok(-506097522914230529))
+  }
+
+  test "the extremes" {
+    var reader = ByteReader([0x80, 0x7F, 0x80, 0x00, 0x7F, 0xFF])
+    assert(reader.int8() == Ok(-128))
+    assert(reader.int8() == Ok(127))
+    assert(reader.int16() == Ok(-32768))
+    assert(reader.int16() == Ok(32767))
+    var wide = ByteReader([0x80, 0, 0, 0, 0, 0, 0, 0])
+    assert(wide.int64() == Ok(Int.minimum))
+  }
+}
+
+group "floats" {
+  test "binary64 bit patterns in both orders" {
+    var reader = ByteReader([0x3F, 0xF0, 0, 0, 0, 0, 0, 0, 0xC0, 0x09, 0x21, 0xFB, 0x54, 0x44, 0x2D, 0x18])
+    assert(reader.float64() == Ok(1.0))
+    assert(reader.float64() == Ok(-3.141592653589793))
+    var swapped = little([0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40])
+    assert(swapped.float64() == Ok(3.141592653589793))
+  }
+
+  test "binary64 zeros, infinities, the smallest numbers and a nan" {
+    var reader = ByteReader([
+      0x80, 0, 0, 0, 0, 0, 0, 0,
+      0x7F, 0xF0, 0, 0, 0, 0, 0, 0,
+      0xFF, 0xF0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 1,
+      0, 0x10, 0, 0, 0, 0, 0, 0,
+      0x7F, 0xEF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0x7F, 0xF8, 0, 0, 0, 0, 0x12, 0x34,
+    ])
+    const negativeZero = reader.float64().expect("eight bytes")
+    assert(negativeZero == 0.0 && 1.0 / negativeZero < 0.0)
+    assert(reader.float64() == Ok(Float64.infinity))
+    assert(reader.float64() == Ok(Float64.negativeInfinity))
+    assert(reader.float64() == Ok(4.9e-324))
+    assert(reader.float64() == Ok(2.2250738585072014e-308))
+    assert(reader.float64() == Ok(1.7976931348623157e308))
+    const nan = reader.float64().expect("eight bytes")
+    assert(nan != nan)
+  }
+
+  test "binary32 bit patterns, widened exactly" {
+    var reader = ByteReader([0x3F, 0x80, 0, 0, 0xC0, 0x49, 0x0F, 0xDB, 0, 0, 0, 1, 0x7F, 0x7F, 0xFF, 0xFF])
+    assert(reader.float32() == Ok(1.0))
+    assert(reader.float32() == Ok(-3.1415927410125732))
+    assert(reader.float32() == Ok(1.401298464324817e-45))
+    assert(reader.float32() == Ok(3.4028234663852886e38))
+    var special = little([0, 0, 0x80, 0xFF, 1, 0, 0xC0, 0x7F])
+    assert(special.float32() == Ok(Float64.negativeInfinity))
+    const nan = special.float32().expect("four bytes")
+    assert(nan != nan)
+  }
+}
+
+group "LEB128" {
+  test "unsigned: zero, one byte, two bytes, the largest, and a padded zero" {
+    var reader = ByteReader([0, 0x7F, 0xAC, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x80, 0x00])
+    assert(reader.varUInt() == Ok(0))
+    assert(reader.varUInt() == Ok(127))
+    assert(reader.varUInt() == Ok(300))
+    assert(reader.varUInt() == Ok(UInt64.maximum))
+    assert(reader.varUInt() == Ok(0))
+    assert(reader.remaining() == 0)
+  }
+
+  test "unsigned: overlong, overflow and truncated, with the cursor left in front" {
+    var overlong = ByteReader([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00])
+    assert(overlong.varUInt() == Fail(ReadError.Overlong(0, "a variable-length UInt64")))
+    assert(overlong.position() == 0)
+    var overflow = ByteReader([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02])
+    assert(overflow.varUInt() == Fail(ReadError.Overflow(0, "a variable-length UInt64")))
+    var truncated = ByteReader([0x05, 0x80, 0x80])
+    assert(truncated.varUInt() == Ok(5))
+    assert(truncated.varUInt() == Fail(ReadError.Truncated(1, "a variable-length UInt64", 3, 2)))
+    assert(truncated.position() == 1)
+  }
+
+  test "signed, sign-extended as WebAssembly writes it" {
+    var reader = ByteReader([0, 0x7F, 0x3F, 0x40, 0x80, 0x7F, 0xC0, 0xBB, 0x78])
+    assert(reader.varInt() == Ok(0))
+    assert(reader.varInt() == Ok(-1))
+    assert(reader.varInt() == Ok(63))
+    assert(reader.varInt() == Ok(-64))
+    assert(reader.varInt() == Ok(-128))
+    assert(reader.varInt() == Ok(-123456))
+    var extremes = ByteReader([
+      0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7F,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+    ])
+    assert(extremes.varInt() == Ok(Int.minimum))
+    assert(extremes.varInt() == Ok(Int.maximum))
+  }
+
+  test "signed, zigzag as protobuf writes it" {
+    var reader = ByteReader([0, 1, 2, 3, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F])
+    const zigzag = SignedEncoding.Zigzag
+    assert(reader.varInt(encoding: zigzag) == Ok(0))
+    assert(reader.varInt(encoding: zigzag) == Ok(-1))
+    assert(reader.varInt(encoding: zigzag) == Ok(1))
+    assert(reader.varInt(encoding: zigzag) == Ok(-2))
+    assert(reader.varInt(encoding: zigzag) == Ok(2147483647))
+    assert(reader.varInt(encoding: zigzag) == Ok(-2147483648))
+    var extremes = ByteReader([
+      0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01,
+    ])
+    assert(extremes.varInt(encoding: zigzag) == Ok(Int.maximum))
+    assert(extremes.varInt(encoding: zigzag) == Ok(Int.minimum))
+  }
+
+  test "signed: a tenth byte that is not the sign is an overflow" {
+    var reader = ByteReader([0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01])
+    assert(reader.varInt() == Fail(ReadError.Overflow(0, "a variable-length Int64")))
+    var overlong = ByteReader([0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00])
+    assert(overlong.varInt() == Fail(ReadError.Overlong(0, "a variable-length Int64")))
+  }
+}
+
+group "runs of bytes and limited readers" {
+  test "bytes, skip, and the end" {
+    var reader = ByteReader counting
+    assert(reader.bytes(3) == Ok([0x01, 0x02, 0x03]))
+    assert(reader.skip(2) == Ok(void))
+    assert(reader.bytes(3) == Ok([0x06, 0x07, 0x08]))
+    assert(reader.bytes(0) == Ok([]))
+    assert(reader.bytes(1) == Fail(ReadError.Truncated(8, "a run of bytes", 1, 0)))
+    assert(reader.bytes(-1) == Fail(ReadError.OutOfRange(8, 7, 8)))
+  }
+
+  test "a limited reader reads its bytes only, and its parent moves past them" {
+    var reader = ByteReader counting
+    assert(reader.uint8() == Ok(1))
+    var inner = reader.limited(4).expect("four bytes")
+    assert(reader.position() == 5)
+    assert(inner.position() == 0 && inner.offset() == 1)
+    assert(inner.uint16() == Ok(0x0203))
+    assert(inner.uint32() == Fail(ReadError.Truncated(3, "a UInt32", 4, 2)))
+    assert(inner.uint16() == Ok(0x0405))
+    assert(reader.uint8() == Ok(6))
+  }
+
+  test "limited readers inside each other count offsets from the outermost" {
+    var reader = ByteReader counting
+    assert(reader.skip(1) == Ok(void))
+    var outer = reader.limited(6).expect("six bytes")
+    assert(outer.skip(1) == Ok(void))
+    var inner = outer.limited(3).expect("three bytes")
+    assert(inner.offset() == 2)
+    assert(inner.bytes(3) == Ok([0x03, 0x04, 0x05]))
+    assert(inner.uint8() == Fail(ReadError.Truncated(5, "a UInt8", 1, 0)))
+    assert(outer.remaining() == 2)
+    assert(outer.limited(3).map({ _.remaining() }) == Fail(ReadError.Truncated(5, "a limited reader", 3, 2)))
+    var swapped = little counting
+    const order = swapped.limited(2).map({ _.order })
+    assert(order == Ok(ByteOrder.LittleEndian))
+  }
+
+  test "seek inside the reader, to its end, and out of range" {
+    var reader = ByteReader counting
+    assert(reader.seek(6) == Ok(void))
+    assert(reader.uint16() == Ok(0x0708))
+    assert(reader.seek(8) == Ok(void))
+    assert(reader.seek(9) == Fail(ReadError.OutOfRange(8, 9, 8)))
+    assert(reader.seek(-1) == Fail(ReadError.OutOfRange(8, -1, 8)))
+    assert(reader.seek(0) == Ok(void))
+    assert(reader.uint8() == Ok(1))
+    var inner = reader.limited(3).expect("three bytes")
+    assert(inner.seek(3) == Ok(void))
+    assert(inner.seek(4) == Fail(ReadError.OutOfRange(4, 4, 3)))
+  }
+}
+
+group "text" {
+  test "a fixed length of UTF-8, and a NUL-terminated one" {
+    var reader = ByteReader([0x68, 0xC3, 0xA9, 0x6C, 0x6C, 0x6F, 0x61, 0x62, 0x00, 0x00, 0x7A])
+    assert(reader.text(6) == Ok("héllo"))
+    assert(reader.terminatedText() == Ok("ab"))
+    assert(reader.terminatedText() == Ok(""))
+    assert(reader.terminatedText() == Fail(ReadError.Unterminated(10, 1)))
+    assert(reader.text(2) == Fail(ReadError.Truncated(10, "a text", 2, 1)))
+  }
+
+  test "bytes that are not UTF-8 name the byte that breaks them, and move nothing" {
+    var reader = ByteReader([0x61, 0x62, 0xFF, 0x00])
+    assert(reader.text(3) == Fail(ReadError.InvalidText(2)))
+    assert(reader.terminatedText() == Fail(ReadError.InvalidText(2)))
+    assert(reader.position() == 0)
+  }
+}
+
+group "failures" {
+  test "a truncated read moves nothing and says what it wanted" {
+    var reader = ByteReader([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12])
+    assert(reader.skip(12) == Ok(void))
+    const failure = ReadError.Truncated 12, "a UInt16", 2, 1
+    assert(reader.uint16() == Fail(failure))
+    assert(failure.show() == "truncated at byte 12: 2 bytes for a UInt16, 1 left")
+    assert(reader.uint64() == Fail(ReadError.Truncated(12, "a UInt64", 8, 1)))
+    assert(reader.position() == 12)
+    assert(reader.uint8() == Ok(0x12))
+    assert(reader.uint8() == Fail(ReadError.Truncated(13, "a UInt8", 1, 0)))
+  }
+
+  test "every failure shows one line with its offset" {
+    const failures = [
+      ReadError.TruncatedBits(3, 5, 2),
+      ReadError.Unterminated(4, 1),
+      ReadError.Overlong(5, "a variable-length UInt64"),
+      ReadError.Overflow(6, "a variable-length Int64"),
+      ReadError.InvalidText(7),
+      ReadError.OutOfRange(8, 20, 16),
+    ]
+    const lines = failures.map({ _.show() }).toList()
+    assert(lines == [
+      "truncated at byte 3: 5 bits, 2 left",
+      "unterminated text at byte 4: no NUL in the 1 byte left",
+      "overlong at byte 5: a variable-length UInt64 has at most 10 bytes",
+      "overflow at byte 6: the value does not fit a variable-length Int64",
+      "invalid UTF-8 at byte 7",
+      "out of range at byte 8: position 20 of a reader of 16 bytes",
+    ])
+    assert(failures.map({ _.offset() }).toList() == [3, 4, 5, 6, 7, 8])
+  }
+}

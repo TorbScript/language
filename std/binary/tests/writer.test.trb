@@ -1,0 +1,234 @@
+/**
+ * `ByteWriter`: every width in both byte orders, floats rounded to binary32, LEB128 at its edges, text, and marks that a
+ * length is patched into - and every one of them read back by a `ByteReader`.
+ */
+
+use test, group from "std/test"
+use ByteOrder, ByteReader, ByteWriter, SignedEncoding from "../src/lib"
+
+fn written(build: (var writer: ByteWriter) => Void): List<UInt8> {
+  var writer = ByteWriter()
+  build writer
+  writer.bytes()
+}
+
+group "numbers" {
+  test "every width, big endian" {
+    var writer = ByteWriter()
+    writer.uint8 1
+    writer.uint16 0x0203
+    writer.uint32 0x04050607
+    writer.uint64 0xFFFEFDFCFBFAF9F8
+    assert(writer.length() == 15)
+    const expected: List<UInt8> = [1, 2, 3, 4, 5, 6, 7, 0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8]
+    assert(writer.bytes() == expected)
+  }
+
+  test "every width, little endian, and a write that names its own order" {
+    var writer = ByteWriter order: ByteOrder.LittleEndian
+    writer.uint16 0x0203
+    writer.uint32 0x04050607
+    writer.uint64 0x0102030405060708
+    writer.uint16 0x0A0B, order: Some(.BigEndian)
+    const expected: List<UInt8> = [3, 2, 7, 6, 5, 4, 8, 7, 6, 5, 4, 3, 2, 1, 0x0A, 0x0B]
+    assert(writer.bytes() == expected)
+  }
+
+  test "signed numbers in two's complement, read back" {
+    for order in [ByteOrder.BigEndian, ByteOrder.LittleEndian] {
+      var writer = ByteWriter order: order
+      writer.int8(-128)
+      writer.int16(-259)
+      writer.int32(-50595079)
+      writer.int64 Int.minimum
+      writer.int64(-1)
+      var reader = ByteReader writer.bytes(), order: order
+      assert(reader.int8() == Ok(-128))
+      assert(reader.int16() == Ok(-259))
+      assert(reader.int32() == Ok(-50595079))
+      assert(reader.int64() == Ok(Int.minimum))
+      assert(reader.int64() == Ok(-1))
+      assert(reader.remaining() == 0)
+    }
+  }
+
+  test "unsigned extremes read back in both orders" {
+    for order in [ByteOrder.BigEndian, ByteOrder.LittleEndian] {
+      var writer = ByteWriter order: order
+      writer.uint16 UInt16.maximum
+      writer.uint32 UInt32.maximum
+      writer.uint64 UInt64.maximum
+      writer.uint64 0x8000000000000000
+      var reader = ByteReader writer.bytes(), order: order
+      assert(reader.uint16() == Ok(UInt16.maximum))
+      assert(reader.uint32() == Ok(UInt32.maximum))
+      assert(reader.uint64() == Ok(UInt64.maximum))
+      assert(reader.uint64() == Ok(0x8000000000000000))
+    }
+  }
+}
+
+group "floats" {
+  test "binary64 is written bit for bit" {
+    const bytes = written({ writer =>
+      writer.float64 1.0
+      writer.float64(-3.141592653589793)
+      writer.float64 3.141592653589793, order: Some(.LittleEndian)
+    })
+    const expected: List<UInt8> = [
+      0x3F, 0xF0, 0, 0, 0, 0, 0, 0,
+      0xC0, 0x09, 0x21, 0xFB, 0x54, 0x44, 0x2D, 0x18,
+      0x18, 0x2D, 0x44, 0x54, 0xFB, 0x21, 0x09, 0x40,
+    ]
+    assert(bytes == expected)
+  }
+
+  test "binary64 zeros, infinities, subnormals, the largest, and the quiet nan" {
+    const values = [-0.0, Float64.infinity, Float64.negativeInfinity, 4.9e-324, 2.2250738585072014e-308, 1.7976931348623157e308]
+    var writer = ByteWriter()
+    for value in values {
+      writer.float64 value
+    }
+    writer.float64 Float64.nan
+    const expected: List<UInt8> = [
+      0x80, 0, 0, 0, 0, 0, 0, 0,
+      0x7F, 0xF0, 0, 0, 0, 0, 0, 0,
+      0xFF, 0xF0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 1,
+      0, 0x10, 0, 0, 0, 0, 0, 0,
+      0x7F, 0xEF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0x7F, 0xF8, 0, 0, 0, 0, 0, 0,
+    ]
+    assert(writer.bytes() == expected)
+    var reader = ByteReader writer.bytes()
+    for value in values {
+      assert(reader.float64() == Ok(value))
+    }
+  }
+
+  test "a double of many values survives the round trip" {
+    var writer = ByteWriter()
+    var value = 1.0e-300
+    var values: List<Float64> = []
+    while value < 1.0e300 {
+      values.append value
+      values.append(-value / 3.0)
+      value = value * 7.3
+    }
+    for each in values {
+      writer.float64 each
+    }
+    var reader = ByteReader writer.bytes()
+    for each in values {
+      assert(reader.float64() == Ok(each))
+    }
+  }
+
+  test "binary32 is the nearest value, rounded to even" {
+    const bytes = written({ writer =>
+      writer.float32 1.0
+      writer.float32(-3.141592653589793)
+      writer.float32 1.401298464324817e-45
+      writer.float32 3.4028234663852886e38
+      writer.float32 1.0e39
+      writer.float32 1.0e-50
+      writer.float32 Float64.nan
+      writer.float32(-2.0, order: Some(.LittleEndian))
+    })
+    const expected: List<UInt8> = [
+      0x3F, 0x80, 0, 0,
+      0xC0, 0x49, 0x0F, 0xDB,
+      0, 0, 0, 1,
+      0x7F, 0x7F, 0xFF, 0xFF,
+      0x7F, 0x80, 0, 0,
+      0, 0, 0, 0,
+      0x7F, 0xC0, 0, 0,
+      0, 0, 0, 0xC0,
+    ]
+    assert(bytes == expected)
+  }
+
+  test "binary32 halfway cases go to the even neighbour" {
+    // 1 + 2^-24 lies halfway between 1 and the next binary32, whose last bit is odd: it rounds down to 1. One step up,
+    // 1 + 3 * 2^-24 lies halfway between two neighbours of which the upper one is even: it rounds up
+    const bytes = written({ writer =>
+      writer.float32(1.0 + 0.000000059604644775390625)
+      writer.float32(1.0 + 0.000000178813934326171875)
+    })
+    const expected: List<UInt8> = [0x3F, 0x80, 0, 0, 0x3F, 0x80, 0, 2]
+    assert(bytes == expected)
+  }
+}
+
+group "LEB128" {
+  test "unsigned: zero, one byte, two bytes and the largest" {
+    const bytes = written({ writer =>
+      writer.varUInt 0
+      writer.varUInt 127
+      writer.varUInt 300
+      writer.varUInt UInt64.maximum
+    })
+    const expected: List<UInt8> = [0, 0x7F, 0xAC, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]
+    assert(bytes == expected)
+  }
+
+  test "signed, sign-extended and zigzag, and both extremes read back" {
+    const bytes = written({ writer =>
+      writer.varInt 0
+      writer.varInt(-1)
+      writer.varInt 63
+      writer.varInt(-64)
+      writer.varInt 64
+      writer.varInt(-123456)
+      writer.varInt(-1, encoding: .Zigzag)
+      writer.varInt 2147483647, encoding: .Zigzag
+    })
+    const expected: List<UInt8> = [0, 0x7F, 0x3F, 0x40, 0xC0, 0x00, 0xC0, 0xBB, 0x78, 0x01, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F]
+    assert(bytes == expected)
+    for encoding in [SignedEncoding.SignExtended, SignedEncoding.Zigzag] {
+      var writer = ByteWriter()
+      for value in [Int.minimum, Int.maximum, 0, -1, 1] {
+        writer.varInt value, encoding: encoding
+      }
+      var reader = ByteReader writer.bytes()
+      for value in [Int.minimum, Int.maximum, 0, -1, 1] {
+        assert(reader.varInt(encoding: encoding) == Ok(value))
+      }
+      assert(reader.remaining() == 0)
+    }
+  }
+}
+
+group "bytes, text and marks" {
+  test "bytes and text as they are, and text that ends in a NUL" {
+    const bytes = written({ writer =>
+      writer.append([1, 2])
+      writer.text "hé"
+      writer.terminatedText "ab"
+    })
+    const expected: List<UInt8> = [1, 2, 0x68, 0xC3, 0xA9, 0x61, 0x62, 0]
+    assert(bytes == expected)
+  }
+
+  test "a length is patched in after what it counts" {
+    var writer = ByteWriter()
+    writer.uint8 7
+    const outer = writer.reserve32()
+    const inner = writer.reserve16 order: Some(.LittleEndian)
+    writer.text "hello"
+    writer.patch inner, UInt16.tryFrom(writer.lengthAfter(inner)).expect("a short length")
+    writer.patch outer, UInt32.tryFrom(writer.lengthAfter(outer)).expect("a short length")
+    assert(outer.position() == 1 && outer.end() == 5 && inner.end() == 7)
+    const expected: List<UInt8> = [7, 0, 0, 0, 7, 5, 0, 0x68, 0x65, 0x6C, 0x6C, 0x6F]
+    assert(writer.bytes() == expected)
+  }
+
+  test "what bytes() answered does not change when the writer writes on" {
+    var writer = ByteWriter()
+    writer.uint8 1
+    const before = writer.bytes()
+    writer.uint8 2
+    assert(before == [1])
+    assert(writer.bytes() == [1, 2])
+  }
+}

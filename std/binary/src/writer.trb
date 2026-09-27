@@ -1,0 +1,215 @@
+/** [ByteWriter]: typed writes into a growable buffer, and [Mark] for a length that is written after what it counts. */
+
+use ByteOrder from "std/core"
+use Bytes from "std/stream"
+use SignedEncoding from "./reader"
+use byteOf, float32Pattern, float64Pattern, patternOf from "./number"
+
+/**
+ * Where a [ByteWriter] left room for a number of `Width` - a `UInt16` or a `UInt32` - that is written later with
+ * [ByteWriter.patch]: a length that is known only after what it counts.
+ */
+public type Mark<Width> {
+  /** The first byte of the room, counted from the start of the writer's bytes. */
+  private positionValue: Int
+  /** How many bytes of room: 2 or 4. */
+  private width: Int
+  /** The byte order the number is written in. */
+  private order: ByteOrder
+
+  /** The first byte of the room, counted from the start of the writer's bytes. */
+  fn position(): Int {
+    positionValue
+  }
+
+  /** The first byte after the room: where what the number counts starts. */
+  fn end(): Int {
+    positionValue + width
+  }
+}
+
+/**
+ * A growable buffer that numbers, bytes and text are written into, in the writer's byte order - big endian unless it
+ * was made with another - or in the one a write names. Nothing here fails: a value that does not fit a field is refused
+ * where it becomes the field's width type, with `tryInto()` at the caller, because the signatures take width types.
+ *
+ *     var writer = ByteWriter()
+ *     writer.uint16 0x1234
+ *     writer.uint32(7, order: Some(.LittleEndian))
+ *     print writer.bytes()
+ *
+ * A length that comes before what it counts is left open with [ByteWriter.reserve16] or [ByteWriter.reserve32] and
+ * filled in with [ByteWriter.patch] once the rest is written.
+ */
+public type ByteWriter {
+  /** The byte order of every write of a number that does not name one. */
+  order: ByteOrder = ByteOrder.BigEndian
+  /** Everything written so far. */
+  private var output: Bytes = []
+
+  /** How many bytes have been written. */
+  fn length(): Int {
+    output.length()
+  }
+
+  /** Everything written so far. A list is a value, so writing on afterwards does not change what this answered. */
+  fn bytes(): Bytes {
+    output
+  }
+
+  /** The lowest `width` bytes of `value`, at most 8, in `order`. */
+  private var fn put(value: Int, width: Int, order: ByteOrder) {
+    if order == ByteOrder.BigEndian {
+      var shift = (width - 1) * 8
+      while shift >= 0 {
+        output.append byteOf(value >> shift)
+        shift = shift - 8
+      }
+    } else {
+      var shift = 0
+      while shift < width * 8 {
+        output.append byteOf(value >> shift)
+        shift = shift + 8
+      }
+    }
+  }
+
+  /** One byte. */
+  var fn uint8(value: UInt8) {
+    output.append value
+  }
+
+  /** A `UInt16` as two bytes, in `order` or the writer's. */
+  var fn uint16(value: UInt16, order: ByteOrder? = None) {
+    put(Int.from(value), 2, order ?? self.order)
+  }
+
+  /** A `UInt32` as four bytes, in `order` or the writer's. */
+  var fn uint32(value: UInt32, order: ByteOrder? = None) {
+    put(Int.from(value), 4, order ?? self.order)
+  }
+
+  /** A `UInt64` as eight bytes, in `order` or the writer's. */
+  var fn uint64(value: UInt64, order: ByteOrder? = None) {
+    put(patternOf(value), 8, order ?? self.order)
+  }
+
+  /** An `Int8` as one byte, in two's complement. */
+  var fn int8(value: Int8) {
+    output.append byteOf(Int.from(value))
+  }
+
+  /** An `Int16` as two bytes, in two's complement and in `order` or the writer's. */
+  var fn int16(value: Int16, order: ByteOrder? = None) {
+    put(Int.from(value), 2, order ?? self.order)
+  }
+
+  /** An `Int32` as four bytes, in two's complement and in `order` or the writer's. */
+  var fn int32(value: Int32, order: ByteOrder? = None) {
+    put(Int.from(value), 4, order ?? self.order)
+  }
+
+  /** An `Int64` as eight bytes, in two's complement and in `order` or the writer's. */
+  var fn int64(value: Int64, order: ByteOrder? = None) {
+    put(value, 8, order ?? self.order)
+  }
+
+  /**
+   * The IEEE 754 binary32 nearest to `value`, rounded to even, as four bytes in `order` or the writer's. A value too
+   * large for one is an infinity; a `nan` is the quiet `7fc00000`.
+   */
+  var fn float32(value: Float64, order: ByteOrder? = None) {
+    put(float32Pattern(value), 4, order ?? self.order)
+  }
+
+  /** `value` as an IEEE 754 binary64, eight bytes in `order` or the writer's. A `nan` is the quiet `7ff8000000000000`. */
+  var fn float64(value: Float64, order: ByteOrder? = None) {
+    put(float64Pattern(value), 8, order ?? self.order)
+  }
+
+  /** The 64 bits of `pattern` as an unsigned LEB128: as few bytes as the value needs, at most 10. */
+  private var fn putVariable(pattern: Int) {
+    var rest = pattern
+    loop {
+      const low = rest & 0x7F
+      // The shift keeps the sign, so the bits it brings in are cleared: the rest is a number without one
+      rest = (rest >> 7) & 0x1FFFFFFFFFFFFFF
+      if rest == 0 {
+        output.append byteOf(low)
+        return
+      }
+      output.append byteOf(low | 0x80)
+    }
+  }
+
+  /** `value` as an unsigned LEB128, in as few bytes as it needs: protobuf's varint, WebAssembly's `u64`. */
+  var fn varUInt(value: UInt64) {
+    putVariable patternOf(value)
+  }
+
+  /**
+   * `value` as a signed LEB128 in `encoding`, in as few bytes as it needs: sign-extended by default, as WebAssembly
+   * writes it, or zigzag, as protobuf's `sint64` does.
+   */
+  var fn varInt(value: Int64, encoding: SignedEncoding = SignedEncoding.SignExtended) {
+    if encoding == SignedEncoding.Zigzag {
+      putVariable((value << 1) ^ (value >> 63))
+      return
+    }
+    var rest = value
+    loop {
+      const low = rest & 0x7F
+      rest = rest >> 7
+      const done = (rest == 0 && low & 0x40 == 0) || (rest == -1 && low & 0x40 != 0)
+      if done {
+        output.append byteOf(low)
+        return
+      }
+      output.append byteOf(low | 0x80)
+    }
+  }
+
+  /** `bytes` as they are. */
+  var fn append(bytes: Bytes) {
+    output.appendAll bytes
+  }
+
+  /** The UTF-8 bytes of `value`, with nothing around them: a length, where the format has one, is written first. */
+  var fn text(value: String) {
+    output.appendAll value.bytes()
+  }
+
+  /** The UTF-8 bytes of `value` and a NUL byte after them. A NUL inside `value` ends the text for whoever reads it. */
+  var fn terminatedText(value: String) {
+    output.appendAll value.bytes()
+    output.append 0
+  }
+
+  /** Room for a `UInt16` that [ByteWriter.patch] fills in later, in `order` or the writer's; it holds zeros until then. */
+  var fn reserve16(order: ByteOrder? = None): Mark<UInt16> {
+    const mark = Mark<UInt16>(output.length(), 2, order ?? self.order)
+    put 0, 2, mark.order
+    mark
+  }
+
+  /** Room for a `UInt32` that [ByteWriter.patch] fills in later, in `order` or the writer's; it holds zeros until then. */
+  var fn reserve32(order: ByteOrder? = None): Mark<UInt32> {
+    const mark = Mark<UInt32>(output.length(), 4, order ?? self.order)
+    put 0, 4, mark.order
+    mark
+  }
+
+  /** How many bytes were written after the room `mark` stands for: the length a length field usually holds. */
+  fn lengthAfter<Width>(mark: Mark<Width>): Int {
+    output.length() - mark.end()
+  }
+
+  /** Writes `value` into the room `mark` stands for, in the order the room was made with. */
+  var fn patch<Width: Into<Int>>(mark: Mark<Width>, value: Width) {
+    const number: Int = value.into()
+    for index in 0..mark.width {
+      const shift = if mark.order == ByteOrder.BigEndian { (mark.width - 1 - index) * 8 } else { index * 8 }
+      output[mark.positionValue + index] = byteOf(number >> shift)
+    }
+  }
+}
