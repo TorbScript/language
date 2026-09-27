@@ -1,20 +1,22 @@
 #!/bin/sh
-# Publishes a packed seed (`tools/pack-seed.sh`) to the `seeds` release of the repository and puts it at the top of the
-# index `seeds.txt` there, which is what `tools/fetch-seed.sh` reads.
+# Publishes a packed seed (`tools/pack-seed.sh`) to the release `seeds` of the repository on its forge and puts it at
+# the top of the index `seeds.txt` there, which is what `tools/fetch-seed.sh` reads.
 #
-# The workflows run it (`.github/workflows/seed.yml`, `nightly.yml`, `release.yml`), with the job's own token; the owner
-# runs it once by hand for the very first seed, because CI cannot bootstrap before one exists:
+# The workflows run it (`.forgejo/workflows/seed.yml`, `nightly.yml`, `release.yml`) with the JWT of an Authorized
+# Integration; `tools/land.sh publish` runs it with the owner's access token; the owner runs it by hand for the very
+# first seed of a forge, because CI cannot bootstrap before one exists:
 #
 #   sh tools/pack-seed.sh seed                               # the main checkout's seed/, into build/seed-archive/
-#   sh tools/publish-seed.sh build/seed-archive/torb-seed-<commit>.tar.gz
+#   TORB_FORGE_TOKEN=<token> sh tools/publish-seed.sh build/seed-archive/torb-seed-<commit>.tar.gz
 #
-# Needs `gh`, logged in (`gh auth login`) or given `$GH_TOKEN` with `contents: write` on the repository.
-# `$TORB_SEED_REPOSITORY` names the repository (default: TorbScript/language).
+# The forge is `tools/forge.sh`'s: Forgejo at git.torb.dev unless TORB_FORGE, TORB_FORGE_URL and
+# TORB_FORGE_REPOSITORY say otherwise (TORB_FORGE=github publishes to the GitHub mirror's release instead), and
+# TORB_FORGE_TOKEN is a token that may write the repository's releases.
 #
 # It is idempotent: a seed whose commit the index already lists is left as it is. The `seeds` release is a
-# prerelease, so it is never the repository's "latest" release, and it is created on first use; the commit its tag
-# points at means nothing. Two publishers at the same time would race on `seeds.txt`, which is why every workflow that
-# calls this script shares the concurrency group `seeds`.
+# prerelease, so it is never the repository's newest stable release, and it is created on first use at the commit
+# `main` is at; the commit its tag points at means nothing. Two publishers at the same time would race on `seeds.txt`,
+# which is why every workflow that calls this script shares the concurrency group `seeds`.
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
@@ -43,9 +45,12 @@ sha256_of() {
 archive=$1
 [ -f "$archive" ] || fail "there is no $archive"
 [ -f "$archive.sha256" ] || fail "there is no $archive.sha256 beside it (tools/pack-seed.sh writes both)"
-command -v gh >/dev/null 2>&1 || fail "gh is needed to publish (https://cli.github.com)"
 
-repository=${TORB_SEED_REPOSITORY:-TorbScript/language}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+forge() {
+  sh "$root/tools/forge.sh" "$@"
+}
+
 name=$(basename "$archive")
 case "$name" in
   torb-seed-*.tar.gz) ;;
@@ -61,34 +66,47 @@ recorded=$(cut -d ' ' -f 1 <"$archive.sha256")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-if ! gh release view seeds --repo "$repository" >/dev/null 2>&1; then
-  say "creating the release \`seeds\` of $repository"
-  gh release create seeds --repo "$repository" --prerelease --title "Seeds" --notes \
-    "The portable seeds of the compiler: its own C and the runtime of the same commit, one archive per commit. \
-seeds.txt lists them, newest first. sh tools/fetch-seed.sh downloads, verifies and builds one; nothing else here is \
-meant to be downloaded by hand."
+# `forge.sh release` answers 2 for a release that does not exist, and 1 when the forge could not be asked
+status=0
+forge release seeds >"$work/release" 2>"$work/error" || status=$?
+if [ "$status" -eq 1 ]; then
+  cat "$work/error" >&2
+  fail "the release \`seeds\` could not be read"
+fi
+if [ "$status" -eq 2 ]; then
+  say "creating the release \`seeds\`"
+  cat >"$work/notes.md" <<'EOF'
+The portable seeds of the compiler: its own C and the runtime of the same commit, one archive per commit. seeds.txt
+lists them, newest first. `sh tools/fetch-seed.sh` downloads, verifies and builds one; nothing else here is meant to
+be downloaded by hand.
+EOF
+  forge create seeds main "Seeds" "$work/notes.md" --prerelease >/dev/null
+  forge release seeds >"$work/release"
 fi
 
-if gh release download seeds --repo "$repository" --pattern seeds.txt --dir "$work" >/dev/null 2>&1; then
-  :
+# An index that exists is read, and one that cannot be read stops the publish: starting a new one would drop every
+# seed it lists
+if forge assets seeds | grep -q -x 'seeds.txt'; then
+  forge download seeds seeds.txt "$work/seeds.txt" || fail "seeds.txt is on the release and could not be downloaded"
 else
   printf '%s\n' "# <commit> <sha256> <archive> - the newest first. Written by tools/publish-seed.sh." >"$work/seeds.txt"
 fi
+tr -d '\r' <"$work/seeds.txt" >"$work/seeds.read"
 
-if awk -v commit="$commit" '$1 == commit { found = 1 } END { exit !found }' "$work/seeds.txt"; then
+if awk -v commit="$commit" '$1 == commit { found = 1 } END { exit !found }' "$work/seeds.read"; then
   say "the index already lists the seed $commit - nothing to do"
   exit 0
 fi
 
-gh release upload seeds --repo "$repository" --clobber "$archive" "$archive.sha256"
+forge upload seeds "$archive" "$archive.sha256"
 
 # The new line goes above every seed and below the comment lines at the top
 {
-  grep '^#' "$work/seeds.txt" || true
+  grep '^#' "$work/seeds.read" || true
   printf '%s %s %s\n' "$commit" "$hash" "$name"
-  grep -v '^#' "$work/seeds.txt" || true
-} >"$work/seeds.next"
-mv "$work/seeds.next" "$work/seeds.txt"
-gh release upload seeds --repo "$repository" --clobber "$work/seeds.txt"
+  grep -v '^#' "$work/seeds.read" || true
+} >"$work/seeds.txt"
+forge upload seeds "$work/seeds.txt"
 
-say "published the seed $commit to $repository (release seeds): $name, sha256 $hash"
+say "published the seed $commit (release seeds): $name, sha256 $hash"
+say "  $(forge url seeds seeds.txt)"

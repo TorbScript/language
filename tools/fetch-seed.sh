@@ -2,9 +2,9 @@
 # Downloads a published seed, verifies it, and compiles it into `build/seed/torb` - the seed `tools/bootstrap.sh` uses
 # when this machine has none of its own (no `$TORB_SEED`, no `seed/`, no archive in `../torbscript-seeds/`).
 #
-# Seeds are published as assets of one GitHub release, tagged `seeds`, of the repository (`tools/publish-seed.sh`,
-# run by the nightly, the release and the seed workflows). Beside the archives it holds `seeds.txt`, the index, one
-# line per seed and the newest first:
+# Seeds are published as assets of one release, tagged `seeds`, of the repository on its forge - Forgejo at
+# git.torb.dev (`tools/publish-seed.sh`, run by the nightly, the release and the seed workflows of `.forgejo/`).
+# Beside the archives it holds `seeds.txt`, the index, one line per seed and the newest first:
 #
 #   <commit> <sha256 of the archive> <file name of the archive>
 #   1ae963fa1234 5f3a...e9 torb-seed-1ae963fa1234.tar.gz
@@ -12,6 +12,10 @@
 # An archive is found in the same directory as the index, so a mirror, a fork or a local directory is an index URL
 # away. The download is checked against the hash in the index, unpacked into `build/seed/`, compiled with the local C
 # compiler (`tools/build-seed.sh`: `$TORB_CC`, clang, gcc, cc) and run once on a one-line program before it counts.
+#
+# Two indexes are asked, in this order: the forge's, and GitHub's (TorbScript/language, where CI published seeds until
+# 2026-09-27). The second is asked only when the first cannot be read or does not list the seed that was asked for -
+# the seeds older than the move are on GitHub until `tools/migrate-seeds.sh` has copied them.
 #
 #   sh tools/fetch-seed.sh                  # the newest seed of the index
 #   sh tools/fetch-seed.sh 1ae963fa         # the seed built from that commit (any unique prefix of it)
@@ -21,10 +25,13 @@
 #                                           # that archive, checked against the .sha256 beside it
 #
 # Variables:
-#   TORB_SEED_REPOSITORY  owner/name on GitHub (default TorbScript/language)
-#   TORB_SEED_INDEX       the index: an https:// or file:// URL or a path (default: the `seeds` release's seeds.txt)
+#   TORB_SEED_INDEX       the index: an https:// or file:// URL or a path, and then only that one (default: the forge's
+#                         seeds.txt, then GitHub's)
+#   TORB_FORGE_URL, TORB_FORGE_REPOSITORY  the forge (https://git.torb.dev, torbscript/language), as tools/forge.sh
+#   TORB_FORGE_TOKEN      for a private repository on the forge: sent with every download from it
+#   TORB_SEED_REPOSITORY  owner/name of the GitHub fallback (default TorbScript/language)
 #   TORB_SEED_SHA256      the expected hash for --archive, instead of the .sha256 beside it
-#   GH_TOKEN, GITHUB_TOKEN  for a private repository: the downloads then go through the REST API with this token
+#   GH_TOKEN, GITHUB_TOKEN  for GitHub's private repository: its downloads then go through the REST API with this token
 #   TORB_CC, TORB_CFLAGS  the C compiler and extra flags (tools/build-seed.sh)
 #
 # Needs curl or wget, tar, gzip, and sha256sum, shasum or openssl - no `gh`, no `torb`. A seed that is already in
@@ -84,7 +91,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h | --help)
-      sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     -*) fail "unknown option $1" ;;
@@ -105,16 +112,22 @@ esac
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
+forge_url=${TORB_FORGE_URL:-https://git.torb.dev}
+forge_url=${forge_url%/}
+forge_repository=${TORB_FORGE_REPOSITORY:-torbscript/language}
+forge_token=${TORB_FORGE_TOKEN-}
 repository=${TORB_SEED_REPOSITORY:-TorbScript/language}
-index_url=${TORB_SEED_INDEX:-https://github.com/$repository/releases/download/seeds/seeds.txt}
 token=${GH_TOKEN:-${GITHUB_TOKEN-}}
+forge_index="$forge_url/$forge_repository/releases/download/seeds/seeds.txt"
+github_index="https://github.com/$repository/releases/download/seeds/seeds.txt"
 destination="$root/build/seed"
 
 # ----------------------------------------------------------------------------- downloading --------------------------
 
-# One URL into one file. A path or a file:// URL is copied. A release asset of GitHub is fetched through the REST API
-# when there is a token - the plain download URL of a private repository answers with a login page - and with a plain
-# GET otherwise. curl drops the Authorization header on the redirect to the storage host, which is what GitHub expects.
+# One URL into one file; 1 when it could not be downloaded. A path or a file:// URL is copied. A release asset of
+# GitHub is fetched through the REST API when there is a token - the plain download URL of a private repository
+# answers with a login page - and with a plain GET otherwise; a file of the forge carries TORB_FORGE_TOKEN where it is
+# set. curl drops the Authorization header on a redirect to another host, which is what both forges expect.
 fetch() {
   url=$1
   file=$2
@@ -136,18 +149,27 @@ fetch() {
         return
       fi
       ;;
+    "$forge_url"/*)
+      if [ -n "$forge_token" ]; then
+        get "$url" "$file" -H "Authorization: token $forge_token"
+        return
+      fi
+      ;;
   esac
   get "$url" "$file"
 }
 
-# A plain HTTPS GET, with the headers given after the file, retried a few times.
+# A plain HTTPS GET, with the headers given after the file, retried a few times; 1 when it failed.
 get() {
   get_url=$1
   get_file=$2
   shift 2
   if command -v curl >/dev/null 2>&1; then
     set -- --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 -o "$get_file" "$@" "$get_url"
-    curl "$@" || fail "could not download $get_url"
+    curl "$@" || {
+      say "could not download $get_url"
+      return 1
+    }
   elif command -v wget >/dev/null 2>&1; then
     # `-H <header>` pairs become `--header=<header>`: the list is rebuilt in place, which keeps the spaces in a header
     for header in "$@"; do
@@ -155,7 +177,10 @@ get() {
       [ "$header" = "-H" ] && continue
       set -- "$@" "--header=$header"
     done
-    wget -q --https-only --tries=3 -O "$get_file" "$@" "$get_url" || fail "could not download $get_url"
+    wget -q --https-only --tries=3 -O "$get_file" "$@" "$get_url" || {
+      say "could not download $get_url"
+      return 1
+    }
   else
     fail "neither curl nor wget is installed"
   fi
@@ -172,12 +197,13 @@ fetch_asset() {
   path=${path#*/releases/download/}
   tag=${path%%/*}
   asset=${path#*/}
-  listing=$(mktemp)
+  listing="$work/listing.json"
   if [ -n "$token" ]; then
     get "https://api.github.com/repos/$owner/$name/releases/tags/$tag" "$listing" \
-      -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json"
+      -H "Authorization: Bearer $token" -H "Accept: application/vnd.github+json" || return 1
   else
-    get "https://api.github.com/repos/$owner/$name/releases/tags/$tag" "$listing" -H "Accept: application/vnd.github+json"
+    get "https://api.github.com/repos/$owner/$name/releases/tags/$tag" "$listing" \
+      -H "Accept: application/vnd.github+json" || return 1
   fi
   # The JSON on one line, `"key" : value` as `"key":value`, then cut before every `"url":"`: an asset's own URL is
   # followed by its `name` before the next URL (its uploader's) starts
@@ -196,7 +222,10 @@ fetch_asset() {
       }
     }')
   rm -f "$listing"
-  [ -n "$id" ] || fail "the release \`$tag\` of $owner/$name has no asset \`$asset\`"
+  if [ -z "$id" ]; then
+    say "the release \`$tag\` of $owner/$name has no asset \`$asset\`"
+    return 1
+  fi
   if [ -n "$token" ]; then
     get "https://api.github.com/repos/$owner/$name/releases/assets/$id" "$asset_file" \
       -H "Authorization: Bearer $token" -H "Accept: application/octet-stream"
@@ -225,27 +254,60 @@ if [ -n "$archive_source" ]; then
     expected=$(cut -d ' ' -f 1 <"$work/sums")
   fi
 else
-  fetch "$index_url" "$work/seeds.txt"
-  # Comments and blank lines are not seeds; a line is `<commit> <sha256> <file>`
-  grep -v '^[[:space:]]*\(#\|$\)' "$work/seeds.txt" | tr -d '\r' >"$work/entries" || true
-  [ -s "$work/entries" ] || fail "the index $index_url lists no seed"
+  # choose <index>: reads the index and picks the seed that was asked for. 1 when the index cannot be read, 2 when it
+  # lists no seed or not the one asked for; the reason is in $reason either way
+  choose() {
+    index_url=$1
+    if ! fetch "$index_url" "$work/seeds.txt" 2>"$work/fetch.error"; then
+      reason="the index $index_url could not be read: $(tr '\n' ' ' <"$work/fetch.error")"
+      return 1
+    fi
+    # Comments and blank lines are not seeds; a line is `<commit> <sha256> <file>`
+    grep -v '^[[:space:]]*\(#\|$\)' "$work/seeds.txt" | tr -d '\r' >"$work/entries" || true
+    if [ ! -s "$work/entries" ]; then
+      reason="the index $index_url lists no seed"
+      return 2
+    fi
+    [ "$mode" != "list" ] || return 0
+    if [ -z "$wanted" ]; then
+      entry=$(head -n 1 "$work/entries")
+    else
+      matches=$(awk -v prefix="$wanted" 'index($1, prefix) == 1' "$work/entries")
+      if [ -z "$matches" ]; then
+        reason="the index $index_url lists no seed built from a commit that starts with $wanted"
+        return 2
+      fi
+      [ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" -eq 1 ] || fail "$wanted names more than one seed of $index_url"
+      entry=$matches
+    fi
+    commit=$(printf '%s\n' "$entry" | awk '{ print $1 }')
+    expected=$(printf '%s\n' "$entry" | awk '{ print $2 }')
+    archive_name=$(printf '%s\n' "$entry" | awk '{ print $3 }')
+    [ -n "$archive_name" ] || fail "the index line \`$entry\` is not \`<commit> <sha256> <file>\`"
+    archive_source="${index_url%/*}/$archive_name"
+    return 0
+  }
+
+  if [ -n "${TORB_SEED_INDEX-}" ]; then
+    choose "$TORB_SEED_INDEX" || fail "$reason"
+  else
+    # The forge first; GitHub's index where the forge's cannot be read or lacks the seed (the seeds before the move)
+    reasons=""
+    chosen=0
+    for candidate in "$forge_index" "$github_index"; do
+      if choose "$candidate"; then
+        chosen=1
+        break
+      fi
+      reasons="$reasons
+  $reason"
+    done
+    [ "$chosen" -eq 1 ] || fail "no index had the seed:$reasons"
+  fi
   if [ "$mode" = "list" ]; then
     cat "$work/entries"
     exit 0
   fi
-  if [ -z "$wanted" ]; then
-    entry=$(head -n 1 "$work/entries")
-  else
-    matches=$(awk -v prefix="$wanted" 'index($1, prefix) == 1' "$work/entries")
-    [ -n "$matches" ] || fail "the index lists no seed built from a commit that starts with $wanted"
-    [ "$(printf '%s\n' "$matches" | wc -l | tr -d ' ')" -eq 1 ] || fail "$wanted names more than one seed of the index"
-    entry=$matches
-  fi
-  commit=$(printf '%s\n' "$entry" | awk '{ print $1 }')
-  expected=$(printf '%s\n' "$entry" | awk '{ print $2 }')
-  archive_name=$(printf '%s\n' "$entry" | awk '{ print $3 }')
-  [ -n "$archive_name" ] || fail "the index line \`$entry\` is not \`<commit> <sha256> <file>\`"
-  archive_source="${index_url%/*}/$archive_name"
 fi
 
 if [ "$mode" = "newest" ]; then
@@ -265,7 +327,7 @@ fi
 # ----------------------------------------------------------------------------- download, verify, unpack ------------
 
 say "downloading the seed $commit: $archive_source"
-fetch "$archive_source" "$work/$archive_name"
+fetch "$archive_source" "$work/$archive_name" || fail "the seed $commit could not be downloaded from $archive_source"
 actual=$(sha256_of "$work/$archive_name")
 if [ "$actual" != "$expected" ]; then
   fail "$archive_name has the SHA-256 $actual, and $expected was expected - nothing was unpacked"
