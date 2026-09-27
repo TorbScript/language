@@ -17,6 +17,9 @@
  *     yank "1.2.4", reason: "sends the proxy password in clear text"
  *
  * A yank is undone by a later `unyank "1.2.4"` line, never by removing the first one.
+ *
+ * A registry with a key signs every record - a `release` block with a `signature` line, a `yank` or `unyank` line
+ * with a `signature:` label - over [recordMessage], and a client checks them (`./signing`).
  */
 
 use Version from "./version"
@@ -47,6 +50,22 @@ public type IndexYank {
   signature: String = ""
 }
 
+/** One record of an index file - a release, a yank or a yank undone - in the order the file has them. */
+public type IndexRecord {
+  /** A published version. */
+  case Release(release: IndexRelease)
+  /** A version withdrawn for new resolutions. */
+  case Yank(yank: IndexYank)
+  /** A yank undone: the version, and the registry's signature of the line, empty where it signs nothing. */
+  case Unyank(version: Version, signature: String)
+}
+
+/** The records of an index file in their order, and the package the file names. */
+public type IndexRecords {
+  package: String
+  records: List<IndexRecord>
+}
+
 /** Everything the index says about one package. */
 public type PackageIndex {
   package: String
@@ -71,36 +90,101 @@ public type PackageIndex {
  *   of one version.
  */
 public fn readIndex(text: String, expected: String): Result<PackageIndex, String> {
+  const read = recordsOf(text)?
+  if read.package != expected {
+    return Fail "the index file of {expected} names `{read.package}`"
+  }
   var index = PackageIndex expected
-  var named = ""
-  for setting in settingsOf(text)? {
-    match setting.word {
-      "package" => {
-        named = setting.first() ?? ""
-      }
-      "release" => {
-        const release = releaseOf(setting)?
+  for record in read.records {
+    match record {
+      .Release(release) => {
         if index.release(release.version).isSome() {
           return Fail "the index of {expected} has two releases of {release.version}"
         }
         index = index.copy releases: index.releases.appended(release)
       }
+      .Yank(yanked) => {
+        index = index.copy yanks: index.yanks.appended(yanked)
+      }
+      .Unyank(version, _) => {
+        index = index.copy yanks: index.yanks.filter({ _.version != version }).toList()
+      }
+    }
+  }
+  index
+}
+
+/**
+ * The records of an index file, read statically, in the order of the file - what [readIndex] folds into a
+ * [PackageIndex] and what `./signing` checks one by one.
+ *
+ * # Errors
+ *
+ * - A file that does not parse, a record without a version, or a release without a hash.
+ */
+public fn recordsOf(text: String): Result<IndexRecords, String> {
+  var named = ""
+  var records: List<IndexRecord> = []
+  for setting in settingsOf(text)? {
+    match setting.word {
+      "package" => {
+        named = setting.first() ?? ""
+      }
+      "release" => records.append IndexRecord.Release(releaseOf(setting)?)
       "yank" => {
         const version = versionOf(setting.first() ?? "")?
         const yanked = IndexYank(version, setting.labeled.get("reason") ?? "", setting.labeled.get("signature") ?? "")
-        index = index.copy yanks: index.yanks.appended(yanked)
+        records.append IndexRecord.Yank(yanked)
       }
       "unyank" => {
         const version = versionOf(setting.first() ?? "")?
-        index = index.copy yanks: index.yanks.filter({ _.version != version }).toList()
+        records.append IndexRecord.Unyank(version, setting.labeled.get("signature") ?? "")
       }
       _ => {}
     }
   }
-  if named != expected {
-    return Fail "the index file of {expected} names `{named}`"
+  IndexRecords named, records
+}
+
+/**
+ * The text a record's signature is made over (RELEASE.md section 7.4): a line that names the format, the package, the
+ * record's position among the records of its file - counted from 0 - and then every field resolution reads, each value
+ * written as [quoted] writes it, so that no value can end a line or pretend to be another field.
+ *
+ *     // fragment
+ *     torb index record 1
+ *     package "acme/http"
+ *     position 1
+ *     release "1.2.5"
+ *     hash "sha256:6f1c..."
+ *     language "0.4.0"
+ *     runtime "acme/json:^2.0.1"
+ *     capability "network"
+ *
+ * The package and the position are what make a record signed for one place useless in another: a mirror cannot move
+ * a release into another package's file, nor append an old `unyank` again after a later `yank`.
+ */
+public fn recordMessage(package: String, position: Int, record: IndexRecord): String {
+  var lines = ["torb index record 1", "package {quoted(package)}", "position {position}"]
+  match record {
+    .Release(release) => {
+      lines.append "release {quoted(release.version.show())}"
+      lines.append "hash {quoted(release.hash)}"
+      lines.append "language {quoted(release.language)}"
+      for dependency in release.dependencies {
+        lines.append "runtime {quoted(dependency)}"
+      }
+      for capability in release.capabilities {
+        lines.append "capability {quoted(capability)}"
+      }
+    }
+    .Yank(yanked) => {
+      lines.append "yank {quoted(yanked.version.show())}"
+      lines.append "reason {quoted(yanked.reason)}"
+    }
+    .Unyank(version, _) => lines.append "unyank {quoted(version.show())}"
   }
-  index
+  lines.map({ "{_}\n" }).toList().joined(separator: "")
 }
 
 fn releaseOf(setting: Setting): Result<IndexRelease, String> {
@@ -205,9 +289,11 @@ public fn renderYank(yank: IndexYank): String {
 }
 
 /**
- * A yank undone (`torb yank --undo`, RELEASE.md section 7.3) as the line that is appended for it: the file stays
- * append-only, and the last of a version's `yank` and `unyank` lines is the one that holds.
+ * A yank undone (`torb yank --undo`, RELEASE.md section 7.3) as the line that is appended for it, with the registry's
+ * signature where it signs: the file stays append-only, and the last of a version's `yank` and `unyank` lines is the
+ * one that holds.
  */
-public fn renderUnyank(version: Version): String {
-  "\nunyank {quoted(version.show())}\n"
+public fn renderUnyank(version: Version, signature: String = ""): String {
+  const signed = if signature.isEmpty() { "" } else { ", signature: {quoted(signature)}" }
+  "\nunyank {quoted(version.show())}{signed}\n"
 }

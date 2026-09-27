@@ -1,7 +1,8 @@
 /**
  * The package manager's pure half: versions and their order, requirements and the sets they allow, the specifier
  * grammar, the resolver on fixture indexes - diamonds, backtracking, pre-releases, workspace members, yanked releases,
- * the lock's preference, and an impossible set with its explanation - and the index and the lock written and read back.
+ * the lock's preference, and an impossible set with its explanation - the index and the lock written and read back,
+ * and the signatures of an index and the keys of a registry.
  */
 
 use test, group from "std/test"
@@ -10,7 +11,9 @@ use VersionSet from "../src/package/version-set"
 use requirementOf, versionsOf from "../src/package/requirement"
 use specifierOf, packageNameOf from "../src/package/specifier"
 use Candidate, resolve from "../src/package/resolve"
-use PackageIndex, IndexRelease, IndexYank, readIndex, indexStart, renderRelease, renderYank, candidatesOf from "../src/package/index"
+use PackageIndex, IndexRelease, IndexYank, IndexRecord, readIndex, indexStart, renderRelease, renderYank, renderUnyank, recordMessage, candidatesOf from "../src/package/index"
+use RegistryKey, recordSignature, endorsed, readRegistryKeys, renderRegistryKeys, trustedKeys, verifyIndex from "../src/package/signing"
+use Ed25519PrivateKey from "std/signature"
 use Lock, LockedPackage, LockedSettings, readLock, renderLock from "../src/package/lock"
 use Manifest from "../src/project/manifest"
 use withRequirement, withoutRequirement from "../src/package/manifest-edit"
@@ -319,6 +322,117 @@ group "The index" {
     assert readIndex("{indexStart("acme/other")}{release}", "acme/http").isError()
     assert readIndex("{indexStart("acme/http")}{release}{release}", "acme/http").isError()
     assert readIndex("{indexStart("acme/http")}\nrelease \"1.0.0\" \{\n\}\n", "acme/http").isError()
+  }
+}
+
+/** A registry's key of the tests, made from a seed of 32 bytes of `seed`. */
+fn registryKey(seed: Int): Ed25519PrivateKey {
+  Ed25519PrivateKey.fromSeed(List.filled(32, UInt8.tryFrom(seed).expect("a byte"))).expect("32 bytes")
+}
+
+/** The index of acme/http as a registry with `key` writes it: a release, its yank and the yank undone, each signed. */
+fn signedIndex(key: Ed25519PrivateKey): String {
+  const version = parsedVersion "1.2.4"
+  const release = IndexRelease(
+    version,
+    hashOf("0"),
+    language: "0.1.0",
+    dependencies: ["acme/json:^2.0.0"],
+    capabilities: ["network"],
+  )
+  const signedRelease = release.copy signature: recordSignature(key, "acme/http", 0, IndexRecord.Release(release))
+  const yank = IndexYank version, "sends a password"
+  const signedYank = yank.copy signature: recordSignature(key, "acme/http", 1, IndexRecord.Yank(yank))
+  const unyank = recordSignature key, "acme/http", 2, IndexRecord.Unyank(version, "")
+  "{indexStart("acme/http")}{renderRelease(signedRelease)}{renderYank(signedYank)}{renderUnyank(version, unyank)}"
+}
+
+group "Signatures of the index" {
+  test "a record's message names the package, its position and every field resolution reads" {
+    const release = IndexRelease(
+      parsedVersion("1.2.5"),
+      hashOf("f"),
+      language: "0.1.0",
+      dependencies: ["acme/json:^2.0.1"],
+      capabilities: ["network"],
+    )
+    const expected = [
+      "torb index record 1",
+      "package \"acme/http\"",
+      "position 3",
+      "release \"1.2.5\"",
+      "hash \"{hashOf("f")}\"",
+      "language \"0.1.0\"",
+      "runtime \"acme/json:^2.0.1\"",
+      "capability \"network\"",
+      "",
+    ]
+    assert(recordMessage("acme/http", 3, IndexRecord.Release(release)) == expected.joined(separator: "\n"))
+    const yank = IndexYank parsedVersion("1.2.5"), "a \"quoted\"\nreason"
+    const yankMessage = recordMessage "acme/http", 0, IndexRecord.Yank(yank)
+    assert yankMessage.contains("reason \"a \\\"quoted\\\"\\nreason\"\n")
+  }
+
+  test "records the key signed verify, and read back as the index they were" {
+    const key = registryKey 7
+    const text = signedIndex key
+    assert(verifyIndex(text, "acme/http", [key.publicKey()]) == Ok(void))
+    const index = readIndex(text, "acme/http").expect("an index")
+    assert(index.releases.length() == 1)
+    assert index.yank(parsedVersion("1.2.4")).isNone()
+    assert text.contains("  signature \"ed25519:")
+    assert text.contains("unyank \"1.2.4\", signature: \"ed25519:")
+  }
+
+  test "a changed, moved or unsigned record, or another key, does not verify" {
+    const key = registryKey 7
+    const text = signedIndex key
+    const changed = text.replace hashOf("0"), hashOf("1")
+    assert(
+      verifyIndex(changed, "acme/http", [key.publicKey()])
+        == Fail("the signature of the release 1.2.4 does not verify with a key of the registry"),
+    )
+    assert verifyIndex(text, "acme/other", [key.publicKey()]).isError()
+    assert verifyIndex(text, "acme/http", [registryKey(8).publicKey()]).isError()
+    // The yank's line appended once more after the unyank: signed, but for another position
+    const yankLine = text.lines().find({ _.startsWith "yank " }).expect("a yank line")
+    assert(
+      verifyIndex("{text}\n{yankLine}\n", "acme/http", [key.publicKey()])
+        == Fail("the signature of the yank of 1.2.4 does not verify with a key of the registry"),
+    )
+    const unsigned = "{text}{renderYank(IndexYank(parsedVersion("1.2.4"), "again"))}"
+    assert(
+      verifyIndex(unsigned, "acme/http", [key.publicKey()])
+        == Fail("the yank of 1.2.4 is not signed, and the registry signs every record"),
+    )
+    // One key of several is enough
+    assert(verifyIndex(text, "acme/http", [registryKey(8).publicKey(), key.publicKey()]) == Ok(void))
+  }
+
+  test "the keys of a registry: trust runs forward from a trusted key, along endorsements" {
+    const first = registryKey 1
+    const second = registryKey 2
+    const third = registryKey 3
+    const listed = [
+      RegistryKey(first.publicKey()),
+      endorsed(second.publicKey(), first),
+      endorsed(third.publicKey(), second),
+    ]
+    const all = [first.publicKey(), second.publicKey(), third.publicKey()]
+    assert(trustedKeys(listed, [first.publicKey()]) == all)
+    assert(trustedKeys(listed, [second.publicKey()]) == [second.publicKey(), third.publicKey()])
+    assert(
+      trustedKeys(listed, [registryKey(4).publicKey()]) == Fail("none of the keys it lists is one this machine trusts"),
+    )
+    // A key slipped in after a trusted one without its endorsement, or with an endorsement of another key
+    const slipped = [RegistryKey(first.publicKey()), RegistryKey(registryKey(4).publicKey())]
+    assert trustedKeys(slipped, [first.publicKey()]).isError()
+    const forged = [RegistryKey(first.publicKey()), endorsed(registryKey(4).publicKey(), registryKey(4))]
+    assert trustedKeys(forged, [first.publicKey()]).isError()
+    const text = renderRegistryKeys listed
+    assert text.startsWith("// index/config.trb - written by the registry")
+    const read = readRegistryKeys(text).expect("the keys")
+    assert(read == listed)
   }
 }
 

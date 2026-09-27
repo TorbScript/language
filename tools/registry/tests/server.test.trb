@@ -2,7 +2,8 @@
  * The write service end to end, over loopback: the registry's own server with a database in a temporary directory, a
  * `file:` storage beside it, and a second server that plays GitHub's key set. Every request a client can make is made
  * once the way it works and once the way it is refused - accounts and owners, tokens and their scopes, publishing,
- * yanking, trusted publishing - and the index the registry wrote is read back with the client's own reader.
+ * yanking, trusted publishing - and the index the registry wrote is read back with the client's own reader, and its
+ * signatures and keys checked with the client's own check.
  *
  * A test body is no task and cannot `await()`, so the whole conversation runs at the top of the file and the tests
  * look at what it answered. The database needs the SQLite shell: `sqlite3` on the `PATH`, or `REGISTRY_SQLITE`.
@@ -21,6 +22,8 @@ use Manifest from "torbscript/compiler/project/manifest"
 use Lock, LockedSettings, renderLock from "torbscript/compiler/package/lock"
 use packed, treeHash from "torbscript/compiler/package/archive"
 use readIndex from "torbscript/compiler/package/index"
+use readRegistryKeys, trustedKeys, verifyIndex from "torbscript/compiler/package/signing"
+use Ed25519PrivateKey from "std/signature"
 use Version from "torbscript/compiler/package/version"
 use Config from "../src/config"
 use Database from "../src/database"
@@ -157,7 +160,12 @@ const config = Config(
 )
 const database = Database config.database, program: config.sqlite
 const migrated = database.migrate().await()
-const registry = Registry.of config, database, Storage.registry([FileStorage()])
+const signer = Ed25519PrivateKey.fromSeed(List.filled(32, 5)).expect("32 bytes")
+const successor = Ed25519PrivateKey.fromSeed(List.filled(32, 6)).expect("32 bytes")
+const registry = Registry.of config, database, Storage.registry([FileStorage()]), signer
+const keysPublished = registry.publishKeys(None).await()
+const configAtStart = File.readText("{root}/storage/index/config.trb").ok() ?? ""
+const keysAgain = registry.publishKeys(None).await()
 var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(registry))?
 var serving = server.serve()
 const base = "http://{server.localAddress()}"
@@ -384,6 +392,13 @@ const forgejoForGithubPackage = call(
   body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/http\"\}"),
 ).await()
 
+// --- the successor of the key, announced -----------------------------------------------------------------------------
+
+const announced = registry.publishKeys(successor.publicKey()).await()
+const configAnnounced = File.readText("{root}/storage/index/config.trb").ok() ?? ""
+const anotherSuccessor = Ed25519PrivateKey.fromSeed(List.filled(32, 7)).expect("32 bytes")
+const secondAnnouncement = registry.publishKeys(anotherSuccessor.publicKey()).await()
+
 serving.cancel()
 keyServing.cancel()
 
@@ -490,6 +505,30 @@ group "yanking" {
     assert(unyank.status == 200)
     assert indexAfterUnyank.startsWith(indexAfterYank)
     assert(readIndex(indexAfterUnyank, "acme/json").map({ _.yank(version).isSome() }) == Ok(false))
+  }
+}
+
+group "signatures of the index" {
+  test "index/config.trb lists the key the registry signs with, and is written once" {
+    assert keysPublished.isOk()
+    assert keysAgain.isOk()
+    const listed = readRegistryKeys(configAtStart).expect("the keys")
+    assert(listed.map({ _.key }).toList() == [signer.publicKey()])
+  }
+
+  test "every release, yank and unyank the registry wrote is signed by its key" {
+    assert(verifyIndex(indexAfterUnyank, "acme/json", [signer.publicKey()]) == Ok(void))
+    assert indexAfterFirst.contains("  signature \"ed25519:")
+    assert indexAfterYank.contains(", signature: \"ed25519:")
+    const other = Ed25519PrivateKey.fromSeed(List.filled(32, 9)).expect("32 bytes")
+    assert verifyIndex(indexAfterUnyank, "acme/json", [other.publicKey()]).isError()
+  }
+
+  test "a successor is announced endorsed by the signing key, and only one at a time" {
+    assert announced.isOk()
+    const listed = readRegistryKeys(configAnnounced).expect("the keys")
+    assert(trustedKeys(listed, [signer.publicKey()]) == Ok([signer.publicKey(), successor.publicKey()]))
+    assert secondAnnouncement.isError()
   }
 }
 

@@ -58,6 +58,23 @@ installed acme/json 1.0.0
 1 package installed, 0 of them already in the cache
 ```
 
+### The signatures of the index
+
+A registry that signs its index lists its keys in `index/config.trb`, and every record of every index file `add`
+reads is checked against them before resolution sees it: a record that is unsigned, changed, or moved to another place
+of its file is refused, named by what it is, and nothing is written. The keys are trusted the way SSH trusts a host -
+at the first contact with a registry `torb` prints them and pins them in `<cache>/keys/`, and afterwards a key the
+registry adds is trusted only where a key already trusted endorsed it. A registry without keys, such as a `file:`
+registry of a test, is read as it is. [RELEASE.md section 7.14](../design/RELEASE.md#714-the-signed-index-as-built-2026-09-27)
+has the rules.
+
+```console
+$ torb add acme/json
+torb: trusting the signing keys of https://packages.acme.test from now on: ed25519:3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c (pinned in /home/ada/.torb/cache/keys/packages.acme.test.trb)
+added acme/json to acme/app
+  + acme/json 1.0.0
+```
+
 ### When there is no solution
 
 Resolution fails before anything is written, and the explanation is the derivation of the failure, one reason a line:
@@ -74,6 +91,10 @@ error: nothing was changed: the dependencies of project.trb have no solution
 `torb` and needs no line.
 
 **A requirement is `^` by default.** `@1.2.3` means `^1.2.3`, as in Cargo; `@=1.2.3` is the one version.
+
+**A registry whose keys changed is refused until you decide.** A registry that replaced its key without announcing
+the new one - endorsed by the old - looks exactly like somebody else's index, so `torb` refuses it and names the file of
+pinned keys. Removing that file after checking with the registry's operator trusts the new keys on the next contact.
 
 ## Examples
 

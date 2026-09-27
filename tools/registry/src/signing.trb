@@ -1,0 +1,107 @@
+/**
+ * The registry's signing key (docs/design/RELEASE.md section 7.4): the key every record of the index is signed with,
+ * where it comes from, and the list of keys `index/config.trb` publishes.
+ *
+ * **Where the key comes from.** `REGISTRY_SIGNING_KEY`, the seed as 64 hexadecimal digits, set in the deployment's
+ * `.env` - where every secret of the registry lives, and never in the repository. Without it the registry signs with a
+ * development key: a seed kept in `<database>.development-key`, made from the system's randomness on the first start
+ * and read on every later one, so that a registry on a laptop keeps one key across restarts and its index stays
+ * verifiable. `main.trb` says which of the two it signs with when it starts, and `registry signing-key` prints a new
+ * seed for the `.env`.
+ */
+
+use File from "std/fs"
+use randomQueryIdentifier from "std/network"
+use Ed25519PrivateKey, Ed25519PublicKey from "std/signature"
+use RegistryKey, endorsed, keyText from "torbscript/compiler/package/signing"
+use Config from "./config"
+
+/** The key the registry signs with, and where its seed was read. */
+public type SigningKey {
+  key: Ed25519PrivateKey
+  /** `REGISTRY_SIGNING_KEY`, or the development key and its path: what the start-up line names. */
+  origin: String
+  /** Whether the key is the development key rather than the deployment's. */
+  generated: Bool = false
+}
+
+/** The keys `index/config.trb` is to list, and whether the list started over (see [keyChainOf]). */
+public type KeyChain {
+  keys: List<RegistryKey>
+  restarted: Bool = false
+}
+
+/** 32 bytes of the system's source of randomness: sixteen draws of 16 bits, the way a token is made (`./tokens`). */
+public fn newSeed(): List<UInt8> {
+  var seed: List<UInt8> = []
+  for _ in 0..16 {
+    const value = randomQueryIdentifier()
+    seed.append byteOf(value >> 8)
+    seed.append byteOf(value)
+  }
+  seed
+}
+
+/**
+ * The key `config` names: `REGISTRY_SIGNING_KEY` where it is set, else the development key beside the database,
+ * made where it does not exist yet.
+ *
+ * # Errors
+ *
+ * - `REGISTRY_SIGNING_KEY` or the development key's file is not 64 hexadecimal digits, or the file cannot be read or
+ *   written.
+ */
+public fn signingKeyOf(config: Config): Result<SigningKey, String> {
+  if const Some(written) = config.signingKey {
+    const key = Ed25519PrivateKey.fromHex(written).mapError({ "REGISTRY_SIGNING_KEY: {_}" })?
+    return SigningKey key, "REGISTRY_SIGNING_KEY"
+  }
+  const path = config.developmentKeyPath()
+  if File.exists(path) {
+    const text = File.readText(path).mapError({ "the development key {path}: {_}" })?
+    const key = Ed25519PrivateKey.fromHex(text).mapError({ "the development key {path}: {_}" })?
+    return SigningKey key, "the development key {path}", generated: true
+  }
+  const key = Ed25519PrivateKey.fromSeed(newSeed()).mapError({ _.show() })?
+  File.writeTextAtomically(path, "{key.seedHex()}\n").mapError({ "the development key {path}: {_}" })?
+  SigningKey key, "the development key {path}, made now", generated: true
+}
+
+/**
+ * The keys `index/config.trb` is to list, given the ones it lists now (`listed`), the key the registry signs with and
+ * the successor it is to announce. A list that names the signing key is kept, and the successor - endorsed by the
+ * signing key - is appended where it is not listed yet. A list that does not name the signing key starts over with
+ * it: `restarted` says so, because a client that trusted the old list refuses the new one until the keys it pinned are
+ * removed. The way to change the key without that is to announce the successor first.
+ *
+ * # Errors
+ *
+ * - A successor to announce while the signing key is not the last one listed: another successor was announced
+ *   already, and a successor is endorsed by the key right before it.
+ */
+public fn keyChainOf(
+  listed: List<RegistryKey>,
+  signing: Ed25519PrivateKey,
+  successor: Ed25519PublicKey?,
+): Result<KeyChain, String> {
+  const current = signing.publicKey()
+  var chain = KeyChain listed
+  if !listed.any({ _.key == current }) {
+    chain = KeyChain([RegistryKey(current)], restarted: !listed.isEmpty())
+  }
+  if const Some(next) = successor {
+    if chain.keys.any({ _.key == next }) {
+      return chain
+    }
+    if chain.keys.last().map({ _.key }) != current {
+      return Fail "REGISTRY_SIGNING_KEY_SUCCESSOR names {keyText(next)}, and index/config.trb announces another successor already: sign with that one first"
+    }
+    chain = chain.copy keys: chain.keys.appended(endorsed(next, signing))
+  }
+  chain
+}
+
+/** The low eight bits of `value`. */
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

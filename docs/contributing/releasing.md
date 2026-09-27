@@ -210,6 +210,12 @@ runs on the machine - beside the forge's own stack or in it. Nothing is built on
      random string (`openssl rand -hex 32`), entered in the webhook too.
    - `REGISTRY_ADMINISTRATOR_TOKEN`: another random string, for step 6; empty again afterwards.
      `REGISTRY_FORGEJO_ISSUERS=https://git.torb.dev/api/actions`: whose Forgejo Actions may publish packages.
+   - `REGISTRY_SIGNING_KEY`: the seed of the key every record of the index is signed with, which
+     `docker compose run --rm registry signing-key` prints together with its public key (after step 4's pull). Keep a
+     copy of the seed off the machine: a lost key cannot endorse its successor, and every client that trusts it refuses
+     an index signed by another. The public key goes into `shippedKeys` of `compiler/src/package/registry.trb` in the
+     release that opens the registry ([RELEASE.md section 7.14](../design/RELEASE.md#714-the-signed-index-as-built-2026-09-27)).
+     Without the variable the registry signs with a development key it makes itself, and says so in its log.
    - `BACKUP_ENDPOINT`, `BACKUP_REGION`, `BACKUP_BUCKET`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`: a bucket of
      S3-compatible object storage at another provider than the server's, and a key limited to it; `RESTIC_PASSWORD`:
      a random string kept somewhere else too - without it the file backups cannot be read.
@@ -247,6 +253,11 @@ runs on the machine - beside the forge's own stack or in it. Nothing is built on
    `docker compose --profile backup run --rm --entrypoint sh backup`.
 10. **The CDN** (optional, later): in front of both host names, honouring the `Cache-Control` the site sends - a year
     for an archive, a minute for an index file.
+11. **Changing the signing key**: `registry signing-key` makes the next one; its public key goes into
+    `REGISTRY_SIGNING_KEY_SUCCESSOR` and `docker compose up -d` announces it in `index/config.trb`, endorsed by the
+    current key, and into `shippedKeys` of the next release. Once that release is out, the new seed goes into
+    `REGISTRY_SIGNING_KEY` and the successor variable is emptied. Replacing the key without announcing it makes every
+    client that trusted the old one refuse the index.
 
 Verifying an image by hand:
 

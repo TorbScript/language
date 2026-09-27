@@ -11,7 +11,10 @@
  *                                              graph as it is; `--check` compares instead, byte for byte
  *
  * `add`, `remove` and `update` are the only commands that write the `graph` of `project.lock.trb`, and `publish`
- * and `lock` write its `settings` blocks; `install` never changes it. Resolution fails before anything is written, with PubGrub's explanation.
+ * and `lock` write its `settings` blocks; `install` never changes it. Resolution fails before anything is written, with
+ * PubGrub's explanation. Every index file read from a registry that signs its index is checked record by record first
+ * (docs/design/RELEASE.md section 7.4, `../package/signing`), so a resolution never sees a record the registry did
+ * not sign.
  * An update that gains a capability is refused unless `--accept-capabilities` says it is wanted (CONCEPT, "Packages and
  * the Supply Chain").
  */
@@ -35,7 +38,9 @@ use Candidate, resolve from "../package/resolve"
 use PackageIndex, IndexRelease, readIndex, candidatesOf, indexStart, renderRelease from "../package/index"
 use Lock, LockedPackage, LockedSettings, readLock, renderLock from "../package/lock"
 use registryOf, bindingsOf from "../package/registry"
-use FetchSettings, registryLocationOf, fetchIndex, fetchArchive from "../package/fetch"
+use FetchSettings, RegistryLocation, registryLocationOf, registryKeysOf, fetchIndex, fetchArchive from "../package/fetch"
+use verifyIndex from "../package/signing"
+use Ed25519PublicKey from "std/signature"
 use isInstalled, install, writeBytes, writeText from "../package/store"
 use withRequirement, withoutRequirement from "../package/manifest-edit"
 use packed, unpacked, treeHash, capabilitiesOf from "../package/archive"
@@ -358,7 +363,8 @@ fn newestRelease(context: Context, package: String): Result<String, String> {
       return Fail "the registry {registryOf(package, context.bindings)} has no package `{package}`"
     }
   }
-  const index = readIndex(text, package)?
+  const keys = registryKeysOf(location, context.settings)?
+  const index = verifiedIndex(text, package, registryOf(package, context.bindings), keys)?
   var newest: Version? = None
   for candidate in candidatesOf(index, languageVersion) {
     if candidate.excluded.isNone() && !candidate.version.isPreRelease() {
@@ -420,8 +426,9 @@ fn resolved(
     packages.set name, [Candidate(versionOf(found.manifest), needs)]
     pending.appendAll needs.map({ _.package })
   }
-  // Every registry package any version of what is reached needs, each index fetched once
+  // Every registry package any version of what is reached needs, each index fetched once, each registry's keys too
   var indexes: Map<String, PackageIndex> = [:]
+  var registryKeys: Map<String, List<Ed25519PublicKey>> = [:]
   while const Some(name) = pending.removeAt(0) {
     if packages.containsKey(name) || memberNames.contains(name) || paths.containsKey(name) {
       continue
@@ -431,7 +438,15 @@ fn resolved(
     match fetchIndex(location, name, context.settings)? {
       None => packages.set name, []
       Some(text) => {
-        const index = readIndex(text, name).mapError({ "the index of {name} at {url}: {_}" })?
+        const keys = match registryKeys.get(url) {
+          Some(found) => found
+          None => {
+            const found = registryKeysOf(location, context.settings)?
+            registryKeys.set url, found
+            found
+          }
+        }
+        const index = verifiedIndex(text, name, url, keys)?
         const candidates = candidatesOf index, languageVersion
         packages.set name, candidates
         indexes.set name, index
@@ -469,6 +484,26 @@ fn resolved(
     }
   }
   Ok Ok(Lock(language: rootPackage.manifest.language, graph: graph))
+}
+
+/**
+ * The index of `package` from the registry at `url`, every record checked against the registry's `keys` first where
+ * it has any (`../package/signing`).
+ *
+ * # Errors
+ *
+ * - A record that is unsigned or whose signature does not verify, and an index that does not read.
+ */
+fn verifiedIndex(
+  text: String,
+  package: String,
+  url: String,
+  keys: List<Ed25519PublicKey>,
+): Result<PackageIndex, String> {
+  if !keys.isEmpty() {
+    verifyIndex(text, package, keys).mapError({ "the index of {package} at {url} is refused: {_}" })?
+  }
+  readIndex(text, package).mapError({ "the index of {package} at {url}: {_}" })
 }
 
 /** A manifest's requirements the resolver sees: the toolchain's packages left out, `development` ones for members. */
@@ -697,6 +732,11 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
     dependencies: publishedDependencies(manifest),
     capabilities: reaches.map({ _.capability }).toList(),
   )
+  // A registry with keys needs every record signed, which only its write service can do
+  const keys = registryKeysOf(RegistryLocation.Directory(directory), context.settings)?
+  if !keys.isEmpty() {
+    return Fail "the registry {directory} signs its index (index/config.trb lists its keys), and `torb publish` cannot sign a record for it: publish through the registry's write service"
+  }
   const indexPath = joinPath directory, "index/{manifest.name}.trb"
   const archivePath = joinPath directory, "archives/{manifest.name}/{manifest.version}.tar.gz"
   const existing = File.readText(indexPath).ok() ?? indexStart(manifest.name)

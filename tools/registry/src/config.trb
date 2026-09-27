@@ -36,6 +36,23 @@ public type Config {
   mirror: String? = None
   /** Whether the mirror is pushed to its remote after each commit. */
   mirrorPush: Bool = false
+  /**
+   * The seed of the Ed25519 key every record of the index is signed with, as 64 hexadecimal digits (RELEASE.md section
+   * 7.4). `None` signs with a development key kept beside the database ([Config.developmentKeyPath]) - for a registry
+   * on a laptop; a deployment sets it.
+   */
+  signingKey: String? = None
+  /**
+   * The public key that is to follow [Config.signingKey], as 64 hexadecimal digits: announced in `index/config.trb`
+   * with the current key's endorsement before the registry signs with it, which is how the key is rotated. `None`
+   * announces nothing.
+   */
+  successorKey: String? = None
+
+  /** Where the development key's seed is kept when [Config.signingKey] is not set: beside the database. */
+  fn developmentKeyPath(): String {
+    "{database}.development-key"
+  }
 
   /** Every value from the environment, with the defaults above where a variable is not set. */
   static fn fromEnvironment(): Self {
@@ -52,6 +69,8 @@ public type Config {
       trustedTokenSeconds: Environment.get("REGISTRY_TRUSTED_TOKEN_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 900,
       mirror: Environment.get("REGISTRY_MIRROR").filter({ !_.trim().isEmpty() }),
       mirrorPush: Environment.get("REGISTRY_MIRROR_PUSH") == Some("1"),
+      signingKey: Environment.get("REGISTRY_SIGNING_KEY").filter({ !_.trim().isEmpty() }),
+      successorKey: Environment.get("REGISTRY_SIGNING_KEY_SUCCESSOR").filter({ !_.trim().isEmpty() }),
     )
   }
 }

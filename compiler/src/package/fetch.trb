@@ -15,13 +15,23 @@
  *
  * **`--offline`** never touches the network: an index comes from the copy in the cache, and an archive that is not
  * unpacked in the cache is an error that names the package. A `file:` registry is read either way.
+ *
+ * **The keys of a registry** ([registryKeysOf]) are what every record of its index has to be signed with
+ * (RELEASE.md section 7.4, `./signing`). They come from its `index/config.trb`, and are trusted the way SSH trusts a
+ * host: the keys that ship in `torb` for it where there are any, else the keys the machine saw at its first contact,
+ * pinned in `<cache>/keys/`; a later key is trusted only when a trusted one endorsed it. A registry that lists no
+ * key signs nothing and its records are read as they are - unless this machine has pinned keys of it, which makes a
+ * missing list a refusal rather than a way around the check.
  */
 
 use File from "std/fs"
 use Environment from "std/os"
 use Process from "std/process"
+use Ed25519PublicKey from "std/signature"
 use joinPath, normalizePath from "../project/path"
 use readBytes, writeText from "./store"
+use RegistryKey, keyText, keyOfText, readRegistryKeys, renderRegistryKeys, trustedKeys from "./signing"
+use shippedKeys from "./registry"
 
 /** Where a registry is. */
 public type RegistryLocation {
@@ -99,6 +109,102 @@ public fn fetchIndex(location: RegistryLocation, package: String, settings: Fetc
       Ok Some(text)
     }
   }
+}
+
+/**
+ * The keys every record of the registry's index has to be signed with, or none for a registry that signs nothing: its
+ * `index/config.trb` checked against the keys this machine trusts for it (the module's comment). A `file:` registry is
+ * a directory on this machine, and its list is taken as it stands.
+ *
+ * # Errors
+ *
+ * - The list does not read, names no key this machine trusts, has a key a trusted one did not endorse, or is gone
+ *   where this machine has pinned keys of the registry; the cache cannot be written.
+ */
+public fn registryKeysOf(location: RegistryLocation, settings: FetchSettings): Result<List<Ed25519PublicKey>, String> {
+  match location {
+    .Directory(directory) => {
+      const path = joinPath directory, "index/config.trb"
+      if !File.exists(path) {
+        return []
+      }
+      const text = File.readText(path).mapError({ _.show() })?
+      const listed = readRegistryKeys(text).mapError({ "the keys of the registry {directory}: {_}" })?
+      match listed.first() {
+        Some(first) => trustedKeys(listed, [first.key]).mapError({ "the keys of the registry {directory}: {_}" })
+        None => []
+      }
+    }
+    .Web(url) => webRegistryKeys url, settings
+  }
+}
+
+/** [registryKeysOf] of a registry on the network: its list fetched, and checked against the shipped or pinned keys. */
+fn webRegistryKeys(url: String, settings: FetchSettings): Result<List<Ed25519PublicKey>, String> {
+  const pinnedPath = "{settings.cache}/keys/{keyOf(url)}.trb"
+  var shipped: List<Ed25519PublicKey> = []
+  for entry in shippedKeys {
+    if entry.registry == url {
+      shipped.append(keyOfText(entry.key)?)
+    }
+  }
+  var pinned: List<Ed25519PublicKey> = []
+  if File.exists(pinnedPath) {
+    const text = File.readText(pinnedPath).mapError({ _.show() })?
+    const read = readRegistryKeys(text).mapError({ "the keys pinned for {url} in {pinnedPath}: {_}" })?
+    pinned = read.map({ _.key }).toList()
+  }
+  const anchors = if shipped.isEmpty() { pinned } else { shipped }
+  const copy = "{settings.cache}/index/{keyOf(url)}/config.trb"
+  const text: String? = if settings.offline {
+    // Without the network the last copy of the list stands in for it, and without one the trusted keys do
+    if !File.exists(copy) {
+      return anchors
+    }
+    File.readText(copy).mapError({ _.show() })?
+  } else {
+    const downloaded = "{settings.cache}/download.part"
+    if fetchUrl("{url}/index/config.trb", downloaded)? {
+      const found = File.readText(downloaded).mapError({ _ => "the keys of {url} (index/config.trb) are not UTF-8" })?
+      writeText(copy, found)?
+      found
+    } else {
+      None
+    }
+  }
+  const listed = match text {
+    Some(found) => readRegistryKeys(found).mapError({ "the keys of {url} (index/config.trb): {_}" })?
+    None => []
+  }
+  if listed.isEmpty() {
+    if !anchors.isEmpty() {
+      return Fail "{url} lists no signing key, and this machine trusts keys of it ({trustedWhere(shipped, pinnedPath)}): its index is refused rather than read unsigned"
+    }
+    return []
+  }
+  if anchors.isEmpty() {
+    // The first contact: the keys are trusted as the registry lists them, and pinned for every later one
+    const trusted = trustedKeys(listed, [listed[0].key]).mapError({ "the keys of {url} (index/config.trb): {_}" })?
+    writeText(pinnedPath, renderRegistryKeys(trusted.map({ RegistryKey _ }).toList()))?
+    printError "torb: trusting the signing keys of {url} from now on: {trusted.map(keyText).toList().joined(separator: ", ")} (pinned in {pinnedPath})"
+    return trusted
+  }
+  const endorsed = trustedKeys(listed, anchors).mapError({ "the keys of {url} (index/config.trb): {_}; the keys this machine trusts for it are {trustedWhere(shipped, pinnedPath)}" })?
+  var trusted = anchors
+  for key in endorsed {
+    if !trusted.contains(key) {
+      trusted.append key
+    }
+  }
+  if shipped.isEmpty() && trusted.length() > pinned.length() {
+    writeText(pinnedPath, renderRegistryKeys(trusted.map({ RegistryKey _ }).toList()))?
+  }
+  trusted
+}
+
+/** Where the keys this machine trusts for a registry come from, for a message. */
+fn trustedWhere(shipped: List<Ed25519PublicKey>, pinnedPath: String): String {
+  if shipped.isEmpty() { "pinned in {pinnedPath}" } else { "the ones torb ships with" }
 }
 
 /**

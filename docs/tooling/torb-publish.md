@@ -61,12 +61,13 @@ nothing was uploaded (--dry-run)
 
 6. **The upload.** For a `file:` registry, the archive goes to `archives/<owner>/<name>/<version>.tar.gz` and the release
    is appended to `index/<owner>/<name>.trb`; the `settings` block of the package is written into the workspace's
-   `project.lock.trb`. A version that is published already is refused: a published version is never replaced.
-   For a registry on the network (`https://...`), the archive is sent with
+   `project.lock.trb`. A version that is published already is refused: a published version is never replaced, and a
+   `file:` registry that signs its index - its `index/config.trb` lists keys - is refused too, because this command
+   cannot sign the record. For a registry on the network (`https://...`), the archive is sent with
    `PUT <registry>/api/1/packages/<owner>/<name>/<version>` and its tree hash in `Torb-Tree-Hash`, through `curl`
    (else `wget`, or the one `TORB_FETCH` names). The registry unpacks it, reads the settings of its lock, refuses what
-   this command refuses, and writes the archive and the index entry; its answer is printed, and the `settings` block
-   goes into the workspace's lock as for `file:`.
+   this command refuses, and writes the archive and the index entry, signed with its key; its answer is printed, and
+   the `settings` block goes into the workspace's lock as for `file:`.
 
 ### The token
 

@@ -101,7 +101,7 @@ says it is temporary), `Decimal`, the REPL, milestones 9 and 10.
 | The package manager commands: `add`, `remove`, `update`, `publish`, `yank`, `login`, `owner`, `audit`, `vendor` | milestone 8, section 7 |
 | Resolution: semantic versions, `^` by default, the highest compatible version, one version per major (CONCEPT, "Packages and the Supply Chain") | CONCEPT |
 | **An HTTP client with TLS**: the three planned natives of `std/http` (fact 12). The plan for `std/http` (`docs/ROADMAP.md`, milestone 8) is TLS through the platform (SChannel on Windows, the system's stack on macOS, OpenSSL where Linux has it) | milestone 8 |
-| SHA-256 and Ed25519 verification, as natives of `runtime/` or a `std` package | fact 13 |
+| SHA-256 and Ed25519 verification, as natives of `runtime/` or a `std` package | built: `std/digest` and `std/signature`, TorbScript with no native (section 7.14) |
 | Reading and writing a deterministic `tar` and `gzip` (inflate is the part that must be fast; deflate may be simple) | fact 13, section 7.2 |
 | `torb doc`, which renders doc comments; the registry runs it for every version | built: `docs/tooling/torb-doc.md`. `torb doc --json` is the data a package's pages are rendered from, and `torb doc --check --no-run` the check that runs none of its code |
 | The table that says which `std` package is which capability (section 7.8) | CONCEPT, "Capabilities are visible" |
@@ -621,7 +621,8 @@ The client reads exactly this format since 2026-09-26; what this section left op
   (`ca/rg/cargo`) are not needed.
 - **Every record is signed by the registry's key** (Ed25519), whose public half ships in `torb` and is listed in
   `config.trb` with its successor for rotation. Hex signs its registry the same way. It is what makes a mirror
-  untrusted: a mirror can withhold a release, but it cannot change one.
+  untrusted: a mirror can withhold a release, but it cannot change one. Built on 2026-09-27; section 7.14 decides what
+  this left open.
 
 | Option | For | Against |
 |---|---|---|
@@ -893,7 +894,7 @@ packed): the registry's container answered, created an account and took a `torb 
 the index, the archive and a WAL-mode database; the site served `install.sh` and the reference read-only, split by host
 name. `linux/arm64` has not been built outside CI.
 
-**Not built yet**: signatures of the index (no Ed25519 in `std`), sign-in and a second factor, the documentation
+**Not built yet**: sign-in and a second factor, the documentation
 worker, search, verified domains, "elsewhere" owners, the similarity rule against packages with many dependents, an
 `s3:` driver, and `torb yank`, `owner` and `login` as commands over the API that exists.
 
@@ -938,7 +939,7 @@ PROJECT.md section 6a's PubGrub; everything is TorbScript, with no new native. W
 | The capability table | in the toolchain for now (`capabilityOf`, `compiler/src/package/archive.trb`): `files` for `std/fs`, `network` for `std/network`, `std/http` and `std/tls`, `processes`, `environment` for `std/os/environment`, `the operating system` for the rest of `std/os`, `clock` for `std/time`, `scripts` for `std/sandbox`, `foreign functions` for a `foreign` block | 7.8 wants it in `std`; until then one function is the one place |
 | An update that gains a capability | refused, printing the gain, unless `--accept-capabilities` | CONCEPT: "needs an explicit confirmation"; a flag is the confirmation a script can give |
 | `language` of a release | compared with the toolchain's language version (`languageVersion`, 0.1.0); a newer one is not chosen, and the explanation says so | 7.4 |
-| Signatures and `config.trb` | a `signature` line is read and kept, and **not verified**: there is no Ed25519 in `std` yet, and a `file:` registry signs nothing. `config.trb` is not fetched | verification belongs with the key of the registry, which the write service's round creates |
+| Signatures and `config.trb` | a `signature` line is read and kept, and **not verified**: there is no Ed25519 in `std` yet, and a `file:` registry signs nothing. `config.trb` is not fetched. **Verified since 2026-09-27: section 7.14** | verification belongs with the key of the registry, which the write service's round creates |
 
 **`torb publish` against 7.2's steps.** Step 1 is built (every refusal at once). Step 2 evaluates `project.trb` in the
 sandbox and writes the `settings` block into the workspace's lock; the archive's own lock holds that block and the
@@ -949,9 +950,44 @@ to a registry on the network with a token or through trusted publishing (7.11, "
 as built").
 
 **Not built in this round, and why**: the write service, accounts, tokens, trusted publishing and the compose
-deployment (7.11, the next round - built 2026-09-27); signature checks and key rotation (no Ed25519); `yank`, `owner`, `login`, `audit`,
+deployment (7.11, the next round - built 2026-09-27); signature checks and key rotation (no Ed25519 - built 2026-09-27, section 7.14); `yank`, `owner`, `login`, `audit`,
 `vendor` and `deprecate`; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources; two majors of one package
 in one graph (PROJECT.md section 6a); HTTP range requests for an index that grew.
+
+### 7.14 The signed index, as built (2026-09-27)
+
+**Every record of an index file is signed with the registry's Ed25519 key, and `torb` checks every record it reads
+before resolution sees it.** `std/signature` - Ed25519 of RFC 8032 in TorbScript, over the `Sha512` `std/digest`
+gained for it - made it possible without a native. `compiler/src/package/signing.trb` is shared by the write service
+and the client, so what is signed and what is checked is one function. What 7.4 left open is decided here:
+
+| Question | Decision | Why |
+|---|---|---|
+| What a signature is over | not the bytes of the file but a text of the record (`recordMessage`, `compiler/src/package/index.trb`): `torb index record 1`, the package, the record's position among the records of its file counted from 0, the kind and the version, and every field resolution reads - the hash, the language, each `runtime` requirement, each capability, a yank's reason - each value written as the index writer quotes it | the layout of the file may change without breaking a signature, and quoting makes the text unambiguous; the package keeps a record from being moved into another file, the position keeps a mirror from appending an old signed `unyank` again after a later `yank` |
+| Which records | every one: the `signature` line of a `release` block, the `signature:` label of a `yank` line, and of an `unyank` line, which had none | an unsigned `unyank` a mirror appends would bring back a version its owner withdrew |
+| How a key and a signature are written | `ed25519:` and 64 hexadecimal digits, `ed25519:` and 128 | beside the `sha256:` of the hashes; hexadecimal is what `std` has, Base64 it has not |
+| Where the key comes from | `REGISTRY_SIGNING_KEY`, the seed as 64 hexadecimal digits, in the deployment's `.env`; `registry signing-key` prints a new one and its public key. Without it a development key: a seed in `<database>.development-key`, made from the system's randomness on the first start and read on every later one, and named as a development key in the start-up lines | the registry's secrets live in `.env` and never in the repository (7.11); a registry on a laptop needs a key that survives a restart, or its own index stops verifying |
+| Where the keys are published | `index/config.trb`, written at every start where it changed and mirrored like an index file: `key "ed25519:..."` lines oldest first, each after the first with a `signature:` label - its predecessor's signature of `torb index key 1` and the key | the path of 7.4; the file server serves it with the index, a mirror copies it with the index |
+| Rotation | `REGISTRY_SIGNING_KEY_SUCCESSOR` names the next public key, and the registry appends it endorsed by the current key; the operator switches `REGISTRY_SIGNING_KEY` to it later and a release of `torb` ships it. Earlier keys stay listed, because the records they signed stay. A signing key the list does not name starts the list over, with a warning, and one successor is announced at a time | "listed in `config.trb` with its successor for rotation": a client that trusts the old key learns the new one from a signature of the old one |
+| What a client trusts | the keys that ship in `torb` for the registry (`shippedKeys`, `compiler/src/package/registry.trb`), else the keys it saw at its first contact, pinned in `<cache>/keys/` - trust on first use, as SSH trusts a host; a key the list adds later only where a trusted key endorsed it, and never one before the first trusted key. A `file:` registry is a directory of this machine and its list is taken as it stands | a key read from a mirror's own `config.trb` would make the mirror trusted; shipping the key is 7.4's plan and needs the production key, pinning is what protects every contact after the first until then |
+| A registry that signs nothing | one without `index/config.trb`, or with no key in it, is read as before - the `file:` registry of a test, a directory copied onto a disk - unless this machine pinned keys of it: then a missing list is a refusal | a downgrade must not be the way around the check |
+| When the client checks | every index file a resolution reads (`torb add`, `torb update`), record by record, before `readIndex`; the equation without the cofactor, an S below L. `torb install` reads no index: it checks the tree hash the lock pins | a resolution never sees a record the registry did not sign, and a lock stays the proof of what was chosen |
+| `torb publish` into a `file:` registry that has keys | refused: it cannot sign, and one unsigned record makes the whole file refused | the write service is the one writer of a signed index |
+
+**Speed**: a native binary verifies about 1 000 records a second (`docs/standard-library/signature.md`), so a
+resolution that reads a hundred index files of ten records each spends about a second on them; `torb` is native. The
+VM verifies about 20 a second.
+
+**Tested**: `compiler/tests/packages.test.trb` - the text of a record, a signed index that verifies, a changed, moved,
+appended-again or unsigned record and another key that do not, and trust along endorsements;
+`tools/registry/tests/server.test.trb` - `index/config.trb` at the start, every record the registry wrote verifying,
+a successor announced once; `tools/registry/tests/client.test.trb` - `torb add` from the registry's files over HTTP
+pins the keys, and a changed record and a replaced list of keys are refused.
+
+**Not built**: the production key and its line in `shippedKeys` - the owner makes it when packages.torb.dev opens
+(`docs/contributing/releasing.md`, "The root server"); naming a registry's key in `project.trb` or `~/.torb/config.trb`
+instead of trusting it on first use; a command that forgets pinned keys (deleting the file under `<cache>/keys/` is the
+way); the tombstones of 7.3.
 
 ## 8. Terminology
 
@@ -1051,7 +1087,7 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 | 9 | **`torb upgrade`** and `torb toolchain add c` (the managed `zig cc` of section 4) | 7 | preview |
 | 10 | **The playground**: `torb` for `wasm32-wasi`, the new `OperatingSystem` case, the page | VM slice 7 | preview or later |
 | **—** | **The preview**: torb.dev live with downloads, the documentation of the tag, the policies of section 9 | 1-3, 7-9 | |
-| 11 | **The client**: resolution, `add`/`remove`/`update`, the content-addressed cache, `--offline`, `vendor`, signature checks against `config.trb` — tested against a directory of index files, with no server at all. **Built (2026-09-26) without `vendor` and the signature checks, with the index format of slice 5 and `torb publish --dry-run` of slice 6: section 7.13** | 5, 6, HTTP and TLS (milestone 8) | registry |
+| 11 | **The client**: resolution, `add`/`remove`/`update`, the content-addressed cache, `--offline`, `vendor`, signature checks against `config.trb` — tested against a directory of index files, with no server at all. **Built (2026-09-26) without `vendor` and the signature checks, with the index format of slice 5 and `torb publish --dry-run` of slice 6: section 7.13; the signature checks built 2026-09-27: section 7.14** | 5, 6, HTTP and TLS (milestone 8) | registry |
 | 12 | **The write service**: accounts, owners, tokens, 2FA, publish, yank, trusted publishing, the documentation worker | the HTTP server of milestone 10, or question 2 | registry |
 | 13 | **The registry's site**: package pages, capabilities, documentation, search | 2, 12 | registry |
 | **—** | **The registry**: packages.torb.dev live, the policies of 7.10 | 11-13 | |

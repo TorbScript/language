@@ -1,0 +1,190 @@
+/**
+ * The signatures of a registry's index (docs/design/RELEASE.md section 7.4): the registry signs every record of an
+ * index file with its Ed25519 key over [recordMessage] and lists its keys in `index/config.trb`, and a client checks
+ * every record it reads against the keys it trusts ([verifyIndex]). The registry's write service and `torb` share this
+ * module, so what is signed and what is checked cannot drift apart.
+ *
+ *     // index/config.trb - written by the registry: the keys the records of this index are signed with.
+ *
+ *     key "ed25519:3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"
+ *     key "ed25519:fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", signature: "ed25519:6291d657..."
+ *
+ * **Keys are listed oldest first, and each one after the first carries its predecessor's signature of
+ * [keyMessage].** That is how a key is rotated: the registry announces the successor, endorsed by the key a client
+ * already trusts, and only then signs with it; the old key stays listed, because the records it signed stay in the
+ * index. [trustedKeys] is the rule a client applies: the keys it trusts already, and every key a trusted one endorsed.
+ */
+
+use Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature from "std/signature"
+use IndexRecord, recordsOf, recordMessage from "./index"
+use settingsOf, quoted from "./literal"
+
+/** How a key and a signature are written in the index and in `index/config.trb`: this, then the hexadecimal. */
+public const ed25519Prefix = "ed25519:"
+
+/** A key of `index/config.trb`: the key, and its predecessor's signature of it where it has a predecessor. */
+public type RegistryKey {
+  key: Ed25519PublicKey
+  endorsement: Ed25519Signature? = None
+}
+
+/** `ed25519:` and the key's 64 hexadecimal digits. */
+public fn keyText(key: Ed25519PublicKey): String {
+  "{ed25519Prefix}{key.hex()}"
+}
+
+/** `ed25519:` and the signature's 128 hexadecimal digits. */
+public fn signatureText(signature: Ed25519Signature): String {
+  "{ed25519Prefix}{signature.hex()}"
+}
+
+/**
+ * The key an `ed25519:` text writes.
+ *
+ * # Errors
+ *
+ * - Another algorithm than `ed25519:`, or digits that are not a key.
+ */
+public fn keyOfText(text: String): Result<Ed25519PublicKey, String> {
+  match text.withoutPrefix(ed25519Prefix) {
+    Some(digits) => Ed25519PublicKey.tryFrom(digits).mapError({ _.show() })
+    None => Fail "`{text}` is not a key: a key is `{ed25519Prefix}` and 64 hexadecimal digits"
+  }
+}
+
+/**
+ * The signature an `ed25519:` text writes.
+ *
+ * # Errors
+ *
+ * - Another algorithm than `ed25519:`, or digits that are not a signature.
+ */
+public fn signatureOfText(text: String): Result<Ed25519Signature, String> {
+  match text.withoutPrefix(ed25519Prefix) {
+    Some(digits) => Ed25519Signature.tryFrom(digits).mapError({ _.show() })
+    None => Fail "`{text}` is not a signature: a signature is `{ed25519Prefix}` and 128 hexadecimal digits"
+  }
+}
+
+/** The text a key's endorsement is made over: the format, and the key it vouches for. */
+public fn keyMessage(key: Ed25519PublicKey): String {
+  "torb index key 1\nkey {quoted(keyText(key))}\n"
+}
+
+/** The signature a registry's `key` writes into a record of `package`'s file at `position` - its `ed25519:` text. */
+public fn recordSignature(key: Ed25519PrivateKey, package: String, position: Int, record: IndexRecord): String {
+  signatureText key.signature(recordMessage(package, position, record).bytes().toList())
+}
+
+/** `key` endorsed by `predecessor`: the line `index/config.trb` lists a successor with. */
+public fn endorsed(key: Ed25519PublicKey, predecessor: Ed25519PrivateKey): RegistryKey {
+  RegistryKey key, endorsement: predecessor.signature(keyMessage(key).bytes().toList())
+}
+
+/**
+ * The keys of an `index/config.trb`, in its order.
+ *
+ * # Errors
+ *
+ * - A file that does not parse, or a `key` line whose key or signature does not read.
+ */
+public fn readRegistryKeys(text: String): Result<List<RegistryKey>, String> {
+  var keys: List<RegistryKey> = []
+  for setting in settingsOf(text)? {
+    if setting.word != "key" {
+      continue
+    }
+    const key = keyOfText(setting.first() ?? "")?
+    const endorsement = match setting.labeled.get("signature") {
+      Some(written) => Some(signatureOfText(written)?)
+      None => None
+    }
+    keys.append RegistryKey(key, endorsement: endorsement)
+  }
+  keys
+}
+
+/** `index/config.trb` for `keys`, oldest first: what the registry writes, and what a client pins. */
+public fn renderRegistryKeys(keys: List<RegistryKey>): String {
+  var lines = ["// index/config.trb - written by the registry: the keys the records of this index are signed with.", ""]
+  for listed in keys {
+    const signed = match listed.endorsement {
+      Some(signature) => ", signature: {quoted(signatureText(signature))}"
+      None => ""
+    }
+    lines.append "key {quoted(keyText(listed.key))}{signed}"
+  }
+  lines.map({ "{_}\n" }).toList().joined(separator: "")
+}
+
+/**
+ * Of the keys a registry lists, the ones a client that trusts `anchors` may trust: every listed anchor, and every key
+ * right after a trusted one whose endorsement by that one verifies - so trust runs forward along the list from an
+ * anchor, never backward. A key before the first anchor is trusted only when it is an anchor itself.
+ *
+ * # Errors
+ *
+ * - None of the listed keys is an anchor, or a key right after a trusted one is not endorsed by it: both are what a
+ *   list written by somebody else than the registry looks like.
+ */
+public fn trustedKeys(
+  listed: List<RegistryKey>,
+  anchors: List<Ed25519PublicKey>,
+): Result<List<Ed25519PublicKey>, String> {
+  var trusted: List<Ed25519PublicKey> = []
+  var previous: Ed25519PublicKey? = None
+  for entry in listed {
+    if anchors.contains(entry.key) {
+      trusted.append entry.key
+      previous = entry.key
+      continue
+    }
+    if const Some(predecessor) = previous {
+      const signature = match entry.endorsement {
+        Some(found) => found
+        None => {
+          return Fail "the key {keyText(entry.key)} follows a trusted key and is not endorsed by it"
+        }
+      }
+      if !predecessor.verifies(keyMessage(entry.key).bytes().toList(), signature) {
+        return Fail "the endorsement of the key {keyText(entry.key)} does not verify with the key before it"
+      }
+      trusted.append entry.key
+      previous = entry.key
+    }
+  }
+  if trusted.isEmpty() {
+    return Fail "none of the keys it lists is one this machine trusts"
+  }
+  trusted
+}
+
+/**
+ * Every record of `package`'s index file checked: signed, over [recordMessage] at its position, by one of `keys`.
+ *
+ * # Errors
+ *
+ * - A file whose records do not read, and the first record that carries no signature or whose signature does not
+ *   verify with any of the keys, named by what it is.
+ */
+public fn verifyIndex(text: String, package: String, keys: List<Ed25519PublicKey>): Result<Void, String> {
+  const read = recordsOf(text)?
+  var position = 0
+  for record in read.records {
+    const (what, written) = match record {
+      .Release(release) => ("the release {release.version}", release.signature)
+      .Yank(yanked) => ("the yank of {yanked.version}", yanked.signature)
+      .Unyank(version, signature) => ("the unyank of {version}", signature)
+    }
+    if written.isEmpty() {
+      return Fail "{what} is not signed, and the registry signs every record"
+    }
+    const signature = signatureOfText(written).mapError({ "the signature of {what}: {_}" })?
+    const message = recordMessage(package, position, record).bytes().toList()
+    if !keys.any({ _.verifies message, signature }) {
+      return Fail "the signature of {what} does not verify with a key of the registry"
+    }
+    position = position + 1
+  }
+  Ok void
+}

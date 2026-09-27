@@ -71,8 +71,9 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   the forge has no runner for yet, and the installers and package manifests download from torb.dev (RELEASE.md
   section 14). What is left there: runners for windows-x64, linux-arm64 and macos-arm64, without which a release
   carries the linux-x64 toolchain only. **What is left:** sign-in through GitHub, GitLab, Codeberg or a passkey and a second factor; the
-  documentation worker, search, verified domains and "elsewhere" owners; an `s3:` storage driver; Ed25519 signatures
-  and `config.trb`; `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
+  documentation worker, search, verified domains and "elsewhere" owners; an `s3:` storage driver; the production signing
+  key and its line in `torb` (the index is signed and checked since 2026-09-27, `std/signature`, RELEASE.md section
+  7.14); `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
   two majors of one package in one graph; `torb lock` and `lock --check`; the variables an evaluation read, printed by
   `publish` and recorded in `from`; and a way for `torb` to wait for a task without
   making its top level one, which lets the client use `std/http`. **A bug found on the way:** `std/network`'s name

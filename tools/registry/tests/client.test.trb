@@ -4,6 +4,10 @@
  * storage. Once with a token, once again - which the registry refuses in words the client prints - and once without a
  * token, which the client refuses before it sends anything.
  *
+ * Then `torb add` of the package into a second project, from the storage served the way a deployment's file server
+ * serves it: the client checks every record of the index against the registry's keys and pins them on this first
+ * contact, and refuses the index once a record is changed, and once the list of keys is replaced by another.
+ *
  * The `torb` driven is `REGISTRY_TEST_TORB`, or the `torb` running this test where that is the VM of `torb test`. Its
  * environment is set through `env`, which POSIX systems and Git for Windows have. The database needs the SQLite shell,
  * as in `./server.test.trb`.
@@ -15,7 +19,9 @@ use Environment, Directories from "std/os"
 use Path from "std/path"
 use Process from "std/process"
 use SocketAddress, IpAddress from "std/network"
-use Server, Method, Headers, Body, send from "std/http"
+use Server, Request, Response, Status, Method, Headers, Body, send from "std/http"
+use Ed25519PrivateKey from "std/signature"
+use RegistryKey, renderRegistryKeys from "torbscript/compiler/package/signing"
 use Uri from "std/uri"
 use Json from "std/json"
 use Config from "../src/config"
@@ -96,12 +102,22 @@ const config = Config(
 )
 const database = Database config.database, program: config.sqlite
 const migrated = database.migrate().await()
-var server = Server.listen(
-  SocketAddress(IpAddress.loopback, 0),
-  handler(Registry.of(config, database, Storage.registry([FileStorage()]))),
-)?
+const signer = Ed25519PrivateKey.fromSeed(List.filled(32, 5)).expect("32 bytes")
+const registry = Registry.of config, database, Storage.registry([FileStorage()]), signer
+const keysPublished = registry.publishKeys(None).await()
+var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(registry))?
 var serving = server.serve()
 const base = "http://{server.localAddress()}"
+// The storage as a deployment's file server serves it: `/index/...` and `/archives/...`, and 404 for the rest
+const storageRoot = "{root}/storage"
+var fileServer = Server.listen(SocketAddress(IpAddress.loopback, 0), { request =>
+  match File.readBytes("{storageRoot}{request.path()}") {
+    Ok(bytes) => Response Status.ok, Headers(), Body.from(bytes)
+    Fail(_) => Response Status.notFound, Headers(), Body.from("not found")
+  }
+})?
+var fileServing = fileServer.serve()
+const files = "http://{fileServer.localAddress()}"
 
 const account = post(base, "/api/1/accounts", administrator, "\{\"name\":\"ada\"\}").await()
 const token = Json().decode<TokenField>(account).map({ _.token }).ok() ?? ""
@@ -127,7 +143,32 @@ const withoutToken = torb(
   [cache, "TORB_TOKEN=", "ACTIONS_ID_TOKEN_REQUEST_URL="],
   ["publish", "--project", package],
 ).await()
+
+// A project that depends on acme/hello, from the registry's files
+const consumer = "{root}/consumer"
+File.createDirectory("{consumer}/src")?
+const consumerManifest = """
+  name = "acme/consumer"
+  version = "0.1.0"
+
+  registry "acme", url: "{files}"
+  """
+File.writeText("{consumer}/project.trb", "{consumerManifest}\n")?
+File.writeText("{consumer}/src/lib.trb", "/** Nothing yet. */\npublic fn nothing() \{\}\n")?
+const added = torb([cache], ["add", "acme/hello", "--project", consumer]).await()
+const addedAgain = torb([cache], ["update", "--project", consumer]).await()
+// A record changed on the way: the release claims another tree hash
+const indexPath = "{root}/storage/index/acme/hello.trb"
+const hashLine = indexText.lines().find({ _.trim().startsWith("hash ") }) ?? ""
+File.writeText(indexPath, indexText.replace(hashLine, "  hash \"sha256:{"0".repeat(64)}\""))?
+const changedRecord = torb([cache], ["update", "--project", consumer]).await()
+File.writeText(indexPath, indexText)?
+// The list of keys replaced by one this machine has never trusted
+const stranger = Ed25519PrivateKey.fromSeed(List.filled(32, 8)).expect("32 bytes")
+File.writeText("{root}/storage/index/config.trb", renderRegistryKeys([RegistryKey(stranger.publicKey())]))?
+const replacedKeys = torb([cache], ["update", "--project", consumer]).await()
 serving.cancel()
+fileServing.cancel()
 
 group "torb publish to the write service" {
   test "the account and the owner to publish under exist" {
@@ -152,5 +193,28 @@ group "torb publish to the write service" {
   test "without a token or trusted publishing nothing is sent" {
     assert(withoutToken.code == 1)
     assert withoutToken.output.contains("TORB_TOKEN")
+  }
+}
+
+group "torb add from the signed index" {
+  test "the index verifies, and the registry's keys are pinned on the first contact" {
+    assert keysPublished.isOk()
+    assert indexText.contains("  signature \"ed25519:")
+    assert(added.code == 0)
+    assert added.output.contains("trusting the signing keys of {files}")
+    assert(addedAgain.code == 0)
+    assert(!addedAgain.output.contains("trusting the signing keys"))
+  }
+
+  test "a record changed on the way is refused" {
+    assert(changedRecord.code == 1)
+    assert(
+      changedRecord.output.contains("the signature of the release 0.1.0 does not verify with a key of the registry"),
+    )
+  }
+
+  test "a list of keys this machine never trusted is refused" {
+    assert(replacedKeys.code == 1)
+    assert replacedKeys.output.contains("none of the keys it lists is one this machine trusts")
   }
 }

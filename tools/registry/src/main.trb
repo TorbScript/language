@@ -1,18 +1,32 @@
 /**
  * `registry`: the write service of packages.torb.dev (docs/design/RELEASE.md sections 7.2, 7.4 and 7.11), the first
- * real server program written in TorbScript. It opens the database - creating its tables where they are missing - and
- * serves the API of `./api` until it is stopped. `tools/deploy/compose.example.yml` runs it behind Traefik, with a
- * static file server in front of what it writes.
+ * real server program written in TorbScript. It opens the database - creating its tables where they are missing -,
+ * takes the key it signs the index with, publishes the keys in `index/config.trb`, and serves the API of `./api` until
+ * it is stopped. `tools/deploy/compose.example.yml` runs it behind Traefik, with a static file server in front of what
+ * it writes.
+ *
+ * `registry signing-key` prints a new seed for `REGISTRY_SIGNING_KEY` and the public key it makes, and does nothing
+ * else.
  */
 
 use SocketAddress from "std/network"
 use Process from "std/process"
 use Server from "std/http"
+use Ed25519PrivateKey, Ed25519PublicKey from "std/signature"
+use keyText from "torbscript/compiler/package/signing"
 use Config from "./config"
 use Database from "./database"
 use Storage, FileStorage from "std/storage"
 use Registry from "./registry"
 use handler from "./api"
+use newSeed, signingKeyOf from "./signing"
+
+if Process.arguments().first() == "signing-key" {
+  const key = Ed25519PrivateKey.fromSeed(newSeed()).expect("32 bytes")
+  print "REGISTRY_SIGNING_KEY={key.seedHex()}"
+  print "# the public key: {keyText(key.publicKey())}"
+  Process.exit 0
+}
 
 const config = Config.fromEnvironment()
 const database = Database config.database, program: config.sqlite
@@ -23,9 +37,42 @@ match database.migrate().await() {
     Process.exit 1
   }
 }
+const signing = match signingKeyOf(config) {
+  Ok(found) => found
+  Fail(problem) => {
+    printError "registry: {problem}"
+    Process.exit 1
+  }
+}
+const successor: Ed25519PublicKey? = match config.successorKey {
+  Some(written) => {
+    match Ed25519PublicKey.tryFrom(written.withoutPrefix("ed25519:") ?? written) {
+      Ok(key) => key
+      Fail(problem) => {
+        printError "registry: REGISTRY_SIGNING_KEY_SUCCESSOR: {problem}"
+        Process.exit 1
+      }
+    }
+  }
+  None => None
+}
 // The drivers this deployment can reach, by scheme: `file:` today; an `s3:` driver is one more entry (URI.md section 11)
 const storage = Storage.registry([FileStorage()])
-const registry = Registry.of config, database, storage
+const registry = Registry.of config, database, storage, signing.key
+const chain = match registry.publishKeys(successor).await() {
+  Ok(found) => found
+  Fail(refusal) => {
+    printError "registry: index/config.trb: {refusal.message()}"
+    Process.exit 1
+  }
+}
+print "registry: signing the index with {keyText(signing.key.publicKey())}, from {signing.origin}"
+if signing.generated {
+  printError "registry: a development key signs the index - set REGISTRY_SIGNING_KEY in a deployment (`registry signing-key` makes one)"
+}
+if chain.restarted {
+  printError "registry: index/config.trb did not list the signing key, and lists only it now: clients that trusted the old keys refuse the index until they remove them. Announce a new key with REGISTRY_SIGNING_KEY_SUCCESSOR first"
+}
 const address = SocketAddress.tryFrom(config.listenAddress)?
 var server = Server.listen(address, handler(registry))?
 print "registry: listening on {server.localAddress()}, storing below {config.storage}, database {config.database}"

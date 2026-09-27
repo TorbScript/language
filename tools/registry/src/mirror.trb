@@ -15,8 +15,8 @@ use ran from "./program"
 const committer = ["-c", "user.name=packages.torb.dev", "-c", "user.email=registry@torb.dev"]
 
 /**
- * `text`, the whole index file of `package`, written into the working copy `directory` as `<owner>/<name>.trb` and
- * committed with `message`; pushed where `push` says so.
+ * `text`, the whole index file of `package`, written into the working copy `directory` as `<owner>/<name>.trb` - or,
+ * for `config`, the registry's keys, as `config.trb` - and committed with `message`; pushed where `push` says so.
  */
 public fn mirrorIndex(
   directory: String,
@@ -26,8 +26,10 @@ public fn mirrorIndex(
   push: Bool,
 ): Task<Result<Void, String>> {
   const relative = "{package}.trb"
-  const owner = package.splitOnce("/").map({ _.0 }) ?? package
-  File.createDirectory("{directory}/{owner}").mapError({ "the mirror {directory}: {_}" })?
+  // A package's file is below its owner's directory; `config`, the list of keys, is at the top
+  if const Some((owner, _)) = package.splitOnce("/") {
+    File.createDirectory("{directory}/{owner}").mapError({ "the mirror {directory}: {_}" })?
+  }
   File.writeText("{directory}/{relative}", text).mapError({ "the mirror {directory}: {_}" })?
   git(directory, ["add", "--", relative]).await()?
   var arguments = committer

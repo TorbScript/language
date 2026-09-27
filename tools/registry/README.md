@@ -35,6 +35,13 @@ writer, so the tree hash, the limits (10 MiB, 64 MiB unpacked, 10 000 files), th
 drift apart from the client's. It trusts nothing the client computed and never evaluates a `project.trb`; it does not
 check the package, because its toolchain may be another patch release.
 
+**Every record of the index is signed** with the registry's Ed25519 key (`std/signature`): a release, a yank and an
+unyank carry the signature of the record at its place in the file, and `index/config.trb` lists the keys, oldest
+first, each later one endorsed by the one before it. `torb` checks every record it reads against the keys it trusts
+- the ones it ships with, or the ones it pinned at its first contact - with the same code
+(`compiler/src/package/signing.trb`, [RELEASE.md section 7.14](../../docs/design/RELEASE.md#714-the-signed-index-as-built-2026-09-27)).
+`registry signing-key` prints a new seed for `REGISTRY_SIGNING_KEY` and its public key, and does nothing else.
+
 **Trusted publishing** verifies the job's token itself. Its `iss` picks the issuer: GitHub Actions
 (`https://token.actions.githubusercontent.com`, key set at `/.well-known/jwks`) or a Forgejo of
 `REGISTRY_FORGEJO_ISSUERS` (`https://git.torb.dev/api/actions` by default; its key set is the `jwks_uri` of its
@@ -63,6 +70,8 @@ Everything comes from the environment (`tools/deploy/compose.example.yml` sets i
 | `REGISTRY_TRUSTED_TOKEN_SECONDS` | `900` | how long an exchanged token lives |
 | `REGISTRY_MIRROR` | none | a git working copy the index is mirrored into after every change |
 | `REGISTRY_MIRROR_PUSH` | `0` | `1` pushes the mirror after each commit |
+| `REGISTRY_SIGNING_KEY` | a development key | the seed of the key the index is signed with, 64 hexadecimal digits; without it the registry makes a seed in `<database>.development-key` on its first start, keeps it, and says in its log that a development key signs |
+| `REGISTRY_SIGNING_KEY_SUCCESSOR` | none | the public key that is to follow, 64 hexadecimal digits: announced in `index/config.trb`, endorsed by the current key, before `REGISTRY_SIGNING_KEY` switches to it |
 
 ## Decisions
 
@@ -89,8 +98,8 @@ Everything comes from the environment (`tools/deploy/compose.example.yml` sets i
 
 ## Not built yet
 
-The index is not signed (there is no Ed25519 in `std`, and the client does not verify yet); accounts are created by
-the operator, not by signing in through GitHub, GitLab, Codeberg or a passkey; there is no second factor, no
+The production signing key does not exist yet, so no `torb` ships a key for packages.torb.dev and every client trusts
+the registry's keys on first use; accounts are created by the operator, not by signing in through GitHub, GitLab, Codeberg or a passkey; there is no second factor, no
 documentation worker, no search, no `deprecate`, no verified domains and no "elsewhere" owners; the similar-name rule
 does not yet compare against packages with many dependents; and `torb yank`, `torb owner` and `torb login` are not
 commands yet - the API is there for them.

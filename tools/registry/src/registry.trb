@@ -18,6 +18,10 @@
  * writes the archive, then the index, then the database row; a crash between them leaves at worst an archive nothing
  * names - written over by the next attempt - or an index entry without its row, which the next attempt finds in the
  * index, refuses as published, and repairs the row of.
+ *
+ * **Every record is signed** (RELEASE.md section 7.4): a release, a yank and an unyank carry the signature of the
+ * registry's key over the record at its position in the file (`torbscript/compiler/package/signing`, which the
+ * client checks with), and [Registry.publishKeys] keeps the list of keys in `index/config.trb`.
  */
 
 use Uri from "std/uri"
@@ -32,7 +36,10 @@ use checkedUpload from "./upload"
 use mirrorIndex from "./mirror"
 use TrustedPublisher, TrustedIssuer, JsonWebKeySet, githubIssuer, issuerOf, verifiedClaims, publisherMatches, publisherName, describedJob, keySetUrlOf, fetchKeySet from "./oidc"
 use Version from "torbscript/compiler/package/version"
-use IndexYank, readIndex, indexStart, renderRelease, renderYank, renderUnyank from "torbscript/compiler/package/index"
+use IndexYank, IndexRecord, readIndex, recordsOf, indexStart, renderRelease, renderYank, renderUnyank from "torbscript/compiler/package/index"
+use recordSignature, readRegistryKeys, renderRegistryKeys from "torbscript/compiler/package/signing"
+use Ed25519PrivateKey, Ed25519PublicKey from "std/signature"
+use KeyChain, keyChainOf from "./signing"
 
 /** Why a request is not done: the HTTP status, and one sentence - or several, for an archive with several problems. */
 public type Refusal {
@@ -179,16 +186,40 @@ type CountRow {
   count: Int
 }
 
-/** The registry: its configuration, its database, its storage and the lock of the storage. */
+/** The registry: its configuration, its database, its storage, the lock of the storage and the key it signs with. */
 public shared type Registry {
   config: Config
   database: Database
   private var storage: Storage
   private var lock: WriteLock
+  /** The key every record of the index is signed with. */
+  private signer: Ed25519PrivateKey
 
-  /** The registry over `database` and `storage`, with a lock of its own. */
-  static fn of(config: Config, database: Database, storage: Storage): Registry {
-    Registry config, database, storage, WriteLock()
+  /** The registry over `database` and `storage`, signing with `signer`, with a lock of its own. */
+  static fn of(config: Config, database: Database, storage: Storage, signer: Ed25519PrivateKey): Self {
+    Self config, database, storage, WriteLock(), signer
+  }
+
+  /**
+   * Writes `index/config.trb` where it does not list what it should (`./signing`'s [keyChainOf]): the key the registry
+   * signs with, and `successor`, endorsed by it, where one is to be announced. Run once at every start, before any
+   * request; the list is mirrored like an index file.
+   */
+  fn publishKeys(successor: Ed25519PublicKey?): Task<Result<KeyChain, Refusal>> {
+    using holding = lock.acquire().await()
+    const uri = uriOf "index/config.trb"
+    const existing = textAt(uri).await()?
+    const listed = match existing {
+      Some(text) => readRegistryKeys(text).mapError({ Refusal.of 500, "index/config.trb does not read: {_}" })?
+      None => []
+    }
+    const chain = keyChainOf(listed, signer, successor).mapError({ Refusal.of 500, _ })?
+    const text = renderRegistryKeys chain.keys
+    if existing != text {
+      written(uri, text.bytes().toList()).await()?
+      mirrored("config", text, "the keys of the index").await()
+    }
+    chain
   }
 
   // --- who is asking -------------------------------------------------------------------------------------------------
@@ -450,7 +481,9 @@ public shared type Registry {
     }
     ensurePackage(package, owner).await()?
     written(uriOf("archives/{package}/{version}.tar.gz"), archive).await()?
-    const text = existing + renderRelease(upload.release)
+    const position = positionIn(existing, package)?
+    const signature = recordSignature signer, package, position, IndexRecord.Release(upload.release)
+    const text = existing + renderRelease(upload.release.copy(signature: signature))
     written(indexUri, text.bytes().toList()).await()?
     recordRelease(package, version, hash, grant.map({ _.account }) ?? caller.actor()).await()?
     logged(caller, "publish", package, "{version} {hash}").await()?
@@ -500,7 +533,13 @@ public shared type Registry {
       const state = if undo { "is not yanked" } else { "is yanked already" }
       return Fail Refusal.of(409, "{package} {version} {state}")
     }
-    const line = if undo { renderUnyank parsed } else { renderYank IndexYank(parsed, reason.trim()) }
+    const position = positionIn(existing, package)?
+    const line = if undo {
+      renderUnyank parsed, recordSignature(signer, package, position, IndexRecord.Unyank(parsed, ""))
+    } else {
+      const yanked = IndexYank parsed, reason.trim()
+      renderYank yanked.copy(signature: recordSignature(signer, package, position, IndexRecord.Yank(yanked)))
+    }
     const text = existing + line
     written(indexUri, text.bytes().toList()).await()?
     const flag = if undo { 0 } else { 1 }
@@ -827,6 +866,12 @@ public shared type Registry {
   private fn nowOf(): Task<Result<Int, Refusal>> {
     database.now().await().mapError({ Refusal.of 500, _ })
   }
+}
+
+/** Where the next record of `package`'s index file `text` stands: how many records it has. */
+fn positionIn(text: String, package: String): Result<Int, Refusal> {
+  const read = recordsOf(text).mapError({ Refusal.of 500, "the index of {package} does not read: {_}" })?
+  read.records.length()
 }
 
 /** `owner/name`, both parts checked against the segment grammar. */
