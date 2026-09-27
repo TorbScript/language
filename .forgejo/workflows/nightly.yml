@@ -1,0 +1,180 @@
+# The nightly channel (docs/design/RELEASE.md section 5): every night that main has changed, the gates, and then
+#
+#   - the seed of main, published to the release `seeds`, once linux-x64 passes tier A and tier B (the seed does not
+#     wait for the other targets: it is C, and the `agree` job shows the C is the same on every host)
+#   - a prerelease `nightly-YYYYMMDD` with the archives of every target that ran, the source, the seed, SHA256SUMS and
+#     its cosign signature SHA256SUMS.sig, once every gate is green
+#   - the nightlies older than 30 days are deleted, with their tags
+#   - the root server's container images, built from the nightly's assets and pushed to cr.torb.dev as `nightly`
+#     (images.yml)
+#
+# Only main is ever published: the schedule runs on the default branch, and a manual run from another branch runs the
+# gates and publishes nothing. The jobs that write ask the forge for a token of the Authorized Integration whose
+# audience is TORB_PUBLISH_AUDIENCE (.forgejo/actions/token); the signing key is the secret COSIGN_PRIVATE_KEY.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: has main changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - id: plan
+        env:
+          EVENT: ${{ forgejo.event_name }}
+          COMMIT: ${{ forgejo.sha }}
+        run: |
+          version="nightly-$(date -u +%Y%m%d)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          # The commits the nightlies were built from; a scheduled run of a commit that already has one does nothing
+          built=$(sh tools/forge.sh tags nightly- | awk '{ print $2 }' || true)
+          if [ "$EVENT" = "schedule" ] && printf '%s\n' "$built" | grep -q -x "$COMMIT"; then
+            echo "main is still $COMMIT, which has a nightly already"
+            echo "build=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "build=true" >>"$GITHUB_OUTPUT"
+          fi
+
+  gates:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    uses: ./.forgejo/workflows/gates.yml
+    with:
+      tier-b: true
+      seed: true
+      package: true
+      version: ${{ needs.plan.outputs.version }}
+
+  seed:
+    name: publish the seed
+    needs: gates
+    # The seed artifact exists exactly when linux-x64 passed tier A and tier B, whatever the other targets did
+    if: always() && forgejo.ref == 'refs/heads/main' && needs.gates.result != 'skipped' && needs.gates.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - id: download
+        continue-on-error: true
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: seed
+          path: seed-archive
+      - id: token
+        if: steps.download.outcome == 'success'
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
+      - name: sh tools/publish-seed.sh
+        if: steps.download.outcome == 'success'
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          for archive in seed-archive/torb-seed-*.tar.gz; do
+            sh tools/publish-seed.sh "$archive"
+          done
+      - name: No seed tonight
+        if: steps.download.outcome != 'success'
+        run: echo "::warning::linux-x64 did not pass tier A and tier B, so no seed was packed and none was published"
+
+  publish:
+    name: publish the nightly
+    needs: [plan, gates, seed]
+    if: always() && forgejo.ref == 'refs/heads/main' && needs.gates.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - uses: ./.forgejo/actions/cosign
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then
+            echo "::error::the secret COSIGN_PRIVATE_KEY is not set (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 1
+          fi
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false \
+            --output-signature SHA256SUMS.sig SHA256SUMS
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
+      - name: The prerelease
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          COMMIT: ${{ forgejo.sha }}
+          SERVER: ${{ forgejo.server_url }}
+          REPOSITORY: ${{ forgejo.repository }}
+        run: |
+          # A second run on the same day replaces that day's nightly
+          if sh tools/forge.sh release "$VERSION" >/dev/null 2>&1; then
+            sh tools/forge.sh delete "$VERSION"
+          fi
+          cat >notes.md <<EOF
+          The nightly of main at $COMMIT: tier A and tier B green on linux-x64, bootstrap and conformance green on every
+          other target that has a runner. Not a release: nothing about it is promised, and it is deleted after 30 days.
+
+          Verify a download:
+
+              cosign verify-blob --key $SERVER/$REPOSITORY/raw/branch/main/tools/deploy/cosign.pub \\
+                --signature SHA256SUMS.sig --insecure-ignore-tlog=true SHA256SUMS
+              sha256sum --check --ignore-missing SHA256SUMS
+          EOF
+          # A draft first: the webhook "published" goes out once every asset is there, and release-sync fetches them
+          sh tools/forge.sh create "$VERSION" "$COMMIT" "Nightly $(date -u +%Y-%m-%d)" notes.md --draft --prerelease
+          sh tools/forge.sh upload "$VERSION" dist/*
+          sh tools/forge.sh publish "$VERSION"
+      - name: Delete the nightlies older than 30 days
+        # The images of a deleted nightly stay on cr.torb.dev under their dated tag; `nightly` always names the newest
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          cutoff=$(date -u -d '30 days ago' +%Y%m%d)
+          sh tools/forge.sh releases | awk '{ print $1 }' | grep -E '^nightly-[0-9]{8}$' | while IFS= read -r tag; do
+            if [ "${tag#nightly-}" -lt "$cutoff" ]; then
+              echo "deleting $tag"
+              sh tools/forge.sh delete "$tag" </dev/null
+            fi
+          done
+
+  images:
+    name: container images, tagged nightly (docs/design/RELEASE.md section 7.11)
+    needs: [plan, publish]
+    if: forgejo.ref == 'refs/heads/main'
+    uses: ./.forgejo/workflows/images.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      channel: nightly
+      source: artifact
+    secrets: inherit

@@ -1,0 +1,93 @@
+# Every push to main and every pull request of the repository itself: the commit messages, then the gates
+# (gates.yml).
+#
+# - linux-x64 bootstraps from the forge's published seed and runs tier A, the tests of tools/, and the agreement of
+#   the C, always.
+# - Tier B runs on every push to main, and on a pull request that touches compiler/src/ir, compiler/src/backend,
+#   runtime/, tools/ or .forgejo/ - the rule of compiler/CONTRIBUTING.md.
+# - windows-x64, linux-arm64 and macos-arm64 run once the forge has runners of those labels and TORB_RUNNERS names
+#   them (gates.yml); until then the GitHub mirror runs them after the push (.github/workflows/portable.yml).
+#
+# A pull request from a fork runs nothing (docs/design/RELEASE.md, "The forge", security): the runner can run Docker,
+# and code nobody with write access has read never runs on it. A maintainer who wants CI for such a change pushes its
+# branch into the repository. Nothing of this workflow asks for a token or reads a secret, and a newer push to the same
+# branch or pull request cancels the run it supersedes.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ forgejo.event.pull_request.number || forgejo.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commits:
+    name: commit messages
+    if: forgejo.event_name != 'pull_request' || forgejo.event.pull_request.head.repo.full_name == forgejo.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - env:
+          EVENT: ${{ forgejo.event_name }}
+          BEFORE: ${{ forgejo.event.before }}
+          BASE: ${{ forgejo.event.pull_request.base.sha }}
+          HEAD_OF_PULL: ${{ forgejo.event.pull_request.head.sha }}
+        run: |
+          # What the push or the pull request adds: linear, and every subject a Conventional Commit
+          if [ "$EVENT" = "pull_request" ]; then
+            sh tools/check-commits.sh "$BASE" "$HEAD_OF_PULL"
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            sh tools/check-commits.sh "$BEFORE" HEAD
+          else
+            echo "a new branch or a force push: there is no earlier commit to compare against"
+          fi
+
+  scope:
+    name: what the change touches
+    if: forgejo.event_name != 'pull_request' || forgejo.event.pull_request.head.repo.full_name == forgejo.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tier-b: ${{ steps.scope.outputs.tier-b }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: scope
+        env:
+          EVENT: ${{ forgejo.event_name }}
+          BEFORE: ${{ forgejo.event.before }}
+          BASE: ${{ forgejo.event.pull_request.base.sha }}
+        run: |
+          # The files the change touches; unknown (a new branch, a force push) counts as everything
+          if [ "$EVENT" = "pull_request" ]; then
+            changed=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "*")
+          elif git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BEFORE" HEAD)
+          else
+            changed="*"
+          fi
+          printf '%s\n' "$changed"
+          touches() {
+            printf '%s\n' "$changed" | grep -q -E "^(\*|$1)"
+          }
+          if [ "$EVENT" = "push" ] || touches 'compiler/src/ir/|compiler/src/backend/|runtime/|tools/|\.forgejo/'; then
+            echo "tier-b=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "tier-b=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  gates:
+    needs: scope
+    uses: ./.forgejo/workflows/gates.yml
+    with:
+      tier-b: ${{ needs.scope.outputs.tier-b == 'true' }}
+      save-cache: ${{ forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main' }}

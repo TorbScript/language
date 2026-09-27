@@ -1,0 +1,418 @@
+# The gates of compiler/CONTRIBUTING.md, and - when asked - the release binaries, the archives and the seed. Every
+# other workflow of the forge calls this one (Forgejo expands it into their runs); it writes nothing but artifacts and
+# caches, so none of its jobs asks for a token.
+#
+# The split, and why (docs/design/RELEASE.md, "The forge" and section 13):
+#
+#   linux-x64     bootstrap (seed from program.c -> torb -> torb, fixpoint), then tier A, tier B and the tests of
+#                 tools/release-sync and tools/registry as parallel jobs
+#   agree         every host emits the same C for every target (tools/agree.sh): linux-x64 emits the compiler's C for
+#                 all eight targets with `torb build --emit-c --target`, every other runner of this run does the same,
+#                 and the lists have to agree
+#   windows-x64   bootstrap, `check .`, the conformance suite, the runtime's tests (.forgejo/actions/portable)
+#   linux-arm64   the same
+#   macos-arm64   the same
+#
+# The forge has one runner today (labels ubuntu-latest and ubuntu-24.04), so the last three run only for the targets
+# the repository variable TORB_RUNNERS names - `windows-x64 linux-arm64 macos-arm64`, or any of them - once a runner
+# with that label is registered. A job whose label no runner has would wait forever; these are skipped instead, on the
+# server, because their `if:` reads only `needs`. Until then the GitHub mirror runs them (.github/workflows/portable.yml).
+name: gates
+
+on:
+  workflow_call:
+    inputs:
+      tier-b:
+        description: Run tier B on linux-x64
+        type: boolean
+        default: true
+      seed:
+        description: Pack the seed (artifact `seed`) once linux-x64 passes tier A and tier B
+        type: boolean
+        default: false
+      package:
+        description: Build the release binaries and the archives (artifact `dist`) of every target that ran
+        type: boolean
+        default: false
+      version:
+        description: The version in the archive names (0.4.0, nightly-20260923)
+        type: string
+        default: ""
+      save-cache:
+        description: Write the caches (a push to main)
+        type: boolean
+        default: false
+
+env:
+  # One large C compile at a time per job: the runner runs two jobs at once beside the forge itself, and one cc1 over
+  # the compiler's 100 MB of C takes 1.5-2 GB
+  TORB_BUILD_SLOTS: "1"
+
+jobs:
+  plan:
+    name: which runners exist
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      windows-x64: ${{ steps.plan.outputs.windows-x64 }}
+      linux-arm64: ${{ steps.plan.outputs.linux-arm64 }}
+      macos-arm64: ${{ steps.plan.outputs.macos-arm64 }}
+    steps:
+      - id: plan
+        env:
+          RUNNERS: ${{ vars.TORB_RUNNERS }}
+        run: |
+          # TORB_RUNNERS: the targets besides linux-x64 that have a runner of that label, separated by spaces or commas
+          runners=$(printf '%s' "$RUNNERS" | tr ',' ' ')
+          for target in windows-x64 linux-arm64 macos-arm64; do
+            label=""
+            for runner in $runners; do
+              [ "$runner" = "$target" ] && label=$target
+            done
+            echo "$target=$label" >>"$GITHUB_OUTPUT"
+            echo "$target: ${label:-no runner (TORB_RUNNERS does not name it) - skipped}"
+          done
+
+  linux-x64:
+    name: bootstrap (linux-x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+          musl: ${{ inputs.package }}
+          packages: file
+      - uses: ./.forgejo/actions/bootstrap
+        with:
+          target: linux-x64
+          save-cache: ${{ inputs.save-cache }}
+      - name: Keep the compiler for the jobs after this one
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: |
+            build/release/torb
+            build/release/program.c
+            build/release/program.hash
+          retention-days: 3
+          if-no-files-found: error
+      - name: The release binary (static, musl)
+        if: inputs.package
+        run: |
+          TORB_CC=musl-gcc TORB_CFLAGS=-static sh tools/build-seed.sh build/release build/dist-binary/torb
+          file build/dist-binary/torb || true
+          if ldd build/dist-binary/torb >/dev/null 2>&1; then
+            echo "::error::the release binary is linked dynamically"
+            exit 1
+          fi
+      - name: Smoke test of the release binary
+        if: inputs.package
+        run: sh tools/smoke-test.sh build/dist-binary/torb
+      - name: Keep the release binary
+        if: inputs.package
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: binary-linux-x64
+          path: build/dist-binary/torb
+          retention-days: 3
+          if-no-files-found: error
+
+  tier-a:
+    name: tier A (linux-x64)
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      # The download is newer than the checkout, so gates.sh finds build/release/torb current and does not bootstrap
+      - run: |
+          chmod +x build/release/torb
+          touch build/release/*
+      - name: sh tools/gates.sh a
+        env:
+          TORB_SEED_FETCH: "0"
+        run: sh tools/gates.sh a
+
+  tier-b:
+    name: tier B (linux-x64)
+    if: inputs.tier-b
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+          clang: "true"
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      # Tier B's fixpoint gate bootstraps again. Its seed is this compiler itself: the job before already showed that
+      # the published seed builds these sources, and this shows that the compiler reproduces its own C
+      - name: The compiler as its own seed
+        run: |
+          chmod +x build/release/torb
+          mkdir -p build/ci-seed
+          cp build/release/torb build/ci-seed/torb
+      - name: sh tools/gates.sh b
+        env:
+          TORB_SEED: build/ci-seed/torb
+        run: sh tools/gates.sh b
+      # gcc built everything above; the runtime's own tests with clang as well (-Wpedantic -Werror), which is the
+      # compiler macOS has
+      - name: The runtime's tests with clang
+        env:
+          TORB_CC: clang
+        run: sh runtime/build.sh
+
+  tools:
+    name: tools/release-sync and tools/registry (linux-x64)
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+          # The registry keeps its database through the SQLite shell, and its tests run `torb publish` against it
+          packages: sqlite3 curl
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - run: |
+          chmod +x build/release/torb
+          touch build/release/*
+      - name: torb test --native tools/release-sync
+        run: build/release/torb test --native tools/release-sync
+      - name: torb test --native tools/registry
+        # The client's tests drive `torb publish` against the registry, with this very compiler
+        run: REGISTRY_TEST_TORB="$PWD/build/release/torb" build/release/torb test --native tools/registry
+      - name: The shell of tools/ parses
+        run: |
+          for script in tools/*.sh tools/deploy/*.sh; do
+            sh -n "$script"
+          done
+
+  windows-x64:
+    name: bootstrap and conformance (windows-x64)
+    needs: plan
+    if: needs.plan.outputs.windows-x64 != ''
+    runs-on: ${{ needs.plan.outputs.windows-x64 || 'ubuntu-latest' }}
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/portable
+        with:
+          target: windows-x64
+          package: ${{ inputs.package }}
+          save-cache: ${{ inputs.save-cache }}
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: agree-windows-x64
+          path: build/agree.txt
+          retention-days: 3
+          if-no-files-found: error
+      - if: inputs.package
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: binary-windows-x64
+          path: build/dist-binary/torb*
+          retention-days: 3
+          if-no-files-found: error
+
+  linux-arm64:
+    name: bootstrap and conformance (linux-arm64)
+    needs: plan
+    if: needs.plan.outputs.linux-arm64 != ''
+    runs-on: ${{ needs.plan.outputs.linux-arm64 || 'ubuntu-latest' }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/portable
+        with:
+          target: linux-arm64
+          package: ${{ inputs.package }}
+          save-cache: ${{ inputs.save-cache }}
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: agree-linux-arm64
+          path: build/agree.txt
+          retention-days: 3
+          if-no-files-found: error
+      - if: inputs.package
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: binary-linux-arm64
+          path: build/dist-binary/torb*
+          retention-days: 3
+          if-no-files-found: error
+
+  macos-arm64:
+    name: bootstrap and conformance (macos-arm64)
+    needs: plan
+    if: needs.plan.outputs.macos-arm64 != ''
+    runs-on: ${{ needs.plan.outputs.macos-arm64 || 'ubuntu-latest' }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/portable
+        with:
+          target: macos-arm64
+          package: ${{ inputs.package }}
+          save-cache: ${{ inputs.save-cache }}
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: agree-macos-arm64
+          path: build/agree.txt
+          retention-days: 3
+          if-no-files-found: error
+      - if: inputs.package
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: binary-macos-arm64
+          path: build/dist-binary/torb*
+          retention-days: 3
+          if-no-files-found: error
+
+  agree:
+    name: every host emits the same C
+    if: always() && needs.linux-x64.result == 'success'
+    needs: [linux-x64, windows-x64, linux-arm64, macos-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - name: The compiler's C for every target, emitted on linux-x64
+        run: |
+          chmod +x build/release/torb
+          touch build/release/*
+          mkdir -p build/hosts
+          sh tools/agree.sh emit build/release/torb build/hosts/linux-x64.txt
+      - name: The lists of the other runners of this run
+        continue-on-error: true
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          pattern: agree-*
+          path: build/hosts
+      - name: tools/agree.sh compare
+        run: |
+          for file in build/hosts/*.txt build/hosts/*/agree.txt; do
+            [ -f "$file" ] || continue
+            echo "== $file"
+            cat "$file"
+          done
+          set --
+          for file in build/hosts/*.txt build/hosts/*/agree.txt; do
+            [ -f "$file" ] && set -- "$@" "$file"
+          done
+          sh tools/agree.sh compare "$@"
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: agree-linux-x64
+          path: build/hosts/linux-x64.txt
+          retention-days: 30
+
+  seed:
+    name: pack the seed
+    if: always() && inputs.seed && needs.linux-x64.result == 'success' && needs.tier-a.result == 'success' && (needs.tier-b.result == 'success' || needs.tier-b.result == 'skipped')
+    needs: [linux-x64, tier-a, tier-b]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - run: sh tools/pack-seed.sh build/release build/seed-archive
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: seed
+          path: build/seed-archive/
+          retention-days: 7
+          if-no-files-found: error
+
+  package:
+    name: archives
+    if: >-
+      always() && inputs.package && needs.seed.result == 'success'
+      && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    needs: [linux-x64, tier-a, tier-b, tools, windows-x64, linux-arm64, macos-arm64, agree, seed]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+          packages: zip
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          pattern: binary-*
+          path: binaries
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: seed
+          path: dist
+      - name: One archive per target that ran, the source, SHA256SUMS
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          [ -n "$VERSION" ] || { echo "::error::package needs a version"; exit 1; }
+          for directory in binaries/binary-*; do
+            target=${directory#binaries/binary-}
+            binary="$directory/torb"
+            [ -f "$binary" ] || binary="$directory/torb.exe"
+            sh tools/package.sh archive "$VERSION" "$target" "$binary" dist
+          done
+          git archive --format=tar.gz --prefix="torb-$VERSION-source/" -o "dist/torb-$VERSION-source.tar.gz" HEAD
+          (cd dist && sha256sum -- *) | LC_ALL=C sort -k 2 >SHA256SUMS
+          mv SHA256SUMS dist/SHA256SUMS
+          cat dist/SHA256SUMS
+          echo "targets in this release: $(ls binaries | sed 's/^binary-//' | tr '\n' ' ')"
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+          if-no-files-found: error

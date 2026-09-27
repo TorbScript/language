@@ -1,0 +1,55 @@
+# The JWT of an Authorized Integration for this job - how a workflow of the forge writes (docs/design/RELEASE.md,
+# "The forge"): Forgejo ignores a job with a `permissions:` key, and the job's automatic token is limited, so a job that
+# publishes sets `enable-openid-connect: true`, asks the forge for an ID token whose audience is the integration's, and
+# sends that token as `Authorization: Bearer` (or as the password of `docker login` and of git over HTTPS). The forge
+# checks the integration's rules - this repository, the workflow file, the ref, the event - and the call may do what the
+# integration's permissions allow. The token lives as long as the forge's `[actions] ID_TOKEN_EXPIRATION_TIME` (an hour
+# by default), so a step asks for it right before it needs it.
+#
+# The audience is not a secret: it is a repository variable (TORB_PUBLISH_AUDIENCE, TORB_IMAGES_AUDIENCE), written
+# once when the owner creates the integration (docs/contributing/releasing.md, "One-time setup").
+name: Token
+description: Requests the job's ID token for an Authorized Integration and writes it, masked, to the step output `token`.
+inputs:
+  audience:
+    description: The audience of the Authorized Integration (its `aud`, shown by the forge when it is created)
+    required: true
+  variable:
+    description: The name of the repository variable the audience comes from, for the error message
+    required: true
+outputs:
+  token:
+    description: The ID token
+    value: ${{ steps.token.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - id: token
+      shell: bash
+      env:
+        AUDIENCE: ${{ inputs.audience }}
+        VARIABLE: ${{ inputs.variable }}
+      run: |
+        if [ -z "$AUDIENCE" ]; then
+          echo "::error::the repository variable $VARIABLE is not set: create the Authorized Integration and put its audience there (docs/contributing/releasing.md, \"One-time setup\")"
+          exit 1
+        fi
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN-}" ]; then
+          echo "::error::this job cannot ask for an ID token: it needs \`enable-openid-connect: true\`"
+          exit 1
+        fi
+        case "$ACTIONS_ID_TOKEN_REQUEST_URL" in
+          *\?*) separator="&" ;;
+          *) separator="?" ;;
+        esac
+        headers="${RUNNER_TEMP:-/tmp}/token-headers-$$"
+        ( umask 077 && printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" >"$headers" )
+        answer=$(curl -fsS --retry 3 -H @"$headers" "$ACTIONS_ID_TOKEN_REQUEST_URL${separator}audience=$AUDIENCE")
+        rm -f "$headers"
+        token=$(printf '%s' "$answer" | tr -d '\r\n' | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        if [ -z "$token" ]; then
+          echo "::error::the forge's answer holds no ID token"
+          exit 1
+        fi
+        echo "::add-mask::$token"
+        echo "token=$token" >>"$GITHUB_OUTPUT"

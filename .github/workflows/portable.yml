@@ -1,0 +1,81 @@
+# The GitHub mirror's one workflow (docs/design/RELEASE.md, "The forge"): the repository lives on git.torb.dev, whose
+# CI (.forgejo/workflows/) runs every gate on linux-x64 and publishes everything; GitHub receives every push through
+# the forge's push mirror and runs only what the forge has no runner for yet - bootstrap, `check .`, the conformance
+# suite and the runtime's tests on windows-x64, linux-arm64 and macos-arm64 - and whether the three agree on the C of
+# every target (tools/agree.sh).
+#
+# It publishes nothing, reads no secret and needs no token: the seed comes from the forge's public release. It runs
+# only while the mirror is public, where GitHub's standard runners cost nothing; a private mirror would pay for macOS
+# minutes at ten times the Linux rate. It is a report after the push, not a gate: main has moved on the forge already.
+name: portable
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TORB_BUILD_SLOTS: "1"
+
+jobs:
+  portable:
+    name: bootstrap and conformance (${{ matrix.target }})
+    if: github.event.repository.private == false
+    runs-on: ${{ matrix.target == 'windows-x64' && 'windows-latest' || matrix.target == 'macos-arm64' && 'macos-latest' || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [windows-x64, linux-arm64, macos-arm64]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/portable
+        with:
+          target: ${{ matrix.target }}
+          save-cache: ${{ github.event_name == 'push' }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agree-${{ matrix.target }}
+          path: build/agree.txt
+          retention-days: 30
+          if-no-files-found: error
+
+  agree:
+    name: every host emits the same C
+    if: always() && github.event.repository.private == false
+    needs: portable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: agree-*
+          path: hosts
+      - name: tools/agree.sh compare
+        run: |
+          set --
+          for file in hosts/*/agree.txt; do
+            [ -f "$file" ] || continue
+            echo "== $file"
+            cat "$file"
+            set -- "$@" "$file"
+          done
+          [ $# -gt 0 ] || { echo "::error::no host emitted its list"; exit 1; }
+          sh tools/agree.sh compare "$@"

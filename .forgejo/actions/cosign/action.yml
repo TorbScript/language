@@ -1,0 +1,21 @@
+# cosign on the PATH: the pinned release that tools/deploy/Dockerfile.release-sync verifies with, checked against the
+# SHA-256 its release lists, so what signs and what verifies is the same program (docs/design/RELEASE.md, "Signing").
+# Linux x64 only - the one runner of the forge.
+name: cosign
+description: Installs the pinned cosign release into the job's PATH.
+runs:
+  using: composite
+  steps:
+    - name: cosign 2.4.1
+      shell: bash
+      run: |
+        version=2.4.1
+        sum=8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b
+        directory="${RUNNER_TEMP:-/tmp}/cosign-$version"
+        mkdir -p "$directory"
+        curl -fsSL --retry 3 -o "$directory/cosign" \
+          "https://github.com/sigstore/cosign/releases/download/v$version/cosign-linux-amd64"
+        echo "$sum  $directory/cosign" | sha256sum -c -
+        chmod 755 "$directory/cosign"
+        echo "$directory" >>"$GITHUB_PATH"
+        "$directory/cosign" version | head -n 3

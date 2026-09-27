@@ -1,4 +1,4 @@
-# Publishes the seed of main without a release: Actions -> seed -> Run workflow.
+# Publishes the seed of main without a release: Actions -> seed -> Run workflow, on main.
 #
 # This is the CI half of the two-commit rule (compiler/CONTRIBUTING.md, "Two commits for a breaking change"): the
 # first commit teaches the compiler both forms, this workflow publishes the seed built from it, and only then can the
@@ -6,52 +6,48 @@
 # seed as well, so a breaking change that can wait a day needs nothing but the nightly.
 #
 # The seed is packed only when linux-x64 bootstraps (the fixpoint) and passes tier A and tier B. The other targets are
-# not needed for it: a seed is C, and the C is the same on every target (gates.yml, `agree`).
+# not needed for it: a seed is C, and the C is the same on every host (gates.yml, `agree`). Publishing asks the forge
+# for a token of the Authorized Integration whose audience is TORB_PUBLISH_AUDIENCE (.forgejo/actions/token).
 name: seed
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 concurrency:
-  group: seed-workflow
+  group: seeds
   cancel-in-progress: false
 
 jobs:
   gates:
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/gates.yml
+    if: forgejo.ref == 'refs/heads/main'
+    uses: ./.forgejo/workflows/gates.yml
     with:
-      portable: "[]"
       tier-b: true
       seed: true
 
   publish:
     name: publish the seed
     needs: gates
-    if: github.ref == 'refs/heads/main'
+    if: forgejo.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Every job that writes seeds.txt shares this group, in every workflow
-    concurrency:
-      group: seeds
-      cancel-in-progress: false
-    permissions:
-      contents: write
+    enable-openid-connect: true
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
         with:
           name: seed
           path: seed-archive
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
       - name: sh tools/publish-seed.sh
         env:
-          GH_TOKEN: ${{ github.token }}
-          TORB_SEED_REPOSITORY: ${{ github.repository }}
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           for archive in seed-archive/torb-seed-*.tar.gz; do
             sh tools/publish-seed.sh "$archive"

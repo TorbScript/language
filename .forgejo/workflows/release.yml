@@ -1,0 +1,249 @@
+# The stable channel (docs/design/RELEASE.md sections 3 to 5 and 13): pushing a tag `v0.MINOR.PATCH` - and nothing
+# else - makes a release.
+#
+#   1. check      the tag is a version, it equals the `version` of project.trb and compiler/project.trb, its commit is
+#                 on main, and there is a LICENSE
+#   2. gates      every gate (gates.yml), the release binaries of every target that has a runner, the archives, the seed
+#   3. publish    SHA256SUMS signed with the project's cosign key (SHA256SUMS.sig), the release on the forge with every
+#                 archive, the source, the seed and the signature - a draft until every asset is uploaded, so the
+#                 webhook "published" reaches release-sync with all of them there - and the seed added to `seeds.txt`
+#   4. images     the root server's container images from the release's assets, pushed to cr.torb.dev and signed
+#                 (images.yml), and the package manager channels (publish-packages)
+#
+# A red gate anywhere stops the release before anything is published. Nothing here runs for a pull request: the only
+# trigger is a tag, which only somebody with write access can push, and pushing it is the approval - the forge has no
+# required reviewers for a job. The jobs that write ask the forge for a token of the Authorized Integration whose
+# audience is TORB_PUBLISH_AUDIENCE (.forgejo/actions/token); only `publish` and `images` read the signing key.
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: release-${{ forgejo.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: the tag is a release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: check
+        env:
+          TAG: ${{ forgejo.ref_name }}
+        run: |
+          version=${TAG#v}
+          case "$version" in
+            0.*) ;;
+            *)
+              echo "::error::before 1.0 a release is 0.MINOR.PATCH (docs/design/RELEASE.md section 3), not $version"
+              exit 1
+              ;;
+          esac
+          printf '%s\n' "$version" | grep -q -E '^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "::error::$TAG is not v0.MINOR.PATCH without leading zeros"
+            exit 1
+          }
+          # The download, the manifests and the documentation carry one number (RELEASE.md section 3)
+          for manifest in project.trb compiler/project.trb; do
+            declared=$(sed -n 's/^version "\(.*\)"$/\1/p' "$manifest" | tr -d '\r')
+            if [ "$declared" != "$version" ]; then
+              echo "::error file=$manifest::says version \"$declared\", and the tag is $TAG"
+              exit 1
+            fi
+          done
+          # fetch-depth 0 fetched every branch, main among them
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
+            echo "::error::$TAG is not a commit of main"
+            exit 1
+          fi
+          # RELEASE.md section 9: without a license nobody may use it, and the repository is public
+          if ! ls LICENSE* >/dev/null 2>&1; then
+            echo "::error::a release needs a LICENSE file at the root"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  gates:
+    needs: check
+    uses: ./.forgejo/workflows/gates.yml
+    with:
+      tier-b: true
+      seed: true
+      package: true
+      version: ${{ needs.check.outputs.version }}
+
+  publish:
+    name: publish the release
+    needs: [check, gates]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - uses: ./.forgejo/actions/cosign
+      - name: Sign SHA256SUMS
+        working-directory: dist
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then
+            echo "::error::the secret COSIGN_PRIVATE_KEY is not set (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 1
+          fi
+          cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false \
+            --output-signature SHA256SUMS.sig SHA256SUMS
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
+      - name: The release
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+          TAG: ${{ forgejo.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+          COMMIT: ${{ forgejo.sha }}
+          SERVER: ${{ forgejo.server_url }}
+          REPOSITORY: ${{ forgejo.repository }}
+        run: |
+          notes="docs/releases/$VERSION.md"
+          {
+            if [ -f "$notes" ]; then
+              cat "$notes"
+            else
+              echo "TorbScript $VERSION."
+            fi
+            echo ""
+            echo "Targets: $(ls dist | sed -n "s/^torb-$VERSION-\(.*\)\.tar\.gz$/\1/p" | grep -v '^source$' | tr '\n' ' ')"
+            echo ""
+            echo "## Verifying a download"
+            echo ""
+            echo '```sh'
+            echo "cosign verify-blob --key $SERVER/$REPOSITORY/raw/branch/main/tools/deploy/cosign.pub \\"
+            echo "  --signature SHA256SUMS.sig --insecure-ignore-tlog=true SHA256SUMS"
+            echo "sha256sum --check --ignore-missing SHA256SUMS"
+            echo '```'
+          } >release-notes.md
+          # A draft first: the webhook "published" goes out once every asset is there
+          sh tools/forge.sh create "$TAG" "$COMMIT" "TorbScript $VERSION" release-notes.md --draft
+          sh tools/forge.sh upload "$TAG" dist/*
+          sh tools/forge.sh publish "$TAG"
+      - name: The seed of the release, in the seeds index
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          for archive in dist/torb-seed-*.tar.gz; do
+            sh tools/publish-seed.sh "$archive"
+          done
+
+  images:
+    name: container images (docs/design/RELEASE.md section 7.11)
+    needs: [check, publish]
+    # The images are built from the release's own assets, so they wait for the release; images.yml pushes them to
+    # cr.torb.dev tagged <version> and latest, and signs them
+    uses: ./.forgejo/workflows/images.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      channel: stable
+      source: artifact
+    secrets: inherit
+
+  publish-packages:
+    name: package manager channels (docs/design/RELEASE.md section 5)
+    needs: [check, gates, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    enable-openid-connect: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - name: Render Formula/torb.rb and bucket/torb.json from SHA256SUMS
+        id: render
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: sh tools/render-package-manifests.sh "$VERSION" dist rendered
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
+      # The tap and the bucket are repositories of the forge, pushed with the same token (git over HTTPS takes it as
+      # the password) and mirrored to GitHub, where `brew tap torbscript/tap` finds the tap without a URL. A channel
+      # whose repository does not exist yet, or whose archives this release lacks, is skipped - it never holds back
+      # the release.
+      - name: Push Formula/torb.rb to torbscript/homebrew-tap
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TOKEN: ${{ steps.token.outputs.token }}
+          SERVER: ${{ forgejo.server_url }}
+        run: |
+          if [ ! -f rendered/Formula/torb.rb ]; then
+            echo "this release lacks an archive the formula names - skipping"
+            exit 0
+          fi
+          host=${SERVER#https://}
+          if ! git clone --depth 1 "https://torbscript-release:$TOKEN@$host/torbscript/homebrew-tap.git" tap; then
+            echo "::warning::torbscript/homebrew-tap could not be cloned - skipping (docs/contributing/releasing.md)"
+            exit 0
+          fi
+          mkdir -p tap/Formula
+          cp rendered/Formula/torb.rb tap/Formula/torb.rb
+          cd tap
+          git add Formula/torb.rb
+          git -c user.name="torbscript-release" -c user.email="release@torb.dev" commit -m "torb $VERSION" || exit 0
+          git push
+      - name: Push bucket/torb.json to torbscript/scoop-bucket
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          TOKEN: ${{ steps.token.outputs.token }}
+          SERVER: ${{ forgejo.server_url }}
+        run: |
+          if [ ! -f rendered/bucket/torb.json ]; then
+            echo "this release has no windows-x64 archive - skipping"
+            exit 0
+          fi
+          host=${SERVER#https://}
+          if ! git clone --depth 1 "https://torbscript-release:$TOKEN@$host/torbscript/scoop-bucket.git" bucket; then
+            echo "::warning::torbscript/scoop-bucket could not be cloned - skipping (docs/contributing/releasing.md)"
+            exit 0
+          fi
+          mkdir -p bucket/bucket
+          cp rendered/bucket/torb.json bucket/bucket/torb.json
+          cd bucket
+          git add bucket/torb.json
+          git -c user.name="torbscript-release" -c user.email="release@torb.dev" commit -m "torb $VERSION" || exit 0
+          git push
+      # wingetcreate runs on Windows only, and the forge has no Windows runner yet: the pull request against
+      # microsoft/winget-pkgs is opened by hand, with the command this step prints (docs/contributing/releasing.md)
+      - name: The winget command
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          if [ ! -f "dist/torb-$VERSION-windows-x64.zip" ]; then
+            echo "this release has no windows-x64 archive - no winget update"
+            exit 0
+          fi
+          echo "::notice::winget: on Windows, run: wingetcreate update TorbScript.Torb --version $VERSION --urls https://torb.dev/download/$VERSION/torb-$VERSION-windows-x64.zip --submit"

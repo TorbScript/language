@@ -1,0 +1,107 @@
+# What a target other than linux-x64 runs (docs/design/RELEASE.md section 13): bootstrap natively with the fixpoint,
+# `torb check .`, the conformance suite, the runtime's own tests, the compiler's C for every target
+# (tools/agree.sh emit, into build/agree.txt), and - with `package` - the release binary, smoke-tested as a download
+# (into build/dist-binary/). Tier A and tier B run in full on linux-x64 only: the compiler is the same C everywhere, and
+# what differs per machine - the C compiler, the C library, the runtime's platform layer - is exactly what these steps
+# exercise.
+#
+# The calling workflow checks out first and uploads build/agree.txt and build/dist-binary/ afterwards: uploading is the
+# one step the forge (forgejo/upload-artifact) and GitHub (actions/upload-artifact) do differently. Used by the forge's
+# gates (.forgejo/workflows/gates.yml, once a runner of the target exists) and by the GitHub mirror
+# (.github/workflows/portable.yml).
+name: Portable target
+description: Bootstraps, checks and runs the conformance suite on one target, and builds its release binary.
+inputs:
+  target:
+    description: windows-x64, linux-arm64 or macos-arm64
+    required: true
+  package:
+    description: Build and smoke-test the release binary into build/dist-binary/
+    required: false
+    default: "false"
+  save-cache:
+    description: Write the caches (a push to main)
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - uses: ./.forgejo/actions/c-compiler
+      with:
+        target: ${{ inputs.target }}
+        musl: ${{ inputs.package == 'true' && startsWith(inputs.target, 'linux-') }}
+        packages: file
+
+    - uses: ./.forgejo/actions/bootstrap
+      with:
+        target: ${{ inputs.target }}
+        save-cache: ${{ inputs.save-cache }}
+
+    - name: torb check .
+      shell: bash
+      run: |
+        torb=build/release/torb.exe
+        [ -f "$torb" ] || torb=build/release/torb
+        "$torb" check .
+
+    - name: The conformance suite
+      shell: bash
+      run: sh tools/conformance.sh --jobs 3
+
+    - name: The runtime's tests
+      shell: bash
+      run: sh runtime/build.sh
+
+    - name: The compiler's C for every target (tools/agree.sh)
+      shell: bash
+      run: |
+        torb=build/release/torb.exe
+        [ -f "$torb" ] || torb=build/release/torb
+        sh tools/agree.sh emit "$torb" build/agree.txt
+
+    - name: The release binary (static, musl)
+      if: inputs.package == 'true' && startsWith(inputs.target, 'linux-')
+      shell: bash
+      run: |
+        TORB_CC=musl-gcc TORB_CFLAGS=-static sh tools/build-seed.sh build/release build/dist-binary/torb
+        file build/dist-binary/torb || true
+        if ldd build/dist-binary/torb >/dev/null 2>&1; then
+          echo "::error::the release binary is linked dynamically"
+          exit 1
+        fi
+
+    - name: The release binary (the bootstrapped one)
+      if: inputs.package == 'true' && !startsWith(inputs.target, 'linux-')
+      shell: bash
+      run: |
+        mkdir -p build/dist-binary
+        cp build/release/torb* build/dist-binary/
+        rm -f build/dist-binary/*.old-*
+
+    - name: Only system libraries (Windows)
+      if: inputs.package == 'true' && inputs.target == 'windows-x64'
+      shell: bash
+      run: |
+        imports=$(objdump -p build/dist-binary/torb.exe | sed -n 's/^[[:space:]]*DLL Name: //p')
+        echo "$imports"
+        foreign=$(printf '%s\n' "$imports" | grep -v -i -E '^(kernel32|user32|shell32|advapi32|ws2_32|bcrypt|ntdll|ucrtbase|msvcrt|api-ms-win-[a-z0-9-]+)\.dll$' || true)
+        if [ -n "$foreign" ]; then
+          echo "::error::torb.exe needs DLLs a Windows machine does not have: $foreign"
+          exit 1
+        fi
+
+    - name: An ad hoc signature (macOS)
+      if: inputs.package == 'true' && inputs.target == 'macos-arm64'
+      shell: bash
+      run: |
+        codesign --verify --verbose build/dist-binary/torb
+        otool -L build/dist-binary/torb
+
+    - name: Smoke test of the release binary
+      if: inputs.package == 'true'
+      shell: bash
+      run: |
+        # .exe first: Git Bash answers true for `torb` when only `torb.exe` is there
+        binary=build/dist-binary/torb.exe
+        [ -f "$binary" ] || binary=build/dist-binary/torb
+        sh tools/smoke-test.sh "$binary"

@@ -1,9 +1,10 @@
 # build/release/torb for the checked-out sources: from the cache when these exact sources were bootstrapped on this
 # target before, and otherwise seed -> torb -> torb with the fixpoint (tools/bootstrap.sh), from a published seed that
-# tools/fetch-seed.sh downloads, verifies and compiles from its program.c with the target's C compiler.
+# tools/fetch-seed.sh downloads from the forge (git.torb.dev, a public release, no token), verifies and compiles from
+# its program.c with the target's C compiler. Shared by the forge's workflows and the GitHub mirror's.
 #
 # Two caches, both written only when `save-cache` is true (a push to main), so a pull request can read them and never
-# fill the repository's 10 GB with its own:
+# fill the cache with its own:
 #
 #   torb-<target>-<hash of every file torb is built from>   build/release: the binary, program.c, program.hash
 #   seed-<target>-<commit of the seed>                      build/seed: the compiled seed, so an unchanged seed is
@@ -11,15 +12,12 @@
 #
 # A hit of the first skips the bootstrap: the fixpoint was established when that entry was written, from the same
 # sources. The binary's timestamp is then renewed, because `tools/gates.sh a` compares it with the sources' and the
-# checkout has just written those.
+# checkout has just written those. A runner without a cache server only loses the time: actions/cache warns and goes on.
 name: Bootstrap
 description: Builds build/release/torb from a published seed, or restores it from the cache.
 inputs:
   target:
     description: windows-x64, linux-x64, linux-arm64 or macos-arm64
-    required: true
-  token:
-    description: A token that may read the repository's releases (the seeds of a private repository).
     required: true
   save-cache:
     description: Write the caches (true only for a push to main).
@@ -34,7 +32,7 @@ runs:
   steps:
     - name: The compiler of these sources, from the cache
       id: compiler
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build/release
         key: torb-${{ inputs.target }}-${{ hashFiles('compiler/src/**', 'compiler/project.trb', 'std/**', 'runtime/**', 'project.trb', 'tools/bootstrap.sh') }}
@@ -50,15 +48,12 @@ runs:
       id: seed
       if: steps.compiler.outputs.cache-hit != 'true'
       shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.token }}
-        TORB_SEED_REPOSITORY: ${{ github.repository }}
       run: echo "commit=$(sh tools/fetch-seed.sh --newest)" >>"$GITHUB_OUTPUT"
 
     - name: The compiled seed, from the cache
       id: seed-cache
       if: steps.compiler.outputs.cache-hit != 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build/seed
         key: seed-${{ inputs.target }}-${{ steps.seed.outputs.commit }}
@@ -67,14 +62,12 @@ runs:
       if: steps.compiler.outputs.cache-hit != 'true'
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.token }}
-        TORB_SEED_REPOSITORY: ${{ github.repository }}
         SEED: ${{ steps.seed.outputs.commit }}
       run: sh tools/fetch-seed.sh "$SEED"
 
     - name: Save the compiled seed
       if: steps.compiler.outputs.cache-hit != 'true' && steps.seed-cache.outputs.cache-hit != 'true' && inputs.save-cache == 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build/seed
         key: seed-${{ inputs.target }}-${{ steps.seed.outputs.commit }}
@@ -88,7 +81,7 @@ runs:
 
     - name: Save the compiler
       if: steps.compiler.outputs.cache-hit != 'true' && inputs.save-cache == 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build/release
         key: ${{ steps.compiler.outputs.cache-primary-key }}
@@ -100,8 +93,4 @@ runs:
       run: |
         hash=$(cat build/release/program.hash 2>/dev/null || echo "none")
         size=$(wc -c <build/release/program.c | tr -d ' ')
-        echo "program.hash $hash, program.c $size bytes"
-        {
-          echo "### The compiler's C ($TARGET)"
-          echo "program.hash \`$hash\`, program.c $size bytes"
-        } >>"$GITHUB_STEP_SUMMARY"
+        echo "the compiler's C on $TARGET: program.hash $hash, program.c $size bytes"

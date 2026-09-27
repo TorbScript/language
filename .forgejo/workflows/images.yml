@@ -1,0 +1,199 @@
+# The container images of the root server (docs/design/RELEASE.md section 7.11): cr.torb.dev/torbscript/release-sync,
+# cr.torb.dev/torbscript/site and cr.torb.dev/torbscript/registry, built from a release's own assets (the Linux
+# toolchains and the source archive) and never from a checkout, signed with the project's cosign key, with the OCI
+# labels that link them to the repository. cr.torb.dev is the forge's own container registry.
+#
+#   stable    <version> and latest        (release.yml calls this once the release is published)
+#   nightly   nightly-YYYYMMDD and nightly (nightly.yml, the same)
+#
+# Called by those two with `source: artifact` - the `dist` artifact of their run - and run by hand (Actions -> images
+# -> Run workflow) with `source: release`, which downloads the assets of the published release from the forge instead:
+# the way to rebuild the images of a release, or to build them once cr.torb.dev is set up.
+#
+# Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well when the release has a linux-arm64
+# toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) and QEMU can be registered in
+# the runner's Docker; a release without one - every release until the forge has a linux-arm64 runner - gets amd64
+# images only, and the log says why.
+#
+# The push logs in to cr.torb.dev with a token of the Authorized Integration whose audience is TORB_IMAGES_AUDIENCE
+# (`docker login` takes it as the password), asked for after the build so an hour-long arm64 build cannot outlive it.
+# Verifying an image:
+#
+#   cosign verify --key https://git.torb.dev/torbscript/language/raw/branch/main/tools/deploy/cosign.pub \
+#     --insecure-ignore-tlog=true cr.torb.dev/torbscript/registry:0.2.0
+name: images
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The release's version, which names its assets (0.2.0, nightly-20260927)
+        required: true
+        type: string
+      channel:
+        description: stable or nightly
+        required: true
+        type: string
+      source:
+        description: artifact (the dist artifact of the calling run) or release (the published release's assets)
+        required: false
+        type: string
+        default: artifact
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release's version, which names its assets (0.2.0, nightly-20260927)
+        required: true
+        type: string
+      channel:
+        description: stable or nightly
+        required: true
+        type: choice
+        options: [stable, nightly]
+      source:
+        description: Where the assets come from
+        required: false
+        type: choice
+        options: [release, artifact]
+        default: release
+
+jobs:
+  image:
+    name: cr.torb.dev/torbscript/${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    enable-openid-connect: true
+    strategy:
+      fail-fast: false
+      # One image at a time: each build stage compiles a TorbScript program, the registry's with the compiler inside
+      max-parallel: 1
+      matrix:
+        image: [release-sync, site, registry]
+    env:
+      REGISTRY: cr.torb.dev
+      IMAGE: ${{ matrix.image }}
+      VERSION: ${{ inputs.version }}
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: The assets, from this run
+        if: inputs.source == 'artifact'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - name: The assets, from the published release
+        if: inputs.source != 'artifact'
+        run: |
+          case "$VERSION" in
+            nightly-*) tag=$VERSION ;;
+            *) tag="v$VERSION" ;;
+          esac
+          mkdir -p dist
+          for asset in $(sh tools/forge.sh assets "$tag"); do
+            case "$asset" in
+              "torb-$VERSION-source.tar.gz" | torb-"$VERSION"-linux-*.tar.gz)
+                sh tools/forge.sh download "$tag" "$asset" "dist/$asset"
+                ;;
+            esac
+          done
+          ls -l dist
+
+      - name: The tags, the labels and the platforms
+        id: plan
+        env:
+          REPOSITORY: ${{ forgejo.repository }}
+          SERVER: ${{ forgejo.server_url }}
+          COMMIT: ${{ forgejo.sha }}
+        run: |
+          name="$REGISTRY/torbscript/$IMAGE"
+          case "$CHANNEL" in
+            stable) tags="$name:$VERSION $name:latest" ;;
+            nightly) tags="$name:$VERSION $name:nightly" ;;
+            *) echo "::error::the channel is stable or nightly, not $CHANNEL"; exit 1 ;;
+          esac
+          ls "dist/torb-$VERSION-source.tar.gz" "dist/torb-$VERSION-linux-x64.tar.gz"
+          platforms=linux/amd64
+          if [ -f "dist/torb-$VERSION-linux-arm64.tar.gz" ]; then
+            # QEMU for the arm64 build stage, registered in the runner's Docker (Docker-in-Docker needs it privileged)
+            if docker run --privileged --rm tonistiigi/binfmt:qemu-v10.2.3 --install arm64; then
+              platforms="linux/amd64,linux/arm64"
+            else
+              echo "::warning::QEMU could not be registered in the runner's Docker: $IMAGE is built for linux/amd64 only"
+            fi
+          else
+            echo "the release has no linux-arm64 toolchain: $IMAGE is built for linux/amd64 only"
+          fi
+          {
+            echo "name=$name"
+            echo "tags=$tags"
+            echo "platforms=$platforms"
+          } >>"$GITHUB_OUTPUT"
+          cat >labels.txt <<EOF
+          org.opencontainers.image.source=$SERVER/$REPOSITORY
+          org.opencontainers.image.revision=$COMMIT
+          org.opencontainers.image.version=$VERSION
+          org.opencontainers.image.licenses=MIT
+          org.opencontainers.image.url=https://torb.dev
+          EOF
+
+      - name: Build (not yet pushed)
+        env:
+          PLATFORMS: ${{ steps.plan.outputs.platforms }}
+        run: |
+          docker buildx version
+          docker buildx create --name torb --driver docker-container --use
+          set -- --file "tools/deploy/Dockerfile.$IMAGE" --platform "$PLATFORMS" --build-arg "VERSION=$VERSION" --provenance=false
+          while IFS= read -r label; do
+            set -- "$@" --label "$label"
+          done <labels.txt
+          # The build stays in the builder's cache; the push below builds nothing again
+          docker buildx build "$@" dist
+          printf '%s\n' "$@" >build-arguments.txt
+
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_IMAGES_AUDIENCE }}
+          variable: TORB_IMAGES_AUDIENCE
+
+      - name: Push
+        id: push
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+          OWNER: ${{ forgejo.repository_owner }}
+        run: |
+          printf '%s' "$TOKEN" | docker login "$REGISTRY" --username "$OWNER" --password-stdin
+          set --
+          while IFS= read -r argument; do
+            set -- "$@" "$argument"
+          done <build-arguments.txt
+          for tag in $TAGS; do
+            set -- "$@" --tag "$tag"
+          done
+          docker buildx build "$@" --push --metadata-file metadata.json dist
+          digest=$(sed -n 's/.*"containerimage\.digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' metadata.json | head -n 1)
+          [ -n "$digest" ] || { echo "::error::the push named no digest"; cat metadata.json; exit 1; }
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "pushed $TAGS at $digest"
+
+      - uses: ./.forgejo/actions/cosign
+      - name: Sign the image
+        env:
+          NAME: ${{ steps.plan.outputs.name }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then
+            echo "::error::the secret COSIGN_PRIVATE_KEY is not set (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 1
+          fi
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$NAME@$DIGEST"
+
+      - name: Log out
+        if: always()
+        run: docker logout cr.torb.dev || true
