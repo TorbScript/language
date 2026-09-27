@@ -24,7 +24,7 @@ use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType, memberOfI
 use typeFromReference, integerLiteral, unsignedLiteral from "./lowering"
 use typeSignatureOf, signatureOf from "./signature"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
-use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
+use checkCall, instantiateTarget, checkBounds, withInstantiation, isWrappingCase from "./call"
 use checkClosure from "./closure"
 use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from "./quote"
 use checkBlock, checkDiscarded, scopeHere, taskValueOf from "./statement"
@@ -53,11 +53,17 @@ public fn checkExpression(var checker: Checker, expression: Expression, expected
       checker.quotingParameter = ""
     }
   }
+  // A written `Some(...)` may itself decide what is expected of it (`filterMap({ Some(_ / 5) })`), so only what was
+  // decided before it is read counts for the lint rule
+  const isDecided = isCall(expression) && !hasVariable(checker, expected.annotationOf() ?? checker.deferredType)
   const found = evaluateExpression checker, expression, expected
   // A block, an `if` and a `match` handed the expectation down to their parts, which said everything there is to say
   if const Some(annotation) = expected.annotationOf() {
     if !isNested(expression) {
       const _ = checkValue checker, found, annotation, expression.span
+      if isDecided {
+        noteRedundantWrap checker, expression, found, annotation
+      }
     }
   }
   // A value that goes nowhere is a mistake with value semantics, whether it stands as a statement or as the
@@ -3384,38 +3390,162 @@ fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
  * coercion it never solves a variable: where either side still has one, the mismatch is reported as it was.
  */
 fn wrapsInto(var checker: Checker, given: TypeId, wanted: TypeId, at: Span): Bool {
-  const payload = match wrappedPayloadOf(checker, wanted) {
-    Some(found) => resolveType checker, found
-    None => {
-      return false
-    }
-  }
-  if hasVariable(checker, given) || hasVariable(checker, payload) || checker.absorbs(payload) {
+  if checker.exactValueAt == Some(at) || !canWrap(checker, given, wanted) {
     return false
   }
-  if checker.exactValueAt == Some(at) {
-    return false
-  }
-  if valueOfOptionOrResult(checker, given).isSome() {
-    if optionValueOf(checker, wanted).isSome() || !sameType(checker.types, given, payload) {
-      return false
-    }
-    checker.adapted at, Adaptation.Wrap(wanted)
-    return true
-  }
-  if !sameType(checker.types, given, payload) {
-    const bounds = match checker.types.form(payload) {
-      .Traits(found) => found
-      _ => {
+  const payload = wrappedPayloadOf(checker, wanted) ?? wanted
+  if valueOfOptionOrResult(checker, given).isNone() && !sameType(checker.types, given, payload) {
+    if const .Traits(bounds) = checker.types.form(payload) {
+      if !coerceToTraits(checker, given, bounds, at) {
         return false
       }
     }
-    if !fitsType(checker, given, payload) || !coerceToTraits(checker, given, bounds, at) {
-      return false
+  }
+  // An argument an overload set read once already is checked again, and it still wraps once
+  for adaptation in checker.adaptationsHere(at) {
+    if const .Wrap(_) = adaptation {
+      return true
     }
   }
   checker.adapted at, Adaptation.Wrap(wanted)
   true
+}
+
+/** Whether a value of `given` wraps into `wanted` by the rules of [wrapsInto], asked without recording anything. */
+fn canWrap(var checker: Checker, given: TypeId, wanted: TypeId): Bool {
+  const payload = match wrappedPayloadOf(checker, wanted) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if hasVariable(checker, given) {
+    return false
+  }
+  if valueOfOptionOrResult(checker, given).isSome() {
+    return optionValueOf(checker, wanted).isNone() && sameType(checker.types, given, payload)
+  }
+  if sameType(checker.types, given, payload) {
+    return true
+  }
+  if const .Traits(_) = checker.types.form(payload) {
+    return fitsType checker, given, payload
+  }
+  false
+}
+
+/**
+ * A written `Some(value)` or `Ok(value)` that the wrap would add by itself, noted for the lint rule `redundant-wrap`:
+ * only here is the expected type known. Left out is every one the value needs - the payload of another written `Some`
+ * or `Ok` (`Some(Some(1))`), a value whose type the call's expectation decided (`None`, `Fail(...)`, a call of a
+ * generic function: without the case it would be decided differently), and `Ok(void)`, whose bare `void` would say less.
+ */
+fn noteRedundantWrap(var checker: Checker, expression: Expression, found: TypeId, annotation: TypeId) {
+  const (callee, arguments) = match expression.kind {
+    .Call(callee, arguments, _) => (callee, arguments)
+    _ => {
+      return
+    }
+  }
+  if arguments.length() != 1 || arguments[0].isSpread || checker.exactValueAt == Some(expression.span) {
+    return
+  }
+  const resolution = match checker.resolutionHere(callee.span) {
+    Some(known) => known
+    None => {
+      return
+    }
+  }
+  if !isWrappingCase(checker, resolution) {
+    return
+  }
+  const value = arguments[0].value
+  if !isSelfTyped(checker, value) {
+    return
+  }
+  const wanted = resolveType checker, annotation
+  if !sameType(checker.types, resolveType(checker, found), wanted) {
+    return
+  }
+  const given = match checker.expressionTypeHere(value.span) {
+    Some(known) => resolveType checker, known
+    None => {
+      return
+    }
+  }
+  if canWrap(checker, given, wanted) {
+    checker.notedRedundantWrap expression.span
+  }
+}
+
+fn isCall(expression: Expression): Bool {
+  match expression.kind {
+    .Call(_, _, _) => true
+    _ => false
+  }
+}
+
+/** Whether a type names a generic type with its arguments: `Option<Int>`, `Box<Item>`. */
+fn hasTypeArguments(checker: Checker, owner: TypeId): Bool {
+  if const .Nominal(_, arguments) = checker.types.form(owner) {
+    return !arguments.isEmpty()
+  }
+  false
+}
+
+/** Whether a value has the type it has on its own, whatever is expected of it: what removing a written case needs. */
+fn isSelfTyped(checker: Checker, value: Expression): Bool {
+  match value.kind {
+    .VoidLiteral => false
+    .Name(text) => text != "None"
+    .ImplicitMember(_) => false
+    .Call(callee, _, _) => {
+      if const .ImplicitMember(_) = callee.kind {
+        return false
+      }
+      // `into()` and `tryInto()` convert into what is expected of them, which the case decided
+      if const .Member(_, name, _) = callee.kind {
+        if name.text == "into" || name.text == "tryInto" {
+          return false
+        }
+      }
+      // A static member of a generic type learns the type's arguments from what is expected: `Some(Set.of())`
+      if const .Member(base, _, _) = callee.kind {
+        if const Some(.TypeOf(owner)) = checker.resolutionHere(base.span) {
+          if hasTypeArguments(checker, owner) {
+            return false
+          }
+        }
+      }
+      // A generic function, constructor or case learns its arguments from what is expected: `Ok(Ok(x))`
+      match checker.resolutionHere(callee.span) {
+        Some(.Callable(_, arguments, _)) => {
+          if !arguments.isEmpty() {
+            return false
+          }
+        }
+        Some(.Construct(owner)) | Some(.CaseOf(owner, _)) => {
+          if hasTypeArguments(checker, owner) {
+            return false
+          }
+        }
+        _ => {}
+      }
+      (checker.typeArgumentsAt(checker.module, value.span) ?? []).isEmpty()
+        && (checker.typeArgumentsAt(checker.module, callee.span) ?? []).isEmpty()
+    }
+    .Generic(_, _) => false
+    // `text.tryInto()?` reads its target from what the `?` is expected to leave, and that is the case's payload
+    .Try(inner) => {
+      if const .Call(callee, _, _) = inner.kind {
+        if const .Member(_, name, _) = callee.kind {
+          return name.text != "tryInto" && name.text != "into"
+        }
+      }
+      true
+    }
+    _ => true
+  }
 }
 
 /**

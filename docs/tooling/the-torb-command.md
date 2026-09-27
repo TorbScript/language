@@ -152,7 +152,8 @@ erased, so a run cannot change what a program means ([torb format](torb-format.m
 Reports the rules of style the type checker leaves alone, each finding in the format of `check` with `warning` in
 front and the id of its rule under it: the own name of a type where `Self` means the same (`self-name`), a `Bool` field
 named as a question (`question-field`), a binding of an irrefutable pattern that nothing reads (`unread-binding`), and
-`true`, `false` or `None` for a `Bool` or an optional without its label (`labeled-literal`, which runs the checker)
+`true`, `false` or `None` for a `Bool` or an optional without its label (`labeled-literal`, which runs the checker),
+and a written `Some` or `Ok` the value would become on its own (`redundant-wrap`, which runs the checker)
 ([torb lint](torb-lint.md)).
 
 | Flag | What it does |

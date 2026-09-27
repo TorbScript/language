@@ -657,6 +657,8 @@ public type Tables {
   var resolutions: Map<Span, Resolution> = [:]
   /** Everything the source does not spell out, by the span of the expression it applies to. */
   var adaptations: Map<Span, List<Adaptation>> = [:]
+  /** The written `Some(value)` and `Ok(value)` calls the wrap would add by itself, for the lint rule `redundant-wrap`. */
+  var redundantWraps: Map<Span, Bool> = [:]
   /**
    * Per call span: which parameter every written argument fills, in written order. `-1` where an argument could not
    * be matched, which is the case a message was already given for.
@@ -1314,6 +1316,11 @@ public type Checker {
     tables[module.value].adaptations.set(at, known.appended(adaptation))
   }
 
+  /** The written `Some(value)` and `Ok(value)` of a module that the wrap would add by itself, by the span of the call. */
+  fn redundantWrapsAt(module: ModuleId): List<Span> {
+    tables[module.value].redundantWraps.keys().toList()
+  }
+
   fn adaptationsAt(module: ModuleId, at: Span): List<Adaptation> {
     tables[module.value].adaptations.get(at) ?? []
   }
@@ -1408,6 +1415,10 @@ public type Checker {
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.append at
     }
+  }
+
+  var fn notedRedundantWrap(at: Span) {
+    tables[module.value].redundantWraps.set at, true
   }
 
   var fn adapted(at: Span, adaptation: Adaptation) {

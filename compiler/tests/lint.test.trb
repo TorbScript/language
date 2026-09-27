@@ -6,6 +6,7 @@ use test, group from "std/test"
 use lintFindings, fixed, lintOptionsOf from "../src/lint/command"
 use Finding, LintRule from "../src/lint/finding"
 use labeledLiteralFindings from "../src/lint/labeled-literal"
+use redundantWrapFindings from "../src/lint/redundant-wrap"
 use plainBindingStarts from "../src/lint/plain-values"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
@@ -241,13 +242,88 @@ group "labeled-literal" {
   }
 }
 
+/** What `redundant-wrap` finds in a program the checker checked, with the harness's prelude. */
+fn wrapFindings(source: String): List<Finding> {
+  const probed = probe source
+  redundantWrapFindings probed.checker, probed.module, source, parse(SourceText.of(source)).file
+}
+
+fn wrapTexts(source: String): List<String> {
+  var texts: List<String> = []
+  for finding in wrapFindings(source) {
+    texts.append source.sliceBytes(finding.span.start, finding.span.end)
+  }
+  texts
+}
+
+group "redundant-wrap" {
+  test "a written `Some` or `Ok` the value would become on its own is found, and the fix leaves the value" {
+    const source = [
+      "fn find(item: Int, isAbsent: Bool): Int? \{",
+      "  if isAbsent \{",
+      "    return None",
+      "  \}",
+      "  return Some(item)",
+      "\}",
+      "",
+      "fn halved(value: Int): Result<Int, String> \{",
+      "  Ok(value / 2)",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    assert(wrapTexts(source) == ["Some(item)", "Ok(value / 2)"])
+    const expected = [
+      "fn find(item: Int, isAbsent: Bool): Int? \{",
+      "  if isAbsent \{",
+      "    return None",
+      "  \}",
+      "  return item",
+      "\}",
+      "",
+      "fn halved(value: Int): Result<Int, String> \{",
+      "  value / 2",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    expectText fixed(source, wrapFindings(source)), expected
+  }
+
+  test "a case the value needs is kept: a nested one, `Ok(void)`, `None` and a generic call inside, and no expectation" {
+    const source = [
+      "fn same<Item>(value: Item): Item \{",
+      "  value",
+      "\}",
+      "",
+      "fn nested(value: Int): Int?? \{",
+      "  Some(Some(value))",
+      "\}",
+      "",
+      "fn done(): Result<Void, String> \{",
+      "  Ok(void)",
+      "\}",
+      "",
+      "fn absent(): Result<Int?, String> \{",
+      "  Ok(None)",
+      "\}",
+      "",
+      "fn generic(): Int? \{",
+      "  Some(same(1))",
+      "\}",
+      "",
+      "const unexpected = Some(1)",
+      "",
+    ].joined(separator: "\n")
+    assert wrapFindings(source).isEmpty()
+  }
+}
+
 group "The command line" {
   test "every rule runs unless --rule picks some, and --skip leaves one out" {
     const every = lintOptionsOf([]).expect("options")
-    assert(every.rules.length() == 4)
+    assert(every.rules.length() == 5)
     assert(every.paths == ["."])
     assert(lintOptionsOf(["--rule", "self-name", "std"]).expect("options").rules == [LintRule.SelfName])
-    assert(lintOptionsOf(["--skip", "question-field"]).expect("options").rules.length() == 3)
+    assert(lintOptionsOf(["--skip", "question-field"]).expect("options").rules.length() == 4)
     assert lintOptionsOf(["--fix"]).expect("options").fix
     assert lintOptionsOf(["--rule", "no-such-rule"]).isNone()
     assert lintOptionsOf(["--frobnicate"]).isNone()

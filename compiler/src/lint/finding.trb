@@ -37,6 +37,8 @@ public type LintRule {
   case UnreadBinding
   /** `true`, `false` or `None` passed to a `Bool` or an optional without the parameter's label */
   case LabeledLiteral
+  /** A written `Some(value)` or `Ok(value)` where the value wraps itself */
+  case RedundantWrap
 
   /** The name of the rule on the command line and in every finding. */
   fn id(): String {
@@ -45,6 +47,7 @@ public type LintRule {
       .QuestionField => "question-field"
       .UnreadBinding => "unread-binding"
       .LabeledLiteral => "labeled-literal"
+      .RedundantWrap => "redundant-wrap"
     }
   }
 
@@ -55,15 +58,16 @@ public type LintRule {
       .QuestionField => "A `Bool` field is an adjective or a participle, not a question that starts with `is`"
       .UnreadBinding => "A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)"
       .LabeledLiteral => "`true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)"
+      .RedundantWrap => "No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)"
     }
   }
 
   /**
    * Whether the rule reads the checker's tables, so that a run with it checks the projects of the paths first:
-   * `labeled-literal` for all it finds, `unread-binding` for which of its findings may be fixed.
+   * `labeled-literal` and `redundant-wrap` for all they find, `unread-binding` for which of its findings may be fixed.
    */
   fn needsTheChecker(): Bool {
-    self == Self.LabeledLiteral || self == Self.UnreadBinding
+    self == Self.LabeledLiteral || self == Self.UnreadBinding || self == Self.RedundantWrap
   }
 
   static fn named(id: String): Self? {
@@ -73,5 +77,5 @@ public type LintRule {
 
 /** Every rule, in the order they are listed and run. */
 public fn everyLintRule(): List<LintRule> {
-  [LintRule.SelfName, LintRule.QuestionField, LintRule.UnreadBinding, LintRule.LabeledLiteral]
+  [LintRule.SelfName, LintRule.QuestionField, LintRule.UnreadBinding, LintRule.LabeledLiteral, LintRule.RedundantWrap]
 }

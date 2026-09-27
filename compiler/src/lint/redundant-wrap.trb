@@ -1,0 +1,65 @@
+/**
+ * The rule `redundant-wrap`: a written `Some(value)` or `Ok(value)` where the value wraps itself, because a value of
+ * exactly `Value` where an `Option<Value>` or a `Result<Value, Failure>` is expected becomes `Some(value)` or
+ * `Ok(value)` on its own (CONCEPT, "Conversions"). One spelling per meaning, so the written case goes.
+ *
+ * Which calls those are is the checker's answer (`Checker.redundantWrapsAt`), because only there is the expected type
+ * known. It leaves out every case the value needs: the payload of another written `Some` or `Ok` (`Some(Some(1))`), a
+ * value whose type the expectation decided (`None`, `Fail(...)`, a generic call), and `Ok(void)`.
+ *
+ * The fix replaces the call with its argument, in parentheses where the call is an operand of an operator and the
+ * argument is an operation itself.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Expression, ExpressionKind from "../syntax/ast"
+use Checker from "../semantics/checker/context"
+use ModuleId from "../semantics/module"
+use Finding, LintRule, TextEdit from "./finding"
+use everyNodeOf from "./nodes"
+
+public fn redundantWrapFindings(checker: Checker, module: ModuleId, source: String, file: SourceFile): List<Finding> {
+  const flagged = checker.redundantWrapsAt module
+  if flagged.isEmpty() {
+    return []
+  }
+  const nodes = everyNodeOf file
+  var operands: List<Span> = []
+  for expression in nodes.expressions {
+    if const .Binary(_, left, right) = expression.kind {
+      operands.append left.span
+      operands.append right.span
+    }
+  }
+  var findings: List<Finding> = []
+  var seen: List<Span> = []
+  for expression in nodes.expressions {
+    if !flagged.contains(expression.span) || seen.contains(expression.span) {
+      continue
+    }
+    seen.append expression.span
+    const (callee, arguments) = match expression.kind {
+      .Call(callee, arguments, _) => (callee, arguments)
+      _ => {
+        continue
+      }
+    }
+    const value = arguments[0].value
+    const written = source.sliceBytes value.span.start, value.span.end
+    const wrapper = source.sliceBytes callee.span.start, callee.span.end
+    const text = if operands.contains(expression.span) && isOperation(value) { "({written})" } else { written }
+    const message = "The value becomes `{wrapper}(...)` on its own here: write `{text}`"
+    const fix = [TextEdit(expression.span.start, expression.span.end, text)]
+    findings.append Finding(LintRule.RedundantWrap, message, expression.span, fix)
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+/** An expression an operator around it could split: an operation, a `??`, a range. */
+fn isOperation(value: Expression): Bool {
+  match value.kind {
+    .Binary(_, _, _) | .Unary(_, _) | .RangeLiteral(_, _, _) => true
+    _ => false
+  }
+}

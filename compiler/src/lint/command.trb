@@ -31,6 +31,7 @@ use selfNameFindings from "./self-name"
 use questionFieldFindings from "./question-field"
 use unreadBindingFindings from "./unread-binding"
 use labeledLiteralFindings from "./labeled-literal"
+use redundantWrapFindings from "./redundant-wrap"
 use plainBindingStarts from "./plain-values"
 
 /** `torb lint --help` */
@@ -125,7 +126,7 @@ fn findingsOf(rule: LintRule, source: String, file: SourceFile, plain: Set<Int>?
     .QuestionField => questionFieldFindings file
     .UnreadBinding => unreadBindingFindings source, file, plain
     // Read from the checker's tables instead, by [typedFactsOf]
-    .LabeledLiteral => []
+    .LabeledLiteral | .RedundantWrap => []
   }
 }
 
@@ -158,10 +159,13 @@ fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, 
     if broken.contains(shape.shownPath) || !shape.diagnostics.isEmpty() {
       continue
     }
-    const findings = if rules.contains(LintRule.LabeledLiteral) {
+    var findings = if rules.contains(LintRule.LabeledLiteral) {
       labeledLiteralFindings checked.checker, module, shape.file
     } else {
       []
+    }
+    if rules.contains(LintRule.RedundantWrap) {
+      findings.appendAll redundantWrapFindings(checked.checker, module, shape.source.text, shape.file)
     }
     found.set shape.path, TypedFacts(findings, plainBindingStarts(checked.checker, module))
   }

@@ -43,6 +43,6 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[torb publish](torb-publish.md)** - torb publish builds and checks a package's archive as a registry receives it, prints its tree hash and capabilities, and writes it into a directory registry or uploads it with a token or through trusted publishing.
 - **[torb doc](torb-doc.md)** - torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
 - **[torb format](torb-format.md)** - torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces and blank lines - and --check fails on every file that is not in it.
-- **[torb lint](torb-lint.md)** - torb lint reports the rules of style the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal - each with its id and, where it is certain, a fix.
+- **[torb lint](torb-lint.md)** - torb lint reports the rules of style the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a Some or Ok the value adds itself - each with its id and, where it is certain, a fix.
 
 <!-- torb:index:end -->
