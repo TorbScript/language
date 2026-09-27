@@ -49,7 +49,7 @@ public type VersionSet with Show {
 
   /** The one version. */
   static fn exactly(version: Version): VersionSet {
-    const interval = Interval version, Some(version.successor())
+    const interval = Interval version, version.successor()
     if version.isPreRelease() {
       return VersionSet([], [interval])
     }
@@ -218,7 +218,7 @@ fn isNonEmpty(interval: Interval): Bool {
 /** The later of two ends, where `None` is no end and later than every version. */
 fn laterEnd(first: Version?, second: Version?): Version? {
   match (first, second) {
-    (Some(left), Some(right)) => Some left.max(right)
+    (Some(left), Some(right)) => left.max right
     _ => None
   }
 }
@@ -234,7 +234,7 @@ fn complementOf(half: List<Interval>, lowest: Version): List<Interval> {
   var start = lowest
   for interval in half {
     if start < interval.low {
-      gaps.append Interval(start, Some(interval.low))
+      gaps.append Interval(start, interval.low)
     }
     match interval.high {
       Some(end) => {

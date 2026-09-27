@@ -105,7 +105,7 @@ fn checked(value: Int): Result<Int, String> {
   if value < 0 {
     return Fail "negative"
   }
-  Ok value
+  value
 }
 
 print checked(1)

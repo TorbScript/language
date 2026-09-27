@@ -491,7 +491,7 @@ fn inlineVariantLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
     }
   }
   match program.layoutAt(layout).representation {
-    .Inline => Some layout
+    .Inline => layout
     _ => None
   }
 }
@@ -756,7 +756,7 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   var machine: TaskMachine? = None
   var taskRegister = 0 - 1
   if const .TaskResume = function.kind {
-    machine = Some taskMachineOf(program, function)
+    machine = taskMachineOf program, function
     taskRegister = cursor
     cursor = cursor + 1
   }
@@ -1101,8 +1101,8 @@ fn savedFrameOf(emitter: Emitter, function: IrFunction): (List<Int>, Int) {
 fn siteOf(instruction: Instruction): LocationId? {
   match instruction {
     .Call(_, _, _, _, at) => at
-    .Intrinsic(_, _, _, at) => Some at
-    .Panic(_, at) => Some at
+    .Intrinsic(_, _, _, at) => at
+    .Panic(_, at) => at
     _ => None
   }
 }
@@ -1923,7 +1923,7 @@ fn emitRuntimeCall(
   }
   // An element the runtime writes through a `void *` is its narrow bytes in a zeroed word: a signed one is widened
   for position in 0..arguments.length() {
-    if prototype.parameters.get(position) != Some("void *") {
+    if prototype.parameters.get(position) != "void *" {
       continue
     }
     if const Some(place) = arguments[position].place {
@@ -2219,10 +2219,10 @@ fn widthStep(width: Int): Int {
 fn numericKindOfSpelling(spelling: String): NumericKind? {
   for width in [8, 16, 32, 64] {
     if spelling == "int{width}_t" {
-      return Some NumericKind.Signed(width)
+      return NumericKind.Signed width
     }
     if spelling == "uint{width}_t" {
-      return Some NumericKind.Unsigned(width)
+      return NumericKind.Unsigned width
     }
   }
   None
@@ -2232,12 +2232,12 @@ fn numericKindOfType(program: IrProgram, id: IrTypeId): NumericKind? {
   match program.typeAt(id) {
     .Integer(width, isSigned) => {
       if isSigned {
-        Some NumericKind.Signed(width)
+        NumericKind.Signed width
       } else {
-        Some NumericKind.Unsigned(width)
+        NumericKind.Unsigned width
       }
     }
-    .Floating(width) => Some NumericKind.Floating(width)
+    .Floating(width) => NumericKind.Floating width
     _ => None
   }
 }

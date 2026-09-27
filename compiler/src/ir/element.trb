@@ -37,22 +37,22 @@ public fn elementFor(
   const name = elementName lowering.program, annotation
   if const Some(found) = lowering.program.elementNamed(name) {
     if !needsKeyOperations {
-      return Some found
+      return found
     }
     // A descriptor made for a list first and needed as a key afterwards learns the two members it was missing
     const known = lowering.program.elementAt found
     if known.equals.isSome() {
-      return Some found
+      return found
     }
     const filled = keyOperationsOf(lowering, known, item, at)?
     lowering.program.setElement found, filled
-    return Some found
+    return found
   }
   var descriptor = ElementDescriptor name, annotation, 0, 0
   if needsKeyOperations {
     descriptor = keyOperationsOf(lowering, descriptor, item, at)?
   }
-  Some lowering.program.addElement(descriptor)
+  lowering.program.addElement descriptor
 }
 
 /**
@@ -91,5 +91,5 @@ fn keyOperationsOf(
       return None
     }
   }
-  Some descriptor.copy(equals: Some(equals), hash: Some(hash))
+  descriptor.copy equals: equals, hash: hash
 }

@@ -34,7 +34,7 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
   static fn tryFrom(text: String): Result<Regex, RegexError> {
     const parsed = parsedPattern(text)?
     match compiled(parsed.root, parsed.names.length()) {
-      Some(program) => Ok Regex(text, program, parsed.names)
+      Some(program) => Regex text, program, parsed.names
       None => Fail RegexError(text, 0, "the pattern is too large")
     }
   }
@@ -75,7 +75,7 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
   /** The match of the whole text, with its groups. */
   fn wholeMatch(text: String): RegexMatch? {
     const slots = run(program, text, 0, true, true)?
-    Some RegexMatch(text, slots, names)
+    RegexMatch text, slots, names
   }
 
   /** The first match in the text: the leftmost one, and of those the one the pattern prefers. */
@@ -86,7 +86,7 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
   /** The first match that starts at byte `from` or after it. `^` and `\b` still see the text before it. */
   fn findFrom(text: String, from: Int): RegexMatch? {
     const slots = run(program, text, from, false, false)?
-    Some RegexMatch(text, slots, names)
+    RegexMatch text, slots, names
   }
 
   /** Every match, left to right, none overlapping. An empty match right behind the previous one does not count. */
@@ -243,12 +243,12 @@ public type RegexMatch {
   /** The text a group found, by its index - 0 is the whole match - or `None` where it took no part. */
   fn group(index: Int): String? {
     const range = groupRange(index)?
-    Some subject.sliceBytes(range.start, range.end)
+    subject.sliceBytes range.start, range.end
   }
 
   /** The text a named group found, or `None` where it took no part or the pattern has no group of that name. */
   fn named(name: String): String? {
-    const index = names.indexOf(Some(name))?
+    const index = names.indexOf(name)?
     group index
   }
 
@@ -262,7 +262,7 @@ public type RegexMatch {
     if start < 0 || end < 0 {
       return None
     }
-    Some GroupRange(start, end)
+    GroupRange start, end
   }
 
   /** What every group found, the whole match first. */

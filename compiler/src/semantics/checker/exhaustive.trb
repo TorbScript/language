@@ -474,7 +474,7 @@ fn normalizedVariant(
       types.append field.annotation
     }
     constructor = Constructor.Named declared, ".{declared}", types.length()
-  } else if name == "Self" || typeNameOf(checker, subject) == Some(name) {
+  } else if name == "Self" || typeNameOf(checker, subject) == name {
     for field in fieldsOf(checker, subject) {
       types.append field.annotation
     }
@@ -527,7 +527,7 @@ fn arrangedFields(
     if position < 0 || position >= count {
       continue
     }
-    found.set position, Some(fields[index].pattern)
+    found.set position, fields[index].pattern
   }
   found
 }
@@ -623,7 +623,7 @@ fn rangeConstructor(
 
 fn integerValueOf(value: Expression): Int? {
   if const Some(.Integer(inner)) = literalOf(value) {
-    return Some inner
+    return inner
   }
   None
 }
@@ -641,11 +641,11 @@ fn isIntegerType(var checker: Checker, subject: TypeId): Bool {
 /** `1.5` and `-1.5`: the text of a decimal literal, which is how two of them are told apart. */
 fn decimalTextOf(value: Expression): String? {
   match value.kind {
-    .FloatLiteral(text) => Some text
+    .FloatLiteral(text) => text
     .Unary(operator, operand) => {
       if const .Negate = operator {
         if const .FloatLiteral(text) = operand.kind {
-          return Some "-{text}"
+          return "-{text}"
         }
       }
       None
@@ -728,7 +728,7 @@ fn bindingOf(var checker: Checker, name: String, path: List<PatternStep>): Patte
     }
   }
   const local = checker.binding found
-  Some PatternBinding(name, found, path, local.annotation, local.isVar)
+  PatternBinding name, found, path, local.annotation, local.isVar
 }
 
 fn tupleBranches(

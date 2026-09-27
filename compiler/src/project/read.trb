@@ -46,7 +46,7 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   }
   const cache = cacheDirectory() ?? ""
   readLockedPackages(files, listed, others, cache)?
-  Ok SourceTree.onDisk(files, listed, normalizePath(File.absolutePath(".")?), library, others, cache)
+  SourceTree.onDisk files, listed, normalizePath(File.absolutePath(".")?), library, others, cache
 }
 
 /**
@@ -105,7 +105,7 @@ public fn absolutePaths(paths: List<String>): Result<List<String>, IoError> {
   for path in paths {
     absolute.append normalizePath(File.absolutePath(path)?)
   }
-  Ok absolute
+  absolute
 }
 
 /**
@@ -119,7 +119,7 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
     const manifest = joinPath current, "project.trb"
     if File.exists(manifest) {
       files.set(manifest, File.readText(manifest)?)
-      outermost = Some current
+      outermost = current
       // The lock beside it is what says which installed packages belong to the workspace
       const lock = joinPath current, "project.lock.trb"
       if File.exists(lock) {
@@ -139,7 +139,7 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
     }
     current = parent
   }
-  Ok outermost
+  outermost
 }
 
 fn isSkippedDirectory(name: String): Bool {

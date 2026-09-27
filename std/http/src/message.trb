@@ -65,7 +65,7 @@ public type Method with Show, Equals, Hash {
       "SEARCH" => Method.Search
       _ => Method.Other name
     }
-    Ok method
+    method
   }
 
   /** `"GET"`. */
@@ -164,7 +164,7 @@ public type Status with Show, Equals, Hash, Compare {
     if code < 100 || code > 599 {
       return Fail HttpError.malformed("{code} is not a status: a status is from 100 to 599")
     }
-    Ok Status(code)
+    Status code
   }
 
   /** `404`. */
@@ -289,7 +289,7 @@ public type Headers with Show, Equals {
     const wanted = name.toLowerCase()
     for field in fields {
       if field.name.toLowerCase() == wanted {
-        return Some field.value
+        return field.value
       }
     }
     None
@@ -424,7 +424,7 @@ public shared type Body with Source<Bytes, HttpError> {
       }
       collected.appendAll chunk
     }
-    Ok collected
+    collected
   }
 
   /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
@@ -456,7 +456,7 @@ public shared type Body with Source<Bytes, HttpError> {
   /** A body with nothing in it, e.g. for a `GET` request. */
   static fn empty(): Body {
     const nothing: List<Bytes> = []
-    Body Source.from(nothing), Some(0)
+    Body Source.from(nothing), 0
   }
 
   /**
@@ -478,7 +478,7 @@ extend Body with From<String> {
 /** `Body.from(bytes)` - one chunk, already in memory. */
 extend Body with From<Bytes> {
   static fn from(value: Bytes): Body {
-    Body Source.from([value]), Some(value.length())
+    Body Source.from([value]), value.length()
   }
 }
 

@@ -75,7 +75,7 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
        if value < 0 || value > 100 {
          return Fail "{value} is not between 0 and 100"
        }
-       Ok Self(value)
+       Self value
      }
    }
 

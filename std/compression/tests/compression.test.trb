@@ -30,22 +30,22 @@ group "CRC-32" {
 
 group "Inflating" {
   test "a member gzip wrote, with a dynamic block, reads back to its text" {
-    assert(gunzipped(sampleMember) == Ok(bytesOf(sampleText)))
+    assert(gunzipped(sampleMember) == bytesOf(sampleText))
   }
 
   test "a stored block" {
     const stored: List<UInt8> = [1, 3, 0, 252, 255, 97, 98, 99]
-    assert(inflated(stored) == Ok(bytesOf("abc")))
+    assert(inflated(stored) == bytesOf("abc"))
   }
 
   test "a fixed block with a match: `abcabcabc`" {
-    assert(inflated(deflated(bytesOf("abcabcabc"))) == Ok(bytesOf("abcabcabc")))
+    assert(inflated(deflated(bytesOf("abcabcabc"))) == bytesOf("abcabcabc"))
   }
 
   test "two members one after the other are one output" {
     var both = gzipped bytesOf("first, ")
     both.appendAll gzipped(bytesOf("second"))
-    assert(gunzipped(both) == Ok(bytesOf("first, second")))
+    assert(gunzipped(both) == bytesOf("first, second"))
   }
 
   test "a broken input is refused with its reason" {
@@ -72,8 +72,8 @@ group "Deflating" {
     }
     const inputs = [bytesOf(sampleText), bytesOf("a".repeat(1000)), everyByte, bytesOf(""), bytesOf("x")]
     for input in inputs {
-      assert(inflated(deflated(input)) == Ok(input))
-      assert(gunzipped(gzipped(input)) == Ok(input))
+      assert(inflated(deflated(input)) == input)
+      assert(gunzipped(gzipped(input)) == input)
     }
   }
 

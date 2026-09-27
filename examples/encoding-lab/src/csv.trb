@@ -61,7 +61,7 @@ public type Csv {
     for field in structure.recordFields() {
       columns.appendAll(columnsOf(field, format.flattened)?)
     }
-    Ok Csv(columns)
+    Csv columns
   }
 
   fn header(): String {
@@ -75,7 +75,7 @@ public type Csv {
     value.encode target
     const encoded = target.cells
     const cells = columns.map { column => escaped(encoded.get(column.path) ?? "") }
-    Ok cells.toList().joined(separator: ",")
+    cells.toList().joined(separator: ",")
   }
 
   /**
@@ -120,13 +120,13 @@ fn columnsOf(field: StructureField, flattened: List<String>): Result<List<CsvCol
           columns.append CsvColumn("{name}.{column.path}", "{name}.{column.name}")
         }
       }
-      Ok columns
+      columns
     }
     .Sequence(_) => Fail CsvProblem(name, "is a sequence, and a table has one value per cell")
     .Mapping(_, _) => Fail CsvProblem(name, "is a map, and a table has one value per cell")
     .Variant(_, _) => Fail CsvProblem(name, "has cases, and a table has one shape per column")
     .Reference(_) => Fail CsvProblem(name, "refers to itself, and a table has no depth")
-    _ => Ok([CsvColumn(name, name)])
+    _ => [CsvColumn(name, name)]
   }
 }
 

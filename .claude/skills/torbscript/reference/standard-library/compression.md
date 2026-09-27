@@ -31,7 +31,7 @@ use gzipped, gunzipped, deflated, inflated, crc32, CompressionError from "std/co
 use gzipped, gunzipped from "std/compression"
 
 const bytes = "hello, hello, hello".bytes().toList()
-print(gunzipped(gzipped(bytes)) == Ok(bytes))
+print(gunzipped(gzipped(bytes)) == bytes)
 ```
 
 ## Declarations

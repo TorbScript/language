@@ -82,9 +82,9 @@ public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name:
 
 fn memberSymbolOf(candidate: Candidate): SymbolId? {
   match candidate.kind {
-    .Field(_, field) => Some field
-    .Constant(_, symbol) => Some symbol
-    .Method(_, symbol) => Some symbol
+    .Field(_, field) => field
+    .Constant(_, symbol) => symbol
+    .Method(_, symbol) => symbol
     _ => None
   }
 }
@@ -108,9 +108,9 @@ fn ownerOfCandidate(candidate: Candidate): TypeId {
 fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId? {
   if const .Field(declaring) = checker.symbolAt(member).kind {
     if const .Case(inner) = checker.symbolAt(declaring).kind {
-      return Some inner
+      return inner
     }
-    return Some declaring
+    return declaring
   }
   headSymbolOf checker, owner
 }
@@ -146,7 +146,7 @@ public fn isInsideType(var checker: Checker, owner: TypeId): Bool {
 
 fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
   if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return Some symbol
+    return symbol
   }
   None
 }
@@ -239,7 +239,7 @@ fn requireLabeledCopy(var checker: Checker, fields: List<FieldSignature>, argume
 fn fieldNamed(fields: List<FieldSignature>, name: String): FieldSignature? {
   for field in fields {
     if field.name == name {
-      return Some field
+      return field
     }
   }
   None
@@ -321,7 +321,7 @@ fn circularFieldOf(var checker: Checker, own: TypeId): FieldSignature? {
   const fields = fieldsOf checker, own
   for field in fields {
     if !isInhabited(checker, field.annotation, []) {
-      return Some field
+      return field
     }
   }
   None
@@ -942,7 +942,7 @@ fn repeatedTraitOf(traits: List<TraitClause>): String? {
   for clause in traits {
     for name in traitHeadsOf(clause.capability) {
       if seen.containsKey(name) {
-        return Some name
+        return name
       }
       seen.set name, true
     }
@@ -1267,7 +1267,7 @@ fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, dep
   match checker.types.form(annotation) {
     .Nominal(symbol, arguments) => {
       if isPrivateType(checker, module, symbol) {
-        return Some symbol
+        return symbol
       }
       privateTypeInAll checker, module, arguments, depth
     }
@@ -1287,7 +1287,7 @@ fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, dep
 fn privateTypeInAll(var checker: Checker, module: ModuleId, types: List<TypeId>, depth: Int): SymbolId? {
   for annotation in types {
     if const Some(found) = privateTypeIn(checker, module, annotation, depth + 1) {
-      return Some found
+      return found
     }
   }
   None
@@ -1586,15 +1586,15 @@ fn unseenOf(var checker: Checker, annotation: TypeId): Unseen {
  */
 public fn taskProblemOf(var checker: Checker, annotation: TypeId): String? {
   if !isNothingUnseen(unseenInside(checker, annotation)) {
-    return Some "may hold an object"
+    return "may hold an object"
   }
   if !containsShared(checker, annotation) {
     return None
   }
   if isSharedType(checker, annotation) {
-    return Some "has an identity"
+    return "has an identity"
   }
-  Some "holds an object"
+  "holds an object"
 }
 
 /** The note under [taskProblemOf]'s message: what the task could take instead. */
@@ -1683,13 +1683,11 @@ public fn channelItemProblem(var checker: Checker, built: TypeId, at: Span): Dia
   }
   const shown = checker.describe item
   const held = if isSharedType(checker, item) { "has an identity" } else { "holds an object" }
-  Some(
-    Diagnostic.error("A `Channel` cannot carry a `{shown}`: it {held}", at)
-      .withNote(
-        "An item of a channel crosses from one task to another, and an object is never copied. Send what the object"
-          + " holds instead, or hand over a `Task` or a `Channel` - the two that may cross"
-      )
-  )
+  Diagnostic.error("A `Channel` cannot carry a `{shown}`: it {held}", at)
+    .withNote(
+      "An item of a channel crosses from one task to another, and an object is never copied. Send what the object"
+        + " holds instead, or hand over a `Task` or a `Channel` - the two that may cross"
+    )
 }
 
 /** The arguments a nominal type or a bound was applied to: the `Counter` of `List<Counter>`. */

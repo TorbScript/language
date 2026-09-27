@@ -103,7 +103,7 @@ fn toCommand(source: String, tokens: List<Token>, site: CallSite, callee: Expres
     return None
   }
   const replacements = [Replacement(open.start, open.end, " "), Replacement(close.start, close.end, "")]
-  Some Edit(EditKind.ToCommand, site.call.span.start, replacements)
+  Edit EditKind.ToCommand, site.call.span.start, replacements
 }
 
 /** `f a, b` becomes `f(a, b)` where a condition of K2 does not hold: a nested call, an operator in an argument, or arguments over several lines. */
@@ -125,7 +125,7 @@ fn toParentheses(source: String, tokens: List<Token>, site: CallSite, callee: Ex
     return None
   }
   const replacements = [Replacement(callee.span.end, argumentStart(first), "("), Replacement(argumentsEnd, argumentsEnd, ")")]
-  Some Edit(EditKind.ToParentheses, site.call.span.start, replacements)
+  Edit EditKind.ToParentheses, site.call.span.start, replacements
 }
 
 /** `Ok`, `Email.parse`, `self.builder.add` - what `parseCommandPath` of the parser reads. `a?.b` is not one, and neither is `pair.0`: after the `.` the parser wants a name or a keyword. */
@@ -260,7 +260,7 @@ fn startsCommandArgument(source: String, tokens: List<Token>, offset: Int): Bool
 fn indexOfTokenAt(tokens: List<Token>, offset: Int): Int? {
   const index = partitionPoint tokens, offset
   if index < tokens.length() && tokens[index].span.start == offset {
-    return Some index
+    return index
   }
   None
 }
@@ -276,7 +276,7 @@ fn previousToken(tokens: List<Token>, offset: Int): Token? {
   if index == 0 {
     return None
   }
-  Some tokens[index - 1]
+  tokens[index - 1]
 }
 
 /** The index of the first token whose span does not start before `offset`. */
@@ -304,7 +304,7 @@ fn matchingParenthesis(tokens: List<Token>, open: Int): Int? {
       .ParenClose => {
         depth = depth - 1
         if depth == 0 {
-          return Some index
+          return index
         }
       }
       _ => {}

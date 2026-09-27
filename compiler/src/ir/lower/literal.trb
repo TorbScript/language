@@ -48,7 +48,7 @@ public fn lowerCheckedLiteral(
   }
   const target = valueSlot lowering, builder, destination, annotation
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), accessor, [], empty, Some(locationOf(lowering, at)))
+  emit builder, Instruction.Call(target, accessor, [], empty, locationOf(lowering, at))
   target
 }
 
@@ -66,7 +66,7 @@ fn literalCellOf(var lowering: Lowering, written: TypeId, text: String, at: Span
   const produced = irTypeOfClosed lowering, written
   const key = "literal {produced.value} {text}"
   if const Some(known) = lowering.constantCells.get(key) {
-    return Some known
+    return known
   }
   const shape = lowering.checker.typeSignature typeSignatureOf(lowering.checker, symbol)
   const member = shape.members.get("literal")?
@@ -77,20 +77,20 @@ fn literalCellOf(var lowering: Lowering, written: TypeId, text: String, at: Span
   const literal = instanceFor(lowering, member, mapping)?
   const accessorName = mangledName "t", ["literal", "{lowering.constantCells.length()}"], ""
   const initializerName = mangledName "t", ["constant"], accessorName
-  var inner = newFunction initializerName, Some(member), IrSignature([], produced), "constant"
+  var inner = newFunction initializerName, member, IrSignature([], produced), "constant"
   const saved = savedFrame lowering
   enterBody lowering, initializerName
   const location = locationOf lowering, at
-  setBlockLocation inner, BlockId(0), Some(location)
+  setBlockLocation inner, BlockId(0), location
   const argument = textSlot lowering, inner, text
   const value = emitCall lowering, inner, None, literal, [argument], produced, at
-  finishBlock lowering, inner, Terminator.Return(Some(borrowed(value)))
+  finishBlock lowering, inner, Terminator.Return(borrowed(value))
   restoreFrame lowering, saved
   const initializer = finishFunction lowering.program, inner
-  var accessor = newFunction accessorName, Some(member), IrSignature([], produced), "constant"
+  var accessor = newFunction accessorName, member, IrSignature([], produced), "constant"
   const empty = accessor.function
   accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
   const added = finishFunction lowering.program, accessor
   lowering.constantCells.set key, added
-  Some added
+  added
 }

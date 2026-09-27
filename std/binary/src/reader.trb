@@ -140,7 +140,7 @@ public type ByteReader {
       }
     }
     cursor = cursor + width
-    Ok value
+    value
   }
 
   /** The next 8 bytes in `order` as the `Int` with their 64 bits. */
@@ -152,8 +152,8 @@ public type ByteReader {
     const first = unsigned(4, order, expected)?
     const second = unsigned(4, order, expected)?
     match order {
-      .BigEndian => Ok((first << 32) | second)
-      .LittleEndian => Ok((second << 32) | first)
+      .BigEndian => (first << 32) | second
+      .LittleEndian => (second << 32) | first
     }
   }
 
@@ -165,7 +165,7 @@ public type ByteReader {
     }
     const value = bytes[cursor]
     cursor = cursor + 1
-    Ok value
+    value
   }
 
   /** The next two bytes as a `UInt16`, in `order` or the reader's. */
@@ -185,8 +185,8 @@ public type ByteReader {
       .LittleEndian => second << 8 | first
     }
     match UInt16.tryFrom(value) {
-      Ok(number) => Ok number
-      Fail(_) => Ok 0
+      Ok(number) => number
+      Fail(_) => 0
     }
   }
 
@@ -204,32 +204,32 @@ public type ByteReader {
     const fourth = Int.from bytes[cursor + 3]
     cursor = cursor + 4
     match order ?? self.order {
-      .BigEndian => Ok word32(first << 24 | second << 16 | third << 8 | fourth)
-      .LittleEndian => Ok word32(fourth << 24 | third << 16 | second << 8 | first)
+      .BigEndian => word32(first << 24 | second << 16 | third << 8 | fourth)
+      .LittleEndian => word32(fourth << 24 | third << 16 | second << 8 | first)
     }
   }
 
   /** The next eight bytes as a `UInt64`, in `order` or the reader's. */
   var fn uint64(order: ByteOrder? = None): Result<UInt64, ReadError> {
-    Ok unsignedOf(pattern64(order ?? self.order, "a UInt64")?)
+    unsignedOf(pattern64(order ?? self.order, "a UInt64")?)
   }
 
   /** The next byte as an `Int8`, in two's complement. */
   var fn int8(): Result<Int8, ReadError> {
     const value = unsigned(1, ByteOrder.BigEndian, "an Int8")?
-    Ok(Int8.tryFrom(if value >= 0x80 { value - 0x100 } else { value }).ok() ?? 0)
+    Int8.tryFrom(if value >= 0x80 { value - 0x100 } else { value }).ok() ?? 0
   }
 
   /** The next two bytes as an `Int16`, in two's complement and in `order` or the reader's. */
   var fn int16(order: ByteOrder? = None): Result<Int16, ReadError> {
     const value = unsigned(2, order ?? self.order, "an Int16")?
-    Ok(Int16.tryFrom(if value >= 0x8000 { value - 0x10000 } else { value }).ok() ?? 0)
+    Int16.tryFrom(if value >= 0x8000 { value - 0x10000 } else { value }).ok() ?? 0
   }
 
   /** The next four bytes as an `Int32`, in two's complement and in `order` or the reader's. */
   var fn int32(order: ByteOrder? = None): Result<Int32, ReadError> {
     const value = unsigned(4, order ?? self.order, "an Int32")?
-    Ok(Int32.tryFrom(if value >= 0x80000000 { value - 0x100000000 } else { value }).ok() ?? 0)
+    Int32.tryFrom(if value >= 0x80000000 { value - 0x100000000 } else { value }).ok() ?? 0
   }
 
   /** The next eight bytes as an `Int64`, in two's complement and in `order` or the reader's. */
@@ -242,12 +242,12 @@ public type ByteReader {
    * exactly. A `nan` reads as [Float64.nan], without its payload.
    */
   var fn float32(order: ByteOrder? = None): Result<Float64, ReadError> {
-    Ok float32OfPattern(unsigned(4, order ?? self.order, "a Float32")?)
+    float32OfPattern(unsigned(4, order ?? self.order, "a Float32")?)
   }
 
   /** The next eight bytes as an IEEE 754 binary64, in `order` or the reader's. A `nan` reads without its payload. */
   var fn float64(order: ByteOrder? = None): Result<Float64, ReadError> {
-    Ok float64OfPattern(pattern64(order ?? self.order, "a Float64")?)
+    float64OfPattern(pattern64(order ?? self.order, "a Float64")?)
   }
 
   /**
@@ -280,11 +280,11 @@ public type ByteReader {
           cursor = start
           return Fail ReadError.Overflow(start, "a variable-length UInt64")
         }
-        return Ok unsignedOf(value | (byte << 63))
+        return unsignedOf(value | (byte << 63))
       }
       value = value | ((byte & 0x7F) << shift)
       if byte & 0x80 == 0 {
-        return Ok unsignedOf(value)
+        return unsignedOf value
       }
       shift = shift + 7
     }
@@ -338,9 +338,9 @@ public type ByteReader {
     if encoding == SignedEncoding.Zigzag {
       // `value` is the unsigned number's 64 bits: half of it, and the lowest bit says whether it is negative
       const half = (value >> 1) & Int.maximum
-      return Ok(if value & 1 == 0 { half } else { -half - 1 })
+      return if value & 1 == 0 { half } else { -half - 1 }
     }
-    Ok value
+    value
   }
 
   /**
@@ -356,7 +356,7 @@ public type ByteReader {
     ensure(count, "a run of bytes")?
     const taken = input[cursor..(cursor + count)]
     cursor = cursor + count
-    Ok taken
+    taken
   }
 
   /**
@@ -372,7 +372,7 @@ public type ByteReader {
     ensure(count, "a limited reader")?
     const inner = Self(input, order, cursor, cursor + count, cursor)
     cursor = cursor + count
-    Ok inner
+    inner
   }
 
   /**
@@ -388,7 +388,7 @@ public type ByteReader {
     match textOf(input[cursor..(cursor + count)]) {
       Ok(text) => {
         cursor = cursor + count
-        Ok text
+        text
       }
       Fail(problem) => Fail ReadError.InvalidText(cursor + problem.offset)
     }
@@ -414,7 +414,7 @@ public type ByteReader {
     match textOf(input[cursor..end]) {
       Ok(text) => {
         cursor = end + 1
-        Ok text
+        text
       }
       Fail(problem) => Fail ReadError.InvalidText(cursor + problem.offset)
     }

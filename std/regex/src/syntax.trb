@@ -74,7 +74,7 @@ public fn parsedPattern(pattern: String): Result<ParsedPattern, RegexError> {
   if parser.position < parser.characters.length() {
     return Fail parser.failure("a `)` has no `(` to close")
   }
-  Ok ParsedPattern(root, parser.names)
+  ParsedPattern root, parser.names
 }
 
 type Parser {
@@ -129,9 +129,9 @@ type Parser {
       break
     }
     if branches.length() == 1 {
-      return Ok branches[0]
+      return branches[0]
     }
-    Ok RegexNode.Alternation(branches)
+    RegexNode.Alternation branches
   }
 
   var fn concatenation(flags: Flags): Result<Branch, RegexError> {
@@ -150,7 +150,7 @@ type Parser {
       1 => items[0]
       _ => RegexNode.Concatenation items
     }
-    Ok Branch(node, current)
+    Branch node, current
   }
 
   /** Whether the `(?` here only sets flags, `(?i)`, as opposed to opening a group. */
@@ -174,7 +174,7 @@ type Parser {
     position = position + 2
     const changed = flagsUntil(flags, ')')?
     position = position + 1
-    Ok changed
+    changed
   }
 
   /** Reads flag letters up to `end`, with a `-` switching the ones after it off. */
@@ -218,7 +218,7 @@ type Parser {
     if negated && !any {
       return Fail failure("a flag group has flags after its `-`")
     }
-    Ok result
+    result
   }
 
   var fn atom(flags: Flags): Result<RegexNode, RegexError> {
@@ -231,9 +231,9 @@ type Parser {
     }
     position = position + 1
     match character {
-      '.' => Ok RegexNode.AnyCharacter(flags.dotAll)
-      '^' => Ok RegexNode.Assertion(if flags.multiLine { AssertionKind.LineStart } else { AssertionKind.TextStart })
-      '$' => Ok RegexNode.Assertion(if flags.multiLine { AssertionKind.LineEnd } else { AssertionKind.TextEnd })
+      '.' => RegexNode.AnyCharacter flags.dotAll
+      '^' => RegexNode.Assertion(if flags.multiLine { AssertionKind.LineStart } else { AssertionKind.TextStart })
+      '$' => RegexNode.Assertion(if flags.multiLine { AssertionKind.LineEnd } else { AssertionKind.TextEnd })
       '\\' => escape flags
       '*' | '+' | '?' => {
         position = position - 1
@@ -245,9 +245,9 @@ type Parser {
           return Fail failure("`\{` repeats nothing")
         }
         position = position + 1
-        Ok literal(character, flags)
+        literal character, flags
       }
-      _ => Ok literal(character, flags)
+      _ => literal character, flags
     }
   }
 
@@ -260,10 +260,10 @@ type Parser {
       const next = peekAt 1
       if next == 'P' && peekAt(2) == '<' {
         position = position + 3
-        name = Some(groupName()?)
+        name = groupName()?
       } else if next == '<' && peekAt(2) != '=' && peekAt(2) != '!' {
         position = position + 2
-        name = Some(groupName()?)
+        name = groupName()?
       } else if next == 'P' && peekAt(2) == '=' {
         return Fail failure("a backreference `(?P=name)` is not supported: a Regex matches in time linear in its input")
       } else if next == '=' || next == '!' || (next == '<' && (peekAt(2) == '=' || peekAt(2) == '!')) {
@@ -286,9 +286,9 @@ type Parser {
     }
     position = position + 1
     if !capturing {
-      return Ok body
+      return body
     }
-    Ok RegexNode.Group(index, [body])
+    RegexNode.Group index, [body]
   }
 
   /** The name of `(?P<name>...)` up to its `>`: letters, digits and `_`, not starting with a digit. */
@@ -310,11 +310,11 @@ type Parser {
     if characters[start].isDigit() {
       return Fail failure("a group name does not start with a digit")
     }
-    if names.contains(Some(name)) {
+    if names.contains(name) {
       return Fail failure("the group name `{name}` is used twice")
     }
     position = position + 1
-    Ok name
+    name
   }
 
   /** The repetition operators after an atom, if any: `*`, `+`, `?`, `\{n\}`, `\{n,\}`, `\{n,m\}`, each lazy with `?`. */
@@ -323,7 +323,7 @@ type Parser {
     var maximum = -1
     const operator = peek()
     if atEnd() {
-      return Ok atom
+      return atom
     }
     if operator == '*' {
       position = position + 1
@@ -345,11 +345,11 @@ type Parser {
           }
         }
         None => {
-          return Ok atom
+          return atom
         }
       }
     } else {
-      return Ok atom
+      return atom
     }
     var greedy = !flags.ungreedy
     if peek() == '?' && !atEnd() {
@@ -364,9 +364,9 @@ type Parser {
     }
     if const RegexNode.Assertion(_) = atom {
       // RE2 allows a repeated assertion; it matches the same place once or not at all
-      return Ok RegexNode.Repetition([atom], minimum.min(1), if maximum == 0 { 0 } else { 1 }, greedy)
+      return RegexNode.Repetition([atom], minimum.min(1), if maximum == 0 { 0 } else { 1 }, greedy)
     }
-    Ok RegexNode.Repetition([atom], minimum, maximum, greedy)
+    RegexNode.Repetition([atom], minimum, maximum, greedy)
   }
 
   /** `\{n\}`, `\{n,\}` or `\{n,m\}` here, read and passed; `None`, and nothing read, where it is not one. */
@@ -388,7 +388,7 @@ type Parser {
       return None
     }
     position = position + 1
-    Some RepeatCount(minimum ?? 0, maximum)
+    RepeatCount(minimum ?? 0, maximum)
   }
 
   var fn number(): Int? {
@@ -403,7 +403,7 @@ type Parser {
     if position == start {
       return None
     }
-    Some value
+    value
   }
 
   /** A character, or the set of its case partners under `(?i)`. */
@@ -431,19 +431,19 @@ type Parser {
     match character {
       'A' => {
         position = position + 1
-        return Ok RegexNode.Assertion(AssertionKind.TextStart)
+        return RegexNode.Assertion AssertionKind.TextStart
       }
       'z' => {
         position = position + 1
-        return Ok RegexNode.Assertion(AssertionKind.TextEnd)
+        return RegexNode.Assertion AssertionKind.TextEnd
       }
       'b' => {
         position = position + 1
-        return Ok RegexNode.Assertion(AssertionKind.WordBoundary)
+        return RegexNode.Assertion AssertionKind.WordBoundary
       }
       'B' => {
         position = position + 1
-        return Ok RegexNode.Assertion(AssertionKind.NotWordBoundary)
+        return RegexNode.Assertion AssertionKind.NotWordBoundary
       }
       'Q' => {
         position = position + 1
@@ -458,8 +458,8 @@ type Parser {
       _ => {}
     }
     match classEscape()? {
-      Some(set) => Ok RegexNode.Set(if flags.caseInsensitive { set.folded() } else { set })
-      None => Ok literal(escapedCharacter()?, flags)
+      Some(set) => RegexNode.Set(if flags.caseInsensitive { set.folded() } else { set })
+      None => literal(escapedCharacter()?, flags)
     }
   }
 
@@ -479,7 +479,7 @@ type Parser {
       1 => items[0]
       _ => RegexNode.Concatenation items
     }
-    Ok node
+    node
   }
 
   /** `\d`, `\D`, `\s`, `\S`, `\w`, `\W`, `\pN`, `\p\{Greek\}`, `\PN`: a set, or `None` for another escape. */
@@ -536,12 +536,12 @@ type Parser {
     const character = peek()
     position = position + 1
     match character {
-      'a' => Ok '\u{7}'
-      'f' => Ok '\u{c}'
-      't' => Ok '\t'
-      'n' => Ok '\n'
-      'r' => Ok '\r'
-      'v' => Ok '\u{b}'
+      'a' => '\u{7}'
+      'f' => '\u{c}'
+      't' => '\t'
+      'n' => '\n'
+      'r' => '\r'
+      'v' => '\u{b}'
       'x' => hexEscape()
       '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' => {
         // RE2 has octal escapes, and `\1` to `\9` would be backreferences, which it does not have
@@ -562,7 +562,7 @@ type Parser {
         const code = Int64.from character
         const isPunctuation = code < 128 && !character.isLetter() && !character.isDigit() && character != '_'
         if isPunctuation {
-          return Ok character
+          return character
         }
         position = position - 1
         Fail failure("`\\{character}` is not an escape of RE2")
@@ -602,7 +602,7 @@ type Parser {
 
   fn characterOf(value: Int): Result<Char, RegexError> {
     match Char.tryFrom(value) {
-      Ok(character) => Ok character
+      Ok(character) => character
       Fail(_) => Fail failure("`{value}` is not a character")
     }
   }
@@ -661,7 +661,7 @@ type Parser {
     if flags.caseInsensitive {
       set = set.folded()
     }
-    Ok RegexNode.Set(if negated { set.negated() } else { set })
+    RegexNode.Set(if negated { set.negated() } else { set })
   }
 
   /** One character of a class: itself, or what its escape stands for. */
@@ -674,12 +674,12 @@ type Parser {
       }
       if peek() == 'b' {
         position = position + 1
-        return Ok '\u{8}'
+        return '\u{8}'
       }
       return escapedCharacter()
     }
     position = position + 1
-    Ok character
+    character
   }
 
   /** `[:alpha:]` or `[:^alpha:]` inside a class; `None`, and nothing read, where it is not one. */

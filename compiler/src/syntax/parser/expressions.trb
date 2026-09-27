@@ -35,10 +35,10 @@ const exponentPower = 9
  */
 fn infixOperatorAt(parser: Parser): (Int, InfixOperator, Int)? {
   if parser.isAt(TokenKind.Greater) && parser.kindAt(1) == TokenKind.Greater && parser.span().end == parser.spanAt(1).start {
-    return Some((shiftPower, InfixOperator.ShiftRight, 2))
+    return (shiftPower, InfixOperator.ShiftRight, 2)
   }
   const (power, operator) = infixOperator(parser.kind())?
-  Some((power, operator, 1))
+  (power, operator, 1)
 }
 
 fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
@@ -66,7 +66,7 @@ fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
       return None
     }
   }
-  Some found
+  found
 }
 
 /** Whether the parser stands at a comparison - and not at the `>>` whose first half looks like one. */
@@ -133,7 +133,7 @@ fn parseCommandPath(var parser: Parser): Expression? {
     break
   }
   parser = settled
-  Some settledPath
+  settledPath
 }
 
 /**
@@ -153,7 +153,7 @@ fn parseIndexSegment(var parser: Parser, path: Expression, start: Span): Express
     return None
   }
   parser.bump()
-  Some Expression(ExpressionKind.Index(path, index), start.to(parser.previousSpan()))
+  Expression ExpressionKind.Index(path, index), start.to(parser.previousSpan())
 }
 
 /**
@@ -209,7 +209,7 @@ fn parseArgument(var parser: Parser): Argument {
   const isSpread = parser.eat TokenKind.Ellipsis
   var label: Name? = None
   if isNameOrKeyword(parser.kind()) && parser.kindAt(1) == TokenKind.Colon {
-    label = Some parser.nameOrKeyword()
+    label = parser.nameOrKeyword()
     parser.bump()
   }
   Argument label, isSpread, parseExpression(parser)
@@ -227,7 +227,7 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
   var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
   loop {
     if isAtRange(parser, minimum) {
-      left = parseRange parser, start, Some(left)
+      left = parseRange parser, start, left
       isBarePrefix = false
       continue
     }
@@ -431,7 +431,7 @@ fn parseGenericArguments(var parser: Parser): List<TypeReference>? {
     TokenKind.EndOfFile,
   ]
   if isClosed && parser.isAtAny(followers) && !parser.hasFailedSince(beforeArguments) {
-    return Some arguments
+    return arguments
   }
   parser = beforeArguments
   None
@@ -586,7 +586,7 @@ fn parseClosureParameters(var parser: Parser): List<ClosureParameter>? {
     parser = beforeParameters
     return None
   }
-  Some parameters
+  parameters
 }
 
 /** The position is at `if`. */
@@ -599,7 +599,7 @@ fn parseIf(var parser: Parser): ExpressionKind {
   }
   const start = parser.span()
   const kind = if parser.isAtKeyword(Keyword.If) { parseIf parser } else { ExpressionKind.Block parseBlock(parser) }
-  ExpressionKind.If condition, then, otherwise: Some(Expression(kind, start.to(parser.previousSpan())))
+  ExpressionKind.If condition, then, otherwise: Expression(kind, start.to(parser.previousSpan()))
 }
 
 fn parseMatch(var parser: Parser): ExpressionKind {

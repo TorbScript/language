@@ -41,11 +41,11 @@ public type RegistryLocation {
 public fn registryLocationOf(url: String, projectDirectory: String): Result<RegistryLocation, String> {
   if const Some(rest) = url.withoutPrefix("file:") {
     const path = rest.withoutPrefix("//") ?? rest
-    const absolute = path.startsWith("/") || (path.byteLength() > 1 && path.byteAt(1) == Some(58))
-    return Ok RegistryLocation.Directory(if absolute { normalizePath path } else { joinPath projectDirectory, path })
+    const absolute = path.startsWith("/") || (path.byteLength() > 1 && path.byteAt(1) == 58)
+    return RegistryLocation.Directory(if absolute { normalizePath path } else { joinPath projectDirectory, path })
   }
   if url.startsWith("https://") || url.startsWith("http://") {
-    return Ok RegistryLocation.Web(url.withoutSuffix("/") ?? url)
+    return RegistryLocation.Web(url.withoutSuffix("/") ?? url)
   }
   Fail "`{url}` is not a registry URL: a registry is `https://...`, or `file:` and a directory"
 }

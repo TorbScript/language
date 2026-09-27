@@ -59,9 +59,9 @@ public fn evaluateConstant(var lowering: Lowering, expression: Expression): Cons
   match expression.kind {
     .IntegerLiteral(text) => integerConstant lowering, text, false, annotation, expression.span
     .FloatLiteral(text) => floatConstant lowering, text, false, annotation, expression.span
-    .BoolLiteral(value) => Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
-    .VoidLiteral => Some ConstantValue(StaticContents.VoidValue, annotation)
-    .CharLiteral(value) => Some ConstantValue(StaticContents.Literal(LiteralValue.Character(value)), annotation)
+    .BoolLiteral(value) => ConstantValue StaticContents.Literal(LiteralValue.Boolean(value)), annotation
+    .VoidLiteral => ConstantValue StaticContents.VoidValue, annotation
+    .CharLiteral(value) => ConstantValue StaticContents.Literal(LiteralValue.Character(value)), annotation
     .TextLiteral(segments) => textConstant lowering, segments, annotation, expression.span
     .Name(_) | .Member(_, _, _) => namedConstant lowering, expression, annotation
     .Unary(operator, operand) => unaryConstant lowering, operator, operand, annotation, expression.span
@@ -94,11 +94,11 @@ fn unaryConstant(
     const inner = evaluateConstant(lowering, operand)?
     const value = integerOf(inner)?
     const found = wrappedToKind(lowering, ~value, annotation)?
-    return Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(found)), annotation)
+    return ConstantValue StaticContents.Literal(LiteralValue.Integer(found)), annotation
   }
   const inner = evaluateConstant(lowering, operand)?
   const value = booleanOf(inner)?
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(!value)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Boolean(!value)), annotation
 }
 
 fn negatedConstant(var lowering: Lowering, inner: ConstantValue, annotation: IrTypeId, at: Span): ConstantValue? {
@@ -110,7 +110,7 @@ fn negatedConstant(var lowering: Lowering, inner: ConstantValue, annotation: IrT
     return integerValue(lowering, 0 - value, annotation, "-", at)
   }
   const value = floatOf(inner)?
-  Some ConstantValue(StaticContents.Floating(0.0 - value), annotation)
+  ConstantValue StaticContents.Floating(0.0 - value), annotation
 }
 
 /**
@@ -128,7 +128,7 @@ fn binaryConstant(
   const first = evaluateConstant(lowering, left)?
   const second = evaluateConstant(lowering, right)?
   if const Some(found) = booleanConstant(lowering, operator, first, second, annotation) {
-    return Some found
+    return found
   }
   if const Some(found) = integerOf(first) {
     const other = integerOf(second)?
@@ -158,7 +158,7 @@ fn booleanConstant(
         return None
       }
     }
-    return Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
+    return ConstantValue StaticContents.Literal(LiteralValue.Boolean(value)), annotation
   }
   if const Some(found) = textOf(first) {
     const other = textOf(second)?
@@ -187,7 +187,7 @@ fn textComparison(
       return None
     }
   }
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Boolean(value)), annotation
 }
 
 fn characterComparison(
@@ -208,7 +208,7 @@ fn characterComparison(
       return None
     }
   }
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Boolean(value)), annotation
 }
 
 /** Whether a type is `UInt64`, whose values above the largest `Int64` the compiler holds as negative bits. */
@@ -235,12 +235,12 @@ fn integerOperation(
     return None
   }
   match operator {
-    .Equal => Some comparisonValue(first == second, annotation)
-    .NotEqual => Some comparisonValue(first != second, annotation)
-    .Less => Some comparisonValue(first < second, annotation)
-    .LessOrEqual => Some comparisonValue(first <= second, annotation)
-    .Greater => Some comparisonValue(first > second, annotation)
-    .GreaterOrEqual => Some comparisonValue(first >= second, annotation)
+    .Equal => comparisonValue(first == second, annotation)
+    .NotEqual => comparisonValue(first != second, annotation)
+    .Less => comparisonValue(first < second, annotation)
+    .LessOrEqual => comparisonValue(first <= second, annotation)
+    .Greater => comparisonValue(first > second, annotation)
+    .GreaterOrEqual => comparisonValue(first >= second, annotation)
     .Add => {
       const found = addedChecked first, second
       integerResult lowering, found, annotation, "+", at
@@ -284,7 +284,7 @@ fn integerOperation(
 
 fn bitsValue(var lowering: Lowering, value: Int, annotation: IrTypeId): ConstantValue? {
   const found = wrappedToKind(lowering, value, annotation)?
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(found)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Integer(found)), annotation
 }
 
 /** Whether a shift amount is inside the width of the type the shift answers. */
@@ -315,14 +315,14 @@ fn wrappedToKind(var lowering: Lowering, value: Int, annotation: IrTypeId): Int?
     if !isSigned && value < 0 {
       return None
     }
-    return Some value
+    return value
   }
   const modulus = 1 << width
   const low = value & (modulus - 1)
   if isSigned && low >= modulus / 2 {
-    return Some(low - modulus)
+    return low - modulus
   }
-  Some low
+  low
 }
 
 /** `base ** exponent` by squaring, or `None` where it overflows. The factor is squared only while it is still needed. */
@@ -339,7 +339,7 @@ fn poweredChecked(base: Int, exponent: Int): Int? {
       factor = multipliedChecked(factor, factor)?
     }
   }
-  Some result
+  result
 }
 
 fn comparisonValue(value: Bool, annotation: IrTypeId): ConstantValue {
@@ -375,7 +375,7 @@ fn integerValue(
     reportOverflow lowering, operator, annotation, at
     return None
   }
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Integer(value)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Integer(value)), annotation
 }
 
 fn dividedConstant(var lowering: Lowering, first: Int, second: Int, annotation: IrTypeId, at: Span): ConstantValue? {
@@ -411,12 +411,12 @@ fn floatOperation(
   at: Span,
 ): ConstantValue? {
   match operator {
-    .Equal => Some comparisonValue(first == second, annotation)
-    .NotEqual => Some comparisonValue(first != second, annotation)
-    .Less => Some comparisonValue(first < second, annotation)
-    .LessOrEqual => Some comparisonValue(first <= second, annotation)
-    .Greater => Some comparisonValue(first > second, annotation)
-    .GreaterOrEqual => Some comparisonValue(first >= second, annotation)
+    .Equal => comparisonValue(first == second, annotation)
+    .NotEqual => comparisonValue(first != second, annotation)
+    .Less => comparisonValue(first < second, annotation)
+    .LessOrEqual => comparisonValue(first <= second, annotation)
+    .Greater => comparisonValue(first > second, annotation)
+    .GreaterOrEqual => comparisonValue(first >= second, annotation)
     .Add => floatResult(lowering, first + second, annotation, "+", at)
     .Subtract => floatResult(lowering, first - second, annotation, "-", at)
     .Multiply => floatResult(lowering, first * second, annotation, "*", at)
@@ -443,7 +443,7 @@ fn floatResult(
     reportProblem lowering, "`{operator}` produces `nan` here, which a compile-time constant cannot hold", at
     return None
   }
-  Some ConstantValue(StaticContents.Floating(value), annotation)
+  ConstantValue StaticContents.Floating(value), annotation
 }
 
 // --- Literals -------------------------------------------------------------------------------------------------------
@@ -471,7 +471,7 @@ fn integerConstant(
     }
   }
   // A literal that does not fit the type it adapts to was already reported by the checker, so nothing is said twice
-  Some ConstantValue(StaticContents.Literal(literal), annotation)
+  ConstantValue StaticContents.Literal(literal), annotation
 }
 
 fn floatConstant(
@@ -483,7 +483,7 @@ fn floatConstant(
 ): ConstantValue? {
   const value = Float.tryFrom(text).ok()?
   // `-value` and not `0.0 - value`: the two differ for zero, and `-0.0` has to keep its sign
-  Some(ConstantValue(StaticContents.Floating(if isNegative { -value } else { value }), annotation))
+  ConstantValue(StaticContents.Floating(if isNegative { -value } else { value }), annotation)
 }
 
 /**
@@ -514,7 +514,7 @@ fn textConstant(
       }
     }
   }
-  Some ConstantValue(StaticContents.Literal(LiteralValue.Text(text)), annotation)
+  ConstantValue StaticContents.Literal(LiteralValue.Text(text)), annotation
 }
 
 /** What one interpolated part of a constant becomes. `None` for everything whose `Show` is not this evaluator's. */
@@ -522,16 +522,16 @@ fn shownConstant(value: ConstantValue): String? {
   if const .Literal(literal) = value.contents {
     match literal {
       .Integer(inner) => {
-        return Some "{inner}"
+        return "{inner}"
       }
       .Text(inner) => {
-        return Some inner
+        return inner
       }
       .Character(inner) => {
-        return Some "{inner}"
+        return "{inner}"
       }
       .Boolean(inner) => {
-        return Some(if inner { "true" } else { "false" })
+        return if inner { "true" } else { "false" }
       }
     }
   }
@@ -548,7 +548,7 @@ fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrT
     .Constant(symbol, owner) => {
       const identifier = staticOfConstant(lowering, symbol, owner)?
       const value = lowering.program.staticAt identifier
-      Some ConstantValue(value.contents, value.annotation)
+      ConstantValue value.contents, value.annotation
     }
     _ => None
   }
@@ -568,7 +568,7 @@ fn staticLayoutOf(var lowering: Lowering, annotation: IrTypeId): LayoutId? {
   if !isStaticLayout(lowering.program, layout) {
     return None
   }
-  Some layout
+  layout
 }
 
 /** `(1, "one")`: a tuple layout whose fields are static values of their own. */
@@ -588,7 +588,7 @@ fn aggregateConstant(
     const value = evaluateConstant(lowering, items[index].value)?
     fields.append internStatic(lowering, value.contents, value.annotation)
   }
-  Some ConstantValue(StaticContents.Aggregate(layout, 0, fields), annotation)
+  ConstantValue StaticContents.Aggregate(layout, 0, fields), annotation
 }
 
 /**
@@ -624,7 +624,7 @@ fn callConstant(
       const field = internStatic lowering, value.contents, value.annotation
       fields.set position, field
     }
-    return Some ConstantValue(StaticContents.Aggregate(layout, 0, fields), annotation)
+    return ConstantValue StaticContents.Aggregate(layout, 0, fields), annotation
   }
   None
 }
@@ -651,7 +651,7 @@ public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: Ty
   var mapping: Map<ParameterId, TypeId> = [:]
   const nothing: List<IrTypeId> = []
   if signature.generics.isEmpty() {
-    return Some ConstantInstance(instanceKeyOf(Instance(symbol, nothing, [])), nothing, mapping)
+    return ConstantInstance instanceKeyOf(Instance(symbol, nothing, [])), nothing, mapping
   }
   const declared = signature.owner?
   const reached = substituted(lowering, owner?)
@@ -664,7 +664,7 @@ public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: Ty
     }
     arguments.append irTypeOfClosed(lowering, given)
   }
-  Some ConstantInstance(instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping)
+  ConstantInstance instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping
 }
 
 /**
@@ -696,7 +696,7 @@ public fn reachedConstantOf(var lowering: Lowering, symbol: SymbolId, owner: Typ
   const bound = match traitConstantBound(lowering, symbol, subject) {
     Some(found) => found
     None => {
-      return ReachedConstant symbol, Some(subject)
+      return ReachedConstant symbol, subject
     }
   }
   if const .Implementation(implementation, _, _) = witnessFor(lowering.checker, subject, bound) {
@@ -707,9 +707,9 @@ public fn reachedConstantOf(var lowering: Lowering, symbol: SymbolId, owner: Typ
         return delegated
       }
     }
-    return ReachedConstant provider, Some(subject)
+    return ReachedConstant provider, subject
   }
-  ReachedConstant symbol, Some(subject)
+  ReachedConstant symbol, subject
 }
 
 /**
@@ -747,13 +747,13 @@ fn delegatedConstantOf(var lowering: Lowering, symbol: SymbolId, subject: TypeId
     return None
   }
   const field = onlyFieldOf(lowering, subject)?
-  const inner = reachedConstantOf lowering, symbol, Some(field)
+  const inner = reachedConstantOf lowering, symbol, field
   const owner = signature.owner?
   const declared = signature.form.result
   if declared == owner {
     var wrapping = inner.wrapping
     wrapping.append subject
-    return Some ReachedConstant(inner.symbol, inner.owner, wrapping)
+    return ReachedConstant inner.symbol, inner.owner, wrapping
   }
   const itself = match lowering.checker.types.form(owner) {
     .Parameter(found) => found
@@ -766,7 +766,7 @@ fn delegatedConstantOf(var lowering: Lowering, symbol: SymbolId, subject: TypeId
   if substitute(lowering.checker.types, declared, mapping) != declared {
     return None
   }
-  Some inner
+  inner
 }
 
 /** The type of the one field of a type that has exactly one and no cases: what a `by` delegation forwards to. */
@@ -785,7 +785,7 @@ fn onlyFieldOf(var lowering: Lowering, subject: TypeId): TypeId? {
   for index in 0..shape.generics.length().min(arguments.length()) {
     mapping.set shape.generics[index], arguments[index]
   }
-  Some substitute(lowering.checker.types, shape.fields[0].annotation, mapping)
+  substitute lowering.checker.types, shape.fields[0].annotation, mapping
 }
 
 /**
@@ -800,7 +800,7 @@ fn wrappedStaticOf(var lowering: Lowering, reached: ReachedConstant): StaticId? 
     const layout = staticLayoutOf(lowering, annotation)?
     current = internStatic lowering, StaticContents.Aggregate(layout, 0, [current]), annotation
   }
-  Some current
+  current
 }
 
 /**
@@ -818,7 +818,7 @@ fn traitConstantBound(var lowering: Lowering, symbol: SymbolId, subject: TypeId)
   }
   const capability = lowering.checker.types.parameter(parameter).owner?
   const arguments = traitArgumentsOf(lowering.checker, subject, capability) ?? []
-  Some lowering.checker.nominal(capability, arguments)
+  lowering.checker.nominal capability, arguments
 }
 
 /**
@@ -842,7 +842,7 @@ fn traitConstantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: Type
     }
     arguments.append irTypeOfClosed(lowering, given)
   }
-  Some ConstantInstance(instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping)
+  ConstantInstance instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping
 }
 
 /** One instantiation of a `const`: what the caches are keyed by, what its name carries, and what its body sees. */
@@ -881,7 +881,7 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
   const symbol = reached.symbol
   const instance = constantInstanceOf(lowering, symbol, reached.owner)?
   if const Some(known) = lowering.constants.get(instance.key) {
-    return Some known
+    return known
   }
   // A constant that could not be evaluated is not evaluated a second time: one root cause gets one message, however
   // many uses of it there are, and a constant in terms of itself has to stop somewhere
@@ -916,7 +916,7 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
   const found = componentOfBinding(lowering, binding.pattern, declaredAt, whole)?
   const identifier = namedStatic lowering, name, found.contents, annotation
   lowering.constants.set instance.key, identifier
-  Some identifier
+  identifier
 }
 
 /**
@@ -945,7 +945,7 @@ fn componentOfBinding(
     const inner = lowering.program.staticAt identifier
     found = ConstantValue inner.contents, inner.annotation
   }
-  Some found
+  found
 }
 
 /**
@@ -957,7 +957,7 @@ public fn fieldPathTo(pattern: Pattern, at: Span): List<Int>? {
     .Binding(_) => {
       if pattern.span.start == at.start {
         const whole: List<Int> = []
-        return Some whole
+        return whole
       }
       None
     }
@@ -973,7 +973,7 @@ fn pathIntoPatterns(items: List<Pattern>, at: Span): List<Int>? {
     if const Some(inner) = fieldPathTo(items[index], at) {
       var steps = [index]
       steps.appendAll inner
-      return Some steps
+      return steps
     }
   }
   None
@@ -994,7 +994,7 @@ fn pathIntoFields(fields: List<FieldPattern>, at: Span): List<Int>? {
     if const Some(inner) = fieldPathTo(fields[index].pattern, at) {
       var steps = [index]
       steps.appendAll inner
-      return Some steps
+      return steps
     }
   }
   None
@@ -1006,7 +1006,7 @@ fn pathIntoFields(fields: List<FieldPattern>, at: Span): List<Int>? {
 public fn integerOf(value: ConstantValue): Int? {
   if const .Literal(literal) = value.contents {
     if const .Integer(found) = literal {
-      return Some found
+      return found
     }
   }
   None
@@ -1015,7 +1015,7 @@ public fn integerOf(value: ConstantValue): Int? {
 /** The value as a `Float`, or `None` when the constant holds something else. */
 public fn floatOf(value: ConstantValue): Float? {
   if const .Floating(found) = value.contents {
-    return Some found
+    return found
   }
   None
 }
@@ -1024,7 +1024,7 @@ public fn floatOf(value: ConstantValue): Float? {
 public fn booleanOf(value: ConstantValue): Bool? {
   if const .Literal(literal) = value.contents {
     if const .Boolean(found) = literal {
-      return Some found
+      return found
     }
   }
   None
@@ -1034,7 +1034,7 @@ public fn booleanOf(value: ConstantValue): Bool? {
 public fn textOf(value: ConstantValue): String? {
   if const .Literal(literal) = value.contents {
     if const .Text(found) = literal {
-      return Some found
+      return found
     }
   }
   None
@@ -1044,7 +1044,7 @@ public fn textOf(value: ConstantValue): String? {
 public fn characterOf(value: ConstantValue): Char? {
   if const .Literal(literal) = value.contents {
     if const .Character(found) = literal {
-      return Some found
+      return found
     }
   }
   None
@@ -1064,7 +1064,7 @@ public fn addedChecked(first: Int, second: Int): Int? {
   if second < 0 && first < smallestInteger - second {
     return None
   }
-  Some(first + second)
+  first + second
 }
 
 /** Subtraction that answers `None` instead of leaving the range of an `Int64`, checked before it runs (BACKEND 3.3). */
@@ -1075,13 +1075,13 @@ public fn subtractedChecked(first: Int, second: Int): Int? {
   if second > 0 && first < smallestInteger + second {
     return None
   }
-  Some(first - second)
+  first - second
 }
 
 /** Multiplication that answers `None` instead of leaving the range of an `Int64`, checked before it runs (BACKEND 3.3). */
 public fn multipliedChecked(first: Int, second: Int): Int? {
   if first == 0 || second == 0 {
-    return Some 0
+    return 0
   }
   if first > 0 {
     if second > 0 {
@@ -1098,7 +1098,7 @@ public fn multipliedChecked(first: Int, second: Int): Int? {
   } else if first < largestInteger / second {
     return None
   }
-  Some(first * second)
+  first * second
 }
 
 /** Whether a value fits into the numeric type it is written at. `Int64` and `UInt64` are as wide as the host's. */

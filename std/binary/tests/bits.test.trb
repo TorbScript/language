@@ -9,31 +9,31 @@ use BitOrder, BitReader, BitWriter, ReadError from "../src/lib"
 group "reading" {
   test "most significant bit first: the first bit read is the highest of the number" {
     var reader = BitReader([0b1011_0010, 0b0111_0000])
-    assert(reader.bits(3) == Ok(0b101))
-    assert(reader.bit() == Ok(true))
-    assert(reader.bits(8) == Ok(0b0010_0111))
+    assert(reader.bits(3) == 0b101)
+    assert(reader.bit() == true)
+    assert(reader.bits(8) == 0b0010_0111)
     assert(reader.remaining() == 4)
-    assert(reader.bits(4) == Ok(0))
+    assert(reader.bits(4) == 0)
     assert(reader.bit() == Fail(ReadError.TruncatedBits(2, 1, 0)))
   }
 
   test "least significant bit first: the first bit read is the lowest of the number, as DEFLATE packs them" {
     var reader = BitReader([0b1011_0010, 0b0111_0000], order: BitOrder.LeastSignificantFirst)
-    assert(reader.bits(3) == Ok(0b010))
-    assert(reader.bit() == Ok(false))
-    assert(reader.bits(8) == Ok(0b0000_1011))
-    assert(reader.bits(4) == Ok(0b0111))
+    assert(reader.bits(3) == 0b010)
+    assert(reader.bit() == false)
+    assert(reader.bits(8) == 0b0000_1011)
+    assert(reader.bits(4) == 0b0111)
   }
 
   test "alignment drops the rest of a byte, and whole bytes follow" {
     for order in [BitOrder.MostSignificantFirst, BitOrder.LeastSignificantFirst] {
       var reader = BitReader([0xFF, 0x12, 0x34, 0x56], order: order)
-      assert(reader.bits(3) == Ok(7))
+      assert(reader.bits(3) == 7)
       assert(reader.position() == 1)
       reader.alignToByte()
-      assert(reader.bytes(2) == Ok([0x12, 0x34]))
+      assert(reader.bytes(2) == [0x12, 0x34])
       assert(reader.position() == 3)
-      assert(reader.bits(8) == Ok(0x56))
+      assert(reader.bits(8) == 0x56)
       assert(reader.bytes(1) == Fail(ReadError.Truncated(4, "a run of bytes", 1, 0)))
     }
   }
@@ -41,19 +41,19 @@ group "reading" {
   test "the widest field, 56 bits, in both orders" {
     const bytes: List<UInt8> = [0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF]
     var high = BitReader bytes
-    assert(high.bits(4) == Ok(0))
-    assert(high.bits(56) == Ok(0x123456789ABCDE))
+    assert(high.bits(4) == 0)
+    assert(high.bits(56) == 0x123456789ABCDE)
     var low = BitReader bytes, order: BitOrder.LeastSignificantFirst
-    assert(low.bits(4) == Ok(1))
-    assert(low.bits(56) == Ok(0xFCDAB896745230))
+    assert(low.bits(4) == 1)
+    assert(low.bits(56) == 0xFCDAB896745230)
   }
 
   test "a read past the end moves nothing" {
     var reader = BitReader([0xA5])
-    assert(reader.bits(5) == Ok(0b10100))
+    assert(reader.bits(5) == 0b10100)
     assert(reader.bits(4) == Fail(ReadError.TruncatedBits(1, 4, 3)))
-    assert(reader.bits(3) == Ok(0b101))
-    assert(reader.bits(0) == Ok(0))
+    assert(reader.bits(3) == 0b101)
+    assert(reader.bits(0) == 0)
   }
 }
 
@@ -97,7 +97,7 @@ group "writing" {
       }
       var reader = BitReader writer.bytes(), order: order
       for width in widths {
-        assert(reader.bits(width) == Ok(0x5A5A5A5A5A5A5A5A & ((1 << width) - 1)))
+        assert(reader.bits(width) == (0x5A5A5A5A5A5A5A5A & ((1 << width) - 1)))
       }
     }
   }

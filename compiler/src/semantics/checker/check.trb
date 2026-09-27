@@ -249,7 +249,7 @@ fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding
   }
   var annotation: TypeId? = None
   if const Some(reference) = binding.annotation {
-    annotation = Some typeFromReference(checker, reference, scope.forType())
+    annotation = typeFromReference checker, reference, scope.forType()
   }
   const found = checkInitializer checker, scope.module, binding.value, scope.selfType, annotation
   // `const None = value`, `const Some(x) = value`: a pattern that names a case declares no name, so nothing above
@@ -324,7 +324,7 @@ fn checkTypeBody(var checker: Checker, scope: TypeScope, at: Span, members: List
   }
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
-  const inner = scope.copy selfType: Some(shape.own)
+  const inner = scope.copy selfType: shape.own
   checkMembers checker, inner, shape.members, members
 }
 
@@ -333,7 +333,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
     match member.kind {
       .Field(field) => {
         const annotation = typeFromReference checker, field.annotation, scope.forType()
-        checkFieldDefault checker, scope, field.default, Some(annotation)
+        checkFieldDefault checker, scope, field.default, annotation
       }
       // The annotation of a `const` member is its signature; a `const` that got no id keeps the ordinary way
       .Constant(binding) => {
@@ -354,7 +354,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
           const annotation = typeFromReference checker, field.annotation, scope.forType()
-          checkFieldDefault checker, scope, field.default, Some(annotation)
+          checkFieldDefault checker, scope, field.default, annotation
         }
       }
     }
@@ -381,14 +381,14 @@ fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDecla
     None => {
       const generics = declareParameters checker, scope.module, None, extension.generics
       const target = typeFromReference checker, extension.target, scope.forType()
-      const inner = scope.copy selfType: Some(target)
+      const inner = scope.copy selfType: target
       const _ = boundsOf checker, generics, extension.generics, extension.whereClauses, inner
       const _ = traitList checker, extension.traits, target, inner
       checkMembers checker, inner, [:], extension.members
       return
     }
   }
-  const inner = scope.copy selfType: Some(implementation.target)
+  const inner = scope.copy selfType: implementation.target
   const members = implementation.members
   checkMembers checker, inner, members, extension.members
 }

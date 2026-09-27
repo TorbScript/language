@@ -66,14 +66,14 @@ group "Punycode" {
       ("-> $1.00 <-", "-> $1.00 <--"),
     ]
     for (text, encoded) in samples {
-      assert(punycodeEncoded(pointsOf(text)) == Some(encoded))
-      assert(punycodeDecoded(encoded) == Some(pointsOf(text)))
+      assert(punycodeEncoded(pointsOf(text)) == encoded)
+      assert(punycodeDecoded(encoded) == pointsOf(text))
     }
   }
 
   test "decoding reads the digits in either case, and copies the basic code points as they are" {
-    assert(punycodeDecoded("bcher-KVA") == Some(pointsOf("bücher")))
-    assert(punycodeDecoded("BCHER-kva") == Some(pointsOf("BüCHER")))
+    assert(punycodeDecoded("bcher-KVA") == pointsOf("bücher"))
+    assert(punycodeDecoded("BCHER-kva") == pointsOf("BüCHER"))
   }
 
   test "text that is not Punycode is refused, not a panic" {
@@ -147,7 +147,7 @@ group "host names and IDNA" {
 
   test "an A-label of a U-label that the mapping would change is refused" {
     // The ASCII of an A-label is lower cased like any other, but `xn--bcher-2pa` is `bÜcher`, whose `Ü` the mapping lower cases
-    assert(punycodeEncoded(pointsOf("bÜcher")) == Some("bcher-2pa"))
+    assert(punycodeEncoded(pointsOf("bÜcher")) == "bcher-2pa")
     assert refused("xn--bcher-2pa.example")
     assert(asciiOf("xn--BCHER-KVA.example") == "xn--bcher-kva.example")
   }
@@ -189,13 +189,13 @@ group "limits" {
       Ok(name) => {
         assert(name.show() == "\\000\\.\\255.test")
         assert(!name.isHostName())
-        assert(DomainName.ofPresentation(name.show()) == Ok(name))
+        assert(DomainName.ofPresentation(name.show()) == name)
       }
       Fail(_) => assert false
     }
     assert DomainName.ofLabels([[]]).isError()
     assert DomainName.ofLabels([repeated("a", 64).bytes().toList()]).isError()
-    assert(DomainName.ofLabels([]) == Ok(DomainName.root))
+    assert(DomainName.ofLabels([]) == DomainName.root)
   }
 }
 
@@ -230,13 +230,13 @@ group "comparison and structure" {
   test "a name is a key of a map without regard to case" {
     var seen: Map<DomainName, Int> = [:]
     seen[presentedOf("Example.TEST")] = 1
-    assert(seen.get(nameOf("example.test")) == Some(1))
+    assert(seen.get(nameOf("example.test")) == 1)
   }
 
   test "parent, subdomain and the counts" {
     const name = nameOf "www.example.test"
     assert(name.labelCount() == 3)
-    assert(name.parent() == Some(nameOf("example.test")))
+    assert(name.parent() == nameOf("example.test"))
     assert name.isSubdomain(of: presentedOf("EXAMPLE.test"))
     assert name.isSubdomain(of: name)
     assert name.isSubdomain(of: DomainName.root)

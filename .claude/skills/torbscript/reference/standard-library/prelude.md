@@ -23,7 +23,7 @@ The prelude needs no import: it is what every other file's imports are measured 
 one by setting `prelude` in `project.trb` (see [std/project](project.md)).
 
 ```trb check
-const values: List<Int?> = [Some(1), None, Some(3)]
+const values: List<Int?> = [1, None, 3]
 print(values.filterMap { _ }.sum())
 ```
 

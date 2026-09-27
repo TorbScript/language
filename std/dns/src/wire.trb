@@ -45,7 +45,7 @@ extend<Value> Result<Value, ReadError> {
   /** What was read, or the failure of `scope` that says the bytes end inside `part`. */
   fn inside(part: String, scope: Scope): Result<Value, DnsError> {
     match self {
-      Ok(value) => Ok value
+      Ok(value) => value
       Fail(problem) => Fail scope.failure(part, problem.offset())
     }
   }
@@ -57,7 +57,7 @@ fn nameOf(var reader: ByteReader, message: Bytes, part: String, scope: Scope): R
   const (name, end) = nameAt(message, at, part)?
   // A pointer may lead anywhere in the message, but the name itself has to end inside what the reader may read
   match reader.skip(end - at) {
-    Ok(_) => Ok name
+    Ok(_) => name
     Fail(_) => Fail scope.failure(part, at)
   }
 }
@@ -117,7 +117,7 @@ fn nameAt(bytes: Bytes, start: Int, part: String): Result<(DomainName, Int), Dns
     position = position + 1 + size
   }
   const name = DomainName.ofLabels(labels)?
-  Ok((name, end))
+  (name, end)
 }
 
 /** The fixed part of a record: its owner, type, class and time to live, and how many bytes of data follow. */
@@ -136,14 +136,14 @@ fn entryOf(var reader: ByteReader, message: Bytes): Result<Entry, DnsError> {
   const classCode = Int.from(reader.uint16().inside("the class of a record", sections)?)
   const timeToLive = Int.from(reader.uint32().inside("the time to live of a record", sections)?)
   const length = Int.from(reader.uint16().inside("the data length of a record", sections)?)
-  Ok Entry(name, typeCode, classCode, timeToLive, length)
+  Entry name, typeCode, classCode, timeToLive, length
 }
 
 /** A reader over the data of `entry`, and `reader` moved past it. */
 fn dataReaderOf(var reader: ByteReader, entry: Entry): Result<ByteReader, DnsError> {
   // The part is named only where the data is cut short, so that no record pays for the text of its failure
   match reader.limited(entry.length) {
-    Ok(data) => Ok data
+    Ok(data) => data
     Fail(problem) => Fail DnsError.Truncated(problem.offset(), "the data of a {RecordType.of(entry.typeCode)} record")
   }
 }
@@ -165,7 +165,7 @@ fn recordOf(var reader: ByteReader, message: Bytes, entry: Entry): Result<Record
     const reason = "the data is {entry.length} bytes long and ends after {data.position()}"
     return Fail DnsError.InvalidRecord(recordType, start, reason)
   }
-  Ok Record(entry.name, RecordClass.of(entry.classCode), entry.timeToLive, decoded)
+  Record entry.name, RecordClass.of(entry.classCode), entry.timeToLive, decoded
 }
 
 /** Reads a whole message. */
@@ -212,18 +212,18 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
       return Fail DnsError.InvalidMessage(start, "the owner of an OPT record is the root (RFC 6891 6.1.2)")
     }
     extendedCode = entry.timeToLive >> 24 & 255
-    edns = Some(Edns(
+    edns = Edns(
       payloadSize: entry.classCode,
       version: entry.timeToLive >> 16 & 255,
       dnssecOk: entry.timeToLive >> 15 & 1 == 1,
       options: optionsOf(data)?,
-    ))
+    )
   }
   if reader.remaining() > 0 {
     const reason = "the message is {bytes.length()} bytes long and ends after {reader.position()}"
     return Fail DnsError.InvalidMessage(reader.position(), reason)
   }
-  Ok(Message(
+  Message(
     identifier: identifier,
     kind: if flags >> 15 & 1 == 1 { MessageKind.Response } else { MessageKind.Query },
     operation: Operation.of(flags >> 11 & 15),
@@ -239,27 +239,27 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
     authority: authority,
     additional: additional,
     edns: edns,
-  ))
+  )
 }
 
 /** The options of an OPT record: a code, a length and that many bytes, until the data ends. */
 fn optionsOf(data: ByteReader): Result<List<EdnsOption>, DnsError> {
   var reader = data
-  const scope = Scope Some(RecordType.Opt), reader.offset()
+  const scope = Scope RecordType.Opt, reader.offset()
   var options: List<EdnsOption> = []
   while reader.remaining() > 0 {
     const code = Int.from(reader.uint16().inside("an option code", scope)?)
     const length = Int.from(reader.uint16().inside("an option length", scope)?)
     options.append EdnsOption(code, reader.bytes(length).inside("the data of an option", scope)?)
   }
-  Ok options
+  options
 }
 
 /** The data of a record of `recordType`, which `reader` holds and nothing else. */
 fn dataOf(message: Bytes, recordType: RecordType, var reader: ByteReader): Result<RecordData, DnsError> {
   const start = reader.offset()
   const length = reader.remaining()
-  const scope = Scope Some(recordType), start
+  const scope = Scope recordType, start
   const decoded = match recordType {
     .A => {
       if length != 4 {
@@ -334,7 +334,7 @@ fn dataOf(message: Bytes, recordType: RecordType, var reader: ByteReader): Resul
     }
     _ => RecordData.Unknown(recordType, reader.bytes(length).inside("the data", scope)?)
   }
-  Ok decoded
+  decoded
 }
 
 /** An ASCII letter or digit. */
@@ -364,7 +364,7 @@ fn bindingOf(
     previous = key
     parameters.append(parameterOf(recordType, scope.start, key, value)?)
   }
-  Ok((priority, target, parameters))
+  (priority, target, parameters)
 }
 
 /** One service parameter, typed where RFC 9460 defines its key. */
@@ -380,7 +380,7 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
       while reader.remaining() > 0 {
         keys.append Int.from(reader.uint16().mapError({ _ => broken })?)
       }
-      Ok ServiceParameter.Mandatory(keys)
+      ServiceParameter.Mandatory keys
     }
     1 => {
       var protocols: List<String> = []
@@ -393,26 +393,26 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
         match textOf(protocol) {
           Ok(text) => protocols.append text
           Fail(_) => {
-            return Ok ServiceParameter.Other(key, value)
+            return ServiceParameter.Other key, value
           }
         }
       }
       if protocols.isEmpty() {
         return Fail broken
       }
-      Ok ServiceParameter.Alpn(protocols)
+      ServiceParameter.Alpn protocols
     }
     2 => {
       if !value.isEmpty() {
         return Fail broken
       }
-      Ok ServiceParameter.NoDefaultAlpn
+      ServiceParameter.NoDefaultAlpn
     }
     3 => {
       if value.length() != 2 {
         return Fail broken
       }
-      Ok ServiceParameter.Port(Int.from(reader.uint16().mapError({ _ => broken })?))
+      ServiceParameter.Port(Int.from(reader.uint16().mapError({ _ => broken })?))
     }
     4 => {
       if value.isEmpty() || value.length() % 4 != 0 {
@@ -423,9 +423,9 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
         const octets = reader.bytes(4).mapError({ _ => broken })?
         addresses.append Ipv4Address.of(octets[0], octets[1], octets[2], octets[3])
       }
-      Ok ServiceParameter.Ipv4Hint(addresses)
+      ServiceParameter.Ipv4Hint addresses
     }
-    5 => Ok ServiceParameter.EncryptedClientHello(value)
+    5 => ServiceParameter.EncryptedClientHello value
     6 => {
       if value.isEmpty() || value.length() % 16 != 0 {
         return Fail broken
@@ -443,9 +443,9 @@ fn parameterOf(recordType: RecordType, start: Int, key: Int, value: Bytes): Resu
           }
         }
       }
-      Ok ServiceParameter.Ipv6Hint(addresses)
+      ServiceParameter.Ipv6Hint addresses
     }
-    _ => Ok ServiceParameter.Other(key, value)
+    _ => ServiceParameter.Other key, value
   }
 }
 
@@ -460,7 +460,7 @@ fn narrowed<Width: TryFrom<Int, NumberRangeError> & Integer & Into<Int>>(
   what: String,
 ): Result<Width, DnsError> {
   match Width.tryFrom(value) {
-    Ok(width) => Ok width
+    Ok(width) => width
     Fail(_) => {
       const largest: Int = Width.maximum.into()
       Fail DnsError.Unencodable("{what} is {value}, outside 0 to {largest}")
@@ -713,7 +713,7 @@ fn parameterValue(parameter: ServiceParameter): Result<Bytes, DnsError> {
     }
     .Other(_, bytes) => value.append bytes
   }
-  Ok value.bytes()
+  value.bytes()
 }
 
 /** Nothing where `value` fits the width type of its field, and otherwise the refusal that names `what`. */
@@ -770,7 +770,7 @@ public fn encodedMessage(message: Message): Result<Bytes, DnsError> {
   if const Some(edns) = message.edns {
     writeEdns writer.output, edns, extendedCode
   }
-  Ok writer.output.bytes()
+  writer.output.bytes()
 }
 
 // --- Queries and responses -------------------------------------------------------------------------------------------
@@ -835,12 +835,12 @@ public fn readResponse(bytes: Bytes, query: Bytes): Result<Message, DnsError> {
     if response.responseCode == ResponseCode.NoError {
       return Fail DnsError.UnexpectedResponse("an answer without the question it answers")
     }
-    return Ok response
+    return response
   }
   if response.questions != asked.questions {
     const answered = response.questions.map({ _.show() }).joined(separator: ", ")
     const questioned = asked.questions.map({ _.show() }).joined(separator: ", ")
     return Fail DnsError.UnexpectedResponse("the question is `{answered}`, and the query asked `{questioned}`")
   }
-  Ok response
+  response
 }

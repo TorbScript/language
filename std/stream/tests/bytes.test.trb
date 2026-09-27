@@ -63,7 +63,7 @@ fn cutAt(text: String, at: Int): List<List<UInt8>> {
 group "textOf" {
   test "a whole chunk of UTF-8 is text" {
     const bytes: List<UInt8> = [104, 105]
-    assert(textOf(bytes) == Ok("hi"))
+    assert(textOf(bytes) == "hi")
   }
 
   test "an incomplete sequence at the end fails at the byte it starts on" {
@@ -79,36 +79,36 @@ group "textOf" {
 
 group "lines" {
   test "a line split across two chunks is one line" {
-    assert(linesOf(cutAt("one\ntwo\n", 5)) == [Ok("one"), Ok("two")])
+    assert(linesOf(cutAt("one\ntwo\n", 5)) == ["one", "two"])
   }
 
   test "a last line without a line break is still a line" {
-    assert(linesOf(cutAt("one\ntwo", 5)) == [Ok("one"), Ok("two")])
+    assert(linesOf(cutAt("one\ntwo", 5)) == ["one", "two"])
   }
 
   test "a CRLF file reads like an LF file" {
-    assert(linesOf(cutAt("one\r\ntwo\r\n", 4)) == [Ok("one"), Ok("two")])
+    assert(linesOf(cutAt("one\r\ntwo\r\n", 4)) == ["one", "two"])
   }
 
   test "a broken line fails at a byte of that line, and the next line still arrives" {
     const chunks: List<List<UInt8>> = [[0xFF, 10, 104, 105]]
-    assert(linesOf(chunks) == [Fail(Utf8Error(0)), Ok("hi")])
+    assert(linesOf(chunks) == [Fail(Utf8Error(0)), "hi"])
   }
 }
 
 group "decodedText" {
   test "an incomplete sequence at the end of the stream carries the offset it starts on" {
     const chunks: List<List<UInt8>> = [[104, 105], [0xE2, 0x82]]
-    assert(decodedOf(chunks) == [Ok("hi"), Fail(Utf8Error(2))])
+    assert(decodedOf(chunks) == ["hi", Fail(Utf8Error(2))])
   }
 
   test "the offset counts the whole stream and not the last chunk" {
     const chunks: List<List<UInt8>> = [[104, 105], [106, 107], [0xF0, 0x9F]]
-    assert(decodedOf(chunks) == [Ok("hi"), Ok("jk"), Fail(Utf8Error(4))])
+    assert(decodedOf(chunks) == ["hi", "jk", Fail(Utf8Error(4))])
   }
 
   test "a byte that can start nothing counts from the start of the stream as well" {
     const chunks: List<List<UInt8>> = [[104, 105], [106, 0xFF]]
-    assert(decodedOf(chunks) == [Ok("hi"), Fail(Utf8Error(3))])
+    assert(decodedOf(chunks) == ["hi", Fail(Utf8Error(3))])
   }
 }

@@ -129,7 +129,7 @@ fn parseVariantField(var parser: Parser): FieldPattern {
   var label: Name? = None
   // A label is the name of a field, and a field may be named after a reserved word: `.Click(type: kind)`
   if isNameOrKeyword(parser.kind()) && parser.kindAt(1) == TokenKind.Colon {
-    label = Some parser.nameOrKeyword()
+    label = parser.nameOrKeyword()
     parser.bump()
   }
   FieldPattern label, parsePattern(parser)
@@ -147,13 +147,13 @@ fn parseListPattern(var parser: Parser): PatternKind {
     }
     var name: Name? = None
     if parser.isAt(TokenKind.Identifier) {
-      name = Some parser.name()
+      name = parser.name()
     }
     if rest.isSome() {
       const at = parser.previousSpan()
       parser.error "A list pattern can only have one `...`", at
     }
-    rest = Some RestPattern(count, name)
+    rest = RestPattern count, name
     None
   })
   PatternKind.ListPattern(items.filterMap({ _ }).toList(), rest)

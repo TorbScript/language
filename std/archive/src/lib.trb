@@ -65,7 +65,7 @@ public fn tarred(entries: List<TarEntry>): Result<Bytes, ArchiveError> {
     padded(writer, [], (512 - entry.bytes.length() % 512) % 512)
   }
   padded writer, [], 1024
-  Ok writer.bytes()
+  writer.bytes()
 }
 
 /**
@@ -83,13 +83,13 @@ public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
     const at = reader.position()
     const block = reader.bytes(512)?
     if block.all({ _ == 0 }) {
-      return Ok entries
+      return entries
     }
     var sum = 0
     for index in 0..512 {
       sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from block[index] }
     }
-    if octalAt(block, 148, 8) != Some(sum) {
+    if octalAt(block, 148, 8) != sum {
       return Fail ArchiveError("a header whose checksum does not match", at)
     }
     const size = match octalAt(block, 124, 12) {
@@ -120,7 +120,7 @@ public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
     }
   }
   if bytes.isEmpty() {
-    return Ok entries
+    return entries
   }
   Fail ArchiveError("the archive ends without its two blocks of zeros", reader.position())
 }
@@ -221,7 +221,7 @@ fn octalAt(block: Bytes, start: Int, width: Int): Int? {
   if digits == 0 {
     return None
   }
-  Some value
+  value
 }
 
 /** The text of a field, up to its first NUL. */
@@ -231,7 +231,7 @@ fn fieldText(block: Bytes, start: Int, width: Int, at: Int): Result<String, Arch
     end = end + 1
   }
   match textOf(block[start..end]) {
-    Ok(text) => Ok text
+    Ok(text) => text
     Fail(_) => Fail ArchiveError("a path that is not UTF-8", at + start)
   }
 }

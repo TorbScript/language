@@ -95,7 +95,7 @@ type Term {
     if positive {
       return nonEmpty versions.intersection(other.versions), true
     }
-    Some Term(package, versions.union(other.versions), false)
+    Term package, versions.union(other.versions), false
   }
 
   /** This term and not `other`. */
@@ -107,7 +107,7 @@ type Term {
     if isPositive && found.isEmpty() {
       return None
     }
-    Some Term(package, found, isPositive)
+    Term package, found, isPositive
   }
 
   /** Whether everything this term allows is allowed by `other`. */
@@ -201,7 +201,7 @@ type Solver {
 
   var fn solve(): Result<Resolution, String> {
     add Incompatibility([Term(root, VersionSet.exactly(rootVersion), false)], Cause.Root)
-    var next: String? = Some root
+    var next: String? = root
     var steps = 0
     while const Some(package) = next {
       steps = steps + 1
@@ -218,7 +218,7 @@ type Solver {
         versions.set name, version
       }
     }
-    Ok Resolution(versions)
+    Resolution versions
   }
 
   var fn add(incompatibility: Incompatibility): Int {
@@ -274,7 +274,7 @@ type Solver {
           if unsatisfied.isSome() {
             return Propagated.Nothing
           }
-          unsatisfied = Some term
+          unsatisfied = term
         }
         .Subset => {}
       }
@@ -282,7 +282,7 @@ type Solver {
     match unsatisfied {
       None => Propagated.Conflict
       Some(term) => {
-        assign term.inverse(), Some(position)
+        assign term.inverse(), position
         Propagated.Derived term.package
       }
     }
@@ -345,8 +345,8 @@ type Solver {
         continue
       }
       accumulated = match accumulated {
-        Some(earlier) => Some(earlier.intersection(assignment.term) ?? assignment.term)
-        None => Some assignment.term
+        Some(earlier) => earlier.intersection(assignment.term) ?? assignment.term
+        None => assignment.term
       }
       if const Some(found) = accumulated {
         if found.satisfies(term) {
@@ -402,21 +402,21 @@ type Solver {
         const found = satisfier term
         match mostRecent {
           None => {
-            mostRecentTerm = Some term
-            mostRecent = Some found
+            mostRecentTerm = term
+            mostRecent = found
           }
           Some(recent) => {
             if recent.position < found.position {
               previousLevel = previousLevel.max recent.level
-              mostRecentTerm = Some term
-              mostRecent = Some found
+              mostRecentTerm = term
+              mostRecent = found
               difference = None
             } else {
               previousLevel = previousLevel.max found.level
             }
           }
         }
-        if mostRecentTerm == Some(term) {
+        if mostRecentTerm == term {
           if const Some(recent) = mostRecent {
             difference = recent.term.difference term
             if const Some(rest) = difference {
@@ -436,12 +436,12 @@ type Solver {
         Some(cause) => cause
         None => {
           backtrack previousLevel
-          return Ok current
+          return current
         }
       }
       if previousLevel < satisfierFound.level {
         backtrack previousLevel
-        return Ok current
+        return current
       }
       var terms: List<Term> = []
       for term in incompatibility.terms {
@@ -527,7 +527,7 @@ type Solver {
       Some(found) => found
       None => {
         add Incompatibility([term], Cause.NoVersions(noteOf(package, term.versions)))
-        return Some package
+        return package
       }
     }
     var conflict = false
@@ -542,13 +542,13 @@ type Solver {
     if !conflict {
       decide package, version
     }
-    Some package
+    package
   }
 
   /** The candidates of a package within `versions` that may be chosen, lowest first. */
   fn allowedOf(package: String, versions: VersionSet): List<Candidate> {
     const known = candidates.get(package) ?? []
-    known.filter({ versions.contains(_.version) && (_.excluded.isNone() || preferred.get(package) == Some(_.version)) }).toList()
+    known.filter({ versions.contains(_.version) && (_.excluded.isNone() || preferred.get(package) == _.version) }).toList()
   }
 
   /** Why a range of a package has nothing to choose from: which versions are there and excluded. */
@@ -706,7 +706,7 @@ type Explanation {
     if numbered {
       const number = numbers.length() + 1
       numbers.set position, number
-      lines.append((text: text, number: Some(number)))
+      lines.append((text: text, number: number))
     } else {
       lines.append((text: text, number: None))
     }
@@ -729,7 +729,7 @@ type Explanation {
       const conflictLine = numbers.get conflict
       const otherLine = numbers.get other
       if const (Some(first), Some(second)) = (conflictLine, otherLine) {
-        record position, "Because {joinedOf(conflict, other, Some(first), Some(second))}, {text}.", numbered
+        record position, "Because {joinedOf(conflict, other, first, second)}, {text}.", numbered
         return
       }
       if conflictLine.isSome() || otherLine.isSome() {
@@ -762,7 +762,7 @@ type Explanation {
       const derived = if conflictDerived { conflict } else { other }
       const external = if conflictDerived { other } else { conflict }
       if const Some(line) = numbers.get(derived) {
-        record position, "Because {joinedOf(external, derived, None, Some(line))}, {text}.", numbered
+        record position, "Because {joinedOf(external, derived, None, line)}, {text}.", numbered
         return
       }
       if isCollapsible(derived) {

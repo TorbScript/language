@@ -107,7 +107,7 @@ public fn resolveName(
   }
   // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one
   if const Some(receiver) = checker.receiverType {
-    if const Some(candidate) = lookupMember(checker, receiver, text, Some(at)) {
+    if const Some(candidate) = lookupMember(checker, receiver, text, at) {
       return implicitTarget checker, candidate, text, at
     }
   }
@@ -318,7 +318,7 @@ fn callableTarget(var checker: Checker, symbol: SymbolId, text: String, explicit
   Target(
     Resolution.Callable(symbol, [], Dispatch.Direct),
     checker.functionType(signature.form),
-    form: Some(signature.form),
+    form: signature.form,
     name: text,
     generics: signature.generics,
     bounds: signature.bounds,
@@ -378,7 +378,7 @@ fn traitNamespaceTarget(
   const arguments = argumentsFor checker, generics, explicit, wanted, text, at
   const bound = checker.nominal symbol, arguments
   const own = checker.types.intern TypeForm.Traits([bound])
-  Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
+  Target Resolution.TypeOf(own), own, name: text, constructs: own
 }
 
 /** `Target.from(self)` inside a generic function: the members of the bounds, reached through the caller's witness. */
@@ -395,7 +395,7 @@ fn parameterNamespaceTarget(var checker: Checker, symbol: SymbolId, text: String
   if const Some(value) = checker.constantValueType(identifier) {
     return Target Resolution.TypeOf(own), value, name: text
   }
-  Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
+  Target Resolution.TypeOf(own), own, name: text, constructs: own
 }
 
 /**
@@ -437,7 +437,7 @@ fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? 
   match checker.types.form(annotation) {
     .Nominal(head, arguments) => {
       if head == symbol {
-        return Some arguments
+        return arguments
       }
       None
     }
@@ -445,7 +445,7 @@ fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? 
       for bound in bounds {
         if const .Nominal(head, arguments) = checker.types.form(bound) {
           if head == symbol {
-            return Some arguments
+            return arguments
           }
         }
       }
@@ -469,13 +469,13 @@ public fn typeTarget(var checker: Checker, own: TypeId, text: String): Target {
     Some(found) => Target(
       Resolution.Construct(own),
       checker.functionType(found),
-      form: Some(found),
+      form: found,
       name: text,
-      constructs: Some(own),
+      constructs: own,
       bounds: appliedBoundsOf(checker, own),
     )
     // A type with cases is constructed through them, so the name itself is only a namespace
-    None => Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
+    None => Target Resolution.TypeOf(own), own, name: text, constructs: own
   }
   noteDefaultSource checker, built
   built
@@ -511,7 +511,7 @@ fn appliedBoundsOf(var checker: Checker, own: TypeId): List<Bound> {
 /** A function type is what makes a value callable: a binding or a field that holds a closure. */
 public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
   if const .Function(form) = checker.types.form(annotation) {
-    return Some form
+    return form
   }
   None
 }
@@ -523,7 +523,7 @@ public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
  */
 fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
   if const Some(found) = candidate.form {
-    return Some found
+    return found
   }
   const form = formOf(checker, candidate.annotation)?
   for parameter in form.parameters {
@@ -531,7 +531,7 @@ fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
       return None
     }
   }
-  Some form
+  form
 }
 
 // --- Messages -------------------------------------------------------------------------------------------------------
@@ -759,11 +759,11 @@ fn openRangeNote(checker: Checker, receiver: TypeId, text: String): String? {
   }
   const named = Some symbol
   if checker.wellKnown.rangeFrom == named && (text == "length" || text == "isEmpty") {
-    return Some "`0..` has no end, so it has no length: write one (`0..10`)"
+    return "`0..` has no end, so it has no length: write one (`0..10`)"
   }
   if checker.wellKnown.rangeTo == named {
     if text == "length" || text == "isEmpty" || text == "iterate" {
-      return Some "`..10` has neither a start nor a length: write the start (`0..10`)"
+      return "`..10` has neither a start nor a length: write the start (`0..10`)"
     }
   }
   None
@@ -830,7 +830,7 @@ fn nearestMember(var checker: Checker, receiver: TypeId, text: String): String? 
     const found = editDistance(name, text, distance - 1)
     if found < distance {
       distance = found
-      best = Some name
+      best = name
     }
   }
   best

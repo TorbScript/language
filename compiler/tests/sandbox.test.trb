@@ -177,7 +177,7 @@ group "The program of the scripts" {
   }
 
   test "a script that runs to its end configures the receiver, and the host reads it back" {
-    assert(run("configures.trb", readingGrant()) == Ok("example.test:9000"))
+    assert(run("configures.trb", readingGrant()) == "example.test:9000")
   }
 
   test "the grant is text the runtime reads, one setting per line" {
@@ -204,7 +204,7 @@ group "Limits" {
 
   test "after a stop the same program runs the next script as if nothing had happened" {
     const _ = run "loops.trb", readingGrant().copy(steps: 1000)
-    assert(run("configures.trb", readingGrant()) == Ok("example.test:9000"))
+    assert(run("configures.trb", readingGrant()) == "example.test:9000")
   }
 }
 
@@ -225,7 +225,7 @@ group "Panics are the script's, never the host's" {
 
 group "Files" {
   test "a relative path is read against the base, inside the root" {
-    assert(run("reads.trb", readingGrant()) == Ok("from.file:8080"))
+    assert(run("reads.trb", readingGrant()) == "from.file:8080")
   }
 
   test "a path that leaves the root is refused, with the path and the root" {
@@ -245,19 +245,19 @@ group "Files" {
 
   test "a root to write is one to read as well" {
     const grant = Grant base: prepared.directory, readWrite: [prepared.directory]
-    assert(run("writes.trb", grant) == Ok("localhost:1"))
-    assert(run("reads.trb", grant) == Ok("from.file:8080"))
+    assert(run("writes.trb", grant) == "localhost:1")
+    assert(run("reads.trb", grant) == "from.file:8080")
   }
 }
 
 group "The environment" {
   test "a variable no pattern matches reads as unset" {
-    assert(run("environment.trb", readingGrant()) == Ok("unset:8080"))
+    assert(run("environment.trb", readingGrant()) == "unset:8080")
   }
 
   test "a pattern with a star matches every name it is the prefix of" {
     const answer = run "environment.trb", readingGrant().copy(environment: ["PA*"])
-    assert(answer != Ok("unset:8080"))
+    assert(answer != "unset:8080")
     assert answer.isOk()
   }
 }

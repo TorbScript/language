@@ -96,7 +96,7 @@ public type Json {
     if !parser.atEnd() {
       return Fail DecodeError("there is more than one value in this text")
     }
-    Ok value
+    value
   }
 }
 
@@ -138,7 +138,7 @@ public type JsonEncoder with Encoder {
 
   /** JSON has no bytes, so they travel as a sequence of numbers - the one lossy step, and it is JSON's. */
   var fn bytes(value: List<UInt8>) {
-    sequence Some(value.length())
+    sequence value.length()
     for byte in value {
       int Int64.from(byte)
     }
@@ -314,7 +314,7 @@ type JsonParser {
       return array()
     }
     if character == '"' {
-      return Ok EncodedValue.String(text()?)
+      return EncodedValue.String(text()?)
     }
     if character == 't' || character == 'f' || character == 'n' {
       return word()
@@ -345,7 +345,7 @@ type JsonParser {
       return Fail DecodeError("this object is not closed")
     }
     position = position + 1
-    Ok EncodedValue.Record("", fields)
+    EncodedValue.Record "", fields
   }
 
   private var fn array(): Result<EncodedValue, DecodeError> {
@@ -365,7 +365,7 @@ type JsonParser {
       return Fail DecodeError("this array is not closed")
     }
     position = position + 1
-    Ok EncodedValue.Sequence(items)
+    EncodedValue.Sequence items
   }
 
   private var fn text(): Result<String, DecodeError> {
@@ -395,7 +395,7 @@ type JsonParser {
       return Fail DecodeError("this text is not closed")
     }
     position = position + 1
-    Ok String.from(out)
+    String.from out
   }
 
   private var fn word(): Result<EncodedValue, DecodeError> {
@@ -406,9 +406,9 @@ type JsonParser {
     }
     const found = String.from out
     match found {
-      "true" => Ok EncodedValue.Bool(true)
-      "false" => Ok EncodedValue.Bool(false)
-      "null" => Ok EncodedValue.Nothing
+      "true" => EncodedValue.Bool true
+      "false" => EncodedValue.Bool false
+      "null" => EncodedValue.Nothing
       other => Fail DecodeError("`{other}` is not a JSON value")
     }
   }

@@ -44,8 +44,8 @@ public type FrontMatter {
   fn text(key: String): String? {
     match at(key) {
       Some(field) => match field.value {
-        .Text(value) => Some value
-        .Number(value) => Some "{value}"
+        .Text(value) => value
+        .Number(value) => "{value}"
         .Items(_) => None
       }
       None => None
@@ -55,7 +55,7 @@ public type FrontMatter {
   fn number(key: String): Int? {
     match at(key) {
       Some(field) => match field.value {
-        .Number(value) => Some value
+        .Number(value) => value
         _ => None
       }
       None => None
@@ -176,7 +176,7 @@ public fn readPage(path: String, text: String): ReadPage {
       Some(index) => {
         const read = readFrontMatter path, lines, 1, index
         problems.appendAll read.problems
-        frontMatter = Some read.frontMatter
+        frontMatter = read.frontMatter
         bodyStart = index + 1
       }
       None => {
@@ -193,7 +193,7 @@ fn closingDelimiter(lines: List<String>): Int? {
   var index = 1
   while index < lines.length() {
     if lines[index].trim() == "---" {
-      return Some index
+      return index
     }
     index = index + 1
   }
@@ -229,7 +229,7 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
     }
   }
   const root = document.root
-  if root.text() == Some("") {
+  if root.text() == "" {
     return ReadFields FrontMatter([]), problems
   }
   var fields: List<Field> = []
@@ -273,9 +273,9 @@ fn fieldValue(path: String, key: String, node: YamlNode, from: Int): Result<Fiel
         return Fail DocumentationProblem(path, number, "`{key}` is a value on one line, plain or in double quotes")
       }
       if style == ScalarStyle.Plain && isNumber(text) {
-        return Ok FieldValue.Number(numberOf(text))
+        return FieldValue.Number numberOf(text)
       }
-      Ok FieldValue.Text(text)
+      FieldValue.Text text
     }
     .Sequence(items, _) => {
       var values: List<String> = []
@@ -288,7 +288,7 @@ fn fieldValue(path: String, key: String, node: YamlNode, from: Int): Result<Fiel
           }
         }
       }
-      Ok FieldValue.Items(values)
+      FieldValue.Items values
     }
     .Mapping(_, _) => Fail DocumentationProblem(path, number, "`{key}` holds a mapping. A value of the front matter is a scalar or a list")
     .Alias(_) => Fail DocumentationProblem(path, number, "`{key}` is an alias, which the front matter does not have")
@@ -351,15 +351,15 @@ fn lineProblems(path: String, lines: List<String>, from: Int, to: Int): List<Doc
 fn scalarProblem(path: String, line: Int, text: String): DocumentationProblem? {
   if text.startsWith("\"") {
     if !text.endsWith("\"") || text.byteLength() < 2 {
-      return Some DocumentationProblem(path, line, "A quoted value ends with `\"` on the same line")
+      return DocumentationProblem path, line, "A quoted value ends with `\"` on the same line"
     }
     return None
   }
   if text.contains(": ") {
-    return Some DocumentationProblem(path, line, "`{text}` contains `: ` and has to be written in double quotes")
+    return DocumentationProblem path, line, "`{text}` contains `: ` and has to be written in double quotes"
   }
   if startsWithIndicator(text) {
-    return Some DocumentationProblem(path, line, "`{text}` starts with a character YAML reserves and has to be written in double quotes")
+    return DocumentationProblem path, line, "`{text}` starts with a character YAML reserves and has to be written in double quotes"
   }
   None
 }

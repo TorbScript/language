@@ -19,7 +19,7 @@ the shape" - by convention of the standard library, not because a trait ties the
 ## Example
 
 ```trb check
-const found: Int? = Some 3
+const found: Int? = 3
 print(found.map { _ * 2 })
 
 const numbers: List<Int> = [1, 2, 3]

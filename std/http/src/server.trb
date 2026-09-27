@@ -77,7 +77,7 @@ public shared type Server with Close {
     tls: ServerIdentity? = None,
   ): Result<Server, HttpError> {
     const listener = TcpListener.listen(address)?
-    Ok Server(listener, handler, limits, ServerState(), tls)
+    Server listener, handler, limits, ServerState(), tls
   }
 
   /** Where it listens. */
@@ -102,7 +102,7 @@ public shared type Server with Close {
     var started: List<Task<Result<Void, HttpError>>> = []
     match identity {
       Some(proof) => {
-        started.append serveAccepted(listener.acceptor(), handler, limits, Some(proof))
+        started.append serveAccepted(listener.acceptor(), handler, limits, proof)
       }
       None => {
         const count = if Workers.count() < 1 { 1 } else { Workers.count() }
@@ -254,7 +254,7 @@ fn serveAccepted(
       }
     }
     const serving = Serving()
-    serving.task = Some serveTracked(stream, handler, limits, state, serving, identity)
+    serving.task = serveTracked stream, handler, limits, state, serving, identity
     var kept: List<Serving> = []
     for known in connections {
       if !known.done {
@@ -360,11 +360,11 @@ fn serveConnection(
     const keepAlive = keepsAlive request.headers, request.version
     // A request without a body leaves the connection idle while its handler runs: it is read beside the handler, so a
     // client that goes away cancels its handler (WEB.md's fourth request)
-    const watched = request.body.length() == Some(0) && !connection.hasBuffered()
+    const watched = request.body.length() == 0 && !connection.hasBuffered()
     var running = handler request
     var watching: Task<Void>? = None
     if watched {
-      watching = Some watchPeer(connection, running)
+      watching = watchPeer connection, running
     }
     const outcome = running.result()
     if const Some(watcher) = watching {
@@ -423,13 +423,13 @@ fn requestOf(
     return Fail HttpError.malformed("an HTTP/1.1 request has exactly one `Host`")
   }
   const body = match requestFraming(headers, line.version)? {
-    .Fixed(length) => Body.of FixedReader.of(connection, length), length: Some(length)
+    .Fixed(length) => Body.of FixedReader.of(connection, length), length: length
     .Chunked => Body.of ChunkedReader.of(connection)
     .Empty => Body.empty()
     .UntilEnd => Body.empty()
   }
   const uri = targetUriOf(line.target, headers.get("Host") ?? "", secure)?
-  Ok Request(line.method, line.target, uri, headers, body, remote: remote, version: line.version)
+  Request line.method, line.target, uri, headers, body, remote: remote, version: line.version
 }
 
 /**
@@ -456,7 +456,7 @@ fn targetUriOf(target: String, host: String, secure: Bool): Result<Uri, HttpErro
       if uri.scheme() != "http" && uri.scheme() != "https" {
         return Fail HttpError.malformed("the target `{target}` is not an HTTP URI")
       }
-      Ok uri
+      uri
     }
     Fail(problem) => Fail HttpError.malformed("the target `{target}` and the host `{host}` make no URI: {problem}")
   }

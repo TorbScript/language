@@ -21,38 +21,38 @@ use BuildOptions, buildTree, buildFailedCode, entryModulesOf, outputPathOf, pool
 public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   if options.onlyC || options.target.isSome() {
     printError "error: `--embed-vm` builds a binary for this machine, and takes neither `--emit-c` nor `--target`"
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const tree = readSourceTree(options.paths)?
   const checked = check(tree, absolutePaths(options.paths)?, false, true)
   if reportChecked(checked) > 0 {
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const modules = match entryModulesOf(checked, tree, options) {
     Some(found) => found
     None => {
       printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const program = match bytecodeOf(checked, tree, modules) {
     Some(found) => found
     None => {
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const compiler = match findCompilerSources(options.paths) {
     Some(found) => found
     None => {
       printError "error: `--embed-vm` builds the VM from the toolchain's own sources, and there is no `compiler/` beside it"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const entry = joinPath compiler, "src/vm/embedded-program.trb"

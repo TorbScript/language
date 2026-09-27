@@ -42,7 +42,7 @@ public fn coreTag(name: String): String {
 
 /** Whether a tag says nothing about the node: none, or the non-specific `!`. */
 public fn isUntagged(tag: String?): Bool {
-  tag.isNone() || tag == Some("!")
+  tag.isNone() || tag == "!"
 }
 
 /** Whether a tag is a local one, `!name`, as opposed to a tag of the core schema or a global one. */
@@ -88,7 +88,7 @@ type Expander {
           const message = "the aliases of this document expand to more than {limit} nodes: raise `aliasLimit` for a document that is trusted"
           return Fail YamlError.content(node.line, message)
         }
-        return Ok anchored.node
+        return anchored.node
       }
       .Scalar(_, _) => {}
       .Sequence(items, style) => {
@@ -114,7 +114,7 @@ type Expander {
     if const Some(anchor) = node.anchor {
       anchors[anchor] = Anchored result, sizeOf(result)
     }
-    Ok result
+    result
   }
 }
 
@@ -143,7 +143,7 @@ fn sizeOf(node: YamlNode): Int {
 public fn isMergeKey(key: YamlNode): Bool {
   match key.content {
     .Scalar(text, style) => {
-      if key.tag == Some(coreTag("merge")) {
+      if key.tag == coreTag("merge") {
         return true
       }
       text == "<<" && style == ScalarStyle.Plain && key.tag.isNone()
@@ -158,7 +158,7 @@ public fn isMergeKey(key: YamlNode): Bool {
  */
 fn merged(entries: List<YamlEntry>): Result<List<YamlEntry>, YamlError> {
   if !entries.any({ isMergeKey _.key }) {
-    return Ok entries
+    return entries
   }
   var seen: Set<String> = []
   for entry in entries {
@@ -201,7 +201,7 @@ fn merged(entries: List<YamlEntry>): Result<List<YamlEntry>, YamlError> {
       }
     }
   }
-  Ok result
+  result
 }
 
 // --- A document without a type ----------------------------------------------------------------------------------------
@@ -217,7 +217,7 @@ public fn valueOf(node: YamlNode, schema: YamlSchema, tags: List<YamlTag>): Resu
     .Alias(name) => Fail YamlError.content(node.line, "the alias `*{name}` was not expanded")
     .Scalar(text, style) => scalarValue node, text, style, schema, known
     .Sequence(items, _) => {
-      if node.tag == Some(coreTag("omap")) || node.tag == Some(coreTag("pairs")) {
+      if node.tag == coreTag("omap") || node.tag == coreTag("pairs") {
         var entries: List<EncodedValue> = []
         for item in items {
           for entry in item.entries() {
@@ -225,22 +225,22 @@ public fn valueOf(node: YamlNode, schema: YamlSchema, tags: List<YamlTag>): Resu
             entries.append(valueOf(entry.value, schema, tags)?)
           }
         }
-        return Ok EncodedValue.Mapping(entries)
+        return EncodedValue.Mapping entries
       }
       checkTag(node, known, ["seq"])?
       var values: List<EncodedValue> = []
       for item in items {
         values.append(valueOf(item, schema, tags)?)
       }
-      Ok EncodedValue.Sequence(values)
+      EncodedValue.Sequence values
     }
     .Mapping(entries, _) => {
-      if node.tag == Some(coreTag("set")) {
+      if node.tag == coreTag("set") {
         var keys: List<EncodedValue> = []
         for entry in entries {
           keys.append(valueOf(entry.key, schema, tags)?)
         }
-        return Ok EncodedValue.Sequence(keys)
+        return EncodedValue.Sequence keys
       }
       if const Some(tag) = known {
         var fields: List<EncodedField> = []
@@ -248,7 +248,7 @@ public fn valueOf(node: YamlNode, schema: YamlSchema, tags: List<YamlTag>): Resu
           const name = entry.key.text() ?? ""
           fields.append EncodedField(name, valueOf(entry.value, schema, tags)?)
         }
-        return Ok EncodedValue.Record(tag.typeName, fields)
+        return EncodedValue.Record tag.typeName, fields
       }
       checkTag(node, known, ["map"])?
       var flat: List<EncodedValue> = []
@@ -256,7 +256,7 @@ public fn valueOf(node: YamlNode, schema: YamlSchema, tags: List<YamlTag>): Resu
         flat.append(valueOf(entry.key, schema, tags)?)
         flat.append(valueOf(entry.value, schema, tags)?)
       }
-      Ok EncodedValue.Mapping(flat)
+      EncodedValue.Mapping flat
     }
   }
 }
@@ -309,46 +309,46 @@ fn scalarValue(
   known: YamlTag?,
 ): Result<EncodedValue, YamlError> {
   if isUntagged(node.tag) || known.isSome() {
-    if style != ScalarStyle.Plain || node.tag == Some("!") {
-      return Ok EncodedValue.String(text)
+    if style != ScalarStyle.Plain || node.tag == "!" {
+      return EncodedValue.String text
     }
     return match resolvedPlain(text, schema) {
-      Some(resolved) => Ok encodedOf(resolved)
+      Some(resolved) => encodedOf resolved
       None => Fail YamlError.content(node.line, "`{text}` is no value of the JSON schema: a text is written in quotes")
     }
   }
   const tag = node.tag ?? ""
   const typed = if schema == YamlSchema.Yaml11 { YamlSchema.Yaml11 } else { YamlSchema.Core }
   if tag == coreTag("str") || tag == coreTag("timestamp") || tag == coreTag("value") || tag == coreTag("merge") {
-    return Ok EncodedValue.String(text)
+    return EncodedValue.String text
   }
   if tag == coreTag("null") {
     if isNullText(text, YamlSchema.Core) {
-      return Ok EncodedValue.Nothing
+      return EncodedValue.Nothing
     }
     return Fail YamlError.content(node.line, "`{text}` is not null")
   }
   if tag == coreTag("bool") {
     return match boolOf(text, typed) {
-      Some(truth) => Ok EncodedValue.Bool(truth)
+      Some(truth) => EncodedValue.Bool truth
       None => Fail YamlError.content(node.line, "`{text}` is not a truth value")
     }
   }
   if tag == coreTag("int") {
     return match wholeOf(text, typed) {
-      Some(whole) => Ok encodedOf(whole)
+      Some(whole) => encodedOf whole
       None => Fail YamlError.content(node.line, "`{text}` is not a whole number")
     }
   }
   if tag == coreTag("float") {
     return match floatOf(text, typed) {
-      Some(number) => Ok EncodedValue.Float(number)
+      Some(number) => EncodedValue.Float number
       None => Fail YamlError.content(node.line, "`{text}` is not a number")
     }
   }
   if tag == coreTag("binary") {
     return match base64Decoded(text) {
-      Some(bytes) => Ok EncodedValue.Bytes(bytes)
+      Some(bytes) => EncodedValue.Bytes bytes
       None => Fail YamlError.content(node.line, "the `!!binary` scalar is not base64")
     }
   }

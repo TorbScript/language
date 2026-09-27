@@ -21,10 +21,10 @@ type Greeting {
 /** The routes of the test server. */
 fn handle(request: Request): Task<Result<Response, HttpError>> {
   match request.path() {
-    "/hello" => Ok Response.text("hello from {request.method} {request.target}")
+    "/hello" => Response.text "hello from {request.method} {request.target}"
     "/echo" => {
       const text = request.body.text().await()?
-      Ok Response.text("echoed {text.byteLength()} bytes: {text}")
+      Response.text "echoed {text.byteLength()} bytes: {text}"
     }
     "/json" => {
       const greeting = request.body.json<Greeting>().await()?
@@ -32,14 +32,14 @@ fn handle(request: Request): Task<Result<Response, HttpError>> {
     }
     "/stream" => {
       const parts: List<Bytes> = ["one ".bytes().toList(), "two ".bytes().toList(), "three".bytes().toList()]
-      Ok Response(Status.ok, Headers(), Body.of(Source.from(parts)))
+      Response Status.ok, Headers(), Body.of(Source.from(parts))
     }
     "/fail" => Fail HttpError.connectionFailed("a secret the client must not see")
     "/target" => {
       const uri = request.uri
-      Ok Response.text("{uri.scheme()} {uri.host()} {request.path()} {request.segments()} {request.query()}")
+      Response.text "{uri.scheme()} {uri.host()} {request.path()} {request.segments()} {request.query()}"
     }
-    _ => Ok Response.text("nothing at {request.path()}", status: Status.notFound)
+    _ => Response.text "nothing at {request.path()}", status: Status.notFound
   }
 }
 
@@ -62,7 +62,7 @@ fn fetch(base: Uri, method: Method, path: String, body: Body): Task<Result<Strin
   var response = http.send(method, target, body: body).await()?
   const framing = if response.headers.contains("Transfer-Encoding") { "chunked" } else { "length" }
   const text = response.body.text().await()?
-  Ok "{method} {path} -> {response.status} ({framing}): {text}"
+  "{method} {path} -> {response.status} ({framing}): {text}"
 }
 
 match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {

@@ -74,7 +74,7 @@ public fn nativeFunctionOf(
   const path = symbolPathOf lowering.checker, member
   const name = nativeWrapperName lowering.program, path, wrapperKeyOf(entry, arguments, declared)
   if const Some(found) = lowering.nativeWrappers.get(name) {
-    return Some found
+    return found
   }
   const raw = match runtimeFunctionShaped(lowering, member, symbol, mapping, shape) {
     Some(found) => found
@@ -157,7 +157,7 @@ fn collectionOf(
   const signature = lowering.checker.signature identifier
   const result = substitute lowering.checker.types, signature.form.result, mapping
   if const Some(found) = collectionCrossingOf(lowering, result) {
-    return Some found
+    return found
   }
   const payload = successPayloadOf(lowering, result)?
   collectionCrossingOf lowering, payload
@@ -344,9 +344,9 @@ fn buildWrapper(
   crossing: CollectionCrossing?,
   at: Span,
 ): FunctionId? {
-  var builder = newFunction name, Some(member), declared, "native wrapper"
+  var builder = newFunction name, member, declared, "native wrapper"
   const location = declarationLocationOf lowering, member
-  setBlockLocation builder, BlockId(0), Some(location)
+  setBlockLocation builder, BlockId(0), location
   var given: List<Argument> = []
   for index in 0..declared.parameters.length() {
     // A `var self` is a place; an element the runtime takes by address stays an ordinary value operand, and the emitter
@@ -364,7 +364,7 @@ fn buildWrapper(
     }
     const direct = finishFunction lowering.program, builder
     lowering.nativeWrappers.set name, direct
-    return Some direct
+    return direct
   }
   if const .Ordering = entry.result {
     if !orderingWrapperBody(lowering, builder, declared, raw, given, location, at) {
@@ -373,7 +373,7 @@ fn buildWrapper(
     }
     const ordered = finishFunction lowering.program, builder
     lowering.nativeWrappers.set name, ordered
-    return Some ordered
+    return ordered
   }
   const layout = match variantLayoutOfType(lowering, declared.result) {
     Some(found) => found
@@ -398,10 +398,10 @@ fn buildWrapper(
   const boolean = lowering.program.internType IrType.Boolean
   const answered = addTemporary builder, boolean
   const target = addTemporary builder, declared.result
-  emit builder, Instruction.Call(Some(answered), raw, given, empty, Some(location))
-  const good = addBlock builder, "then", Some(location)
-  const bad = addBlock builder, "else", Some(location)
-  const done = addBlock builder, "done", Some(location)
+  emit builder, Instruction.Call(answered, raw, given, empty, location)
+  const good = addBlock builder, "then", location
+  const bad = addBlock builder, "else", location
+  const done = addBlock builder, "done", location
   terminate builder, Terminator.Branch(answered, good, bad)
   switchTo builder, good
   const built = match successConstruct(lowering, builder, layout, success, outs, slots, crossing, location, at) {
@@ -419,10 +419,10 @@ fn buildWrapper(
   }
   terminate builder, Terminator.Jump(done)
   switchTo builder, done
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  terminate builder, Terminator.Return(borrowed(target))
   const added = finishFunction lowering.program, builder
   lowering.nativeWrappers.set name, added
-  Some added
+  added
 }
 
 /**
@@ -456,23 +456,23 @@ fn directWrapperBody(
 ): Bool {
   const empty: List<WitnessSource> = []
   if isVoidResult(lowering, declared.result) {
-    emit builder, Instruction.Call(None, raw, given, empty, Some(location))
+    emit builder, Instruction.Call(None, raw, given, empty, location)
     terminate builder, Terminator.Return(None)
     return true
   }
   if const Some(found) = crossing {
     const storage = addTemporary builder, found.storage
-    emit builder, Instruction.Call(Some(storage), raw, given, empty, Some(location))
+    emit builder, Instruction.Call(storage, raw, given, empty, location)
     const value = addTemporary builder, declared.result
     if !coerceStorage(lowering, builder, value, storage, found, at) {
       return false
     }
-    terminate builder, Terminator.Return(Some(borrowed(value)))
+    terminate builder, Terminator.Return(borrowed(value))
     return true
   }
   const target = addTemporary builder, declared.result
-  emit builder, Instruction.Call(Some(target), raw, given, empty, Some(location))
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  emit builder, Instruction.Call(target, raw, given, empty, location)
+  terminate builder, Terminator.Return(borrowed(target))
   true
 }
 
@@ -501,7 +501,7 @@ fn orderingWrapperBody(
   const sign = lowering.program.internType IrType.Integer(32, true)
   const answered = addTemporary builder, sign
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(answered), raw, given, empty, Some(location))
+  emit builder, Instruction.Call(answered, raw, given, empty, location)
   orderingOutOfSign lowering, builder, answered, sign, ordering, at
   true
 }
@@ -555,14 +555,14 @@ fn successConstruct(
   const shape = lowering.program.layoutAt layout
   const fields = shape.fieldsOfVariant success
   if fields.isEmpty() {
-    return Some([])
+    return []
   }
   const annotation = fields[0].annotation
   if isVoidResult(lowering, annotation) {
     const slot = addTemporary builder, annotation
     const value = internStatic lowering, StaticContents.VoidValue, annotation
     emit builder, Instruction.Constant(slot, value)
-    return Some([borrowed(slot)])
+    return [borrowed(slot)]
   }
   const written = outIndexOf outs, "out"
   if written < 0 {
@@ -577,9 +577,9 @@ fn successConstruct(
     if !coerceStorage(lowering, builder, value, slots[written], found, at) {
       return None
     }
-    return Some([borrowed(value)])
+    return [borrowed(value)]
   }
-  Some([borrowed(slots[written])])
+  [borrowed(slots[written])]
 }
 
 /** The payload of a `.OptionalParts` native: one `Construct` of the tuple out of the out parameters, in their order. */
@@ -602,7 +602,7 @@ fn builtPayload(
   }
   const built = addTemporary builder, payload
   emit builder, Instruction.Construct(built, inner, 0, parts)
-  Some([borrowed(built)])
+  [borrowed(built)]
 }
 
 /**

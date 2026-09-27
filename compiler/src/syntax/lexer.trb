@@ -164,7 +164,7 @@ type Lexer {
 
   var fn run() {
     // A byte order mark in front of the first character is how some editors on Windows save UTF-8: it is no text
-    if position == 0 && peek() == Some('\u{FEFF}') {
+    if position == 0 && peek() == '\u{FEFF}' {
       position = 1
     }
     while const Some(character) = peek() {
@@ -177,8 +177,8 @@ type Lexer {
         _ if character.isWhitespace() => {
           position = position + 1
         }
-        '/' if peekAt(1) == Some('/') => skipLineComment()
-        '/' if peekAt(1) == Some('*') => skipBlockComment()
+        '/' if peekAt(1) == '/' => skipLineComment()
+        '/' if peekAt(1) == '*' => skipBlockComment()
         '"' => textLiteral start, raw: false
         // `raw` is contextual: it is the prefix only directly in front of `"`, an ordinary name everywhere else, so
         // `const raw = 1` still declares one.
@@ -189,7 +189,7 @@ type Lexer {
         // The one-letter prefix this replaced (docs/RUST-EXIT.md 4.2, "the two-commit rename"): still lexed as a raw
         // string, so the rest of the file reports nothing else about it, but with the one diagnostic that says what
         // to write instead.
-        'r' if peekAt(1) == Some('"') => {
+        'r' if peekAt(1) == '"' => {
           errorWithNote(
             "`r\"...\"` is written `raw\"...\"`",
             "The one-letter prefix was retired: `raw` is the prefix everywhere a raw string starts",
@@ -215,7 +215,7 @@ type Lexer {
   fn peekAt(offset: Int): Char? {
     const index = position + offset
     if index < end {
-      Some source.characters[index]
+      source.characters[index]
     } else {
       None
     }
@@ -313,7 +313,7 @@ type Lexer {
   }
 
   var fn number(start: Int) {
-    const isAfterDot = tokens.last()?.kind == Some(TokenKind.Dot)
+    const isAfterDot = tokens.last()?.kind == TokenKind.Dot
     if isAt("0x") || isAt("0b") {
       position = position + 2
       digits isHexDigit
@@ -323,14 +323,14 @@ type Lexer {
     digits isAsciiDigit
     var kind = TokenKind.IntegerLiteral
     // `tuple.0.1` and `1..5` are not floats, `16.megabytes()` is a call on an integer
-    const hasFraction = !isAfterDot && peek() == Some('.') && (peekAt(1).map(isAsciiDigit) ?? false)
+    const hasFraction = !isAfterDot && peek() == '.' && (peekAt(1).map(isAsciiDigit) ?? false)
     if hasFraction {
       position = position + 1
       digits isAsciiDigit
       kind = TokenKind.FloatLiteral
     }
-    if !isAfterDot && (peek() == Some('e') || peek() == Some('E')) {
-      const sign = if peekAt(1) == Some('+') || peekAt(1) == Some('-') { 1 } else { 0 }
+    if !isAfterDot && (peek() == 'e' || peek() == 'E') {
+      const sign = if peekAt(1) == '+' || peekAt(1) == '-' { 1 } else { 0 }
       if peekAt(1 + sign).map(isAsciiDigit) ?? false {
         position = position + 1 + sign
         digits isAsciiDigit
@@ -362,7 +362,7 @@ type Lexer {
       }
       _ => None
     }
-    if peek() != Some('\'') {
+    if peek() != '\'' {
       error "A character literal contains exactly one character and ends with `'`", start
       // `'ab'`: the literal ends at the next quote of the line and stands for its first character from there on, so the
       // rest of it is not read as a name and a second literal
@@ -404,13 +404,13 @@ type Lexer {
       't' => '\t'
       '0' => '\0'
       '\\' | '"' | '\'' | '{' | '}' => character
-      'u' if peek() == Some('{') => unicodeEscape(start)?
+      'u' if peek() == '{' => unicodeEscape(start)?
       _ => {
         textError "Unknown escape sequence `\\{character}`", start
         character
       }
     }
-    Some result
+    result
   }
 
   /**
@@ -439,10 +439,10 @@ type Lexer {
     position = close + 1
     const code = Int.parseDigits(hexDigits, radix: 16).ok().flatMap({ Char.tryFrom(_).ok() })
     match code {
-      Some(code) => Some code
+      Some(code) => code
       None => {
         textError "This is not a Unicode scalar value", start
-        Some '\u{FFFD}'
+        '\u{FFFD}'
       }
     }
   }
@@ -618,7 +618,7 @@ type Lexer {
       return
     }
     position = position + 1
-    if character == Some('u') && peek() == Some('{') {
+    if character == 'u' && peek() == '{' {
       var index = position
       while index < end && source.characters[index] != '}' {
         index = index + 1
@@ -633,7 +633,7 @@ type Lexer {
   fn indentLength(): Int {
     var offset = 0
     loop {
-      if peekAt(offset) != Some(' ') && peekAt(offset) != Some('\t') {
+      if peekAt(offset) != ' ' && peekAt(offset) != '\t' {
         return offset
       }
       offset = offset + 1
@@ -646,9 +646,9 @@ type Lexer {
    */
   var fn skipLeadingLineBreak() {
     const length = indentLength()
-    if peekAt(length) == Some('\r') && peekAt(length + 1) == Some('\n') {
+    if peekAt(length) == '\r' && peekAt(length + 1) == '\n' {
       position = position + length + 2
-    } else if peekAt(length) == Some('\n') {
+    } else if peekAt(length) == '\n' {
       position = position + length + 1
     }
   }
@@ -661,14 +661,14 @@ type Lexer {
    */
   var fn dedentLine(var reference: String?) {
     const length = indentLength()
-    const hasNoContent = peekAt(length) == Some('\n') || peekAt(length) == Some('\r') || textStartsAt(position + length, "\"\"\"")
+    const hasNoContent = peekAt(length) == '\n' || peekAt(length) == '\r' || textStartsAt(position + length, "\"\"\"")
     if hasNoContent {
       position = position + length
       return
     }
     match reference {
       None => {
-        reference = Some source.slice(position, position + length)
+        reference = source.slice(position, position + length)
         position = position + length
       }
       Some(text) => {
@@ -731,7 +731,7 @@ type Lexer {
   fn punctuationAt(): (String, TokenKind)? {
     for entry in punctuationTable {
       if isAt(entry.0) {
-        return Some entry
+        return entry
       }
     }
     None
@@ -773,14 +773,14 @@ fn removeInsignificantNewlines(tokens: List<Token>): List<Token> {
     match token.kind {
       .Reserved(.Match) => {
         // `text.match(...)` and `match: value` are names
-        const isAfterDot = result.last()?.kind == Some(TokenKind.Dot) || result.last()?.kind == Some(TokenKind.QuestionDot)
-        const isLabel = tokens.get(index + 1)?.kind == Some(TokenKind.Colon)
+        const isAfterDot = result.last()?.kind == TokenKind.Dot || result.last()?.kind == TokenKind.QuestionDot
+        const isLabel = tokens.get(index + 1)?.kind == TokenKind.Colon
         if !isAfterDot && !isLabel {
-          pendingMatch = Some brackets.length()
+          pendingMatch = brackets.length()
         }
       }
       .BraceOpen => {
-        const isMatchBody = pendingMatch == Some(brackets.length())
+        const isMatchBody = pendingMatch == brackets.length()
         if isMatchBody {
           pendingMatch = None
         }

@@ -127,7 +127,7 @@ public fn referenceAt(characters: List<Char>, index: Int): Reference? {
     }
     // U+0000 and what is no character become the replacement character
     const character = if value == 0 { '\u{fffd}' } else { Char.tryFrom(value) ?? '\u{fffd}' }
-    return Some Reference(character.show(), at + 1 - index)
+    return Reference(character.show(), at + 1 - index)
   }
   const start = at
   while at < characters.length() && at - start < 32 && isAlphanumeric(characters[at]) {
@@ -138,7 +138,7 @@ public fn referenceAt(characters: List<Char>, index: Int): Reference? {
   }
   const name = String.from characters.slice(start..at)
   const text = entityText(name)?
-  Some Reference(text, at + 1 - index)
+  Reference(text, at + 1 - index)
 }
 
 fn digitValue(character: Char, hex: Bool): Int {
@@ -285,10 +285,10 @@ public fn htmlTagLength(characters: List<Char>, index: Int): Int? {
     if startsWithText(characters, index, "<!--") {
       // `<!-->` and `<!--->` are comments too
       if startsWithText(characters, index, "<!-->") {
-        return Some 5
+        return 5
       }
       if startsWithText(characters, index, "<!--->") {
-        return Some 6
+        return 6
       }
       return lengthUntil(characters, index + 4, "-->", index)
     }
@@ -319,7 +319,7 @@ fn lengthUntil(characters: List<Char>, from: Int, end: String, start: Int): Int?
   var at = from
   while at < characters.length() {
     if startsWithText(characters, at, end) {
-      return Some(at + end.byteLength() - start)
+      return at + end.byteLength() - start
     }
     at = at + 1
   }
@@ -346,7 +346,7 @@ fn openTagLength(characters: List<Char>, start: Int): Int? {
     at = at + 1
   }
   if at < characters.length() && characters[at] == '>' {
-    return Some(at + 1 - start)
+    return at + 1 - start
   }
   None
 }
@@ -356,7 +356,7 @@ fn closingTagLength(characters: List<Char>, start: Int): Int? {
   var at = tagNameEnd(characters, start + 2)?
   at = skipWhitespace characters, at
   if at < characters.length() && characters[at] == '>' {
-    return Some(at + 1 - start)
+    return at + 1 - start
   }
   None
 }
@@ -370,7 +370,7 @@ fn tagNameEnd(characters: List<Char>, from: Int): Int? {
   while at < characters.length() && (isAlphanumeric(characters[at]) || characters[at] == '-') {
     at = at + 1
   }
-  Some at
+  at
 }
 
 /** An attribute: its name, and optionally `=` and a value. */
@@ -393,7 +393,7 @@ fn attributeEnd(characters: List<Char>, from: Int): Int? {
   }
   const beforeValue = skipWhitespace characters, at
   if beforeValue >= characters.length() || characters[beforeValue] != '=' {
-    return Some at
+    return at
   }
   var value = skipWhitespace(characters, beforeValue + 1)
   if value >= characters.length() {
@@ -408,7 +408,7 @@ fn attributeEnd(characters: List<Char>, from: Int): Int? {
     if value >= characters.length() {
       return None
     }
-    return Some(value + 1)
+    return value + 1
   }
   // An unquoted value: no whitespace, no quotes, no `=`, `<`, `>` or backtick
   const unquoted = value
@@ -424,7 +424,7 @@ fn attributeEnd(characters: List<Char>, from: Int): Int? {
   if value == unquoted {
     return None
   }
-  Some value
+  value
 }
 
 /** Past spaces, tabs and up to one line break - the whitespace a tag may hold. */
@@ -456,7 +456,7 @@ public fn linkDestination(characters: List<Char>, from: Int): Scanned? {
     while at < characters.length() {
       const character = characters[at]
       if character == '>' {
-        return Some Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
+        return Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
       }
       if character == '<' || character == '\n' || character == '\r' {
         return None
@@ -495,7 +495,7 @@ public fn linkDestination(characters: List<Char>, from: Int): Scanned? {
   if at == from || depth != 0 {
     return None
   }
-  Some Scanned(unescaped(String.from(characters.slice(from..at))), at)
+  Scanned unescaped(String.from(characters.slice(from..at))), at
 }
 
 /** A link title at `from`: in `"..."`, `'...'` or `(...)`, with escapes. */
@@ -520,7 +520,7 @@ public fn linkTitle(characters: List<Char>, from: Int): Scanned? {
       continue
     }
     if character == closing {
-      return Some Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
+      return Scanned(unescaped(String.from(characters.slice((from + 1)..at))), at + 1)
     }
     if opening == '(' && character == '(' {
       return None
@@ -551,7 +551,7 @@ public fn linkLabel(characters: List<Char>, from: Int): Scanned? {
       if !hasContent || at - from > 1000 {
         return None
       }
-      return Some Scanned(String.from(characters.slice((from + 1)..at)), at + 1)
+      return Scanned(String.from(characters.slice((from + 1)..at)), at + 1)
     }
     if !isSpaceOrTab(character) && character != '\n' && character != '\r' {
       hasContent = true

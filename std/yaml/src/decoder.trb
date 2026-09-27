@@ -35,7 +35,7 @@ public type YamlDecoder with Decoder {
     strict: Bool = false,
     tags: List<YamlTag> = [],
   ): YamlDecoder {
-    Self root: Some(node), schema: schema, naming: naming, strict: strict, tags: tags
+    Self root: node, schema: schema, naming: naming, strict: strict, tags: tags
   }
 
   var fn nothing(): Bool {
@@ -53,7 +53,7 @@ public type YamlDecoder with Decoder {
     const text = scalarText(node, "a truth value")?
     if isReadAsValue(node, "bool") {
       if const Some(truth) = boolOf(text, schema) {
-        return Ok truth
+        return truth
       }
     }
     Fail DecodeError("a truth value is needed, not {shown(node)}")
@@ -62,10 +62,10 @@ public type YamlDecoder with Decoder {
   var fn int(): Result<Int64, DecodeError> {
     const node = take()?
     const text = scalarText(node, "a whole number")?
-    if isReadAsValue(node, "int") || node.tag == Some(coreTag("float")) {
+    if isReadAsValue(node, "int") || node.tag == coreTag("float") {
       match wholeOf(text, schema) {
         Some(.Int(value)) => {
-          return Ok value
+          return value
         }
         Some(.Unsigned(value)) => {
           return Fail DecodeError("{value} does not fit into an Int64")
@@ -76,7 +76,7 @@ public type YamlDecoder with Decoder {
         match Int64.tryFrom(number) {
           Ok(whole) => {
             if Float64.from(whole) == number {
-              return Ok whole
+              return whole
             }
           }
           Fail(_) => {}
@@ -92,7 +92,7 @@ public type YamlDecoder with Decoder {
     if isReadAsValue(node, "int") {
       match wholeOf(text, schema) {
         Some(.Unsigned(value)) => {
-          return Ok value
+          return value
         }
         Some(.Int(value)) => {
           return UInt64.tryFrom(value).mapError { _ => DecodeError "{value} is not a count" }
@@ -106,9 +106,9 @@ public type YamlDecoder with Decoder {
   var fn float(): Result<Float64, DecodeError> {
     const node = take()?
     const text = scalarText(node, "a number")?
-    if isReadAsValue(node, "float") || node.tag == Some(coreTag("int")) {
+    if isReadAsValue(node, "float") || node.tag == coreTag("int") {
       if const Some(number) = floatOf(text, schema) {
-        return Ok number
+        return number
       }
     }
     Fail DecodeError("a number is needed, not {shown(node)}")
@@ -117,10 +117,10 @@ public type YamlDecoder with Decoder {
   var fn decimal(): Result<Decimal, DecodeError> {
     const node = take()?
     const text = scalarText(node, "an exact number")?
-    if isReadAsValue(node, "float") || node.tag == Some(coreTag("int")) {
+    if isReadAsValue(node, "float") || node.tag == coreTag("int") {
       match Decimal.tryFrom(text) {
         Ok(value) => {
-          return Ok value
+          return value
         }
         Fail(_) => {}
       }
@@ -140,7 +140,7 @@ public type YamlDecoder with Decoder {
     match node.content {
       .Scalar(text, _) => {
         match base64Decoded(text) {
-          Some(bytes) => Ok bytes
+          Some(bytes) => bytes
           None => Fail DecodeError("bytes are needed, and {shown(node)} is not base64")
         }
       }
@@ -159,7 +159,7 @@ public type YamlDecoder with Decoder {
           }
           found.append byte
         }
-        Ok found
+        found
       }
       _ => Fail DecodeError("bytes are needed, not {shown(node)}")
     }
@@ -171,7 +171,7 @@ public type YamlDecoder with Decoder {
    */
   var fn sequence(): Result<Int?, DecodeError> {
     const node = take()?
-    if node.tag == Some(coreTag("binary")) {
+    if node.tag == coreTag("binary") {
       const bytes = match base64Decoded(node.text() ?? "") {
         Some(found) => found
         None => {
@@ -188,7 +188,7 @@ public type YamlDecoder with Decoder {
         Ok Some(items.length())
       }
       .Mapping(entries, _) => {
-        if node.tag != Some(coreTag("set")) {
+        if node.tag != coreTag("set") {
           return Fail DecodeError("a sequence is needed, not {shown(node)}")
         }
         const keys = entries.map({ _.key }).toList()
@@ -230,10 +230,10 @@ public type YamlDecoder with Decoder {
 
   var fn hasNext(): Result<Bool, DecodeError> {
     if frames.isEmpty() {
-      return Ok false
+      return false
     }
     const frame = frames[frames.length() - 1]
-    Ok(frame.index < frame.items.length())
+    frame.index < frame.items.length()
   }
 
   /**
@@ -273,7 +273,7 @@ public type YamlDecoder with Decoder {
             .Mapping(entries, _) => frames.append YamlCursor(CursorKind.Fields, fields: entries)
             _ => frames.append YamlCursor(CursorKind.Fields)
           }
-          return Ok(mapping.caseName ?? "")
+          return mapping.caseName ?? ""
         }
         return Fail unknownTag(tag, typeName)
       }
@@ -281,7 +281,7 @@ public type YamlDecoder with Decoder {
     match node.content {
       .Scalar(text, _) => {
         frames.append YamlCursor(CursorKind.Fields)
-        Ok text
+        text
       }
       .Mapping(entries, _) => {
         if entries.length() != 1 {
@@ -298,7 +298,7 @@ public type YamlDecoder with Decoder {
           .Mapping(fields, _) => frames.append YamlCursor(CursorKind.Fields, fields: fields)
           _ => frames.append YamlCursor(CursorKind.Fields)
         }
-        Ok name
+        name
       }
       _ => Fail DecodeError("a case is needed, not {shown(node)}")
     }
@@ -319,13 +319,13 @@ public type YamlDecoder with Decoder {
     const spelled = naming.applied name
     for index in 0..frames[last].fields.length() {
       const entry = frames[last].fields[index]
-      if entry.key.text() == Some(spelled) {
-        frames[last].selected = Some entry.value
+      if entry.key.text() == spelled {
+        frames[last].selected = entry.value
         frames[last].read.append spelled
-        return Ok true
+        return true
       }
     }
-    Ok false
+    false
   }
 
   var fn finish(): Result<Void, DecodeError> {
@@ -353,7 +353,7 @@ public type YamlDecoder with Decoder {
   private fn isNull(node: YamlNode): Bool {
     match node.content {
       .Scalar(text, style) => {
-        if node.tag == Some(coreTag("null")) {
+        if node.tag == coreTag("null") {
           return true
         }
         node.tag.isNone() && style == ScalarStyle.Plain && isNullText(text, schema)
@@ -367,7 +367,7 @@ public type YamlDecoder with Decoder {
    * one. A quoted scalar is a text - except as the key of a map, where JSON quotes every key.
    */
   private fn isReadAsValue(node: YamlNode, name: String): Bool {
-    if node.tag == Some(coreTag(name)) {
+    if node.tag == coreTag(name) {
       return true
     }
     if !isUntagged(node.tag) {
@@ -382,7 +382,7 @@ public type YamlDecoder with Decoder {
   /** The text of a scalar, and an error that names what was wanted for anything else. */
   private fn scalarText(node: YamlNode, wanted: String): Result<String, DecodeError> {
     match node.content {
-      .Scalar(text, _) => Ok text
+      .Scalar(text, _) => text
       _ => Fail DecodeError("{wanted} is needed, not {shown(node)}")
     }
   }
@@ -417,10 +417,10 @@ public type YamlDecoder with Decoder {
     }
     const frame = frames[frames.length() - 1]
     if const Some(selected) = frame.selected {
-      return Some selected
+      return selected
     }
     if frame.index < frame.items.length() {
-      return Some frame.items[frame.index]
+      return frame.items[frame.index]
     }
     None
   }
@@ -436,13 +436,13 @@ public type YamlDecoder with Decoder {
       }
       root = None
       line = found.line
-      return Ok found
+      return found
     }
     const last = frames.length() - 1
     if const Some(selected) = frames[last].selected {
       frames[last].selected = None
       line = selected.line
-      return Ok selected
+      return selected
     }
     const index = frames[last].index
     if index >= frames[last].items.length() {
@@ -454,7 +454,7 @@ public type YamlDecoder with Decoder {
     }
     const found = frames[last].items[index]
     line = found.line
-    Ok found
+    found
   }
 }
 

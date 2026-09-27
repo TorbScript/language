@@ -48,7 +48,7 @@ public fn requirementOf(text: String): Result<Requirement, String> {
   }
   const package = packageNameOf(name)?
   if written.isEmpty() {
-    return Ok Requirement(package, "", VersionSet.everyRelease)
+    return Requirement package, "", VersionSet.everyRelease
   }
   const versions = match versionsOf(written) {
     Ok(found) => found
@@ -56,7 +56,7 @@ public fn requirementOf(text: String): Result<Requirement, String> {
       return Fail "`{text}`: {problem}"
     }
   }
-  Ok Requirement(package, written, versions)
+  Requirement package, written, versions
 }
 
 /**
@@ -69,7 +69,7 @@ public fn requirementOf(text: String): Result<Requirement, String> {
 public fn versionsOf(written: String): Result<VersionSet, String> {
   const text = written.trim()
   if text == "*" {
-    return Ok VersionSet.everyRelease
+    return VersionSet.everyRelease
   }
   var releases = VersionSet.everyRelease
   var preReleases = VersionSet.preReleasesBetween Version.lowest, None
@@ -84,13 +84,13 @@ public fn versionsOf(written: String): Result<VersionSet, String> {
     releases = releases.intersection VersionSet.releasesBetween(comparator.low, comparator.high)
     preReleases = preReleases.intersection VersionSet.preReleasesBetween(comparator.low, comparator.high)
     if const Some(release) = comparator.preReleasesOf {
-      allowed = allowed.union VersionSet.preReleasesBetween(Version(release.major, release.minor, release.patch, preRelease: ["0"]), Some(release))
+      allowed = allowed.union VersionSet.preReleasesBetween(Version(release.major, release.minor, release.patch, preRelease: ["0"]), release)
     }
   }
   if comparators == 0 {
     return Fail "the requirement is empty: write a version such as `^1.2.3`, or leave out the `:`"
   }
-  Ok releases.union(preReleases.intersection(allowed))
+  releases.union preReleases.intersection(allowed)
 }
 
 /** One comparator as a range of the whole order, and the release whose pre-releases it allows, if it names one. */
@@ -122,17 +122,17 @@ fn comparatorOf(part: String): Result<Comparator, String> {
       } else {
         Version.of(0, 0, low.patch + 1)
       }
-      Ok Comparator(low, Some(high), pre)
+      Comparator low, high, pre
     }
     "~" => {
       const high = if partial.fields == 1 { Version.of(low.major + 1, 0, 0) } else { Version.of(low.major, low.minor + 1, 0) }
-      Ok Comparator(low, Some(high), pre)
+      Comparator low, high, pre
     }
-    "=" => Ok Comparator(low, Some(partial.end()), pre)
-    ">=" => Ok Comparator(low, None, pre)
-    ">" => Ok Comparator(if full { low.successor() } else { partial.end() }, None, pre)
-    "<" => Ok Comparator(Version.lowest, Some(low), pre)
-    "<=" => Ok Comparator(Version.lowest, Some(partial.end()), pre)
+    "=" => Comparator low, partial.end(), pre
+    ">=" => Comparator low, None, pre
+    ">" => Comparator(if full { low.successor() } else { partial.end() }, None, pre)
+    "<" => Comparator Version.lowest, low, pre
+    "<=" => Comparator Version.lowest, partial.end(), pre
     _ => Fail "`{part}` has an operator that is not one of ^ ~ = >= > <= <"
   }
 }
@@ -159,7 +159,7 @@ fn partialOf(text: String): Result<Partial, String> {
   const numbers = text.substringBefore("-") ?? text
   const fields = numbers.split(".").length()
   if fields == 3 {
-    return Ok Partial(Version.tryFrom(text)?, 3)
+    return Partial(Version.tryFrom(text)?, 3)
   }
   if text.contains("-") {
     return Fail "`{text}` has a pre-release, and a pre-release needs all three numbers"
@@ -168,5 +168,5 @@ fn partialOf(text: String): Result<Partial, String> {
     return Fail "`{text}` has more than three numbers"
   }
   const padded = if fields == 1 { "{text}.0.0" } else { "{text}.0" }
-  Ok Partial(Version.tryFrom(padded)?, fields)
+  Partial(Version.tryFrom(padded)?, fields)
 }

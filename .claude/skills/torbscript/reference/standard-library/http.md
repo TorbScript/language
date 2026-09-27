@@ -63,9 +63,9 @@ fn fetchUser(api: Uri, id: Int): Task<Result<User, HttpError>> {
 
 fn hello(request: Request): Task<Result<Response, HttpError>> {
   if request.path() == "/hello" {
-    return Ok Response.text("hello")
+    return Response.text "hello"
   }
-  Ok Response.of(Status.notFound)
+  Response.of Status.notFound
 }
 
 fn serveForever(): Task<Result<Void, HttpError>> {
@@ -149,7 +149,7 @@ fn twoUsers(api: Uri): Task<Result<(String, String), HttpError>> {
   var first = client.get(api.joined("users/1")).await()?
   const one = first.body.text().await()?
   var second = client.get(api.joined("users/2")).await()?
-  Ok((one, second.body.text().await()?))
+  (one, second.body.text().await()?)
 }
 ```
 

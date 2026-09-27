@@ -55,7 +55,7 @@ public fn packed(entries: List<TarEntry>): Result<List<UInt8>, String> {
   if archive.length() > archiveLimit {
     return Fail "the archive has {archive.length()} bytes, and the registry takes at most {archiveLimit}"
   }
-  Ok archive
+  archive
 }
 
 /**
@@ -98,17 +98,17 @@ public fn unpacked(archive: List<UInt8>, expected: String): Result<List<TarEntry
   if found != expected {
     return Fail "the tree hash is {found}, and {expected} was pinned: the archive is not the one that was published"
   }
-  Ok entries
+  entries
 }
 
 /** Why a path of an archive may not be written out, or `None`. */
 public fn pathProblem(path: String): String? {
   if path.isEmpty() || path.startsWith("/") || path.contains("\\") || path.contains(":") {
-    return Some "the archive has a path that is absolute or not portable: `{path}`"
+    return "the archive has a path that is absolute or not portable: `{path}`"
   }
   for segment in path.split("/") {
     if segment.isEmpty() || segment == "." || segment == ".." {
-      return Some "the archive has a path that is not inside the package: `{path}`"
+      return "the archive has a path that is not inside the package: `{path}`"
     }
   }
   None
@@ -120,13 +120,13 @@ public fn pathProblem(path: String): String? {
  */
 public fn capabilityOf(package: String): String? {
   match package {
-    "std/fs" => Some "files"
-    "std/network" | "std/http" | "std/tls" => Some "network"
-    "std/process" => Some "processes"
-    "std/os/environment" => Some "environment"
-    "std/os" => Some "the operating system"
-    "std/time" => Some "clock"
-    "std/sandbox" => Some "scripts"
+    "std/fs" => "files"
+    "std/network" | "std/http" | "std/tls" => "network"
+    "std/process" => "processes"
+    "std/os/environment" => "environment"
+    "std/os" => "the operating system"
+    "std/time" => "clock"
+    "std/sandbox" => "scripts"
     _ => None
   }
 }
@@ -163,13 +163,13 @@ public fn capabilitiesOf(entries: List<TarEntry>): List<Reach> {
           .Use(usage) => {
             if const .Module(written) = usage.source {
               reached = match capabilityOf(written) {
-                Some(found) => Some found
+                Some(found) => found
                 None => capabilityOf packageOf(written)
               }
             }
           }
           .Foreign(_) => {
-            reached = Some "foreign functions"
+            reached = "foreign functions"
           }
           _ => {}
         }

@@ -31,7 +31,7 @@ type Unsupported with Show, Error {
 
 fn translate(condition: Expression<Bool>): Result<String, Unsupported> {
   match condition.tree {
-    .Binary(.Greater, left, right, _) => Ok "{nameOfNode(left)} > {nameOfNode(right)}"
+    .Binary(.Greater, left, right, _) => "{nameOfNode(left)} > {nameOfNode(right)}"
     _ => Fail Unsupported(condition.source)
   }
 }

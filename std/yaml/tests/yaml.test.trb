@@ -73,58 +73,58 @@ fn failureOf(text: String): String {
 group "decoding into a type" {
   test "a field reads its scalar as its own type" {
     const service = decodedService "name: web\nreplicas: 3\nports: [80, 443]\nlabels:\n  tier: front\n"
-    assert(service == Some(Service("web", 3, [80, 443], true, ["tier": "front"], None)))
+    assert(service == Service("web", 3, [80, 443], true, ["tier": "front"], None))
   }
 
   test "no is the text `no` in a String field and an error in a Bool field" {
     const flags = Yaml().decode<Flags>("country: no\nactive: true\n")
-    assert(flags.ok() == Some(Flags("no", true)))
+    assert(flags.ok() == Flags("no", true))
     assert(!Yaml().decode<Flags>("country: no\nactive: no\n").isOk())
   }
 
   test "a document that says %YAML 1.1 reads yes, no, on and off as truth values" {
     const flags = Yaml().decode<Flags>("%YAML 1.1\n---\ncountry: no\nactive: yes\n")
-    assert(flags.ok() == Some(Flags("no", true)))
+    assert(flags.ok() == Flags("no", true))
     const legacy = Yaml(version: YamlVersion.Yaml11).decode<Flags>("country: NO\nactive: off\n")
-    assert(legacy.ok() == Some(Flags("NO", false)))
+    assert(legacy.ok() == Flags("NO", false))
   }
 
   test "YAML 1.1 reads 0777 as an octal number and 1_000 with its separator" {
-    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("0777").ok() == Some(511))
-    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("1_000").ok() == Some(1000))
-    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("1:30").ok() == Some(90))
-    assert(Yaml().decode<Int>("0777").ok() == Some(777))
-    assert(Yaml().decode<String>("0777").ok() == Some("0777"))
+    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("0777").ok() == 511)
+    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("1_000").ok() == 1000)
+    assert(Yaml(version: YamlVersion.Yaml11).decode<Int>("1:30").ok() == 90)
+    assert(Yaml().decode<Int>("0777").ok() == 777)
+    assert(Yaml().decode<String>("0777").ok() == "0777")
   }
 
   test "numbers in every spelling of the core schema" {
-    assert(Yaml().decode<List<Int>>("[0x1F, 0o17, -42, +7]").ok() == Some([31, 15, -42, 7]))
-    assert(Yaml().decode<List<Float>>("[1.5, .5, 1e3, 2]").ok() == Some([1.5, 0.5, 1000.0, 2.0]))
+    assert(Yaml().decode<List<Int>>("[0x1F, 0o17, -42, +7]").ok() == [31, 15, -42, 7])
+    assert(Yaml().decode<List<Float>>("[1.5, .5, 1e3, 2]").ok() == [1.5, 0.5, 1000.0, 2.0])
     const special = Yaml().decode<List<Float>>("[.inf, -.inf]").ok() ?? []
     assert(special == [Float64.infinity, Float64.negativeInfinity])
-    assert(Yaml().decode<Float>(".nan").map({ _ != _ }).ok() == Some(true))
+    assert(Yaml().decode<Float>(".nan").map({ _ != _ }).ok() == true)
   }
 
   test "a quoted scalar is a text, and an explicit tag is honoured" {
     assert(!Yaml().decode<Int>("\"5\"").isOk())
-    assert(Yaml().decode<String>("\"5\"").ok() == Some("5"))
-    assert(Yaml().decode<Int>("!!int \"5\"").ok() == Some(5))
+    assert(Yaml().decode<String>("\"5\"").ok() == "5")
+    assert(Yaml().decode<Int>("!!int \"5\"").ok() == 5)
     assert(!Yaml().decode<Int>("!!str 5").isOk())
   }
 
   test "an absent field takes its default, and null is None" {
     const service = decodedService "name: api\nowner: ~\n"
-    assert(service == Some(Service("api", 1, [], true, [:], None)))
+    assert(service == Service("api", 1, [], true, [:], None))
     assert(decodedService("name: api\nowner: ada\n").map({ _.owner }) == Some(Some("ada")))
   }
 
   test "an empty value is an empty list and an empty map" {
-    assert(decodedService("name: api\nports:\nlabels:\n").map({ _.ports.length() + _.labels.length() }) == Some(0))
+    assert(decodedService("name: api\nports:\nlabels:\n").map({ _.ports.length() + _.labels.length() }) == 0)
   }
 
   test "an alias reads the node its anchor stands on" {
     const text = "- &origin \{x: 1, y: 2\}\n- *origin\n"
-    assert(Yaml().decode<List<Point>>(text).ok() == Some([Point(1, 2), Point(1, 2)]))
+    assert(Yaml().decode<List<Point>>(text).ok() == [Point(1, 2), Point(1, 2)])
   }
 
   test "the merge key merges mappings, and the mapping's own keys win" {
@@ -138,12 +138,12 @@ group "decoding into a type" {
         name: web
       """
     const services = Yaml().decode<Map<String, Service>>(text).ok() ?? [:]
-    assert(services.get("service") == Some(Service("web", 2, [], false, [:], None)))
+    assert(services.get("service") == Service("web", 2, [], false, [:], None))
   }
 
   test "a list of mappings merges in order" {
     const text = "a: &a \{x: 1\}\nb: &b \{x: 2, y: 3\}\nc:\n  <<: [*a, *b]\n"
-    assert(Yaml().decode<Map<String, Offset>>(text).ok().flatMap({ _.get "c" }) == Some(Offset(1, 3)))
+    assert(Yaml().decode<Map<String, Offset>>(text).ok().flatMap({ _.get "c" }) == Offset(1, 3))
   }
 
   test "the merge key can be switched off" {
@@ -152,24 +152,24 @@ group "decoding into a type" {
 
   test "a case by its name, by a mapping of one entry, and by a local tag" {
     const drawing = Yaml().decode<Drawing>("shapes:\n  - Empty\n  - Circle: \{radius: 2\}\n")
-    assert(drawing.ok() == Some(Drawing([Shape.Empty, Shape.Circle(2.0)])))
+    assert(drawing.ok() == Drawing([Shape.Empty, Shape.Circle(2.0)]))
     const shape = typeNameOf EncodedValue.of(Shape.Empty)
-    const tags = [YamlTag("!circle", shape, Some("Circle")), YamlTag("!square", shape, Some("Square"))]
+    const tags = [YamlTag("!circle", shape, "Circle"), YamlTag("!square", shape, "Square")]
     const tagged = Yaml(tags: tags).decode<List<Shape>>("- !circle \{radius: 1\}\n- !square \{side: 2\}\n")
-    assert(tagged.ok() == Some([Shape.Circle(1.0), Shape.Square(2.0)]))
+    assert(tagged.ok() == [Shape.Circle(1.0), Shape.Square(2.0)])
   }
 
   test "a local tag names a type through YamlTag, and an unknown one is an error that names it" {
     const point = typeNameOf EncodedValue.of(Point(0, 0))
     const yaml = Yaml tags: [YamlTag("!point", point)]
-    assert(yaml.decode<Point>("!point \{x: 1, y: 2\}").ok() == Some(Point(1, 2)))
+    assert(yaml.decode<Point>("!point \{x: 1, y: 2\}").ok() == Point(1, 2))
     const tagged = "!point \{x: 1, y: 2\}"
     const unknown = Yaml().decode<Point>(tagged)
     assert "{unknown}".contains("`!point` is not known")
   }
 
   test "naming spells the field names" {
-    assert(Yaml(naming: Naming.SnakeCase).decode<Entry>("log_label: a\n").ok() == Some(Entry("a")))
+    assert(Yaml(naming: Naming.SnakeCase).decode<Entry>("log_label: a\n").ok() == Entry("a"))
   }
 
   test "strict refuses a field nothing read" {
@@ -184,13 +184,13 @@ group "decoding into a type" {
   }
 
   test "a stream of documents" {
-    assert(Yaml().decodeDocuments<Int>("1\n---\n2\n--- 3\n").ok() == Some([1, 2, 3]))
+    assert(Yaml().decodeDocuments<Int>("1\n---\n2\n--- 3\n").ok() == [1, 2, 3])
     assert(!Yaml().decode<Int>("1\n---\n2\n").isOk())
     assert(Yaml().decode<Int?>("").ok() == Some(None))
   }
 
   test "bytes are base64" {
-    assert(Yaml().decode<Blob>("data: !!binary aGVsbG8=\n").ok() == Some(Blob([104, 101, 108, 108, 111])))
+    assert(Yaml().decode<Blob>("data: !!binary aGVsbG8=\n").ok() == Blob([104, 101, 108, 108, 111]))
   }
 
   test "aliases that expand past the limit are an error, not an exhausted memory" {
@@ -203,7 +203,7 @@ group "decoding into a type" {
     const text = lines.joined(separator: "\n") + "\n"
     const result = Yaml().decode<Map<String, EncodedValue>>(text)
     assert "{result}".contains("more than 100000 nodes")
-    assert(Yaml(aliasLimit: 20).decode<List<Int>>("- &a 1\n- *a\n").ok() == Some([1, 1]))
+    assert(Yaml(aliasLimit: 20).decode<List<Int>>("- &a 1\n- *a\n").ok() == [1, 1])
   }
 }
 
@@ -229,8 +229,8 @@ group "encoding" {
   }
 
   test "what is written reads back as the same value" {
-    const service = Service "a: b", 0, [1, 2], false, ["no": "yes", "multi": "one\ntwo"], Some("#owner")
-    assert(Yaml().decode<Service>(Yaml().encode(service)).ok() == Some(service))
+    const service = Service "a: b", 0, [1, 2], false, ["no": "yes", "multi": "one\ntwo"], "#owner"
+    assert(Yaml().decode<Service>(Yaml().encode(service)).ok() == service)
   }
 
   test "an empty list is [] and a case without fields is its name" {
@@ -243,7 +243,7 @@ group "encoding" {
     const yaml = Yaml tags: [YamlTag("!point", point)]
     // `y` is a truth value to a YAML 1.1 reader, so even a key is quoted
     assert(yaml.encode([Point(1, 2)]) == "- !point\n  x: 1\n  \"y\": 2\n")
-    assert(yaml.decode<List<Point>>(yaml.encode([Point(1, 2)])).ok() == Some([Point(1, 2)]))
+    assert(yaml.decode<List<Point>>(yaml.encode([Point(1, 2)])).ok() == [Point(1, 2)])
   }
 
   test "bytes are written as !!binary, and a list of bytes is a sequence" {
@@ -258,7 +258,7 @@ group "the tree" {
     const quoted = document.root.at("a") ?? YamlNode.empty()
     assert(quoted.content == .Scalar("x", ScalarStyle.SingleQuoted))
     const tagged = document.root.at("b") ?? YamlNode.empty()
-    assert(tagged.tag == Some("tag:yaml.org,2002:int") && tagged.anchor == Some("n") && tagged.line == 2)
+    assert(tagged.tag == "tag:yaml.org,2002:int" && tagged.anchor == "n" && tagged.line == 2)
     const flow = document.root.at("c") ?? YamlNode.empty()
     assert(flow.content == .Sequence([YamlNode.scalar("1").copy(line: 3, column: 5), YamlNode.scalar("2").copy(line: 3, column: 8)], CollectionStyle.Flow))
   }
@@ -312,23 +312,23 @@ group "schemas" {
       EncodedValue.String("yes"),
       EncodedValue.Int(16),
     ])
-    assert(value == Some(expected))
+    assert(value == expected)
   }
 
   test "the 1.1 schema reads yes as true, and a %YAML 1.1 document is read by it" {
     const document = Yaml().parse("[yes, 010]").ok() ?? YamlDocument(YamlNode.empty())
     const expected = EncodedValue.Sequence([EncodedValue.Bool(true), EncodedValue.Int(8)])
-    assert(Yaml(schema: Some(YamlSchema.Yaml11)).resolved(document).ok() == Some(expected))
+    assert(Yaml(schema: YamlSchema.Yaml11).resolved(document).ok() == expected)
     const versioned = Yaml().parse("%YAML 1.1\n--- [yes, 010]").ok() ?? YamlDocument(YamlNode.empty())
-    assert(Yaml().resolved(versioned).ok() == Some(expected))
+    assert(Yaml().resolved(versioned).ok() == expected)
   }
 
   test "the failsafe schema reads every scalar as a text, and the JSON schema refuses what JSON has not" {
     const document = Yaml().parse("[1, true]").ok() ?? YamlDocument(YamlNode.empty())
     const texts = EncodedValue.Sequence([EncodedValue.String("1"), EncodedValue.String("true")])
-    assert(Yaml(schema: Some(YamlSchema.Failsafe)).resolved(document).ok() == Some(texts))
+    assert(Yaml(schema: YamlSchema.Failsafe).resolved(document).ok() == texts)
     const other = Yaml().parse("[yes]").ok() ?? YamlDocument(YamlNode.empty())
-    assert(!Yaml(schema: Some(YamlSchema.Json)).resolved(other).isOk())
+    assert(!Yaml(schema: YamlSchema.Json).resolved(other).isOk())
   }
 }
 
@@ -338,6 +338,6 @@ group "streams" {
     const bytes = text.bytes().toList()
     const chunks = [bytes[0..7], bytes[7..20], bytes[20..bytes.length()]]
     const points = chunks.through(Yaml.items<Point>()).toList()
-    assert(points == [Ok(Point(1, 2)), Ok(Point(3, 4)), Ok(Point(5, 6))])
+    assert(points == [Point(1, 2), Point(3, 4), Point(5, 6)])
   }
 }

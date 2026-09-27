@@ -40,7 +40,7 @@ fn doubleAll(values: List<Int>): List<Int> {
   values.map { _ * 2 }.toList()
 }
 
-print double(Some(3))
+print double(3)
 print doubleAll([1, 2, 3])
 ```
 

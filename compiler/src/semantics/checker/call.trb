@@ -453,7 +453,7 @@ fn chooseOverload(
       continue
     }
     const found = inferExpression checker, argument.value
-    given.append(if checker.absorbs(found) { None } else { Some found })
+    given.append(if checker.absorbs(found) { None } else { found })
   }
   var fitting: List<Candidate> = []
   var exact: List<Candidate> = []
@@ -474,7 +474,7 @@ fn chooseOverload(
     reportNoOverload checker, target, given, at
     // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
     const broken = checker.invalidType
-    return target.copy form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken))
+    return target.copy form: FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken)
   }
   if fitting.length() == 1 {
     return targetOfCandidate checker, fitting[0], target.name
@@ -786,7 +786,7 @@ public fn trailingClosureAt(arguments: List<Argument>, at: Span): Int {
 
 fn indexOfParameter(parameters: List<ParameterForm>, name: String): Int {
   for index in 0..parameters.length() {
-    if parameters[index].name == Some(name) {
+    if parameters[index].name == name {
       return index
     }
   }
@@ -886,14 +886,14 @@ fn checkArgumentPass(
     if isClosurePass {
       checker.closureSites.set at, site
     } else if isNameArgument(argument) {
-      checker.nameSite = Some site
+      checker.nameSite = site
       checker.nameSiteAt = at
     }
     // `Some(value)` and `Ok(value)` are the wrap written out: their payload is exactly the value and never wraps itself,
     // so the inner `Some` of an `Option<Option<Int>>` stays written (`Some(Some(1))`)
     const exact = checker.exactValueAt
     if isWrappingCase(checker, resolution) {
-      checker.exactValueAt = Some at
+      checker.exactValueAt = at
     }
     const given = checkExpression checker, argument.value, inner
     checker.exactValueAt = exact
@@ -948,7 +948,7 @@ fn isShowParameter(var checker: Checker, annotation: TypeId): Bool {
   }
   if const .Traits(bounds) = checker.types.form(annotation) {
     if bounds.length() == 1 {
-      return headSymbolOf(checker, bounds[0]) == Some(show)
+      return headSymbolOf(checker, bounds[0]) == show
     }
   }
   false
@@ -1450,10 +1450,8 @@ fn skippedDefaultNote(
   }
   const over = skipped?
   const wanted = parameters[empty].name ?? ""
-  Some(
-    "A positional argument fills the next field in order, and `{over}` has a default: name the field to pass it"
-      + " over (`{name}(..., {wanted}: ...)`)"
-  )
+  "A positional argument fills the next field in order, and `{over}` has a default: name the field to pass it"
+    + " over (`{name}(..., {wanted}: ...)`)"
 }
 
 /**
@@ -1467,10 +1465,8 @@ fn optionalWithoutDefaultNote(var checker: Checker, name: String, parameter: Par
   const field = parameter.name?
   const inner = optionValueOf(checker, parameter.annotation)?
   const shown = checker.describe inner
-  Some(
-    "`{field}` is optional in `{name}` and has no default, so it is still required: write `{field}: None` here,"
-      + " or give the field one (`{field}: {shown}? = None`)"
-  )
+  "`{field}` is optional in `{name}` and has no default, so it is still required: write `{field}: None` here,"
+    + " or give the field one (`{field}: {shown}? = None`)"
 }
 
 /** Which fields may be left out, for the message that says what is required. */
@@ -1566,7 +1562,7 @@ fn nearestParameter(parameters: List<ParameterForm>, filled: List<Bool>, label: 
     const found = editDistance(name, label, distance - 1)
     if found < distance {
       distance = found
-      best = Some name
+      best = name
     }
   }
   best

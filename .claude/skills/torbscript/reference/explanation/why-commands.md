@@ -37,7 +37,7 @@ type Email with TryFrom<String, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
-    Ok Self(text)
+    Self text
   }
 }
 
@@ -45,7 +45,7 @@ fn checked(value: Int): Result<Int, String> {
   if value < 0 {
     return Fail "must not be negative"
   }
-  Ok value
+  value
 }
 
 const email = Email.tryFrom "user@example.test"

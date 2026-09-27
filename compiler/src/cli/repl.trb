@@ -30,8 +30,8 @@ public type ReadEvent {
  */
 public fn readEvent(): Result<ReadEvent, IoError> {
   match readLine()? {
-    Some(line) => Ok ReadEvent.Line(line)
-    None => Ok(if interrupted() { ReadEvent.Interrupted } else { ReadEvent.EndOfInput })
+    Some(line) => ReadEvent.Line line
+    None => if interrupted() { ReadEvent.Interrupted } else { ReadEvent.EndOfInput }
   }
 }
 
@@ -115,7 +115,7 @@ public fn runRepl(sandboxed: Bool = false): Result<Int, IoError> {
     if pending.isEmpty() && line.trim().startsWith(":") {
       match command(session, directory, sandboxed, line.trim())? {
         Some(code) => {
-          return Ok code
+          return code
         }
         None => {
           continue
@@ -144,23 +144,23 @@ public fn runRepl(sandboxed: Bool = false): Result<Int, IoError> {
     }
     pending = []
     if const Some(code) = exitCodeOf(evaluate(session, text)) {
-      return Ok code
+      return code
     }
   }
   // The end of the input ends an entry that is still open: the parser says what is missing
   if !pending.isEmpty() {
     if const Some(code) = exitCodeOf(evaluate(session, pending.joined(separator: "\n"))) {
-      return Ok code
+      return code
     }
   }
   closeSession session
-  Ok 0
+  0
 }
 
 /** The code the session ends with where an entry called `Process.exit`. */
 fn exitCodeOf(outcome: Outcome): Int? {
   if const .Exited(code) = outcome {
-    return Some code
+    return code
   }
   None
 }
@@ -197,7 +197,7 @@ fn command(var session: Session, directory: String, sandboxed: Bool, line: Strin
         printError "error: `{rest}` does not exist"
       } else {
         const text = File.readText(rest)?
-        return Ok exitCodeOf(evaluate(session, text, Some(rest)))
+        return exitCodeOf evaluate(session, text, rest)
       }
     }
     _ => printError "error: `{name}` is no command of the session: :help lists them"

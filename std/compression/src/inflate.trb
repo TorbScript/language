@@ -10,7 +10,7 @@ use CompressionError from "./error"
 /** Everything a raw DEFLATE stream holds, which has to end with its last block. */
 public fn inflated(bytes: Bytes): Result<Bytes, CompressionError> {
   const (output, _) = inflatedFrom(bytes, 0)?
-  Ok output
+  output
 }
 
 /**
@@ -45,7 +45,7 @@ public fn inflatedFrom(bytes: Bytes, start: Int): Result<(Bytes, Int), Compressi
       break
     }
   }
-  Ok((output, reader.position()))
+  (output, reader.position())
 }
 
 /** A canonical Huffman code: how many codes each length has, and the symbols in code order. */
@@ -63,7 +63,7 @@ type Huffman {
       counts[length] = counts[length] + 1
     }
     if counts[0] == lengths.length() {
-      return Ok((Huffman(counts, []), 0))
+      return (Huffman(counts, []), 0)
     }
     var left = 1
     for length in 1..(maximumBits + 1) {
@@ -84,7 +84,7 @@ type Huffman {
         offsets[length] = offsets[length] + 1
       }
     }
-    Ok((Huffman(counts, symbols), left))
+    (Huffman(counts, symbols), left)
   }
 
   /** The next symbol of the stream. */
@@ -96,7 +96,7 @@ type Huffman {
       code = code | reader.bits(1)?
       const count = counts[length]
       if code - count < first {
-        return Ok symbols[index + (code - first)]
+        return symbols[index + (code - first)]
       }
       index = index + count
       first = (first + count) << 1
@@ -136,7 +136,7 @@ fn fixedCodes(): Result<(Huffman, Huffman), CompressionError> {
   }
   const (literals, _) = Huffman.of(lengths, 0)?
   const (distances, _) = Huffman.of(List.filled(30, 5), 0)?
-  Ok((literals, distances))
+  (literals, distances)
 }
 
 /** The codes of a dynamic block, read from its header (RFC 1951 section 3.2.7). */
@@ -198,7 +198,7 @@ fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionEr
   if distanceLeft != 0 && distanceCount != distances.counts[0] + distances.counts[1] {
     return Fail CompressionError("an incomplete code for the distances", reader.position())
   }
-  Ok((literals, distances))
+  (literals, distances)
 }
 
 /** The symbols of a fixed or dynamic block, up to its end-of-block code. */

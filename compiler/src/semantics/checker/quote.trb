@@ -35,7 +35,7 @@ use resolveType, suppressVariables from "./unify"
 /** `Expression<Value>` quotes what arrives at it instead of evaluating it. */
 public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
   if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return checker.wellKnown.expression == Some(symbol)
+    return checker.wellKnown.expression == symbol
   }
   false
 }
@@ -43,8 +43,8 @@ public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
 /** The `Value` of an `Expression<Value>`: the type the quoted expression itself has to have. */
 public fn quotationValueOf(checker: Checker, annotation: TypeId): TypeId? {
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
-    if checker.wellKnown.expression == Some(symbol) && arguments.length() == 1 {
-      return Some arguments[0]
+    if checker.wellKnown.expression == symbol && arguments.length() == 1 {
+      return arguments[0]
     }
   }
   None
@@ -460,7 +460,7 @@ fn implicitParameterIndexOf(checker: Checker, at: Span): Int? {
   const module = checker.module
   for adaptation in checker.adaptationsAt(module, at) {
     if const .ImplicitParameter(index) = adaptation {
-      return Some index
+      return index
     }
   }
   None
@@ -474,7 +474,7 @@ fn writtenParameterIndexOf(checker: Checker, state: QuotationWalk, binding: Bind
     const parameters = state.open[frame]
     for index in 0..parameters.length() {
       if parameters[index].name == name {
-        return Some index
+        return index
       }
     }
     frame = frame - 1

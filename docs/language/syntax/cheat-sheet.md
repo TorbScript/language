@@ -38,7 +38,7 @@ fn load(path: String): Result<Config, ConfigError> {
   if !File.exists(path) {
     return Fail ConfigError.Missing(path)
   }
-  Ok Config()
+  Config()
 }
 
 match load("project.trb") {

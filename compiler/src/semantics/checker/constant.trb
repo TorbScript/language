@@ -141,14 +141,14 @@ fn objectMadeIn(var checker: Checker, module: ModuleId, expression: Expression):
     if isBuilt {
       if const Some(built) = checker.expressionType(module, expression.span) {
         if isSharedType(checker, built) {
-          return Some expression
+          return expression
         }
       }
     }
   }
   for child in childrenOf(expression) {
     if const Some(found) = objectMadeIn(checker, module, child) {
-      return Some found
+      return found
     }
   }
   None
@@ -183,13 +183,13 @@ fn operatorSpelling(operator: InfixOperator): String {
 /** The callee of a call as it was written, without type arguments: `List.filled`, `Set.of`, `.max`. */
 fn calleeText(callee: Expression): String? {
   match callee.kind {
-    .Name(text) => Some text
-    .ImplicitMember(name) => Some ".{name.text}"
+    .Name(text) => text
+    .ImplicitMember(name) => ".{name.text}"
     .Generic(target, _) => calleeText target
     .Member(target, name, _) => {
       match calleeText(target) {
-        Some(base) => Some "{base}.{name.text}"
-        None => Some ".{name.text}"
+        Some(base) => "{base}.{name.text}"
+        None => ".{name.text}"
       }
     }
     _ => None
@@ -199,11 +199,11 @@ fn calleeText(callee: Expression): String? {
 /** The part of `expression` that starts and ends at `at`, which is what [evaluateConstant] names when it gives up. */
 fn expressionAt(expression: Expression, at: Span): Expression? {
   if expression.span == at {
-    return Some expression
+    return expression
   }
   for child in childrenOf(expression) {
     if const Some(found) = expressionAt(child, at) {
-      return Some found
+      return found
     }
   }
   None
@@ -650,14 +650,14 @@ fn integerWidthAt(checker: Checker, module: ModuleId, at: Span): (Int, Bool)? {
 
 fn widthOfInteger(name: String): (Int, Bool)? {
   match name {
-    "Int8" => Some((8, true))
-    "Int16" => Some((16, true))
-    "Int32" => Some((32, true))
-    "Int64" => Some((64, true))
-    "UInt8" => Some((8, false))
-    "UInt16" => Some((16, false))
-    "UInt32" => Some((32, false))
-    "UInt64" => Some((64, false))
+    "Int8" => (8, true)
+    "Int16" => (16, true)
+    "Int32" => (32, true)
+    "Int64" => (64, true)
+    "UInt8" => (8, false)
+    "UInt16" => (16, false)
+    "UInt32" => (32, false)
+    "UInt64" => (64, false)
     _ => None
   }
 }
@@ -672,14 +672,14 @@ fn wrappedToWidth(value: Int, width: Int, isSigned: Bool): Int? {
     if !isSigned && value < 0 {
       return None
     }
-    return Some value
+    return value
   }
   const modulus = 1 << width
   const low = value & (modulus - 1)
   if isSigned && low >= modulus / 2 {
-    return Some(low - modulus)
+    return low - modulus
   }
-  Some low
+  low
 }
 
 fn binaryConstant(
@@ -830,7 +830,7 @@ fn addedIntegers(left: Int, right: Int): Int? {
   if right < 0 && left < Int.minimum - right {
     return None
   }
-  Some(left + right)
+  left + right
 }
 
 fn subtractedIntegers(left: Int, right: Int): Int? {
@@ -840,7 +840,7 @@ fn subtractedIntegers(left: Int, right: Int): Int? {
   if right > 0 && left < Int.minimum + right {
     return None
   }
-  Some(left - right)
+  left - right
 }
 
 /**
@@ -849,25 +849,25 @@ fn subtractedIntegers(left: Int, right: Int): Int? {
  */
 fn multipliedIntegers(left: Int, right: Int): Int? {
   if left == 0 || right == 0 {
-    return Some 0
+    return 0
   }
   if left == 1 {
-    return Some right
+    return right
   }
   if right == 1 {
-    return Some left
+    return left
   }
   if left == -1 {
     if right == Int.minimum {
       return None
     }
-    return Some(0 - right)
+    return 0 - right
   }
   if right == -1 {
     if left == Int.minimum {
       return None
     }
-    return Some(0 - left)
+    return 0 - left
   }
   const fits = if left > 0 && right > 0 {
     left <= Int.maximum / right
@@ -881,7 +881,7 @@ fn multipliedIntegers(left: Int, right: Int): Int? {
   if !fits {
     return None
   }
-  Some(left * right)
+  left * right
 }
 
 /**
@@ -902,7 +902,7 @@ fn poweredIntegers(base: Int, exponent: Int): Int? {
       factor = multipliedIntegers(factor, factor)?
     }
   }
-  Some result
+  result
 }
 
 /** `==` and `!=` on the number types and on `Bool`. Everything else is `Equals.equals` and therefore a call. */
@@ -1053,7 +1053,7 @@ public fn requireCertainArithmetic(
       return
     }
   }
-  if width < 64 && wrappedToWidth(folded, width, isSigned) != Some(folded) {
+  if width < 64 && wrappedToWidth(folded, width, isSigned) != folded {
     checker.report(
       module,
       Diagnostic.error("This does not fit into an `{name}`, so it panics wherever it runs", at)

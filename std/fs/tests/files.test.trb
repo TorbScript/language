@@ -63,13 +63,13 @@ group "bytes" {
   }
 
   test "read answers what readBytes answers, in a task" {
-    assert(readBack == Ok(everyByte()))
+    assert(readBack == everyByte())
     assert readByTask.isError()
   }
 
   test "a source written into a file arrives whole: a file is the sink write fills" {
     assert(writtenBySource == Ok(void))
-    assert(File.readText("{streamed}/from-source") == Ok("hi\n"))
+    assert(File.readText("{streamed}/from-source") == "hi\n")
   }
 }
 
@@ -78,15 +78,15 @@ group "replacing a file whole" {
     const directory = place "atomic"
     File.writeText("{directory}/index", "old").expect("the old content")
     File.writeBytesAtomically("{directory}/index", [110, 101, 119]).expect("the new content")
-    assert(File.readText("{directory}/index") == Ok("new"))
-    assert(File.list(directory) == Ok(["index"]))
+    assert(File.readText("{directory}/index") == "new")
+    assert(File.list(directory) == ["index"])
   }
 
   test "a file that was not there is created" {
     const directory = place "atomic-new"
     File.writeTextAtomically("{directory}/fresh", "first").expect("the first content")
-    assert(File.readText("{directory}/fresh") == Ok("first"))
-    assert(File.list(directory) == Ok(["fresh"]))
+    assert(File.readText("{directory}/fresh") == "first")
+    assert(File.list(directory) == ["fresh"])
   }
 
   test "the permissions of the file it replaces are kept" {
@@ -110,15 +110,15 @@ group "replacing a file whole" {
     File.writeText(path, "old").expect("the old content")
     File.setPermissions(path, Permissions(0b100_100_100)).expect("read-only")
     File.writeTextAtomically(path, "new").expect("the new content")
-    assert(File.readText(path) == Ok("new"))
+    assert(File.readText(path) == "new")
     assert(!File.metadata(path).expect("the metadata").permissions.writable())
-    assert(File.list(directory) == Ok(["locked"]))
+    assert(File.list(directory) == ["locked"])
   }
 
   test "a directory that is not there fails, and leaves nothing" {
     const directory = place "atomic-nowhere"
     assert File.writeTextAtomically("{directory}/missing/file", "text").isError()
-    assert(File.list(directory) == Ok([]))
+    assert(File.list(directory) == [])
   }
 }
 
@@ -129,7 +129,7 @@ group "the tree" {
     File.createDirectory("{directory}/empty").expect("a directory")
     File.remove("{directory}/file").expect("the file removed")
     File.remove("{directory}/empty").expect("the directory removed")
-    assert(File.list(directory) == Ok([]))
+    assert(File.list(directory) == [])
     assert File.remove("{directory}/file").isError()
   }
 
@@ -173,7 +173,7 @@ group "the tree" {
     File.writeText("{directory}/first", "one").expect("the first file")
     File.writeText("{directory}/second", "two").expect("the second file")
     File.rename("{directory}/first", "{directory}/second").expect("the rename")
-    assert(File.readText("{directory}/second") == Ok("one"))
+    assert(File.readText("{directory}/second") == "one")
     assert(!File.exists("{directory}/first"))
     assert File.rename("{directory}/first", "{directory}/third").isError()
   }
@@ -183,7 +183,7 @@ group "the tree" {
     File.createDirectory("{directory}/before/inner").expect("the directories")
     File.writeText("{directory}/before/inner/file", "x").expect("a file")
     File.rename("{directory}/before", "{directory}/after").expect("the rename")
-    assert(File.readText("{directory}/after/inner/file") == Ok("x"))
+    assert(File.readText("{directory}/after/inner/file") == "x")
     assert(!File.exists("{directory}/before"))
   }
 
@@ -193,7 +193,7 @@ group "the tree" {
     File.setPermissions("{directory}/source", Permissions(0b110_100_000)).expect("its permissions")
     File.writeText("{directory}/target", "to be replaced").expect("the target")
     File.copy("{directory}/source", "{directory}/target").expect("the copy")
-    assert(File.readBytes("{directory}/target") == Ok(everyByte()))
+    assert(File.readBytes("{directory}/target") == everyByte())
     const source = File.metadata("{directory}/source").expect("the source's metadata")
     const target = File.metadata("{directory}/target").expect("the target's metadata")
     assert(source.permissions == target.permissions)
@@ -207,8 +207,8 @@ group "the tree" {
     File.writeText("{directory}/b/inner/deep", "x").expect("a deep file")
     File.writeText("{directory}/a", "x").expect("a file")
     File.writeText("{directory}/c", "x").expect("another file")
-    assert(File.list(directory) == Ok(["a", "b", "c"]))
-    assert(File.walk(directory) == Ok(["a", "b", "b/inner", "b/inner/deep", "c"]))
+    assert(File.list(directory) == ["a", "b", "c"])
+    assert(File.walk(directory) == ["a", "b", "b/inner", "b/inner/deep", "c"])
   }
 }
 
@@ -280,19 +280,19 @@ group "symbolic links" {
       }
       Ok(_) => {
         File.createSymbolicLink("{directory}/to-directory", "target").expect("a link to a directory")
-        assert(File.symbolicLinkTarget("{directory}/to-file") == Ok("plain"))
+        assert(File.symbolicLinkTarget("{directory}/to-file") == "plain")
         assert(File.linkMetadata("{directory}/to-file").expect("the link").kind == FileKind.SymbolicLink)
         assert(File.metadata("{directory}/to-file").expect("what it points at").kind == FileKind.File)
-        assert(File.readText("{directory}/to-file") == Ok("plain"))
-        assert(File.readText("{directory}/to-directory/file") == Ok("inside"))
+        assert(File.readText("{directory}/to-file") == "plain")
+        assert(File.readText("{directory}/to-directory/file") == "inside")
         // A walk lists a link and does not follow it, and removing the tree leaves what it pointed at
-        assert(File.walk(directory) == Ok(["plain", "target", "target/file", "to-directory", "to-file"]))
+        assert(File.walk(directory) == ["plain", "target", "target/file", "to-directory", "to-file"])
         File.remove("{directory}/to-file").expect("the link removed")
         assert File.exists("{directory}/plain")
         File.createDirectory("{directory}/holder").expect("a directory holding a link")
         File.createSymbolicLink("{directory}/holder/out", "../target").expect("a link out of it")
         File.removeDirectory("{directory}/holder").expect("the holder removed")
-        assert(File.readText("{directory}/target/file") == Ok("inside"))
+        assert(File.readText("{directory}/target/file") == "inside")
       }
     }
   }
@@ -307,12 +307,12 @@ group "symbolic links" {
 group "temporary files and directories" {
   test "each one is new, carries its prefix and is where it was asked for" {
     const directory = place "temporary"
-    const first = File.createTemporaryFile(prefix: "piece-", inside: Some(directory)).expect("a temporary file")
-    const second = File.createTemporaryFile(prefix: "piece-", inside: Some(directory)).expect("another one")
+    const first = File.createTemporaryFile(prefix: "piece-", inside: directory).expect("a temporary file")
+    const second = File.createTemporaryFile(prefix: "piece-", inside: directory).expect("another one")
     assert(first != second)
     assert first.startsWith("{directory}/piece-")
-    assert(File.readBytes(first) == Ok([]))
-    const folder = File.createTemporaryDirectory(inside: Some(directory)).expect("a temporary directory")
+    assert(File.readBytes(first) == [])
+    const folder = File.createTemporaryDirectory(inside: directory).expect("a temporary directory")
     assert File.isDirectory(folder)
     assert(File.list(directory).expect("the entries").length() == 3)
   }

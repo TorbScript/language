@@ -100,7 +100,7 @@ public fn lintOptionsOf(arguments: List<String>): LintOptions? {
       rules.append rule
     }
   }
-  Some LintOptions(fix, rules, paths)
+  LintOptions fix, rules, paths
 }
 
 /**
@@ -117,7 +117,7 @@ public fn lintFindings(source: String, rules: List<LintRule>, plain: Set<Int>? =
     findings.appendAll findingsOf(rule, source, parsed.file, plain)
   }
   findings.sort({ _.span.start })
-  Some findings
+  findings
 }
 
 fn findingsOf(rule: LintRule, source: String, file: SourceFile, plain: Set<Int>?): List<Finding> {
@@ -144,7 +144,7 @@ type TypedFacts {
 fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, TypedFacts>, IoError> {
   var found: Map<String, TypedFacts> = [:]
   if !rules.any({ _.needsTheChecker() }) {
-    return Ok found
+    return found
   }
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?)
@@ -169,7 +169,7 @@ fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, 
     }
     found.set shape.path, TypedFacts(findings, plainBindingStarts(checked.checker, module))
   }
-  Ok found
+  found
 }
 
 /** Every finding of one file: those of the syntax tree, and those the checker's tables gave. `None` if it does not parse. */
@@ -302,7 +302,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
   }
   if total == 0 {
     print "{counted(files.length(), "file")}, no findings"
-    return Ok 0
+    return 0
   }
   var counts: List<String> = []
   for (index, rule) in everyLintRule().indexed() {
@@ -311,7 +311,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
     }
   }
   printError "{counted(total, "finding")} in {filesWithFindings} of {counted(files.length(), "file")} ({counts.joined(separator: ", ")})"
-  Ok 1
+  1
 }
 
 /** A finding as the diagnostic `torb check` would print, with its rule and its fix as notes. */

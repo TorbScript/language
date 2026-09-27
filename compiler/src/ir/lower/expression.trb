@@ -101,7 +101,7 @@ fn lowerAdaptedValue(
 fn wrapOf(var lowering: Lowering, expression: Expression): TypeId? {
   for adaptation in lowering.checker.adaptationsAt(lowering.module, expression.span) {
     if const .Wrap(wrapped) = adaptation {
-      return Some wrapped
+      return wrapped
     }
   }
   None
@@ -187,7 +187,7 @@ fn lowerInnerExpression(
     }
     .Block(block) => {
       const target = valueSlot lowering, builder, destination, annotation
-      lowerBlockInto lowering, builder, block, Some(target)
+      lowerBlockInto lowering, builder, block, target
       target
     }
     .TupleLiteral(items) => lowerTuple lowering, builder, destination, items, annotation, expression.span
@@ -225,21 +225,21 @@ fn optionalChainOf(var lowering: Lowering, expression: Expression): OptionalChai
   if lowering.optionalReceivers.containsKey(member.base.span) {
     return None
   }
-  Some member
+  member
 }
 
 /** `a?.m` written on its own, or as the callee of a call. */
 fn optionalMemberOf(expression: Expression): OptionalChain? {
   if const .Member(base, name, isOptional) = expression.kind {
     if isOptional {
-      return Some OptionalChain(base, name.span)
+      return OptionalChain base, name.span
     }
     return None
   }
   if const .Call(callee, _, _) = expression.kind {
     if const .Member(base, name, isOptional) = callee.kind {
       if isOptional {
-        return Some OptionalChain(base, name.span)
+        return OptionalChain base, name.span
       }
     }
   }
@@ -319,7 +319,7 @@ public fn spanOfArguments(arguments: List<Argument>, from: Int): Span? {
   }
   const first = arguments[from].value.span
   const last = arguments[arguments.length() - 1].value.span
-  Some first.to(last)
+  first.to last
 }
 
 /**
@@ -338,7 +338,7 @@ fn valueDestinationOf(var lowering: Lowering, var builder: FunctionBuilder, expr
   }
   if const Some(annotation) = typeAtSpan(lowering, expression.span) {
     if isVoidType(lowering, annotation) {
-      return Some addTemporary(builder, annotation)
+      return addTemporary builder, annotation
     }
   }
   None
@@ -382,18 +382,18 @@ public fn lowerOptionalMemberValue(
   destination: Slot,
 ): Slot {
   if !lowering.isSupported {
-    return abandonedSlot lowering, builder, Some(destination)
+    return abandonedSlot lowering, builder, destination
   }
   const annotation = match typeAtSpan(lowering, expression.span) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, Some(destination), "an expression without a type", expression.span
+      return unsupportedSlot lowering, builder, destination, "an expression without a type", expression.span
     }
   }
   if !canReplayAdaptations(lowering, expression) {
-    return abandonedSlot lowering, builder, Some(destination)
+    return abandonedSlot lowering, builder, destination
   }
-  lowerInnerExpression lowering, builder, expression, Some(destination), annotation
+  lowerInnerExpression lowering, builder, expression, destination, annotation
 }
 
 /** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */
@@ -503,7 +503,7 @@ public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, de
   }
   const annotation = voidTypeOf lowering
   const made = addTemporary builder, annotation
-  lowering.hole = Some made
+  lowering.hole = made
   made
 }
 
@@ -557,7 +557,7 @@ fn conversionMethodOf(var lowering: Lowering, expression: Expression): SymbolId?
   const module = lowering.module
   for adaptation in lowering.checker.adaptationsAt(module, expression.span) {
     if const .Convert(_, method) = adaptation {
-      return Some method
+      return method
     }
   }
   None
@@ -736,7 +736,7 @@ fn lowerLocalRead(
      * capture for - it declares the binding when the name is first used, which is already inside the inner closure - so
      * reading it by position would silently read the wrong parameter.
      */
-    if lowering.closureAt != Some(declared) {
+    if lowering.closureAt != declared {
       const what = "a closure that captures an implicit parameter of a closure around it"
       return unsupportedSlot lowering, builder, destination, what, at
     }
@@ -773,7 +773,7 @@ fn implicitParameterOf(var lowering: Lowering, at: Span): Int? {
   const adaptations = lowering.checker.adaptationsAt module, at
   for adaptation in adaptations {
     if const .ImplicitParameter(position) = adaptation {
-      return Some position
+      return position
     }
   }
   None
@@ -893,7 +893,7 @@ fn lowerImmortalConstant(
   const target = valueSlot lowering, builder, destination, lowering.program.functionAt(accessor).signature.result
   const location = locationOf lowering, at
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), accessor, [], empty, Some(location))
+  emit builder, Instruction.Call(target, accessor, [], empty, location)
   target
 }
 
@@ -918,7 +918,7 @@ fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writt
     }
   }
   if const Some(known) = lowering.constantCells.get(instance.key) {
-    return Some known
+    return known
   }
   const site = match lowering.checker.siteOf(symbol) {
     Some(found) => found
@@ -957,12 +957,12 @@ fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writt
     }
   }
   const produced = lowering.program.functionAt(initializer).signature.result
-  var accessor = newFunction accessorName, Some(symbol), IrSignature([], produced), "constant"
+  var accessor = newFunction accessorName, symbol, IrSignature([], produced), "constant"
   const empty = accessor.function
   accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
   const added = finishFunction lowering.program, accessor
   lowering.constantCells.set instance.key, added
-  Some added
+  added
 }
 
 /**
@@ -976,7 +976,7 @@ fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writt
 fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant): FunctionId? {
   const symbol = constant.symbol
   const value = constant.binding.value
-  var inner = newFunction constant.name, Some(symbol), IrSignature([], constant.declared), "constant"
+  var inner = newFunction constant.name, symbol, IrSignature([], constant.declared), "constant"
   const saved = savedFrame lowering
   enterBody lowering, constant.name
   enterModule lowering, constant.module
@@ -984,12 +984,12 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   lowering.capturedVariables = [:]
   lowering.inlinedConstants.set constant.instance.key, true
   const location = locationOf lowering, value.span
-  setBlockLocation inner, BlockId(0), Some(location)
+  setBlockLocation inner, BlockId(0), location
   const built = lowerExpression lowering, inner, value, None
   const slot = destructuredSlot lowering, inner, constant, built, value.span
   const produced = inner.function.typeOfSlot slot
   if lowering.isSupported && !lowering.isDiverged {
-    finishBlock lowering, inner, Terminator.Return(Some(borrowed(slot)))
+    finishBlock lowering, inner, Terminator.Return(borrowed(slot))
   }
   const isSupported = lowering.isSupported
   const _ = lowering.inlinedConstants.remove constant.instance.key
@@ -1000,7 +1000,7 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   }
   const written = inner.function
   inner.function = written.copy signature: IrSignature([], produced)
-  Some finishFunction(lowering.program, inner)
+  finishFunction lowering.program, inner
 }
 
 /**
@@ -1052,7 +1052,7 @@ fn constantTypeOf(var lowering: Lowering, symbol: SymbolId, instance: ConstantIn
     return None
   }
   const applied = substitute lowering.checker.types, declared, instance.mapping
-  Some irTypeOfClosed(lowering, applied)
+  irTypeOfClosed lowering, applied
 }
 
 /**
@@ -1145,7 +1145,7 @@ public fn fieldIndexOf(var lowering: Lowering, layout: LayoutId, field: SymbolId
   const shape = lowering.program.layoutAt layout
   const reachable = if shape.variants.isEmpty() { shape.fields.length() } else { shape.commonFieldCount }
   for index in 0..reachable {
-    if shape.fields[index].symbol == Some(field) {
+    if shape.fields[index].symbol == field {
       return index
     }
   }
@@ -1173,14 +1173,14 @@ public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, exp
     // `a?.m`: the base of the member is the *payload* of the `Option`, which `lowerOptionalMember` unwrapped and put here
     if isOptional {
       if const Some(payload) = lowering.optionalReceivers.get(base.span) {
-        return Some payload
+        return payload
       }
       const what = "`?.` the back end did not unwrap"
       reportUnsupported lowering, what, expression.span
       return None
     }
     const slot = lowerValue lowering, builder, base
-    return Some slot
+    return slot
   }
   implicitReceiver lowering, expression.span
 }
@@ -1304,7 +1304,7 @@ fn lowerUnary(
       .BitwiseNot => IntrinsicOperation.BitwiseNot
       _ => IntrinsicOperation.Negate
     }
-    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [slot], annotation, at
+    return intrinsicSlot lowering, builder, destination, operation, kind, [slot], annotation, at
   }
   const written = lowering.checker.expressionType lowering.module, operand.span
   lowerOperator lowering, builder, destination, expression.span, [slot], annotation, written
@@ -1325,7 +1325,7 @@ fn lowerBinary(
     .Coalesce => lowerCoalesce lowering, builder, destination, expression, left, right, annotation
     _ => {
       const lowered = lowerValue lowering, builder, left
-      const first = snapshotted lowering, builder, left, lowered, Some(right.span)
+      const first = snapshotted lowering, builder, left, lowered, right.span
       const second = lowerValue lowering, builder, right
       // The type of the **left** operand, which is the receiver of the member an operator is (`a + b` is `a.add(b)`)
       const operand = lowering.checker.expressionType lowering.module, left.span
@@ -1361,10 +1361,10 @@ fn shortCircuit(
   at: Span,
 ): Slot {
   const target = valueSlot lowering, builder, destination, annotation
-  const _ = lowerExpression lowering, builder, left, Some(target)
+  const _ = lowerExpression lowering, builder, left, target
   const location = locationOf lowering, at
-  const other = addBlock builder, "right", Some(location)
-  const join = addBlock builder, "join", Some(location)
+  const other = addBlock builder, "right", location
+  const join = addBlock builder, "join", location
   const isAnd = match operator {
     .And => true
     _ => false
@@ -1376,7 +1376,7 @@ fn shortCircuit(
   }
   finishBlock lowering, builder, terminator
   continueIn lowering, builder, other
-  const _ = lowerExpression lowering, builder, right, Some(target)
+  const _ = lowerExpression lowering, builder, right, target
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
@@ -1403,7 +1403,7 @@ fn lowerComparison(
   const operands = builder.typeOfSlot first
   const operation = comparisonOperation operator
   if const Some(kind) = numericKindOf(lowering.program, operands) {
-    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [first, second], annotation, at
+    return intrinsicSlot lowering, builder, destination, operation, kind, [first, second], annotation, at
   }
   if isEqualityOperation(operation) && isPlainEquality(lowering, operands) {
     return intrinsicSlot lowering, builder, destination, operation, None, [first, second], annotation, at
@@ -1479,7 +1479,7 @@ fn lowerOrderComparison(
     IntrinsicOperation.NotEqual
   }
   const kind = NumericKind.Signed 64
-  intrinsicSlot lowering, builder, destination, test, Some(kind), [tag, value], annotation, at
+  intrinsicSlot lowering, builder, destination, test, kind, [tag, value], annotation, at
 }
 
 /** `a < b` and `a >= b` both test against `.Less`; `a > b` and `a <= b` against `.Greater`. */
@@ -1502,7 +1502,7 @@ fn orderingTypeOf(var lowering: Lowering): IrTypeId? {
   const symbol = lowering.checker.wellKnown.symbolNamed("Ordering")?
   const empty: List<TypeId> = []
   const named = lowering.checker.nominal symbol, empty
-  Some irTypeOfClosed(lowering, named)
+  irTypeOfClosed lowering, named
 }
 
 fn variantNamed(var lowering: Lowering, layout: LayoutId, name: String): Int {
@@ -1573,10 +1573,10 @@ fn lowerTextComparison(
   }
   const integer = lowering.program.internType IrType.Integer(64, true)
   const order = addTemporary builder, integer
-  emitIntrinsic lowering, builder, Some(order), IntrinsicOperation.TextCompare, None, [first, second], at
+  emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [first, second], at
   const zero = integerSlot lowering, builder, 0, integer
   const kind = NumericKind.Signed 64
-  intrinsicSlot lowering, builder, destination, operation, Some(kind), [order, zero], annotation, at
+  intrinsicSlot lowering, builder, destination, operation, kind, [order, zero], annotation, at
 }
 
 /**
@@ -1601,7 +1601,7 @@ fn lowerArithmetic(
   }
   if const Some(kind) = numericKindOf(lowering.program, operands) {
     const operation = arithmeticOperation operator
-    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [first, second], annotation, at
+    return intrinsicSlot lowering, builder, destination, operation, kind, [first, second], annotation, at
   }
   if isTextType(lowering, operands) {
     if const .Add = operator {
@@ -1639,7 +1639,7 @@ public fn intrinsicSlot(
   at: Span,
 ): Slot {
   const target = valueSlot lowering, builder, destination, annotation
-  emitIntrinsic lowering, builder, Some(target), operation, kind, operands, at
+  emitIntrinsic lowering, builder, target, operation, kind, operands, at
   target
 }
 
@@ -1704,25 +1704,25 @@ public fn lowerIf(
   }
   const scrutinee = lowerValue lowering, builder, test
   const location = locationOf lowering, expression.span
-  const thenBlock = addBlock builder, "then", Some(location)
+  const thenBlock = addBlock builder, "then", location
   const alternative = match otherwise {
     Some(found) => found
     None => {
       return lowerIfStatement lowering, builder, destination, scrutinee, thenBlock, then, location
     }
   }
-  const elseBlock = addBlock builder, "else", Some(location)
-  const join = addBlock builder, "join", Some(location)
+  const elseBlock = addBlock builder, "else", location
+  const join = addBlock builder, "join", location
   const target = valueSlot lowering, builder, destination, annotation
   finishBlock lowering, builder, Terminator.Branch(scrutinee, thenBlock, elseBlock)
   continueIn lowering, builder, thenBlock
-  lowerBlockInto lowering, builder, then, Some(target)
+  lowerBlockInto lowering, builder, then, target
   const thenDiverged = lowering.isDiverged
   if !thenDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
   continueIn lowering, builder, elseBlock
-  const _ = lowerExpression lowering, builder, alternative, Some(target)
+  const _ = lowerExpression lowering, builder, alternative, target
   const elseDiverged = lowering.isDiverged
   if !elseDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
@@ -1763,7 +1763,7 @@ public fn lowerDecidedElse(
 ): Slot {
   const target = decidedIfTarget lowering, builder, destination, otherwise, annotation
   if const Some(alternative) = otherwise {
-    const _ = lowerExpression lowering, builder, alternative, Some(target)
+    const _ = lowerExpression lowering, builder, alternative, target
   }
   target
 }
@@ -1777,7 +1777,7 @@ fn lowerIfStatement(
   then: Block,
   location: LocationId,
 ): Slot {
-  const join = addBlock builder, "join", Some(location)
+  const join = addBlock builder, "join", location
   // An `if` without an `else` produces `Void`. Where somebody takes that value it is defined *before* the branch, so
   // that it is defined on both paths; where nobody does, no instruction is written at all
   const target = match destination {

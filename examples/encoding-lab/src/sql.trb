@@ -105,7 +105,7 @@ public type Sql {
       }
     }
     const name = if format.tableName.isEmpty() { lowered structure.declaredName() } else { format.tableName }
-    Ok Sql(name, columns, format.keys)
+    Sql name, columns, format.keys
   }
 
   fn createTable(): String {
@@ -167,18 +167,18 @@ fn columnsOf(
         columns.appendAll(columnsOf(nested, name, overrides)?)
       }
       // The path of a nested column is the path the encoder builds, which uses the field names and not the prefix
-      Ok(columns.map({ _.copy path: "{field.name()}.{_.path}" }).toList())
+      columns.map({ _.copy path: "{field.name()}.{_.path}" }).toList()
     }
     // A wrapper keeps its name, so this is where a well-known type gets the column type its driver wants
     .Wrapper(typeName, of) => {
       const kind = overrides.get(typeName) ?? scalarOf(of)
-      Ok([SqlColumn(field.name(), name, kind, required, defaultValue: constantOf(field))])
+      [SqlColumn(field.name(), name, kind, required, defaultValue: constantOf(field))]
     }
     .Sequence(_) => Fail SqlProblem(name, "is a sequence. A table has one value per column")
     .Mapping(_, _) => Fail SqlProblem(name, "is a map. A table has one value per column")
     .Variant(_, _) => Fail SqlProblem(name, "has cases. A table has one shape per column")
     .Reference(_) => Fail SqlProblem(name, "refers to itself. A table has no depth")
-    scalar => Ok([SqlColumn(field.name(), name, scalarOf(scalar), required, defaultValue: constantOf(field))])
+    scalar => [SqlColumn(field.name(), name, scalarOf(scalar), required, defaultValue: constantOf(field))]
   }
 }
 

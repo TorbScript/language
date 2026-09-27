@@ -232,7 +232,7 @@ type Game {
 
 extend Game with Store<Int> {
   fn valueOf(): Int? {
-    Some number
+    number
   }
 
   fn attachAt(slot: Bool, value: Int): Int {
@@ -242,7 +242,7 @@ extend Game with Store<Int> {
 
 extend Game with Store<String> {
   fn valueOf(): String? {
-    Some text
+    text
   }
 
   fn attachAt(slot: Bool, value: String): Int {

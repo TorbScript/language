@@ -85,7 +85,7 @@ public fn docOptionsOf(arguments: List<String>): DocOptions? {
     printError "torb doc: `--output` needs a directory behind it"
     return None
   }
-  Some DocOptions(paths, output, printsJson, onlyCheck, withoutRunning)
+  DocOptions paths, output, printsJson, onlyCheck, withoutRunning
 }
 
 /** The `torb doc` block of `torb --help`. */
@@ -105,7 +105,7 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
   const checked = check tree, roots
   if checked.files.isEmpty() {
     printError "error: {paths.joined(separator: ", ")} holds no package to document"
-    return Ok 1
+    return 1
   }
   var compileErrors = 0
   for file in checked.files {
@@ -113,12 +113,12 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
   }
   if compileErrors > 0 {
     printError "error: {counted(compileErrors, "problem")} in the checked files. `torb check` says what they are"
-    return Ok 1
+    return 1
   }
   const reference = referenceOf checked
   if options.printsJson {
     print referenceJson(reference)
-    return Ok 0
+    return 0
   }
   if !options.onlyCheck {
     for problem in sorted(reference.problems) {
@@ -128,7 +128,7 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
     const modules = reference.packages.map({ _.modules.length() }).sum()
     const packages = counted reference.packages.length(), "package"
     print "{packages}, {counted(modules, "module")}: wrote {counted(written, "file")} to {options.output}"
-    return Ok 0
+    return 0
   }
   var problems = reference.problems
   const tests = documentationTestsOf reference, checked
@@ -146,10 +146,10 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
   if !problems.isEmpty() {
     printError ""
     printError "{counted(problems.length(), "problem")}; {summary}"
-    return Ok 1
+    return 1
   }
   print "{summary}, no problems"
-  Ok 0
+  0
 }
 
 fn sorted(problems: List<DocumentationProblem>): List<DocumentationProblem> {

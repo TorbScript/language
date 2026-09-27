@@ -131,7 +131,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
     if !fileReadBytes(path, bytes, failure) {
       return Fail IoError(path, failure)
     }
-    Ok bytes
+    bytes
   }
 
   /** Creates or empties `path` and writes `bytes` into it in one call, synchronously - the counterpart of `readBytes`. */
@@ -151,7 +151,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
     while const Some(chunk) = chunks.next().await()? {
       bytes.appendAll chunk
     }
-    Ok bytes
+    bytes
   }
 
   /**
@@ -234,7 +234,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   static fn walk(path: String): Result<List<String>, IoError> {
     var found: List<String> = []
     walkInto path, "", found
-    Ok found
+    found
   }
 
   /**
@@ -428,13 +428,13 @@ fn metadataOf(path: String, follow: Bool): Result<Metadata, IoError> {
     3 => FileKind.SymbolicLink
     _ => FileKind.Other
   }
-  Ok Metadata(found, size, Timestamp.fromUnixNanoseconds(modified), Permissions(mode))
+  Metadata found, size, Timestamp.fromUnixNanoseconds(modified), Permissions(mode)
 }
 
 /** A new temporary file or directory, and a failure that names the directory it was to be made in. */
 fn temporaryEntry(prefix: String, inside: String?, directory: Bool): Result<String, IoError> {
   match fileCreateTemporary(inside ?? "", prefix, directory) {
-    Ok(path) => Ok path
+    Ok(path) => path
     Fail(problem) => Fail IoError(inside ?? "the directory for temporary files", problem.message)
   }
 }

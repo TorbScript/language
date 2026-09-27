@@ -29,7 +29,7 @@ fn api(request: Request): Task<Result<Response, HttpError>> {
       const posts = [Post("Notes on the Analytical Engine"), Post("Sketch of the Engine")]
       Ok Response.jsonOf(posts)
     }
-    _ => Ok Response.of(Status.notFound)
+    _ => Response.of Status.notFound
   }
 }
 
@@ -55,7 +55,7 @@ fn fetchPosts(base: Uri, userId: Int): Task<Result<List<Post>, HttpError>> {
 fn loadProfile(base: Uri, id: Int): Task<Result<String, HttpError>> {
   const user = fetchUser(base, id).await()?
   const posts = fetchPosts(base, user.id).await()?
-  Ok "{user.name} wrote {posts.length()} posts"
+  "{user.name} wrote {posts.length()} posts"
 }
 
 // Concurrent: start both tasks, then wait for both
@@ -64,7 +64,7 @@ fn loadProfileFast(base: Uri, id: Int): Task<Result<String, HttpError>> {
   const (userResult, postsResult) = both(fetchUser(base, id), fetchPosts(base, id)).await()
   const user = userResult?
   const posts = postsResult?
-  Ok "{user.name} wrote {posts.length()} posts, fetched at once"
+  "{user.name} wrote {posts.length()} posts, fetched at once"
 }
 
 // Parallel computation. Values are copied into tasks, which is cheap: slices and copies share their storage.

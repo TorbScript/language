@@ -37,7 +37,7 @@ fn loadConfig(path: String): Result<ServerConfig, SandboxError> {
   const script = Sandbox.load<ServerConfig>(path)?
   var config = ServerConfig()
   script.apply(config)?
-  Ok config
+  config
 }
 ```
 

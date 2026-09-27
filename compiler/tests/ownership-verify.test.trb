@@ -74,8 +74,8 @@ group "A value that is released twice, or used after it is gone" {
     const length = addTemporary builder, int64
     const at = someLocation program
     emit builder, Instruction.Call(None, callee, [Argument(Slot(0), Ownership.Owned, true)], [])
-    emit builder, Instruction.Intrinsic(Some(length), byteLength(), [Slot(0)], at)
-    terminate builder, Terminator.Return(Some(borrowed(length)))
+    emit builder, Instruction.Intrinsic(length, byteLength(), [Slot(0)], at)
+    terminate builder, Terminator.Return(borrowed(length))
     const identifier = finishFunction program, builder
     assert(problemsOf(program, identifier) == ["t_afterMove b0: %0 is used after it was moved out of or released"])
   }
@@ -91,7 +91,7 @@ group "A value that is released twice, or used after it is gone" {
     const kept = addTemporary builder, text
     emit builder, Instruction.Copy(kept, Slot(0))
     emit builder, Instruction.Copy(kept, Slot(1))
-    terminate builder, Terminator.Return(Some(Argument(kept, Ownership.Owned, true)))
+    terminate builder, Terminator.Return(Argument(kept, Ownership.Owned, true))
     const identifier = finishFunction program, builder
     assert(problemsOf(program, identifier) == ["t_overwritten b0: %2 is overwritten while it still owns a value"])
   }
@@ -163,7 +163,7 @@ group "A parameter the caller keeps the count of" {
     var builder = newFunction "t_stolen", None, signature, "body"
     const taken = addTemporary builder, text
     emit builder, Instruction.Move(taken, Slot(0))
-    terminate builder, Terminator.Return(Some(Argument(taken, Ownership.Owned, true)))
+    terminate builder, Terminator.Return(Argument(taken, Ownership.Owned, true))
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier)
@@ -197,7 +197,7 @@ group "A position that keeps a value says so" {
     var builder = newFunction "t_field", None, signature, "body"
     const built = addTemporary builder, pairType
     emit builder, Instruction.Construct(built, pair, 0, [borrowed(Slot(0))])
-    terminate builder, Terminator.Return(Some(Argument(built, Ownership.Owned, true)))
+    terminate builder, Terminator.Return(Argument(built, Ownership.Owned, true))
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier) == ["t_field b0: `construct` keeps %0, so the operand has to be `owned`"]

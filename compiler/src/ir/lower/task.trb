@@ -158,7 +158,7 @@ public fn resumeSignatureOf(var lowering: Lowering, signature: IrSignature, valu
     }
     parameters.append IrParameter(parameter.name, parameter.annotation, false, Ownership.Borrowed)
   }
-  Some IrSignature(parameters, value)
+  IrSignature parameters, value
 }
 
 /**
@@ -185,7 +185,7 @@ public fn buildTaskConstructor(
   }
   const task = addTemporary builder, signature.result
   emit builder, Instruction.TaskNew(task, resume, taskResultElement(lowering, value), arguments)
-  terminate builder, Terminator.Return(Some(borrowed(task)))
+  terminate builder, Terminator.Return(borrowed(task))
 }
 
 /** The element descriptor of a task's value, which the task block places and releases it by; `None` for `Void`. */
@@ -193,7 +193,7 @@ public fn taskResultElement(var lowering: Lowering, value: IrTypeId): ElementId?
   if isVoidType(lowering, value) {
     return None
   }
-  Some elementOfType(lowering, value)
+  elementOfType lowering, value
 }
 
 /**
@@ -287,7 +287,7 @@ public fn loweredNativeOf(var lowering: Lowering, symbol: SymbolId): String? {
   const name = lowering.checker.symbolAt(symbol).name
   const entry = nativeNamed(lowering, "", name, signature)?
   if const .Lowered = entry.target {
-    return Some entry.name
+    return entry.name
   }
   None
 }
@@ -352,7 +352,7 @@ fn spawnedRunnerOf(var lowering: Lowering, closureType: IrTypeId, value: IrTypeI
   const _ = closureSignatureOf(lowering, closureType)?
   const name = spawnedFunctionName canonicalType(lowering.program, closureType)
   if const Some(found) = lowering.generatedInstances.get(name) {
-    return Some found
+    return found
   }
   const parameters = [IrParameter("body", closureType, false, Ownership.Borrowed)]
   var runner = newFunction name, None, IrSignature(parameters, value), "spawned"
@@ -362,10 +362,10 @@ fn spawnedRunnerOf(var lowering: Lowering, closureType: IrTypeId, value: IrTypeI
     terminate runner, Terminator.Return(None)
   } else {
     const answer = addTemporary runner, value
-    emit runner, Instruction.CallClosure(Some(answer), Slot(0), [])
-    terminate runner, Terminator.Return(Some(borrowed(answer)))
+    emit runner, Instruction.CallClosure(answer, Slot(0), [])
+    terminate runner, Terminator.Return(borrowed(answer))
   }
   const added = finishFunction lowering.program, runner
   lowering.generatedInstances.set name, added
-  Some added
+  added
 }

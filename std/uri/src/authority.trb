@@ -114,7 +114,7 @@ public type Authority with Show, Equals, Hash {
     }
     const chosen = if port.isSome() { port } else { defaultPort }
     match chosen {
-      Some(found) => Some SocketAddress(address, found)
+      Some(found) => SocketAddress address, found
       None => None
     }
   }
@@ -136,7 +136,7 @@ public fn authorityOf(text: String, whole: String): Result<Authority, UriError> 
   var rest = text
   var userInfo: String? = None
   if const Some(at) = rest.lastByteOffsetOf("@") {
-    userInfo = Some(normalizedComponent(rest.sliceBytes(0, at), Component.UserInformation, whole)?)
+    userInfo = normalizedComponent(rest.sliceBytes(0, at), Component.UserInformation, whole)?
     rest = rest.sliceBytes(at + 1, rest.byteLength())
   }
   var hostText = rest
@@ -160,7 +160,7 @@ public fn authorityOf(text: String, whole: String): Result<Authority, UriError> 
   }
   const host = hostOf(hostText, whole)?
   const port = portOf(portText)?
-  Ok Authority(userInfo, host, port)
+  Authority userInfo, host, port
 }
 
 /** A port: decimal digits for a number from 0 to 65535, and `None` for an empty one, which RFC 3986 drops. */
@@ -213,9 +213,9 @@ fn hostOf(text: String, whole: String): Result<Host, UriError> {
     }
   }
   if const Ok(address) = Ipv4Address.tryFrom(name) {
-    return Ok Host.Address(IpAddress.Version4(address))
+    return Host.Address IpAddress.Version4(address)
   }
-  Ok Host.Name(name)
+  Host.Name name
 }
 
 /**
@@ -229,10 +229,10 @@ fn internationalHostOf(name: String, written: String): Result<Host, UriError> {
     Ok(mapped) => {
       const labels = mapped.show()
       if const Ok(address) = Ipv4Address.tryFrom(labels) {
-        return Ok Host.Address(IpAddress.Version4(address))
+        return Host.Address IpAddress.Version4(address)
       }
       const dot = if name.endsWith(".") { "." } else { "" }
-      Ok Host.Name("{labels}{dot}")
+      Host.Name "{labels}{dot}"
     }
     Fail(problem) => Fail UriError.InvalidHost(written, "{problem}")
   }
@@ -280,7 +280,7 @@ fn literalOf(text: String): Result<Host, UriError> {
     ))
   }
   match Ipv6Address.tryFrom(inside) {
-    Ok(address) => Ok Host.Address(IpAddress.Version6(address))
+    Ok(address) => Host.Address IpAddress.Version6(address)
     Fail(problem) => Fail UriError.InvalidHost(text, problem.reason)
   }
 }
@@ -305,5 +305,5 @@ fn futureOf(text: String, inside: String): Result<Host, UriError> {
     }
     index = index + 1
   }
-  Ok Host.Future(inside.toLowerCase())
+  Host.Future inside.toLowerCase()
 }

@@ -124,12 +124,12 @@ group "C statements" {
   test "a declaration, with and without a value, and as an array" {
     assert(shown(CStatement.Declaration("int64_t", "s3")) == "static void f(void) \{\n  int64_t s3;\n\}")
     const zero = CExpression.Initializer([CExpression.Literal("0")])
-    assert shown(CStatement.Declaration("int64_t", "s3", Some(zero))).contains("  int64_t s3 = \{ 0 \};")
+    assert shown(CStatement.Declaration("int64_t", "s3", zero)).contains("  int64_t s3 = \{ 0 \};")
     // The `*` of a pointer binds to the name, which is where C wants it
     assert shown(CStatement.Declaration("T_Node *", "value")).contains("  T_Node *value;")
     const parts = CExpression.Initializer([slot("s7"), slot("s0_part")])
     assert(
-      shown(CStatement.Declaration("const torb_text", "parts", Some(parts), 2))
+      shown(CStatement.Declaration("const torb_text", "parts", parts, 2))
         .contains("  const torb_text parts[2] = \{ s7, s0_part \};")
     )
   }
@@ -147,7 +147,7 @@ group "C statements" {
     assert shown(CStatement.Evaluate(CExpression.Cast("void", slot("s1")))).contains("  (void)s1;")
     assert shown(CStatement.Goto("L1")).contains("  goto L1;")
     assert shown(CStatement.Return()).contains("  return;")
-    assert shown(CStatement.Return(Some(slot("s2")))).contains("  return s2;")
+    assert shown(CStatement.Return(slot("s2"))).contains("  return s2;")
     assert shown(CStatement.Break).contains("  break;")
   }
 
@@ -177,7 +177,7 @@ group "C statements" {
   test "a block of its own is two levels deep inside it" {
     const parts = CExpression.Initializer([slot("s7")])
     const body = [
-      CStatement.Declaration("const torb_text", "parts", Some(parts), 1),
+      CStatement.Declaration("const torb_text", "parts", parts, 1),
       CStatement.Assignment(slot("s2"), CExpression.Name("torb_text_concat")),
     ]
     assert(
@@ -253,7 +253,7 @@ group "C declarations" {
   }
 
   test "a definition carries its comment, and its body is one level deep" {
-    const body = [CStatement.Declaration("int64_t", "s1"), CStatement.Return(Some(slot("s1")))]
+    const body = [CStatement.Declaration("int64_t", "s1"), CStatement.Return(slot("s1"))]
     assert(
       written(CDeclaration.Definition("t_main_double", "static int64_t t_main_double(void)", body))
         == raw"""

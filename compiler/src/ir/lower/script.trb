@@ -55,13 +55,13 @@ public fn scriptTableOf(
   }
   const name = nativeWrapperName lowering.program, symbolPathOf(lowering.checker, member), arguments
   if const Some(found) = lowering.nativeWrappers.get(name) {
-    return Some found
+    return found
   }
   const signature = lowering.checker.signature signatureOf(lowering.checker, member)
   const declared = irSignatureUnder lowering, signature, mapping
-  var builder = newFunction name, Some(member), declared, "script table"
+  var builder = newFunction name, member, declared, "script table"
   const location = locationOf lowering, at
-  setBlockLocation builder, BlockId(0), Some(location)
+  setBlockLocation builder, BlockId(0), location
   const text = lowering.program.internType IrType.Text
   const boolean = lowering.program.internType IrType.Boolean
   const layout = variantLayoutOfType lowering, declared.result
@@ -78,10 +78,10 @@ public fn scriptTableOf(
     }
     const described = addTemporary builder, text
     emit builder, Instruction.Constant(described, textStatic(lowering, written, text))
-    terminate builder, Terminator.Return(Some(borrowed(described)))
+    terminate builder, Terminator.Return(borrowed(described))
     const built = finishFunction lowering.program, builder
     lowering.nativeWrappers.set name, built
-    return Some built
+    return built
   }
   // A native binary runs no script natively: the front end it embeds loads even the ones it was compiled with
   const tabled = if lowering.forMachine || kind != ScriptTableKind.Body { scriptsOf lowering, receiver } else { [] }
@@ -90,9 +90,9 @@ public fn scriptTableOf(
     emit builder, Instruction.Constant(written, textStatic(lowering, path, text))
     const equal = addTemporary builder, boolean
     const comparison = Intrinsic operation: IntrinsicOperation.TextEqual
-    emit builder, Instruction.Intrinsic(Some(equal), comparison, [Slot(0), written], location)
-    const found = addBlock builder, "found", Some(location)
-    const next = addBlock builder, "next", Some(location)
+    emit builder, Instruction.Intrinsic(equal, comparison, [Slot(0), written], location)
+    const found = addBlock builder, "found", location
+    const next = addBlock builder, "next", location
     terminate builder, Terminator.Branch(equal, found, next)
     switchTo builder, found
     match kind {
@@ -111,12 +111,12 @@ public fn scriptTableOf(
         emit builder, Instruction.Closure(closure, function, [], true)
         const result = addTemporary builder, declared.result
         emit builder, Instruction.Construct(result, inner, some, [borrowed(closure)])
-        terminate builder, Terminator.Return(Some(borrowed(result)))
+        terminate builder, Terminator.Return(borrowed(result))
       }
       .Imports => {
         const imports = addTemporary builder, text
         emit builder, Instruction.Constant(imports, textStatic(lowering, importsOf(lowering, module), text))
-        terminate builder, Terminator.Return(Some(borrowed(imports)))
+        terminate builder, Terminator.Return(borrowed(imports))
       }
       // Answered above, without a path, or no table at all
       .Receiver | .Sources | .Crossing => {}
@@ -134,12 +134,12 @@ public fn scriptTableOf(
       }
       const result = addTemporary builder, declared.result
       emit builder, Instruction.Construct(result, inner, variantNamed(lowering, inner, "None"), [])
-      terminate builder, Terminator.Return(Some(borrowed(result)))
+      terminate builder, Terminator.Return(borrowed(result))
     }
     .Imports => {
       const nothing = addTemporary builder, text
       emit builder, Instruction.Constant(nothing, textStatic(lowering, "", text))
-      terminate builder, Terminator.Return(Some(borrowed(nothing)))
+      terminate builder, Terminator.Return(borrowed(nothing))
     }
     .Receiver | .Sources => {}
     .Crossing => {
@@ -149,7 +149,7 @@ public fn scriptTableOf(
   }
   const built = finishFunction lowering.program, builder
   lowering.nativeWrappers.set name, built
-  Some built
+  built
 }
 
 /**
@@ -225,7 +225,7 @@ fn scriptsOf(var lowering: Lowering, receiver: TypeId): List<(ModuleId, String)>
   var found: List<(ModuleId, String)> = []
   for module in lowering.checker.program.graph.modules {
     if const Some(.Loaded(_, _)) = module.receiver {
-      if scriptReceiverOf(lowering.checker, module.id) == Some(receiver) {
+      if scriptReceiverOf(lowering.checker, module.id) == receiver {
         const package = lowering.checker.program.workspace.packages[module.package]
         found.append((module.id, relativePath(package.directory, module.path)))
       }

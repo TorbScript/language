@@ -49,7 +49,7 @@ public fn specifierOf(text: String): Result<Specifier, String> {
       checkedSegment(component, text)?
       components.append component
     }
-    return Ok Specifier.Relative(climbs, components)
+    return Specifier.Relative climbs, components
   }
   const parts = text.split "/"
   if parts.length() < 2 {
@@ -67,10 +67,10 @@ public fn specifierOf(text: String): Result<Specifier, String> {
     checkedSegment(component, text)?
     path.append component
   }
-  if path.last() == Some("main") {
+  if path.last() == "main" {
     return Fail "`{text}` names the program of `{owner}/{name}`, and a program is not importable"
   }
-  Ok Specifier.Package(owner, name, path)
+  Specifier.Package owner, name, path
 }
 
 /**
@@ -89,7 +89,7 @@ public fn packageNameOf(text: String): Result<String, String> {
     return Fail "`{text}` is not `owner/name`: a dependency names a package, never a module of one"
   }
   const (owner, name) = packageNameParts(parts[0], parts[1], text)?
-  Ok "{owner}/{name}"
+  "{owner}/{name}"
 }
 
 /** Whether `text` is a segment: a lowercase letter, then lowercase letters, digits and `-`. */
@@ -117,7 +117,7 @@ fn packageNameParts(owner: String, name: String, text: String): Result<(String, 
   }
   checkedSegment(owner, text)?
   checkedSegment(name, text)?
-  Ok((owner, name))
+  (owner, name)
 }
 
 fn checkedSegment(segment: String, text: String): Result<Void, String> {
@@ -136,5 +136,5 @@ fn schemeOf(text: String): String? {
   if word.isEmpty() || !word.chars().all({ (_ >= 'a' && _ <= 'z') || (_ >= '0' && _ <= '9') }) {
     return None
   }
-  Some word
+  word
 }

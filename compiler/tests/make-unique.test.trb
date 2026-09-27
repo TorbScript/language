@@ -61,7 +61,7 @@ group "Make unique before a write" {
     const signature = IrSignature([IrParameter("self", bigType), IrParameter("value", int64)], bigType)
     var builder = newFunction "t_changed", None, signature, "body"
     emit builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(big, 0)]), borrowed(Slot(1)))
-    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    terminate builder, Terminator.Return(borrowed(Slot(0)))
     const identifier = finishFunction program, builder
     assert(
       ownedTextOfFunction(program, identifier) == raw"""
@@ -92,7 +92,7 @@ group "Make unique before a write" {
     var builder = newFunction "t_deep", None, signature, "body"
     const place = Reference Slot(0), [PathStep.Field(outer, 0), PathStep.Field(big, 0)]
     emit builder, Instruction.Write(place, borrowed(Slot(1)))
-    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    terminate builder, Terminator.Return(borrowed(Slot(0)))
     const identifier = finishFunction program, builder
     assert(
       ownedTextOfFunction(program, identifier) == raw"""
@@ -116,7 +116,7 @@ group "Make unique before a write" {
     const signature = IrSignature([IrParameter("self", smallType), IrParameter("value", int64)], smallType)
     var builder = newFunction "t_resized", None, signature, "body"
     emit builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(small, 1)]), borrowed(Slot(1)))
-    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    terminate builder, Terminator.Return(borrowed(Slot(0)))
     const identifier = finishFunction program, builder
     assert(
       ownedTextOfFunction(program, identifier) == raw"""
@@ -140,7 +140,7 @@ group "Make unique before a write" {
     var builder = newFunction "t_once", None, signature, "body"
     emit builder, Instruction.MakeUnique(Reference(Slot(0), []))
     emit builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(big, 0)]), borrowed(Slot(1)))
-    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    terminate builder, Terminator.Return(borrowed(Slot(0)))
     const identifier = finishFunction program, builder
     const shown = ownedTextOfFunction program, identifier
     assert shown.contains("b0: # body\n  makeUnique %0\n  write %0.f0 = %1 borrowed\n  return %0 owned last")

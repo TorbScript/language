@@ -97,7 +97,7 @@ type Email with TryFrom<String, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
-    Ok Self(text)
+    Self text
   }
 }
 

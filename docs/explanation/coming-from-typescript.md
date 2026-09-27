@@ -146,7 +146,7 @@ type User {
 }
 
 fn findUser(id: Int): User? {
-  if id == 1 { Some User("Ada") } else { None }
+  if id == 1 { User "Ada" } else { None }
 }
 
 const managerName: String? = findUser(2)?.manager?.name

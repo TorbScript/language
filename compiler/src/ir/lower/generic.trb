@@ -77,7 +77,7 @@ public fn dispatchedMember(
       const mapping = mappingOfCall lowering, symbol, typeArguments, subject
       const empty: List<TypeId> = []
       const owner = ownerNameOf lowering, symbol
-      Some Dispatched(symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject)
+      Dispatched symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject
     }
     .Implementation(implementation, _) => {
       staticDispatch lowering, symbol, typeArguments, implementation, subject, at
@@ -91,7 +91,7 @@ public fn dispatchedMember(
       if const Some(found) = subject {
         if !takesSelf(lowering, symbol) {
           if const .Implementation(one, _, _) = witnessFor(lowering.checker, found, applied) {
-            return memberOfImplementationDispatch lowering, symbol, typeArguments, one, Some(found), applied, at
+            return memberOfImplementationDispatch lowering, symbol, typeArguments, one, found, applied, at
           }
         }
         // A concrete receiver whose bound named a generic parameter (`String.from value` under `where String:
@@ -108,7 +108,7 @@ public fn dispatchedMember(
       const own = lowering.checker.types.intern parameterFormOf(parameter)
       const found = substituted lowering, own
       if isTraitValueType(lowering, found) && takesSelf(lowering, symbol) {
-        return dynamicDispatch lowering, symbol, typeArguments, applied, Some(found), at
+        return dynamicDispatch lowering, symbol, typeArguments, applied, found, at
       }
       resolvedDispatch lowering, symbol, typeArguments, found, applied, at
     }
@@ -120,7 +120,7 @@ fn subjectOfReceiver(var lowering: Lowering, receiver: TypeId?, symbol: SymbolId
   const written = receiver?
   const applied = substituted lowering, written
   if const Some(found) = closedReceiver(lowering, applied) {
-    return Some found
+    return found
   }
   constructedReceiver lowering, applied, symbol
 }
@@ -154,7 +154,7 @@ fn closedReceiver(var lowering: Lowering, found: TypeId): TypeId? {
     return None
   }
   if isClosedType(lowering, found) {
-    return Some found
+    return found
   }
   None
 }
@@ -176,7 +176,7 @@ fn resolvedDispatch(
       return None
     }
   }
-  memberOfImplementationDispatch lowering, symbol, typeArguments, implementation, Some(subject), bound, at
+  memberOfImplementationDispatch lowering, symbol, typeArguments, implementation, subject, bound, at
 }
 
 fn staticDispatch(
@@ -221,8 +221,8 @@ fn constructedReceiver(var lowering: Lowering, receiver: TypeId, symbol: SymbolI
   const built = headNameOfType(lowering, applied)?
   const identifier = signatureOf lowering.checker, symbol
   const owner = lowering.checker.signature(identifier).owner?
-  if headNameOfType(lowering, owner) == Some(built) {
-    return Some applied
+  if headNameOfType(lowering, owner) == built {
+    return applied
   }
   implementingReceiver lowering, applied, owner, symbol
 }
@@ -259,7 +259,7 @@ fn implementingReceiver(
   // A type may implement the trait more than once (`String` is made from an `Iterate<Char>` and from a `Path`), and then
   // it names no single list of arguments - but it still is what `Self` stands for
   match resolveTrait(lowering.checker, applied, declaring) {
-    .Found(_, _) | .Bounded(_) | .Ambiguous(_, _) => Some applied
+    .Found(_, _) | .Bounded(_) | .Ambiguous(_, _) => applied
     .Missing => None
   }
 }
@@ -268,7 +268,7 @@ fn targetOfImplementation(var lowering: Lowering, implementation: Implementation
   const found = lowering.checker.implementations.at implementation
   const target = found.target
   if const .Nominal(_, _) = lowering.checker.types.form(target) {
-    return Some target
+    return target
   }
   None
 }
@@ -300,7 +300,7 @@ fn memberOfImplementationDispatch(
   addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
   const owner = ownerOfImplementation lowering, found.target, target, member
-  Some Dispatched(member, mapping, bound, owner, Some(implementation), false, empty, Some(target))
+  Dispatched member, mapping, bound, owner, implementation, false, empty, target
 }
 
 /**
@@ -362,7 +362,7 @@ fn ownerOfImplementation(
 
 fn headNameOfType(var lowering: Lowering, id: TypeId): String? {
   if const .Nominal(symbol, _) = lowering.checker.types.form(id) {
-    return Some lowering.checker.symbolAt(symbol).name
+    return lowering.checker.symbolAt(symbol).name
   }
   None
 }
@@ -410,7 +410,7 @@ fn dynamicDispatch(
        * that implementation and not a table lookup. Only where no implementation covers it is it the finding.
        */
       if const .Implementation(found, _, _) = witnessFor(lowering.checker, target, bound) {
-        return memberOfImplementationDispatch lowering, symbol, typeArguments, found, Some(target), bound, at
+        return memberOfImplementationDispatch lowering, symbol, typeArguments, found, target, bound, at
       }
       // A member with type parameters of its own has one slot per list of arguments the program calls it with
       if !typeArguments.isEmpty() {
@@ -422,7 +422,7 @@ fn dynamicDispatch(
           own.append applied
         }
         if isClosed {
-          return Some Dispatched(member, mapping, bound, "", None, true, bounds, Some(target), own)
+          return Dispatched member, mapping, bound, "", None, true, bounds, target, own
         }
       }
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
@@ -430,7 +430,7 @@ fn dynamicDispatch(
       return None
     }
   }
-  Some Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target))
+  Dispatched member, mapping, bound, "", None, isDynamic, bounds, target
 }
 
 /**
@@ -469,7 +469,7 @@ public fn dispatchedOn(
   }
   const empty: List<TypeId> = []
   if isTraitValueType(lowering, subject) {
-    return dynamicDispatch lowering, symbol, empty, bound, Some(subject), at
+    return dynamicDispatch lowering, symbol, empty, bound, subject, at
   }
   resolvedDispatch lowering, symbol, empty, subject, bound, at
 }
@@ -653,7 +653,7 @@ public fn collectionCrossingOf(var lowering: Lowering, declared: TypeId): Collec
     return None
   }
   const container = preludeType(lowering, name, arguments)?
-  Some CollectionCrossing(irTypeOfClosed(lowering, container), container, bounds)
+  CollectionCrossing irTypeOfClosed(lowering, container), container, bounds
 }
 
 /** The implementation a collection trait's storage is, or empty for a trait that is not one of the three. */
@@ -674,7 +674,7 @@ fn defaultImplementationName(var lowering: Lowering, capability: SymbolId): Stri
 /** `ArrayList<Item>`, `TrieMap<Key, Value>`: a declaration of the prelude applied to these type arguments. */
 public fn preludeType(var lowering: Lowering, name: String, arguments: List<TypeId>): TypeId? {
   const symbol = lowering.checker.wellKnown.symbolNamed(name)?
-  Some lowering.checker.nominal(symbol, arguments)
+  lowering.checker.nominal symbol, arguments
 }
 
 /**

@@ -111,7 +111,7 @@ fn isMethod(candidate: Candidate): Bool {
 public fn resolutionOfCandidate(candidate: Candidate): Resolution {
   match candidate.kind {
     .Field(owner, field) => Resolution.Field owner, field
-    .Constant(owner, symbol) => Resolution.Constant symbol, Some(owner)
+    .Constant(owner, symbol) => Resolution.Constant symbol, owner
     .Method(_, symbol) => Resolution.Callable symbol, [], candidate.dispatch
     .CaseConstructor(owner, variant) => Resolution.CaseOf owner, variant
     .Construct(owner) => Resolution.Construct owner
@@ -166,7 +166,7 @@ fn findMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bo
     return None
   }
   if const Some(known) = checker.memberAnswers.get(key) {
-    return Some known
+    return known
   }
   const generation = checker.answerGeneration
   const found = searchMember checker, receiver, name, isStatic, at
@@ -190,8 +190,8 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
     }
     var index = 0
     for field in fields {
-      if field.label == Some(name) || name == "{index}" {
-        return Some Candidate(CandidateKind.TupleField(receiver, index), field.annotation)
+      if field.label == name || name == "{index}" {
+        return Candidate CandidateKind.TupleField(receiver, index), field.annotation
       }
       index = index + 1
     }
@@ -202,28 +202,28 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
   // not the one of `String` or of `Int64`, and its `Self` is the literal type (concept, Literal Types)
   if const .Literals(base, _) = checker.types.form(receiver) {
     if const Some(found) = traitMember(checker, receiver, name, isStatic) {
-      return Some found
+      return found
     }
     return lookupMemberAt checker, base, name, isStatic, at
   }
   if const .Nominal(symbol, arguments) = checker.types.form(receiver) {
     if const Some(found) = nominalMember(checker, receiver, symbol, arguments, name, isStatic) {
       if isStatic {
-        return Some withTraitOverloads(checker, receiver, name, found)
+        return withTraitOverloads checker, receiver, name, found
       }
-      return Some found
+      return found
     }
   }
   if const Some(found) = extensionMember(checker, receiver, name, isStatic, at) {
-    return Some found
+    return found
   }
   if const Some(found) = traitMember(checker, receiver, name, isStatic) {
-    return Some found
+    return found
   }
   // `a.hash()` before anything asked for `Hash`: a generated implementation is made on first use, and naming its member
   // is a use - so the member is there whenever `==`, a key or an interpolation would find the trait
   if const Some(found) = derivedMember(checker, receiver, name, isStatic) {
-    return Some found
+    return found
   }
   // `Trait.member`: the members of an implementation whose target is the trait itself, like `List.from`
   if isStatic {
@@ -250,24 +250,24 @@ fn nominalMember(
     for field in shape.fields {
       if field.name == name {
         const annotation = substitute checker.types, field.annotation, mapping
-        return Some Candidate(CandidateKind.Field(receiver, field.symbol), annotation)
+        return Candidate CandidateKind.Field(receiver, field.symbol), annotation
       }
     }
   }
   if isStatic {
     for variant in shape.cases {
       if variant.name == name {
-        return Some caseCandidate(checker, receiver, variant, mapping)
+        return caseCandidate checker, receiver, variant, mapping
       }
     }
   }
   if const Some(member) = shape.members.get(name) {
-    return Some memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct)
+    return memberCandidate checker, receiver, member, mapping, own, isStatic, Dispatch.Direct
   }
   // `copy` is generated for every `type`, with the shape of the constructor and every field optional
   if !isStatic && name == "copy" && shape.cases.isEmpty() && !shape.isShared {
     const form = constructorForm checker, receiver, shape, mapping, allOptional: true
-    return Some Candidate(CandidateKind.Copy(receiver), checker.functionType(form), form: Some(form))
+    return Candidate CandidateKind.Copy(receiver), checker.functionType(form), form: form
   }
   None
 }
@@ -293,15 +293,15 @@ fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStati
       // The more specific of two extensions is the answer and no ambiguity: see `isMoreSpecificExtension`
       if isMoreSpecificExtension(checker, index, best) {
         best = index
-        bestMember = Some member
+        bestMember = member
         second = None
       } else if !isMoreSpecificExtension(checker, best, index) && checker.implementations.all[best].module != module {
-        second = Some module
+        second = module
       }
       continue
     }
     best = index
-    bestMember = Some member
+    bestMember = member
   }
   const member = bestMember?
   const module = checker.implementations.all[best].module
@@ -312,7 +312,7 @@ fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStati
   }
   const mapping = mappingOfImplementation checker, best, receiver
   const own = mapping.length()
-  Some memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct).copy(module: Some(module))
+  memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct).copy(module: module)
 }
 
 /**
@@ -370,11 +370,11 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
     }
   }
   if found.length() == 1 {
-    return Some first
+    return first
   }
   // `Int.from` is one name with five signatures, because `Int64` implements `From<Int32>`, `From<UInt8>` and three
   // more: the argument decides which one is meant, and the call site picks (design 4.3)
-  Some first.copy(needsArguments: true, overloads: found)
+  first.copy needsArguments: true, overloads: found
 }
 
 /**
@@ -394,16 +394,16 @@ fn derivedMember(var checker: Checker, receiver: TypeId, name: String, isStatic:
 fn derivedTraitOf(name: String, isStatic: Bool): String? {
   if isStatic {
     return match name {
-      "decode" => Some "Decode"
-      "describe" => Some "Describe"
+      "decode" => "Decode"
+      "describe" => "Describe"
       _ => None
     }
   }
   match name {
-    "equals" => Some "Equals"
-    "hash" => Some "Hash"
-    "show" => Some "Show"
-    "encode" => Some "Encode"
+    "equals" => "Equals"
+    "hash" => "Hash"
+    "show" => "Show"
+    "encode" => "Encode"
     _ => None
   }
 }
@@ -530,7 +530,7 @@ fn memberOfTrait(
   const own = shape.generics.length()
   const dispatch = dispatchOf checker, receiver, symbol, bound
   // `Self` of the trait is what makes `equals(self, other: Self)` meaningless on a trait-typed value
-  Some memberCandidate(checker, receiver, member, mapping, own, isStatic, dispatch, Some(shape.own))
+  memberCandidate checker, receiver, member, mapping, own, isStatic, dispatch, shape.own
 }
 
 /**
@@ -626,7 +626,7 @@ fn memberCandidate(
       return Candidate(
         CandidateKind.Method(receiver, member),
         annotation,
-        form: Some(value),
+        form: value,
         takesSelf: true,
         isVarSelf: signature.isVarSelf,
         generics: generics,
@@ -639,7 +639,7 @@ fn memberCandidate(
     return Candidate(
       CandidateKind.Method(receiver, member),
       annotation,
-      form: Some(form),
+      form: form,
       takesSelf: true,
       isVarSelf: signature.isVarSelf,
       generics: generics,
@@ -658,7 +658,7 @@ fn memberCandidate(
       return Candidate(
         CandidateKind.Constant(receiver, member),
         checker.functionType(value),
-        form: Some(value),
+        form: value,
         takesSelf: true,
         isVarSelf: isVarReceiver(held.parameters[0].mode),
         generics: generics,
@@ -678,7 +678,7 @@ fn memberCandidate(
   Candidate(
     CandidateKind.Method(receiver, member),
     annotation,
-    form: Some(form),
+    form: form,
     generics: generics,
     bounds: bounds,
     takesSelfArgument: takesSelfArgument,
@@ -728,7 +728,7 @@ fn receiverFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
   if const .Function(form) = checker.types.form(annotation) {
     if const Some(first) = form.parameters.first() {
       if const .Receiver(_) = first.mode {
-        return Some form
+        return form
       }
     }
   }
@@ -763,12 +763,12 @@ fn caseCandidate(
   if form.parameters.isEmpty() {
     return Candidate CandidateKind.CaseConstructor(owner, variant.symbol), owner, form: None
   }
-  Candidate CandidateKind.CaseConstructor(owner, variant.symbol), checker.functionType(form), form: Some(form)
+  Candidate CandidateKind.CaseConstructor(owner, variant.symbol), checker.functionType(form), form: form
 }
 
 /** `Point.area` is `(self: Point) => Int`, `p.area` is `() => Int`: the same member, read through a type or a value. */
 fn withReceiver(var checker: Checker, receiver: TypeId, form: FunctionForm, isVarSelf: Bool): FunctionForm {
-  var parameters = [ParameterForm(Some("self"), ParameterMode.Receiver(isVarSelf), receiver)]
+  var parameters = [ParameterForm("self", ParameterMode.Receiver(isVarSelf), receiver)]
   parameters.appendAll form.parameters
   FunctionForm parameters, form.result
 }
@@ -790,7 +790,7 @@ public fn constructorOf(var checker: Checker, owner: TypeId): FunctionForm? {
     return None
   }
   const mapping = argumentMapping shape.generics, arguments
-  Some constructorForm(checker, owner, shape, mapping, allOptional: false)
+  constructorForm checker, owner, shape, mapping, allOptional: false
 }
 
 fn constructorForm(
@@ -804,7 +804,7 @@ fn constructorForm(
   for field in shape.fields {
     const annotation = substitute checker.types, field.annotation, mapping
     const hasDefault = allOptional || field.hasDefault
-    parameters.append ParameterForm(Some(field.name), ParameterMode.Value, annotation, hasDefault)
+    parameters.append ParameterForm(field.name, ParameterMode.Value, annotation, hasDefault)
   }
   FunctionForm parameters, owner
 }
@@ -839,7 +839,7 @@ public fn caseNamed(var checker: Checker, owner: TypeId, name: String): CaseSign
           for field in variant.fields {
             fields.append field.copy(annotation: substitute(checker.types, field.annotation, mapping))
           }
-          return Some variant.copy(fields: fields)
+          return variant.copy fields: fields
         }
       }
       None
@@ -882,7 +882,7 @@ public fn caseNamesOf(var checker: Checker, of: TypeId): List<String> {
 /** The name a nominal type was declared under, which is what `Point(x, y)` as a pattern has to match. */
 public fn typeNameOf(checker: Checker, of: TypeId): String? {
   if const .Nominal(symbol, _) = checker.types.form(of) {
-    return Some checker.symbolAt(symbol).name
+    return checker.symbolAt(symbol).name
   }
   None
 }
@@ -947,7 +947,7 @@ public fn lookupTraitNamespace(var checker: Checker, owner: TypeId, name: String
     if !sameType(checker.types, applied, owner) {
       continue
     }
-    return Some memberCandidate(checker, owner, member, mapping, mapping.length(), true, Dispatch.Direct)
+    return memberCandidate checker, owner, member, mapping, mapping.length(), true, Dispatch.Direct
   }
   None
 }

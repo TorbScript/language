@@ -391,7 +391,7 @@ fn buildNominalLayout(
   // A type may carry fields of its own *and* cases; those fields are in front of every group
   for field in signature.fields {
     const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
-    fields.append FieldLayout(field.name, annotation, Some(field.symbol))
+    fields.append FieldLayout(field.name, annotation, field.symbol)
   }
   const common = fields.length()
   var variants: List<VariantLayout> = []
@@ -399,13 +399,13 @@ fn buildNominalLayout(
     const first = fields.length()
     for field in declared.fields {
       const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
-      fields.append FieldLayout(field.name, annotation, Some(field.symbol))
+      fields.append FieldLayout(field.name, annotation, field.symbol)
     }
-    variants.append VariantLayout(declared.name, first, fields.length() - first, Some(declared.symbol))
+    variants.append VariantLayout(declared.name, first, fields.length() - first, declared.symbol)
   }
   // `Expression<Value>` is a record of the program with one field more than `std/expression` declares: the `lazy` cell
   // of its value, which `value()` forces (`ir/lower/quoted.trb`)
-  if checker.wellKnown.expression == Some(signature.symbol) && arguments.length() == 1 {
+  if checker.wellKnown.expression == signature.symbol && arguments.length() == 1 {
     const empty: Map<ParameterId, TypeId> = [:]
     const inner = instantiateType program, checker, instantiation, empty, arguments[0]
     const cell = cellType program, checker, instantiation, arguments[0], inner
@@ -415,7 +415,7 @@ fn buildNominalLayout(
   program.setLayout(
     id,
     layout.copy(
-      origin: Some(signature.symbol),
+      origin: signature.symbol,
       arguments: applied,
       fields: fields,
       variants: variants,
@@ -465,7 +465,7 @@ fn primitiveType(
  */
 fn runtimeObjectOf(path: SymbolPath, signature: TypeSignature): RuntimeKind? {
   if signature.isShared && path.package == "std/fs" && path.owners.isEmpty() && path.name == "File" {
-    return Some RuntimeKind.FileHandle
+    return RuntimeKind.FileHandle
   }
   None
 }
@@ -569,14 +569,14 @@ fn extensionOf(checker: Checker, symbol: SymbolId): Int? {
   candidates.appendAll table.open
   for index in candidates {
     const implementation = table.all[index]
-    if implementation.members.get(name) != Some(symbol) {
+    if implementation.members.get(name) != symbol {
       continue
     }
     // Only an `extend` is remembered by where it is written; the `with` list of a `type` shares the body's members
     if !table.bySpan.containsKey("{implementation.module.value}:{implementation.at.start}") {
       continue
     }
-    return Some index
+    return index
   }
   None
 }
@@ -593,7 +593,7 @@ public fn traitExtensionTargetOf(checker: Checker, symbol: SymbolId): TypeId? {
     return None
   }
   if const .Traits(_) = checker.types.form(implementation.target) {
-    return Some implementation.target
+    return implementation.target
   }
   None
 }
@@ -658,8 +658,8 @@ public fn moduleComponentOf(directory: String, path: String): String {
  */
 fn ownerSymbolOf(checker: Checker, symbol: SymbolId): SymbolId? {
   match checker.symbolAt(symbol).kind {
-    .Field(owner) => Some owner
-    .Case(owner) => Some owner
+    .Field(owner) => owner
+    .Case(owner) => owner
     _ => {
       const site = checker.siteOf(symbol)?
       if const .Owned(owner, _, _) = site.kind {
@@ -677,14 +677,14 @@ fn ownerSymbolOf(checker: Checker, symbol: SymbolId): SymbolId? {
  */
 fn symbolOfOwnerType(checker: Checker, owner: TypeId): SymbolId? {
   match checker.types.form(owner) {
-    .Nominal(symbol, _) => Some symbol
+    .Nominal(symbol, _) => symbol
     .Parameter(parameter) => checker.types.parameter(parameter).owner
     .Traits(bounds) => {
       if bounds.length() != 1 {
         return None
       }
       if const .Nominal(symbol, _) = checker.types.form(bounds[0]) {
-        return Some symbol
+        return symbol
       }
       None
     }

@@ -13,7 +13,7 @@ public fn readSystemFile(path: String): Result<String, OsError> {
   var text = ""
   var failure = ""
   outcome(Linux.readSystemFile(path, text, failure), path, failure)?
-  Ok text
+  text
 }
 
 /**
@@ -26,7 +26,7 @@ public fn version(): Result<SystemVersion, OsError> {
     Ok(found) => found
     Fail(_) => readSystemFile("/usr/lib/os-release").ok() ?? ""
   }
-  Ok versionOf(parseOsRelease(text), kernel.release)
+  versionOf parseOsRelease(text), kernel.release
 }
 
 /**
@@ -100,7 +100,7 @@ public fn parseUptime(text: String): Result<Duration, OsError> {
   match (seconds, milliseconds) {
     (Ok(wholeSeconds), Ok(thousandths)) => {
       const total = wholeSeconds * 1000 + thousandths
-      Ok total.milliseconds()
+      total.milliseconds()
     }
     _ => Fail OsError.Malformed("/proc/uptime", "`{text.trim()}` does not begin with a number of seconds")
   }

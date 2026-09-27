@@ -254,7 +254,7 @@ type ReferenceBuilder {
         continue
       }
       const read = readModule name, package, module, exported
-      if entry == Some(module.id) {
+      if entry == module.id {
         doc = read.doc
         summary = read.summary
         // The entry's module comment is the package's too, and its links go from the index page of the package
@@ -281,7 +281,7 @@ type ReferenceBuilder {
     for (_, symbol) in names {
       found.insert symbol.value
     }
-    Some found
+    found
   }
 
   var fn readModule(packageName: String, package: Package, module: Module, exported: Set<Int>?): DocumentedModule {
@@ -476,7 +476,7 @@ type ModuleReader {
         const end = bodyStart function.body, span.end
         const parameters = parametersOf function.parameters
         const found = item ItemKind.Function, function.name.text, "", span, end, parameters, [], true
-        Some located(found, function.name.span)
+        located found, function.name.span
       }
       .Type(declared) => {
         if !isIncluded(declared.name.span, visibility) {
@@ -485,7 +485,7 @@ type ModuleReader {
         const name = declared.name.text
         const members = membersOf declared.members, name, true
         const header = headerEnd declared.name.span.end, span.end
-        Some located(item(ItemKind.Type, name, "", span, header, [], members, true), declared.name.span)
+        located item(ItemKind.Type, name, "", span, header, [], members, true), declared.name.span
       }
       .Trait(declared) => {
         if !isIncluded(declared.name.span, visibility) {
@@ -494,13 +494,13 @@ type ModuleReader {
         const name = declared.name.text
         const members = membersOf declared.members, name, true
         const header = headerEnd declared.name.span.end, span.end
-        Some located(item(ItemKind.Trait, name, "", span, header, [], members, true), declared.name.span)
+        located item(ItemKind.Trait, name, "", span, header, [], members, true), declared.name.span
       }
       .Alias(declared) => {
         if !isIncluded(declared.name.span, visibility) {
           return None
         }
-        Some located(item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], true), declared.name.span)
+        located item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], true), declared.name.span
       }
       .Constant(binding) => {
         const names = bindingNames binding.pattern
@@ -508,7 +508,7 @@ type ModuleReader {
         if !isIncluded(binding.pattern.span, visibility) {
           return None
         }
-        Some located(item(ItemKind.Constant, name, "", span, span.end, [], [], true), binding.pattern.span)
+        located item(ItemKind.Constant, name, "", span, span.end, [], [], true), binding.pattern.span
       }
       .Extend(extension) => {
         const target = typeNameOf extension.target
@@ -522,7 +522,7 @@ type ModuleReader {
         if const Some(owner) = targetSymbol(extension.target) {
           locateMembers found, owner
         }
-        Some found
+        found
       }
       .Use(_) => None
       .Foreign(_) => None
@@ -653,7 +653,7 @@ type ModuleReader {
     var found: DocumentationBlock? = None
     for block in blocks {
       if block.span.end <= start {
-        found = Some block
+        found = block
       }
     }
     const block = found?
@@ -663,7 +663,7 @@ type ModuleReader {
     if !module.source.text.sliceBytes(block.span.end, start).isBlank() {
       return None
     }
-    Some block
+    block
   }
 
   /** Where the header of a type, a trait or an `extend` ends: at the `{` of its members. */

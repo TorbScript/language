@@ -56,7 +56,7 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   var expectedResult: TypeId? = None
   if const Some(found) = form {
     if !written.isBroken {
-      expectedResult = Some found.result
+      expectedResult = found.result
     }
   }
   const frame = ClosureFrame(at, 0, implicit, types, used, [], hasParameters, receiver + 1)
@@ -161,7 +161,7 @@ fn isVarMode(mode: ParameterMode): Bool {
 /** The name a written closure parameter is known under, where its pattern is a plain name. */
 fn nameOfParameter(parameter: ClosureParameter): String? {
   if const .Binding(name) = parameter.pattern.kind {
-    return Some name
+    return name
   }
   None
 }
@@ -371,7 +371,7 @@ public fn implicitParameterTarget(var checker: Checker, text: String, at: Span):
       continue
     }
     if index < checker.closureFrames[frame].types.length() {
-      return Some parameterBindingOf(checker, frame, index, text, at)
+      return parameterBindingOf checker, frame, index, text, at
     }
     // `_` belongs to the innermost closure without a parameter list and never reaches an outer one
     return None
@@ -396,7 +396,7 @@ public fn implicitParameterHint(checker: Checker, text: String): String? {
     if !checker.closureFrames[frame].hasParameters {
       const index = nameIndexOf checker.closureFrames[frame].implicit, text
       if index >= 0 && index < checker.closureFrames[frame].types.length() {
-        return Some hintFor(checker, frame, index, text)
+        return hintFor checker, frame, index, text
       }
     }
     frame = frame - 1
@@ -406,7 +406,7 @@ public fn implicitParameterHint(checker: Checker, text: String): String? {
 
 fn nameIndexOf(implicit: List<String?>, text: String): Int {
   for index in 0..implicit.length() {
-    if implicit[index] == Some(text) {
+    if implicit[index] == text {
       return index
     }
   }

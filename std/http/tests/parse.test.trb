@@ -33,8 +33,8 @@ fn fields(lines: List<String>): Result<Headers, HttpError> {
 group "the lines of a head" {
   test "every line ends in CR LF, and the empty line ends the head" {
     const lines = headLines bytesOf("GET / HTTP/1.1\r\nHost: a\r\n\r\n")
-    assert(lines.map({ _.length() }) == Ok(2))
-    assert(lines.map({ _[0] }) == Ok("GET / HTTP/1.1"))
+    assert(lines.map({ _.length() }) == 2)
+    assert(lines.map({ _[0] }) == "GET / HTTP/1.1")
   }
 
   test "a bare LF or a bare CR is malformed" {
@@ -53,9 +53,9 @@ group "the lines of a head" {
 group "the request line" {
   test "a method, a target and a version, one space apart" {
     const line = requestLineOf "POST /users?id=7 HTTP/1.1"
-    assert(line.map({ _.method }) == Ok(Method.Post))
-    assert(line.map({ _.target }) == Ok("/users?id=7"))
-    assert(line.map({ _.version }) == Ok("HTTP/1.1"))
+    assert(line.map({ _.method }) == Method.Post)
+    assert(line.map({ _.target }) == "/users?id=7")
+    assert(line.map({ _.version }) == "HTTP/1.1")
   }
 
   test "two spaces, a missing part, or a method that is no token is malformed" {
@@ -74,13 +74,13 @@ group "the request line" {
 
 group "the method" {
   test "a registered name is its case, and only an unregistered one is Other" {
-    assert(Method.of("GET") == Ok(Method.Get))
-    assert(Method.of("PATCH") == Ok(Method.Patch))
-    assert(Method.of("PROPFIND") == Ok(Method.Other("PROPFIND")))
-    assert(Method.of("get") == Ok(Method.Other("get")))
-    assert(Method.of("PROPFIND").map({ _.name() }) == Ok("PROPFIND"))
-    assert(Method.of("QUERY") == Ok(Method.Query))
-    assert(Method.of("SEARCH") == Ok(Method.Search))
+    assert(Method.of("GET") == Method.Get)
+    assert(Method.of("PATCH") == Method.Patch)
+    assert(Method.of("PROPFIND") == Method.Other("PROPFIND"))
+    assert(Method.of("get") == Method.Other("get"))
+    assert(Method.of("PROPFIND").map({ _.name() }) == "PROPFIND")
+    assert(Method.of("QUERY") == Method.Query)
+    assert(Method.of("SEARCH") == Method.Search)
     assert(Method.Query.name() == "QUERY")
     assert(Method.Search.show() == "SEARCH")
   }
@@ -102,10 +102,10 @@ group "the method" {
 
 group "the status line" {
   test "a version, three digits and a phrase that may be empty" {
-    assert(statusLineOf("HTTP/1.1 200 OK").map({ _.status }) == Ok(Status.ok))
-    assert(statusLineOf("HTTP/1.0 404 Not Found").map({ _.status.code() }) == Ok(404))
-    assert(statusLineOf("HTTP/1.1 599").map({ _.status.code() }) == Ok(599))
-    assert(statusLineOf("HTTP/1.1 204 ").map({ _.status.code() }) == Ok(204))
+    assert(statusLineOf("HTTP/1.1 200 OK").map({ _.status }) == Status.ok)
+    assert(statusLineOf("HTTP/1.0 404 Not Found").map({ _.status.code() }) == 404)
+    assert(statusLineOf("HTTP/1.1 599").map({ _.status.code() }) == 599)
+    assert(statusLineOf("HTTP/1.1 204 ").map({ _.status.code() }) == 204)
   }
 
   test "a status that is not three digits is malformed" {
@@ -120,7 +120,7 @@ group "the fields" {
   test "a name and a value, the blanks around the value dropped, the order and the repetition kept" {
     const read = fields(["Host: example.test", "Set-Cookie: a=1", "set-cookie:b=2", "X-Blank: \t spaced \t"])
     assert(read.map({ _.get "host" }) == Ok(Some("example.test")))
-    assert(read.map({ _.all "Set-Cookie" }) == Ok(["a=1", "b=2"]))
+    assert(read.map({ _.all "Set-Cookie" }) == ["a=1", "b=2"])
     assert(read.map({ _.get "x-blank" }) == Ok(Some("spaced")))
   }
 
@@ -152,17 +152,17 @@ group "the fields" {
 
 group "the framing of a request" {
   test "no length and no coding is no body" {
-    assert(requestFraming(Headers(), "HTTP/1.1") == Ok(Framing.Empty))
+    assert(requestFraming(Headers(), "HTTP/1.1") == Framing.Empty)
   }
 
   test "a length is a body of that many bytes" {
     const read = fields(["Content-Length: 42"]).ok() ?? Headers()
-    assert(requestFraming(read, "HTTP/1.1") == Ok(Framing.Fixed(42)))
+    assert(requestFraming(read, "HTTP/1.1") == Framing.Fixed(42))
   }
 
   test "chunked is chunked" {
     const read = fields(["Transfer-Encoding: Chunked"]).ok() ?? Headers()
-    assert(requestFraming(read, "HTTP/1.1") == Ok(Framing.Chunked))
+    assert(requestFraming(read, "HTTP/1.1") == Framing.Chunked)
   }
 
   test "a length and a coding together are refused: the classic smuggling vector" {
@@ -200,13 +200,13 @@ group "the framing of a request" {
 group "the framing of a response" {
   test "no body after HEAD, and none for 1xx, 204 and 304, whatever the fields say" {
     const read = fields(["Content-Length: 10"]).ok() ?? Headers()
-    assert(responseFraming(read, Status.ok, Method.Head) == Ok(Framing.Empty))
-    assert(responseFraming(read, Status.noContent, Method.Get) == Ok(Framing.Empty))
-    assert(responseFraming(read, Status.notModified, Method.Get) == Ok(Framing.Empty))
+    assert(responseFraming(read, Status.ok, Method.Head) == Framing.Empty)
+    assert(responseFraming(read, Status.noContent, Method.Get) == Framing.Empty)
+    assert(responseFraming(read, Status.notModified, Method.Get) == Framing.Empty)
   }
 
   test "without a length and a coding, the body ends with the connection" {
-    assert(responseFraming(Headers(), Status.ok, Method.Get) == Ok(Framing.UntilEnd))
+    assert(responseFraming(Headers(), Status.ok, Method.Get) == Framing.UntilEnd)
   }
 }
 
@@ -223,10 +223,10 @@ group "persistence" {
 
 group "the size of a chunk" {
   test "hexadecimal digits of either case, with extensions after a semicolon ignored" {
-    assert(chunkSize(bytesOf("1a")) == Ok(26))
-    assert(chunkSize(bytesOf("FF")) == Ok(255))
-    assert(chunkSize(bytesOf("0")) == Ok(0))
-    assert(chunkSize(bytesOf("10;name=value")) == Ok(16))
+    assert(chunkSize(bytesOf("1a")) == 26)
+    assert(chunkSize(bytesOf("FF")) == 255)
+    assert(chunkSize(bytesOf("0")) == 0)
+    assert(chunkSize(bytesOf("10;name=value")) == 16)
   }
 
   test "no digits, a stray character, or more than fifteen digits is malformed" {

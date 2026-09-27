@@ -50,7 +50,7 @@ public fn instanceFor(
   const instance = Instance symbol, arguments, []
   const key = instanceKeyOf instance
   if const Some(found) = lowering.program.instances.get(key) {
-    return Some found
+    return found
   }
   if !boundedArguments(lowering, symbol, mapping) {
     return None
@@ -65,12 +65,12 @@ public fn instanceFor(
   }
   const built = irSignatureUnder lowering, signature, mapping
   const name = nameOfInstance lowering, symbol, arguments
-  var builder = newFunction name, Some(symbol), built, "not supported yet"
+  var builder = newFunction name, symbol, built, "not supported yet"
   const added = finishFunction lowering.program, builder
   lowering.program.instances.set key, added
   lowering.instanceMappings.set key, mapping
   lowering.program.pending.append instance
-  Some added
+  added
 }
 
 /**
@@ -208,21 +208,21 @@ public fn runtimeFunctionShaped(
   const instance = Instance symbol, arguments, []
   const key = instanceKeyOf instance
   if const Some(found) = lowering.program.instances.get(key) {
-    return Some found
+    return found
   }
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
   const built = shapedSignature lowering, declared, shape
   const name = nameOfInstance lowering, symbol, arguments
-  var function = IrFunction name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime)
+  var function = IrFunction name, symbol, built, [], [], FunctionKind.Runtime(runtime)
   for index in 0..built.parameters.length() {
     const parameter = built.parameters[index]
     function.slots.append SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
   }
   const added = lowering.program.addFunction function
   lowering.program.instances.set key, added
-  Some added
+  added
 }
 
 /**
@@ -263,7 +263,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
 fn storageAt(shape: RuntimeShape, at: Int): IrTypeId? {
   for position in shape.storage {
     if position.at == at {
-      return Some position.annotation
+      return position.annotation
     }
   }
   None
@@ -321,7 +321,7 @@ public fn instanceArgumentsOf(
       return None
     }
   }
-  Some arguments
+  arguments
 }
 
 /**
@@ -407,7 +407,7 @@ fn anyMentionsLiteralType(var lowering: Lowering, types: List<TypeId>, depth: In
 fn selfParameterOf(var lowering: Lowering, signature: Signature): ParameterId? {
   const owner = signature.owner?
   if const .Parameter(parameter) = lowering.checker.types.form(owner) {
-    return Some parameter
+    return parameter
   }
   None
 }
@@ -421,7 +421,7 @@ fn closedArgument(
   if !isClosedType(lowering, given) {
     return None
   }
-  Some irTypeOfClosed(lowering, given)
+  irTypeOfClosed lowering, given
 }
 
 /**

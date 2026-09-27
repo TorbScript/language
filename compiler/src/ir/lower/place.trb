@@ -128,14 +128,14 @@ public fn parameterTypeAt(
     return None
   }
   if mapping.isEmpty() {
-    return Some irTypeOf(lowering, annotation)
+    return irTypeOf lowering, annotation
   }
   // The mapping's own arguments are closed already (the dispatch substituted the caller's first), so this is the answer
   const applied = substitute lowering.checker.types, annotation, mapping
   if lowering.checker.isBroken(applied) {
     return None
   }
-  Some irTypeOfClosed(lowering, applied)
+  irTypeOfClosed lowering, applied
 }
 
 // --- From the checker's place to a reference -------------------------------------------------------------------------
@@ -211,7 +211,7 @@ public fn pathPreludeAt(
       return None
     }
   }
-  Some PathPrelude(root, place.steps, keys)
+  PathPrelude root, place.steps, keys
 }
 
 /**
@@ -226,7 +226,7 @@ fn temporaryPrelude(var lowering: Lowering, var builder: FunctionBuilder, target
   if !lowering.isSupported {
     return None
   }
-  Some PathPrelude(PlacePath(Reference(slot, []), builder.typeOfSlot(slot)))
+  PathPrelude PlacePath(Reference(slot, []), builder.typeOfSlot(slot))
 }
 
 /** The other half: every step walked, and every `a[key]` on the way taken out of its container. */
@@ -318,7 +318,7 @@ fn steppedFrom(
     steps.append next.step
     annotation = next.annotation
   }
-  Some PlacePath(Reference(base, steps), annotation, taken)
+  PlacePath Reference(base, steps), annotation, taken
 }
 
 /** What a step that takes a value out of its container takes: an element of `a[key]`, or a window of `a[from..to]`. */
@@ -353,10 +353,10 @@ fn rootReferenceOf(
       const declared = lowering.checker.binding(binding).at
       if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
         const annotation = typeOfPlace lowering, builder, place
-        return Some PlacePath(place, annotation)
+        return PlacePath place, annotation
       }
       match lowering.slots.get(declared) {
-        Some(found) => Some PlacePath(Reference(found, []), builder.typeOfSlot(found))
+        Some(found) => PlacePath Reference(found, []), builder.typeOfSlot(found)
         None => {
           const shown = describeRoot lowering, binding
           reportUnsupported lowering, "{what} through {shown}", at
@@ -366,14 +366,14 @@ fn rootReferenceOf(
     }
     .Declared(symbol) => {
       match lowering.entryLocals.get(symbol.value) {
-        Some(found) => Some PlacePath(Reference(found, []), builder.typeOfSlot(found))
+        Some(found) => PlacePath Reference(found, []), builder.typeOfSlot(found)
         None => {
           // A top-level `const` of the entry file: a path into it starts at the one value the entry made - for a shared
           // object the one object, whoever holds a count of it
           if const Some(accesses) = entryCellRead(lowering, symbol) {
             const object = addTemporary builder, accesses.held
             readEntryCell lowering, builder, symbol, accesses, object, at
-            return Some PlacePath(Reference(object, []), accesses.held)
+            return PlacePath Reference(object, []), accesses.held
           }
           reportUnsupported lowering, "{what} through a top-level `var` read from a function", at
           None
@@ -430,7 +430,7 @@ fn steppedPath(
         reportUnsupported lowering, "{what} through a field of a variant type", at
         return None
       }
-      Some SteppedPath(PathStep.Field(layout, index), fieldTypeOf(lowering, layout, index))
+      SteppedPath PathStep.Field(layout, index), fieldTypeOf(lowering, layout, index)
     }
     .TupleField(_, index) => {
       const layout = match layoutOfType(lowering.program, annotation) {
@@ -444,7 +444,7 @@ fn steppedPath(
         reportUnsupported lowering, "{what} through a tuple position the layout does not have", at
         return None
       }
-      Some SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index))
+      SteppedPath PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index)
     }
     // An index and a slice take their value out one level up, so the walk never asks this one about them
     .Index(_, _, _) | .Range(_, _) => {
@@ -547,7 +547,7 @@ fn loweredKeys(
   }
   const empty: List<Slot> = []
   if count == 0 {
-    return Some empty
+    return empty
   }
   if keys.length() != count {
     reportUnsupported lowering, "{what} through `a[key]` the back end could not pair with its path", at
@@ -561,7 +561,7 @@ fn loweredKeys(
     }
     found.append slot
   }
-  Some found
+  found
 }
 
 /**
@@ -610,12 +610,12 @@ fn takenElement(
   emit builder, Instruction.Read(receiver, container)
   const element = addTemporary builder, spelling
   const places: List<Reference?> = []
-  const _ = lowerDispatched lowering, builder, Some(element), at, reader, [receiver, key], places, spelling
+  const _ = lowerDispatched lowering, builder, element, at, reader, [receiver, key], places, spelling
   if !lowering.isSupported {
     return None
   }
   if kind.isWindow {
-    return Some TakenElement(container, key, element, setter, at)
+    return TakenElement container, key, element, setter, at
   }
   // Which member this was, so that `ir/elements.trb` can recognize the round trip once the container is concrete and
   // replace it with one `Element` step - by the symbol, because a specialized copy of it is the same member
@@ -624,7 +624,7 @@ fn takenElement(
   if const .FixedArray(_, _) = lowering.program.typeAt(annotation) {
     lowering.program.elementWriters.insert setter.member.value
   }
-  Some TakenElement(container, key, element, setter, at)
+  TakenElement container, key, element, setter, at
 }
 
 /** The two halves of an index path, or of a window: `Slice.slice` and `MutableSlice.replace` of the container. */
@@ -709,7 +709,7 @@ public fn putBackElements(var lowering: Lowering, var builder: FunctionBuilder, 
   for position in 0..taken.length() {
     const entry = taken[taken.length() - 1 - position]
     // One entry per operand, because that is how a call says which of its positions takes a place and which a value
-    const places: List<Reference?> = [Some(entry.container), None, None]
+    const places: List<Reference?> = [entry.container, None, None]
     const operands = [entry.container.base, entry.key, entry.element]
     const _ = lowerDispatched lowering, builder, None, entry.at, entry.setter, operands, places, voidType
     if !lowering.isSupported {
@@ -772,11 +772,11 @@ public fn argumentReference(
 ): PlacePath? {
   if isTemporaryPlace(lowering, value.span) {
     const slot = addTemporary builder, annotation
-    const _ = lowerExpression lowering, builder, value, Some(slot)
+    const _ = lowerExpression lowering, builder, value, slot
     if !lowering.isSupported {
       return None
     }
-    return Some PlacePath(Reference(slot, []), annotation)
+    return PlacePath Reference(slot, []), annotation
   }
   referenceAt lowering, builder, value, what
 }
@@ -928,7 +928,7 @@ fn lowerIndexAssignment(
       return
     }
   }
-  const places: List<Reference?> = [Some(path.reference), None, None]
+  const places: List<Reference?> = [path.reference, None, None]
   const operands = [path.reference.base, key, written]
   const voidType = voidTypeOf lowering
   const _ = lowerDispatched lowering, builder, None, at, setter, operands, places, voidType
@@ -975,7 +975,7 @@ public fn lowerPropertyWrite(
   }
   const voidType = voidTypeOf lowering
   const site = Some locationOf(lowering, callee.span)
-  emitClosureCall lowering, builder, None, holder, [path.reference.base], [Some(path.reference)], voidType, site
+  emitClosureCall lowering, builder, None, holder, [path.reference.base], [path.reference], voidType, site
   match destination {
     Some(_) => voidSlot lowering, builder, destination
     None => abandonedSlot lowering, builder, destination

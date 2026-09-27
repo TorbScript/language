@@ -100,7 +100,7 @@ public fn readIndex(text: String, expected: String): Result<PackageIndex, String
   if named != expected {
     return Fail "the index file of {expected} names `{named}`"
   }
-  Ok index
+  index
 }
 
 fn releaseOf(setting: Setting): Result<IndexRelease, String> {
@@ -130,12 +130,12 @@ fn releaseOf(setting: Setting): Result<IndexRelease, String> {
   if !release.hash.startsWith("sha256:") {
     return Fail "the release {version} has no `hash \"sha256:...\"`"
   }
-  Ok release
+  release
 }
 
 fn versionOf(text: String): Result<Version, String> {
   match Version.tryFrom(text) {
-    Ok(version) => Ok version
+    Ok(version) => version
     Fail(problem) => Fail "the index has a release that is no version: {problem}"
   }
 }
@@ -154,18 +154,18 @@ public fn candidatesOf(index: PackageIndex, language: String): List<Candidate> {
       match requirementOf(written) {
         Ok(requirement) => needs.append requirement
         Fail(problem) => {
-          excluded = Some "has a dependency that does not parse: {problem}"
+          excluded = "has a dependency that does not parse: {problem}"
         }
       }
     }
     if const (Some(needed), Some(have)) = (Version.tryFrom(release.language).ok(), current) {
       if needed > have {
-        excluded = Some "needs language {needed}, and this toolchain is {have}"
+        excluded = "needs language {needed}, and this toolchain is {have}"
       }
     }
     if const Some(yank) = index.yank(release.version) {
       const why = if yank.reason.isEmpty() { "" } else { ": {yank.reason}" }
-      excluded = Some "is yanked{why}"
+      excluded = "is yanked{why}"
     }
     found.append Candidate(release.version, needs, excluded)
   }

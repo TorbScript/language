@@ -61,7 +61,7 @@ public fn headLines(head: ArrayList<UInt8>): Result<List<String>, HttpError> {
   if lines.isEmpty() {
     return Fail HttpError.malformed("the head is empty")
   }
-  Ok lines
+  lines
 }
 
 /** `GET /path HTTP/1.1`: three parts, separated by exactly one space each. */
@@ -76,7 +76,7 @@ public fn requestLineOf(line: String): Result<RequestLine, HttpError> {
     return Fail HttpError.malformed("the target of a request has no spaces and no control characters")
   }
   const version = versionOf(parts[2])?
-  Ok RequestLine(method, target, version)
+  RequestLine method, target, version
 }
 
 /** `HTTP/1.1 200 OK`: a version, a status of three digits, and a phrase that may be empty. */
@@ -92,13 +92,13 @@ public fn statusLineOf(line: String): Result<StatusLine, HttpError> {
     return Fail HttpError.malformed("a status is three digits")
   }
   const status = Status.of(Int.tryFrom(code).ok() ?? 0)?
-  Ok StatusLine(version, status)
+  StatusLine version, status
 }
 
 /** `HTTP/1.1` or `HTTP/1.0`. Any other version of the right form is not supported; anything else is malformed. */
 fn versionOf(text: String): Result<String, HttpError> {
   if text == "HTTP/1.1" || text == "HTTP/1.0" {
-    return Ok text
+    return text
   }
   if text.startsWith("HTTP/") {
     return Fail HttpError.unsupportedVersion(text)
@@ -134,7 +134,7 @@ public fn fieldsOf(lines: List<String>, limit: Int): Result<Headers, HttpError> 
     }
     headers.add name, value
   }
-  Ok headers
+  headers
 }
 
 /** A value without the spaces and tabs around it - and no other whitespace, which `trim()` would take too. */
@@ -187,12 +187,12 @@ public fn requestFraming(headers: Headers, version: String): Result<Framing, Htt
     if tokens != ["chunked"] {
       return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
     }
-    return Ok Framing.Chunked
+    return Framing.Chunked
   }
   if lengths.isEmpty() {
-    return Ok Framing.Empty
+    return Framing.Empty
   }
-  Ok Framing.Fixed(lengthOf(lengths)?)
+  Framing.Fixed(lengthOf(lengths)?)
 }
 
 /**
@@ -202,7 +202,7 @@ public fn requestFraming(headers: Headers, version: String): Result<Framing, Htt
 public fn responseFraming(headers: Headers, status: Status, method: Method): Result<Framing, HttpError> {
   const code = status.code()
   if method == Method.Head || code < 200 || code == 204 || code == 304 {
-    return Ok Framing.Empty
+    return Framing.Empty
   }
   const codings = headers.all "Transfer-Encoding"
   if !codings.isEmpty() {
@@ -210,13 +210,13 @@ public fn responseFraming(headers: Headers, status: Status, method: Method): Res
     if tokens.isEmpty() || tokens[tokens.length() - 1] != "chunked" || tokens.length() > 1 {
       return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
     }
-    return Ok Framing.Chunked
+    return Framing.Chunked
   }
   const lengths = headers.all "Content-Length"
   if lengths.isEmpty() {
-    return Ok Framing.UntilEnd
+    return Framing.UntilEnd
   }
-  Ok Framing.Fixed(lengthOf(lengths)?)
+  Framing.Fixed(lengthOf(lengths)?)
 }
 
 /** One `Content-Length`: decimal digits and nothing else, at most eighteen of them. */
@@ -228,7 +228,7 @@ fn lengthOf(lengths: List<String>): Result<Int, HttpError> {
   if text.isEmpty() || text.byteLength() > 18 || text.chars().any({ !_.isDigit() }) {
     return Fail HttpError.malformed("`Content-Length` is decimal digits")
   }
-  Ok(Int.tryFrom(text).ok() ?? 0)
+  Int.tryFrom(text).ok() ?? 0
 }
 
 /**

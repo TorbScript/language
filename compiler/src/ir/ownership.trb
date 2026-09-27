@@ -344,8 +344,8 @@ fn markMutated(var mutated: List<Bool>, instruction: Instruction) {
 /** `%4 = copy %2` and `%4 = move %2`: the edge a value travels along inside a frame. */
 fn copyEdgeOf(instruction: Instruction): (Slot, Slot)? {
   match instruction {
-    .Copy(target, source) => Some((target, source))
-    .Move(target, source) => Some((target, source))
+    .Copy(target, source) => (target, source)
+    .Move(target, source) => (target, source)
     _ => None
   }
 }
@@ -584,7 +584,7 @@ fn conflictingSlot(instruction: Instruction, counted: Counted): Slot? {
   }
   for slot in usedSlots(instruction) {
     if slot == target {
-      return Some target
+      return target
     }
   }
   None
@@ -704,7 +704,7 @@ fn rewriteTerminator(
       // Nothing can follow a `return`, and a value that is returned is never released: only a retain can land here
       tail.appendAll retains
       markAlive alive, counted, argument.slot
-      Terminator.Return Some(answer)
+      Terminator.Return answer
     }
     // A condition and a scrutinee are read and nothing else, so their last use is the end of the block
     .Branch(condition, _, _) => {

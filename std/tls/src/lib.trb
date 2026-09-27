@@ -51,7 +51,7 @@ public shared type ServerIdentity with Close {
     if handle < 0 {
       return Fail NetworkError.withWords(handle, tlsErrorText(handle))
     }
-    Ok ServerIdentity(handle)
+    ServerIdentity handle
   }
 
   var fn close() {
@@ -84,7 +84,7 @@ public shared type TlsStream with Close {
     }
     var connection = TlsStream stream, session
     connection.handshake().await()?
-    Ok connection
+    connection
   }
 
   /** The server's side: a handshake over an accepted `stream`, proving `identity`. */
@@ -95,7 +95,7 @@ public shared type TlsStream with Close {
     }
     var connection = TlsStream stream, session
     connection.handshake().await()?
-    Ok connection
+    connection
   }
 
   /** The version the two sides agreed on: `"TLSv1.3"` or `"TLSv1.2"`. */
@@ -228,9 +228,9 @@ public shared type TlsStream with Close {
     match stream.receiveBuffer().await()? {
       Some(bytes) => {
         tlsFeed session, bytes
-        Ok true
+        true
       }
-      None => Ok false
+      None => false
     }
   }
 
@@ -321,7 +321,7 @@ public type TlsResolver {
       || message.responseCode == ResponseCode.NotImplemented {
       return Fail NetworkError.nameServerFailed("{server} answered {message.responseCode} for `{name}`")
     }
-    Ok message.answersFor(name, recordType)
+    message.answersFor name, recordType
   }
 
   /**

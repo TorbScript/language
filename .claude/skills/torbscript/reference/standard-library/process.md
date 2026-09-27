@@ -34,7 +34,7 @@ fn firstArgument(): String? {
 
 fn sorted(): Task<Result<String, IoError>> {
   const output = Process.run("sort", [], input: "banana\napple\n").await()?
-  Ok output.standardOutput
+  output.standardOutput
 }
 ```
 
@@ -131,7 +131,7 @@ fn sorted(words: List<String>): Task<Result<Int, IoError>> {
   }
   const code = child.wait().await()?
   print "sort left with {code}"
-  Ok received
+  received
 }
 ```
 

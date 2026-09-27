@@ -76,25 +76,25 @@ type EncodingShape {
 
 fn encodingShapeOf(var lowering: Lowering, subject: TypeId, at: Span): EncodingShape? {
   match lowering.checker.types.form(subject) {
-    .Literals(base, _) => Some EncodingShape.Literal(base)
+    .Literals(base, _) => EncodingShape.Literal base
     .Tuple(fields) => {
       var found: List<TypeId> = []
       for field in fields {
         found.append field.annotation
       }
-      Some EncodingShape.Positions(found)
+      EncodingShape.Positions found
     }
     .Nominal(symbol, arguments) => {
       const identifier = typeSignatureOf lowering.checker, symbol
       const shape = lowering.checker.typeSignature identifier
       if isConstructible(lowering.checker, shape.fields) {
-        return Some EncodingShape.Fields(symbol, arguments, everyField: false)
+        return EncodingShape.Fields symbol, arguments, everyField: false
       }
       if const Some(pair) = conversionPairOf(lowering.checker, subject) {
         const failure = if pair.fallible { failureOf lowering, subject, pair.source } else { None }
-        return Some EncodingShape.Paired(pair.source, failure)
+        return EncodingShape.Paired pair.source, failure
       }
-      Some EncodingShape.Fields(symbol, arguments, everyField: true)
+      EncodingShape.Fields symbol, arguments, everyField: true
     }
     _ => {
       const shown = lowering.checker.describe subject
@@ -110,7 +110,7 @@ fn failureOf(var lowering: Lowering, subject: TypeId, wire: TypeId): TypeId? {
   for bound in writtenTraitsOf(lowering.checker, subject, tryFrom) {
     if const .Nominal(_, given) = lowering.checker.types.form(bound) {
       if given.length() == 2 && sameType(lowering.checker.types, given[0], wire) {
-        return Some given[1]
+        return given[1]
       }
     }
   }
@@ -170,7 +170,7 @@ fn fieldGroupsOf(
       const passable = field.visibility != Visibility.Private
       fields.append EncodedFieldOf(field.name, subject, annotation, step, field.symbol, field.hasDefault, passable)
     }
-    return Some([FieldGroup("", -1, fields)])
+    return [FieldGroup("", -1, fields)]
   }
   if !shape.fields.isEmpty() {
     reportUnsupported lowering, "a generated encoding form of a type with cases and fields of its own", at
@@ -198,7 +198,7 @@ fn fieldGroupsOf(
     }
     groups.append FieldGroup(declared.name, variant, fields)
   }
-  Some groups
+  groups
 }
 
 /**
@@ -336,12 +336,12 @@ fn encodeFields(
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, Slot(0))
-  const impossible = addBlock builder, "no such case", Some(location)
+  const impossible = addBlock builder, "no such case", location
   var values: List<Int> = []
   var targets: List<BlockId> = []
   for group in groups {
     values.append group.variant
-    targets.append addBlock(builder, "case {group.name}", Some(location))
+    targets.append addBlock(builder, "case {group.name}", location)
   }
   terminate builder, Terminator.Switch(tag, values, targets, impossible)
   for index in 0..groups.length() {
@@ -430,7 +430,7 @@ fn returnStep(
   at: Span,
 ) {
   if const Some(answer) = step(lowering, builder, name, typeArguments, arguments, at) {
-    terminate builder, Terminator.Return(Some(borrowed(answer)))
+    terminate builder, Terminator.Return(borrowed(answer))
   }
 }
 
@@ -541,9 +541,9 @@ fn decodeFields(
     const wanted = textSlot lowering, builder, group.name
     const same = addTemporary builder, boolean
     const intrinsic = Intrinsic IntrinsicOperation.TextEqual, None
-    emit builder, Instruction.Intrinsic(Some(same), intrinsic, [name, wanted], location)
-    const chosen = addBlock builder, "case {group.name}", Some(location)
-    const next = addBlock builder, "not {group.name}", Some(location)
+    emit builder, Instruction.Intrinsic(same, intrinsic, [name, wanted], location)
+    const chosen = addBlock builder, "case {group.name}", location
+    const next = addBlock builder, "not {group.name}", location
     terminate builder, Terminator.Branch(same, chosen, next)
     switchTo builder, chosen
     const values = match decodeGroup(lowering, builder, subject, arguments, symbol, group, source, at) {
@@ -602,9 +602,9 @@ fn decodeGroup(
     const asked = if field.isPassable { "decodeHasField" } else { "decodeHasPrivateField" }
     const present = checkedStep(lowering, builder, asked, [source], [borrowed(name), place], at)?
     const value = addLocal builder, field.annotation, field.name
-    const given = addBlock builder, "{field.name} given", Some(location)
-    const missing = addBlock builder, "{field.name} missing", Some(location)
-    const joined = addBlock builder, "{field.name} read", Some(location)
+    const given = addBlock builder, "{field.name} given", location
+    const missing = addBlock builder, "{field.name} missing", location
+    const joined = addBlock builder, "{field.name} read", location
     terminate builder, Terminator.Branch(present, given, missing)
     switchTo builder, given
     const read = checkedStep(lowering, builder, "decodeFieldValue", [field.subject, source], [borrowed(name), place], at)?
@@ -617,7 +617,7 @@ fn decodeGroup(
     switchTo builder, joined
     values.append value
   }
-  Some values
+  values
 }
 
 /** The default of a field, lowered where it is needed and in the module of the declaration that wrote it. */
@@ -646,7 +646,7 @@ fn defaultOf(
   if !lowering.isSupported {
     return None
   }
-  Some slot
+  slot
 }
 
 /** The default a field is declared with: in the member of a type, or in the field list of a case. */
@@ -705,7 +705,7 @@ fn answerOk(
   emit builder, Instruction.Construct(built, layout, variant, given)
   const answer = addTemporary builder, result
   emit builder, Instruction.Construct(answer, resultLayout, success, [borrowed(built)])
-  terminate builder, Terminator.Return(Some(borrowed(answer)))
+  terminate builder, Terminator.Return(borrowed(answer))
 }
 
 /** `Fail(problem)`, returned. */
@@ -721,7 +721,7 @@ fn answerFailure(var lowering: Lowering, var builder: FunctionBuilder, problem: 
   const failure = variantNamed lowering, resultLayout, "Fail"
   const answer = addTemporary builder, result
   emit builder, Instruction.Construct(answer, resultLayout, failure, [borrowed(problem)])
-  terminate builder, Terminator.Return(Some(borrowed(answer)))
+  terminate builder, Terminator.Return(borrowed(answer))
 }
 
 /** The type in the `Ok` of a `Result`. */
@@ -734,7 +734,7 @@ fn okTypeOf(var lowering: Lowering, result: IrTypeId): IrTypeId? {
   const shape = lowering.program.layoutAt layout
   const fields = shape.fieldsOfVariant success
   match fields.first() {
-    Some(found) => Some found.annotation
+    Some(found) => found.annotation
     None => None
   }
 }
@@ -770,8 +770,8 @@ fn checkedStep(
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, answer)
-  const succeeded = addBlock builder, "{name} succeeded", Some(location)
-  const failed = addBlock builder, "{name} failed", Some(location)
+  const succeeded = addBlock builder, "{name} succeeded", location
+  const failed = addBlock builder, "{name} failed", location
   terminate builder, Terminator.Switch(tag, [success], [succeeded], failed)
   switchTo builder, failed
   const shape = lowering.program.layoutAt layout
@@ -782,9 +782,9 @@ fn checkedStep(
   const valueType = shape.fieldsOfVariant(success)[0].annotation
   // `Result<Void, _>` answers nothing worth reading: the step's own slot stands in for it
   if isVoidType(lowering, valueType) {
-    return Some answer
+    return answer
   }
-  Some readInto(builder, answer, PathStep.Variant(layout, success, 0), valueType)
+  readInto builder, answer, PathStep.Variant(layout, success, 0), valueType
 }
 
 // --- `describe` -------------------------------------------------------------------------------------------------------
@@ -866,8 +866,8 @@ fn describeFields(
       return
     }
   }
-  const body = addBlock builder, "described", Some(location)
-  const done = addBlock builder, "known", Some(location)
+  const body = addBlock builder, "described", location
+  const done = addBlock builder, "known", location
   terminate builder, Terminator.Branch(wanted, body, done)
   switchTo builder, body
   if isRecord {
@@ -980,7 +980,7 @@ fn ownArgumentOf(var lowering: Lowering, request: GeneratedRequest, at: Span): T
   const generics = lowering.checker.signature(identifier).generics
   if const Some(last) = generics.last() {
     if const Some(found) = request.mapping.get(last) {
-      return Some found
+      return found
     }
   }
   reportUnsupported lowering, "a generated encoding form whose format the call site did not decide", at
@@ -1027,12 +1027,12 @@ fn step(
   const result = lowering.program.functionAt(function).signature.result
   const empty: List<WitnessSource> = []
   if isVoidType(lowering, result) {
-    emit builder, Instruction.Call(None, function, arguments, empty, Some(location))
+    emit builder, Instruction.Call(None, function, arguments, empty, location)
     return None
   }
   const target = addTemporary builder, result
-  emit builder, Instruction.Call(Some(target), function, arguments, empty, Some(location))
-  Some target
+  emit builder, Instruction.Call(target, function, arguments, empty, location)
+  target
 }
 
 /** A step whose answer nothing reads. */

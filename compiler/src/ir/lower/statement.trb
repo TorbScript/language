@@ -99,9 +99,9 @@ fn lowerStatementsOfScope(
         }
         const value = lowerExpression lowering, builder, expression, destination
         if isStatement {
-          endTemporaries lowering, builder, firstSlot, except: Some(value)
+          endTemporaries lowering, builder, firstSlot, except: value
         }
-        return Some value
+        return value
       }
     }
     lowerStatement lowering, builder, statement
@@ -208,7 +208,7 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
     return
   }
   const slot = addLocal builder, annotation, name
-  const _ = lowerExpression lowering, builder, binding.value, Some(slot)
+  const _ = lowerExpression lowering, builder, binding.value, slot
   lowering.slots.set declared, slot
   declareScoped lowering, builder, slot
 }
@@ -218,7 +218,7 @@ fn bindingNameOf(pattern: Pattern): String? {
     if name == "_" {
       return None
     }
-    return Some name
+    return name
   }
   None
 }
@@ -238,7 +238,7 @@ fn isWildcardPattern(pattern: Pattern): Bool {
  */
 fn bindingTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
   if const Some(found) = patternTypeOf(lowering, at) {
-    return Some found
+    return found
   }
   const module = lowering.module
   const symbol = lowering.checker.resolvedName(module, at)?
@@ -246,7 +246,7 @@ fn bindingTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
   if lowering.checker.isBroken(declared) {
     return None
   }
-  Some irTypeOf(lowering, declared)
+  irTypeOf lowering, declared
 }
 
 fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
@@ -255,7 +255,7 @@ fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
   if lowering.checker.isBroken(found) {
     return None
   }
-  Some irTypeOf(lowering, found)
+  irTypeOf lowering, found
 }
 
 /**
@@ -334,7 +334,7 @@ fn assignedInto(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot
     lowerSlotAssignment lowering, builder, slot, value
     return
   }
-  const _ = lowerExpression lowering, builder, value, Some(slot)
+  const _ = lowerExpression lowering, builder, value, slot
 }
 
 // --- `return`, `break`, `continue` ----------------------------------------------------------------------------------
@@ -362,7 +362,7 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
   }
   // The value is produced before the scopes end, so a binding that is returned is moved out and not released
   endEveryScope lowering, builder
-  finishBlock lowering, builder, Terminator.Return(Some(borrowed(slot)))
+  finishBlock lowering, builder, Terminator.Return(borrowed(slot))
 }
 
 fn lowerBreak(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
@@ -402,9 +402,9 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
     }
   }
   const location = locationOf lowering, at
-  const check = addBlock builder, "while", Some(location)
-  const inner = addBlock builder, "body", Some(location)
-  const done = addBlock builder, "done", Some(location)
+  const check = addBlock builder, "while", location
+  const inner = addBlock builder, "body", location
+  const done = addBlock builder, "done", location
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const scrutinee = lowerValue lowering, builder, test
@@ -428,8 +428,8 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
  */
 fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, at: Span) {
   const location = locationOf lowering, at
-  const inner = addBlock builder, "loop", Some(location)
-  const done = addBlock builder, "done", Some(location)
+  const inner = addBlock builder, "loop", location
+  const done = addBlock builder, "done", location
   finishBlock lowering, builder, Terminator.Jump(inner)
   continueIn lowering, builder, inner
   enterLoop lowering, done, inner
@@ -467,7 +467,7 @@ fn rangeEndsOf(iterable: Expression): (Expression, Expression)? {
   }
   const start = from?
   const end = to?
-  Some((start, end))
+  (start, end)
 }
 
 fn lowerFor(
@@ -503,9 +503,9 @@ fn lowerFor(
   // A pattern that takes the item apart binds in the body, through the plan the checker recorded for it
   const takesApart = !isWildcardPattern(pattern) && name.isEmpty()
   const counter = addLocal builder, item, name
-  const _ = lowerExpression lowering, builder, start, Some(counter)
+  const _ = lowerExpression lowering, builder, start, counter
   const limit = addTemporary builder, item
-  const _ = lowerExpression lowering, builder, end, Some(limit)
+  const _ = lowerExpression lowering, builder, end, limit
   if !lowering.isSupported {
     return
   }
@@ -513,15 +513,15 @@ fn lowerFor(
     lowering.slots.set pattern.span, counter
   }
   const location = locationOf lowering, at
-  const check = addBlock builder, "for", Some(location)
-  const inner = addBlock builder, "body", Some(location)
-  const step = addBlock builder, "step", Some(location)
-  const done = addBlock builder, "done", Some(location)
+  const check = addBlock builder, "for", location
+  const inner = addBlock builder, "body", location
+  const step = addBlock builder, "step", location
+  const done = addBlock builder, "done", location
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const boolean = booleanTypeOf lowering
   const scrutinee = addTemporary builder, boolean
-  emitIntrinsic lowering, builder, Some(scrutinee), IntrinsicOperation.Less, Some(kind), [counter, limit], at
+  emitIntrinsic lowering, builder, scrutinee, IntrinsicOperation.Less, kind, [counter, limit], at
   finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
   continueIn lowering, builder, inner
   enterLoop lowering, done, step
@@ -535,7 +535,7 @@ fn lowerFor(
   }
   continueIn lowering, builder, step
   const one = integerSlot lowering, builder, 1, item
-  emitIntrinsic lowering, builder, Some(counter), IntrinsicOperation.Add, Some(kind), [counter, one], at
+  emitIntrinsic lowering, builder, counter, IntrinsicOperation.Add, kind, [counter, one], at
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, done
 }
@@ -637,16 +637,16 @@ fn lowerForIterate(
     lowering.slots.set pattern.span, value
   }
   const location = locationOf lowering, at
-  const check = addBlock builder, "for", Some(location)
-  const inner = addBlock builder, "body", Some(location)
-  const done = addBlock builder, "done", Some(location)
+  const check = addBlock builder, "for", location
+  const inner = addBlock builder, "body", location
+  const done = addBlock builder, "done", location
   const pulled = addTemporary builder, option
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const places = [Some(Reference(cursor.slot, []))]
-  const _ = lowerDispatched lowering, builder, Some(pulled), at, pull, [cursor.slot], places, option
+  const _ = lowerDispatched lowering, builder, pulled, at, pull, [cursor.slot], places, option
   if !lowering.isSupported {
     return
   }
@@ -695,11 +695,11 @@ fn lowerCursor(
   const spelling = irTypeOfClosed lowering, annotation
   const slot = addLocal builder, spelling, "iterator"
   const places: List<Reference?> = []
-  const _ = lowerDispatched lowering, builder, Some(slot), at, made, [subject], places, spelling
+  const _ = lowerDispatched lowering, builder, slot, at, made, [subject], places, spelling
   if !lowering.isSupported {
     return None
   }
-  Some Cursor(slot, annotation)
+  Cursor slot, annotation
 }
 
 /** The slot a cursor lives in, and its checker type. */

@@ -121,14 +121,14 @@ public fn runCheck(options: DocumentationOptions): Result<Int, IoError> {
   if count > 0 {
     printError ""
     printError "{counted(count, "problem")} in {counted(checked.pages, "page")}"
-    return Ok count
+    return count
   }
   const folders = counted checked.folders, "folder"
   print "{counted(checked.pages, "page")}, {folders}, {counted(checked.snippets, "snippet")}, no problems"
   for skipped in checked.skipped {
     print "skipped: {skipped}"
   }
-  Ok 0
+  0
 }
 
 /** `torb docs index <root> [--check]`. Returns the number of problems. */
@@ -142,7 +142,7 @@ public fn runIndex(options: DocumentationOptions): Result<Int, IoError> {
     if count == 0 {
       print "{result.generated.length()} indexes, all up to date"
     }
-    return Ok count
+    return count
   }
   const count = reportProblems result.problems
   const written = writeIndexes(documentation, result)?
@@ -152,7 +152,7 @@ public fn runIndex(options: DocumentationOptions): Result<Int, IoError> {
   if written.isEmpty() {
     print "{result.generated.length()} indexes, nothing to write"
   }
-  Ok count
+  count
 }
 
 /**
@@ -163,13 +163,13 @@ public fn runIndex(options: DocumentationOptions): Result<Int, IoError> {
 public fn runSkill(options: DocumentationOptions): Result<Int, IoError> {
   if options.out.isEmpty() {
     printError "torb docs skill <root> <out>: where the skill goes is missing"
-    return Ok 1
+    return 1
   }
   const documentation = readDocumentation(options.root)?
   const skill = buildSkill documentation
   const count = reportProblems skill.problems
   if count > 0 {
-    return Ok count
+    return count
   }
   if options.onlyCheck {
     const stale = staleSkillFiles(options.out, skill)?
@@ -181,20 +181,20 @@ public fn runSkill(options: DocumentationOptions): Result<Int, IoError> {
     } else {
       printError "{stale.length()} files of the skill are stale: torb docs skill {options.root} {options.out}"
     }
-    return Ok stale.length()
+    return stale.length()
   }
   writeSkill(options.out, skill)?
   print "{skillName}: {counted(skill.files.length(), "file")}, SKILL.md has {counted(skill.bodyLines, "line")}"
   print "{counted(skill.included, "page")}, {skill.excluded} left out by `skill: omit`"
   print installationHint(options.out)
-  Ok 0
+  0
 }
 
 /** `torb docs bundle <root> <out>`. */
 public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
   if options.out.isEmpty() {
     printError "torb docs bundle <root> <out>: where the bundle goes is missing"
-    return Ok 1
+    return 1
   }
   const documentation = readDocumentation(options.root)?
   const index = documentation.pageAt "index.md"
@@ -203,7 +203,7 @@ public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
   const bundled = bundleDocumentation documentation, title, summary
   writeBundle(options.out, bundled)?
   print "wrote {options.out}/llms.txt and {options.out}/llms-full.txt"
-  Ok 0
+  0
 }
 
 fn titleOf(page: Page?): String {

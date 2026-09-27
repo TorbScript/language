@@ -21,7 +21,7 @@ group "isAbsolute and isRelative" {
 
 group "name" {
   test "the last component is the name" {
-    assert(Path.from("src/main.trb").name() == Some("main.trb"))
+    assert(Path.from("src/main.trb").name() == "main.trb")
   }
 
   test "a root and the empty path have no name" {
@@ -30,30 +30,30 @@ group "name" {
   }
 
   test "a leading '..' is still a component, and can be the name" {
-    assert(Path.from("..").name() == Some(".."))
-    assert(Path.from("../a").name() == Some("a"))
+    assert(Path.from("..").name() == "..")
+    assert(Path.from("../a").name() == "a")
   }
 }
 
 group "extension and nameWithoutExtension" {
   test "the extension is the text after the last dot" {
-    assert(Path.from("src/main.trb").extension() == Some("trb"))
-    assert(Path.from("src/main.trb").nameWithoutExtension() == Some("main"))
+    assert(Path.from("src/main.trb").extension() == "trb")
+    assert(Path.from("src/main.trb").nameWithoutExtension() == "main")
   }
 
   test "a name with several dots keeps only the last one as the extension" {
-    assert(Path.from("archive.tar.gz").extension() == Some("gz"))
-    assert(Path.from("archive.tar.gz").nameWithoutExtension() == Some("archive.tar"))
+    assert(Path.from("archive.tar.gz").extension() == "gz")
+    assert(Path.from("archive.tar.gz").nameWithoutExtension() == "archive.tar")
   }
 
   test "a dot file has no extension, because its only dot is the first character" {
     assert(Path.from(".gitignore").extension() == None)
-    assert(Path.from(".gitignore").nameWithoutExtension() == Some(".gitignore"))
+    assert(Path.from(".gitignore").nameWithoutExtension() == ".gitignore")
   }
 
   test "a name with no dot at all has no extension" {
     assert(Path.from("README").extension() == None)
-    assert(Path.from("README").nameWithoutExtension() == Some("README"))
+    assert(Path.from("README").nameWithoutExtension() == "README")
   }
 
   test "a root and the empty path have no extension and no name to strip one from" {
@@ -66,16 +66,16 @@ group "extension and nameWithoutExtension" {
 
 group "parent" {
   test "the parent drops the last component" {
-    assert(Path.from("a/b/c").parent() == Some(Path.from("a/b")))
+    assert(Path.from("a/b/c").parent() == Path.from("a/b"))
   }
 
   test "the parent of a single relative component is the empty path" {
-    assert(Path.from("a").parent() == Some(Path.from("")))
+    assert(Path.from("a").parent() == Path.from(""))
   }
 
   test "a leading '..' has a parent too, all the way down to the empty path" {
-    assert(Path.from("../a").parent() == Some(Path.from("..")))
-    assert(Path.from("..").parent() == Some(Path.from("")))
+    assert(Path.from("../a").parent() == Path.from(".."))
+    assert(Path.from("..").parent() == Path.from(""))
   }
 
   test "a root and the empty path have nothing above them" {
@@ -105,11 +105,11 @@ group "joined" {
 
 group "withName" {
   test "the last component is replaced" {
-    assert(Path.from("src/main.trb").withName("other.trb") == Some(Path.from("src/other.trb")))
+    assert(Path.from("src/main.trb").withName("other.trb") == Path.from("src/other.trb"))
   }
 
   test "a single relative component is replaced below the empty path" {
-    assert(Path.from("src").withName("other") == Some(Path.from("other")))
+    assert(Path.from("src").withName("other") == Path.from("other"))
   }
 
   test "a root and the empty path have no name to replace" {
@@ -120,15 +120,15 @@ group "withName" {
 
 group "withExtension" {
   test "a different extension replaces the old one" {
-    assert(Path.from("src/main.trb").withExtension("c") == Some(Path.from("src/main.c")))
+    assert(Path.from("src/main.trb").withExtension("c") == Path.from("src/main.c"))
   }
 
   test "an empty extension removes it" {
-    assert(Path.from("src/main.trb").withExtension("") == Some(Path.from("src/main")))
+    assert(Path.from("src/main.trb").withExtension("") == Path.from("src/main"))
   }
 
   test "an extension is added where there was none, even on a dot file" {
-    assert(Path.from("src/.gitignore").withExtension("bak") == Some(Path.from("src/.gitignore.bak")))
+    assert(Path.from("src/.gitignore").withExtension("bak") == Path.from("src/.gitignore.bak"))
   }
 
   test "a path without a name has no extension to change" {
@@ -157,15 +157,15 @@ group "startsWith" {
 
 group "relativeTo" {
   test "the common prefix is dropped and a '..' is added per component of base that is not shared" {
-    assert(Path.from("/a/b/c").relativeTo(Path.from("/a/x/y")) == Some(Path.from("../../b/c")))
+    assert(Path.from("/a/b/c").relativeTo(Path.from("/a/x/y")) == Path.from("../../b/c"))
   }
 
   test "one path already below the other needs no '..' at all" {
-    assert(Path.from("/a/b/c").relativeTo(Path.from("/a")) == Some(Path.from("b/c")))
+    assert(Path.from("/a/b/c").relativeTo(Path.from("/a")) == Path.from("b/c"))
   }
 
   test "two relative paths that both start with '..' still share a prefix" {
-    assert(Path.from("../a").relativeTo(Path.from("../b")) == Some(Path.from("../a")))
+    assert(Path.from("../a").relativeTo(Path.from("../b")) == Path.from("../a"))
   }
 
   test "two different roots share nothing to be relative to" {
@@ -184,11 +184,11 @@ group "resolved" {
   const base = Path.from "/srv/app"
 
   test "a relative path lands below the base" {
-    assert(Path.from("data/x").resolved(inside: base) == Ok(Path.from("/srv/app/data/x")))
+    assert(Path.from("data/x").resolved(inside: base) == Path.from("/srv/app/data/x"))
   }
 
   test "an internal '..' that stays below the base still resolves" {
-    assert(Path.from("a/../b").resolved(inside: base) == Ok(Path.from("/srv/app/b")))
+    assert(Path.from("a/../b").resolved(inside: base) == Path.from("/srv/app/b"))
   }
 
   test "an absolute path outside the base is refused" {
@@ -220,7 +220,7 @@ group "equality, hashing and order" {
 
   test "a Path works as a Map key" {
     const seen: Map<Path, Int> = [Path.from("a/b"): 1]
-    assert(seen.get(Path.from("a/b")) == Some(1))
+    assert(seen.get(Path.from("a/b")) == 1)
     assert(seen.get(Path.from("a/B")) == None)
   }
 

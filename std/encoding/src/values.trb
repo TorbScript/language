@@ -106,14 +106,14 @@ extend EncodedValue with Encode {
       .String(value) => target.string value
       .Bytes(value) => target.bytes value
       .Sequence(items) => {
-        target.sequence Some(items.length())
+        target.sequence items.length()
         for item in items {
           item.encode target
         }
         target.finish()
       }
       .Mapping(entries) => {
-        target.map Some(entries.length() / 2)
+        target.map(entries.length() / 2)
         for entry in entries {
           entry.encode target
         }
@@ -276,7 +276,7 @@ public type Values with Encoder {
       return
     }
     const last = frames.length() - 1
-    frames[last].pending = Some name
+    frames[last].pending = name
   }
 
   var fn finish() {
@@ -297,7 +297,7 @@ public type Values with Encoder {
 
   private var fn complete(value: EncodedValue) {
     if frames.isEmpty() {
-      finished = Some value
+      finished = value
       return
     }
     const last = frames.length() - 1
@@ -376,7 +376,7 @@ public type ValueDecoder with Decoder {
     strict: Bool = false,
     privateFields: Bool = false,
   ): ValueDecoder {
-    Self root: Some(value), lenient: lenient, naming: naming, strict: strict, privateFields: privateFields
+    Self root: value, lenient: lenient, naming: naming, strict: strict, privateFields: privateFields
   }
 
   fn readsPrivateFields(): Bool {
@@ -393,14 +393,14 @@ public type ValueDecoder with Decoder {
 
   var fn bool(): Result<Bool, DecodeError> {
     match take()? {
-      .Bool(value) => Ok value
+      .Bool(value) => value
       .String(text) => {
         if !lenient && !tookKey {
           return Fail DecodeError("a truth value is needed, not {text.showNested()}")
         }
         match text {
-          "true" => Ok true
-          "false" => Ok false
+          "true" => true
+          "false" => false
           _ => Fail DecodeError("a truth value is needed, not {text.showNested()}")
         }
       }
@@ -410,7 +410,7 @@ public type ValueDecoder with Decoder {
 
   var fn int(): Result<Int64, DecodeError> {
     match take()? {
-      .Int(value) => Ok value
+      .Int(value) => value
       .Unsigned(value) => Int64.tryFrom(value).mapError { _ => DecodeError "{value} does not fit into an Int64" }
       .Float(value) => wholeNumberOf value
       .String(text) => parseInteger(text, lenient || tookKey)
@@ -420,7 +420,7 @@ public type ValueDecoder with Decoder {
 
   var fn unsigned(): Result<UInt64, DecodeError> {
     match take()? {
-      .Unsigned(value) => Ok value
+      .Unsigned(value) => value
       .Int(value) => UInt64.tryFrom(value).mapError { _ => DecodeError "{value} is not a count" }
       .String(text) => parseCount(text, lenient || tookKey)
       other => Fail DecodeError("a count is needed, not {other.show()}")
@@ -429,8 +429,8 @@ public type ValueDecoder with Decoder {
 
   var fn float(): Result<Float64, DecodeError> {
     match take()? {
-      .Float(value) => Ok value
-      .Int(value) => Ok Float64.from(value)
+      .Float(value) => value
+      .Int(value) => Float64.from value
       .String(text) => parseFloating(text, lenient || tookKey)
       other => Fail DecodeError("a number is needed, not {other.show()}")
     }
@@ -447,12 +447,12 @@ public type ValueDecoder with Decoder {
 
   var fn string(): Result<String, DecodeError> {
     match take()? {
-      .String(value) => Ok value
+      .String(value) => value
       other => {
         if !lenient {
           return Fail DecodeError("a text is needed, not {other.show()}")
         }
-        Ok other.plain()
+        other.plain()
       }
     }
   }
@@ -460,7 +460,7 @@ public type ValueDecoder with Decoder {
   /** Bytes, or a sequence of numbers that each fit into a byte: the way a text format writes them. */
   var fn bytes(): Result<List<UInt8>, DecodeError> {
     match take()? {
-      .Bytes(value) => Ok value
+      .Bytes(value) => value
       .Sequence(items) => {
         var found: List<UInt8> = []
         for item in items {
@@ -472,7 +472,7 @@ public type ValueDecoder with Decoder {
           }
           found.append byte
         }
-        Ok found
+        found
       }
       other => Fail DecodeError("bytes are needed, not {other.show()}")
     }
@@ -521,10 +521,10 @@ public type ValueDecoder with Decoder {
 
   var fn hasNext(): Result<Bool, DecodeError> {
     if frames.isEmpty() {
-      return Ok false
+      return false
     }
     const frame = frames[frames.length() - 1]
-    Ok(frame.index < frame.items.length())
+    frame.index < frame.items.length()
   }
 
   /**
@@ -553,12 +553,12 @@ public type ValueDecoder with Decoder {
     match take()? {
       .Variant(_, name, fields) => {
         frames.append ValueCursor(.Fields, fields: fields)
-        Ok name
+        name
       }
       // A case without fields is written as its bare name
       .String(name) => {
         frames.append ValueCursor(.Fields)
-        Ok name
+        name
       }
       // Externally tagged, which is what a text format writes: `{"Rejected": {"reason": "..."}}`
       .Record(_, fields) => {
@@ -570,7 +570,7 @@ public type ValueDecoder with Decoder {
           .Record(_, inner) => frames.append ValueCursor(.Fields, fields: inner)
           _ => frames.append ValueCursor(.Fields)
         }
-        Ok only.name
+        only.name
       }
       other => Fail DecodeError("a case is needed, not {other.show()}")
     }
@@ -592,12 +592,12 @@ public type ValueDecoder with Decoder {
     const spelled = naming.applied name
     for index in 0..frames[last].fields.length() {
       if frames[last].fields[index].name == spelled {
-        frames[last].selected = Some frames[last].fields[index].value
+        frames[last].selected = frames[last].fields[index].value
         frames[last].read.append spelled
-        return Ok true
+        return true
       }
     }
-    Ok false
+    false
   }
 
   var fn finish(): Result<Void, DecodeError> {
@@ -624,10 +624,10 @@ public type ValueDecoder with Decoder {
     }
     const frame = frames[frames.length() - 1]
     if const Some(selected) = frame.selected {
-      return Some selected
+      return selected
     }
     if frame.index < frame.items.length() {
-      return Some frame.items[frame.index]
+      return frame.items[frame.index]
     }
     None
   }
@@ -642,12 +642,12 @@ public type ValueDecoder with Decoder {
         }
       }
       root = None
-      return Ok found
+      return found
     }
     const last = frames.length() - 1
     if const Some(selected) = frames[last].selected {
       frames[last].selected = None
-      return Ok selected
+      return selected
     }
     const index = frames[last].index
     if index >= frames[last].items.length() {
@@ -657,7 +657,7 @@ public type ValueDecoder with Decoder {
     if const .Keys = frames[last].kind {
       tookKey = index % 2 == 0
     }
-    Ok frames[last].items[index]
+    frames[last].items[index]
   }
 }
 
@@ -689,7 +689,7 @@ fn wholeNumberOf(value: Float64): Result<Int64, DecodeError> {
       if Float64.from(whole) != value {
         return Fail DecodeError("{value} is not a whole number")
       }
-      Ok whole
+      whole
     }
     Fail(_) => Fail DecodeError("{value} is not a whole number")
   }

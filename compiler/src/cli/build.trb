@@ -88,7 +88,7 @@ public type Profile {
 public fn profileNamed(name: String): Profile? {
   for profile in [Profile.Dev, Profile.Release] {
     if profile.name() == name {
-      return Some profile
+      return profile
     }
   }
   None
@@ -155,20 +155,20 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   const reported = reportChecked checked
   if reported > 0 {
     printError "{counted(reported, "problem")}, nothing was built"
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const modules = match entryModulesOf(checked, tree, options) {
     Some(found) => found
     None => {
       printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const host = hostTarget()
@@ -176,7 +176,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   if target != host && !options.onlyC {
     printError "error: this machine is {host.name()}, and a binary for {target.name()} needs a C compiler for that target"
     printError "  `torb build --target {target.name()} --emit-c` writes the C, which builds on that system"
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const paths = pathsOfModules checked
   const checker = checked.checker
@@ -196,14 +196,14 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   const found = reportLowering checked, tree, lowering
   if found > 0 {
     printError "{counted(found, "problem")} the native back end cannot compile yet, nothing was built"
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const emission = emitProgram lowering.program, entries
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
       printError "error: {what}"
     }
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   const binary = outputPathOf checked, modules[0], options
   const directory = parentPath binary
@@ -223,7 +223,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
         print "wrote {joinPath(directory, headerFileName)} and {counted(units.units.length(), "unit")} beside it"
       }
     }
-    return Ok 0
+    return 0
   }
   // A program that runs the VM runs whatever its programs call, TLS included, and limits their memory - one that links
   // the script host runs it too
@@ -301,7 +301,7 @@ fn writeUnits(directory: String, source: String, text: String, units: EmittedUni
       File.writeText(joinPath(directory, entry), "")?
     }
   }
-  Ok ProgramSources(source, text.byteLength(), jobs, units.isSplit())
+  ProgramSources source, text.byteLength(), jobs, units.isSplit()
 }
 
 /**
@@ -320,7 +320,7 @@ public fn poolOf(checked: Checked, entry: ModuleId): Result<(workers: Int, block
     const manifestPath = if package.directory.isEmpty() { "project.trb" } else { joinPath package.directory, "project.trb" }
     return Fail "{manifestPath}: {problem}"
   }
-  Ok manifest.pool()
+  manifest.pool()
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -400,7 +400,7 @@ fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
 public fn entryModulesOf(checked: Checked, tree: SourceTree, options: BuildOptions): List<ModuleId>? {
   if !options.isTestRun {
     const only: List<ModuleId> = [entryModuleOf(checked)?]
-    return Some only
+    return only
   }
   var byPath: Map<String, ModuleId> = [:]
   var paths: List<String> = []
@@ -422,7 +422,7 @@ public fn entryModulesOf(checked: Checked, tree: SourceTree, options: BuildOptio
   if found.isEmpty() {
     return None
   }
-  Some found
+  found
 }
 
 /**
@@ -459,13 +459,13 @@ fn programEntriesOf(
  */
 fn entryModuleOf(checked: Checked): ModuleId? {
   if const [only] = checked.requested {
-    return Some only
+    return only
   }
   for module in checked.requested {
     const inside = checked.program.graph.at module
     const package = checked.program.workspace.packages[inside.package]
     if inside.path == joinPath(package.directory, package.manifest.buildInput) {
-      return Some module
+      return module
     }
   }
   None
@@ -516,16 +516,16 @@ fn findCompiler(): CCompiler? {
     if !given.isEmpty() {
       const isMicrosoft = isMicrosoftName given
       const version = if isMicrosoft { "" } else { versionOf(given) ?? "" }
-      return Some CCompiler(given, isMicrosoft, version)
+      return CCompiler given, isMicrosoft, version
     }
   }
   for candidate in ["clang", "gcc", "cc"] {
     if const Some(version) = versionOf(candidate) {
-      return Some CCompiler(candidate, false, version)
+      return CCompiler candidate, false, version
     }
   }
   if canRun("cl", []) {
-    return Some CCompiler("cl", true)
+    return CCompiler "cl", true
   }
   None
 }
@@ -536,7 +536,7 @@ fn versionOf(command: String): String? {
   if output.exitCode != 0 {
     return None
   }
-  Some(output.standardOutput.lines().first() ?? "")
+  output.standardOutput.lines().first() ?? ""
 }
 
 fn isMicrosoftName(command: String): Bool {
@@ -572,7 +572,7 @@ public fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
       }
     }
   }
-  Ok sources
+  sources
 }
 
 /**
@@ -588,7 +588,7 @@ public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, bina
   arguments.appendAll parts.flags
   arguments.appendAll parts.sources
   arguments.appendAll parts.objects
-  Ok arguments
+  arguments
 }
 
 /** [tlsArgumentsOf] apart: the flags every C file of the program is compiled with, the glue's sources, mbedTLS. */
@@ -627,7 +627,7 @@ fn tlsPartsOf(runtime: String, command: String, microsoft: Bool, binary: String)
     Ok(found) => found
     Fail(_) => vendorObjectsOf(joinPath(parentPath(binary), key), unique, vendor, flags, command, microsoft)?
   }
-  Ok TlsParts(flags, sources, objects)
+  TlsParts flags, sources, objects
 }
 
 /**
@@ -688,7 +688,7 @@ fn objectsIn(directory: String, suffix: String): Result<List<String>, IoError> {
       objects.append joinPath(directory, entry)
     }
   }
-  Ok objects
+  objects
 }
 
 fn compile(
@@ -708,7 +708,7 @@ fn compile(
       printError "  tried: $TORB_CC, clang, gcc, cc, cl"
       printError "  on Windows: winget install LLVM.LLVM, or open a \"x64 Native Tools\" prompt"
       printError "  `torb build --emit-c` writes the C without compiling it"
-      return Ok noCompilerCode
+      return noCompilerCode
     }
   }
   const runtime = match findRuntime(options.paths) {
@@ -716,7 +716,7 @@ fn compile(
     None => {
       printError "error: the C runtime was not found above the program, the working directory or `torb`."
       printError "  Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
-      return Ok noCompilerCode
+      return noCompilerCode
     }
   }
   var runtimeSources = runtimeSourcesOf(runtime)?
@@ -728,7 +728,7 @@ fn compile(
     match scriptHostObjectOf(options, runtime, compiler)? {
       Some(object) => objects.append object
       None => {
-        return Ok buildFailedCode
+        return buildFailedCode
       }
     }
   }
@@ -771,7 +771,7 @@ fn compile(
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
     Fail(problem) => {
       printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
-      return Ok noCompilerCode
+      return noCompilerCode
     }
   }
   if output.exitCode == 0 {
@@ -784,10 +784,10 @@ fn compile(
         print "wrote {binary}.exe"
       }
     }
-    return Ok 0
+    return 0
   }
   reportInternalError compiler, source, output.standardOutput, output.standardError
-  Ok internalErrorCode
+  internalErrorCode
 }
 
 /**
@@ -824,7 +824,7 @@ public fn runCompiler(
   match Process.runPassingThrough("sh", slotted) {
     Ok(code) => {
       const text = File.readText(log).ok() ?? ""
-      Ok ProcessOutput(code, text, "")
+      ProcessOutput code, text, ""
     }
     // No `sh` to start the script with
     Fail(_) => Process.runBlocking compiler.command, arguments
@@ -982,7 +982,7 @@ fn runUnits(tools: String, arguments: List<String>, size: Int, binary: String): 
   slotted.appendAll arguments
   const code = Process.runPassingThrough("sh", slotted)?
   const text = File.readText(log).ok() ?? ""
-  Ok ProcessOutput(code, text, "")
+  ProcessOutput code, text, ""
 }
 
 /**

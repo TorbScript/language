@@ -65,7 +65,7 @@ public fn destinationOf(url: Uri): Result<Destination, HttpError> {
     Some(query) => "{path}?{query}"
     None => path
   }
-  Ok Destination(secure, authority, port, target)
+  Destination secure, authority, port, target
 }
 
 /**
@@ -90,7 +90,7 @@ public fn openConnection(destination: Destination, tls: TlsSettings): Task<Resul
     const session = TlsStream.connect(stream, serverName, tls).await()?
     transport = Transport.encrypted stream, session
   }
-  Ok Connection.of(transport)
+  Connection.of transport
 }
 
 /**
@@ -108,7 +108,7 @@ public fn writeRequest(
   var writing = connection
   const length = body.length()
   // A body of no bytes on a method that means none is not announced at all (RFC 9110 section 8.6)
-  const announced = length != Some(0) || method.carriesContent()
+  const announced = length != 0 || method.carriesContent()
   const chunked = length.isNone()
   var head = "{method} {destination.target} HTTP/1.1\r\nHost: {destination.authority.hostAndPort()}\r\n"
   head = head + fieldLines(headers)
@@ -171,7 +171,7 @@ public fn readHead(connection: Connection, method: Method): Task<Result<Response
       continue
     }
     const framing = responseFraming(fields, line.status, method)?
-    return Ok ResponseHead(line.status, fields, framing, line.version)
+    return ResponseHead line.status, fields, framing, line.version
   }
 }
 
@@ -179,7 +179,7 @@ public fn readHead(connection: Connection, method: Method): Task<Result<Response
 public fn bodyOf(connection: Connection, framing: Framing): Body {
   match framing {
     .Empty => Body.empty()
-    .Fixed(size) => Body.of FixedReader.of(connection, size), length: Some(size)
+    .Fixed(size) => Body.of FixedReader.of(connection, size), length: size
     .Chunked => Body.of ChunkedReader.of(connection)
     .UntilEnd => Body.of UntilEndReader.of(connection)
   }
@@ -222,5 +222,5 @@ public fn send(
   const connection = openConnection(destination, tls).await()?
   writeRequest(connection, method, destination, headers, body, true).await()?
   const head = readHead(connection, method).await()?
-  Ok Response(head.status, head.headers, bodyOf(connection, head.framing))
+  Response head.status, head.headers, bodyOf(connection, head.framing)
 }

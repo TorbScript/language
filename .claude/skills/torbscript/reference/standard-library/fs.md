@@ -41,7 +41,7 @@ use File, IoError from "std/fs"
 
 fn wordCount(path: String): Result<Int, IoError> {
   const text = File.readText(path)?
-  Ok text.split(" ").length()
+  text.split(" ").length()
 }
 ```
 
@@ -247,7 +247,7 @@ fn copyLines(from: String, into: String): Task<Result<Int, IoError>> {
     count = count + 1
   }
   target.end().await()?
-  Ok count
+  count
 }
 ```
 

@@ -96,7 +96,7 @@ fn rewrittenFunction(
     }
   }
   if isChanged {
-    return Some blocks
+    return blocks
   }
   None
 }
@@ -206,7 +206,7 @@ fn settledEntries(program: IrProgram, function: IrFunction, lengthOf: Map<Int, I
           None => edge
         }
         if !isSameFacts(entries[successor], merged) {
-          entries.set successor, Some(merged)
+          entries.set successor, merged
           isChanged = true
         }
       }
@@ -271,19 +271,19 @@ fn guardFact(function: IrFunction, block: Int, successor: Int, lengthOf: Map<Int
       return None
     }
   }
-  if target != Some(condition) || arguments.length() != 2 {
+  if target != condition || arguments.length() != 2 {
     return None
   }
   match intrinsic.operation {
     .Less => {
       if lengthOf.containsKey(arguments[1].value) {
-        return Some below(arguments[0], arguments[1].value)
+        return below arguments[0], arguments[1].value
       }
       None
     }
     .Greater => {
       if lengthOf.containsKey(arguments[0].value) {
-        return Some below(arguments[1], arguments[0].value)
+        return below arguments[1], arguments[0].value
       }
       None
     }
@@ -381,7 +381,7 @@ fn integerOfStatic(program: IrProgram, value: StaticId): Int? {
     return None
   }
   if const .Literal(.Integer(found)) = program.staticAt(value).contents {
-    return Some found
+    return found
   }
   None
 }
@@ -428,13 +428,13 @@ fn provenRead(
   if item != function.typeOfSlot(target) {
     return None
   }
-  Some Instruction.Read(target, Reference(list, [PathStep.Element(item, index, at, false)]))
+  Instruction.Read target, Reference(list, [PathStep.Element(item, index, at, false)])
 }
 
 fn listItemOf(program: IrProgram, annotation: IrTypeId): IrTypeId? {
   if const .Runtime(kind, arguments) = program.typeAt(annotation) {
     if kind == RuntimeKind.ListStorage && arguments.length() == 1 {
-      return Some arguments[0]
+      return arguments[0]
     }
   }
   None

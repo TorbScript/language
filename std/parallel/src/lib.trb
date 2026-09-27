@@ -200,7 +200,7 @@ fn piecesOf<Piece>(length: Int, chunk: Int?, cut: (range: Range<Int>) => Piece):
 /** A pipeline over `pieces` that has no stage yet, with at most `workers` chunks at a time. */
 fn spread<Piece: Iterate<Item>, Item>(pieces: ArrayList<Piece>, workers: Int): Parallel<Item> {
   const bound = if workers < 1 { 1 } else { workers }
-  const start: (value: Item) => Item? = { Some _ }
+  const start: (value: Item) => Item? = { _ }
   Parallel bound, Spread(pieces, start)
 }
 
@@ -272,8 +272,8 @@ public type Parallel<Item> {
       }
       const output = accumulator.finish()
       total = match total {
-        Some(before) => Some collector.merge(before, output)
-        None => Some output
+        Some(before) => collector.merge before, output
+        None => output
       }
     }
     total ?? collector.finish()
@@ -327,10 +327,10 @@ public type Parallel<Item> {
    * no further chunk is started once every chunk before it has answered and one of them found one.
    */
   fn find(predicate: Predicate<Item>): Task<Item?> {
-    const firsts = plan.filtered(predicate).run(limit, { _.first() }, { _.isSome() }, Some(1)).await()
+    const firsts = plan.filtered(predicate).run(limit, { _.first() }, { _.isSome() }, 1).await()
     for first in firsts {
       if const Some(value) = first {
-        return Some value
+        return value
       }
     }
     None
@@ -381,7 +381,7 @@ type Spread<Piece: Iterate<Source>, Source, Item> with Plan<Item> {
     const before = step
     const next: (value: Source) => Output? = { value =>
       match before(value) {
-        Some(item) => Some transform(item)
+        Some(item) => transform item
         None => None
       }
     }
@@ -392,7 +392,7 @@ type Spread<Piece: Iterate<Source>, Source, Item> with Plan<Item> {
     const before = step
     const next: (value: Source) => Item? = { value =>
       match before(value) {
-        Some(item) => if predicate(item) { Some item } else { None }
+        Some(item) => if predicate(item) { item } else { None }
         None => None
       }
     }
@@ -483,7 +483,7 @@ fn summed<Item>(items: ArrayList<Item>): Item where Item: Add & From<Int> {
 fn smallest<Item, Key: Compare>(items: ArrayList<Item>, key: Transform<Item, Key>): Item? {
   var best: Item? = None
   for item in items {
-    best = earlierOrSmaller best, Some(item), key
+    best = earlierOrSmaller best, item, key
   }
   best
 }
@@ -492,7 +492,7 @@ fn smallest<Item, Key: Compare>(items: ArrayList<Item>, key: Transform<Item, Key
 fn largest<Item, Key: Compare>(items: ArrayList<Item>, key: Transform<Item, Key>): Item? {
   var best: Item? = None
   for item in items {
-    best = earlierOrLarger best, Some(item), key
+    best = earlierOrLarger best, item, key
   }
   best
 }

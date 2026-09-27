@@ -521,7 +521,7 @@ extend Char with Encode, Decode, Describe {
     if characters.next().isSome() {
       return Fail DecodeError("a character is needed, not the text {text.showNested()}")
     }
-    Ok first
+    first
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -576,7 +576,7 @@ extend<Value: Describe> Option<Value> with Describe {
 /** A list is a `sequence`: its length in front, then every item with its own `encode`. */
 extend<Item: Encode> List<Item> with Encode {
   fn encode<Target: Encoder>(var target: Target) {
-    target.sequence Some(length())
+    target.sequence length()
     for item in self {
       item.encode target
     }
@@ -595,7 +595,7 @@ extend<Item: Decode> List<Item> with Decode {
       items.append item
     }
     source.finish()?
-    Ok items
+    items
   }
 }
 
@@ -616,7 +616,7 @@ extend<Item: Describe> List<Item> with Describe {
 extend<Item: Decode> ArrayList<Item> with Decode {
   static fn decode<Source: Decoder>(var source: Source): Result<ArrayList<Item>, DecodeError> {
     const items = List<Item>.decode(source)?
-    Ok ArrayList.from(items)
+    ArrayList.from items
   }
 }
 
@@ -632,7 +632,7 @@ extend<Item: Describe> ArrayList<Item> with Describe {
 /** A set is a sequence of its items. */
 extend<Item: Encode> Set<Item> with Encode {
   fn encode<Target: Encoder>(var target: Target) {
-    target.sequence Some(length())
+    target.sequence length()
     for item in self {
       item.encode target
     }
@@ -644,7 +644,7 @@ extend<Item: Encode> Set<Item> with Encode {
 extend<Item: Decode & Hash> Set<Item> with Decode {
   static fn decode<Source: Decoder>(var source: Source): Result<Set<Item>, DecodeError> {
     const items = List<Item>.decode(source)?
-    Ok items.toSet()
+    items.toSet()
   }
 }
 
@@ -660,7 +660,7 @@ extend<Item: Describe> Set<Item> with Describe {
 /** A map is a `map`: its length in front, then every entry as its key and its value. */
 extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
   fn encode<Target: Encoder>(var target: Target) {
-    target.map Some(length())
+    target.map length()
     for (key, value) in self {
       key.encode target
       value.encode target
@@ -683,7 +683,7 @@ extend<Key: Decode & Hash & Show, Value: Decode> Map<Key, Value> with Decode {
       entries[key] = value
     }
     source.finish()?
-    Ok entries
+    entries
   }
 }
 

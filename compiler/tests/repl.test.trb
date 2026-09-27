@@ -119,8 +119,8 @@ group "The module of an entry" {
     const plan = planEntry entry
     const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, plan, Form())
     const at = synthesis.text.byteOffsetOf("print missing") ?? 0
-    assert(synthesis.locate(Span(at + 6, at + 13)) == Some((0, Span(22, 29), true)))
-    assert(synthesis.statementOffset(0, 22) == Some(at + 6))
+    assert(synthesis.locate(Span(at + 6, at + 13)) == (0, Span(22, 29), true))
+    assert(synthesis.statementOffset(0, 22) == (at + 6))
   }
 
   test "a declaration the session keeps is copied from its own entry" {
@@ -130,7 +130,7 @@ group "The module of an entry" {
     const kept = [KeptDeclaration(["Point"], 0, Span(0, first.byteLength()), false)]
     const synthesis = synthesize sources, kept, [], 1, planEntry(second), Form()
     assert synthesis.text.startsWith(first)
-    assert(synthesis.locate(Span(5, 10)) == Some((0, Span(5, 10), false)))
+    assert(synthesis.locate(Span(5, 10)) == (0, Span(5, 10), false))
   }
 
   test "the new bindings are handed out through `var` parameters, in the order they are bound" {
@@ -144,7 +144,7 @@ group "The module of an entry" {
 
   test "a `?` at the top level makes the statements the body of a function that can fail" {
     const entry = "const text = read()?"
-    const form = Form failure: Some("IoError"), outputs: [("text", "String")]
+    const form = Form failure: "IoError", outputs: [("text", "String")]
     const synthesis = synthesize([EntrySource("<repl>", entry)], [], [], 0, planEntry(entry), form)
     assert synthesis.text.contains("fn replEntry(var replOut0: String): Bool \{\n  match replBody(replOut0) \{")
     assert synthesis.text.contains("fn replBody(var replOut0: String): Result<Void, IoError> \{")

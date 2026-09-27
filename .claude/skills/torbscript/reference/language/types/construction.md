@@ -91,7 +91,7 @@ Self(<field>, ...)                   // The constructor, from inside the type
    }
 
    print Person("Ada")
-   print Person("Alan", nickname: Some("al"))
+   print Person("Alan", nickname: "al")
    ```
 
 3. **Positional arguments fill the fields from the left; a field with a default in the middle is passed over by
@@ -213,7 +213,7 @@ type Percent {
     if value < 0 || value > 100 {
       return Fail "{value} is not between 0 and 100"
     }
-    Ok Self(value)
+    Self value
   }
 }
 ```

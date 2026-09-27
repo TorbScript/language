@@ -35,7 +35,7 @@ public shared type Connection with Close {
   /** Receives once more into the buffer: `false` at the end of the stream. */
   var fn fill(): Task<Result<Bool, HttpError>> {
     if ended {
-      return Ok false
+      return false
     }
     match stream.receiveBuffer().await() {
       Ok(Some(received)) => {
@@ -44,11 +44,11 @@ public shared type Connection with Close {
         } else {
           buffer.replace(buffer.length()..buffer.length(), received)
         }
-        Ok true
+        true
       }
       Ok(None) => {
         ended = true
-        Ok false
+        false
       }
       Fail(problem) => Fail HttpError.network(problem)
     }
@@ -122,7 +122,7 @@ public shared type Connection with Close {
             return Fail HttpError.malformed("a CR stands alone")
           }
           const found = consume(index + 2)
-          return Ok found.slice(0..index)
+          return found.slice(0..index)
         }
         index = index + 1
       }
@@ -295,7 +295,7 @@ public fn chunkSize(line: ArrayList<UInt8>): Result<Int, HttpError> {
   if digits == 0 {
     return Fail HttpError.malformed("a chunk size is hexadecimal digits")
   }
-  Ok size
+  size
 }
 
 /** A body that ends where the connection ends: a response without a length and without chunks. */

@@ -122,7 +122,7 @@ fn arrayReadAt(program: IrProgram, function: IrFunction, instruction: Instructio
   }
   const site = readerSiteOf(program, instruction)?
   const step = PathStep.Element item, arguments[1].slot, site
-  Some Instruction.Read(target, Reference(array, [step]))
+  Instruction.Read target, Reference(array, [step])
 }
 
 /**
@@ -165,7 +165,7 @@ fn isPureBetween(instruction: Instruction, reader: Instruction): Bool {
       return false
     }
   }
-  if definedSlot(instruction) == Some(wanted) {
+  if definedSlot(instruction) == wanted {
     return false
   }
   match instruction {
@@ -237,7 +237,7 @@ fn foldedRead(
   var definitions = 0
   for instruction in instructions {
     uses = uses + occurrences(usedSlots(instruction), whole)
-    if definedSlot(instruction) == Some(whole) {
+    if definedSlot(instruction) == whole {
       definitions = definitions + 1
     }
   }
@@ -246,7 +246,7 @@ fn foldedRead(
   }
   var steps = source.steps
   steps.append step
-  Some Instruction.Read(target, Reference(source.base, steps))
+  Instruction.Read target, Reference(source.base, steps)
 }
 
 /** One take-out and the put-back that closes it, with everything the rewrite needs decided. */
@@ -275,7 +275,7 @@ fn elementWriteIn(
 ): ElementWrite? {
   for at in 0..instructions.length() {
     if const Some(found) = elementWriteAt(program, function, block, instructions, at) {
-      return Some found
+      return found
     }
   }
   None
@@ -353,7 +353,7 @@ fn elementWriteAt(
     return None
   }
   const hasOwnerUnique = isMakeUniqueOf instructions[at - 1], container
-  Some ElementWrite(take - 1, take, at, hasOwnerUnique, container, key, element, item, site)
+  ElementWrite(take - 1, take, at, hasOwnerUnique, container, key, element, item, site)
 }
 
 /**
@@ -374,7 +374,7 @@ fn putBackArguments(program: IrProgram, instruction: Instruction): List<Argument
       if !isListSetter(program, callee) && !isArraySetter(program, callee) {
         return None
       }
-      Some arguments
+      arguments
     }
     _ => None
   }
@@ -461,7 +461,7 @@ fn forwardedCallee(function: IrFunction): FunctionId? {
       }
     }
   }
-  Some parts.callee
+  parts.callee
 }
 
 /** One forwarding call: what it calls, and with what. */
@@ -480,7 +480,7 @@ type Forwarded {
 fn takenReceiver(program: IrProgram, instruction: Instruction, element: Slot, key: Slot): Slot? {
   match instruction {
     .Call(target, callee, arguments, witnesses, _) => {
-      if target != Some(element) || !witnesses.isEmpty() || arguments.length() != 2 {
+      if target != element || !witnesses.isEmpty() || arguments.length() != 2 {
         return None
       }
       if !isElementReader(program, callee) {
@@ -489,7 +489,7 @@ fn takenReceiver(program: IrProgram, instruction: Instruction, element: Slot, ke
       if arguments[1].slot != key || hasPlace(arguments[0]) || hasPlace(arguments[1]) {
         return None
       }
-      Some arguments[0].slot
+      arguments[0].slot
     }
     _ => None
   }
@@ -524,11 +524,11 @@ fn elementTypeOf(program: IrProgram, function: IrFunction, container: Reference,
   match program.typeAt(annotation) {
     .Runtime(kind, arguments) => {
       if kind == RuntimeKind.ListStorage && arguments.length() == 1 && isListSetter(program, callee) {
-        return Some arguments[0]
+        return arguments[0]
       }
       None
     }
-    .FixedArray(item, _) => if isArraySetter(program, callee) { Some item } else { None }
+    .FixedArray(item, _) => if isArraySetter(program, callee) { item } else { None }
     _ => None
   }
 }
@@ -561,7 +561,7 @@ fn readerSiteOf(program: IrProgram, instruction: Instruction): LocationId? {
         if const Some(_) = found {
           return None
         }
-        found = Some at
+        found = at
       }
     }
   }
@@ -569,7 +569,7 @@ fn readerSiteOf(program: IrProgram, instruction: Instruction): LocationId? {
     return None
   }
   if const Some(site) = called {
-    return Some site
+    return site
   }
   found
 }
@@ -596,10 +596,10 @@ fn isConfined(
   }
   for at in 0..instructions.length() {
     const instruction = instructions[at]
-    if at != take - 1 && definedSlot(instruction) == Some(receiver) {
+    if at != take - 1 && definedSlot(instruction) == receiver {
       return false
     }
-    if at != take && definedSlot(instruction) == Some(element) {
+    if at != take && definedSlot(instruction) == element {
       return false
     }
     if at != take && occurrences(usedSlots(instruction), receiver) > 0 {
@@ -645,7 +645,7 @@ fn isUndisturbed(
   while at < putBack {
     const instruction = instructions[at]
     for slot in guarded {
-      if definedSlot(instruction) == Some(slot) {
+      if definedSlot(instruction) == slot {
         return false
       }
     }
@@ -794,7 +794,7 @@ fn substitutedArguments(arguments: List<Argument>, element: Slot, prefix: Refere
     match argument.place {
       Some(place) => {
         const moved = substitutedReference place, element, prefix
-        found.append argument.copy(slot: moved.base, place: Some(moved))
+        found.append argument.copy(slot: moved.base, place: moved)
       }
       None => found.append argument
     }
@@ -828,7 +828,7 @@ fn substitutedWitness(witness: WitnessSource, element: Slot, prefix: Reference):
 fn definitionOf(instructions: List<Instruction>, at: Int, slot: Slot): Int {
   var found = -1
   for index in 0..at {
-    if definedSlot(instructions[index]) == Some(slot) {
+    if definedSlot(instructions[index]) == slot {
       found = index
     }
   }
@@ -965,7 +965,7 @@ fn touchesOutsideBlock(function: IrFunction, block: Int, slot: Slot): Bool {
       continue
     }
     for instruction in found.instructions {
-      if occurrences(usedSlots(instruction), slot) > 0 || definedSlot(instruction) == Some(slot) {
+      if occurrences(usedSlots(instruction), slot) > 0 || definedSlot(instruction) == slot {
         return true
       }
     }

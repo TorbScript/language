@@ -53,13 +53,13 @@ public fn runInMachine(path: String, arguments: List<String>, withTimings: Bool 
   }
   clock.lap "checking"
   if reportChecked(checked) > 0 {
-    return Ok refusedCode
+    return refusedCode
   }
   const module = match checked.requested.first() {
     Some(found) => found
     None => {
       printError "error: `torb run --vm` needs one entry file"
-      return Ok refusedCode
+      return refusedCode
     }
   }
   const executable = normalizePath(File.absolutePath(path)?)
@@ -111,13 +111,13 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const requested = absolutePaths(paths)?
   const checked = check tree, requested, false, false, [], true
   if reportChecked(checked) > 0 {
-    return Ok refusedCode
+    return refusedCode
   }
   const modules = match entryModulesOf(checked, tree, BuildOptions(paths, isTestRun: true)) {
     Some(found) => found
     None => {
       printError "error: no test file (`*.test.trb`) below {paths.joined(", ")}"
-      return Ok refusedCode
+      return refusedCode
     }
   }
   runModules checked, tree, modules, [], true, "", requested, RunClock(isOn: false, last: 0)
@@ -138,19 +138,19 @@ fn runModules(
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
-      return Ok refusedCode
+      return refusedCode
     }
   }
   const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, true) {
     Some(found) => found
     None => {
-      return Ok refusedCode
+      return refusedCode
     }
   }
   const loader = scriptLoaderOf tree, requested
   clock.lap "the loader of scripts"
   clock.finish()
-  Ok runProgram(program, arguments, executable, Some(loader), pool)
+  runProgram program, arguments, executable, loader, pool
 }
 
 /**
@@ -219,7 +219,7 @@ public fn bytecodeOf(
     return None
   }
   clock.lap "the bytecode"
-  Some emission.program
+  emission.program
 }
 
 /** Whether the lowering found nothing to refuse. */
@@ -283,7 +283,7 @@ fn loadAtRunTime(
   }
   const key = "{absolute}\n{receiver}\n{text}"
   if const Some((chunk, imports)) = known.loaded.get(key) {
-    return Ok LoadedScript(after, chunk, imports)
+    return LoadedScript after, chunk, imports
   }
   const (declaring, name) = match receiver.split("\t").toList() {
     [module, typeName] => (module, typeName)
@@ -358,7 +358,7 @@ fn loadAtRunTime(
     if emission.program.chunks[index].name == function {
       const imports = importsOf checked, module
       known.loaded.set key, (index, imports)
-      return Ok LoadedScript(emission.program, index, imports)
+      return LoadedScript emission.program, index, imports
     }
   }
   Fail ScriptStop(0, "internal error: the script `{path}` was not emitted")

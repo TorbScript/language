@@ -33,7 +33,7 @@ fn orElseComputed(value: Int?, fallback: lazy Int): Int {
 var n = 5
 print reset(n)
 print n
-print orElseComputed(Some(1), 999)
+print orElseComputed(1, 999)
 ```
 
 ## Syntax
@@ -108,7 +108,7 @@ var <name>: <Type>                    a var path
      value ?? fallback
    }
 
-   print orElseComputed(Some(1), expensive())
+   print orElseComputed(1, expensive())
    print orElseComputed(None, expensive())
    ```
 

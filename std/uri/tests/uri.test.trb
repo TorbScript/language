@@ -44,10 +44,10 @@ group "parsing and normalization" {
   test "a URI with every part keeps every part" {
     const uri = uriOf "https://example.test/a/b?q=1#top"
     assert(uri.scheme() == "https")
-    assert(uri.host() == Some(Host.Name("example.test")))
+    assert(uri.host() == Host.Name("example.test"))
     assert(uri.path() == "/a/b")
-    assert(uri.query() == Some("q=1"))
-    assert(uri.fragment() == Some("top"))
+    assert(uri.query() == "q=1")
+    assert(uri.fragment() == "top")
     assert(uri.text() == "https://example.test/a/b?q=1#top")
   }
 
@@ -64,7 +64,7 @@ group "parsing and normalization" {
     assert(uri.text() == "https://user:secret@example.test:8443/")
     assert(uri.show() == "https://user:***@example.test:8443/")
     assert("{uri}" == "https://user:***@example.test:8443/")
-    assert(uri.authority()?.userInfo == Some("user:secret"))
+    assert(uri.authority()?.userInfo == "user:secret")
   }
 
   test "a user information without a colon is a name and is shown" {
@@ -105,7 +105,7 @@ group "parsing and normalization" {
 
   test "a mailto has no authority and a file URI an empty host" {
     assert uriOf("mailto:ada@example.test").authority().isNone()
-    assert(uriOf("file:///x").host() == Some(Host.Name("")))
+    assert(uriOf("file:///x").host() == Host.Name(""))
   }
 
   test "the dot segments of a relative path are kept, and those of an absolute path removed" {
@@ -134,9 +134,9 @@ group "hosts outside ASCII" {
     const uri = uriOf "https://München.test/a"
     assert(uri.text() == "https://xn--mnchen-3ya.test/a")
     assert(uri.iriText() == "https://münchen.test/a")
-    assert(Uri.tryFrom(uri.iriText()) == Ok(uri))
+    assert(Uri.tryFrom(uri.iriText()) == uri)
     assert(uriOf("https://bücher.example:8443/").iriText() == "https://bücher.example:8443/")
-    assert(uri.host() == Some(Host.Name("xn--mnchen-3ya.test")))
+    assert(uri.host() == Host.Name("xn--mnchen-3ya.test"))
   }
 
   test "escaped UTF-8 in a host is the same name, and a trailing dot stays" {
@@ -146,7 +146,7 @@ group "hosts outside ASCII" {
   }
 
   test "a name that maps to dotted decimal is that address" {
-    assert(uriOf("http://１２７.０.０.１/").host() == Some(Host.Address(IpAddress.loopback)))
+    assert(uriOf("http://１２７.０.０.１/").host() == Host.Address(IpAddress.loopback))
   }
 
   test "what IDNA refuses is an invalid host, and escapes that are not UTF-8 name no host" {
@@ -170,7 +170,7 @@ group "refusals" {
   test "a port that is no number from 0 to 65535 is refused" {
     assert(UriReference.tryFrom("https://example.test:http/a") == Fail(UriError.InvalidPort("http")))
     assert(UriReference.tryFrom("https://example.test:65536/a") == Fail(UriError.InvalidPort("65536")))
-    assert(uriOf("https://example.test:08080/").port() == Some(8080))
+    assert(uriOf("https://example.test:08080/").port() == 8080)
   }
 
   test "a colon in the first segment of a relative path reads as a scheme that is none" {
@@ -197,19 +197,19 @@ group "refusals" {
 group "hosts" {
   test "an IPv4 address is an address and not a name" {
     const uri = uriOf "http://127.0.0.1:8080/"
-    assert(uri.host() == Some(Host.Address(IpAddress.Version4(Ipv4Address.loopback))))
-    assert(uri.socketAddress() == Some(SocketAddress(IpAddress.loopback, 8080)))
+    assert(uri.host() == Host.Address(IpAddress.Version4(Ipv4Address.loopback)))
+    assert(uri.socketAddress() == SocketAddress(IpAddress.loopback, 8080))
   }
 
   test "an IPv6 literal is written in RFC 5952's form" {
     assert(shown("http://[2001:DB8:0:0::1]/") == "http://[2001:db8::1]/")
     const loopback = IpAddress.Version6 Ipv6Address.loopback
-    assert(uriOf("https://[::1]/").socketAddress() == Some(SocketAddress(loopback, 443)))
+    assert(uriOf("https://[::1]/").socketAddress() == SocketAddress(loopback, 443))
   }
 
   test "what is not an IPv4 address by the RFC's rule is a name" {
-    assert(uriOf("http://01.2.3.4/").host() == Some(Host.Name("01.2.3.4")))
-    assert(uriOf("http://1.2.3/").host() == Some(Host.Name("1.2.3")))
+    assert(uriOf("http://01.2.3.4/").host() == Host.Name("01.2.3.4"))
+    assert(uriOf("http://1.2.3/").host() == Host.Name("1.2.3"))
   }
 
   test "a registered name has no socket address, and neither has an address without a known port" {
@@ -227,7 +227,7 @@ group "hosts" {
 
   test "a registered name that is a host name is a domain name, and nothing else is" {
     assert(uriOf("https://www.Example.test/").host()?.domainName() == DomainName.tryFrom("www.example.test").ok())
-    assert(uriOf("https://xn--bcher-kva.example/").host()?.domainName()?.unicodeText() == Some("bücher.example"))
+    assert(uriOf("https://xn--bcher-kva.example/").host()?.domainName()?.unicodeText() == "bücher.example")
     for text in ["http://127.0.0.1/", "http://[::1]/", "http://[v7.x]/", "file:///x", "http://a%2Cb.test/", "http://a!b.test/"] {
       assert(uriOf(text).host()?.domainName() == None)
     }
@@ -347,7 +347,7 @@ group "members" {
   }
 
   test "the default port is the scheme's, for five schemes" {
-    assert(uriOf("wss://example.test/").defaultPort() == Some(443))
+    assert(uriOf("wss://example.test/").defaultPort() == 443)
     assert uriOf("gopher://example.test/").defaultPort().isNone()
   }
 
@@ -364,13 +364,13 @@ group "members" {
   test "withFragment writes the text as it is" {
     const uri = uriOf "https://example.test/a#old"
     assert(uri.withFragment(None).text() == "https://example.test/a")
-    assert(uri.withFragment(Some("a b%")).text() == "https://example.test/a#a%20b%25")
+    assert(uri.withFragment("a b%").text() == "https://example.test/a#a%20b%25")
   }
 
   test "a reference with a scheme is a Uri, and a Uri is a reference" {
     const reference = referenceOf "https://example.test/a"
     assert reference.isAbsolute()
-    assert(reference.uri() == Some(uriOf("https://example.test/a")))
+    assert(reference.uri() == uriOf("https://example.test/a"))
     assert referenceOf("/a").uri().isNone()
     assert referenceOf("/a").isRelative()
     assert(UriReference.from(uriOf("https://example.test/a")) == reference)
@@ -379,17 +379,17 @@ group "members" {
   test "the text is the way out, with every part of it" {
     const uri = uriOf "postgres://ada:hunter2@db.test/orders"
     assert(uri.text() == "postgres://ada:hunter2@db.test/orders")
-    assert(Uri.tryFrom(uri.text()) == Ok(uri))
+    assert(Uri.tryFrom(uri.text()) == uri)
   }
 }
 
 group "queries" {
   test "the query is read as a form" {
     const uri = uriOf "https://example.test/search?q=Gr%C3%BCner+Weg&tag=a&tag=b&flag&=x"
-    assert(uri.queryParameter("q") == Some("Grüner Weg"))
-    assert(uri.queryParameters().get("tag") == Some(["a", "b"]))
-    assert(uri.queryParameter("flag") == Some(""))
-    assert(uri.queryParameter("") == Some("x"))
+    assert(uri.queryParameter("q") == "Grüner Weg")
+    assert(uri.queryParameters().get("tag") == ["a", "b"])
+    assert(uri.queryParameter("flag") == "")
+    assert(uri.queryParameter("") == "x")
     assert uri.queryParameter("missing").isNone()
   }
 

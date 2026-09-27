@@ -93,7 +93,7 @@ public fn bodyOf(
   if const .TaskResume = function.kind {
     // The value goes into the task block and never through a result pointer, whatever its size
     const machine = taskMachineOf program, function
-    return Body function, prototypes, reads, labels, false, framed, Some(machine), closing, cleared
+    return Body function, prototypes, reads, labels, false, framed, machine, closing, cleared
   }
   Body function, prototypes, reads, labels, isByPointerResult(function), framed, closing: closing, clearedSlots: cleared
 }
@@ -617,7 +617,7 @@ public fn frameTypeName(function: IrFunction): String {
 fn frameDeclarationOf(function: IrFunction): CStatement {
   const spelling = pointerTo frameTypeName(function)
   const frame = CExpression.Call CExpression.Name("torb_task_frame"), [CExpression.Name(taskName)]
-  CStatement.Declaration spelling, frameName, Some(CExpression.Cast(spelling, frame))
+  CStatement.Declaration spelling, frameName, CExpression.Cast(spelling, frame)
 }
 
 /**
@@ -690,7 +690,7 @@ fn stopPathOf(
     const released = releaseStatements emission, program, typeOfSlot(body, slot), place
     statements.appendAll guardedRelease(program, body, slot, place, released)
   }
-  statements.append CStatement.Return(Some(CExpression.Name("TORB_POLL_STOPPED")))
+  statements.append CStatement.Return(CExpression.Name("TORB_POLL_STOPPED"))
   statements
 }
 
@@ -711,7 +711,7 @@ fn suspendStatements(body: Body, state: Int, awaited: Slot, observes: Bool): Lis
   }
   const waited = CExpression.Call CExpression.Name(primitive), [task, slotExpression(body, awaited)]
   const suspended = CExpression.Binary waited, "==", CExpression.Name("TORB_WAIT_SUSPENDED")
-  const returned = CStatement.Return Some(CExpression.Name("TORB_POLL_SUSPENDED"))
+  const returned = CStatement.Return CExpression.Name("TORB_POLL_SUSPENDED")
   const outcome = CExpression.Call CExpression.Name("torb_task_outcome"), [task]
   [
     recorded,
@@ -806,7 +806,7 @@ fn startStatementOf(program: IrProgram, place: CExpression, members: List<CExpre
 
 /** A resume function finishes by moving its value into the result slot of the task block. */
 fn finishedStatements(program: IrProgram, body: Body, value: Argument?): List<CStatement> {
-  const finished = CStatement.Return Some(CExpression.Name("TORB_POLL_FINISHED"))
+  const finished = CStatement.Return CExpression.Name("TORB_POLL_FINISHED")
   const found = match value {
     Some(argument) => argument
     None => {
@@ -844,7 +844,7 @@ fn slotDeclarationsOf(program: IrProgram, body: Body): List<CStatement> {
       continue
     }
     const spelling = valueTypeOf program, declared.annotation
-    statements.append CStatement.Declaration(spelling, name, Some(zeroInitializer))
+    statements.append CStatement.Declaration(spelling, name, zeroInitializer)
   }
   statements.appendAll frameEnvironmentDeclarations(program, body)
   if !silenced.isEmpty() {
@@ -871,7 +871,7 @@ fn frameEnvironmentDeclarations(program: IrProgram, body: Body): List<CStatement
         }
         if const Some(layout) = environmentLayoutOfFunction(program, program.functionAt(callee)) {
           const name = frameEnvironmentName body, target
-          statements.append CStatement.Declaration(program.layoutAt(layout).name, name, Some(zeroInitializer))
+          statements.append CStatement.Declaration(program.layoutAt(layout).name, name, zeroInitializer)
         }
       }
     }
@@ -1111,32 +1111,32 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     const helper = retainChildrenFunctionOf program, layout
-    return Some CStatement.Evaluate(CExpression.Call(helper, [CExpression.AddressOf(place)]))
+    return CStatement.Evaluate CExpression.Call(helper, [CExpression.AddressOf(place)])
   }
   if isCountedPointer(program, inner) {
-    return Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
+    return CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [place])
   }
   match program.typeAt(inner) {
     // A trait-typed value owns its boxed payload and borrows its tables, which are static data
     .Object(_) => {
       const data = CExpression.Member place, "data"
-      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [data]))
+      CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [data])
     }
-    .Text => Some retainedInto(place, "torb_text_retained")
+    .Text => retainedInto place, "torb_text_retained"
     // A closure owns its environment and borrows its code pointer, which is static
     .Closure(_) => {
       const held = CExpression.Member place, environmentMemberName
-      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [held]))
+      CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [held])
     }
     .Runtime(kind, _) => {
       match kind {
-        .ListStorage => Some retainedInto(place, "torb_list_retained")
-        .MapStorage => Some retainedInto(place, "torb_map_retained")
-        .SetStorage => Some retainedInto(place, "torb_set_retained")
+        .ListStorage => retainedInto place, "torb_list_retained"
+        .MapStorage => retainedInto place, "torb_map_retained"
+        .SetStorage => retainedInto place, "torb_set_retained"
         // A task and a channel are counted blocks with the header first, so the generic retain is theirs
-        .TaskObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
-        .ChannelObject => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
-        .FileHandle => Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place]))
+        .TaskObject => CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [place])
+        .ChannelObject => CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [place])
+        .FileHandle => CStatement.Evaluate CExpression.Call(CExpression.Name("torb_retain"), [place])
         _ => None
       }
     }
@@ -1163,16 +1163,16 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
   }
   if const Some(layout) = boxedLayoutOf(program, inner) {
     const drop = dropFunctionOf program, layout
-    return Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
+    return CStatement.Evaluate CExpression.Call(CExpression.Name("torb_release"), [place, drop])
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     const helper = dropFunctionOf program, layout
-    return Some CStatement.Evaluate(CExpression.Call(helper, [CExpression.AddressOf(place)]))
+    return CStatement.Evaluate CExpression.Call(helper, [CExpression.AddressOf(place)])
   }
   // A `shared type` object is its block, whose drop releases what its fields hold
   if const .SharedObject(layout) = program.typeAt(inner) {
     const drop = dropFunctionOf program, layout
-    return Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
+    return CStatement.Evaluate CExpression.Call(CExpression.Name("torb_release"), [place, drop])
   }
   match program.typeAt(inner) {
     // The payload is erased, so the drop function comes out of the first table the value carries: it is a function of the
@@ -1184,25 +1184,25 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
       const data = CExpression.Member place, "data"
       const table = CExpression.Member place, witnessMemberNameOf(0)
       const drop = CExpression.PointerMember table, "drop"
-      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [data, drop]))
+      CStatement.Evaluate CExpression.Call(CExpression.Name("torb_release"), [data, drop])
     }
-    .Text => Some releasedBy(place, "torb_text_release")
+    .Text => releasedBy place, "torb_text_release"
     // The environment carries its own drop function, because a closure value has erased which captures are in it
     .Closure(_) => {
       const held = CExpression.Member place, environmentMemberName
-      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_environment_release"), [held]))
+      CStatement.Evaluate CExpression.Call(CExpression.Name("torb_environment_release"), [held])
     }
     .Runtime(kind, _) => {
       match kind {
-        .ListStorage => Some releasedBy(place, "torb_list_release")
-        .MapStorage => Some releasedBy(place, "torb_map_release")
-        .SetStorage => Some releasedBy(place, "torb_set_release")
-        .TaskObject => Some releasedBy(place, "torb_task_release")
-        .ChannelObject => Some releasedBy(place, "torb_channel_release")
+        .ListStorage => releasedBy place, "torb_list_release"
+        .MapStorage => releasedBy place, "torb_map_release"
+        .SetStorage => releasedBy place, "torb_set_release"
+        .TaskObject => releasedBy place, "torb_task_release"
+        .ChannelObject => releasedBy place, "torb_channel_release"
         // The generic release with the file's own drop, which closes the handle where `close` never ran (torb.h)
         .FileHandle => {
           const drop = CExpression.Name "torb_file_drop"
-          Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [place, drop]))
+          CStatement.Evaluate CExpression.Call(CExpression.Name("torb_release"), [place, drop])
         }
         _ => None
       }
@@ -1254,7 +1254,7 @@ fn itemsLoopOf(program: IrProgram, item: IrTypeId, size: Int, place: CExpression
   const slot = CExpression.Index CExpression.Member(place, arrayItemsMember), CExpression.Name(counter)
   const inner = if isRetain { retainStatement program, item, slot } else { releaseStatement program, item, slot }
   const found = inner?
-  Some CStatement.Loop(counter, size, [found])
+  CStatement.Loop counter, size, [found]
 }
 
 /** How many arrays a type nests inside of it: 0 for an item that is no array. */
@@ -1312,7 +1312,7 @@ public fn inlineCountedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
     return None
   }
   match shape.representation {
-    .Inline => Some layout
+    .Inline => layout
     _ => None
   }
 }
@@ -1393,7 +1393,7 @@ public fn boxedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
   if !isBoxedLayout(program, layout) {
     return None
   }
-  Some layout
+  layout
 }
 
 /**
@@ -1902,7 +1902,7 @@ fn closureStatements(
     sizeOf(shape.name),
     CExpression.Name("TORB_BLOCK_ENVIRONMENT"),
   ])
-  inner.append CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
+  inner.append CStatement.Declaration(spelling, "environment", CExpression.Cast(spelling, allocated))
   const drop = CExpression.PointerMember CExpression.Name("environment"), "drop"
   inner.append CStatement.Assignment(drop, dropFunctionOf(program, found))
   const copy = CExpression.PointerMember CExpression.Name("environment"), "privatize"
@@ -2029,7 +2029,7 @@ public fn environmentLayoutOfFunction(program: IrProgram, function: IrFunction):
   if !isEnvironmentLayout(program.layoutAt(layout)) {
     return None
   }
-  Some layout
+  layout
 }
 
 /**
@@ -2125,7 +2125,7 @@ fn traitValueStatements(
     sizeOf(name),
     CExpression.Name("TORB_BLOCK_OBJECT"),
   ])
-  inner.append CStatement.Declaration(spelling, "box", Some(CExpression.Cast(spelling, allocated)))
+  inner.append CStatement.Declaration(spelling, "box", CExpression.Cast(spelling, allocated))
   const shape = program.layoutAt layout
   if shape.fields.isEmpty() {
     return reported emission, "a trait-typed value whose payload layout has no field"
@@ -2323,7 +2323,7 @@ fn textConcatStatements(
   const declaration = CStatement.Declaration(
     "const torb_text",
     "parts",
-    Some(CExpression.Initializer(parts)),
+    CExpression.Initializer(parts),
     count,
   )
   const concatenated = CExpression.Call(CExpression.Name("torb_text_concat"), [
@@ -2362,7 +2362,7 @@ fn mixedConcatStatements(
   const declaration = CStatement.Declaration(
     "const torb_text_part",
     "parts",
-    Some(CExpression.Initializer(parts)),
+    CExpression.Initializer(parts),
     count,
   )
   const concatenated = CExpression.Call(CExpression.Name("torb_text_concat_parts"), [
@@ -2440,7 +2440,7 @@ fn printPartsStatements(body: Body, symbol: String, arguments: List<Slot>): List
   const declaration = CStatement.Declaration(
     "const torb_text",
     "parts",
-    Some(CExpression.Initializer(parts)),
+    CExpression.Initializer(parts),
     count,
   )
   const written = CExpression.Call(CExpression.Name(symbol), [
@@ -2467,18 +2467,18 @@ fn intrinsicExpression(
   const second = operands.get(1) ?? CExpression.Literal("0")
   const site = siteExpression program, body, at
   match intrinsic.operation {
-    .BooleanNot => Some CExpression.Unary("!", first)
-    .TextEqual => Some textCall("torb_text_equal", first, second)
-    .TextByteLength => Some CExpression.Call(CExpression.Name("torb_text_byte_length"), [first])
+    .BooleanNot => CExpression.Unary "!", first
+    .TextEqual => textCall "torb_text_equal", first, second
+    .TextByteLength => CExpression.Call CExpression.Name("torb_text_byte_length"), [first]
     .TextConcat => None
     .TextCompare => {
-      Some CExpression.Cast("int64_t", textCall("torb_text_compare", first, second))
+      CExpression.Cast "int64_t", textCall("torb_text_compare", first, second)
     }
     .LazyForce => {
       reportUnsupported emission, "forcing a `lazy` value"
       None
     }
-    .Convert(to) => Some CExpression.Cast(numericTypeOf(to), first)
+    .Convert(to) => CExpression.Cast numericTypeOf(to), first
     .Equal => comparisonExpression emission, program, body, arguments, "==", first, second
     .NotEqual => comparisonExpression emission, program, body, arguments, "!=", first, second
     .Less => comparisonExpression emission, program, body, arguments, "<", first, second
@@ -2519,7 +2519,7 @@ fn arithmeticExpression(
   }
   if !intrinsic.isChecked {
     if const Some(found) = uncheckedExpression(intrinsic.operation, first, second) {
-      return Some found
+      return found
     }
   }
   if isUnsignedKind(kind) {
@@ -2541,7 +2541,7 @@ fn arithmeticExpression(
   if takesLocation(intrinsic.operation) {
     given.append site
   }
-  Some CExpression.Call(symbol, given)
+  CExpression.Call symbol, given
 }
 
 /**
@@ -2557,10 +2557,10 @@ fn uncheckedExpression(
   second: CExpression,
 ): CExpression? {
   match operation {
-    .Add => Some CExpression.Binary(first, "+", second)
-    .Subtract => Some CExpression.Binary(first, "-", second)
-    .Multiply => Some CExpression.Binary(first, "*", second)
-    .Negate => Some CExpression.Unary("-", first)
+    .Add => CExpression.Binary first, "+", second
+    .Subtract => CExpression.Binary first, "-", second
+    .Multiply => CExpression.Binary first, "*", second
+    .Negate => CExpression.Unary "-", first
     _ => None
   }
 }
@@ -2573,14 +2573,14 @@ fn floatingExpression(
   suffix: String,
 ): CExpression? {
   match operation {
-    .Add => Some CExpression.Binary(first, "+", second)
-    .Subtract => Some CExpression.Binary(first, "-", second)
-    .Multiply => Some CExpression.Binary(first, "*", second)
-    .Divide => Some CExpression.Binary(first, "/", second)
-    .Negate => Some CExpression.Unary("-", first)
+    .Add => CExpression.Binary first, "+", second
+    .Subtract => CExpression.Binary first, "-", second
+    .Multiply => CExpression.Binary first, "*", second
+    .Divide => CExpression.Binary first, "/", second
+    .Negate => CExpression.Unary "-", first
     // The one arithmetic operator of a float that is not a C operator. A remainder by zero answers `nan` and never
     // panics, exactly as `a / 0.0` answers an infinity - only the integers panic (BACKEND 3.3)
-    .Remainder => Some CExpression.Call(CExpression.Name("torb_remainder_{suffix}"), [first, second])
+    .Remainder => CExpression.Call CExpression.Name("torb_remainder_{suffix}"), [first, second]
     _ => {
       reportUnsupported emission, "a bit operation on a float"
       None
@@ -2607,16 +2607,16 @@ fn comparisonExpression(
   }
   if isTextType(program, annotation) {
     if operator == "==" {
-      return Some textCall("torb_text_equal", first, second)
+      return textCall "torb_text_equal", first, second
     }
     if operator == "!=" {
-      return Some CExpression.Unary("!", textCall("torb_text_equal", first, second))
+      return CExpression.Unary "!", textCall("torb_text_equal", first, second)
     }
     const compared = textCall "torb_text_compare", first, second
-    return Some CExpression.Binary(compared, operator, CExpression.Literal("0"))
+    return CExpression.Binary compared, operator, CExpression.Literal("0")
   }
   if isComparableInC(program, annotation) {
-    return Some CExpression.Binary(first, operator, second)
+    return CExpression.Binary first, operator, second
   }
   reportUnsupported emission, "a comparison of a value the C back end cannot compare directly"
   None
@@ -2985,7 +2985,7 @@ fn variantLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
     return None
   }
   match program.typeAt(id) {
-    .Variant(layout) => Some layout
+    .Variant(layout) => layout
     _ => None
   }
 }
@@ -3234,7 +3234,7 @@ fn terminatorStatements(
       if body.machine.isNone() {
         return reported emission, "a stop outside the body of a task"
       }
-      [CStatement.Return(Some(CExpression.Name("TORB_POLL_STOPPED")))]
+      [CStatement.Return(CExpression.Name("TORB_POLL_STOPPED"))]
     }
   }
 }
@@ -3255,7 +3255,7 @@ fn returnStatements(program: IrProgram, body: Body, value: Argument?): List<CSta
     const into = CExpression.Dereference CExpression.Name(resultPointerName)
     return [CStatement.Assignment(into, name), CStatement.Return()]
   }
-  [CStatement.Return(Some(name))]
+  [CStatement.Return(name)]
 }
 
 // --- Slots ----------------------------------------------------------------------------------------------------------

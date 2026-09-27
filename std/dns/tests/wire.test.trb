@@ -41,7 +41,7 @@ fn bytesOf(message: Message): Bytes {
 fn refusalOf(bytes: Bytes): DnsError? {
   match Message.tryFrom(bytes) {
     Ok(_) => None
-    Fail(problem) => Some problem
+    Fail(problem) => problem
   }
 }
 
@@ -97,7 +97,7 @@ group "captured responses" {
       "example.com. 165 IN A 104.20.23.154",
       "example.com. 165 IN A 172.66.147.243",
     ])
-    assert(message.edns == Some(Edns(payloadSize: 512)))
+    assert(message.edns == Edns(payloadSize: 512))
     assert(message.addresses(of: nameOf("EXAMPLE.com")) == [
       IpAddress.Version4(version4("104.20.23.154")),
       IpAddress.Version4(version4("172.66.147.243")),
@@ -205,7 +205,7 @@ group "captured responses" {
         assert refusalOf(bytes[0..length]).isSome()
       }
     }
-    assert(refusalOf(exampleAddress()[0..11]) == Some(DnsError.Truncated(10, "the header")))
+    assert(refusalOf(exampleAddress()[0..11]) == DnsError.Truncated(10, "the header"))
   }
 
   test "every byte of a captured response changed to 0, 63, 192 or 255 answers a message or a refusal" {
@@ -256,7 +256,7 @@ group "round trips" {
     ]
     for data in cases {
       const message = answering data
-      assert(Message.tryFrom(bytesOf(message)) == Ok(message))
+      assert(Message.tryFrom(bytesOf(message)) == message)
     }
   }
 
@@ -289,7 +289,7 @@ group "round trips" {
       authority: [Record(name, timeToLive: 60, data: RecordData.Ns(nameOf("ns.example.test")))],
       additional: [Record(nameOf("ns.example.test"), timeToLive: 60, data: RecordData.A(version4("192.0.2.53")))],
     )
-    assert(Message.tryFrom(bytesOf(message)) == Ok(message))
+    assert(Message.tryFrom(bytesOf(message)) == message)
   }
 }
 
@@ -310,37 +310,37 @@ group "compression" {
   test "a pointer to itself is a loop" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([192, 12, 0, 1, 0, 1])
-    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(12)))
+    assert(refusalOf(bytes) == DnsError.PointerLoop(12))
   }
 
   test "a label followed by a pointer back to it is a loop" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([1, 97, 192, 12, 0, 1, 0, 1])
-    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(14)))
+    assert(refusalOf(bytes) == DnsError.PointerLoop(14))
   }
 
   test "two pointers that point at each other are a loop" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([192, 14, 192, 12, 0, 1, 0, 1])
-    assert(refusalOf(bytes) == Some(DnsError.PointerLoop(12)))
+    assert(refusalOf(bytes) == DnsError.PointerLoop(12))
   }
 
   test "a pointer past the end of the message is refused" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([193, 244, 0, 1, 0, 1])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidPointer(12, 500)))
+    assert(refusalOf(bytes) == DnsError.InvalidPointer(12, 500))
   }
 
   test "a pointer cut in half is a truncation" {
     var bytes = headerWithOneQuestion()
     bytes.append 192
-    assert(refusalOf(bytes) == Some(DnsError.Truncated(12, "a question")))
+    assert(refusalOf(bytes) == DnsError.Truncated(12, "a question"))
   }
 
   test "the label types 01 and 10 are refused" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([65, 0, 0, 1, 0, 1])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(12, "the label type 64 is not defined (RFC 6891 section 5)")))
+    assert(refusalOf(bytes) == DnsError.InvalidMessage(12, "the label type 64 is not defined (RFC 6891 section 5)"))
   }
 
   test "a name of pointers whose labels pass 255 bytes is refused" {
@@ -367,12 +367,12 @@ group "records that do not fit their type" {
     bytes[7] = 1
     bytes.appendAll([0, 0, 1, 0, 1])
     bytes.appendAll([0, 0, 1, 0, 1, 0, 0, 0, 60, 0, 5, 1, 2, 3, 4, 5])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidRecord(RecordType.A, 28, "an A record holds 4 bytes, not 5")))
+    assert(refusalOf(bytes) == DnsError.InvalidRecord(RecordType.A, 28, "an A record holds 4 bytes, not 5"))
     var trailing = headerWithOneQuestion()
     trailing[7] = 1
     trailing.appendAll([0, 0, 1, 0, 1])
     trailing.appendAll([0, 0, 15, 0, 1, 0, 0, 0, 60, 0, 4, 0, 10, 0, 1])
-    assert(refusalOf(trailing) == Some(DnsError.InvalidRecord(RecordType.Mx, 28, "the data is 4 bytes long and ends after 3")))
+    assert(refusalOf(trailing) == DnsError.InvalidRecord(RecordType.Mx, 28, "the data is 4 bytes long and ends after 3"))
   }
 
   test "a name in the data that runs past the data is refused" {
@@ -380,7 +380,7 @@ group "records that do not fit their type" {
     bytes[7] = 1
     bytes.appendAll([0, 0, 1, 0, 1])
     bytes.appendAll([0, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 1, 97, 0])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidRecord(RecordType.Cname, 28, "the data ends inside the canonical name")))
+    assert(refusalOf(bytes) == DnsError.InvalidRecord(RecordType.Cname, 28, "the data ends inside the canonical name"))
   }
 
   test "service parameters out of order are refused" {
@@ -395,7 +395,7 @@ group "records that do not fit their type" {
   test "bytes after the last record are refused" {
     var bytes = headerWithOneQuestion()
     bytes.appendAll([0, 0, 1, 0, 1, 0])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(17, "the message is 18 bytes long and ends after 17")))
+    assert(refusalOf(bytes) == DnsError.InvalidMessage(17, "the message is 18 bytes long and ends after 17"))
   }
 }
 
@@ -405,22 +405,22 @@ group "EDNS0" {
       identifier: 1,
       kind: MessageKind.Response,
       responseCode: ResponseCode.BadVersion,
-      edns: Some(Edns(payloadSize: 4096, version: 0, dnssecOk: true, options: [EdnsOption(10, [1, 2, 3, 4, 5, 6, 7, 8])])),
+      edns: Edns(payloadSize: 4096, version: 0, dnssecOk: true, options: [EdnsOption(10, [1, 2, 3, 4, 5, 6, 7, 8])]),
     )
     const bytes = bytesOf message
     // The header holds the low four bits of 16, which are 0; the OPT record the high eight, which are 1
     assert(Int.from(bytes[3]) & 15 == 0)
-    assert(Message.tryFrom(bytes) == Ok(message))
+    assert(Message.tryFrom(bytes) == message)
   }
 
   test "a second OPT record and an OPT record in the answer section are refused" {
     var bytes: Bytes = [0, 1, 129, 128, 0, 0, 0, 0, 0, 0, 0, 2]
     bytes.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
     bytes.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
-    assert(refusalOf(bytes) == Some(DnsError.InvalidMessage(34, "a second OPT record (RFC 6891 section 6.1.1)")))
+    assert(refusalOf(bytes) == DnsError.InvalidMessage(34, "a second OPT record (RFC 6891 section 6.1.1)"))
     var answered: Bytes = [0, 1, 129, 128, 0, 0, 0, 1, 0, 0, 0, 0]
     answered.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
-    assert(refusalOf(answered) == Some(DnsError.InvalidMessage(23, "an OPT record belongs to the additional section (RFC 6891)")))
+    assert(refusalOf(answered) == DnsError.InvalidMessage(23, "an OPT record belongs to the additional section (RFC 6891)"))
   }
 }
 
@@ -466,7 +466,7 @@ group "queries and responses" {
     const message = messageOf query(nameOf("example.com"), RecordType.Https, 65536 + 5, recursionDesired: false, dnssecOk: true)
     assert(message.identifier == 5)
     assert(!message.recursionDesired)
-    assert(message.edns == Some(Edns(payloadSize: 1232, dnssecOk: true)))
+    assert(message.edns == Edns(payloadSize: 1232, dnssecOk: true))
     assert(message.questions == [Question(nameOf("example.com"), RecordType.Https)])
   }
 

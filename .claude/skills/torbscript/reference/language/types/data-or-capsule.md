@@ -91,7 +91,7 @@ extend <Source> with From<<Name>>        // ...and the pair is what `Encode` and
        if value < 0 || value > 100 {
          return Fail "{value} is not between 0 and 100"
        }
-       Ok Self(value)
+       Self value
      }
    }
 

@@ -163,30 +163,28 @@ fn treeBuilderOf(var lowering: Lowering, quotation: Quotation, layout: LayoutId,
   const nodeItem = preludeTypeOrReport(lowering, "ExpressionNode", at)?
   const referenceItem = preludeTypeOrReport(lowering, "TypeReference", at)?
   const stringItem = preludeTypeOrReport(lowering, "String", at)?
-  Some(
-    TreeBuilder(
-      quotation: quotation,
-      node: node,
-      nodeLayout: nodeLayout,
-      nodeItem: nodeItem,
-      reference: reference,
-      referenceLayout: referenceLayout,
-      referenceItem: referenceItem,
-      encoded: layoutIn(lowering, literal[0], "EncodedValue", at)?,
-      optionalNode: optionalNode,
-      optionalLayout: layoutIn(lowering, optionalNode, "ExpressionNode?", at)?,
-      nodes: call[3],
-      references: referenceShape.fields[1].annotation,
-      names: lambda[0],
-      stringItem: stringItem,
-    ),
+  TreeBuilder(
+    quotation: quotation,
+    node: node,
+    nodeLayout: nodeLayout,
+    nodeItem: nodeItem,
+    reference: reference,
+    referenceLayout: referenceLayout,
+    referenceItem: referenceItem,
+    encoded: layoutIn(lowering, literal[0], "EncodedValue", at)?,
+    optionalNode: optionalNode,
+    optionalLayout: layoutIn(lowering, optionalNode, "ExpressionNode?", at)?,
+    nodes: call[3],
+    references: referenceShape.fields[1].annotation,
+    names: lambda[0],
+    stringItem: stringItem,
   )
 }
 
 fn preludeTypeOrReport(var lowering: Lowering, name: String, at: Span): TypeId? {
   const empty: List<TypeId> = []
   match preludeType(lowering, name, empty) {
-    Some(found) => Some found
+    Some(found) => found
     None => {
       reportUnsupported lowering, "a quotation without `{name}` in the prelude", at
       None
@@ -196,7 +194,7 @@ fn preludeTypeOrReport(var lowering: Lowering, name: String, at: Span): TypeId? 
 
 fn layoutIn(var lowering: Lowering, annotation: IrTypeId, name: String, at: Span): LayoutId? {
   match layoutOfType(lowering.program, annotation) {
-    Some(found) => Some found
+    Some(found) => found
     None => {
       reportUnsupported lowering, "a quotation whose `{name}` has no layout", at
       None
@@ -212,7 +210,7 @@ fn fieldsOfCase(var lowering: Lowering, layout: LayoutId, name: String, at: Span
     return None
   }
   const shape = lowering.program.layoutAt layout
-  Some shape.fieldsOfVariant(variant).map({ _.annotation }).toList()
+  shape.fieldsOfVariant(variant).map({ _.annotation }).toList()
 }
 
 // --- Nodes ----------------------------------------------------------------------------------------------------------
@@ -285,7 +283,7 @@ fn nodeOf(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeBuilde
       const receiver = nodeOf(lowering, builder, tree, target)?
       const argument = nodeOf(lowering, builder, tree, index)?
       const owner = typeReferenceAt(lowering, builder, tree, target.span)?
-      callOf lowering, builder, tree, Some(receiver), owner, "at", [argument], at
+      callOf lowering, builder, tree, receiver, owner, "at", [argument], at
     }
     _ => {
       reportUnsupported lowering, "this quoted expression, which has no node the back end builds yet", at
@@ -401,7 +399,7 @@ fn callNode(
         }
         const target = nodeOf(lowering, builder, tree, receiver)?
         const owner = typeReferenceAt(lowering, builder, tree, receiver.span)?
-        return callOf lowering, builder, tree, Some(target), owner, method, values, at
+        return callOf lowering, builder, tree, target, owner, method, values, at
       }
       const owner = namedReference(lowering, builder, tree, "", [])?
       callOf lowering, builder, tree, None, owner, method, values, at
@@ -449,7 +447,7 @@ fn wrapped(
   }
   const target = addTemporary builder, tree.optionalNode
   emit builder, Instruction.Construct(target, tree.optionalLayout, variant, fields.map({ borrowed _ }).toList())
-  Some target
+  target
 }
 
 fn constructNode(
@@ -479,7 +477,7 @@ fn binaryNode(
   const second = nodeOf(lowering, builder, tree, right)?
   if const .Coalesce = operator {
     const owner = typeReferenceAt(lowering, builder, tree, left.span)?
-    return callOf lowering, builder, tree, Some(first), owner, "orElse", [second], at
+    return callOf lowering, builder, tree, first, owner, "orElse", [second], at
   }
   const chosen = binaryCaseOf operator
   const operatorSlot = unitCase(lowering, builder, tree, "BinaryOperator", chosen, at)?
@@ -612,7 +610,7 @@ fn encodedCase(
   const annotation = lowering.program.internType IrType.Variant(tree.encoded)
   const target = addTemporary builder, annotation
   emit builder, Instruction.Construct(target, tree.encoded, variant, fields.map({ borrowed _ }).toList())
-  Some target
+  target
 }
 
 /** One case of `ExpressionNode`, with the place it stands at in front of its own fields. */
@@ -644,7 +642,7 @@ fn caseNode(
   given.appendAll fields.map({ borrowed _ })
   const target = addTemporary builder, tree.node
   emit builder, Instruction.Construct(target, tree.nodeLayout, variant, given)
-  Some target
+  target
 }
 
 /** A case without fields of one of the two operator types, whose layout the node's own field says. */
@@ -667,7 +665,7 @@ fn unitCase(
   }
   const target = addTemporary builder, annotation
   emit builder, Instruction.Construct(target, layout, variant, [])
-  Some target
+  target
 }
 
 fn unaryCaseOf(operator: PrefixOperator): String {
@@ -752,7 +750,7 @@ fn namedReference(
   const target = addTemporary builder, tree.reference
   const fields = [borrowed(textSlot(lowering, builder, name)), borrowed(list)]
   emit builder, Instruction.Construct(target, tree.referenceLayout, 0, fields)
-  Some target
+  target
 }
 
 /** `SourceLocation(file, line, column)` of where the quoted expression starts. */
@@ -771,7 +769,7 @@ fn sourceLocationOf(var lowering: Lowering, var builder: FunctionBuilder, layout
   ]
   const slot = addTemporary builder, annotation
   emit builder, Instruction.Construct(slot, target, 0, fields)
-  Some slot
+  slot
 }
 
 /** `expression.value()`: the `lazy` cell in the last field of the quotation, forced - evaluated at most once. */

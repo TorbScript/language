@@ -205,7 +205,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
     extend Game with Store<Int> {
       fn valueOf(): Int? {
-        Some number
+        number
       }
 
       fn attach(value: Int): Int {
@@ -215,7 +215,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
     extend Game with Store<String> {
       fn valueOf(): String? {
-        Some text
+        text
       }
 
       fn attach(value: String): Int {

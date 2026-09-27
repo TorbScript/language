@@ -31,7 +31,7 @@ public fn version(): Result<SystemVersion, OsError> {
     Some(number) => "{build}.{number}"
     None => "{build}"
   }
-  Ok SystemVersion(productName(registered, build), "windows", release, Some(revision), kernel)
+  SystemVersion productName(registered, build), "windows", release, revision, kernel
 }
 
 /**
@@ -52,7 +52,7 @@ fn registryText(value: String): String? {
   if Windows.registryText(currentVersionKey, value, text, failure) != 0 || text.isEmpty() {
     return None
   }
-  Some text
+  text
 }
 
 /** An integer value of the product's key, or `None` where it has none. */
@@ -62,7 +62,7 @@ fn registryInteger(value: String): Int64? {
   if Windows.registryInteger(currentVersionKey, value, number, failure) != 0 {
     return None
   }
-  Some number
+  number
 }
 
 /** `GetComputerNameExW(ComputerNameDnsHostname)`. */
@@ -70,7 +70,7 @@ public fn hostName(): Result<String, OsError> {
   var name = ""
   var failure = ""
   outcome(Windows.computerName(name, failure), "the host name", failure)?
-  Ok name
+  name
 }
 
 /** `GetTickCount64`, which never fails. */
@@ -104,8 +104,8 @@ public fn machineArchitecture(): Result<Architecture, OsError> {
 /** The number [Windows.systemInformation] writes, as an [Architecture]. */
 public fn architectureOf(code: Int64): Result<Architecture, OsError> {
   match code {
-    1 => Ok Architecture.X64
-    2 => Ok Architecture.Arm64
+    1 => Architecture.X64
+    2 => Architecture.Arm64
     3 => Fail OsError.Failed("the machine architecture", "a 32-bit x86 machine, which the toolchain does not build for")
     4 => Fail OsError.Failed("the machine architecture", "a 32-bit Arm machine, which the toolchain does not build for")
     _ => Fail OsError.Failed("the machine architecture", "an architecture the toolchain does not know")

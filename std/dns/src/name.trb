@@ -75,7 +75,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
     }
     pieces.append current
     if pieces.length() == 2 && pieces[0].isEmpty() && pieces[1].isEmpty() {
-      return Ok DomainName.root
+      return DomainName.root
     }
     if pieces.length() > 1 && pieces[pieces.length() - 1].isEmpty() {
       pieces = pieces[0..(pieces.length() - 1)]
@@ -85,7 +85,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       labels.append(asciiLabel(text, piece)?)
     }
     checkedLength(text, labels)?
-    Ok DomainName(labels)
+    DomainName labels
   }
 
   /**
@@ -104,7 +104,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       return Fail DnsError.InvalidName(text, "an empty text is no name - the root is `.`")
     }
     if text == "." {
-      return Ok DomainName.root
+      return DomainName.root
     }
     const codes = text.bytes().map({ Int.from _ }).toList()
     var labels: List<Bytes> = []
@@ -164,7 +164,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       }
     }
     checkedLength(text, labels)?
-    Ok DomainName(labels)
+    DomainName labels
   }
 
   /**
@@ -185,7 +185,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       }
     }
     checkedLength(shown, labels)?
-    Ok DomainName(labels)
+    DomainName labels
   }
 
   /** The labels, most specific first, as bytes. The root has none. */
@@ -216,7 +216,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
     if value.isEmpty() {
       return None
     }
-    Some DomainName(value[1..])
+    DomainName value[1..]
   }
 
   /** The name is `of` or lies below it: `www.example.test` is a subdomain of `example.test` and of itself. */
@@ -415,14 +415,14 @@ fn validUnicodeLabel(rest: String): List<Int>? {
     return None
   }
   for point in points {
-    if mappedPoint(point) != Some(point) || refusal(point).isSome() || point == 46 {
+    if mappedPoint(point) != point || refusal(point).isSome() || point == 46 {
       return None
     }
   }
-  if punycodeEncoded(points) != Some(rest) {
+  if punycodeEncoded(points) != rest {
     return None
   }
-  Some points
+  points
 }
 
 /**
@@ -466,7 +466,7 @@ fn asciiLabel(text: String, points: List<Int>): Result<Bytes, DnsError> {
       "the label `{labelText(label)}` is {label.length()} bytes long, and a label has at most 63",
     ))
   }
-  Ok label
+  label
 }
 
 /**
@@ -477,7 +477,7 @@ fn asciiLabel(text: String, points: List<Int>): Result<Bytes, DnsError> {
  */
 fn mappedPoint(point: Int): Int? {
   if point == 12290 || point == 65294 || point == 65377 {
-    return Some 46
+    return 46
   }
   if isIgnored(point) {
     return None
@@ -486,7 +486,7 @@ fn mappedPoint(point: Int): Int? {
   if point >= 65281 && point <= 65374 {
     mapped = point - 65248
   }
-  Some Int.from(characterOf(mapped).toLowerCase())
+  Int.from characterOf(mapped).toLowerCase()
 }
 
 /** The code points UTS #46 removes: the soft hyphen, invisible characters but ZWJ and ZWNJ, variation selectors. */
@@ -514,26 +514,26 @@ fn refusal(point: Int): String? {
       return None
     }
     const shown = characterOf(point).showNested()
-    return Some "`{shown}` is not a letter, digit or hyphen - `DomainName.ofPresentation` reads any byte"
+    return "`{shown}` is not a letter, digit or hyphen - `DomainName.ofPresentation` reads any byte"
   }
   const shown = "U+{hexadecimal(point)}"
   if point < 192 || point == 215 || point == 247 {
-    return Some "{shown} is a control character, a space or a symbol of Latin-1, which a host name cannot hold"
+    return "{shown} is a control character, a space or a symbol of Latin-1, which a host name cannot hold"
   }
   if point == 8204 || point == 8205 {
-    return Some "{shown} is a joiner, whose context rules (CONTEXTJ) this package does not check"
+    return "{shown} is a joiner, whose context rules (CONTEXTJ) this package does not check"
   }
   if point == 8206 || point == 8207 || (point >= 8234 && point <= 8238) || (point >= 8294 && point <= 8297) {
-    return Some "{shown} is a bidirectional formatting character"
+    return "{shown} is a bidirectional formatting character"
   }
   if point == 8232 || point == 8233 {
-    return Some "{shown} is a line or paragraph separator"
+    return "{shown} is a line or paragraph separator"
   }
   if (point >= 57344 && point <= 63743) || point >= 983040 {
-    return Some "{shown} is a private use character"
+    return "{shown} is a private use character"
   }
   if (point >= 64976 && point <= 65007) || point & 65534 == 65534 || (point >= 65520 && point <= 65535) {
-    return Some "{shown} is a noncharacter or a special"
+    return "{shown} is a noncharacter or a special"
   }
   None
 }

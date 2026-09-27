@@ -176,13 +176,13 @@ fn lowerCallable(
     return lowerAssertion lowering, builder, destination, expression, arguments
   }
   // `describedKey(key)` shows the key where its type has `Show`, which only the instance being lowered knows
-  if lowering.checker.wellKnown.describedKey == Some(symbol) {
+  if lowering.checker.wellKnown.describedKey == symbol {
     if const Some(described) = describedKeySlot(lowering, builder, destination, expression, arguments) {
       return described
     }
   }
   // `spawn` needs the closure literal it is handed, not a value of it: its body becomes the resume function of the task
-  if loweredNativeOf(lowering, symbol) == Some("spawn") {
+  if loweredNativeOf(lowering, symbol) == "spawn" {
     return lowerSpawn lowering, builder, destination, arguments, annotation, expression.span
   }
   // A method called on a value of `Never` - `_.showNested()` inside `List<Never>.show` - is never reached, and `Never`
@@ -222,7 +222,7 @@ fn lowerCallable(
         }
       }
       operands.append path.reference.base
-      places.append Some(path.reference)
+      places.append path.reference
       taken.appendAll path.taken
     } else {
       const slot = lowerValue lowering, builder, value
@@ -238,7 +238,7 @@ fn lowerCallable(
         }
       }
       operands.append path.reference.base
-      places.append Some(path.reference)
+      places.append path.reference
       taken.appendAll path.taken
     } else {
       const reached = match receiverSlot(lowering, builder, callee) {
@@ -295,29 +295,29 @@ fn receiverOfTraitExtension(
   const written = match receiver {
     Some(found) => found
     None => {
-      return Some slot
+      return slot
     }
   }
   const target = match traitExtensionTargetOf(lowering.checker, dispatched.member) {
     Some(found) => found
     None => {
-      return Some slot
+      return slot
     }
   }
   const wanted = substituted lowering, substitute(lowering.checker.types, target, dispatched.mapping)
   const source = substituted lowering, written
   if wanted == source {
-    return Some slot
+    return slot
   }
   const bounds = boundsOfTraitValue lowering, wanted
   if bounds.isEmpty() {
-    return Some slot
+    return slot
   }
   const boxed = addTemporary builder, objectTypeOf(lowering, bounds)
   if !lowerTraitValue(lowering, builder, boxed, slot, bounds, source, at) {
     return None
   }
-  Some boxed
+  boxed
 }
 
 /**
@@ -497,10 +497,10 @@ fn conversionReceiverOf(expression: Expression): Expression? {
     }
   }
   match callee.kind {
-    .Member(base, _, _) => Some base
+    .Member(base, _, _) => base
     .Generic(inner, _) => {
       if const .Member(base, _, _) = inner.kind {
-        return Some base
+        return base
       }
       None
     }
@@ -521,7 +521,7 @@ type ConversionBound {
 fn conversionBoundOf(var lowering: Lowering, name: String, source: TypeId, result: TypeId): ConversionBound? {
   if name == "from" {
     const conversion = lowering.checker.wellKnown.from?
-    return Some ConversionBound(result, lowering.checker.nominal(conversion, [source]))
+    return ConversionBound result, lowering.checker.nominal(conversion, [source])
   }
   if name == "tryFrom" {
     const tryFrom = lowering.checker.wellKnown.tryFrom?
@@ -534,7 +534,7 @@ fn conversionBoundOf(var lowering: Lowering, name: String, source: TypeId, resul
     if arguments.length() != 2 {
       return None
     }
-    return Some ConversionBound(arguments[0], lowering.checker.nominal(tryFrom, [source, arguments[1]]))
+    return ConversionBound arguments[0], lowering.checker.nominal(tryFrom, [source, arguments[1]])
   }
   None
 }
@@ -605,7 +605,7 @@ fn receiverExpressionOf(callee: Expression): Expression? {
     return receiverExpressionOf inner
   }
   if const .Member(base, _, _) = callee.kind {
-    return Some base
+    return base
   }
   None
 }
@@ -621,14 +621,14 @@ public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   if const .Member(base, _, _) = callee.kind {
     // Behind a `?.` the member is looked up on the payload, so that is the receiver and not the `Option` around it
     if const Some(payload) = lowering.optionalReceiverTypes.get(base.span) {
-      return Some payload
+      return payload
     }
     return lowering.checker.expressionType module, base.span
   }
   const adaptations = lowering.checker.adaptationsAt module, callee.span
   for adaptation in adaptations {
     if const .ImplicitSelf(receiver) = adaptation {
-      return Some lowering.checker.binding(receiver).annotation
+      return lowering.checker.binding(receiver).annotation
     }
   }
   None
@@ -719,7 +719,7 @@ fn lowerWitnessCall(
   const given = borrowedArguments rest
   const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.CallWitness(None, found.source, found.member, given, Some(location))
+    emit builder, Instruction.CallWitness(None, found.source, found.member, given, location)
     if isNeverType(lowering, annotation) {
       finishBlock lowering, builder, Terminator.Unreachable
       return abandonedSlot lowering, builder, destination
@@ -734,7 +734,7 @@ fn lowerWitnessCall(
     }
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.CallWitness(Some(target), found.source, found.member, given, Some(location))
+  emit builder, Instruction.CallWitness(target, found.source, found.member, given, location)
   target
 }
 
@@ -770,7 +770,7 @@ fn lowerNativeCall(
       }
       const target = valueSlot lowering, builder, destination, annotation
       const kind = sourceKindOf lowering, builder, intrinsic, operands
-      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, kind, operands, at
+      emitIntrinsic lowering, builder, target, intrinsic.operation, kind, operands, at
       target
     }
     // The runtime's own conventions - an out parameter, an element by address - are a generated wrapper (`native.trb`)
@@ -995,7 +995,7 @@ public fn emitCall(
   // Where the call is written: a runtime function that can panic takes it, and a panic message is observable
   const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.Call(None, function, given, [], Some(location))
+    emit builder, Instruction.Call(None, function, given, [], location)
     if isNeverType(lowering, annotation) {
       finishBlock lowering, builder, Terminator.Unreachable
       return abandonedSlot lowering, builder, destination
@@ -1013,7 +1013,7 @@ public fn emitCall(
   // it would overwrite - and therefore leak - what the callee has just put there
   if collidesWithPlace(destination, places) {
     const inner = valueSlot lowering, builder, None, annotation
-    emit builder, Instruction.Call(Some(inner), function, given, [], Some(location))
+    emit builder, Instruction.Call(inner, function, given, [], location)
     if const Some(slot) = destination {
       writtenResult builder, slot, inner
       return slot
@@ -1021,7 +1021,7 @@ public fn emitCall(
     return inner
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.Call(Some(target), function, given, [], Some(location))
+  emit builder, Instruction.Call(target, function, given, [], location)
   target
 }
 
@@ -1084,7 +1084,7 @@ public fn lowerArgumentSlots(
         return CallOperands([], [])
       }
     }
-    filled.set variadic, Some(list)
+    filled.set variadic, list
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
@@ -1105,7 +1105,7 @@ public fn lowerArgumentSlots(
           return CallOperands([], [])
         }
       }
-      filled.set position, Some(cell)
+      filled.set position, cell
       continue
     }
     if references.get(position) ?? false {
@@ -1115,8 +1115,8 @@ public fn lowerArgumentSlots(
           return CallOperands([], [])
         }
       }
-      filled.set position, Some(path.reference.base)
-      places.set position, Some(path.reference)
+      filled.set position, path.reference.base
+      places.set position, path.reference
       taken.appendAll path.taken
       continue
     }
@@ -1126,7 +1126,7 @@ public fn lowerArgumentSlots(
     if !lowering.isSupported {
       return CallOperands([], [])
     }
-    filled.set position, Some(slot)
+    filled.set position, slot
   }
   lowerDefaults lowering, builder, expression, signature, filled, places, taken, references, mapping
 }
@@ -1170,7 +1170,7 @@ fn lowerVariadicArgument(
   }
   var collected: List<Argument> = []
   for index in 0..arguments.length() {
-    if targets.get(index) == Some(position) {
+    if targets.get(index) == position {
       collected.append arguments[index]
     }
   }
@@ -1179,7 +1179,7 @@ fn lowerVariadicArgument(
   if !lowering.isSupported {
     return None
   }
-  Some slot
+  slot
 }
 
 /**
@@ -1246,7 +1246,7 @@ fn referenceArgumentAt(
     reportUnsupported lowering, what, value.span
     return None
   }
-  Some path
+  path
 }
 
 /**
@@ -1280,7 +1280,7 @@ fn sharedObjectAsTraitPlace(
   if !lowerTraitValue(lowering, builder, boxed, held, boundsOfTraitValue(lowering, wanted), source, value.span) {
     return None
   }
-  Some PlacePath(Reference(boxed, []), annotation, path.taken)
+  PlacePath Reference(boxed, []), annotation, path.taken
 }
 
 /**
@@ -1348,7 +1348,7 @@ fn lowerDefaults(
     if !lowering.isSupported {
       return CallOperands([], [])
     }
-    found.set index, Some(slot)
+    found.set index, slot
   }
   var ordered: List<Slot> = []
   for entry in found {
@@ -1417,7 +1417,7 @@ fn caseFieldsOfDeclarationSite(var lowering: Lowering, symbol: SymbolId): List<F
   const site = lowering.checker.siteOf(symbol)?
   if const .Owned(_, _, member) = site.kind {
     if const .Case(declaration) = member.kind {
-      return Some declaration.fields
+      return declaration.fields
     }
   }
   None
@@ -1428,13 +1428,13 @@ fn functionOfDeclarationSite(var lowering: Lowering, symbol: SymbolId): Function
   match site.kind {
     .Declared(declaration) => {
       if const .Function(function) = declaration.kind {
-        return Some function
+        return function
       }
       None
     }
     .Owned(_, _, member) => {
       if const .Function(function) = member.kind {
-        return Some function
+        return function
       }
       None
     }
@@ -1588,7 +1588,7 @@ fn lowerCopyCall(
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, Some(receiver)
+  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
@@ -1633,7 +1633,7 @@ fn lowerFieldArguments(
     if !lowering.isSupported {
       return []
     }
-    filled.set position, Some(slot)
+    filled.set position, slot
   }
   const substitution = ownerSubstitutionOf lowering, owner
   completeFields lowering, builder, expression, fields, filled, receiver, substitution
@@ -1680,7 +1680,7 @@ fn completeFields(
       if !lowering.isSupported {
         return []
       }
-      found.set index, Some(slot)
+      found.set index, slot
       continue
     }
     const value = match fieldDefaultOf(lowering, field.symbol) {
@@ -1694,7 +1694,7 @@ fn completeFields(
     if !lowering.isSupported {
       return []
     }
-    found.set index, Some(slot)
+    found.set index, slot
   }
   var ordered: List<Slot> = []
   for entry in found {
@@ -1757,7 +1757,7 @@ public fn lowerDefaultOfSource(
         }
       }
       const substitution = ownerSubstitutionOf lowering, owner
-      Some lowerForeignExpression(lowering, builder, field.symbol, written, substitution)
+      lowerForeignExpression lowering, builder, field.symbol, written, substitution
     }
     .Declared(symbol) => {
       const defaults = declaredDefaults lowering, symbol
@@ -1769,7 +1769,7 @@ public fn lowerDefaultOfSource(
         }
       }
       const empty: Map<ParameterId, TypeId> = [:]
-      Some lowerForeignExpression(lowering, builder, symbol, written, empty)
+      lowerForeignExpression lowering, builder, symbol, written, empty
     }
     .Ambiguous => {
       reportUnsupported lowering, "a function value whose defaults two declarations could have written", at
@@ -2001,7 +2001,7 @@ fn sourceKindOf(
   if const .Convert(_) = intrinsic.operation {
     if const Some(slot) = operands.first() {
       if const Some(found) = conversionKindOf(lowering.program, builder.typeOfSlot(slot)) {
-        return Some found
+        return found
       }
     }
   }
@@ -2086,12 +2086,12 @@ fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch, operand: TypeId?): 
   if const .Implementation(implementation, _) = dispatch {
     const found = lowering.checker.implementations.at implementation
     if isClosedType(lowering, found.target) {
-      return Some found.target
+      return found.target
     }
     if const Some(applied) = written {
-      return Some applied
+      return applied
     }
-    return Some found.target
+    return found.target
   }
   written
 }
@@ -2099,7 +2099,7 @@ fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch, operand: TypeId?): 
 /** The type of the left operand as this instance sees it, with its own type arguments substituted. */
 fn writtenOperandOf(var lowering: Lowering, operand: TypeId?): TypeId? {
   const found = operand?
-  Some substituted(lowering, found)
+  substituted lowering, found
 }
 
 fn lowerNativeOperator(
@@ -2122,7 +2122,7 @@ fn lowerNativeOperator(
     .Intrinsic(intrinsic) => {
       const target = valueSlot lowering, builder, destination, annotation
       const kind = sourceKindOf lowering, builder, intrinsic, operands
-      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, kind, operands, at
+      emitIntrinsic lowering, builder, target, intrinsic.operation, kind, operands, at
       target
     }
     .Runtime(function) => {

@@ -95,7 +95,7 @@ fn isCountedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
  */
 fn declaredTypeOf(var checker: Checker, symbol: SymbolId): TypeId? {
   if const .Ready(index) = checker.signatureStates.get(symbol) ?? SignatureState.Missing {
-    return Some checker.signature(SignatureId(index)).form.result
+    return checker.signature(SignatureId(index)).form.result
   }
   None
 }
@@ -146,8 +146,8 @@ fn noteBindingChange(var checker: Checker, root: UseRoot, at: Span) {
 /** A place whose root the rule counts at all: a local or a top-level declaration, never a temporary. */
 fn useRootOf(root: PlaceRoot): UseRoot? {
   match root {
-    .Local(binding) => Some UseRoot.Local(binding)
-    .Declared(symbol) => Some UseRoot.Declared(symbol)
+    .Local(binding) => UseRoot.Local binding
+    .Declared(symbol) => UseRoot.Declared symbol
     _ => None
   }
 }
@@ -276,7 +276,7 @@ fn participleHint(changedBy: String): String? {
   if changedBy.isEmpty() {
     return None
   }
-  Some changedBy
+  changedBy
 }
 
 // --- Closures -------------------------------------------------------------------------------------------------------

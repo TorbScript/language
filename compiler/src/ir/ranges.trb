@@ -126,17 +126,17 @@ fn rangeOfKind(kind: NumericKind?): Interval? {
   match kind {
     Some(.Signed(width)) => {
       if width >= 64 {
-        return Some Interval(Int.minimum, Int.maximum)
+        return Interval Int.minimum, Int.maximum
       }
       const bound = powerOfTwo(width - 1)?
-      Some Interval(0 - bound, bound - 1)
+      Interval(0 - bound, bound - 1)
     }
     Some(.Unsigned(width)) => {
       if width >= 64 {
         return None
       }
       const bound = powerOfTwo(width)?
-      Some Interval(0, bound - 1)
+      Interval(0, bound - 1)
     }
     _ => None
   }
@@ -151,7 +151,7 @@ fn powerOfTwo(exponent: Int): Int? {
   for _ in 0..exponent {
     found = found * 2
   }
-  Some found
+  found
 }
 
 fn isEmpty(interval: Interval): Bool {
@@ -182,7 +182,7 @@ fn addedExactly(left: Int, right: Int): Int? {
   if right < 0 && left < Int.minimum - right {
     return None
   }
-  Some(left + right)
+  left + right
 }
 
 fn subtractedExactly(left: Int, right: Int): Int? {
@@ -192,7 +192,7 @@ fn subtractedExactly(left: Int, right: Int): Int? {
   if right > 0 && left < Int.minimum + right {
     return None
   }
-  Some(left - right)
+  left - right
 }
 
 /**
@@ -201,25 +201,25 @@ fn subtractedExactly(left: Int, right: Int): Int? {
  */
 fn multipliedExactly(left: Int, right: Int): Int? {
   if left == 0 || right == 0 {
-    return Some 0
+    return 0
   }
   if left == 1 {
-    return Some right
+    return right
   }
   if right == 1 {
-    return Some left
+    return left
   }
   if left == -1 {
     if right == Int.minimum {
       return None
     }
-    return Some(0 - right)
+    return 0 - right
   }
   if right == -1 {
     if left == Int.minimum {
       return None
     }
-    return Some(0 - left)
+    return 0 - left
   }
   const fits = if left > 0 && right > 0 {
     left <= Int.maximum / right
@@ -233,20 +233,20 @@ fn multipliedExactly(left: Int, right: Int): Int? {
   if !fits {
     return None
   }
-  Some(left * right)
+  left * right
 }
 
 /** The interval of a sum: both ends added, and `None` where either end leaves the `Int64` the analysis counts in. */
 fn addedInterval(left: Interval, right: Interval): Interval? {
   const low = addedExactly(left.low, right.low)?
   const high = addedExactly(left.high, right.high)?
-  Some Interval(low, high)
+  Interval low, high
 }
 
 fn subtractedInterval(left: Interval, right: Interval): Interval? {
   const low = subtractedExactly(left.low, right.high)?
   const high = subtractedExactly(left.high, right.low)?
-  Some Interval(low, high)
+  Interval low, high
 }
 
 /** The four corner products: a sign change swaps which end is which, so all four are computed and the extremes kept. */
@@ -257,13 +257,13 @@ fn multipliedInterval(left: Interval, right: Interval): Interval? {
   const fourth = multipliedExactly(left.high, right.high)?
   const low = first.min(second).min(third).min(fourth)
   const high = first.max(second).max(third).max(fourth)
-  Some Interval(low, high)
+  Interval low, high
 }
 
 fn negatedInterval(value: Interval): Interval? {
   const low = subtractedExactly(0, value.high)?
   const high = subtractedExactly(0, value.low)?
-  Some Interval(low, high)
+  Interval low, high
 }
 
 // --- The transfer over one block ----------------------------------------------------------------------------------------
@@ -475,10 +475,10 @@ fn entryOf(
     const given = narrowedByGuard function, universes, exits[predecessor], predecessor, block
     match found {
       None => {
-        found = Some given
+        found = given
       }
       Some(before) => {
-        found = Some joinedFacts(before, given)
+        found = joinedFacts before, given
       }
     }
   }
@@ -548,7 +548,7 @@ fn guardOf(function: IrFunction, block: Int): Guard? {
       return None
     }
   }
-  if target != Some(condition) {
+  if target != condition {
     return None
   }
   if !isComparison(intrinsic.operation) || !isTrackedKind(intrinsic.kind) {
@@ -557,7 +557,7 @@ fn guardOf(function: IrFunction, block: Int): Guard? {
   if arguments.length() != 2 {
     return None
   }
-  Some Guard(intrinsic.operation, arguments[0], arguments[1], then, otherwise)
+  Guard intrinsic.operation, arguments[0], arguments[1], then, otherwise
 }
 
 fn isComparison(operation: IntrinsicOperation): Bool {
@@ -601,16 +601,16 @@ fn narrowedFacts(
       found = withLowerBound found, right, addedExactly(facts[left].low, 1)
     }
     .LessOrEqual => {
-      found = withUpperBound found, left, Some(facts[right].high)
-      found = withLowerBound found, right, Some(facts[left].low)
+      found = withUpperBound found, left, facts[right].high
+      found = withLowerBound found, right, facts[left].low
     }
     .Greater => {
       found = withLowerBound found, left, addedExactly(facts[right].low, 1)
       found = withUpperBound found, right, subtractedExactly(facts[left].high, 1)
     }
     .GreaterOrEqual => {
-      found = withLowerBound found, left, Some(facts[right].low)
-      found = withUpperBound found, right, Some(facts[left].high)
+      found = withLowerBound found, left, facts[right].low
+      found = withUpperBound found, right, facts[left].high
     }
     .Equal => {
       const both = intersected facts[left], facts[right]
@@ -834,7 +834,7 @@ fn integerOfStatic(program: IrProgram, value: StaticId): Int? {
     return None
   }
   if const .Literal(.Integer(found)) = program.staticAt(value).contents {
-    return Some found
+    return found
   }
   None
 }
@@ -925,11 +925,11 @@ fn withProvenElements(
   match instruction {
     .Read(target, place) => {
       const proven = provenPlace(program, function, universes, facts, place)?
-      Some Instruction.Read(target, proven)
+      Instruction.Read target, proven
     }
     .Write(place, value) => {
       const proven = provenPlace(program, function, universes, facts, place)?
-      Some Instruction.Write(proven, value)
+      Instruction.Write proven, value
     }
     _ => None
   }
@@ -959,7 +959,7 @@ fn provenPlace(
   if !isChanged {
     return None
   }
-  Some Reference(place.base, steps)
+  Reference place.base, steps
 }
 
 /** Whether the container is an `Array<Item, Size>` and the index provably one of its slots. */

@@ -78,13 +78,13 @@ public fn laidOut(source: String): String? {
   if !lines.isEmpty() {
     parts.append lineEnding
   }
-  Some parts.joined(separator: "")
+  parts.joined separator: ""
 }
 
 /** The first line break of the file, which is the one every line break of the layout is written with. */
 fn lineEndingOf(source: String): String {
   match source.byteOffsetOf("\n") {
-    Some(at) if at > 0 && source.byteAt(at - 1) == Some(13) => "\r\n"
+    Some(at) if at > 0 && source.byteAt(at - 1) == 13 => "\r\n"
     _ => "\n"
   }
 }
@@ -124,14 +124,14 @@ fn piecesOf(source: String, tokens: List<Token>, start: Int): List<Piece>? {
     if !scanGap(source, cursor, token.span.start, pieces, gap) {
       return None
     }
-    pieces.append Piece(token.span.start, token.span.end, Some(index), gap.breaks, gap.spaces)
+    pieces.append Piece(token.span.start, token.span.end, index, gap.breaks, gap.spaces)
     gap = Gap()
     cursor = token.span.end
   }
   if !scanGap(source, cursor, source.byteLength(), pieces, gap) {
     return None
   }
-  Some pieces
+  pieces
 }
 
 /** The comments between two tokens, and the white space in front of the next piece. `false` for anything else. */
@@ -148,9 +148,9 @@ fn scanGap(source: String, from: Int, to: Int, var pieces: List<Piece>, var gap:
       at = at + 1
     } else if byte == 13 {
       at = at + 1
-    } else if byte == 47 && source.byteAt(at + 1) == Some(47) {
+    } else if byte == 47 && source.byteAt(at + 1) == 47 {
       var end = at
-      while end < to && source.byteAt(end) != Some(10) {
+      while end < to && source.byteAt(end) != 10 {
         end = end + 1
       }
       var trimmed = end
@@ -160,7 +160,7 @@ fn scanGap(source: String, from: Int, to: Int, var pieces: List<Piece>, var gap:
       pieces.append Piece(at, trimmed, token: None, breaks: gap.breaks, spaces: gap.spaces)
       gap = Gap()
       at = end
-    } else if byte == 47 && source.byteAt(at + 1) == Some(42) {
+    } else if byte == 47 && source.byteAt(at + 1) == 42 {
       const length = match source.sliceBytes(at + 2, to).byteOffsetOf("*/") {
         Some(found) => found
         None => {
@@ -307,10 +307,10 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
       const kind = tokens[index].kind
       const isLast = position == code.length() - 1
       if kind == TokenKind.Reserved(Keyword.Match) && isMatchKeyword(tokens, code, position) {
-        pendingMatch = Some outer.length()
+        pendingMatch = outer.length()
       }
       if isOpening(kind) {
-        const holdsArms = kind == TokenKind.BraceOpen && pendingMatch == Some(outer.length())
+        const holdsArms = kind == TokenKind.BraceOpen && pendingMatch == outer.length()
         if holdsArms {
           pendingMatch = None
         }
@@ -329,10 +329,10 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, closureArrows: Set<Int
         if closed.line != lineIndex {
           lineBase = closed.content - 1
         }
-        current.last = Some kind
+        current.last = kind
         current.lastEndsParameters = false
       } else {
-        current.last = Some kind
+        current.last = kind
         const endsParameters = kind == TokenKind.Arrow && closureArrows.contains(index)
         current.lastEndsParameters = endsParameters
         if endsParameters && current.line == lineIndex {
@@ -381,7 +381,7 @@ fn isMatchKeyword(tokens: List<Token>, code: List<Int>, position: Int): Bool {
     }
   }
   const index = code[position]
-  tokens.get(index + 1)?.kind != Some(TokenKind.Colon)
+  tokens.get(index + 1)?.kind != TokenKind.Colon
 }
 
 /**
@@ -554,7 +554,7 @@ fn firstTokenFrom(tokens: List<Token>, offset: Int, accepts: (TokenKind) => Bool
   while index < tokens.length() {
     const kind = tokens[index].kind
     if accepts(kind) {
-      return Some index
+      return index
     }
     if kind != TokenKind.ParenClose {
       return None
@@ -692,7 +692,7 @@ fn reindentedComment(text: String, shift: Int): String {
 /** How many spaces and tabs a line starts with. */
 fn leadingBlanks(line: String): Int {
   var count = 0
-  while line.byteAt(count) == Some(32) || line.byteAt(count) == Some(9) {
+  while line.byteAt(count) == 32 || line.byteAt(count) == 9 {
     count = count + 1
   }
   count

@@ -37,7 +37,7 @@ fn parsePort(text: String): Result<Int, String> {
   if value < 1 || value > 65535 {
     return Fail "out of range"
   }
-  Ok value
+  value
 }
 
 fn describe(text: String): String {
@@ -101,7 +101,7 @@ fn total(values: List<String>): Result<Int, String> {
   for value in values {
     sum = sum + readCount(value)?
   }
-  Ok sum
+  sum
 }
 
 print total(["1", "2", "3"])

@@ -105,7 +105,7 @@ fn firstLine(path: String): Result<String, ConfigError> {
   const text = File.readText(path)?
   const lines = text.lines()
   match lines.first() {
-    Some(line) => Ok line
+    Some(line) => line
     None => Fail ConfigError.Empty(path)
   }
 }

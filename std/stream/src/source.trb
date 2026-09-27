@@ -133,7 +133,7 @@ public shared trait Source<Item, Failure> with Close {
   var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>> {
     var accumulator = into
     if accumulator.isDone() {
-      return Ok accumulator.finish()
+      return accumulator.finish()
     }
     while const Some(item) = next().await()? {
       accumulator.add item
@@ -141,7 +141,7 @@ public shared trait Source<Item, Failure> with Close {
         break
       }
     }
-    Ok accumulator.finish()
+    accumulator.finish()
   }
 
   /** Every item, collected into a list. */
@@ -281,7 +281,7 @@ shared type Iterating<Item, Failure> with Source<Item, Failure> {
   }
 
   var fn next(): Task<Result<Item?, Failure>> {
-    Ok cursor.next()
+    cursor.next()
   }
 
   /** Nothing was opened, so there is nothing to release - and every source has to be closable. */
@@ -323,7 +323,7 @@ shared type Remapped<Item, Failure, Other> with Source<Item, Other> {
   }
 
   var fn next(): Task<Result<Item?, Other>> {
-    Ok(upstream.next().await().mapError(transform)?)
+    upstream.next().await().mapError(transform)?
   }
 
   var fn close() {}
@@ -403,7 +403,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   var fn collect<Output>(into: Accumulator<Item, Output>): Task<Result<Output, Failure>> {
     var accumulator = stage.onto into
     if accumulator.isDone() {
-      return Ok accumulator.finish()
+      return accumulator.finish()
     }
     while const Some(value) = upstream.next().await()? {
       accumulator.add value
@@ -411,7 +411,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
         break
       }
     }
-    Ok accumulator.finish()
+    accumulator.finish()
   }
 
   /** Nothing of its own: `upstream` is a field, and the release of the source releases it right after this. */

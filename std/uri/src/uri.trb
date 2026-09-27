@@ -126,7 +126,7 @@ public type Uri with Show, Equals, Hash, Compare {
 
   /** Whether the scheme is `urn`. `Urn.tryFrom(uri)` reads the parts of one. */
   fn isUrn(): Bool {
-    components.scheme == Some("urn")
+    components.scheme == "urn"
   }
 
   /** The query read as `application/x-www-form-urlencoded`: every value of every name, in order. */
@@ -175,7 +175,7 @@ public type Uri with Show, Equals, Hash, Compare {
     var authority = components.authority
     if const Some(found) = authority {
       if found.port.isSome() && found.port == defaultPort() {
-        authority = Some found.copy(port: None)
+        authority = found.copy port: None
       }
     }
     const path = if components.path.isEmpty() && authority.isSome() { "/" } else { components.path }
@@ -249,7 +249,7 @@ extend Uri with TryFrom<String, UriError> {
     if parsed.scheme.isNone() {
       return Fail UriError.Relative(value)
     }
-    Ok Uri(parsed)
+    Uri parsed
   }
 }
 
@@ -342,7 +342,7 @@ public type UriReference with Show, Equals, Hash, Compare {
     if components.scheme.isNone() {
       return None
     }
-    Some Uri(components)
+    Uri components
   }
 
   /**
@@ -410,7 +410,7 @@ public type UriReference with Show, Equals, Hash, Compare {
  */
 extend UriReference with TryFrom<String, UriError> {
   static fn tryFrom(value: String): Result<UriReference, UriError> {
-    Ok UriReference(componentsOf(value)?)
+    UriReference(componentsOf(value)?)
   }
 }
 
@@ -436,33 +436,33 @@ fn componentsOf(text: String): Result<Components, UriError> {
   var scheme: String? = None
   const schemeEnd = schemeEndOf text
   if schemeEnd > 0 {
-    scheme = Some text.sliceBytes(0, schemeEnd).toLowerCase()
+    scheme = text.sliceBytes(0, schemeEnd).toLowerCase()
     rest = text.sliceBytes(schemeEnd + 1, text.byteLength())
   } else if schemeEnd == 0 {
     return Fail UriError.InvalidScheme(text.substringBefore(":") ?? text)
   }
   var fragment: String? = None
   if const Some(mark) = rest.byteOffsetOf("#") {
-    fragment = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Fragment, text)?)
+    fragment = normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Fragment, text)?
     rest = rest.sliceBytes 0, mark
   }
   var query: String? = None
   if const Some(mark) = rest.byteOffsetOf("?") {
-    query = Some(normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Query, text)?)
+    query = normalizedComponent(rest.sliceBytes(mark + 1, rest.byteLength()), Component.Query, text)?
     rest = rest.sliceBytes 0, mark
   }
   var authority: Authority? = None
   if rest.startsWith("//") {
     const body = rest.sliceBytes 2, rest.byteLength()
     const cut = body.byteOffsetOf("/") ?? body.byteLength()
-    authority = Some(authorityOf(body.sliceBytes(0, cut), text)?)
+    authority = authorityOf(body.sliceBytes(0, cut), text)?
     rest = body.sliceBytes cut, body.byteLength()
   }
   var path = normalizedComponent(rest, Component.Path, text)?
   if scheme.isSome() || path.startsWith("/") {
     path = withoutDotSegments path
   }
-  Ok Components(scheme, authority, guardedPath(path, authority), query, fragment)
+  Components scheme, authority, guardedPath(path, authority), query, fragment
 }
 
 /**
@@ -704,7 +704,7 @@ fn relativePath(target: String, base: String): String? {
   } else if (parts.first() ?? "").contains(":") {
     path = "./{path}"
   }
-  Some path
+  path
 }
 
 // --- Members both capsules share -------------------------------------------------------------------------------------
@@ -731,7 +731,7 @@ fn parametersOf(query: String?): Map<String, List<String>> {
 fn parameterOf(query: String?, name: String): String? {
   for (found, value) in formDecoded(query ?? "") {
     if found == name {
-      return Some value
+      return value
     }
   }
   None
@@ -750,7 +750,7 @@ fn queryOf(parameters: Map<String, List<String>>): String? {
   }
   const encoded = formEncoded pairs
   // The form's encoder escapes `~`, which RFC 3986 section 6.2.2.2 writes as itself
-  Some(normalizedComponent(encoded, Component.Query, encoded).ok() ?? encoded)
+  normalizedComponent(encoded, Component.Query, encoded).ok() ?? encoded
 }
 
 /** `relative` below the path of `components`, never above it, with the query and the fragment dropped. */
@@ -785,11 +785,11 @@ fn joinedComponents(components: Components, relative: String): Components {
 /** The port a scheme defaults to, for the five schemes IANA fixes one for. */
 fn defaultPortOf(scheme: String): Int? {
   match scheme {
-    "http" => Some 80
-    "https" => Some 443
-    "ws" => Some 80
-    "wss" => Some 443
-    "ftp" => Some 21
+    "http" => 80
+    "https" => 443
+    "ws" => 80
+    "wss" => 443
+    "ftp" => 21
     _ => None
   }
 }
@@ -921,20 +921,20 @@ fn pathOf(shown: String, host: Host?, path: String, hasQuery: Bool, absolute: Bo
     None => ""
   }
   if !server.isEmpty() {
-    return Ok Path.from("//{server}/{joined}")
+    return Path.from "//{server}/{joined}"
   }
   if isDrive(decoded.first() ?? "") {
     const letter = (decoded.first() ?? "C").sliceBytes(0, 1)
     const rest = decoded[1..decoded.length()].joined separator: "/"
-    return Ok Path.from("{letter}:/{rest}")
+    return Path.from "{letter}:/{rest}"
   }
   if rooted {
-    return Ok Path.from("/{joined}")
+    return Path.from "/{joined}"
   }
   if absolute {
     return Fail UriError.NotAFile(shown, "the path of a `file:` URI is absolute")
   }
-  Ok Path.from(joined)
+  Path.from joined
 }
 
 /** `C:` or `C|`: a drive letter, as the first segment of a `file:` URI writes it (RFC 8089 appendix E.2). */

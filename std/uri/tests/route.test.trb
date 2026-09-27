@@ -46,14 +46,14 @@ fn pages(): TemplateRoutes<Page> {
 group "a typed template" {
   test "is expanded from the fields of a value" {
     const orders: UriTemplate<OrderPath> = "/orders/{id}{?fields*}"
-    assert(orders.expandedFrom(OrderPath(7)).map({ _.text() }) == Ok("/orders/7"))
+    assert(orders.expandedFrom(OrderPath(7)).map({ _.text() }) == "/orders/7")
     const both = orders.expandedFrom(OrderPath(7, ["total", "lines"])).map({ _.text() })
-    assert(both == Ok("/orders/7?fields=total&fields=lines"))
+    assert(both == "/orders/7?fields=total&fields=lines")
   }
 
   test "reads a reference back into a value" {
     const orders: UriTemplate<OrderPath> = "/orders/{id}"
-    assert(orders.decoded(referenceOf("/orders/12")) == Some(OrderPath(12)))
+    assert(orders.decoded(referenceOf("/orders/12")) == OrderPath(12))
     assert(orders.decoded(referenceOf("/orders/twelve")) == None)
     assert(orders.decoded(referenceOf("/customers/12")) == None)
   }
@@ -68,27 +68,27 @@ group "a typed template" {
     const template = UriTemplate<TemplateValues>.tryFrom(raw"/a/{b}").expect("a template")
     var values: TemplateValues = [:]
     values["b"] = .Text("c d")
-    assert(template.expanded(values).map({ _.text() }) == Ok("/a/c%20d"))
+    assert(template.expanded(values).map({ _.text() }) == "/a/c%20d")
   }
 }
 
 group "routes" {
   test "match a reference into the case of the first route that fits it" {
     const routes = pages()
-    assert(routes.matched(referenceOf("/")) == Some(Page.Home))
-    assert(routes.matched(referenceOf("/orders/9")) == Some(Page.Order(9)))
-    assert(routes.matched(referenceOf("/search?query=tea")) == Some(Page.Search("tea", 1)))
-    assert(routes.matched(referenceOf("/search?page=3&query=tea")) == Some(Page.Search("tea", 3)))
-    assert(routes.matched(referenceOf("/files/a/b.txt")) == Some(Page.File(["a", "b.txt"])))
+    assert(routes.matched(referenceOf("/")) == Page.Home)
+    assert(routes.matched(referenceOf("/orders/9")) == Page.Order(9))
+    assert(routes.matched(referenceOf("/search?query=tea")) == Page.Search("tea", 1))
+    assert(routes.matched(referenceOf("/search?page=3&query=tea")) == Page.Search("tea", 3))
+    assert(routes.matched(referenceOf("/files/a/b.txt")) == Page.File(["a", "b.txt"]))
     assert(routes.matched(referenceOf("/nowhere")) == None)
     assert(routes.matched(referenceOf("/orders/nine")) == None)
   }
 
   test "link a case back through its route" {
     const routes = pages()
-    assert(routes.link(Page.Order(5)).map({ _.text() }) == Ok("/orders/5"))
-    assert(routes.link(Page.Search("green tea", 2)).map({ _.text() }) == Ok("/search?query=green%20tea&page=2"))
-    assert(routes.link(Page.Home).map({ _.text() }) == Ok("/"))
+    assert(routes.link(Page.Order(5)).map({ _.text() }) == "/orders/5")
+    assert(routes.link(Page.Search("green tea", 2)).map({ _.text() }) == "/search?query=green%20tea&page=2")
+    assert(routes.link(Page.Home).map({ _.text() }) == "/")
   }
 
   test "refuse to start without a route for every case" {

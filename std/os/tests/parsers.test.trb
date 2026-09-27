@@ -30,16 +30,16 @@ const ubuntu = """
 group "os-release" {
   test "every assignment is read, with its quotes removed" {
     const fields = parseOsRelease ubuntu
-    assert(fields.get("PRETTY_NAME") == Some("Ubuntu 24.04.1 LTS"))
-    assert(fields.get("ID") == Some("ubuntu"))
-    assert(fields.get("VERSION_CODENAME") == Some("noble"))
-    assert(fields.get("HOME_URL") == Some("https://www.ubuntu.com/"))
+    assert(fields.get("PRETTY_NAME") == "Ubuntu 24.04.1 LTS")
+    assert(fields.get("ID") == "ubuntu")
+    assert(fields.get("VERSION_CODENAME") == "noble")
+    assert(fields.get("HOME_URL") == "https://www.ubuntu.com/")
   }
 
   test "comments and blank lines are skipped, and escapes inside double quotes are undone" {
     const fields = parseOsRelease "# a comment\n\nNAME=\"Say \\\"hi\\\"\"\nID='plain'\n"
-    assert(fields.get("NAME") == Some("Say \"hi\""))
-    assert(fields.get("ID") == Some("plain"))
+    assert(fields.get("NAME") == "Say \"hi\"")
+    assert(fields.get("ID") == "plain")
     assert(fields.length() == 2)
   }
 
@@ -67,11 +67,11 @@ group "os-release" {
 group "/proc/uptime" {
   test "the first number is the uptime, to the millisecond" {
     const uptime = parseUptime "350735.47 234388.90\n"
-    assert(uptime == Ok(350_735_470.milliseconds()))
+    assert(uptime == 350_735_470.milliseconds())
   }
 
   test "a number without a fraction is whole seconds" {
-    assert(parseUptime("12 5") == Ok(12_000.milliseconds()))
+    assert(parseUptime("12 5") == 12_000.milliseconds())
   }
 
   test "a file that begins with no number is malformed" {
@@ -88,8 +88,8 @@ group "Windows" {
   }
 
   test "the architecture numbers of the native" {
-    assert(architectureOf(1) == Ok(Architecture.X64))
-    assert(architectureOf(2) == Ok(Architecture.Arm64))
+    assert(architectureOf(1) == Architecture.X64)
+    assert(architectureOf(2) == Architecture.Arm64)
     assert architectureOf(3).isError()
     assert architectureOf(0).isError()
   }
@@ -97,10 +97,10 @@ group "Windows" {
 
 group "POSIX and FreeBSD" {
   test "the machine of uname, as Linux and as the BSDs spell it" {
-    assert(posix.architectureOf("x86_64") == Ok(Architecture.X64))
-    assert(posix.architectureOf("amd64") == Ok(Architecture.X64))
-    assert(posix.architectureOf("aarch64") == Ok(Architecture.Arm64))
-    assert(posix.architectureOf("arm64") == Ok(Architecture.Arm64))
+    assert(posix.architectureOf("x86_64") == Architecture.X64)
+    assert(posix.architectureOf("amd64") == Architecture.X64)
+    assert(posix.architectureOf("aarch64") == Architecture.Arm64)
+    assert(posix.architectureOf("arm64") == Architecture.Arm64)
     assert posix.architectureOf("riscv64").isError()
   }
 
@@ -115,14 +115,14 @@ group "POSIX and FreeBSD" {
 group "XDG base directories" {
   test "an absolute value is the directory" {
     const home = Path.from "/home/ada"
-    assert(resolvedBase(Some("/data/config"), home, ".config") == Path.from("/data/config"))
+    assert(resolvedBase("/data/config", home, ".config") == Path.from("/data/config"))
   }
 
   test "an unset, empty or relative value falls back below the home" {
     const home = Path.from "/home/ada"
     assert(resolvedBase(None, home, ".config") == Path.from("/home/ada/.config"))
-    assert(resolvedBase(Some(""), home, ".cache") == Path.from("/home/ada/.cache"))
-    assert(resolvedBase(Some("cache"), home, ".cache") == Path.from("/home/ada/.cache"))
+    assert(resolvedBase("", home, ".cache") == Path.from("/home/ada/.cache"))
+    assert(resolvedBase("cache", home, ".cache") == Path.from("/home/ada/.cache"))
     assert(resolvedBase(None, home, ".local/share") == Path.from("/home/ada/.local/share"))
   }
 }

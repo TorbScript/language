@@ -175,7 +175,7 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
   const around = tree.withFile entry, lines.joined(separator: "\n")
   const checked = check around, [entry], false, false, [], true
   if reportChecked(checked) > 0 {
-    return Ok false
+    return false
   }
   var exports: List<SymbolId> = []
   for name in ["scriptHostLoad", "scriptHostRun"] {
@@ -183,7 +183,7 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
       Some(found) => exports.append found
       None => {
         printError "internal error: the module of the script host declares no `{name}`"
-        return Ok false
+        return false
       }
     }
   }
@@ -198,11 +198,11 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
   }
   insertOwnership lowering.program
   if reportLowering(checked, around, lowering) > 0 {
-    return Ok false
+    return false
   }
   if lowering.scriptHosts.length() != 2 {
     printError "internal error: the functions of the script host were not lowered"
-    return Ok false
+    return false
   }
   const names = [scriptHostLoadFunction, scriptHostRunFunction]
   var programExports: List<ProgramExport> = []
@@ -214,10 +214,10 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
     for what in emission.unsupported {
       printError "error: {what}"
     }
-    return Ok false
+    return false
   }
   File.writeText(source, emittedText(emission))?
-  Ok true
+  true
 }
 
 /** A public function of the module at `path`. */

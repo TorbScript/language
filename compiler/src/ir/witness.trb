@@ -47,7 +47,7 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
   const target = irTypeOfClosed lowering, subject
   const name = witnessTableName lowering.program, applied, target
   if const Some(found) = lowering.program.witnessTableNamed(name) {
-    return Some found
+    return found
   }
   if lowering.buildingTables.containsKey(name) {
     reportUnsupported lowering, "a witness table that needs itself", at
@@ -77,7 +77,7 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
   }
   const added = lowering.program.addWitnessTable WitnessTable(name, applied, target, found, nested)
   lowering.tableSources.set added.value, TableSource(subject, bound, implementation)
-  Some added
+  added
 }
 
 /**
@@ -150,7 +150,7 @@ fn membersOfTable(
     const built = genericMemberFunctionOf(lowering, subject, bound, implementation, slot, at)?
     found.append built
   }
-  Some found
+  found
 }
 
 /**
@@ -221,7 +221,7 @@ public fn providerOfMember(
   if const .Derived = lowering.checker.implementations.at(implementation).origin {
     return member
   }
-  if const Some(found) = declaredMemberOf(lowering, implementation, Some(member), name) {
+  if const Some(found) = declaredMemberOf(lowering, implementation, member, name) {
     return found
   }
   const identifier = signatureOf lowering.checker, member
@@ -259,7 +259,7 @@ public fn manifestOwnerOf(
 
 fn manifestNameOf(var lowering: Lowering, id: TypeId): String? {
   if const .Nominal(symbol, _) = lowering.checker.types.form(id) {
-    return Some lowering.checker.symbolAt(symbol).name
+    return lowering.checker.symbolAt(symbol).name
   }
   None
 }
@@ -313,11 +313,11 @@ fn declaredMemberOf(
   const wanted = match required {
     Some(inner) => inner
     None => {
-      return Some found
+      return found
     }
   }
   if providesMember(lowering, wanted, found) {
-    return Some found
+    return found
   }
   None
 }
@@ -371,19 +371,19 @@ public fn generatedKindOf(
     }
     match entry.target {
       .Intrinsic(intrinsic) => {
-        return Some Generated.Operation(intrinsic)
+        return Generated.Operation intrinsic
       }
       .Runtime(symbol) => {
-        return Some Generated.RuntimeCall(symbol)
+        return Generated.RuntimeCall symbol
       }
       .Derived(derived) => {
         return derivedKindOf lowering, derived, at
       }
       .Container(kind) => {
-        return Some Generated.Container(kind)
+        return Generated.Container kind
       }
       .ArrayStorage(operation) => {
-        return Some Generated.ArrayStorage(operation)
+        return Generated.ArrayStorage operation
       }
       // `spawn` and `stopAsCancelled` are control flow of the lowering and never the member of a table
       .Lowered | .Target(_) | .ScriptTable(_) | .Machine(_) | .ScriptHost(_) => {
@@ -398,7 +398,7 @@ public fn generatedKindOf(
   }
   // `with Add by value`: the required members are forwarded to the one field, and a default is the trait's own body
   if const .Delegated = found.origin {
-    return Some Generated.Delegate
+    return Generated.Delegate
   }
   // `type Point with Show {}` **declares** the implementation and writes no member at all. The checker accepts that for
   // a trait the language derives, so the body is generated from the layout exactly as for an implementation the checker
@@ -422,35 +422,35 @@ fn isDerivedName(name: String): Bool {
  */
 fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
   if name == "show" {
-    return Some Generated.Show
+    return Generated.Show
   }
   if name == "showNested" {
-    return Some Generated.ShowNested
+    return Generated.ShowNested
   }
   if name == "equals" {
-    return Some Generated.Equals
+    return Generated.Equals
   }
   if name == "hash" {
-    return Some Generated.Hash
+    return Generated.Hash
   }
   if name == "compare" {
-    return Some Generated.Compare
+    return Generated.Compare
   }
   if name == "from" {
-    return Some Generated.Conversion
+    return Generated.Conversion
   }
   if name == "encode" {
-    return Some Generated.Encode
+    return Generated.Encode
   }
   if name == "decode" {
-    return Some Generated.Decode
+    return Generated.Decode
   }
   if name == "describe" {
-    return Some Generated.Describe
+    return Generated.Describe
   }
   // The conversion from text of a literal type, reached through a bound rather than by name
   if name == "tryFrom" {
-    return Some Generated.LiteralParse
+    return Generated.LiteralParse
   }
   reportUnsupported lowering, "a derived `{name}` the back end does not generate", at
   None
@@ -459,13 +459,13 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
 /** What the manifest's `.Derived` entry means for the lowering: the same vocabulary, in the lowering's own words. */
 public fn derivedKindOf(var lowering: Lowering, derived: DerivedKind, at: Span): Generated? {
   match derived {
-    .Show => Some Generated.Show
-    .ShowNested => Some Generated.ShowNested
-    .Equals => Some Generated.Equals
-    .Compare => Some Generated.Compare
-    .Hash => Some Generated.Hash
-    .Absolute => Some Generated.Absolute
-    .Identity => Some Generated.Identity
+    .Show => Generated.Show
+    .ShowNested => Generated.ShowNested
+    .Equals => Generated.Equals
+    .Compare => Generated.Compare
+    .Hash => Generated.Hash
+    .Absolute => Generated.Absolute
+    .Identity => Generated.Identity
     .Copy => {
       reportUnsupported lowering, "a derived `copy` of a native type", at
       None
@@ -1000,7 +1000,7 @@ public fn memberInValue(
     for position in 0..members.length() {
       if lowering.checker.symbolAt(members[position].member).name == name {
         const empty: List<Int> = []
-        return Some MemberInValue(WitnessSource(WitnessRoot.Value(place, index), empty), position)
+        return MemberInValue WitnessSource(WitnessRoot.Value(place, index), empty), position
       }
     }
   }
@@ -1032,7 +1032,7 @@ public fn genericSlotOf(
   const key = genericSlotKey member, arguments
   for index in 0..slots.length() {
     if slots[index].key == key {
-      return Some(fixed + index)
+      return fixed + index
     }
   }
   const slot = GenericSlot member, arguments, key
@@ -1060,7 +1060,7 @@ public fn genericSlotOf(
     members.append built
     lowering.program.witnessTables.set index, table.copy(members: members)
   }
-  Some position
+  position
 }
 
 fn genericSlotKey(member: SymbolId, arguments: List<TypeId>): String {
@@ -1116,10 +1116,10 @@ public fn genericMemberInValue(
 ): MemberInValue? {
   const name = lowering.checker.symbolAt(member).name
   for index in 0..bounds.length() {
-    if traitMemberNamed(lowering, bounds[index], name) == Some(member) {
+    if traitMemberNamed(lowering, bounds[index], name) == member {
       const position = genericSlotOf(lowering, bounds[index], subject, member, arguments, at)?
       const empty: List<Int> = []
-      return Some MemberInValue(WitnessSource(WitnessRoot.Value(place, index), empty), position)
+      return MemberInValue WitnessSource(WitnessRoot.Value(place, index), empty), position
     }
   }
   reportUnsupported lowering, "`{name}`", at, "a supertrait declares it, and it has type parameters of its own"
@@ -1163,7 +1163,7 @@ public fn narrowingPathOf(
   for index in 0..bounds.length() {
     var steps: List<Int> = []
     if stepsToBound(lowering, bounds[index], subject, bound, steps, 0) {
-      return Some WitnessSource(WitnessRoot.Value(Reference(Slot(0), []), index), steps)
+      return WitnessSource WitnessRoot.Value(Reference(Slot(0), []), index), steps
     }
   }
   None

@@ -36,7 +36,7 @@ public fn parsedDocument(text: String, options: ParseOptions): MarkdownDocument 
         inner.append lines[index]
       }
       const innerText = if inner.isEmpty() { "" } else { inner.joined(separator: "\n") + "\n" }
-      frontMatter = Some FrontMatter(innerText, 2)
+      frontMatter = FrontMatter innerText, 2
       lines = lines.slice((end + 1)..lines.length())
       firstLine = end + 2
     }
@@ -147,7 +147,7 @@ type BlockParser {
 
   fn characterAt(index: Int): Char? {
     if index >= 0 && index < line.length() {
-      return Some line[index]
+      return line[index]
     }
     None
   }
@@ -422,10 +422,10 @@ type BlockParser {
       .Document => 0
       .ItemList => 0
       .BlockQuote => {
-        if !indented && characterAt(nextNonspace) == Some('>') {
+        if !indented && characterAt(nextNonspace) == '>' {
           advanceNextNonspace()
           advanceOffset 1, false
-          if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+          if characterAt(offset).map({ isSpaceOrTab _ }) == true {
             advanceOffset 1, true
           }
           return 0
@@ -453,7 +453,7 @@ type BlockParser {
       .CodeBlock => {
         if nodes[container].fenced {
           const fenceCharacter = nodes[container].fenceCharacter
-          if indent <= 3 && characterAt(nextNonspace) == Some(fenceCharacter) {
+          if indent <= 3 && characterAt(nextNonspace) == fenceCharacter {
             const length = closingFenceLength nextNonspace, fenceCharacter
             if length >= nodes[container].fenceLength {
               finalize container, lineNumber
@@ -461,7 +461,7 @@ type BlockParser {
             }
           }
           var remaining = nodes[container].fenceOffset
-          while remaining > 0 && characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+          while remaining > 0 && characterAt(offset).map({ isSpaceOrTab _ }) == true {
             advanceOffset 1, true
             remaining = remaining - 1
           }
@@ -541,12 +541,12 @@ type BlockParser {
   }
 
   var fn startBlockQuote(): Int {
-    if indented || characterAt(nextNonspace) != Some('>') {
+    if indented || characterAt(nextNonspace) != '>' {
       return 0
     }
     advanceNextNonspace()
     advanceOffset 1, false
-    if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+    if characterAt(offset).map({ isSpaceOrTab _ }) == true {
       advanceOffset 1, true
     }
     closeUnmatchedBlocks()
@@ -555,7 +555,7 @@ type BlockParser {
   }
 
   var fn startAtxHeading(): Int {
-    if indented || characterAt(nextNonspace) != Some('#') {
+    if indented || characterAt(nextNonspace) != '#' {
       return 0
     }
     var at = nextNonspace
@@ -581,7 +581,7 @@ type BlockParser {
       return 0
     }
     const fence = characterAt nextNonspace
-    if fence != Some('`') && fence != Some('~') {
+    if fence != '`' && fence != '~' {
       return 0
     }
     const character = fence ?? '`'
@@ -609,7 +609,7 @@ type BlockParser {
   }
 
   var fn startHtmlBlock(container: Int): Int {
-    if indented || characterAt(nextNonspace) != Some('<') {
+    if indented || characterAt(nextNonspace) != '<' {
       return 0
     }
     const rest = restFrom nextNonspace
@@ -781,7 +781,7 @@ type BlockParser {
       markerLength = digits + 1
     }
     const after = characterAt(nextNonspace + markerLength)
-    if after.isSome() && after != Some(' ') && after != Some('\t') {
+    if after.isSome() && after != ' ' && after != '\t' {
       return None
     }
     // A list item that interrupts a paragraph is not empty
@@ -795,7 +795,7 @@ type BlockParser {
     loop {
       advanceOffset 1, true
       const next = characterAt offset
-      if column - spacesStartColumn >= 5 || next.map({ isSpaceOrTab _ }) != Some(true) {
+      if column - spacesStartColumn >= 5 || next.map({ isSpaceOrTab _ }) != true {
         break
       }
     }
@@ -805,13 +805,13 @@ type BlockParser {
       data = data.copy(padding: markerLength + 1)
       column = spacesStartColumn
       offset = spacesStartOffset
-      if characterAt(offset).map({ isSpaceOrTab _ }) == Some(true) {
+      if characterAt(offset).map({ isSpaceOrTab _ }) == true {
         advanceOffset 1, true
       }
     } else {
       data = data.copy(padding: markerLength + spacesAfterMarker)
     }
-    Some data
+    data
   }
 
   // --- Link reference definitions -----------------------------------------------------------------------------------
@@ -932,7 +932,7 @@ type BlockParser {
         return None
       }
     }
-    Some MarkdownBlock(content, firstLine, node.endLine + lineOffset)
+    MarkdownBlock(content, firstLine, node.endLine + lineOffset)
   }
 
   fn codeBlockOf(node: Node): BlockContent {
@@ -1106,7 +1106,7 @@ fn opensHtmlBlock(htmlKind: Int, rest: List<Char>): Bool {
       for name in ["script", "pre", "textarea", "style"] {
         if text.startsWith("<" + name) {
           const after = rest.get(name.byteLength() + 1)
-          if after.isNone() || after == Some(' ') || after == Some('\t') || after == Some('>') {
+          if after.isNone() || after == ' ' || after == '\t' || after == '>' {
             return true
           }
         }
@@ -1119,7 +1119,7 @@ fn opensHtmlBlock(htmlKind: Int, rest: List<Char>): Bool {
     5 => text.startsWith "<![cdata["
     6 => {
       var at = 1
-      if rest.get(1) == Some('/') {
+      if rest.get(1) == '/' {
         at = 2
       }
       var end = at
@@ -1131,8 +1131,8 @@ fn opensHtmlBlock(htmlKind: Int, rest: List<Char>): Bool {
         return false
       }
       const after = rest.get end
-      after.isNone() || after == Some(' ') || after == Some('\t') || after == Some('>')
-        || (after == Some('/') && rest.get(end + 1) == Some('>'))
+      after.isNone() || after == ' ' || after == '\t' || after == '>'
+        || (after == '/' && rest.get(end + 1) == '>')
     }
     7 => {
       // A complete open or closing tag, and nothing but whitespace after it on the line
@@ -1197,7 +1197,7 @@ fn delimiterRow(text: String): List<ColumnAlignment>? {
   if alignments.isEmpty() {
     return None
   }
-  Some alignments
+  alignments
 }
 
 /** The cells of a table row: split at every `|` that no backslash escapes, a leading and a trailing one dropped. */

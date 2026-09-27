@@ -48,7 +48,7 @@ public type Resolver {
     if message.responseCode == ResponseCode.NameError {
       return Fail NetworkError.hostNotFound(name.show())
     }
-    Ok message.answersFor(name, recordType)
+    message.answersFor name, recordType
   }
 
   /**
@@ -75,7 +75,7 @@ public type Resolver {
               || message.responseCode == ResponseCode.NotImplemented {
               last = NetworkError.nameServerFailed "{server} answered {message.responseCode} for `{name}`"
             } else {
-              return Ok message
+              return message
             }
           }
           Fail(problem) => {
@@ -98,7 +98,7 @@ public type Resolver {
       }
     }
     if !answered.truncated {
-      return Ok answered
+      return answered
     }
     var overTcp = exchangeOverTcp server, question
     match overTcp.within(limit).await() {
@@ -141,7 +141,7 @@ public fn systemNameServers(): Result<List<SocketAddress>, NetworkError> {
   if found.isEmpty() {
     return Fail NetworkError.nameServerFailed("the system is configured with no name server")
   }
-  Ok found
+  found
 }
 
 /**
@@ -155,7 +155,7 @@ fn exchangeOverUdp(server: SocketAddress, question: Bytes): Task<Result<Message,
   loop {
     const (bytes, _) = socket.receive().await()?
     if const Ok(message) = readResponse(bytes, question) {
-      return Ok message
+      return message
     }
   }
 }

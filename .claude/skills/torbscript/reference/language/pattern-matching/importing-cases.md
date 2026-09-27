@@ -30,7 +30,7 @@ fn describe(value: Int?): String {
   }
 }
 
-print describe(Some(3))
+print describe(3)
 ```
 
 ## Syntax
@@ -124,7 +124,7 @@ or not the type itself is imported:
 use Option.Some from "std/core"
 
 fn firstOf(numbers: List<Int>): Int? {
-  Some numbers.first().expect("at least one")
+  numbers.first().expect("at least one")
 }
 
 print firstOf([1, 2])

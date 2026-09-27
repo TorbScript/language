@@ -39,7 +39,7 @@ public fn derivableMembers(
     return None
   }
   if const Some(known) = checker.derivations.get(key) {
-    return Some known
+    return known
   }
   const members = membersOf name
   if members.isEmpty() {
@@ -54,7 +54,7 @@ public fn derivableMembers(
     checker.derivationsMissing.set key, true
     return None
   }
-  Some members
+  members
 }
 
 fn wantedKey(wanted: TypeId?): Int {
@@ -67,7 +67,7 @@ fn wantedKey(wanted: TypeId?): Int {
 /** The name of the trait, but only when the symbol really is the prelude's trait of that name. */
 fn derivedTraitName(checker: Checker, capability: SymbolId): String {
   const name = checker.symbolAt(capability).name
-  if checker.wellKnown.symbolNamed(name) == Some(capability) {
+  if checker.wellKnown.symbolNamed(name) == capability {
     return name
   }
   ""
@@ -261,7 +261,7 @@ public fn conversionPairOf(var checker: Checker, target: TypeId): ConversionPair
   if found.length() != 1 {
     return None
   }
-  Some found[0]
+  found[0]
 }
 
 /**
@@ -587,7 +587,7 @@ public fn fieldChainNotesOf(var checker: Checker, target: TypeId, bound: TypeId)
     }
     chain.append "{describeHead(checker, current)}.{failing.name}"
     if first.isNone() {
-      first = Some "`{failing.name}: {checker.describe(failing.annotation)}`"
+      first = "`{failing.name}: {checker.describe(failing.annotation)}`"
     }
     current = failing.annotation
   }
@@ -644,7 +644,7 @@ fn failingFieldOf(var checker: Checker, target: TypeId, bound: TypeId): FailingF
   for field in fields {
     const annotation = substitute checker.types, field.annotation, mapping
     if !fieldImplements(checker, annotation, target, bound) {
-      return Some FailingField(field.name, annotation)
+      return FailingField field.name, annotation
     }
   }
   None
@@ -689,5 +689,5 @@ fn capabilityNameOf(var checker: Checker, bound: TypeId): String? {
   if name.isEmpty() {
     return None
   }
-  Some name
+  name
 }

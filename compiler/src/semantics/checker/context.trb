@@ -55,7 +55,7 @@ public type TypeScope {
 
   /** `with Show`, `where Item: Hash`: the trait, plus what it is asked of. */
   fn forBound(of: TypeId): TypeScope {
-    copy position: TypePosition.Type, subject: Some(of)
+    copy position: TypePosition.Type, subject: of
   }
 
   /** The argument of a `const` parameter. */
@@ -738,7 +738,7 @@ public type Expectation {
   /** The type that is expected, if any. */
   fn annotationOf(): TypeId? {
     match self {
-      .Type(annotation) => Some annotation
+      .Type(annotation) => annotation
       _ => None
     }
   }
@@ -746,7 +746,7 @@ public type Expectation {
   /** The type a `?` above this expression will unwrap to, if one said so. */
   fn unwrappedOf(): TypeId? {
     match self {
-      .Unwrapped(annotation) => Some annotation
+      .Unwrapped(annotation) => annotation
       _ => None
     }
   }
@@ -772,8 +772,8 @@ public type ResultRule {
   /** How a message names the declaration that will not infer, `None` where inference is allowed. */
   fn describe(): String? {
     match self {
-      .PublicFunction => Some "A `public` function"
-      .TraitMethod => Some "A trait method"
+      .PublicFunction => "A `public` function"
+      .TraitMethod => "A trait method"
       .Ordinary => None
     }
   }
@@ -1203,7 +1203,7 @@ public type Checker {
   /** What a name in a type position, or the name of a declaration, resolved to. */
   fn resolvedName(module: ModuleId, at: Span): SymbolId? {
     if const Some(found) = resolutions[module.value].get(at) {
-      return Some found
+      return found
     }
     definitions[module.value].get(at)
   }
@@ -1362,7 +1362,7 @@ public type Checker {
         None => true
       }
       if isEarlier {
-        found = Some at
+        found = at
       }
     }
     found
@@ -1397,7 +1397,7 @@ public type Checker {
   /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
   var fn typed(at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
     id
@@ -1405,14 +1405,14 @@ public type Checker {
 
   var fn typedPattern(at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
 
   var fn resolved(at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1424,7 +1424,7 @@ public type Checker {
   var fn adapted(at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.appended(adaptation))
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1444,7 +1444,7 @@ public type Checker {
     }
     kept.append Adaptation.Literal(annotation)
     tables[module.value].adaptations.set(at, kept)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1456,7 +1456,7 @@ public type Checker {
   /** The type arguments one call was instantiated with: what the lowering monomorphizes from. */
   var fn recordTypeArguments(at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1468,7 +1468,7 @@ public type Checker {
   /** One witness per trait of every bound of the callee, in the order of `Signature.bounds`. */
   var fn recordWitnesses(at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1543,7 +1543,7 @@ public type Checker {
   /** What one collection literal became: the default collection, inline array slots, or `Target.from`. */
   var fn recordCollectionLiteral(at: Span, found: CollectionLiteral) {
     tables[module.value].collectionLiterals.set(at, found)
-    if hasVariables && pendingSpans.last() != Some(at) {
+    if hasVariables && pendingSpans.last() != at {
       pendingSpans.append at
     }
   }
@@ -1605,7 +1605,7 @@ public type Checker {
     if const .Ambiguous = found {
       return None
     }
-    Some found
+    found
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */
@@ -1676,13 +1676,13 @@ public type Checker {
   }
 
   var fn solveVariable(variable: VariableId, id: TypeId) {
-    const solved = variables[variable.value].copy(solution: Some(id))
+    const solved = variables[variable.value].copy(solution: id)
     variables.set variable.value, solved
   }
 
   /** The type a variable takes where the statement that made it leaves it open. */
   var fn fallBackTo(variable: VariableId, id: TypeId) {
-    const given = variables[variable.value].copy(fallback: Some(id))
+    const given = variables[variable.value].copy(fallback: id)
     variables.set variable.value, given
   }
 
@@ -1786,7 +1786,7 @@ public type Checker {
     var index = locals.length() - 1
     while index >= 0 {
       if locals[index].name == name {
-        return Some locals[index].kind
+        return locals[index].kind
       }
       index = index - 1
     }
@@ -1882,8 +1882,8 @@ public type Checker {
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
   var fn setReceiver(binding: BindingId) {
-    receiverBinding = Some binding
-    receiverType = Some bindings[binding.value].annotation
+    receiverBinding = binding
+    receiverType = bindings[binding.value].annotation
   }
 
   /**

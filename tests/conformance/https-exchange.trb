@@ -76,12 +76,12 @@ fn uriOf(text: String): Uri {
 /** Answers with what it was asked and whether the connection was encrypted end to end. */
 fn answer(request: Request): Task<Result<Response, HttpError>> {
   const text = request.body.text().await()?
-  Ok Response.text("{request.method} {request.path()} [{text}]")
+  Response.text "{request.method} {request.path()} [{text}]"
 }
 
 match ServerIdentity.of(serverCertificate, serverKey) {
   Ok(identity) => {
-    match Server.listen(SocketAddress(IpAddress.loopback, 0), answer, tls: Some(identity)) {
+    match Server.listen(SocketAddress(IpAddress.loopback, 0), answer, tls: identity) {
       Ok(server) => {
         var serving = server.serve()
         const base = uriOf "https://localhost:{server.localAddress().port}"

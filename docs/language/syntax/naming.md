@@ -177,7 +177,7 @@ lowerCamelCase           a function, a method, a field, a parameter, a binding, 
         if value < 0 || value > 100 {
           return Fail "{value} is not between 0 and 100"
         }
-        Ok Self(value)
+        Self value
       }
 
       fn percent(): Int {

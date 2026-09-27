@@ -90,7 +90,7 @@ group "A function that uses every instruction" {
       IrSignature([IrParameter("value", int64)], int64),
       "body",
     )
-    terminate doubleBuilder, Terminator.Return(Some(owned(Slot(0))))
+    terminate doubleBuilder, Terminator.Return(owned(Slot(0)))
     const double = finishFunction program, doubleBuilder
     // A closure body takes its environment first, and the environment holds one field per capture (BACKEND 5.8)
     const environment = environmentLayout(
@@ -108,7 +108,7 @@ group "A function that uses every instruction" {
     terminate innerBuilder, Terminator.Return(None)
     const inner = finishFunction program, innerBuilder
     const showTable = program.addWitnessTable WitnessTable("w_show__Int64", show, int64, [double], [])
-    const element = program.addElement ElementDescriptor("d_Int64", int64, 0, 0, Some(double))
+    const element = program.addElement ElementDescriptor("d_Int64", int64, 0, 0, double)
     const greeting = program.addStatic(
       StaticValue("s_main_greeting", strings, StaticContents.Literal(LiteralValue.Text("hi")))
     )
@@ -135,7 +135,7 @@ group "A function that uses every instruction" {
       voidType,
       [show],
     )
-    var builder = newFunction "t_main_everything", Some(SymbolId(9)), signature, "body"
+    var builder = newFunction "t_main_everything", SymbolId(9), signature, "body"
     const firstText = addTemporary builder, strings
     const secondText = addTemporary builder, strings
     const total = addTemporary builder, int64
@@ -161,14 +161,14 @@ group "A function that uses every instruction" {
     const contents = addTemporary builder, int64
     const radius = addTemporary builder, int64
     const itemsPlace = Reference Slot(0), [PathStep.Field(holder, 0)]
-    const add = Intrinsic IntrinsicOperation.Add, Some(NumericKind.Signed(64))
+    const add = Intrinsic IntrinsicOperation.Add, NumericKind.Signed(64)
     emit builder, Instruction.Constant(firstText, greeting)
     emit builder, Instruction.Copy(secondText, firstText)
     emit builder, Instruction.Move(firstText, secondText)
     emit builder, Instruction.Retain(firstText)
     emit builder, Instruction.Release(secondText)
     emit builder, Instruction.MakeUnique(itemsPlace)
-    emit builder, Instruction.Call(Some(total), double, [borrowed(Slot(3))], [])
+    emit builder, Instruction.Call(total, double, [borrowed(Slot(3))], [])
     emit builder, Instruction.BoxNew(boxed, owned(Slot(3)))
     emit builder, Instruction.BoxNew(cell, owned(Slot(3)))
     emit(
@@ -176,7 +176,7 @@ group "A function that uses every instruction" {
       Instruction.Closure(made, inner, [Capture.Value(Slot(3)), Capture.Boxed(boxed), Capture.Place(itemsPlace)], true),
     )
     emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(3))])
-    emit builder, Instruction.Intrinsic(Some(total), add, [Slot(3), total], at)
+    emit builder, Instruction.Intrinsic(total, add, [Slot(3), total], at)
     emit builder, Instruction.Construct(circle, shape, 1, [owned(Slot(3))])
     emit builder, Instruction.Tag(tagValue, circle)
     emit builder, Instruction.Read(items, itemsPlace)
@@ -184,27 +184,27 @@ group "A function that uses every instruction" {
     emit builder, Instruction.Read(element0, Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(int64, Slot(3), at)]))
     emit builder, Instruction.TakeOut(taken, Reference(Slot(1)), Slot(2), RuntimeKind.MapStorage)
     emit builder, Instruction.PutBack(Reference(Slot(1)), Slot(2), taken, RuntimeKind.MapStorage)
-    emit builder, Instruction.Intrinsic(Some(forced), Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
+    emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
     emit builder, Instruction.TraitValue(asObject, owned(Slot(3)), [WitnessSource(WitnessRoot.Table(showTable))])
     emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Value(Reference(asObject, []), 0)), 0, [borrowed(asObject)])
     emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Parameter(0), [1, 2]), 3, [])
-    emit builder, Instruction.Intrinsic(Some(isEqual), Intrinsic(IntrinsicOperation.Equal, Some(NumericKind.Signed(64))), [Slot(3), total], at)
-    emit builder, Instruction.Intrinsic(Some(isNot), Intrinsic(IntrinsicOperation.BooleanNot, None), [isEqual], at)
+    emit builder, Instruction.Intrinsic(isEqual, Intrinsic(IntrinsicOperation.Equal, NumericKind.Signed(64)), [Slot(3), total], at)
+    emit builder, Instruction.Intrinsic(isNot, Intrinsic(IntrinsicOperation.BooleanNot, None), [isEqual], at)
     emit(
       builder,
       Instruction.Intrinsic(
-        Some(narrow),
-        Intrinsic(IntrinsicOperation.Convert(NumericKind.Signed(32)), Some(NumericKind.Signed(64))),
+        narrow,
+        Intrinsic(IntrinsicOperation.Convert(NumericKind.Signed(32)), NumericKind.Signed(64)),
         [Slot(3)],
         at,
       ),
     )
-    emit builder, Instruction.Intrinsic(Some(joined), Intrinsic(IntrinsicOperation.TextConcat, None), [firstText, secondText], at)
-    emit builder, Instruction.Intrinsic(Some(byteLength), Intrinsic(IntrinsicOperation.TextByteLength, None), [firstText], at)
-    emit builder, Instruction.Intrinsic(Some(order), Intrinsic(IntrinsicOperation.TextCompare, None), [firstText, secondText], at)
+    emit builder, Instruction.Intrinsic(joined, Intrinsic(IntrinsicOperation.TextConcat, None), [firstText, secondText], at)
+    emit builder, Instruction.Intrinsic(byteLength, Intrinsic(IntrinsicOperation.TextByteLength, None), [firstText], at)
+    emit builder, Instruction.Intrinsic(order, Intrinsic(IntrinsicOperation.TextCompare, None), [firstText, secondText], at)
     emit(
       builder,
-      Instruction.Intrinsic(Some(shifted), Intrinsic(IntrinsicOperation.ShiftedLeft, Some(NumericKind.Signed(64))), [Slot(3), total], at),
+      Instruction.Intrinsic(shifted, Intrinsic(IntrinsicOperation.ShiftedLeft, NumericKind.Signed(64)), [Slot(3), total], at),
     )
     emit builder, Instruction.Construct(pair, pairLayout, 0, [owned(Slot(3)), owned(firstText)])
     emit builder, Instruction.Read(fromTuple, Reference(pair, [PathStep.TupleField(pairLayout, 0)]))
@@ -294,7 +294,7 @@ group "A function that uses every instruction" {
     var builder = newFunction "t_main_wide", None, IrSignature([], wide), "body"
     const target = addSlot builder, wide, SlotRole.ResultPointer, "result"
     const captured = addSlot builder, int64, SlotRole.Environment, "counter"
-    terminate builder, Terminator.Return(Some(owned(target)))
+    terminate builder, Terminator.Return(owned(target))
     const identifier = finishFunction program, builder
     finishProgram program
     const printed = printFunction program, program.functionAt(identifier)
@@ -317,7 +317,7 @@ group "What an instruction reads and writes" {
     assert(usedSlots(Instruction.Retain(first)) == [first])
     assert(usedSlots(Instruction.Release(first)) == [first])
     assert(usedSlots(Instruction.MakeUnique(place)) == [first, second])
-    assert(usedSlots(Instruction.Call(Some(first), FunctionId(0), [borrowed(second)], [witness])) == [second, third])
+    assert(usedSlots(Instruction.Call(first, FunctionId(0), [borrowed(second)], [witness])) == [second, third])
     assert(usedSlots(Instruction.CallClosure(None, first, [borrowed(second)])) == [first, second])
     assert(usedSlots(Instruction.CallWitness(None, witness, 0, [borrowed(second)])) == [third, second])
     assert(usedSlots(Instruction.Intrinsic(None, Intrinsic(IntrinsicOperation.TextConcat, None), [first, second], LocationId(0))) == [first, second])
@@ -336,21 +336,21 @@ group "What an instruction reads and writes" {
     assert(usedSlots(Instruction.Panic(owned(first), LocationId(0))) == [first])
     assert(usedSlots(Instruction.Suspend(0, first, false)) == [first])
 
-    assert(definedSlot(Instruction.Constant(first, StaticId(0))) == Some(first))
-    assert(definedSlot(Instruction.Move(first, second)) == Some(first))
-    assert(definedSlot(Instruction.Copy(first, second)) == Some(first))
-    assert(definedSlot(Instruction.Call(Some(first), FunctionId(0), [], [])) == Some(first))
+    assert(definedSlot(Instruction.Constant(first, StaticId(0))) == first)
+    assert(definedSlot(Instruction.Move(first, second)) == first)
+    assert(definedSlot(Instruction.Copy(first, second)) == first)
+    assert(definedSlot(Instruction.Call(first, FunctionId(0), [], [])) == first)
     assert(definedSlot(Instruction.Call(None, FunctionId(0), [], [])) == None)
-    assert(definedSlot(Instruction.CallClosure(Some(first), second, [])) == Some(first))
-    assert(definedSlot(Instruction.CallWitness(Some(first), witness, 0, [])) == Some(first))
-    assert(definedSlot(Instruction.Intrinsic(Some(first), Intrinsic(IntrinsicOperation.TextConcat, None), [], LocationId(0))) == Some(first))
-    assert(definedSlot(Instruction.Construct(first, LayoutId(0), 0, [])) == Some(first))
-    assert(definedSlot(Instruction.Read(first, place)) == Some(first))
-    assert(definedSlot(Instruction.Tag(first, second)) == Some(first))
-    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], false)) == Some(first))
-    assert(definedSlot(Instruction.BoxNew(first, owned(second))) == Some(first))
-    assert(definedSlot(Instruction.TraitValue(first, owned(second), [])) == Some(first))
-    assert(definedSlot(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == Some(first))
+    assert(definedSlot(Instruction.CallClosure(first, second, [])) == first)
+    assert(definedSlot(Instruction.CallWitness(first, witness, 0, [])) == first)
+    assert(definedSlot(Instruction.Intrinsic(first, Intrinsic(IntrinsicOperation.TextConcat, None), [], LocationId(0))) == first)
+    assert(definedSlot(Instruction.Construct(first, LayoutId(0), 0, [])) == first)
+    assert(definedSlot(Instruction.Read(first, place)) == first)
+    assert(definedSlot(Instruction.Tag(first, second)) == first)
+    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], false)) == first)
+    assert(definedSlot(Instruction.BoxNew(first, owned(second))) == first)
+    assert(definedSlot(Instruction.TraitValue(first, owned(second), [])) == first)
+    assert(definedSlot(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == first)
     assert(definedSlot(Instruction.Retain(first)) == None)
     assert(definedSlot(Instruction.Release(first)) == None)
     assert(definedSlot(Instruction.MakeUnique(place)) == None)
@@ -362,7 +362,7 @@ group "What an instruction reads and writes" {
     assert(usedByTerminator(Terminator.Jump(BlockId(0))) == [])
     assert(usedByTerminator(Terminator.Branch(first, BlockId(0), BlockId(1))) == [first])
     assert(usedByTerminator(Terminator.Switch(first, [], [], BlockId(0))) == [first])
-    assert(usedByTerminator(Terminator.Return(Some(owned(first)))) == [first])
+    assert(usedByTerminator(Terminator.Return(owned(first))) == [first])
     assert(usedByTerminator(Terminator.Return(None)) == [])
     assert(usedByTerminator(Terminator.Unreachable) == [])
   }

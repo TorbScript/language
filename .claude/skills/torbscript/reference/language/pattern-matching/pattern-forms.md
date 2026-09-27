@@ -157,7 +157,7 @@ Type(<pattern>, ...)              a trailing `...` stands for every field the pa
      }
    }
 
-   print describe(Some(1))
+   print describe(1)
    ```
 
 6. **`_` matches anything and binds nothing.** It is the pattern form, not a name; the same underscore in an

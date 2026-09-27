@@ -124,7 +124,7 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
   for edit in edits {
     const candidate = document.preview edit
     const after = canonicalText candidate
-    const stays = if edit.kind.preservesTheTree() { after == Some(expected) } else { after.isSome() }
+    const stays = if edit.kind.preservesTheTree() { after == expected } else { after.isSome() }
     if !stays {
       const at = lines.lineAndColumn edit.position
       outcome.dropped.append "{at.line}:{at.column}: {edit.kind} would change more than the way it is written"
@@ -153,7 +153,7 @@ public fn canonicalText(source: String): String? {
   if !parsed.diagnostics.isEmpty() {
     return None
   }
-  Some withoutSpansAndStyles("{parsed.file}")
+  withoutSpansAndStyles "{parsed.file}"
 }
 
 const spanMarker = "Span(start: "
@@ -173,7 +173,7 @@ fn withoutSpansAndStyles(dump: String): String {
       }
       Some(index) => {
         result = result + rest.sliceBytes(0, index)
-        if spanAt == Some(index) {
+        if spanAt == index {
           const afterPrefix = index + spanMarker.byteLength()
           const end = match rest.sliceBytes(afterPrefix, rest.byteLength()).byteOffsetOf(")") {
             Some(length) => afterPrefix + length + 1
@@ -181,7 +181,7 @@ fn withoutSpansAndStyles(dump: String): String {
           }
           result = result + "Span"
           rest = rest.sliceBytes end, rest.byteLength()
-        } else if commandAt == Some(index) {
+        } else if commandAt == index {
           result = result + "style: *"
           rest = rest.sliceBytes(index + commandMarker.byteLength(), rest.byteLength())
         } else {
@@ -204,7 +204,7 @@ fn earliest(indices: List<Int?>): Int? {
           None => true
         }
         if isEarlier {
-          found = Some value
+          found = value
         }
       }
     }

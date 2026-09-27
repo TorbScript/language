@@ -46,14 +46,14 @@ public type Urn with Show, Equals, Hash, Compare {
       return None
     }
     const body = query.sliceBytes 1, query.byteLength()
-    Some(body.substringBefore("?=") ?? body)
+    body.substringBefore("?=") ?? body
   }
 
   /** The q-component: what follows `?=`, a query for the named resource. */
   fn query(): String? {
     const query = uriValue.query()?
     if query.startsWith("=") {
-      return Some query.sliceBytes(1, query.byteLength())
+      return query.sliceBytes 1, query.byteLength()
     }
     query.substringAfter "?="
   }
@@ -119,7 +119,7 @@ extend Urn with TryFrom<Uri, UriError> {
     }
     const lowered = namespace.toLowerCase()
     if lowered == namespace {
-      return Ok Urn(value)
+      return Urn value
     }
     var text = "urn:{lowered}:{specific}"
     if const Some(query) = value.query() {
@@ -128,7 +128,7 @@ extend Urn with TryFrom<Uri, UriError> {
     if const Some(fragment) = value.fragment() {
       text = "{text}#{fragment}"
     }
-    Ok Urn(Uri.tryFrom(text)?)
+    Urn(Uri.tryFrom(text)?)
   }
 }
 

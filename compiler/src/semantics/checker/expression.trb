@@ -265,7 +265,7 @@ fn memberTarget(
   }
   // `Point.origin`, `Shape.Circle`, `Email.tryFrom`: a constant, a `static fn` or a case of the type
   if const Some(own) = owner.constructs {
-    match lookupStaticMember(checker, own, text, Some(at)) {
+    match lookupStaticMember(checker, own, text, at) {
       Some(candidate) => {
         noteDeclaredDefaults checker, own
         const found = targetOfCandidate checker, candidate, text
@@ -275,7 +275,7 @@ fn memberTarget(
         // `Vector2.zero` where `zero` lives in `extend Vector2<Float>`: a bare type name has nothing else to go on, so
         // what the declaration says its parameters are by default is what the name means
         if const Some(defaulted) = withDeclaredDefaults(checker, own) {
-          if const Some(candidate) = lookupStaticMember(checker, defaulted, text, Some(at)) {
+          if const Some(candidate) = lookupStaticMember(checker, defaulted, text, at) {
             const _ = unify checker, own, defaulted
             const found = targetOfCandidate checker, candidate, text
             return found.copy arguments: explicit
@@ -287,7 +287,7 @@ fn memberTarget(
     }
   }
   const receiver = owner.annotation
-  match lookupMember(checker, receiver, text, Some(at)) {
+  match lookupMember(checker, receiver, text, at) {
     Some(candidate) => {
       recordDelegation checker, at, candidate
       requireObjectSafe checker, receiver, candidate, text, at
@@ -361,7 +361,7 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
       return deferredTarget checker
     }
   }
-  const candidate = match lookupMember(checker, inner, text, Some(at)) {
+  const candidate = match lookupMember(checker, inner, text, at) {
     Some(found) => found
     None => {
       if reportUnknownMember(checker, inner, text, at) {
@@ -381,7 +381,7 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
       checker.recordFlattenedOptional at, isOption(checker, form.result)
       const wrapped = optionalOf checker, form.result
       const inner = FunctionForm form.parameters, wrapped
-      target.copy annotation: checker.functionType(inner), form: Some(inner)
+      target.copy annotation: checker.functionType(inner), form: inner
     }
     // A field or a constant behind `?.`: the value itself becomes optional
     None => {
@@ -404,7 +404,7 @@ fn optionalOf(var checker: Checker, annotation: TypeId): TypeId {
 
 fn isOption(checker: Checker, annotation: TypeId): Bool {
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
-    return checker.wellKnown.option == Some(symbol) && arguments.length() == 1
+    return checker.wellKnown.option == symbol && arguments.length() == 1
   }
   false
 }
@@ -412,8 +412,8 @@ fn isOption(checker: Checker, annotation: TypeId): Bool {
 /** The `Value` of an `Option<Value>`. */
 public fn optionValueOf(checker: Checker, annotation: TypeId): TypeId? {
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
-    if checker.wellKnown.option == Some(symbol) && arguments.length() == 1 {
-      return Some arguments[0]
+    if checker.wellKnown.option == symbol && arguments.length() == 1 {
+      return arguments[0]
     }
   }
   None
@@ -422,8 +422,8 @@ public fn optionValueOf(checker: Checker, annotation: TypeId): TypeId? {
 /** The `Value` of a `Result<Value, Failure>`, and its `Failure`. */
 public fn resultPartsOf(checker: Checker, annotation: TypeId): (TypeId, TypeId)? {
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
-    if checker.wellKnown.result == Some(symbol) && arguments.length() == 2 {
-      return Some((arguments[0], arguments[1]))
+    if checker.wellKnown.result == symbol && arguments.length() == 2 {
+      return (arguments[0], arguments[1])
     }
   }
   None
@@ -530,7 +530,7 @@ fn withDeclaredDefaults(var checker: Checker, own: TypeId): TypeId? {
   if !isChanged {
     return None
   }
-  Some checker.types.intern(TypeForm.Nominal(symbol, filled))
+  checker.types.intern TypeForm.Nominal(symbol, filled)
 }
 
 /**
@@ -794,7 +794,7 @@ fn constantIndexOf(index: Expression): Int? {
     }
   }
   match integerLiteral(text, isNegative) {
-    Some(.Integer(value)) => Some value
+    Some(.Integer(value)) => value
     _ => None
   }
 }
@@ -809,7 +809,7 @@ fn knownSizeOf(var checker: Checker, receiver: TypeId, target: Expression): (Int
         return None
       }
     }
-    return Some((items.length(), "this literal"))
+    return (items.length(), "this literal")
   }
   const (symbol, arguments) = match checker.types.form(receiver) {
     .Nominal(found, given) => (found, given)
@@ -817,7 +817,7 @@ fn knownSizeOf(var checker: Checker, receiver: TypeId, target: Expression): (Int
       return None
     }
   }
-  if checker.wellKnown.array != Some(symbol) || arguments.length() != 2 {
+  if checker.wellKnown.array != symbol || arguments.length() != 2 {
     return None
   }
   const size = match checker.types.form(arguments[1]) {
@@ -827,7 +827,7 @@ fn knownSizeOf(var checker: Checker, receiver: TypeId, target: Expression): (Int
     }
   }
   const shown = checker.describe receiver
-  Some((size, "an `{shown}`"))
+  (size, "an `{shown}`")
 }
 
 /**
@@ -1467,12 +1467,12 @@ fn defaultListType(
     // Without an expectation the first item decides, and the others are checked against it
     if const Some(first) = items.first() {
       if !first.isSpread {
-        item = Some inferExpression(checker, first.value)
+        item = inferExpression checker, first.value
       }
     }
   }
   if item.isNone() {
-    item = Some checker.newVariable("Item", "", at)
+    item = checker.newVariable "Item", "", at
   }
   const element = item ?? checker.deferredType
   const inner = expectationOf checker, element
@@ -1549,15 +1549,15 @@ fn defaultMapType(
   const isWanted = key.isSome() && value.isSome()
   if !isWanted {
     if const Some((first, second)) = entries.first() {
-      key = Some inferExpression(checker, first)
-      value = Some inferExpression(checker, second)
+      key = inferExpression checker, first
+      value = inferExpression checker, second
     }
   }
   if key.isNone() {
-    key = Some checker.newVariable("Key", "", at)
+    key = checker.newVariable "Key", "", at
   }
   if value.isNone() {
-    value = Some checker.newVariable("Value", "", at)
+    value = checker.newVariable "Value", "", at
   }
   const unknown = checker.deferredType
   const keyType = key ?? unknown
@@ -1607,7 +1607,7 @@ fn expectedTarget(var checker: Checker, expected: TypeId?): TypeId? {
   if checker.absorbs(annotation) {
     return None
   }
-  Some resolveType(checker, annotation)
+  resolveType checker, annotation
 }
 
 /** `const numbers: Array<Int, 4> = [1, 2, 3, 4]`: the one target a literal builds without a collection in between. */
@@ -1616,7 +1616,7 @@ fn arrayTargetOf(var checker: Checker, expected: TypeId?): ExpectedArray? {
   const annotation = expected?
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
     if symbol == array && arguments.length() == 2 {
-      return Some ExpectedArray(annotation, arguments[0], arguments[1])
+      return ExpectedArray annotation, arguments[0], arguments[1]
     }
   }
   None
@@ -1651,28 +1651,28 @@ fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolI
  * text, `[:]` for a map, `[]` for everything else a list literal builds. `None` for a type no literal builds.
  */
 public fn emptyLiteralOf(var checker: Checker, annotation: TypeId): String? {
-  const target = expectedTarget(checker, Some(annotation))?
+  const target = expectedTarget(checker, annotation)?
   // An array literal has exactly as many items as the type says, so an array has no empty literal to start from
-  if arrayTargetOf(checker, Some(target)).isSome() {
+  if arrayTargetOf(checker, target).isSome() {
     return None
   }
   if const .Nominal(symbol, _) = checker.types.form(target) {
     if Some(symbol) == checker.wellKnown.string {
-      return Some "\"\""
+      return "\"\""
     }
   }
   if const Some(map) = checker.wellKnown.map {
-    if itemOfCollection(checker, Some(target), map, 0).isSome() {
-      return Some "[:]"
+    if itemOfCollection(checker, target, map, 0).isSome() {
+      return "[:]"
     }
   }
   if const Some(list) = checker.wellKnown.list {
-    if itemOfCollection(checker, Some(target), list, 0).isSome() {
-      return Some "[]"
+    if itemOfCollection(checker, target, list, 0).isSome() {
+      return "[]"
     }
   }
-  if builtTargetOf(checker, Some(target)).isSome() || itemOfIterated(checker, Some(target)).isSome() {
-    return Some "[]"
+  if builtTargetOf(checker, target).isSome() || itemOfIterated(checker, target).isSome() {
+    return "[]"
   }
   None
 }
@@ -1697,14 +1697,14 @@ fn builtTargetOf(var checker: Checker, expected: TypeId?): BuiltTarget? {
   if const .Unresolved = witness {
     return None
   }
-  Some BuiltTarget(annotation, item, witness)
+  BuiltTarget annotation, item, witness
 }
 
 /** What a target iterates, which is the `Item` its `From<Iterate<Item>>` takes. */
 fn itemOfTarget(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   if const Some(arguments) = traitArgumentsOf(checker, annotation, iterable) {
     if const Some(item) = arguments.first() {
-      return Some item
+      return item
     }
   }
   // A target that is not iterable itself - `String`, a `Histogram with From<Iterate<Int>>` - says it in its own `From`.
@@ -1725,7 +1725,7 @@ fn itemOfIterated(var checker: Checker, expected: TypeId?): TypeId? {
 fn entryTypesOf(checker: Checker, item: TypeId): (TypeId, TypeId)? {
   if const .Tuple(fields) = checker.types.form(item) {
     if fields.length() == 2 {
-      return Some((fields[0].annotation, fields[1].annotation))
+      return (fields[0].annotation, fields[1].annotation)
     }
   }
   None
@@ -1741,7 +1741,7 @@ fn wrongTargetOf(var checker: Checker, expected: TypeId?): TypeId? {
   if const .Traits(_) = checker.types.form(annotation) {
     return None
   }
-  Some annotation
+  annotation
 }
 
 /**
@@ -1801,14 +1801,14 @@ fn spreadLengthOf(var checker: Checker, given: TypeId, item: TypeId): Int? {
   }
   const length = constantLengthOf(checker, arguments[1])?
   const _ = unify checker, arguments[0], item
-  Some length
+  length
 }
 
 /** The number a const argument is, where it is one: `Array<Int, 4>` answers 4 and `Array<Int, Size>` answers nothing. */
 fn constantLengthOf(checker: Checker, size: TypeId): Int? {
   if const .Constant(value, _) = checker.types.form(size) {
     if const .Integer(number) = value {
-      return Some number
+      return number
     }
   }
   None
@@ -2055,7 +2055,7 @@ fn unaryType(
 fn bitsCapability(var checker: Checker, found: TypeId, written: String, at: Span): SymbolId? {
   const bits = checker.wellKnown.symbolNamed("Bits")?
   if traitArgumentsOf(checker, found, bits).isSome() {
-    return Some bits
+    return bits
   }
   const isFloat = match numericNameOf(checker, found) {
     Some(name) => name.startsWith "Float"
@@ -2279,10 +2279,10 @@ fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: S
 /** The `Value` of an `Option<Value>` or of a `Result<Value, Failure>`: what `?` unwraps. */
 fn valueOfOptionOrResult(checker: Checker, annotation: TypeId): TypeId? {
   if const Some(value) = optionValueOf(checker, annotation) {
-    return Some value
+    return value
   }
   if const Some((value, _)) = resultPartsOf(checker, annotation) {
-    return Some value
+    return value
   }
   None
 }
@@ -2335,7 +2335,7 @@ fn arithmeticType(
   }
   const inner = expectationOf checker, arguments[0]
   const _ = checkExpression checker, right, inner
-  recordTraitCall checker, at, found, capability, memberOfOperator(operator), Some(bound)
+  recordTraitCall checker, at, found, capability, memberOfOperator(operator), bound
   if const Some(name) = numericNameOf(checker, arguments[1]) {
     requireCertainArithmetic checker, checker.module, operator, left, right, at, name
   }
@@ -2369,18 +2369,18 @@ fn negativeCommandArgument(
   }
   const argument = writtenPathOf(right) ?? "..."
   const message = "`{callee}` is a function, and `{callee} -{argument}` subtracts from it"
-  Some((message, "{callee}(-{argument})"))
+  (message, "{callee}(-{argument})")
 }
 
 /** A name, a member path or a number as it was written, for a message that shows the line to write instead. */
 fn writtenPathOf(expression: Expression): String? {
   match expression.kind {
-    .Name(text) => Some text
-    .IntegerLiteral(text) => Some text
-    .FloatLiteral(text) => Some text
+    .Name(text) => text
+    .IntegerLiteral(text) => text
+    .FloatLiteral(text) => text
     .Member(target, name, false) => {
       const base = writtenPathOf(target)?
-      Some "{base}.{name.text}"
+      "{base}.{name.text}"
     }
     _ => None
   }
@@ -2402,7 +2402,7 @@ fn operatorBound(
   at: Span,
 ): TypeId? {
   if const Some(given) = traitArgumentsOf(checker, found, capability) {
-    return Some checker.nominal(capability, given)
+    return checker.nominal capability, given
   }
   const candidates = appliedTraitsOf checker, found, capability
   if candidates.isEmpty() {
@@ -2674,7 +2674,7 @@ fn armResult(var checker: Checker, arms: List<TypeId>): TypeId {
         }
       }
       None => {
-        found = Some annotation
+        found = annotation
       }
     }
   }
@@ -2964,7 +2964,7 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
 fn conversionMemberOf(var checker: Checker, witness: Witness, target: TypeId, name: String): SymbolId? {
   if const .Implementation(implementation, _, _) = witness {
     if const Some(found) = memberOfImplementation(checker, implementation, name) {
-      return Some found
+      return found
     }
   }
   memberSymbolOf checker, target, name
@@ -3125,7 +3125,7 @@ fn hasMemberNamed(var checker: Checker, receiver: TypeId, name: String): Bool {
  */
 fn conversionPartsOf(var checker: Checker, source: TypeId, expected: Expectation, at: Span): (TypeId, TypeId)? {
   if const Some(found) = resultArgumentsOf(checker, expected.annotationOf()) {
-    return Some found
+    return found
   }
   if const Some(wanted) = expected.unwrappedOf() {
     const target = resolveType checker, wanted
@@ -3145,7 +3145,7 @@ fn conversionPartsOf(var checker: Checker, source: TypeId, expected: Expectation
 fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, at: Span): (TypeId, TypeId)? {
   const failures = fallibleFailuresOf checker, target, source
   if failures.length() == 1 {
-    return Some((target, failures[0]))
+    return (target, failures[0])
   }
   const given = checker.describe source
   const wanted = checker.describe target
@@ -3178,7 +3178,7 @@ fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, a
  * the callee's span carries it.
  */
 fn typeFallibleCallee(var checker: Checker, callee: Expression, source: TypeId, answer: TypeId) {
-  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], answer)
+  const form = FunctionForm([ParameterForm("self", ParameterMode.Value, source)], answer)
   const shown = checker.functionType form
   const _ = checker.typed callee.span, shown
 }
@@ -3191,7 +3191,7 @@ fn resultArgumentsOf(var checker: Checker, expected: TypeId?): (TypeId, TypeId)?
   if const .Nominal(symbol, arguments) = checker.types.form(resolved) {
     if symbol == result && arguments.length() == 2 {
       if isConcrete(checker, arguments[0]) && isConcrete(checker, arguments[1]) {
-        return Some((arguments[0], arguments[1]))
+        return (arguments[0], arguments[1])
       }
     }
   }
@@ -3228,8 +3228,8 @@ fn reportOpenConversionTarget(var checker: Checker, source: TypeId, at: Span) {
 fn memberSymbolOf(var checker: Checker, owner: TypeId, name: String): SymbolId? {
   const candidate = lookupStaticMember(checker, owner, name)?
   match candidate.kind {
-    .Method(_, symbol) => Some symbol
-    .Constant(_, symbol) => Some symbol
+    .Method(_, symbol) => symbol
+    .Constant(_, symbol) => symbol
     _ => None
   }
 }
@@ -3269,7 +3269,7 @@ fn conversionType(
   }
   // `value.into` is `(self: Source) => Target` - the one member whose type the expected type decides and the receiver
   // alone cannot. That is a fact and not a construct a later pass looks at, so the callee is typed and not deferred
-  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], target)
+  const form = FunctionForm([ParameterForm("self", ParameterMode.Value, source)], target)
   const shown = checker.functionType form
   const _ = checker.typed callee.span, shown
   if checker.absorbs(source) || checker.absorbs(target) {
@@ -3374,7 +3374,7 @@ fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
   if const Some(.Local(binding)) = checker.resolutionHere(at) {
     const written = checker.bindingAliases.get(binding.value)?
     if sameType(checker.types, checker.binding(binding).annotation, given) {
-      return Some written
+      return written
     }
   }
   None
@@ -3390,7 +3390,7 @@ fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
  * coercion it never solves a variable: where either side still has one, the mismatch is reported as it was.
  */
 fn wrapsInto(var checker: Checker, given: TypeId, wanted: TypeId, at: Span): Bool {
-  if checker.exactValueAt == Some(at) || !canWrap(checker, given, wanted) {
+  if checker.exactValueAt == at || !canWrap(checker, given, wanted) {
     return false
   }
   const payload = wrappedPayloadOf(checker, wanted) ?? wanted
@@ -3447,7 +3447,7 @@ fn noteRedundantWrap(var checker: Checker, expression: Expression, found: TypeId
       return
     }
   }
-  if arguments.length() != 1 || arguments[0].isSpread || checker.exactValueAt == Some(expression.span) {
+  if arguments.length() != 1 || arguments[0].isSpread || checker.exactValueAt == expression.span {
     return
   }
   const resolution = match checker.resolutionHere(callee.span) {
@@ -3503,10 +3503,10 @@ fn hasTypeArguments(checker: Checker, owner: TypeId): Bool {
 /** The name of a short case written as a value, `.LittleEndian` or `.Circle(1.0)`. */
 fn shortCaseOf(value: Expression): String? {
   match value.kind {
-    .ImplicitMember(name) => Some name.text
+    .ImplicitMember(name) => name.text
     .Call(callee, _, _) => {
       if const .ImplicitMember(name) = callee.kind {
-        return Some name.text
+        return name.text
       }
       None
     }
@@ -3581,13 +3581,13 @@ public fn wrappedPayloadOf(var checker: Checker, annotation: TypeId): TypeId? {
   if hasVariable(checker, settled) || checker.absorbs(settled) {
     return None
   }
-  Some settled
+  settled
 }
 
 /** What a literal adapts to: the expected type itself, or the `Value` of the `Option` or `Result` it will wrap into. */
 fn literalExpectationOf(var checker: Checker, annotation: TypeId?): TypeId? {
   const wanted = annotation?
-  Some(wrappedPayloadOf(checker, wanted) ?? wanted)
+  wrappedPayloadOf(checker, wanted) ?? wanted
 }
 
 /**
@@ -3661,7 +3661,7 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
     const witness = witnessFor checker, found, bound
     if const .Unresolved = witness {
       if missing.isNone() {
-        missing = Some bound
+        missing = bound
       }
       continue
     }

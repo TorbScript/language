@@ -94,12 +94,12 @@ public type Parser {
     const start = span().start
     var found: DocComment? = None
     while nextDoc < docs.length() && docs[nextDoc].span.end <= start {
-      found = Some docs[nextDoc]
+      found = docs[nextDoc]
       nextDoc = nextDoc + 1
     }
     const doc = found?
     if source.text.sliceBytes(doc.span.end, start).isBlank() {
-      Some doc.text
+      doc.text
     } else {
       None
     }
@@ -166,7 +166,7 @@ public type Parser {
 
   var fn error(message: String, at: Span) {
     // One problem per position is enough, the rest are usually consequences
-    if diagnostics.last()?.span == Some(at) {
+    if diagnostics.last()?.span == at {
       return
     }
     diagnostics.append Diagnostic.error(message, at)
@@ -174,7 +174,7 @@ public type Parser {
 
   /** The same, with the line to write instead. A parse error rarely has one; a form that was removed always does. */
   var fn errorWithNote(message: String, note: String, at: Span) {
-    if diagnostics.last()?.span == Some(at) {
+    if diagnostics.last()?.span == at {
       return
     }
     diagnostics.append Diagnostic.error(message, at).withNote(note)

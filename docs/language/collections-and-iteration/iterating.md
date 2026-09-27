@@ -29,7 +29,7 @@ type CountdownIterator with Iterator<Int> {
       return None
     }
     current = current - 1
-    Some(current + 1)
+    current + 1
   }
 }
 

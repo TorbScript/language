@@ -78,7 +78,7 @@ public fn writeBody(connection: Connection, body: Body, chunked: Bool): Task<Res
   if chunked {
     connection.sendText("0\r\n\r\n").await()?
   }
-  Ok written
+  written
 }
 
 /**
@@ -115,13 +115,13 @@ public fn writeResponse(
   }
   connection.sendText(head + "\r\n").await()?
   if bodiless {
-    return Ok keepOpen
+    return keepOpen
   }
   const written = writeBody(connection, response.body, chunked).await()?
   if const Some(known) = length {
     if written != known {
-      return Ok false
+      return false
     }
   }
-  Ok keepOpen
+  keepOpen
 }

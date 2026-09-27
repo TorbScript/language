@@ -34,20 +34,20 @@ public fn withRequirement(text: String, kind: String, requirement: String, packa
     Some(found) => found
     None => {
       const separator = if text.isEmpty() || text.endsWith("\n") { "" } else { newline }
-      return Ok "{text}{separator}{newline}dependencies \{{newline}  {kind} {quoted(requirement)}{newline}\}{newline}"
+      return "{text}{separator}{newline}dependencies \{{newline}  {kind} {quoted(requirement)}{newline}\}{newline}"
     }
   }
   if const Some(found) = literalOf(block, package) {
     if found.kind == kind {
       const span = found.arguments[found.index].value.span
-      return Ok "{text.sliceBytes(0, span.start)}{quoted(requirement)}{text.sliceBytes(span.end, text.byteLength())}"
+      return "{text.sliceBytes(0, span.start)}{quoted(requirement)}{text.sliceBytes(span.end, text.byteLength())}"
     }
     const (without, _) = withoutRequirement(text, package)?
     return withRequirement without, kind, requirement, package
   }
   // The new line goes in front of the line of the closing brace, indented like the lines above it
   const closing = block.span.end - 1
-  if text.byteAt(closing) != Some(125) {
+  if text.byteAt(closing) != 125 {
     return Fail "the `dependencies` block does not end in `\}`"
   }
   const lineStart = lineStartOf text, closing
@@ -57,10 +57,10 @@ public fn withRequirement(text: String, kind: String, requirement: String, packa
   }
   const added = "{indentation}{kind} {quoted(requirement)}{newline}"
   if text.sliceBytes(lineStart, closing).trim().isEmpty() {
-    return Ok "{text.sliceBytes(0, lineStart)}{added}{text.sliceBytes(lineStart, text.byteLength())}"
+    return "{text.sliceBytes(0, lineStart)}{added}{text.sliceBytes(lineStart, text.byteLength())}"
   }
   // `dependencies { runtime "a" }` on one line: the brace moves to a line of its own
-  Ok "{text.sliceBytes(0, closing)}{newline}{added}{text.sliceBytes(closing, text.byteLength())}"
+  "{text.sliceBytes(0, closing)}{newline}{added}{text.sliceBytes(closing, text.byteLength())}"
 }
 
 /**
@@ -75,23 +75,23 @@ public fn withoutRequirement(text: String, package: String): Result<(String, Boo
   const block = match dependenciesBlock(text)? {
     Some(found) => found
     None => {
-      return Ok((text, false))
+      return (text, false)
     }
   }
   const found = match literalOf(block, package) {
     Some(literal) => literal
     None => {
-      return Ok((text, false))
+      return (text, false)
     }
   }
   if found.arguments.length() == 1 {
     const start = lineStartOf text, found.statement.span.start
     var end = found.statement.span.end
-    while end < text.byteLength() && text.byteAt(end) != Some(10) {
+    while end < text.byteLength() && text.byteAt(end) != 10 {
       end = end + 1
     }
     const after = if end < text.byteLength() { end + 1 } else { end }
-    return Ok((text.sliceBytes(0, start) + text.sliceBytes(after, text.byteLength()), true))
+    return (text.sliceBytes(0, start) + text.sliceBytes(after, text.byteLength()), true)
   }
   const span = found.arguments[found.index].value.span
   const (from, to) = if found.index == 0 {
@@ -99,7 +99,7 @@ public fn withoutRequirement(text: String, package: String): Result<(String, Boo
   } else {
     (found.arguments[found.index - 1].value.span.end, span.end)
   }
-  Ok((text.sliceBytes(0, from) + text.sliceBytes(to, text.byteLength()), true))
+  (text.sliceBytes(0, from) + text.sliceBytes(to, text.byteLength()), true)
 }
 
 /** The `dependencies { }` block of a file: where it stands, and its lines. */
@@ -133,13 +133,13 @@ fn dependenciesBlock(text: String): Result<Block?, String> {
                 return Fail "the `dependencies` block computes something, and `torb add` and `torb remove` only edit plain `runtime \"...\"` and `development \"...\"` lines"
               }
             }
-            found = Some Block(expression.span, closure.body.statements)
+            found = Block expression.span, closure.body.statements
           }
         }
       }
     }
   }
-  Ok found
+  found
 }
 
 /** `runtime "a", "b"` or `development "c"`, every argument a plain string. */
@@ -160,7 +160,7 @@ fn callOf(statement: Statement): (String, List<Argument>)? {
   if const .Evaluate(expression) = statement.kind {
     if const .Call(callee, arguments, _) = expression.kind {
       if const .Name(word) = callee.kind {
-        return Some((word, arguments))
+        return (word, arguments)
       }
     }
   }
@@ -170,7 +170,7 @@ fn callOf(statement: Statement): (String, List<Argument>)? {
 fn plainTextOf(argument: Argument): String? {
   if const .TextLiteral(segments) = argument.value.kind {
     if const [.Literal(text)] = segments {
-      return Some text
+      return text
     }
   }
   None
@@ -183,7 +183,7 @@ fn literalOf(block: Block, package: String): Found? {
       for index in 0..arguments.length() {
         const written = plainTextOf(arguments[index]) ?? ""
         if (written.substringBefore(":") ?? written) == package {
-          return Some Found(word, line, arguments, index)
+          return Found word, line, arguments, index
         }
       }
     }
@@ -194,7 +194,7 @@ fn literalOf(block: Block, package: String): Found? {
 /** The offset of the first byte of the line `offset` is on. */
 fn lineStartOf(text: String, offset: Int): Int {
   var at = offset
-  while at > 0 && text.byteAt(at - 1) != Some(10) {
+  while at > 0 && text.byteAt(at - 1) != 10 {
     at = at - 1
   }
   at

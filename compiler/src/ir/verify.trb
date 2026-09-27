@@ -545,28 +545,28 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
  */
 public fn definedSlot(instruction: Instruction): Slot? {
   match instruction {
-    .Constant(target, _) => Some target
-    .Clear(target) => Some target
-    .Move(target, _) => Some target
-    .Copy(target, _) => Some target
+    .Constant(target, _) => target
+    .Clear(target) => target
+    .Move(target, _) => target
+    .Copy(target, _) => target
     .Call(target, _, _, _, _) => target
     .CallClosure(target, _, _, _) => target
     .CallWitness(target, _, _, _, _) => target
     .Intrinsic(target, _, _, _) => target
-    .Construct(target, _, _, _) => Some target
-    .ArrayNew(target, _) => Some target
-    .Read(target, _) => Some target
-    .Tag(target, _) => Some target
-    .Closure(target, _, _, _) => Some target
-    .BoxNew(target, _) => Some target
-    .TraitValue(target, _, _) => Some target
-    .ContainerNew(target, _, _) => Some target
-    .TakeOut(target, _, _, _) => Some target
-    .TaskNew(target, _, _, _) => Some target
-    .ChannelNew(target, _, _, _) => Some target
+    .Construct(target, _, _, _) => target
+    .ArrayNew(target, _) => target
+    .Read(target, _) => target
+    .Tag(target, _) => target
+    .Closure(target, _, _, _) => target
+    .BoxNew(target, _) => target
+    .TraitValue(target, _, _) => target
+    .ContainerNew(target, _, _) => target
+    .TakeOut(target, _, _, _) => target
+    .TaskNew(target, _, _, _) => target
+    .ChannelNew(target, _, _, _) => target
     .Write(reference, _) => {
       if reference.steps.isEmpty() {
-        Some reference.base
+        reference.base
       } else {
         None
       }
@@ -1111,14 +1111,14 @@ fn environmentLayoutOf(program: IrProgram, target: IrFunction): LayoutId? {
   if !isEnvironmentLayout(program.layoutAt(layout)) {
     return None
   }
-  Some layout
+  layout
 }
 
 /** The slot a capture hands over, or `None` for a place - which carries a whole path and not one value. */
 fn slotOfCapture(capture: Capture): Slot? {
   match capture {
-    .Value(slot) => Some slot
-    .Boxed(slot) => Some slot
+    .Value(slot) => slot
+    .Boxed(slot) => slot
     .Place(_) => None
   }
 }
@@ -1201,7 +1201,7 @@ fn verifyConstruct(
     return
   }
   const annotation = function.typeOfSlot target
-  if layoutOfType(program, annotation) != Some(layout) {
+  if layoutOfType(program, annotation) != layout {
     found.append "{at}: `{shape.name}` was built into %{target.value}, which is `{describeIrType(program, annotation)}`"
   }
 }
@@ -1608,7 +1608,7 @@ fn expectConversionSource(
     return
   }
   const annotation = function.typeOfSlot slot
-  if conversionKindOf(program, annotation) == Some(kind) {
+  if conversionKindOf(program, annotation) == kind {
     return
   }
   const wanted = describeNumericKind kind
@@ -1630,7 +1630,7 @@ fn expectNumeric(
     return
   }
   const annotation = function.typeOfSlot slot
-  if numericKindOf(program, annotation) == Some(kind) {
+  if numericKindOf(program, annotation) == kind {
     return
   }
   const wanted = describeNumericKind kind
@@ -1646,7 +1646,7 @@ fn expectNumeric(
  */
 public fn conversionKindOf(program: IrProgram, id: IrTypeId): NumericKind? {
   if const .Character = program.typeAt(id) {
-    return Some NumericKind.Unsigned(32)
+    return NumericKind.Unsigned 32
   }
   numericKindOf program, id
 }
@@ -1656,11 +1656,11 @@ public fn numericKindOf(program: IrProgram, id: IrTypeId): NumericKind? {
   match program.typeAt(id) {
     .Integer(width, isSigned) => {
       if isSigned {
-        return Some NumericKind.Signed(width)
+        return NumericKind.Signed width
       }
-      Some NumericKind.Unsigned(width)
+      NumericKind.Unsigned width
     }
-    .Floating(width) => Some NumericKind.Floating(width)
+    .Floating(width) => NumericKind.Floating width
     _ => None
   }
 }
@@ -1706,33 +1706,33 @@ public fn typeOfReference(
       }
     }
   }
-  Some current
+  current
 }
 
 fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
   match step {
     .Field(layout, index) => {
-      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+      if layoutOfType(program, current) != layout || !program.hasLayout(layout) {
         return None
       }
       const shape = program.layoutAt layout
       if index < 0 || index >= shape.fields.length() {
         return None
       }
-      Some shape.fields[index].annotation
+      shape.fields[index].annotation
     }
     .TupleField(layout, index) => {
-      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+      if layoutOfType(program, current) != layout || !program.hasLayout(layout) {
         return None
       }
       const shape = program.layoutAt layout
       if index < 0 || index >= shape.fields.length() {
         return None
       }
-      Some shape.fields[index].annotation
+      shape.fields[index].annotation
     }
     .Variant(layout, variant, index) => {
-      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+      if layoutOfType(program, current) != layout || !program.hasLayout(layout) {
         return None
       }
       const shape = program.layoutAt layout
@@ -1743,7 +1743,7 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
       if index < 0 || index >= fields.length() {
         return None
       }
-      Some fields[index].annotation
+      fields[index].annotation
     }
     .Element(item, _, location, _) => {
       // The site of the panic of an index out of range is what the step carries instead of the call it replaced, so a
@@ -1752,23 +1752,23 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
         return None
       }
       match program.typeAt(current) {
-        .FixedArray(inner, _) => if inner == item { Some item } else { None }
+        .FixedArray(inner, _) => if inner == item { item } else { None }
         .Runtime(kind, arguments) => {
           if kind != RuntimeKind.ListStorage || arguments.length() != 1 || arguments[0] != item {
             return None
           }
-          Some item
+          item
         }
         _ => None
       }
     }
     .Contents(annotation) => {
       match program.typeAt(current) {
-        .Box(item) => if item == annotation { Some item } else { None }
-        .Lazy(item) => if item == annotation { Some item } else { None }
-        .SharedObject(_) => Some annotation
-        .Record(_) => Some annotation
-        .Variant(_) => Some annotation
+        .Box(item) => if item == annotation { item } else { None }
+        .Lazy(item) => if item == annotation { item } else { None }
+        .SharedObject(_) => annotation
+        .Record(_) => annotation
+        .Variant(_) => annotation
         _ => None
       }
     }
@@ -1788,10 +1788,10 @@ fn describeStep(program: IrProgram, step: PathStep): String {
 /** The layout behind a type, for a record, a variant, a tuple or a `shared type` object - `None` for anything else. */
 public fn layoutOfType(program: IrProgram, id: IrTypeId): LayoutId? {
   match program.typeAt(id) {
-    .Record(layout) => Some layout
-    .Variant(layout) => Some layout
-    .Tuple(layout) => Some layout
-    .SharedObject(layout) => Some layout
+    .Record(layout) => layout
+    .Variant(layout) => layout
+    .Tuple(layout) => layout
+    .SharedObject(layout) => layout
     _ => None
   }
 }

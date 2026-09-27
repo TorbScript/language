@@ -74,7 +74,7 @@ public type Scanned {
 public fn scanned(text: String): Result<Scanned, YamlError> {
   var scanner = Scanner text.chars().toList()
   scanner.run()?
-  Ok Scanned(scanner.tokens, scanner.comments)
+  Scanned scanner.tokens, scanner.comments
 }
 
 /** The empty lines in front of a line of a block scalar, and the indentation of its content. */
@@ -550,7 +550,7 @@ type Scanner {
     if !version.startsWith("1.") {
       return Fail failureHere("YAML {version} is not supported: this reader reads YAML 1.2 and 1.1")
     }
-    Ok version
+    version
   }
 
   var fn skipBlanks() {
@@ -753,7 +753,7 @@ type Scanner {
 
   fn percentDecoded(text: String, at: Mark): Result<String, YamlError> {
     if !text.contains("%") {
-      return Ok text
+      return text
     }
     var bytes: List<UInt8> = []
     const written = text.bytes().toList()
@@ -945,17 +945,17 @@ type Scanner {
       breaks = breaks + 1
     }
     if textIndent >= 0 {
-      return Ok BlockBreaks(textIndent, breaks)
+      return BlockBreaks textIndent, breaks
     }
     const detected = column
     if atEnd() || isDocumentIndicator() || detected < minimum {
       const found = if longestEmpty > minimum { longestEmpty } else { minimum }
-      return Ok BlockBreaks(found, breaks)
+      return BlockBreaks found, breaks
     }
     if isFirst && longestEmpty > detected {
       return Fail failureHere("an empty line at the start of a block scalar has more spaces than its first line")
     }
-    Ok BlockBreaks(detected, breaks)
+    BlockBreaks detected, breaks
   }
 
   var fn scanFlowScalar(single: Bool): Result<Void, YamlError> {
@@ -1084,7 +1084,7 @@ type Scanner {
       }
       match Char.tryFrom(value) {
         Ok(character) => {
-          return Ok character
+          return character
         }
         Fail(_) => {
           return Fail failure(start, "`{value}` is not a character")
@@ -1092,24 +1092,24 @@ type Scanner {
       }
     }
     match code {
-      '0' => Ok '\u{0}'
-      'a' => Ok '\u{7}'
-      'b' => Ok '\u{8}'
-      't' => Ok '\t'
-      '\t' => Ok '\t'
-      'n' => Ok '\n'
-      'v' => Ok '\u{b}'
-      'f' => Ok '\u{c}'
-      'r' => Ok '\r'
-      'e' => Ok '\u{1b}'
-      ' ' => Ok ' '
-      '"' => Ok '"'
-      '/' => Ok '/'
-      '\\' => Ok '\\'
-      'N' => Ok '\u{85}'
-      '_' => Ok '\u{a0}'
-      'L' => Ok '\u{2028}'
-      'P' => Ok '\u{2029}'
+      '0' => '\u{0}'
+      'a' => '\u{7}'
+      'b' => '\u{8}'
+      't' => '\t'
+      '\t' => '\t'
+      'n' => '\n'
+      'v' => '\u{b}'
+      'f' => '\u{c}'
+      'r' => '\r'
+      'e' => '\u{1b}'
+      ' ' => ' '
+      '"' => '"'
+      '/' => '/'
+      '\\' => '\\'
+      'N' => '\u{85}'
+      '_' => '\u{a0}'
+      'L' => '\u{2028}'
+      'P' => '\u{2029}'
       other => Fail failure(start, "`\\{other}` is not an escape of YAML")
     }
   }

@@ -87,7 +87,7 @@ public type Manifest {
     for (word, number) in [("workers", workers), ("blocking", blocking)] {
       if const Some(given) = number {
         if given < 1 || given > 1024 {
-          return Some "`tasks \{ {word} = {given} \}` is outside 1 to 1024: leave the line out for the default"
+          return "`tasks \{ {word} = {given} \}` is outside 1 to 1024: leave the line out for the default"
         }
       }
     }
@@ -237,10 +237,10 @@ public fn manifestOf(settings: List<Setting>): Manifest {
       }
       "tasks" => {
         if const Some(text) = firstTextOf(setting, "workers") {
-          manifest = manifest.copy workers: Some(numberOf(text))
+          manifest = manifest.copy workers: numberOf(text)
         }
         if const Some(text) = firstTextOf(setting, "blocking") {
-          manifest = manifest.copy blocking: Some(numberOf(text))
+          manifest = manifest.copy blocking: numberOf(text)
         }
       }
       _ => {}
@@ -288,7 +288,7 @@ fn settingOf(statement: Statement): Setting? {
       return None
     }
   }
-  Some setting.copy(span: statement.span)
+  setting.copy span: statement.span
 }
 
 fn settingOfCall(expression: Expression): Setting? {
@@ -325,7 +325,7 @@ fn settingOfCall(expression: Expression): Setting? {
       _ => {}
     }
   }
-  Some Setting(word, texts, block, labeled)
+  Setting word, texts, block, labeled
 }
 
 /** `name = "x"`, `input = "src/main.trb"`: the field's own name is the word, its value the one text a field takes. */
@@ -343,7 +343,7 @@ fn settingOfAssign(target: Expression, value: Expression): Setting? {
       return None
     }
   }
-  Some Setting(word, [text], [])
+  Setting word, [text], []
 }
 
 // --- What has to be evaluated (docs/design/PROJECT.md sections 8 and 10, SCRIPTS.md slice 5) ----------------------
@@ -425,14 +425,14 @@ fn wordOf(statement: Statement): String? {
   match statement.kind {
     .Assign(target, _) => {
       if const .Name(text) = target.kind {
-        return Some text
+        return text
       }
       None
     }
     .Evaluate(expression) => {
       if const .Call(callee, _, _) = expression.kind {
         if const .Name(text) = callee.kind {
-          return Some text
+          return text
         }
       }
       None
@@ -454,9 +454,9 @@ fn firstComputedOf(statement: Statement): Span? {
         if isLiteral(value) {
           return None
         }
-        return Some value.span
+        return value.span
       }
-      Some statement.span
+      statement.span
     }
     .Evaluate(expression) => {
       const arguments = match expression.kind {
@@ -464,29 +464,29 @@ fn firstComputedOf(statement: Statement): Span? {
           if const .Name(_) = callee.kind {
             given
           } else {
-            return Some statement.span
+            return statement.span
           }
         }
         _ => {
-          return Some statement.span
+          return statement.span
         }
       }
       for argument in arguments {
         if const .Closure(closure) = argument.value.kind {
           for inner in closure.body.statements {
             if const Some(span) = firstComputedOf(inner) {
-              return Some span
+              return span
             }
           }
           continue
         }
         if !isLiteral(argument.value) {
-          return Some argument.value.span
+          return argument.value.span
         }
       }
       None
     }
-    _ => Some statement.span
+    _ => statement.span
   }
 }
 
@@ -526,7 +526,7 @@ fn inputProblemsOf(statement: Statement, word: String, var found: List<ManifestP
   for argument in arguments {
     if const .Closure(closure) = argument.value.kind {
       for inner in closure.body.statements {
-        if wordOf(inner) == Some("input") {
+        if wordOf(inner) == "input" {
           if const Some(span) = firstComputedOf(inner) {
             found.append(ManifestProblem(
               span,
@@ -543,10 +543,10 @@ fn inputProblemsOf(statement: Statement, word: String, var found: List<ManifestP
 /** `None` for a string with `{...}` in it: what it means depends on evaluation. */
 fn plainText(segments: List<TextSegment>): String? {
   if const [.Literal(text)] = segments {
-    return Some text
+    return text
   }
   if segments.isEmpty() {
-    return Some ""
+    return ""
   }
   None
 }

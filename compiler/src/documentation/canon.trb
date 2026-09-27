@@ -473,7 +473,7 @@ fn shouldBeACommand(
   }
   const written = text.sliceBytes callee.span.start, callee.span.end
   const line = lineAt lines, site.call.span.start
-  Some CanonProblem(line, "A call is a command wherever the grammar allows it. Write `{written} ...` without parentheses")
+  CanonProblem line, "A call is a command wherever the grammar allows it. Write `{written} ...` without parentheses"
 }
 
 /**
@@ -514,7 +514,7 @@ fn shouldHaveParentheses(
   } else {
     "arguments over several lines"
   }
-  Some CanonProblem(line, "`{written}` has {reason}, so it is written with parentheses")
+  CanonProblem line, "`{written}` has {reason}, so it is written with parentheses"
 }
 
 /** `Ok`, `Email.parse`, `self.builder.add`: what the parser reads as the callee of a command. */
@@ -674,7 +674,7 @@ fn tokenStartingAt(tokens: List<Token>, offset: Int): Int? {
   while index < tokens.length() {
     const start = tokens[index].span.start
     if start == offset {
-      return Some index
+      return index
     }
     if start > offset {
       return None
@@ -688,7 +688,7 @@ fn tokenAtOrAfter(tokens: List<Token>, offset: Int): Int? {
   var index = 0
   while index < tokens.length() {
     if tokens[index].span.start >= offset {
-      return Some index
+      return index
     }
     index = index + 1
   }
@@ -703,7 +703,7 @@ fn tokenBefore(tokens: List<Token>, offset: Int): Int? {
     if tokens[index].span.end > offset {
       return found
     }
-    found = Some index
+    found = index
     index = index + 1
   }
   found
@@ -720,7 +720,7 @@ fn matchingParenthesis(tokens: List<Token>, open: Int): Int? {
       .ParenClose => {
         depth = depth - 1
         if depth == 0 {
-          return Some index
+          return index
         }
       }
       _ => {}
@@ -794,18 +794,18 @@ fn stringProblem(lines: Lines, span: Span, quotes: Int): CanonProblem? {
   const afterQuotes = openText.sliceBytes behindQuotes.min(openText.byteLength()), openText.byteLength()
   if !afterQuotes.trim().isEmpty() {
     const note = "A multi-line string starts with a line break behind its opening quotes"
-    return Some CanonProblem(openLine + 1, note)
+    return CanonProblem(openLine + 1, note)
   }
   var index = openLine + 1
   while index < closeLine {
     const line = lines.texts[index]
     if line.trim().isEmpty() {
       if !line.isEmpty() {
-        return Some CanonProblem(index + 1, "A blank line inside of a multi-line string is empty")
+        return CanonProblem(index + 1, "A blank line inside of a multi-line string is empty")
       }
     } else if indentationOf(line) != target {
       const note = "A multi-line string is indented two spaces deeper than the line it starts on. Expected {target.byteLength()} spaces"
-      return Some CanonProblem(index + 1, note)
+      return CanonProblem(index + 1, note)
     }
     index = index + 1
   }
@@ -814,13 +814,13 @@ fn stringProblem(lines: Lines, span: Span, quotes: Int): CanonProblem? {
   const beforeQuotes = closeText.sliceBytes 0, closeColumn.min(closeText.byteLength())
   if beforeQuotes.trim().isEmpty() {
     if beforeQuotes != target {
-      return Some CanonProblem(closeLine + 1, "The closing `\"\"\"` is aligned with the content of the string")
+      return CanonProblem(closeLine + 1, "The closing `\"\"\"` is aligned with the content of the string")
     }
     return None
   }
   if indentationOf(closeText) != target {
     const note = "A multi-line string is indented two spaces deeper than the line it starts on. Expected {target.byteLength()} spaces"
-    return Some CanonProblem(closeLine + 1, note)
+    return CanonProblem(closeLine + 1, note)
   }
   None
 }

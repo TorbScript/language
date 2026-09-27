@@ -76,7 +76,7 @@ group "IRIs" {
     ]
     for text in texts {
       const uri = uriOf text
-      assert(Uri.tryFrom(uri.iriText()) == Ok(uri))
+      assert(Uri.tryFrom(uri.iriText()) == uri)
     }
   }
 }
@@ -84,25 +84,25 @@ group "IRIs" {
 group "URNs" {
   test "a URN has a namespace, lower case, and a namespace-specific string, as written" {
     const name = Urn.tryFrom(uriOf("urn:UUID:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")).ok()
-    assert(name?.namespace() == Some("uuid"))
-    assert(name?.specific() == Some("F81D4FAE-7dec-11d0-a765-00a0c91e6bf6"))
-    assert(name?.show() == Some("urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6"))
-    assert(name.map(Uri.from) == Some(uriOf("urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")))
+    assert(name?.namespace() == "uuid")
+    assert(name?.specific() == "F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")
+    assert(name?.show() == "urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6")
+    assert(name.map(Uri.from) == uriOf("urn:uuid:F81D4FAE-7dec-11d0-a765-00a0c91e6bf6"))
   }
 
   test "the r-, q- and f-components are read, and the assigned name is without them" {
     const name = Urn.tryFrom(uriOf("urn:example:weather?+CCResolve:cc=uk?=op=map&lat=39.56#top")).ok()
-    assert(name?.resolution() == Some("CCResolve:cc=uk"))
-    assert(name?.query() == Some("op=map&lat=39.56"))
-    assert(name?.fragment() == Some("top"))
-    assert(name.map({ _.assignedName().show() }) == Some("urn:example:weather"))
+    assert(name?.resolution() == "CCResolve:cc=uk")
+    assert(name?.query() == "op=map&lat=39.56")
+    assert(name?.fragment() == "top")
+    assert(name.map({ _.assignedName().show() }) == "urn:example:weather")
     const plain = Urn.tryFrom(uriOf("urn:example:weather")).ok()
     assert(name?.assignedName() == plain)
     assert(name != plain)
   }
 
   test "a q-component alone" {
-    assert(Urn.tryFrom(uriOf("urn:example:a?=b")).ok()?.query() == Some("b"))
+    assert(Urn.tryFrom(uriOf("urn:example:a?=b")).ok()?.query() == "b")
     assert(Urn.tryFrom(uriOf("urn:example:a?=b")).ok()?.resolution() == None)
   }
 
@@ -142,9 +142,9 @@ group "forms" {
   }
 
   test "percentDecoded reads the escapes as UTF-8 and refuses what is not" {
-    assert(percentDecoded("a%20b%C3%A4") == Ok("a bä"))
+    assert(percentDecoded("a%20b%C3%A4") == "a bä")
     assert(!percentDecoded("%FF").isOk())
-    assert(percentDecoded("100%") == Ok("100%"))
+    assert(percentDecoded("100%") == "100%")
   }
 }
 
@@ -188,6 +188,6 @@ group "Path" {
 
   test "a Uri has no relative path" {
     assert(Uri.tryFrom(Path.from("src/main.trb")) == Fail(UriError.Relative("src/main.trb")))
-    assert(Uri.tryFrom(Path.from("/x")).map({ _.text() }) == Ok("file:///x"))
+    assert(Uri.tryFrom(Path.from("/x")).map({ _.text() }) == "file:///x")
   }
 }

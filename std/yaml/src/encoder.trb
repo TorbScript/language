@@ -53,7 +53,7 @@ public type YamlEncoder with Encoder {
 
   /** Bytes are a `!!binary` scalar of base64. */
   var fn bytes(value: List<UInt8>) {
-    complete YamlNode(YamlContent.Scalar(base64Encoded(value), ScalarStyle.Plain), tag: Some(coreTag("binary")))
+    complete YamlNode(YamlContent.Scalar(base64Encoded(value), ScalarStyle.Plain), tag: coreTag("binary"))
   }
 
   var fn sequence(length: Int?) {
@@ -79,7 +79,7 @@ public type YamlEncoder with Encoder {
       return
     }
     const last = frames.length() - 1
-    frames[last].pending = Some naming.applied(name)
+    frames[last].pending = naming.applied name
   }
 
   var fn finish() {
@@ -113,7 +113,7 @@ public type YamlEncoder with Encoder {
     }
     const mapping = YamlNode.mapping frame.fields
     match tagFor(tags, typeName, None) {
-      Some(tag) => mapping.copy tag: Some(tag.tag)
+      Some(tag) => mapping.copy tag: tag.tag
       None => mapping
     }
   }
@@ -123,11 +123,11 @@ public type YamlEncoder with Encoder {
    * fields a mapping of one entry, the name, whose value holds the fields.
    */
   private fn variantNode(typeName: String, name: String, frame: EncoderFrame): YamlNode {
-    if const Some(tag) = tagFor(tags, typeName, Some(name)) {
+    if const Some(tag) = tagFor(tags, typeName, name) {
       if frame.fields.isEmpty() {
-        return YamlNode YamlContent.Scalar("", ScalarStyle.Plain), tag: Some(tag.tag)
+        return YamlNode YamlContent.Scalar("", ScalarStyle.Plain), tag: tag.tag
       }
-      return YamlNode.mapping(frame.fields).copy(tag: Some(tag.tag))
+      return YamlNode.mapping(frame.fields).copy(tag: tag.tag)
     }
     if frame.fields.isEmpty() {
       return YamlNode.scalar name, styleOf(name)
@@ -137,7 +137,7 @@ public type YamlEncoder with Encoder {
 
   private var fn complete(node: YamlNode) {
     if frames.isEmpty() {
-      finished = Some node
+      finished = node
       return
     }
     const last = frames.length() - 1

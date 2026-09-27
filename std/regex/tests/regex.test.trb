@@ -70,21 +70,21 @@ group "matching" {
     assert digits.matches("2026")
     assert(!digits.matches("2026a"))
     assert digits.isFound("in 2026")
-    assert(digits.find("in 2026 and 2027").map({ _.text() }) == Some("2026"))
+    assert(digits.find("in 2026 and 2027").map({ _.text() }) == "2026")
   }
 
   test "groups by index and by name, and a group that took no part" {
     const found = regexOf("(?P<key>\w+)=(?P<value>\w+)?").find("x size=").expect("a match")
-    assert(found.named("key") == Some("size"))
+    assert(found.named("key") == "size")
     assert(found.named("value") == None)
-    assert(found.group(0) == Some("size="))
-    assert(found.groups() == [Some("size="), Some("size"), None])
+    assert(found.group(0) == "size=")
+    assert(found.groups() == ["size=", "size", None])
     assert(found.start() == 2 && found.end() == 7)
   }
 
   test "the first alternative wins where both match at the same place" {
-    assert(regexOf("a|ab").find("ab").map({ _.text() }) == Some("a"))
-    assert(regexOf("a+?").find("aaa").map({ _.text() }) == Some("a"))
+    assert(regexOf("a|ab").find("ab").map({ _.text() }) == "a")
+    assert(regexOf("a+?").find("aaa").map({ _.text() }) == "a")
   }
 
   test "findAll finds every match, and an empty match next to the last one does not count" {
@@ -101,7 +101,7 @@ group "matching" {
   }
 
   test "multi-line, dot-all and case-insensitive flags" {
-    assert(regexOf("(?m)^b$").find("a\nb\nc").map({ _.start() }) == Some(2))
+    assert(regexOf("(?m)^b$").find("a\nb\nc").map({ _.start() }) == 2)
     assert(!regexOf("^b$").isFound("a\nb\nc"))
     assert regexOf("(?s)a.b").matches("a\nb")
     assert(!regexOf("a.b").matches("a\nb"))
@@ -154,16 +154,16 @@ group "reading and writing" {
   test "named groups decode into a type, each text read as its field's type" {
     const date = regexOf "(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})(?: \((?P<note>\w+)\))?"
     const plain = date.find("due 2026-09-25").expect("a match").decoded<Date>()
-    assert(plain.ok() == Some(Date(2026, 9, 25)))
+    assert(plain.ok() == Date(2026, 9, 25))
     const noted = date.find("2026-10-01 (release)").expect("a match").decoded<Date>()
-    assert(noted.ok() == Some(Date(2026, 10, 1, "release")))
+    assert(noted.ok() == Date(2026, 10, 1, "release"))
   }
 
   test "a Regex is written and read as its pattern" {
     const rule = Rule "digits", regexOf("\d+")
     const text = Json().encode(rule)
     assert(text == raw"{" + "\"name\":\"digits\",\"pattern\":\"\\\\d+\"" + raw"}")
-    assert(Json().decode<Rule>(text).ok() == Some(rule))
+    assert(Json().decode<Rule>(text).ok() == rule)
     assert(!Json().decode<Rule>("\{\"name\":\"x\",\"pattern\":\"(\"\}").isOk())
   }
 }

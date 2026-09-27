@@ -53,7 +53,7 @@ fn echoOnce(listener: TcpListener): Task<Result<Int, NetworkError>> {
     connection.send(chunk).await()?
   }
   connection.shutdown()?
-  Ok echoed
+  echoed
 }
 ```
 
@@ -112,7 +112,7 @@ use DomainName, RecordType from "std/dns"
 fn mailExchanges(domain: String): Task<Result<List<String>, NetworkError>> {
   const resolver = Resolver servers: [SocketAddress(IpAddress.loopback, 53)]
   const records = resolver.lookup(DomainName.tryFrom(domain)?, RecordType.Mx).await()?
-  Ok records.map({ _.data.show() }).toList()
+  records.map({ _.data.show() }).toList()
 }
 ```
 

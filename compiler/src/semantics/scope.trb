@@ -95,7 +95,7 @@ public type Program {
 
   fn lookUp(id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
-      return Some symbol
+      return symbol
     }
     builtins.get name
   }
@@ -234,7 +234,7 @@ type Binder {
   /** The name as the module sees it while the imports are being bound: its own names, then those of its prelude. */
   fn visibleName(id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
-      return Some symbol
+      return symbol
     }
     preludeNamesOf(id).get(name)
   }
@@ -343,7 +343,7 @@ type Binder {
             }
             .All(alias) => {
               if !scopes[id.value].names.containsKey(alias.text) && !alias.text.isEmpty() {
-                const symbol = symbols.add Symbol(alias.text, SymbolKind.Namespace(target), isPublic, Some(id), alias.span)
+                const symbol = symbols.add Symbol(alias.text, SymbolKind.Namespace(target), isPublic, id, alias.span)
                 bind id, alias.text, symbol, isPublic
               }
             }
@@ -374,7 +374,7 @@ type Binder {
       current = stepInto(current, path[index].text)?
     }
     match symbols.at(current).kind {
-      .Type | .Trait => Some current
+      .Type | .Trait => current
       _ => None
     }
   }
@@ -385,7 +385,7 @@ type Binder {
     for index in 1..path.length() {
       current = stepInto(current, path[index].text)?
     }
-    Some current
+    current
   }
 
   /** One step of a `use` path: a name a namespace exports, or a case of a type. Nothing else has names of its own. */
@@ -549,7 +549,7 @@ public fn memberImportOf(members: Map<String, List<MemberImport>>, path: String,
   for (_, entries) in members {
     for entry in entries {
       if entry.span == at && entry.path == path && entry.name == name {
-        return Some entry
+        return entry
       }
     }
   }
@@ -645,19 +645,19 @@ fn memberKindIn(members: List<Member>, name: String): String? {
     match member.kind {
       .Function(function) => {
         if function.name.text == name {
-          return Some "method"
+          return "method"
         }
       }
       .Constant(binding) => {
         if const .Binding(bound) = binding.pattern.kind {
           if bound == name {
-            return Some "constant"
+            return "constant"
           }
         }
       }
       .Field(field) => {
         if field.name.text == name {
-          return Some "field"
+          return "field"
         }
       }
       .Case(_) => {}

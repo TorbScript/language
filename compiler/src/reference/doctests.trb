@@ -126,7 +126,7 @@ public fn runDocumentationTests(
   }
   const wanted = examples.filter({ needsChecker _.kind }).toList()
   if wanted.isEmpty() {
-    return Ok DocumentationTestReport(owned(problems, tests), 0, 0, skipped)
+    return DocumentationTestReport owned(problems, tests), 0, 0, skipped
   }
   var workspace = tree
   for example in wanted {
@@ -142,7 +142,7 @@ public fn runDocumentationTests(
     ran = runnable.length()
     problems.appendAll(runExamples(typed.checked, runnable, options)?)
   }
-  Ok DocumentationTestReport(owned(problems, tests), wanted.length(), ran, skipped)
+  DocumentationTestReport owned(problems, tests), wanted.length(), ran, skipped
 }
 
 /** Whether a finding stands inside the lines of this example already. */
@@ -185,13 +185,13 @@ fn runExamples(
     modules.append module
   }
   if runnable.isEmpty() {
-    return Ok problems
+    return problems
   }
   for problem in runSnippets(checked, paths, runnable, modules, options)? {
     const message = problem.message.replace("This `trb run` block", "This example").replace("a block before it", "an example before it")
     problems.append problem.copy(message: message)
   }
-  Ok problems
+  problems
 }
 
 /** An example as the native half of `docs check` takes a block: its output compared only where it says what it is. */

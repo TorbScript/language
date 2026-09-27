@@ -124,7 +124,7 @@ public fn newSession(tree: SourceTree, directory: String, sandboxed: Bool = fals
   if sandboxed {
     const grant = replGrantOf directory
     grantLine = grantText grant
-    limit = Some((grant.steps, grant.milliseconds))
+    limit = (grant.steps, grant.milliseconds)
   }
   Session(
     modulePath: path,
@@ -428,7 +428,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
   if !reportProblems(session, checked, synthesis, current, problems) {
     return None
   }
-  Some Compiled(synthesis, checked, final, parameters, outputs, displaced, generationDeclarations, renamedBindings)
+  Compiled synthesis, checked, final, parameters, outputs, displaced, generationDeclarations, renamedBindings
 }
 
 /** What the probe of an entry found: how it is written, and what the check said about it. */
@@ -467,7 +467,7 @@ fn probe(
   }
   var withFailure = imports
   addImports withFailure, needed, named
-  const failing = Form failure: Some(failure), imports: withFailure, colored: session.colored
+  const failing = Form failure: failure, imports: withFailure, colored: session.colored
   const again = synthesize session.sources, declarations, texts, current, plan, failing
   const checkedAgain = checkSession session, again.text, false
   Probed failing, again, checkedAgain, problemsOf(session, checkedAgain, again)
@@ -506,7 +506,7 @@ fn failureOf(checked: Checked, problems: List<Diagnostic>): (String, List<(Strin
   if found.length() != 1 {
     return None
   }
-  Some((found[0], imports))
+  (found[0], imports)
 }
 
 /**
@@ -528,7 +528,7 @@ fn importsOf(checked: Checked, module: ModuleId, annotation: TypeId): List<(Stri
       .Nominal(symbol, arguments) => {
         pending.appendAll arguments
         const name = checked.checker.symbolAt(symbol).name
-        if checked.program.lookUp(module, name) == Some(symbol) {
+        if checked.program.lookUp(module, name) == symbol {
           continue
         }
         if checked.program.lookUp(module, name).isSome() {
@@ -554,7 +554,7 @@ fn importsOf(checked: Checked, module: ModuleId, annotation: TypeId): List<(Stri
       _ => {}
     }
   }
-  Some found
+  found
 }
 
 /** The path a `use` imports a symbol by: the package whose `src/lib.trb` exports it under its own name. */
@@ -566,10 +566,10 @@ fn importPathOf(checked: Checked, symbol: SymbolId, name: String): String? {
     return None
   }
   const library = program.graph.moduleAt(joinPath(package.directory, "src/lib.trb"))?
-  if program.scopes[library.value].exported.get(name) != Some(symbol) {
+  if program.scopes[library.value].exported.get(name) != symbol {
     return None
   }
-  Some package.name
+  package.name
 }
 
 /**
@@ -720,7 +720,7 @@ fn namedIn(typeText: String, names: List<String>): String? {
     if !word.isEmpty() {
       const found = String.from word
       if names.contains(found) {
-        return Some found
+        return found
       }
       word = []
     }
@@ -926,7 +926,7 @@ fn lowerEntry(session: Session, compiled: Compiled): BytecodeProgram? {
       refused.append "error: {what} is not supported by the VM yet"
     }
     if refused.isEmpty() {
-      return Some emission.program
+      return emission.program
     }
   }
   for line in refused {
@@ -985,7 +985,7 @@ fn sessionSiteOf(session: Session, index: Int): String? {
     const (source, span, _) = part.synthesis.locate(Span(start, start))?
     const entry = session.sources[source]
     const (line, _) = LineIndex.of(entry.text).lineAndColumn(span.start)
-    return Some "{entry.label}:{line}:{location.column}"
+    return "{entry.label}:{line}:{location.column}"
   }
   None
 }
@@ -1011,11 +1011,11 @@ fn innermostSessionSite(session: Session, frames: List<(Int, Int)>): String? {
       location = index
     }
     if const Some(shown) = sessionSiteOf(session, location) {
-      return Some shown
+      return shown
     }
     // A call the lowering gave no site of its own, `items[7]` say, is at least in its entry
     if const Some(part) = partOf(session, location) {
-      return Some part.label
+      return part.label
     }
   }
   None
@@ -1086,7 +1086,7 @@ public fn typeOf(var session: Session, text: String): String? {
   const module = checked.requested.first()?
   const start = synthesis.statementOffset(current, value.start)?
   const annotation = checked.checker.expressionType(module, Span(start, start + value.end - value.start))?
-  Some displayedType(checked.checker.describe(annotation))
+  displayedType checked.checker.describe(annotation)
 }
 
 /** The end of a session: every binding released, the newest first, so that a destructor runs as it would in a program. */

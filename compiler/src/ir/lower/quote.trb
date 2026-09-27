@@ -32,7 +32,7 @@ use bindingReferenceOf from "./closure"
 
 /** Whether a call reaches the `assert` of the standard library, which is the one call lowered here. */
 public fn isAssertion(lowering: Lowering, symbol: SymbolId): Bool {
-  lowering.checker.wellKnown.symbolNamed("assert") == Some(symbol)
+  lowering.checker.wellKnown.symbolNamed("assert") == symbol
 }
 
 /**
@@ -68,8 +68,8 @@ public fn lowerAssertion(
     return abandonedSlot lowering, builder, destination
   }
   const location = locationOf lowering, at
-  const failed = addBlock builder, "assert.failed", Some(location)
-  const held = addBlock builder, "assert.held", Some(location)
+  const failed = addBlock builder, "assert.failed", location
+  const held = addBlock builder, "assert.held", location
   finishBlock lowering, builder, Terminator.Branch(condition, held, failed)
   continueIn lowering, builder, failed
   const message = assertionMessage lowering, builder, written, quotation.captures
@@ -179,13 +179,13 @@ fn scalarKindOf(lowering: Lowering, annotation: TypeId): String {
     }
     return if numeric.startsWith("Float") { "Float" } else { "Int" }
   }
-  if known.boolean == Some(symbol) {
+  if known.boolean == symbol {
     return "Bool"
   }
-  if known.character == Some(symbol) {
+  if known.character == symbol {
     return "Char"
   }
-  if known.string == Some(symbol) {
+  if known.string == symbol {
     return "String"
   }
   ""
@@ -203,10 +203,10 @@ fn captureSlot(
     const annotation = irTypeOf lowering, capture.annotation
     const target = addTemporary builder, annotation
     emit builder, Instruction.Read(target, place)
-    return Some target
+    return target
   }
   match lowering.slots.get(declared) {
-    Some(found) => Some found
+    Some(found) => found
     None => {
       reportUnsupported lowering, "an `assert` over a binding the back end cannot reach", at
       None

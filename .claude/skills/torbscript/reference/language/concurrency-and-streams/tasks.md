@@ -215,13 +215,13 @@ Task.all(tasks: Iterate<Task<Value>>): Task<List<Value>>
 
    ```trb check
    fn fetched(id: Int): Task<Result<String, String>> {
-     Ok "user {id}"
+     "user {id}"
    }
 
    fn fetchedTwo(): Task<Result<String, String>> {
      const first = fetched(1).await()?
      const second = fetched(2).await()?
-     Ok "{first}, {second}"
+     "{first}, {second}"
    }
    ```
 

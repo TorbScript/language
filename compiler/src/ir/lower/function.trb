@@ -79,8 +79,8 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
       return
     }
   }
-  var builder = newFunction name, Some(symbol), signature, "body"
-  setBlockLocation builder, BlockId(0), Some(location)
+  var builder = newFunction name, symbol, signature, "body"
+  setBlockLocation builder, BlockId(0), location
   // A parameter of type `Never` has no value to arrive with, so nothing ever runs this body: `described<Never>` is
   // called only from code that is unreachable itself. The body would ask for what `Never` does not have - a `Show`
   // of it, a layout - so the instance is its one `unreachable` block
@@ -140,9 +140,9 @@ fn lowerTaskInstance(
       return
     }
   }
-  var resume = newFunction resumeFunctionName(name), Some(symbol), resumeSignature, "task"
+  var resume = newFunction resumeFunctionName(name), symbol, resumeSignature, "task"
   setFunctionKind resume, FunctionKind.TaskResume
-  setBlockLocation resume, BlockId(0), Some(location)
+  setBlockLocation resume, BlockId(0), location
   declareParameterSlots lowering, symbol, declaration
   lowering.isTaskBody = true
   lowerBody lowering, resume, body, value
@@ -152,8 +152,8 @@ fn lowerTaskInstance(
     return
   }
   const started = finishFunction lowering.program, resume
-  var constructor = newFunction name, Some(symbol), signature, "task"
-  setBlockLocation constructor, BlockId(0), Some(location)
+  var constructor = newFunction name, symbol, signature, "task"
+  setBlockLocation constructor, BlockId(0), location
   buildTaskConstructor lowering, constructor, signature, started, value
   lowering.program.functions.set identifier.value, constructor.function
   lowering.lowered = lowering.lowered + 1
@@ -227,7 +227,7 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
     return
   }
   match found {
-    Some(target) => finishBlock lowering, builder, Terminator.Return(Some(borrowed(target)))
+    Some(target) => finishBlock lowering, builder, Terminator.Return(borrowed(target))
     // A body that produces nothing and does not diverge is what the checker reports, so nothing is said here
     None => reportUnsupported lowering, "a body that produces no value", body.span
   }
@@ -307,7 +307,7 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   for statement in statements {
     if isEntryStatement(statement) {
       const location = locationOf lowering, statement.span
-      setBlockLocation builder, BlockId(0), Some(location)
+      setBlockLocation builder, BlockId(0), location
       break
     }
   }
@@ -330,10 +330,10 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   if !lowering.isSupported {
     lowering.stubbed = lowering.stubbed + 1
     var stub = newFunction name, None, signature, "not supported yet"
-    return Some finishFunction(lowering.program, stub)
+    return finishFunction lowering.program, stub
   }
   lowering.lowered = lowering.lowered + 1
-  Some finishFunction(lowering.program, builder)
+  finishFunction lowering.program, builder
 }
 
 /**
@@ -417,12 +417,12 @@ fn rememberEntryLocal(var lowering: Lowering, var builder: FunctionBuilder, bind
  */
 public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver: TypeId): FunctionId? {
   if const Some(found) = lowering.scriptFunctions.get(module.value) {
-    return Some found
+    return found
   }
   const statements = lowering.checker.program.graph.at(module).file.statements
   const name = scriptNameOf lowering, module
   const voidType = lowering.checker.voidType
-  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Receiver(true), receiver)], voidType)
+  const form = FunctionForm([ParameterForm("self", ParameterMode.Receiver(true), receiver)], voidType)
   const identifier = instantiateSignature lowering.program, lowering.checker, lowering.instantiation, form
   const signature = lowering.program.signatureAt identifier
   // A script is asked for where its value is made, which may be in the middle of another body
@@ -438,7 +438,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   for statement in statements {
     if isEntryStatement(statement) {
       const location = locationOf lowering, statement.span
-      setBlockLocation builder, BlockId(0), Some(location)
+      setBlockLocation builder, BlockId(0), location
       break
     }
   }
@@ -455,7 +455,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
     // One block per statement of the file, each at its own location: a script that stops is blamed on the statement
     // that was running, even where nothing in it carries a location of its own (docs/design/SCRIPTS.md section 6)
     if !isFirst {
-      const next = addBlock builder, "statement", Some(locationOf(lowering, statement.span))
+      const next = addBlock builder, "statement", locationOf(lowering, statement.span)
       finishBlock lowering, builder, Terminator.Jump(next)
       continueIn lowering, builder, next
     }
@@ -475,12 +475,12 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
     var stub = newFunction name, None, signature, "not supported yet"
     const stubbed = finishFunction lowering.program, stub
     lowering.scriptFunctions.set module.value, stubbed
-    return Some stubbed
+    return stubbed
   }
   lowering.lowered = lowering.lowered + 1
   const function = finishFunction lowering.program, builder
   lowering.scriptFunctions.set module.value, function
-  Some function
+  function
 }
 
 /** `use X from "..."`: a declaration of the file scope, never code. */

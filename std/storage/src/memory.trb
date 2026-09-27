@@ -32,14 +32,14 @@ public shared type MemoryStorage with Storage {
   fn read(uri: Uri): Task<Result<Bytes, StorageFailure>> {
     const key = keyOf(uri)?
     match entries.get(key) {
-      Some(content) => Ok content
+      Some(content) => content
       None => Fail StorageFailure.NotFound(uri.show())
     }
   }
 
   fn exists(uri: Uri): Task<Result<Bool, StorageFailure>> {
     const key = keyOf(uri)?
-    Ok(entries.containsKey(key) || !below(key).isEmpty())
+    entries.containsKey(key) || !below(key).isEmpty()
   }
 
   fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>> {
@@ -66,7 +66,7 @@ public shared type MemoryStorage with Storage {
         }
       }
     }
-    Ok found
+    found
   }
 
   var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>> {
@@ -100,7 +100,7 @@ fn keyOf(uri: Uri): Result<String, StorageFailure> {
   if uri.scheme() != "memory" {
     return Fail StorageFailure.NotAddressable(uri.show(), "the scheme is not `memory`")
   }
-  Ok uri.text()
+  uri.text()
 }
 
 /** The key as the prefix of what is below it: with a `/` at its end. */

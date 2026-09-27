@@ -25,11 +25,11 @@ use NetworkError from "./error"
 public fn resolve(host: String): Task<Result<List<IpAddress>, NetworkError>> {
   const bare = host.withoutPrefix("[")?.withoutSuffix("]") ?? host
   if const Ok(literal) = IpAddress.tryFrom(bare) {
-    return Ok([literal])
+    return [literal]
   }
   // RFC 6761 section 6.3: the loopback, without asking anybody - so a program that talks to itself needs no resolver
   if bare.toLowerCase() == "localhost" {
-    return Ok([IpAddress.loopback, IpAddress.Version6(Ipv6Address.loopback)])
+    return [IpAddress.loopback, IpAddress.Version6(Ipv6Address.loopback)]
   }
   const resolution = networkResolve(bare).await()
   if resolution < 0 {
@@ -46,7 +46,7 @@ public fn resolve(host: String): Task<Result<List<IpAddress>, NetworkError>> {
   if addresses.isEmpty() {
     return Fail NetworkError.hostNotFound(bare)
   }
-  Ok addresses
+  addresses
 }
 
 /**
@@ -79,7 +79,7 @@ public shared type TcpListener with Close {
       return Fail NetworkError.of(handle).about("listening on {address}")
     }
     match socketAddressOf(handle, false) {
-      Ok(bound) => Ok TcpListener(handle, bound)
+      Ok(bound) => TcpListener handle, bound
       Fail(problem) => {
         networkClose handle
         Fail problem
@@ -98,7 +98,7 @@ public shared type TcpListener with Close {
     if answer < 0 {
       return Fail NetworkError.of(answer).about("accepting on {bound}")
     }
-    Ok TcpStream.of(answer)
+    TcpStream.of answer
   }
 
   /**
@@ -147,7 +147,7 @@ public type TcpAcceptor {
     if answer < 0 {
       return Fail NetworkError.of(answer).about("accepting")
     }
-    Ok TcpStream.of(answer)
+    TcpStream.of answer
   }
 }
 
@@ -184,7 +184,7 @@ public shared type TcpStream with Close {
     if answer < 0 {
       return Fail NetworkError.of(answer).about("connecting to {address}")
     }
-    Ok TcpStream(answer)
+    TcpStream answer
   }
 
   /**
@@ -197,7 +197,7 @@ public shared type TcpStream with Close {
     for address in addresses {
       match TcpStream.connect(SocketAddress(address, port)).await() {
         Ok(stream) => {
-          return Ok stream
+          return stream
         }
         Fail(problem) => {
           last = problem
@@ -356,7 +356,7 @@ public fn socketAddressOf(handle: Int, peer: Bool): Result<SocketAddress, Networ
   if answer < 0 {
     return Fail NetworkError.of(answer)
   }
-  Ok SocketAddress(addressOf(parts[0], parts[1], parts[2]), parts[3])
+  SocketAddress addressOf(parts[0], parts[1], parts[2]), parts[3]
 }
 
 // --- the natives of runtime/io.c (runtime/include/torb_network.h) --------------------------------------------------

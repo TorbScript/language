@@ -38,7 +38,7 @@ fn matchedText(template: UriTemplate<TemplateValues>, reference: String): String
       None => {}
     }
   }
-  Some parts.joined(separator: " ")
+  parts.joined separator: " "
 }
 
 group "reading" {
@@ -69,7 +69,7 @@ group "reading" {
   test "a non-ASCII literal is written as its UTF-8, percent-encoded" {
     var values: Map<String, TemplateValue> = [:]
     values["x"] = TemplateValue.Text "ü"
-    assert(templateOf("/straße/{x}").expandedText(values) == Ok("/stra%C3%9Fe/%C3%BC"))
+    assert(templateOf("/straße/{x}").expandedText(values) == "/stra%C3%9Fe/%C3%BC")
   }
 
   test "the template shows as it was written, and is its own text" {
@@ -85,52 +85,52 @@ group "expansion" {
     values["id"] = TemplateValue.Text "7"
     values["fields"] = TemplateValue.Items(["total", "items"])
     const reference = templateOf("/orders/{id}{?fields*}").expanded(values)
-    assert(reference.map({ _.text() }) == Ok("/orders/7?fields=total&fields=items"))
+    assert(reference.map({ _.text() }) == "/orders/7?fields=total&fields=items")
   }
 
   test "a value that makes no reference with the literal parts is refused" {
     var values: Map<String, TemplateValue> = [:]
     values["x"] = TemplateValue.Text "1a"
-    assert(templateOf("{x}:y").expandedText(values) == Ok("1a:y"))
+    assert(templateOf("{x}:y").expandedText(values) == "1a:y")
     assert(!templateOf("{x}:y").expanded(values).isOk())
   }
 
   test "an undefined variable expands to nothing" {
     const empty: Map<String, TemplateValue> = [:]
-    assert(templateOf("/a{/b}{?c,d}").expandedText(empty) == Ok("/a"))
+    assert(templateOf("/a{/b}{?c,d}").expandedText(empty) == "/a")
   }
 }
 
 group "matching" {
   test "a simple variable is one segment, decoded" {
-    assert(matchedText("/orders/{id}", "/orders/7") == Some("id=7"))
-    assert(matchedText("/users/{name}", "/users/Ada%20Lovelace") == Some("name=Ada Lovelace"))
+    assert(matchedText("/orders/{id}", "/orders/7") == "id=7")
+    assert(matchedText("/users/{name}", "/users/Ada%20Lovelace") == "name=Ada Lovelace")
     assert matchedText("/orders/{id}", "/orders/7/items").isNone()
     assert matchedText("/orders/{id}", "/orders/").isNone()
     assert matchedText("/orders/{id}", "/invoices/7").isNone()
   }
 
   test "a literal after a variable is found by backing off" {
-    assert(matchedText("/files/{name}.json", "/files/report.v2.json") == Some("name=report.v2"))
+    assert(matchedText("/files/{name}.json", "/files/report.v2.json") == "name=report.v2")
   }
 
   test "several simple variables split at their unencoded commas" {
-    assert(matchedText("/map/{x,y}", "/map/1024,768") == Some("x=1024 y=768"))
+    assert(matchedText("/map/{x,y}", "/map/1024,768") == "x=1024 y=768")
     assert matchedText("/map/{x,y}", "/map/1024").isNone()
   }
 
   test "path segments, one per name, and an exploded one as a list" {
-    assert(matchedText("/repos{/owner,name}", "/repos/torb/script") == Some("owner=torb name=script"))
-    assert(matchedText("/repos{/owner,name}", "/repos/torb") == Some("owner=torb"))
-    assert(matchedText("/files{/path*}", "/files/a/b%20c/d") == Some("path=[\"a\", \"b c\", \"d\"]"))
-    assert(matchedText("/files{/path*}", "/files") == Some("path=[]"))
+    assert(matchedText("/repos{/owner,name}", "/repos/torb/script") == "owner=torb name=script")
+    assert(matchedText("/repos{/owner,name}", "/repos/torb") == "owner=torb")
+    assert(matchedText("/files{/path*}", "/files/a/b%20c/d") == "path=[\"a\", \"b c\", \"d\"]")
+    assert(matchedText("/files{/path*}", "/files") == "path=[]")
   }
 
   test "query parameters in any order, each optional, the others ignored" {
     const template: UriTemplate<TemplateValues> = "/search{?q,page}"
-    assert(matchedText(template, "/search?page=2&q=uri+templates&utm=x") == Some("q=uri templates page=2"))
-    assert(matchedText(template, "/search") == Some(""))
-    assert(matchedText("/search?kind=all{&q}", "/search?q=x&kind=all") == Some("q=x"))
+    assert(matchedText(template, "/search?page=2&q=uri+templates&utm=x") == "q=uri templates page=2")
+    assert(matchedText(template, "/search") == "")
+    assert(matchedText("/search?kind=all{&q}", "/search?q=x&kind=all") == "q=x")
     assert matchedText("/search?kind=all{&q}", "/search?q=x").isNone()
   }
 
@@ -141,7 +141,7 @@ group "matching" {
     values["items"] = TemplateValue.Items(["x", "y z"])
     values["fields"] = TemplateValue.Text "total,items"
     const reference = template.expanded(values).ok()
-    assert(reference.flatMap({ template.matched _ }) == Some(values))
+    assert(reference.flatMap({ template.matched _ }) == values)
   }
 
   test "what cannot be read backwards is not matchable" {

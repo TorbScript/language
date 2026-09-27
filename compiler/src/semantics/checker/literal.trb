@@ -76,7 +76,7 @@ public fn checkedKindOf(checker: Checker, annotation: TypeId): CheckedKind? {
       return None
     }
   }
-  Some kind
+  kind
 }
 
 // --- String literals --------------------------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ public fn resourceValueMessage(kind: CheckedKind): String? {
   if !kind.isResource() {
     return None
   }
-  Some "A `{typeNameOf(kind)}` is a file the compiler resolves, so it has to be written as a literal here"
+  "A `{typeNameOf(kind)}` is a file the compiler resolves, so it has to be written as a literal here"
 }
 
 fn checkUri(var checker: Checker, text: String, at: Span) {
@@ -257,12 +257,12 @@ fn writtenStartOf(source: String, at: Span): Int? {
     return None
   }
   if head.startsWith("raw\"") {
-    return Some(at.start + 4)
+    return at.start + 4
   }
   if head.startsWith("r\"") {
-    return Some(at.start + 2)
+    return at.start + 2
   }
-  Some(at.start + 1)
+  at.start + 1
 }
 
 /**
@@ -376,7 +376,7 @@ public fn checkedCase(var checker: Checker, expression: Expression, annotation: 
     }
   }
   // Only where a `TemplateCase` itself is expected: an open variable would unify with anything, `None` included
-  if checkedKindOf(checker, resolveType(checker, annotation)) != Some(CheckedKind.TemplateCaseLiteral) {
+  if checkedKindOf(checker, resolveType(checker, annotation)) != CheckedKind.TemplateCaseLiteral {
     return None
   }
   const symbol = checker.wellKnown.checkedSymbols.get("TemplateCase")?
@@ -386,7 +386,7 @@ public fn checkedCase(var checker: Checker, expression: Expression, annotation: 
   }
   const name = checker.symbolAt(variant).name
   checker.recordCheckedLiteral expression.span, CheckedLiteral(name, isVerbatim: false)
-  Some found
+  found
 }
 
 /**
@@ -472,7 +472,7 @@ fn checkRoute(var checker: Checker, templateAt: Span, templateType: TypeId, case
 fn valueTypeOf(var checker: Checker, found: TypeId): TypeId? {
   if const .Nominal(_, arguments) = checker.types.form(found) {
     if const Some(first) = arguments.first() {
-      return Some resolveType(checker, first)
+      return resolveType checker, first
     }
   }
   None
@@ -510,9 +510,9 @@ fn resourceNameOf(var checker: Checker, text: String, kind: CheckedKind, at: Spa
     return None
   }
   if package.directory.isEmpty() {
-    return Some pathName(path)
+    return pathName path
   }
-  Some stableNameOf(package.name, package.directory, path)
+  stableNameOf package.name, package.directory, path
 }
 
 /** `acme/game/src/sheets/hero.spr`: the owner and name of the package, then the path inside it, always with `/`. */

@@ -93,7 +93,7 @@ fn checked(value: Int): Result<Int, String> {
   if value < 0 {
     return Fail "negative"
   }
-  Ok value
+  value
 }
 
 print checked(1)
@@ -366,7 +366,7 @@ fn describe(value: Int?): String {
   }
 }
 
-print describe(Some(1))
+print describe(1)
 ```
 
 ```trb error
@@ -523,7 +523,7 @@ extend Port with TryFrom<String, String> {
     if number < 1 || number > 65535 {
       return Fail "{number} is not a port"
     }
-    Ok Port(number)
+    Port number
   }
 }
 

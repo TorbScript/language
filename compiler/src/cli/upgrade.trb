@@ -119,7 +119,7 @@ fn numericSegments(version: String): List<Int>? {
       Fail(_) => { return None }
     }
   }
-  Some segments
+  segments
 }
 
 /**
@@ -201,10 +201,10 @@ public fn packageManagerCommand(method: String): String {
 public fn torbHome(): Result<String, OsError> {
   if onWindows() {
     const local = variableOf("LOCALAPPDATA")?
-    Ok "{local}/torb"
+    "{local}/torb"
   } else {
     const home = variableOf("HOME")?
-    Ok "{home}/.torb"
+    "{home}/.torb"
   }
 }
 
@@ -212,9 +212,9 @@ public fn torbHome(): Result<String, OsError> {
 fn activeBinDirectory(home: String): Result<String, OsError> {
   if onWindows() {
     const local = variableOf("LOCALAPPDATA")?
-    Ok "{local}/Programs/torb/bin"
+    "{local}/Programs/torb/bin"
   } else {
-    Ok "{home}/bin"
+    "{home}/bin"
   }
 }
 
@@ -228,7 +228,7 @@ fn onWindows(): Bool {
 
 fn variableOf(name: String): Result<String, OsError> {
   match Environment.get(name) {
-    Some(value) => Ok value
+    Some(value) => value
     None => Fail OsError.Missing("the variable {name}", "it is not set")
   }
 }
@@ -236,7 +236,7 @@ fn variableOf(name: String): Result<String, OsError> {
 /** `<home>/install.trb`, or `None` where there is none - a toolchain nothing here installed. */
 public fn readInstallInfo(home: String): InstallInfo? {
   match File.readText("{home}/install.trb") {
-    Ok(text) => Some parseInstallInfo(text)
+    Ok(text) => parseInstallInfo text
     Fail(_) => None
   }
 }
@@ -261,7 +261,7 @@ fn captured(program: String, arguments: List<String>): Result<String, String> {
   match Process.runBlocking(program, arguments) {
     Ok(output) => {
       if output.isSuccess() {
-        Ok output.standardOutput.trim()
+        output.standardOutput.trim()
       } else {
         Fail "{program} {arguments.joined(separator: " ")} failed: {output.standardError.trim()}"
       }
@@ -292,14 +292,14 @@ fn sha256Of(path: String): Result<String, String> {
     const script = "(Get-FileHash -LiteralPath '{path}' -Algorithm SHA256).Hash"
     match captured("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]) {
       Fail(message) => Fail message
-      Ok(hex) => Ok hex.trim().toLowerCase()
+      Ok(hex) => hex.trim().toLowerCase()
     }
   } else {
     match captured("sha256sum", [path]) {
-      Ok(text) => Ok firstWord(text)
+      Ok(text) => firstWord text
       Fail(sha256sumFailure) => {
         match captured("shasum", ["-a", "256", path]) {
-          Ok(text) => Ok firstWord(text)
+          Ok(text) => firstWord text
           Fail(_) => Fail sha256sumFailure
         }
       }
@@ -336,7 +336,7 @@ public fn expectedHash(sums: String, file: String): String? {
       name = name.sliceBytes 1, name.byteLength()
     }
     if name == file {
-      return Some words[0]
+      return words[0]
     }
   }
   None
@@ -391,17 +391,17 @@ fn fetchText(baseUrl: String, path: String): Result<String, String> {
   if baseUrl.startsWith("file://") {
     const root = withoutDriveSlash baseUrl.sliceBytes(7, baseUrl.byteLength())
     match File.readText("{root}/{path}") {
-      Ok(text) => Ok text
+      Ok(text) => text
       Fail(error) => Fail error.show()
     }
   } else {
     // The same tools the download uses: the compiler stays free of the network, TLS and tasks
     const url = "{baseUrl}/{path}"
     match captured("curl", ["-fsSL", url]) {
-      Ok(text) => Ok text
+      Ok(text) => text
       Fail(curlFailure) => {
         match captured("wget", ["-qO-", url]) {
-          Ok(text) => Ok text
+          Ok(text) => text
           Fail(_) => Fail curlFailure
         }
       }
@@ -432,7 +432,7 @@ fn printAvailable(home: String, channel: String): Int {
         print "  (none)"
       }
       for version in installed {
-        const mark = if active == Some(version) { " (active)" } else { "" }
+        const mark = if active == version { " (active)" } else { "" }
         print "  {version}{mark}"
       }
       print "available ({channel}):"
@@ -472,7 +472,7 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Int
       }
     }
   }
-  if options.channel.isSome() && options.channel != Some(info.channel) {
+  if options.channel.isSome() && options.channel != info.channel {
     const updated = InstallInfo channel, info.method
     match File.writeText("{home}/install.trb", renderInstallInfo(updated)) {
       Fail(error) => {

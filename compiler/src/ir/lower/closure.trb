@@ -230,7 +230,7 @@ public fn lowerBoxedBinding(
   value: Expression,
 ) {
   const inner = addTemporary builder, annotation
-  const _ = lowerExpression lowering, builder, value, Some(inner)
+  const _ = lowerExpression lowering, builder, value, inner
   if !lowering.isSupported {
     return
   }
@@ -249,7 +249,7 @@ public fn bindingReferenceOf(var lowering: Lowering, var builder: FunctionBuilde
   if const Some(slot) = lowering.boxes.get(at) {
     const annotation = builder.typeOfSlot slot
     const layout = layoutOfType(lowering.program, annotation)?
-    return Some Reference(slot, [PathStep.Field(layout, 0)])
+    return Reference slot, [PathStep.Field(layout, 0)]
   }
   lowering.references.get at
 }
@@ -345,7 +345,7 @@ public fn lowerLazyArgument(
   }
   const cell = addTemporary builder, cellType
   emit builder, Instruction.Construct(cell, layout, 0, [borrowed(empty), borrowed(thunk)])
-  Some cell
+  cell
 }
 
 /**
@@ -389,9 +389,9 @@ public fn lowerForcedRead(
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, held)
-  const forced = addBlock builder, "forced", Some(location)
-  const pending = addBlock builder, "pending", Some(location)
-  const join = addBlock builder, "join", Some(location)
+  const forced = addBlock builder, "forced", location
+  const pending = addBlock builder, "pending", location
+  const join = addBlock builder, "join", location
   finishBlock lowering, builder, Terminator.Switch(tag, [someIndex], [forced], pending)
   continueIn lowering, builder, forced
   emit builder, Instruction.Read(target, Reference(held, [PathStep.Variant(optionLayout, someIndex, 0)]))
@@ -400,7 +400,7 @@ public fn lowerForcedRead(
   const thunkType = shape.fields[1].annotation
   const thunk = addTemporary builder, thunkType
   emit builder, Instruction.Read(thunk, Reference(cell, [PathStep.Field(layout, 1)]))
-  emit builder, Instruction.CallClosure(Some(target), thunk, [], Some(location))
+  emit builder, Instruction.CallClosure(target, thunk, [], location)
   const wrapped = addTemporary builder, optional
   emit builder, Instruction.Construct(wrapped, optionLayout, someIndex, [borrowed(target)])
   emit builder, Instruction.Write(Reference(cell, [PathStep.Field(layout, 0)]), borrowed(wrapped))
@@ -430,7 +430,7 @@ fn emptyOptionSlot(
   }
   const slot = addTemporary builder, optional
   emit builder, Instruction.Construct(slot, layout, index, [])
-  Some slot
+  slot
 }
 
 fn variantNamedIn(var lowering: Lowering, layout: LayoutId, name: String): Int {
@@ -543,7 +543,7 @@ fn lowerBoundMethodValue(
   var mapping = lowering.substitution
   if !written.hasBody {
     if const .Implementation(_, _) = dispatch {
-      if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, Some(receiverType), expression.span) {
+      if const Some(dispatched) = dispatchedMember(lowering, symbol, [], dispatch, receiverType, expression.span) {
         member = dispatched.member
         mapping = dispatched.mapping
       }
@@ -585,7 +585,7 @@ fn lowerBoundMethodValue(
   parameters.appendAll shape.parameters
   var inner = newFunction closureName, None, IrSignature(parameters, shape.result), "closure"
   const location = locationOf lowering, expression.span
-  setBlockLocation inner, BlockId(0), Some(location)
+  setBlockLocation inner, BlockId(0), location
   const bound = addTemporary inner, held
   emit inner, Instruction.Read(bound, Reference(Slot(0), [PathStep.Field(environment, 0)]))
   var arguments = [borrowed(bound)]
@@ -593,12 +593,12 @@ fn lowerBoundMethodValue(
     arguments.append borrowed(Slot(position))
   }
   if isVoidType(lowering, shape.result) {
-    emit inner, Instruction.Call(None, method, arguments, [], Some(location))
+    emit inner, Instruction.Call(None, method, arguments, [], location)
     terminate inner, Terminator.Return(None)
   } else {
     const answer = addTemporary inner, shape.result
-    emit inner, Instruction.Call(Some(answer), method, arguments, [], Some(location))
-    terminate inner, Terminator.Return(Some(borrowed(answer)))
+    emit inner, Instruction.Call(answer, method, arguments, [], location)
+    terminate inner, Terminator.Return(borrowed(answer))
   }
   const function = finishFunction lowering.program, inner
   const target = valueSlot lowering, builder, destination, annotation
@@ -740,7 +740,7 @@ fn constructorFunctionOf(
     fields.append borrowed(Slot(index))
   }
   emit inner, Instruction.Construct(result, layout, variant, fields)
-  terminate inner, Terminator.Return(Some(borrowed(result)))
+  terminate inner, Terminator.Return(borrowed(result))
   const added = finishFunction lowering.program, inner
   lowering.generatedInstances.set name, added
   added
@@ -799,7 +799,7 @@ public fn lowerClosureCall(
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
-    slots.set 0, Some(bound)
+    slots.set 0, bound
     offset = 1
   }
   // What a `var` argument took out of a container and has to put back once the closure has run
@@ -821,8 +821,8 @@ public fn lowerClosureCall(
           return abandonedSlot lowering, builder, destination
         }
       }
-      slots.set position, Some(path.reference.base)
-      places.set position, Some(path.reference)
+      slots.set position, path.reference.base
+      places.set position, path.reference
       taken.appendAll path.taken
       continue
     }
@@ -830,14 +830,14 @@ public fn lowerClosureCall(
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
-    slots.set position, Some(slot)
+    slots.set position, slot
   }
   const filled = closureDefaults lowering, builder, callee, slots, expression.span
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
   const site = locationOf lowering, expression.span
-  const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation, Some(site)
+  const result = emitClosureCall lowering, builder, destination, holder, filled, places, annotation, site
   putBackElements lowering, builder, taken
   result
 }
@@ -875,7 +875,7 @@ fn boundReceiverOf(var lowering: Lowering, callee: Expression, count: Int): Expr
   if form.parameters.length() + 1 != count {
     return None
   }
-  Some base
+  base
 }
 
 /**
@@ -988,7 +988,7 @@ public fn emitClosureCall(
     }
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.CallClosure(Some(target), holder, given, at)
+  emit builder, Instruction.CallClosure(target, holder, given, at)
   target
 }
 
@@ -1184,7 +1184,7 @@ fn loweredClosureBody(
     setFunctionKind inner, FunctionKind.TaskResume
   }
   const location = locationOf lowering, at
-  setBlockLocation inner, BlockId(0), Some(location)
+  setBlockLocation inner, BlockId(0), location
   const saved = savedFrame lowering
   enterClosure lowering, name, at
   lowering.isTaskBody = isSpawned || isTaskClosure
@@ -1206,7 +1206,7 @@ fn loweredClosureBody(
     return body
   }
   var constructor = newFunction name, None, built, "task"
-  setBlockLocation constructor, BlockId(0), Some(location)
+  setBlockLocation constructor, BlockId(0), location
   buildTaskConstructor lowering, constructor, built, body, bodySignature.result
   finishFunction lowering.program, constructor
 }
@@ -1289,7 +1289,7 @@ fn lowerClosureBody(
         finishBlock lowering, builder, Terminator.Return(None)
         return
       }
-      finishBlock lowering, builder, Terminator.Return(Some(borrowed(slot)))
+      finishBlock lowering, builder, Terminator.Return(borrowed(slot))
     }
   }
 }
@@ -1464,7 +1464,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
  */
 fn enterClosure(var lowering: Lowering, name: String, at: Span) {
   enterBody lowering, name
-  lowering.closureAt = Some at
+  lowering.closureAt = at
 }
 
 /**
@@ -1526,7 +1526,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
 /** The signature a closure value is called with, out of its own type. */
 public fn closureSignatureOf(var lowering: Lowering, annotation: IrTypeId): IrSignatureId? {
   if const .Closure(signature) = lowering.program.typeAt(annotation) {
-    return Some signature
+    return signature
   }
   None
 }

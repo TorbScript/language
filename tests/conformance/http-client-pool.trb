@@ -16,20 +16,20 @@ use sleep from "std/time"
 fn handle(request: Request): Task<Result<Response, HttpError>> {
   const port = request.remote.map({ _.port }) ?? 0
   match request.path() {
-    "/port" => Ok Response.text("{port}")
+    "/port" => Response.text "{port}"
     "/slow" => {
       sleep(5.0).await()
-      Ok Response.text("too late")
+      Response.text "too late"
     }
-    "/moved" => Ok redirect(301, "/target")
-    "/see-other" => Ok redirect(303, "/target")
-    "/elsewhere" => Ok redirect(302, "http://localhost:{request.uri.port() ?? 0}/target")
-    "/loop" => Ok redirect(307, "/loop")
+    "/moved" => redirect 301, "/target"
+    "/see-other" => redirect 303, "/target"
+    "/elsewhere" => redirect 302, "http://localhost:{request.uri.port() ?? 0}/target"
+    "/loop" => redirect 307, "/loop"
     "/target" => {
       const secret = if request.headers.contains("Authorization") { "with" } else { "without" }
-      Ok Response.text("{request.method} /target {secret} credentials")
+      Response.text "{request.method} /target {secret} credentials"
     }
-    _ => Ok Response.of(Status.notFound)
+    _ => Response.of Status.notFound
   }
 }
 
@@ -63,7 +63,7 @@ fn described(result: Result<Response, HttpError>): Task<String> {
 /** The status of a response to a `GET` of `url`, whose body is released unread when this returns. */
 fn statusOf(client: Client, url: Uri): Task<Result<Status, HttpError>> {
   const response = client.get(url).await()?
-  Ok response.status
+  response.status
 }
 
 /** The remote port the server saw for a request of `client`. */
@@ -102,7 +102,7 @@ fn run(base: Uri): Task<Result<Void, HttpError>> {
   print "never: {described(never.get(at(base, "/moved")).await()).await()}"
   print "a loop: {described(client.get(at(base, "/loop")).await()).await()}"
   // A request that times out is cancelled, and gives its connection and its slot back on the way
-  const hasty = Client maximumConnections: 1, timeout: Some(1.seconds())
+  const hasty = Client maximumConnections: 1, timeout: 1.seconds()
   print "timed out: {described(hasty.get(at(base, "/slow")).await()).await()}"
   print "the slot came back: {portOf(hasty, base).await().isOk()}"
   Ok void

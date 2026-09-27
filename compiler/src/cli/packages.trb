@@ -110,7 +110,7 @@ public fn packageOptionsOf(command: String, arguments: List<String>): Result<Pac
   if (command == "install" || command == "publish") && !options.names.isEmpty() {
     return Fail "`torb {command}` takes no package: it works on the project"
   }
-  Ok options
+  options
 }
 
 /** Runs the command; answers the exit code. */
@@ -180,7 +180,7 @@ fn contextOf(options: PackageOptions): Result<Context, String> {
   if cache.isEmpty() {
     return Fail "there is no cache directory: set TORB_CACHE, or HOME (LOCALAPPDATA on Windows)"
   }
-  Ok Context(tree, workspace, root, target, members, bindings, FetchSettings(cache, offline: options.offline))
+  Context tree, workspace, root, target, members, bindings, FetchSettings(cache, offline: options.offline)
 }
 
 // --- add, remove, update, install --------------------------------------------------------------------------------
@@ -221,7 +221,7 @@ fn runAdd(context: Context, options: PackageOptions): Result<Int, String> {
     Fail(explanation) => {
       printError explanation
       printError "error: nothing was changed: the dependencies of project.trb have no solution"
-      return Ok 1
+      return 1
     }
   }
   File.writeText(manifestPath, text).mapError({ _.show() })?
@@ -251,7 +251,7 @@ fn runRemove(context: Context, options: PackageOptions): Result<Int, String> {
     Ok(found) => found
     Fail(explanation) => {
       printError explanation
-      return Ok 1
+      return 1
     }
   }
   File.writeText(manifestPath, text).mapError({ _.show() })?
@@ -260,7 +260,7 @@ fn runRemove(context: Context, options: PackageOptions): Result<Int, String> {
     print "removed {written} from {context.target.name}"
   }
   const _ = printChanges before, after
-  Ok 0
+  0
 }
 
 fn runUpdate(context: Context, options: PackageOptions): Result<Int, String> {
@@ -276,7 +276,7 @@ fn runUpdate(context: Context, options: PackageOptions): Result<Int, String> {
     Ok(found) => found
     Fail(explanation) => {
       printError explanation
-      return Ok 1
+      return 1
     }
   }
   const gains = capabilityGains before, after
@@ -285,7 +285,7 @@ fn runUpdate(context: Context, options: PackageOptions): Result<Int, String> {
       printError "  {gain}"
     }
     printError "error: the update gains capabilities: nothing was changed. `--accept-capabilities` takes them"
-    return Ok 1
+    return 1
   }
   writeLock(context, after.copy(settings: before.settings))?
   if !printChanges(before, after) {
@@ -305,7 +305,7 @@ fn runInstall(context: Context): Result<Int, String> {
     for problem in problems {
       printError renderProblem(problem)
     }
-    return Ok 1
+    return 1
   }
   installAll context, lock
 }
@@ -352,11 +352,11 @@ fn newestRelease(context: Context, package: String): Result<String, String> {
   var newest: Version? = None
   for candidate in candidatesOf(index, languageVersion) {
     if candidate.excluded.isNone() && !candidate.version.isPreRelease() {
-      newest = Some candidate.version
+      newest = candidate.version
     }
   }
   match newest {
-    Some(found) => Ok found.show()
+    Some(found) => found.show()
     None => Fail "`{package}` has no release that may be chosen: write a requirement, `torb add {package}@<requirement>`"
   }
 }
@@ -466,7 +466,7 @@ fn requirementsOf(manifest: Manifest, withDevelopment: Bool): Result<List<Requir
       needs.append requirement
     }
   }
-  Ok needs
+  needs
 }
 
 /** The version a local package stands at: its manifest's, or `0.0.0` where it says none. */
@@ -496,7 +496,7 @@ fn installAll(context: Context, lock: Lock): Result<Int, String> {
     fetched = fetched + 1
   }
   print "{counted(fetched + cached, "package")} installed, {cached} of them already in the cache"
-  Ok 0
+  0
 }
 
 /** What changed between two locks, one line a package; `false` where nothing did. */
@@ -557,12 +557,12 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
       printError "error: {problem}"
     }
     printError "error: {manifest.name} cannot be published: nothing was built"
-    return Ok 1
+    return 1
   }
   const checkedFiles = checkedCount context.tree, package.directory
   if checkedFiles < 0 {
     printError "error: {manifest.name} does not check: `torb check {context.tree.display(package.directory)}` says where"
-    return Ok 1
+    return 1
   }
   const paths = packageFiles(package.directory).mapError({ _.show() })?
   var entries = entriesOf(package.directory, paths.filter({ _ != "project.lock.trb" }).toList())?
@@ -590,7 +590,7 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
   print "  hash:          {hash}"
   if options.dryRun {
     print "nothing was uploaded (--dry-run)"
-    return Ok 0
+    return 0
   }
   const url = registryOf manifest.name, context.bindings
   var kept = workspaceLock.settings.filter({ _.package != manifest.name }).toList()
@@ -603,7 +603,7 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
       const said = uploadRelease(found, manifest.name, manifest.version, archive, hash, context.settings.cache)?
       writeLock(context, workspaceLock.copy(settings: kept))?
       print said
-      return Ok 0
+      return 0
     }
   }
   const release = IndexRelease(
@@ -624,7 +624,7 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
   writeText(indexPath, existing + renderRelease(release))?
   writeLock(context, workspaceLock.copy(settings: kept))?
   print "published {manifest.name} {manifest.version} to {url}"
-  Ok 0
+  0
 }
 
 /**

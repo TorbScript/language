@@ -32,7 +32,7 @@ public fn crossingValueOf(text: String): EncodedValue? {
   if reader.at != text.byteLength() {
     return None
   }
-  Some value
+  value
 }
 
 fn writeValue(var parts: List<String>, value: EncodedValue) {
@@ -96,22 +96,22 @@ type CrossingReader {
     at = at + 1
     // The letters, as bytes: n t f i u d s b q m r v
     match letter {
-      110 => Some EncodedValue.Nothing
-      116 => Some EncodedValue.Bool(true)
-      102 => Some EncodedValue.Bool(false)
+      110 => EncodedValue.Nothing
+      116 => EncodedValue.Bool true
+      102 => EncodedValue.Bool false
       105 => {
         const number = Int64.tryFrom(numberText(59)?).ok()?
-        Some EncodedValue.Int(number)
+        EncodedValue.Int number
       }
       117 => {
         const number = UInt64.tryFrom(numberText(59)?).ok()?
-        Some EncodedValue.Unsigned(number)
+        EncodedValue.Unsigned number
       }
       100 => {
         const number = Float64.tryFrom(numberText(59)?).ok()?
-        Some EncodedValue.Float(number)
+        EncodedValue.Float number
       }
-      115 => Some EncodedValue.String(textPart()?)
+      115 => EncodedValue.String(textPart()?)
       98 => {
         const count = countOf()?
         var bytes: List<UInt8> = []
@@ -119,18 +119,18 @@ type CrossingReader {
           const number = Int.tryFrom(numberText(59)?).ok()?
           bytes.append(UInt8.tryFrom(number).ok()?)
         }
-        Some EncodedValue.Bytes(bytes)
+        EncodedValue.Bytes bytes
       }
-      113 => Some EncodedValue.Sequence(values()?)
-      109 => Some EncodedValue.Mapping(values()?)
+      113 => EncodedValue.Sequence(values()?)
+      109 => EncodedValue.Mapping(values()?)
       114 => {
         const typeName = textPart()?
-        Some EncodedValue.Record(typeName, fields()?)
+        EncodedValue.Record(typeName, fields()?)
       }
       118 => {
         const typeName = textPart()?
         const name = textPart()?
-        Some EncodedValue.Variant(typeName, name, fields()?)
+        EncodedValue.Variant(typeName, name, fields()?)
       }
       _ => None
     }
@@ -148,7 +148,7 @@ type CrossingReader {
     }
     const found = text.sliceBytes start, at
     at = at + 1
-    Some found
+    found
   }
 
   var fn countOf(): Int? {
@@ -163,7 +163,7 @@ type CrossingReader {
     }
     const found = text.sliceBytes(at, at + length)
     at = at + length
-    Some found
+    found
   }
 
   var fn values(): List<EncodedValue>? {
@@ -172,7 +172,7 @@ type CrossingReader {
     for _ in 0..count {
       found.append(value()?)
     }
-    Some found
+    found
   }
 
   var fn fields(): List<EncodedField>? {
@@ -182,6 +182,6 @@ type CrossingReader {
       const name = textPart()?
       found.append EncodedField(name, value()?)
     }
-    Some found
+    found
   }
 }

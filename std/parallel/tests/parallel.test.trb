@@ -58,7 +58,7 @@ const rangeExpected = (1..5000).map({ collatz _ }).filter({ _ > 20 }).sum()
 const rangeAlone = (1..5000).parallel(workers: 1).map({ collatz _ }).filter({ _ > 20 }).sum().await()
 const rangeFour = (1..5000).parallel(workers: 4).map({ collatz _ }).filter({ _ > 20 }).sum().await()
 const rangeEverywhere = (1..5000).parallel().map({ collatz _ }).filter({ _ > 20 }).sum().await()
-const inclusive = (0..=100).parallel(chunk: Some(7)).map({ _ * 3 }).toList().await()
+const inclusive = (0..=100).parallel(chunk: 7).map({ _ * 3 }).toList().await()
 const shortRange = (10..20).parallel(workers: 4).toList().await()
 const emptyCount = (5..5).parallel().count().await()
 const emptyJoined = (5..5).parallel().map({ "{_}" }).collect(joining(prefix: "[", suffix: "]")).await()
@@ -66,12 +66,12 @@ const emptyJoined = (5..5).parallel().map({ "{_}" }).collect(joining(prefix: "["
 // --- A list, an array and a type of the program's own cut themselves
 
 const words = ["one", "two", "three", "four", "five", "six"]
-const wordLengths = words.parallel(workers: 4, chunk: Some(4)).map({ _.byteLength() }).toList().await()
+const wordLengths = words.parallel(workers: 4, chunk: 4).map({ _.byteLength() }).toList().await()
 const fourLetters = words.parallel().filter({ _.byteLength() == 4 }).toList().await()
 const digits: Array<Int, 6> = [3, 1, 4, 1, 5, 9]
-const doubledDigits = digits.parallel(workers: 4, chunk: Some(4)).map({ _ * 2 }).toList().await()
+const doubledDigits = digits.parallel(workers: 4, chunk: 4).map({ _ * 2 }).toList().await()
 const stretch = Stretch 5, 10
-const stretchItems = stretch.parallel(workers: 4, chunk: Some(3)).toList().await()
+const stretchItems = stretch.parallel(workers: 4, chunk: 3).toList().await()
 const stretchSum = stretch.parallel().map({ _ * 2 }).sum().await()
 
 // --- Everything else is read into a list first
@@ -83,7 +83,7 @@ const ages = ["Ada": 36, "Alan": 41, "Grace": 45]
 const elders = ages.parallel(workers: 4).filter({ _.value > 40 }).map({ _.key }).toList().await()
 const text = "parallel pipelines"
 const letterCount = text.chars().parallel(workers: 4).filter({ _ == 'l' }).count().await()
-const letters = text.chars().parallel(chunk: Some(5)).toList().await()
+const letters = text.chars().parallel(chunk: 5).toList().await()
 const squares = (1..).map({ _ * _ }).take(50)
 const oddSquares = squares.parallel(workers: 4).filter({ _ % 2 == 1 }).toList().await()
 const counted = Counter(100).parallel(workers: 4).sum().await()
@@ -96,8 +96,8 @@ const stages = stagesSpread.filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { Non
 const firstLong = (1..10000).parallel(workers: 4).find({ collatz(_) > 200 }).await()
 const noMatch = (1..100).parallel().find({ _ > 1000 }).await()
 const fruits = ["kiwi", "fig", "pear", "date", "yam", "plum"]
-const shortest = fruits.parallel(workers: 4, chunk: Some(3)).minBy({ _.byteLength() }).await()
-const longest = fruits.parallel(workers: 4, chunk: Some(3)).maxBy({ _.byteLength() }).await()
+const shortest = fruits.parallel(workers: 4, chunk: 3).minBy({ _.byteLength() }).await()
+const longest = fruits.parallel(workers: 4, chunk: 3).maxBy({ _.byteLength() }).await()
 const shortestAlone = fruits.parallel(workers: 1).minBy({ _.byteLength() }).await()
 const longestAlone = fruits.parallel(workers: 1).maxBy({ _.byteLength() }).await()
 const thirds = (0..1000).parallel(workers: 4).filter({ _ % 3 == 0 }).count().await()
@@ -112,8 +112,8 @@ const listed = names.parallel(workers: 4).collect(listing()).await()
 const nameCount = names.parallel(workers: 4).collect(counting()).await()
 const nameBytes = names.parallel().map({ _.byteLength() }).collect(summing { value: Int => value }).await()
 const joined = names.parallel(workers: 4).collect(joining(", ")).await()
-const grouped = names.parallel(chunk: Some(6)).collect(groupingBy { name: String => name.byteLength() }).await()
-const bracketed = (1..=64).toList().parallel(chunk: Some(8)).filter({ _ % 20 == 0 }).map({ "{_}" })
+const grouped = names.parallel(chunk: 6).collect(groupingBy { name: String => name.byteLength() }).await()
+const bracketed = (1..=64).toList().parallel(chunk: 8).filter({ _ % 20 == 0 }).map({ "{_}" })
 const bracketedJoined = bracketed.collect(joining(separator: ", ", prefix: "[", suffix: "]")).await()
 const nothing: List<Int> = []
 const nothingCounted = nothing.parallel().collect(counting()).await()
@@ -189,8 +189,8 @@ group "the stages are fused and the terminals agree with their sequential counte
   }
 
   test "minBy and maxBy keep the earlier of equal keys" {
-    assert(shortest == Some("fig"))
-    assert(longest == Some("kiwi"))
+    assert(shortest == "fig")
+    assert(longest == "kiwi")
     assert(shortestAlone == fruits.collect(minBy { fruit: String => fruit.byteLength() }))
     assert(longestAlone == fruits.collect(maxBy { fruit: String => fruit.byteLength() }))
   }

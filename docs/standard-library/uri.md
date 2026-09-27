@@ -61,7 +61,7 @@ use UriReference from "std/uri"
 fn linkTarget(page: String, link: String): Result<Uri, UriError> {
   const base = Uri.tryFrom(page)?
   const reference = UriReference.tryFrom(link)?
-  Ok reference.resolved(against: base)
+  reference.resolved against: base
 }
 
 print linkTarget("https://example.test/guide/start.html", "../reference/index.html#top")
@@ -244,8 +244,8 @@ fn orderOf(target: String): Result<String, UriError> {
   const template: UriTemplate<TemplateValues> = "/orders/{id}{?fields}"
   const values = template.matched(UriReference.tryFrom(target)?) ?? [:]
   match values.get("id") {
-    Some(.Text(id)) => Ok id
-    _ => Ok "no order"
+    Some(.Text(id)) => id
+    _ => "no order"
   }
 }
 

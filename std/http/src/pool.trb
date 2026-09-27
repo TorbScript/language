@@ -129,11 +129,11 @@ public shared type Client {
       const code = response.status.code()
       const location = response.headers.get "Location"
       if !(code == 301 || code == 302 || code == 303 || code == 307 || code == 308) || location.isNone() {
-        return Ok response
+        return response
       }
       const limit = match redirects {
         .Never => {
-          return Ok response
+          return response
         }
         .SameHost(most) => most
         .AnyHost(most) => most
@@ -141,19 +141,19 @@ public shared type Client {
       const next = match UriReference.tryFrom(location ?? "") {
         Ok(reference) => reference.resolved against: current
         Fail(_) => {
-          return Ok response
+          return response
         }
       }
       const sameHost = hostOf(next) == hostOf(current)
       const downgrade = current.scheme() == "https" && next.scheme() != "https"
       if downgrade || (!sameHost && redirects == RedirectPolicy.SameHost(limit)) {
-        return Ok response
+        return response
       }
       // 303 asks for a GET; 301 and 302 turn a POST into one, as browsers do; 307 and 308 repeat the request as it was
       const becomesGet = (code == 303 && asking != Method.Head) || ((code == 301 || code == 302) && asking == Method.Post)
-      if !becomesGet && sending.length() != Some(0) {
+      if !becomesGet && sending.length() != 0 {
         // The body was a stream that is gone now: the redirect is the answer
-        return Ok response
+        return response
       }
       if followed >= limit {
         return Fail HttpError.tooManyRedirects(limit)
@@ -183,7 +183,7 @@ public shared type Client {
       Some(made) => made
       None => {
         const made = Pool()
-        pool = Some made
+        pool = made
         made
       }
     }
@@ -194,12 +194,12 @@ public shared type Client {
       Some(idle) => {
         match attempt(idle, destination, method, headers, body, lease).await() {
           Ok(response) => {
-            return Ok response
+            return response
           }
           Fail(problem) => {
             // A connection the server closed while it was idle: sent again over a new one, where nothing is lost by it -
             // an idempotent method (RFC 9110 section 9.2.2) with no body to send again
-            if !method.isIdempotent() || body.length() != Some(0) {
+            if !method.isIdempotent() || body.length() != 0 {
               lease.discard()
               return Fail problem
             }
@@ -216,7 +216,7 @@ public shared type Client {
       }
     }
     match attempt(fresh, destination, method, headers, body, lease).await() {
-      Ok(response) => Ok response
+      Ok(response) => response
       Fail(problem) => {
         lease.discard()
         Fail problem
@@ -236,17 +236,17 @@ fn attempt(
 ): Task<Result<Response, HttpError>> {
   writeRequest(connection, method, destination, headers, body, false).await()?
   const head = readHead(connection, method).await()?
-  lease.connection = Some connection
+  lease.connection = connection
   lease.reusable = head.keepsConnection()
   const inner = bodyOf connection, head.framing
   const length = inner.length()
-  if length == Some(0) {
+  if length == 0 {
     // Nothing to read: the connection is free at once
     lease.giveBack()
-    return Ok Response(head.status, head.headers, Body.empty())
+    return Response head.status, head.headers, Body.empty()
   }
   var reading = PooledBody inner, lease
-  Ok Response(head.status, head.headers, Body.of(reading, length: length))
+  Response head.status, head.headers, Body.of(reading, length: length)
 }
 
 /** The host of a URI, in lower case, for comparing where a redirect goes. */
@@ -271,7 +271,7 @@ shared type Pool {
       if idle[index].origin == origin {
         const found = idle[index].connection
         idle = idle.removedAt index
-        return Some found
+        return found
       }
       index = index - 1
     }
@@ -328,7 +328,7 @@ shared type Slots {
     }
     const signal = Channel<Int>()
     var reading = signal.source()
-    const waiter = Waiter Some(signal.sink())
+    const waiter = Waiter signal.sink()
     waiting.append waiter
     using _abandon = Abandon self, waiter
     const _ = reading.next().await()

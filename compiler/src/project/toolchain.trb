@@ -44,7 +44,7 @@ public fn findCompilerSources(paths: List<String>): String? {
  * the threads are the Win32 API that every C compiler links anyway. Windows is told by `OS`, which every Windows NT sets.
  */
 public fn threadArguments(): List<String> {
-  if Environment.get("OS") == Some("Windows_NT") {
+  if Environment.get("OS") == "Windows_NT" {
     return []
   }
   ["-pthread"]
@@ -53,7 +53,7 @@ public fn threadArguments(): List<String> {
 fn findToolchainPart(variable: String, name: String, marker: String, paths: List<String>): String? {
   if const Some(given) = Environment.get(variable) {
     if !given.isEmpty() {
-      return Some absoluteOf(given)
+      return absoluteOf given
     }
   }
   var starts: List<String> = []
@@ -66,7 +66,7 @@ fn findToolchainPart(variable: String, name: String, marker: String, paths: List
   }
   for start in starts {
     if const Some(found) = searchAbove(start, name, marker) {
-      return Some found
+      return found
     }
   }
   None
@@ -85,7 +85,7 @@ fn searchAbove(start: String, name: String, marker: String): String? {
   while pathDepth(current) >= 1 {
     const candidate = joinPath current, name
     if File.exists(joinPath(candidate, marker)) {
-      return Some candidate
+      return candidate
     }
     const parent = parentPath current
     if parent == current {

@@ -44,7 +44,7 @@ fn frontPage(host: String): Task<Result<String, NetworkError>> {
   var stream = TlsStream.connect(tcp, host).await()?
   stream.send("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".bytes().toList()).await()?
   const chunk = stream.receive().await()? ?? []
-  Ok(textOf(chunk).ok() ?? "")
+  textOf(chunk).ok() ?? ""
 }
 ```
 

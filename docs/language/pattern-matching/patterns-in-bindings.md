@@ -22,7 +22,7 @@ rules of [Pattern forms](pattern-forms.md) apply - the difference is what happen
 ```trb check
 fn firstPositive(numbers: List<Int>): Int? {
   if const Some(first) = numbers.find({ _ > 0 }) {
-    return Some first
+    return first
   }
   None
 }

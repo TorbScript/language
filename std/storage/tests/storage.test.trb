@@ -35,17 +35,17 @@ group "the memory driver" {
   test "what is written is read back, and a missing reference is not found" {
     assert(firstWritten == Ok(void))
     assert(secondWritten == Ok(void))
-    assert(firstRead == Ok("one"))
+    assert(firstRead == "one")
     assert(missingRead == Fail(StorageFailure.NotFound("memory:/notes/none")))
   }
 
   test "a directory is a prefix: it exists, and lists its entries once, sorted" {
     const deeper: Uri = "memory:/notes/deeper"
     const first: Uri = "memory:/notes/first"
-    assert(listed == Ok([deeper, first]))
-    assert(directoryExists == Ok(true))
-    assert(leafExists == Ok(true))
-    assert(nothingExists == Ok(false))
+    assert(listed == [deeper, first])
+    assert(directoryExists == true)
+    assert(leafExists == true)
+    assert(nothingExists == false)
   }
 
   test "another scheme is not its to reach, and bytes that are not UTF-8 are not text" {
@@ -62,7 +62,7 @@ group "the memory driver" {
 
   test "deleting a directory deletes what is below it, and a second time finds nothing" {
     assert(deletedTree == Ok(void))
-    assert(afterDelete == Ok(false))
+    assert(afterDelete == false)
     assert(deletedAgain == Fail(StorageFailure.NotFound("memory:/notes")))
   }
 }
@@ -80,7 +80,7 @@ group "the registry" {
   test "it answers to the schemes of its drivers and hands a reference to the right one" {
     assert(registrySchemes == ["file", "memory"])
     assert(throughRegistry == Ok(void))
-    assert(readThrough == Ok("hello"))
+    assert(readThrough == "hello")
   }
 
   test "a scheme no driver answers to fails, naming what the registry knows" {
@@ -125,8 +125,8 @@ group "the file driver" {
   test "a write creates the directories above it and replaces the file whole" {
     assert(fileWritten == Ok(void))
     assert(fileReplaced == Ok(void))
-    assert(fileRead == Ok("# Summary, again"))
-    assert(fileEntries == Ok(["summary.md"]))
+    assert(fileRead == "# Summary, again")
+    assert(fileEntries == ["summary.md"])
   }
 
   test "a missing file is not found, and a directory is listed and not read" {
@@ -134,8 +134,8 @@ group "the file driver" {
       Fail(.NotFound(_)) => void
       other => panic "not missing: {other}"
     }
-    assert(fileListed == Ok([inside("reports/2026/summary.md")]))
-    assert(fileExists == Ok(true))
+    assert(fileListed == [inside("reports/2026/summary.md")])
+    assert(fileExists == true)
     match fileDirectoryRead {
       Fail(.Refused(_, reason)) => assert reason.contains("directory")
       other => panic "a directory was read: {other}"
@@ -144,7 +144,7 @@ group "the file driver" {
 
   test "deleting a directory deletes everything in it" {
     assert(fileDeleted == Ok(void))
-    assert(fileGone == Ok(false))
+    assert(fileGone == false)
     match fileDeletedAgain {
       Fail(.NotFound(_)) => void
       other => panic "deleted twice: {other}"

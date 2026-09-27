@@ -69,13 +69,13 @@ if const <pattern> = <compile-time constant> { ... } else { ... }
 
    fn knownPageSize(): Int? {
      match (OperatingSystem.current, Architecture.current) {
-       (.MacOs, .Arm64) => Some 16384
-       (.Windows, _) => Some 4096
+       (.MacOs, .Arm64) => 16384
+       (.Windows, _) => 4096
        (_, _) => None
      }
    }
 
-   print(knownPageSize() != Some(0))
+   print(knownPageSize() != 0)
    // prints true
    ```
 

@@ -70,7 +70,7 @@ public fn nativeSnippetProblems(typed: TypedSnippets, options: NativeOptions): R
   const checked = match typed.checked {
     Some(found) => found
     None => {
-      return Ok([])
+      return []
     }
   }
   const paths = pathsOfModules checked
@@ -121,7 +121,7 @@ public fn nativeSnippetProblems(typed: TypedSnippets, options: NativeOptions): R
   if !runnable.isEmpty() {
     problems.appendAll(runSnippets(checked, paths, runnable, modules, options)?)
   }
-  Ok problems
+  problems
 }
 
 fn refusalNote(snippet: Snippet, refused: List<String>): String {
@@ -137,7 +137,7 @@ fn moduleOf(checked: Checked, snippet: Snippet): ModuleId? {
   const path = snippetPath snippet
   for module in checked.program.graph.modules {
     if module.path == path {
-      return Some module.id
+      return module.id
     }
   }
   None
@@ -232,7 +232,7 @@ public fn runSnippets(
   if !emission.unsupported.isEmpty() {
     const said = emission.unsupported.joined separator: " | "
     const note = "Every `trb run` block builds on its own, and together they do not: {said}"
-    return Ok([DocumentationProblem(runnable[0].path, runnable[0].line, note)])
+    return [DocumentationProblem(runnable[0].path, runnable[0].line, note)]
   }
   File.createDirectory(options.directory)?
   const source = joinPath options.directory, "program.c"
@@ -241,11 +241,11 @@ public fn runSnippets(
   const binary = joinPath options.directory, "snippets"
   const failure = compileProgram(source, binary, options.runtime, text.contains(tlsSymbolPrefix))?
   if !failure.isEmpty() {
-    return Ok([DocumentationProblem(runnable[0].path, runnable[0].line, failure)])
+    return [DocumentationProblem(runnable[0].path, runnable[0].line, failure)]
   }
   const executable = if File.exists(binary) { binary } else { "{binary}.exe" }
   const ran = Process.runBlocking(executable, [])?
-  Ok outputProblems(runnable, ran.standardOutput, ran.exitCode)
+  outputProblems runnable, ran.standardOutput, ran.exitCode
 }
 
 /**
@@ -257,11 +257,11 @@ fn compileProgram(source: String, binary: String, runtime: String, usesTls: Bool
   const compiler = match cCompiler() {
     Some(found) => found
     None => {
-      return Ok "No C compiler found for the `trb run` blocks (tried $TORB_CC, clang, gcc, cc). Pass --no-native to leave them out"
+      return "No C compiler found for the `trb run` blocks (tried $TORB_CC, clang, gcc, cc). Pass --no-native to leave them out"
     }
   }
   if !File.exists(joinPath(runtime, "include/torb.h")) {
-    return Ok "There is no C runtime at `{runtime}`. Set $TORB_RUNTIME, or pass --no-native to leave the `trb run` blocks out"
+    return "There is no C runtime at `{runtime}`. Set $TORB_RUNTIME, or pass --no-native to leave the `trb run` blocks out"
   }
   var arguments = ["-std=c11", "-O0", "-g0", "-I{joinPath(runtime, "include")}", "-o", binary, source]
   arguments.appendAll(runtimeSourcesOf(runtime)?)
@@ -272,25 +272,25 @@ fn compileProgram(source: String, binary: String, runtime: String, usesTls: Bool
   arguments.append "-lm"
   const output = Process.runBlocking(compiler, arguments)?
   if output.exitCode == 0 {
-    return Ok ""
+    return ""
   }
   // A C compiler says what is wrong on standard error, and some say part of it on standard output
   const said = if output.standardError.trim().isEmpty() { output.standardOutput } else { output.standardError }
   const first = linesOf(said).take(5).toList().joined(separator: " | ")
-  Ok "internal error: the C of the `trb run` blocks did not compile ({source}): {first}"
+  "internal error: the C of the `trb run` blocks did not compile ({source}): {first}"
 }
 
 /** The C compiler, in `torb build`'s order: `$TORB_CC`, then `clang`, `gcc`, `cc`. */
 fn cCompiler(): String? {
   if const Some(given) = Environment.get("TORB_CC") {
     if !given.isEmpty() {
-      return Some given
+      return given
     }
   }
   for candidate in ["clang", "gcc", "cc"] {
     if const Ok(output) = Process.runBlocking(candidate, ["--version"]) {
       if output.exitCode == 0 {
-        return Some candidate
+        return candidate
       }
     }
   }

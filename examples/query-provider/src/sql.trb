@@ -50,39 +50,39 @@ extend Fragment with Show {
 public fn translate(node: ExpressionNode, captures: List<EncodedValue>): Result<Fragment, QueryError> {
   match node {
     // `_.age`: a field of the row parameter is a column
-    .Field(.Parameter(_, _, _), name, _) => Ok Fragment.raw(name)
+    .Field(.Parameter(_, _, _), name, _) => Fragment.raw name
 
     // Values never end up in the SQL text, always in the parameters
-    .Literal(value, _) => Ok Fragment.parameter(value)
-    .Captured(index, _, _) => Ok Fragment.parameter(captures[index])
+    .Literal(value, _) => Fragment.parameter value
+    .Captured(index, _, _) => Fragment.parameter captures[index]
 
-    .Unary(.Not, operand, _) => Ok((translate(operand, captures)?).wrap("NOT (", ")"))
-    .Unary(.Negate, operand, _) => Ok((translate(operand, captures)?).wrap("-"))
-    .Unary(.BitwiseNot, operand, _) => Ok((translate(operand, captures)?).wrap("~"))
+    .Unary(.Not, operand, _) => (translate(operand, captures)?).wrap("NOT (", ")")
+    .Unary(.Negate, operand, _) => (translate(operand, captures)?).wrap("-")
+    .Unary(.BitwiseNot, operand, _) => (translate(operand, captures)?).wrap("~")
 
     .Binary(operator, left, right, _) => {
       const a = translate(left, captures)?
       const b = translate(right, captures)?
-      Ok combined(operator, a, b)
+      combined operator, a, b
     }
 
     // A few methods this provider knows
     .Call(Some(target), _, "startsWith", [prefix], _) => {
       const column = translate(target, captures)?
-      Ok column.join("LIKE", (translate(prefix, captures)?).wrap("", " || '%'"))
+      column.join "LIKE", (translate(prefix, captures)?).wrap("", " || '%'")
     }
     .Call(Some(target), _, "contains", [part], _) => {
       const column = translate(target, captures)?
-      Ok column.join("LIKE", (translate(part, captures)?).wrap("'%' || ", " || '%'"))
+      column.join "LIKE", (translate(part, captures)?).wrap("'%' || ", " || '%'")
     }
-    .Call(Some(target), _, "toLowerCase", [], _) => Ok((translate(target, captures)?).wrap("LOWER(", ")"))
-    .Call(Some(target), _, "isSome", [], _) => Ok((translate(target, captures)?).wrap("", " IS NOT NULL"))
+    .Call(Some(target), _, "toLowerCase", [], _) => (translate(target, captures)?).wrap("LOWER(", ")")
+    .Call(Some(target), _, "isSome", [], _) => (translate(target, captures)?).wrap("", " IS NOT NULL")
 
     .Conditional(condition, then, otherwise, _) => {
       const c = translate(condition, captures)?
       const t = translate(then, captures)?
       const o = translate(otherwise, captures)?
-      Ok Fragment("CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters.appendedAll(t.parameters).appendedAll(o.parameters))
+      Fragment "CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters.appendedAll(t.parameters).appendedAll(o.parameters)
     }
 
     // Everything else - and every node kind that is added in the future

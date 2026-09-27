@@ -38,7 +38,7 @@ fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
   if port < 1 || port > 65535 {
     return Fail ConfigError.Invalid("port", "out of range")
   }
-  Ok port
+  port
 }
 
 match readPort(["port": "80a"]) {

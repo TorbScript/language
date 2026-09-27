@@ -112,7 +112,7 @@ fn concatenate(
 ) {
   const location = locationOf lowering, at
   const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
-  emit builder, Instruction.Intrinsic(Some(target), intrinsic, parts, location)
+  emit builder, Instruction.Intrinsic(target, intrinsic, parts, location)
 }
 
 // --- `Show` of one value ----------------------------------------------------------------------------------------------
@@ -209,7 +209,7 @@ public fn showSlot(
     // printed at all
     if const Some(found) = memberInValue(lowering, bounds, subject, Reference(value, []), member) {
       const none: List<Slot> = []
-      emit builder, Instruction.CallWitness(Some(target), found.source, found.member, borrowedArguments(none))
+      emit builder, Instruction.CallWitness(target, found.source, found.member, borrowedArguments(none))
       return target
     }
   }
@@ -220,7 +220,7 @@ public fn showSlot(
     }
   }
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location))
+  emit builder, Instruction.Call(target, called, [borrowed(value)], empty, location)
   target
 }
 
@@ -253,29 +253,29 @@ public fn describedKeySlot(
   const at = expression.span
   const value = lowerValue lowering, builder, written
   if !lowering.isSupported {
-    return Some abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   const showNested = match memberOfType(lowering, subject, bound, "showNested", at) {
     Some(member) => member
     None => {
-      return Some abandonedSlot(lowering, builder, destination)
+      return abandonedSlot lowering, builder, destination
     }
   }
   const text = lowering.program.internType IrType.Text
   const location = locationOf lowering, at
   const empty: List<WitnessSource> = []
   const shown = addTemporary builder, text
-  emit builder, Instruction.Call(Some(shown), showNested, [borrowed(value)], empty, Some(location))
+  emit builder, Instruction.Call(shown, showNested, [borrowed(value)], empty, location)
   const target = valueSlot lowering, builder, destination, text
-  emit builder, Instruction.Call(Some(target), describe, [borrowed(shown)], empty, Some(location))
-  Some target
+  emit builder, Instruction.Call(target, describe, [borrowed(shown)], empty, location)
+  target
 }
 
 /** `Show` as a bound, which is the trait every interpolated part and every argument of `print` is resolved against. */
 fn showBoundOf(var lowering: Lowering): TypeId? {
   const symbol = lowering.checker.wellKnown.symbolNamed("Show")?
   const empty: List<TypeId> = []
-  Some lowering.checker.nominal(symbol, empty)
+  lowering.checker.nominal symbol, empty
 }
 
 /**
@@ -308,11 +308,11 @@ public fn showsHere(lowering: Lowering, at: Span): Bool {
  */
 public fn printOperationOf(var lowering: Lowering, symbol: SymbolId): IntrinsicOperation? {
   const known = lowering.checker.wellKnown
-  if known.symbolNamed("print") == Some(symbol) {
-    return Some IntrinsicOperation.PrintParts
+  if known.symbolNamed("print") == symbol {
+    return IntrinsicOperation.PrintParts
   }
-  if known.symbolNamed("printError") == Some(symbol) {
-    return Some IntrinsicOperation.PrintErrorParts
+  if known.symbolNamed("printError") == symbol {
+    return IntrinsicOperation.PrintErrorParts
   }
   None
 }

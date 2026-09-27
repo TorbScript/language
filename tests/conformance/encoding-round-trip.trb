@@ -52,7 +52,7 @@ const drawing = Drawing(
   "sketch",
   [.Circle(Point(1, 2), 1.5), .Square(3), .Empty],
   ["background": 0, "ink": 1],
-  note: Some("draft"),
+  note: "draft",
 )
 const text = json.encode drawing
 print text
@@ -62,12 +62,12 @@ failed = failed + expect(text, raw"""{"name":"sketch","shapes":""" + shapesText 
 
 const back = json.decode<Drawing>(text)
 print back
-failed = failed + expect("{back == Ok(drawing)}", "true")
+failed = failed + expect("{back == drawing}", "true")
 
 // Every field with a default may be missing, and takes it
 const sparse = json.decode<Drawing>(raw"""{"name": "empty"}""")
 print sparse
-failed = failed + expect("{sparse == Ok(Drawing("empty"))}", "true")
+failed = failed + expect("{sparse == Drawing("empty")}", "true")
 
 // `null` for an option is `None`, and so is a missing one
 const nothing = json.decode<Drawing>(raw"""{"name": "n", "note": null}""")
@@ -81,15 +81,15 @@ failed = failed + expect("{json.decode<List<Shape>>(raw"""["Empty", {"Square": {
 failed = failed + expect("{text.contains("cache")}", "false")
 
 // Collections of collections
-const nested: Map<String, List<Int?>> = ["a": [Some(1), None, Some(3)], "b": []]
+const nested: Map<String, List<Int?>> = ["a": [1, None, 3], "b": []]
 const nestedText = json.encode nested
 failed = failed + expect(nestedText, raw"""{"a":[1,null,3],"b":[]}""")
-failed = failed + expect("{json.decode<Map<String, List<Int?>>>(nestedText) == Ok(nested)}", "true")
+failed = failed + expect("{json.decode<Map<String, List<Int?>>>(nestedText) == nested}", "true")
 
 // A map whose keys are numbers is an object with text keys, and reads back as numbers
 const counts: Map<Int, String> = [1: "one", 2: "two"]
 failed = failed + expect(json.encode(counts), raw"""{"1":"one","2":"two"}""")
-failed = failed + expect("{json.decode<Map<Int, String>>(json.encode(counts)) == Ok(counts)}", "true")
+failed = failed + expect("{json.decode<Map<Int, String>>(json.encode(counts)) == counts}", "true")
 
 // A set comes back as a set, and a tuple is an array of its positions
 failed = failed + expect("{json.decode<Set<Int>>("[3, 1, 3]")}", "Ok(\{3, 1})")

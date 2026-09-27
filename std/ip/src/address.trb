@@ -96,7 +96,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
       const number = decimalPart(text, part)?
       value = value << 8 | number
     }
-    Ok Ipv4Address(value)
+    Ipv4Address value
   }
 }
 
@@ -117,7 +117,7 @@ fn decimalPart(text: String, part: String): Result<Int, AddressError> {
   if number > 255 {
     return Fail AddressError(text, "the part `{part}` is larger than 255")
   }
-  Ok number
+  number
 }
 
 /**
@@ -149,7 +149,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
         low = low << 16 | segment & 65535
       }
     }
-    Ok Ipv6Address(high, low)
+    Ipv6Address high, low
   }
 
   /** The address of its two halves, as the runtime hands them over. */
@@ -209,7 +209,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
     if storedHigh != 0 || storedLow >> 32 & 4294967295 != 65535 {
       return None
     }
-    Some Ipv4Address(storedLow & 4294967295)
+    Ipv4Address(storedLow & 4294967295)
   }
 
   /** The RFC 5952 form: `2001:db8::1`, `::1`, `::ffff:192.0.2.1`. */
@@ -318,7 +318,7 @@ fn compareUnsigned(first: Int, second: Int): Ordering {
 fn segmentsOf(text: String, side: String, last: Bool): Result<List<Int>, AddressError> {
   var result: List<Int> = []
   if side.isEmpty() {
-    return Ok result
+    return result
   }
   const parts = side.split ":"
   for (index, part) in parts.indexed() {
@@ -330,7 +330,7 @@ fn segmentsOf(text: String, side: String, last: Bool): Result<List<Int>, Address
     }
     result.append(hexadecimalSegment(text, part)?)
   }
-  Ok result
+  result
 }
 
 /** One to four hexadecimal digits. */
@@ -346,20 +346,20 @@ fn hexadecimalSegment(text: String, part: String): Result<Int, AddressError> {
     }
     value = value * 16 + digit
   }
-  Ok value
+  value
 }
 
 /** The value of one hexadecimal digit, either case. */
 fn hexadecimalDigit(character: Char): Int? {
   const code = Int.from character
   if code >= 48 && code <= 57 {
-    return Some(code - 48)
+    return code - 48
   }
   if code >= 97 && code <= 102 {
-    return Some(code - 87)
+    return code - 87
   }
   if code >= 65 && code <= 70 {
-    return Some(code - 55)
+    return code - 55
   }
   None
 }
@@ -415,9 +415,9 @@ public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressE
 
   static fn tryFrom(text: String): Result<IpAddress, AddressError> {
     if text.contains(":") {
-      return Ok IpAddress.Version6(Ipv6Address.tryFrom(text)?)
+      return IpAddress.Version6(Ipv6Address.tryFrom(text)?)
     }
-    Ok IpAddress.Version4(Ipv4Address.tryFrom(text)?)
+    IpAddress.Version4(Ipv4Address.tryFrom(text)?)
   }
 }
 
@@ -444,7 +444,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
       }
       const inside = Ipv6Address.tryFrom(text.sliceBytes(1, closing))?
       const port = portOf(text, text.sliceBytes(closing + 2, text.byteLength()))?
-      return Ok SocketAddress(IpAddress.Version6(inside), port)
+      return SocketAddress IpAddress.Version6(inside), port
     }
     const colon = text.lastByteOffsetOf(":") ?? -1
     if colon < 0 {
@@ -455,7 +455,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
     }
     const inside = Ipv4Address.tryFrom(text.sliceBytes(0, colon))?
     const port = portOf(text, text.sliceBytes(colon + 1, text.byteLength()))?
-    Ok SocketAddress(IpAddress.Version4(inside), port)
+    SocketAddress IpAddress.Version4(inside), port
   }
 }
 
@@ -468,5 +468,5 @@ fn portOf(text: String, part: String): Result<Int, AddressError> {
   if number > 65535 {
     return Fail AddressError(text, "the port `{part}` is larger than 65535")
   }
-  Ok number
+  number
 }

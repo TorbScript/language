@@ -563,7 +563,7 @@ fn thunkHeadOf(
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
   const name = thunkNameOf program, table, index, names
-  Some "static {declarationOf(result, "{name}({written})")}"
+  "static {declarationOf(result, "{name}({written})")}"
 }
 
 /** Whether the member the thunk wraps writes through its receiver, which is what makes the box mutable. */
@@ -608,7 +608,7 @@ fn emitThunk(
   }
   var body: List<CStatement> = []
   const cast = CExpression.Cast spelling, CExpression.Name("self")
-  body.append CStatement.Declaration(spelling, "box", Some(cast))
+  body.append CStatement.Declaration(spelling, "box", cast)
   // **The erased ABI borrows every operand**, because a call site knows the member's index and not its declaration:
   // `CallWitness` hands over `value.data` and the arguments as they are and keeps its own counts. A parameter the real
   // member takes **owned** - the `self` of `ArrayList.iterate`, whose `ListIterator` stores the list, and the value of
@@ -619,7 +619,7 @@ fn emitThunk(
   const receiver = match retainedReceiverOf(program, table, index) {
     Some(statement) => {
       const annotation = valueTypeOf program, function.signature.parameters[0].annotation
-      body.append CStatement.Declaration(annotation, receiverName, Some(unwrapped))
+      body.append CStatement.Declaration(annotation, receiverName, unwrapped)
       body.append statement
       CExpression.Name receiverName
     }
@@ -645,7 +645,7 @@ fn emitThunk(
     body.append CStatement.Evaluate(called)
     body.append CStatement.Return()
   } else {
-    body.append CStatement.Return(Some(called))
+    body.append CStatement.Return(called)
   }
   write emission, CDeclaration.Definition("", head, body)
 }
@@ -853,7 +853,7 @@ fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrF
   }
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
-  Some "static {declarationOf(result, "{closureThunkNameOf(function.name)}({written})")}"
+  "static {declarationOf(result, "{closureThunkNameOf(function.name)}({written})")}"
 }
 
 fn emitClosureThunk(var emission: Emission, program: IrProgram, function: IrFunction) {
@@ -882,7 +882,7 @@ fn emitClosureThunk(var emission: Emission, program: IrProgram, function: IrFunc
     body.append CStatement.Evaluate(called)
     body.append CStatement.Return()
   } else {
-    body.append CStatement.Return(Some(called))
+    body.append CStatement.Return(called)
   }
   write emission, CDeclaration.Definition("", head, body)
 }
@@ -998,7 +998,7 @@ fn emitElementHelpers(var emission: Emission, program: IrProgram, descriptor: El
       const left = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("first"))
       const right = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("second"))
       const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [left, right]
-      write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(called))])
+      write emission, CDeclaration.Definition("", head, [CStatement.Return(called)])
     }
   }
   if const Some(function) = descriptor.hash {
@@ -1007,7 +1007,7 @@ fn emitElementHelpers(var emission: Emission, program: IrProgram, descriptor: El
       const value = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("element"))
       const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [value]
       const converted = CExpression.Cast "uint64_t", called
-      write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(converted))])
+      write emission, CDeclaration.Definition("", head, [CStatement.Return(converted)])
     }
   }
 }
@@ -1427,13 +1427,13 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
   for layout in layouts {
     const name = program.layoutAt(layout).name
     const cast = CExpression.Cast "{name} *", CExpression.Name("block")
-    var body = [CStatement.Declaration("{name} *", "value", Some(cast))]
+    var body = [CStatement.Declaration("{name} *", "value", cast)]
     const answer = match privateHelperOf(program, layout) {
       .When(copy) => copy
       .Always => CExpression.Literal "true"
       .Never => CExpression.Literal "false"
     }
-    body.append CStatement.Return(Some(answer))
+    body.append CStatement.Return(answer)
     write emission, CDeclaration.Definition("", privateHeadOf(program, layout), body)
   }
   emitEnvironmentCopies emission, program, copies
@@ -1489,13 +1489,13 @@ fn emitEnvironmentCopies(var emission: Emission, program: IrProgram, layouts: Li
     const environment = CExpression.Name "environment"
     const value = CExpression.Name "value"
     const copy = CExpression.Name "copy"
-    var body = [CStatement.Declaration("{name} *", "value", Some(CExpression.Cast("{name} *", environment)))]
+    var body = [CStatement.Declaration("{name} *", "value", CExpression.Cast("{name} *", environment))]
     var copying = [
-      CStatement.Declaration("{name} *", "copy", Some(CExpression.Cast("{name} *", CExpression.Call(
+      CStatement.Declaration("{name} *", "copy", CExpression.Cast("{name} *", CExpression.Call(
         CExpression.Name("torb_allocate"),
         [CExpression.Name("sizeof({name})"), CExpression.Name("TORB_BLOCK_ENVIRONMENT")],
-      )))),
-      CStatement.Declaration("torb_header", "header", Some(CExpression.PointerMember(copy, "header"))),
+      ))),
+      CStatement.Declaration("torb_header", "header", CExpression.PointerMember(copy, "header")),
       CStatement.Assignment(CExpression.Dereference(copy), CExpression.Dereference(value)),
       CStatement.Assignment(CExpression.PointerMember(copy, "header"), CExpression.Name("header")),
     ]
@@ -1512,10 +1512,10 @@ fn emitEnvironmentCopies(var emission: Emission, program: IrProgram, layouts: Li
       const released = CStatement.Evaluate CExpression.Call(CExpression.Name("torb_environment_release"), [made])
       body.append(CStatement.If(CExpression.Unary("!", test), [
         CStatement.If(isCopy, [released]),
-        CStatement.Return(Some(CExpression.Name("NULL"))),
+        CStatement.Return(CExpression.Name("NULL")),
       ]))
     }
-    body.append CStatement.Return(Some(CExpression.Cast("torb_environment *", value)))
+    body.append CStatement.Return(CExpression.Cast("torb_environment *", value))
     write emission, CDeclaration.Definition("", environmentCopyHeadOf(program, layout), body)
   }
 }
@@ -1532,7 +1532,7 @@ fn privateHeadOf(program: IrProgram, layout: LayoutId): String {
 fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix: String, isRetain: Bool) {
   var body: List<CStatement> = []
   const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
-  body.append CStatement.Declaration("{layout.name} *", "value", Some(cast))
+  body.append CStatement.Declaration("{layout.name} *", "value", cast)
   const children = childStatements emission, program, layout, isRetain, false
   body.appendAll children
   const declaration = CDeclaration.Definition "", helperHeadOf(prefix, layout.name), body
@@ -1558,7 +1558,7 @@ fn emitDropHelper(
   }
   var body: List<CStatement> = []
   const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
-  body.append CStatement.Declaration("{layout.name} *", "value", Some(cast))
+  body.append CStatement.Declaration("{layout.name} *", "value", cast)
   var children = childStatements emission, program, layout, false, isReversed
   if const Some(function) = closer {
     body.appendAll closeStatementsOf(program, function)
@@ -1683,7 +1683,7 @@ fn childStatement(
     releaseStatement program, field.annotation, place
   }
   match statement {
-    Some(found) => Some found
+    Some(found) => found
     None => {
       reportUnsupported emission, "a counted field that is {describeCounted(program, field.annotation)}"
       None
@@ -2080,7 +2080,7 @@ fn childStaticsOf(program: IrProgram, id: StaticId): List<StaticId> {
 fn textOfStatic(value: StaticValue): String? {
   if const .Literal(literal) = value.contents {
     if const .Text(text) = literal {
-      return Some text
+      return text
     }
   }
   None
@@ -2412,7 +2412,7 @@ fn emitConstantCell(
   if isByPointer {
     statements.append CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
   } else {
-    statements.append CStatement.Return(Some(CExpression.Name(cell)))
+    statements.append CStatement.Return(CExpression.Name(cell))
   }
   const comment = "{function.name}: built once, immortal, never freed"
   write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
@@ -2430,7 +2430,7 @@ fn emitEntryCell(var emission: Emission, program: IrProgram, function: IrFunctio
       if const Some(retain) = retainStatement(program, function.signature.result, CExpression.Name(cell)) {
         statements.append retain
       }
-      statements.append CStatement.Return(Some(CExpression.Name(cell)))
+      statements.append CStatement.Return(CExpression.Name(cell))
     }
     .Write => {
       const value = CExpression.Name slotNameOf(function, Slot(0))

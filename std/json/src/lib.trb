@@ -73,7 +73,7 @@ public type Json {
    */
   fn parse(text: String): Result<JsonValue, JsonError> {
     const document = parsed(text)?
-    Ok jsonValueOf(document)
+    jsonValueOf document
   }
 
   /** Any `Encode` value as the [JsonValue] this format would write it as: to diff two versions of it structurally. */
@@ -88,7 +88,7 @@ public type Json {
     if !parser.atEnd() {
       return Fail parser.failure("there is more than one value in this text")
     }
-    Ok document
+    document
   }
 }
 
@@ -120,14 +120,14 @@ extend JsonValue with Encode {
       }
       .String(value) => target.string value
       .Array(items) => {
-        target.sequence Some(items.length())
+        target.sequence items.length()
         for item in items {
           item.encode target
         }
         target.finish()
       }
       .Object(entries) => {
-        target.map Some(entries.length())
+        target.map entries.length()
         for (key, value) in entries {
           target.string key
           value.encode target
@@ -201,8 +201,8 @@ public type JsonError with Show, Error {
   fn cause(): Error? {
     match kind {
       .Syntax(_, _) => None
-      .Decode(problem) => Some problem
-      .Text(problem) => Some problem
+      .Decode(problem) => problem
+      .Text(problem) => problem
     }
   }
 }
@@ -276,7 +276,7 @@ type JsonEncoder with Encoder {
 
   /** JSON has no bytes, so they travel as a sequence of numbers, which is what `ValueDecoder.bytes` reads back. */
   var fn bytes(value: List<UInt8>) {
-    sequence Some(value.length())
+    sequence value.length()
     for byte in value {
       int Int64.from(byte)
     }
@@ -524,7 +524,7 @@ type JsonParser {
       return array()
     }
     if character == '"' {
-      return Ok EncodedValue.String(text()?)
+      return EncodedValue.String(text()?)
     }
     if character.isLetter() {
       return word()
@@ -538,7 +538,7 @@ type JsonParser {
     skipWhitespace()
     if !atEnd() && characters[position] == '}' {
       position = position + 1
-      return Ok EncodedValue.Record("", fields)
+      return EncodedValue.Record "", fields
     }
     loop {
       skipWhitespace()
@@ -560,7 +560,7 @@ type JsonParser {
       }
       if characters[position] == '}' {
         position = position + 1
-        return Ok EncodedValue.Record("", fields)
+        return EncodedValue.Record "", fields
       }
       return Fail failure("a `,` or a `}` belongs after a field, not `{characters[position]}`")
     }
@@ -572,7 +572,7 @@ type JsonParser {
     skipWhitespace()
     if !atEnd() && characters[position] == ']' {
       position = position + 1
-      return Ok EncodedValue.Sequence(items)
+      return EncodedValue.Sequence items
     }
     loop {
       const found = value()?
@@ -587,7 +587,7 @@ type JsonParser {
       }
       if characters[position] == ']' {
         position = position + 1
-        return Ok EncodedValue.Sequence(items)
+        return EncodedValue.Sequence items
       }
       return Fail failure("a `,` or a `]` belongs after an item, not `{characters[position]}`")
     }
@@ -639,7 +639,7 @@ type JsonParser {
       return Fail failure("this text is not closed")
     }
     position = position + 1
-    Ok String.from(out)
+    String.from out
   }
 
   /** The four hex digits after `\u`, and a second escape after them where the first one is a high surrogate. */
@@ -666,7 +666,7 @@ type JsonParser {
   /** The character of a code point an escape wrote. */
   private fn characterOf(code: Int64): Result<Char, JsonError> {
     match Char.tryFrom(code) {
-      Ok(found) => Ok found
+      Ok(found) => found
       Fail(_) => Fail failure("`{code}` is not a character")
     }
   }
@@ -684,7 +684,7 @@ type JsonParser {
       value = value * 16 + digit
       position = position + 1
     }
-    Ok value
+    value
   }
 
   private var fn word(): Result<EncodedValue, JsonError> {
@@ -695,9 +695,9 @@ type JsonParser {
     }
     const found = String.from out
     match found {
-      "true" => Ok EncodedValue.Bool(true)
-      "false" => Ok EncodedValue.Bool(false)
-      "null" => Ok EncodedValue.Nothing
+      "true" => EncodedValue.Bool true
+      "false" => EncodedValue.Bool false
+      "null" => EncodedValue.Nothing
       other => Fail failure("`{other}` is not a JSON value")
     }
   }
@@ -724,14 +724,14 @@ type JsonParser {
     }
     if !floating {
       if const Ok(whole) = Int64.tryFrom(found) {
-        return Ok EncodedValue.Int(whole)
+        return EncodedValue.Int whole
       }
       if const Ok(count) = UInt64.tryFrom(found) {
-        return Ok EncodedValue.Unsigned(count)
+        return EncodedValue.Unsigned count
       }
     }
     match Float64.tryFrom(found) {
-      Ok(number) => Ok EncodedValue.Float(number)
+      Ok(number) => EncodedValue.Float number
       Fail(_) => Fail failure("`{found}` is not a number")
     }
   }

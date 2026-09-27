@@ -116,7 +116,7 @@ type AppError with Show, Error {
 
   fn cause(): Error? {
     match self {
-      .Config(cause) => Some cause
+      .Config(cause) => cause
       .Startup(_) => None
     }
   }

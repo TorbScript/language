@@ -66,7 +66,7 @@ public type Packed {
         }
       }
     }
-    Ok Packed(built.numbering)
+    Packed built.numbering
   }
 
   fn encode<Value: Encode>(value: Value): List<Int64> {
@@ -290,11 +290,11 @@ public type PackedDecoder with Decoder {
   }
 
   var fn bool(): Result<Bool, DecodeError> {
-    Ok(readVarint()? != 0)
+    readVarint()? != 0
   }
 
   var fn int(): Result<Int64, DecodeError> {
-    Ok unzigzag(readVarint()?)
+    unzigzag(readVarint()?)
   }
 
   var fn unsigned(): Result<UInt64, DecodeError> {
@@ -316,7 +316,7 @@ public type PackedDecoder with Decoder {
       const character = Char.tryFrom(code).mapError({ _ => DecodeError "{code} is not a character" })?
       out.append character
     }
-    Ok String.from(out)
+    String.from out
   }
 
   var fn bytes(): Result<List<UInt8>, DecodeError> {
@@ -337,15 +337,15 @@ public type PackedDecoder with Decoder {
 
   var fn hasNext(): Result<Bool, DecodeError> {
     if frames.isEmpty() {
-      return Ok false
+      return false
     }
     const last = frames.length() - 1
     const remaining = frames[last].remaining
     if remaining <= 0 {
-      return Ok false
+      return false
     }
     frames[last].remaining = remaining - 1
-    Ok true
+    true
   }
 
   /** Every record carries its own length, the outermost one too: a message can be concatenated with the next. */
@@ -377,15 +377,15 @@ public type PackedDecoder with Decoder {
       const number = key / 8
       const wire = key % 8
       if number == wanted {
-        return Ok true
+        return true
       }
       if number > wanted {
         position = mark
-        return Ok false
+        return false
       }
       skip(wire)?
     }
-    Ok false
+    false
   }
 
   var fn finish(): Result<Void, DecodeError> {
@@ -430,7 +430,7 @@ public type PackedDecoder with Decoder {
       position = position + 1
       result = result + (byte % 128) * scale
       if byte < 128 {
-        return Ok result
+        return result
       }
       scale = scale * 128
     }

@@ -79,7 +79,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   /** Changes the value of an `Ok` and leaves a `Fail` alone: one more step on the way that worked. */
   fn map<Output>(transform: Transform<Value, Output>): Result<Output, Failure> {
     match self {
-      Ok(value) => .Ok(transform(value))
+      Ok(value) => transform value
       Fail(error) => .Fail(error)
     }
   }
@@ -97,7 +97,7 @@ public type Result<Value, Failure> with OrElse<Value> {
    */
   fn mapError<OtherFailure>(transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
     match self {
-      Ok(value) => Ok value
+      Ok(value) => value
       Fail(error) => Fail transform(error)
     }
   }
@@ -125,7 +125,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   /** The value as an [Option], which drops the reason: for a caller that only wants to know whether there is one. */
   fn ok(): Value? {
     match self {
-      Ok(value) => Some value
+      Ok(value) => value
       Fail(_) => None
     }
   }
@@ -194,6 +194,6 @@ extend<Value, Failure, Target: From<Iterate<Value>>> Result<Target, Failure> wit
         }
       }
     }
-    Ok Target.from(found)
+    Target.from found
   }
 }

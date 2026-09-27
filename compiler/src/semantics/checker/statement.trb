@@ -91,10 +91,10 @@ fn hoistDeclarations(var checker: Checker, statements: List<Statement>) {
 
 fn declaredName(declaration: Declaration): Name? {
   match declaration.kind {
-    .Function(function) => Some function.name
-    .Type(typeDeclaration) => Some typeDeclaration.name
-    .Alias(alias) => Some alias.name
-    .Trait(traitDeclaration) => Some traitDeclaration.name
+    .Function(function) => function.name
+    .Type(typeDeclaration) => typeDeclaration.name
+    .Alias(alias) => alias.name
+    .Trait(traitDeclaration) => traitDeclaration.name
     _ => None
   }
 }
@@ -197,7 +197,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   var annotation: TypeId? = None
   var alias: String? = None
   if const Some(reference) = binding.annotation {
-    annotation = Some typeFromReference(checker, reference, scope.forType())
+    annotation = typeFromReference checker, reference, scope.forType()
     alias = checker.aliasNameAt checker.module, reference.span
     if const Some(written) = alias {
       checker.expectAlias checker.module, binding.value.span, written
@@ -305,7 +305,7 @@ fn reportNotIterate(var checker: Checker, subject: TypeId, at: Span) {
 /** Whether the type is `RangeTo<Value>`, the one range that is open at the start. */
 fn isRangeTo(checker: Checker, annotation: TypeId): Bool {
   if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return checker.wellKnown.rangeTo == Some(symbol)
+    return checker.wellKnown.rangeTo == symbol
   }
   false
 }
@@ -520,10 +520,10 @@ fn calledName(checker: Checker, expression: Expression): String {
 /** `added` was probably meant as `add`: the participles of the language are the verb plus `ed` or `d`. */
 fn verbOf(name: String): String? {
   if name.endsWith("ed") && name.byteLength() > 3 {
-    return Some name.droppingLast(characters: 2)
+    return name.droppingLast characters: 2
   }
   if name.endsWith("d") && name.byteLength() > 2 {
-    return Some name.droppingLast(characters: 1)
+    return name.droppingLast characters: 1
   }
   None
 }
@@ -573,7 +573,7 @@ public fn checkBodyOf(var checker: Checker, symbol: SymbolId) {
     signature.isVarSelf,
     signature.form.result,
     false,
-    declared: Some(symbol),
+    declared: symbol,
   )
 }
 
@@ -667,7 +667,7 @@ public fn taskValueOf(checker: Checker, result: TypeId): TypeId? {
   const task = checker.wellKnown.task?
   if const .Nominal(symbol, arguments) = checker.types.form(result) {
     if symbol == task && arguments.length() == 1 {
-      return Some arguments[0]
+      return arguments[0]
     }
   }
   None
@@ -735,7 +735,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   openInference checker
   var annotation: TypeId? = None
   if const Some(reference) = binding.annotation {
-    annotation = Some typeFromReference(checker, reference, TypeScope(module).forType())
+    annotation = typeFromReference checker, reference, TypeScope(module).forType()
     if const Some(written) = checker.aliasNameAt(module, reference.span) {
       checker.expectAlias module, binding.value.span, written
     }

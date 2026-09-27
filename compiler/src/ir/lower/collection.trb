@@ -230,7 +230,7 @@ fn filledList(
     }
     addInto lowering, builder, adder, storage, [value], written.value.span
   }
-  Some((storage, container))
+  (storage, container)
 }
 
 /**
@@ -319,7 +319,7 @@ public fn listOfValues(
   if !lowering.isSupported {
     return None
   }
-  Some target
+  target
 }
 
 /**
@@ -375,7 +375,7 @@ fn spreadInto(
   const cursorSpelling = irTypeOfClosed lowering, cursorType
   const cursor = addLocal builder, cursorSpelling, "spread"
   const noPlaces: List<Reference?> = []
-  const _ = lowerDispatched lowering, builder, Some(cursor), at, made, [source], noPlaces, cursorSpelling
+  const _ = lowerDispatched lowering, builder, cursor, at, made, [source], noPlaces, cursorSpelling
   if !lowering.isSupported {
     return false
   }
@@ -411,9 +411,9 @@ fn spreadInto(
   }
   const payload = payloadTypeOf lowering, layout, some
   const location = locationOf lowering, at
-  const check = addBlock builder, "spread", Some(location)
-  const inner = addBlock builder, "add", Some(location)
-  const done = addBlock builder, "spread done", Some(location)
+  const check = addBlock builder, "spread", location
+  const inner = addBlock builder, "add", location
+  const done = addBlock builder, "spread done", location
   const pulled = addTemporary builder, option
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
@@ -421,7 +421,7 @@ fn spreadInto(
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const places = [Some(Reference(cursor, []))]
-  const _ = lowerDispatched lowering, builder, Some(pulled), at, pull, [cursor], places, option
+  const _ = lowerDispatched lowering, builder, pulled, at, pull, [cursor], places, option
   if !lowering.isSupported {
     return false
   }
@@ -454,7 +454,7 @@ public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? 
       return None
     }
   }
-  Some lowering.checker.nominal(symbol, [item])
+  lowering.checker.nominal symbol, [item]
 }
 
 /**
@@ -637,7 +637,7 @@ fn appliedBoundOf(var lowering: Lowering, subject: TypeId, name: String, at: Spa
       return None
     }
   }
-  Some lowering.checker.nominal(capability, arguments)
+  lowering.checker.nominal capability, arguments
 }
 
 // --- Reading an element ---------------------------------------------------------------------------------------------
@@ -718,7 +718,7 @@ fn addInto(
     given.append borrowed(value)
   }
   const location = locationOf lowering, at
-  emit builder, Instruction.Call(None, member, given, [], Some(location))
+  emit builder, Instruction.Call(None, member, given, [], location)
 }
 
 /**

@@ -195,15 +195,15 @@ public fn manifestOfProject(directory: String, statically: Manifest): Result<Man
   const text = match File.readText(path) {
     Ok(found) => found
     Fail(_) => {
-      return Ok statically
+      return statically
     }
   }
   if !needsEvaluation(parse(SourceText.of(text)).file) {
-    return Ok statically
+    return statically
   }
   const kept = joinPath directory, inputsName
   if const Some(settings) = keptSettingsOf(directory, kept) {
-    return Ok withEvaluated(statically, settings)
+    return withEvaluated statically, settings
   }
   const evaluation = match evaluateManifests([path]) {
     Ok(found) => found
@@ -232,7 +232,7 @@ public fn manifestOfProject(directory: String, statically: Manifest): Result<Man
   }
   // A build directory that cannot be written costs an evaluation next time and nothing else
   const _ = keepInputs directory, kept, manifest.inputs, settings
-  Ok withEvaluated(statically, settings)
+  withEvaluated statically, settings
 }
 
 /** The settings of the static read, with what the evaluation configured of the ones that may be computed. */
@@ -273,7 +273,7 @@ fn keptSettingsOf(directory: String, kept: String): String? {
         }
       }
       "settings" => {
-        settings = Some(arguments.get(0) ?? "")
+        settings = arguments.get(0) ?? ""
       }
       _ => {
         return None
@@ -319,7 +319,7 @@ fn callOf(statement: Statement): (String, List<String>)? {
       _ => {}
     }
   }
-  Some((word, texts))
+  (word, texts)
 }
 
 /**

@@ -244,7 +244,7 @@ fn defaultArgument(
   var isOutside = false
   if own.isNone() {
     if const Some(owner) = declaration.owner {
-      own = Some selfTypeOf(checker, owner)
+      own = selfTypeOf checker, owner
       isOutside = true
     }
   }
@@ -358,7 +358,7 @@ fn parameterType(
     Some(found) => found
     // A parameter of a declaration whose signature nobody has asked for yet: it is still that parameter
     None => checker.types.declareParameter(
-      ParameterDeclaration(name, Some(symbol), None, false, 0, None, scope.module)
+      ParameterDeclaration(name, symbol, None, false, 0, None, scope.module)
     )
   }
   const built = checker.types.intern TypeForm.Parameter(identifier)
@@ -515,14 +515,14 @@ fn textOfLiteral(value: LiteralValue): String {
 public fn literalOf(expression: Expression): LiteralValue? {
   match expression.kind {
     .IntegerLiteral(text) => integerLiteral text, false
-    .CharLiteral(value) => Some LiteralValue.Character(value)
-    .BoolLiteral(value) => Some LiteralValue.Boolean(value)
+    .CharLiteral(value) => LiteralValue.Character value
+    .BoolLiteral(value) => LiteralValue.Boolean value
     .TextLiteral(segments) => {
       if segments.isEmpty() {
-        return Some LiteralValue.Text("")
+        return LiteralValue.Text ""
       }
       if const [.Literal(text)] = segments {
-        return Some LiteralValue.Text(text)
+        return LiteralValue.Text text
       }
       None
     }
@@ -548,7 +548,7 @@ public fn integerLiteral(text: String, isNegative: Bool): LiteralValue? {
     Int.tryFrom text
   }
   match parsed.ok() {
-    Some(value) => Some(LiteralValue.Integer(if isNegative { 0 - value } else { value }))
+    Some(value) => LiteralValue.Integer(if isNegative { 0 - value } else { value })
     None => None
   }
 }
@@ -594,7 +594,7 @@ public fn unsignedLiteral(text: String): LiteralValue? {
   if bits >= 0 {
     return None
   }
-  Some LiteralValue.Integer(bits)
+  LiteralValue.Integer bits
 }
 
 /** `Show & Encode`: a value that implements all of these. Only traits can be combined. */
@@ -726,10 +726,10 @@ fn aliasType(
 fn functionTypeParameter(var checker: Checker, parameter: FunctionTypeParameter, scope: TypeScope): ParameterForm {
   var name: String? = None
   if const Some(found) = parameter.name {
-    name = Some found.text
+    name = found.text
   }
   var mode = if parameter.isVar { ParameterMode.Var } else { ParameterMode.Value }
-  if name == Some("self") {
+  if name == "self" {
     mode = ParameterMode.Receiver parameter.isVar
   }
   var annotation = checker.invalidType

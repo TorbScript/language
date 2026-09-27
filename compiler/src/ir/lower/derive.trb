@@ -82,13 +82,13 @@ public fn generatedFunctionOf(
   }
   const name = functionName lowering.program, path, arguments
   if const Some(found) = lowering.generatedInstances.get(name) {
-    return Some found
+    return found
   }
-  var builder = newFunction name, Some(member), built, "generated"
+  var builder = newFunction name, member, built, "generated"
   const added = finishFunction lowering.program, builder
   lowering.generatedInstances.set name, added
   lowering.pendingGenerated.append GeneratedRequest(added, kind, member, subject, bound, mapping)
-  Some added
+  added
 }
 
 /**
@@ -106,9 +106,9 @@ public fn lowerGenerated(var lowering: Lowering, request: GeneratedRequest) {
   }
   const at = lowering.checker.symbolAt(member).span
   resetForGenerated lowering, module
-  var builder = newFunction name, Some(member), signature, "generated"
+  var builder = newFunction name, member, signature, "generated"
   const location = locationOf lowering, at
-  setBlockLocation builder, BlockId(0), Some(location)
+  setBlockLocation builder, BlockId(0), location
   lowerGeneratedBody lowering, builder, request, at
   if !lowering.isSupported {
     lowering.stubbed = lowering.stubbed + 1
@@ -223,14 +223,14 @@ fn delegateBody(var lowering: Lowering, var builder: FunctionBuilder, request: G
   const produced = addTemporary builder, answered
   const location = locationOf lowering, at
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(produced), called, arguments, empty, Some(location))
+  emit builder, Instruction.Call(produced, called, arguments, empty, location)
   if signature.result == target && answered != target {
     const wrapped = addTemporary builder, target
     emit builder, Instruction.Construct(wrapped, layout, 0, [borrowed(produced)])
-    terminate builder, Terminator.Return(Some(borrowed(wrapped)))
+    terminate builder, Terminator.Return(borrowed(wrapped))
     return
   }
-  terminate builder, Terminator.Return(Some(borrowed(produced)))
+  terminate builder, Terminator.Return(borrowed(produced))
 }
 
 /** A trait applied to arguments, with every argument that is `from` replaced by `to`: `Add<Meters, Meters>` for a field. */
@@ -267,7 +267,7 @@ fn arrayStorageBody(var lowering: Lowering, var builder: FunctionBuilder, operat
   if const .Unfilled = operation {
     const target = addTemporary builder, signature.result
     emit builder, Instruction.ArrayNew(target, [])
-    terminate builder, Terminator.Return(Some(borrowed(target)))
+    terminate builder, Terminator.Return(borrowed(target))
     return
   }
   const receiver = match signature.parameters.first() {
@@ -290,7 +290,7 @@ fn arrayStorageBody(var lowering: Lowering, var builder: FunctionBuilder, operat
     .Load => {
       const target = addTemporary builder, item
       emit builder, Instruction.Read(target, Reference(Slot(0), [step]))
-      terminate builder, Terminator.Return(Some(borrowed(target)))
+      terminate builder, Terminator.Return(borrowed(target))
     }
     .Store => {
       emit builder, Instruction.Write(Reference(Slot(0), [step]), borrowed(Slot(2)))
@@ -315,7 +315,7 @@ fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     }
   }
   if given == result {
-    terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+    terminate builder, Terminator.Return(borrowed(Slot(0)))
     return
   }
   const layout = match lowering.program.typeAt(result) {
@@ -331,7 +331,7 @@ fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     if fields.length() == 1 && fields[0].annotation == given {
       const target = addTemporary builder, result
       emit builder, Instruction.Construct(target, layout, index, [borrowed(Slot(0))])
-      terminate builder, Terminator.Return(Some(borrowed(target)))
+      terminate builder, Terminator.Return(borrowed(target))
       return
     }
   }
@@ -383,9 +383,9 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
     shownSlots.append shown
     const same = addTemporary builder, boolean
     const equal = Intrinsic IntrinsicOperation.TextEqual, None
-    emit builder, Instruction.Intrinsic(Some(same), equal, [text, shown], location)
-    const found = addBlock builder, "member", Some(location)
-    const next = addBlock builder, "other", Some(location)
+    emit builder, Instruction.Intrinsic(same, equal, [text, shown], location)
+    const found = addBlock builder, "member", location
+    const next = addBlock builder, "other", location
     terminate builder, Terminator.Branch(same, found, next)
     switchTo builder, found
     const member = addTemporary builder, payload
@@ -393,7 +393,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
     emit builder, Instruction.Constant(member, contents)
     const answer = addTemporary builder, result
     emit builder, Instruction.Construct(answer, layout, success, [borrowed(member)])
-    terminate builder, Terminator.Return(Some(borrowed(answer)))
+    terminate builder, Terminator.Return(borrowed(answer))
     switchTo builder, next
   }
   const error = shape.fieldsOfVariant(failure)[0].annotation
@@ -436,7 +436,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
   emit builder, Instruction.Construct(built, errorLayout, 0, fields)
   const failed = addTemporary builder, result
   emit builder, Instruction.Construct(failed, layout, failure, [borrowed(built)])
-  terminate builder, Terminator.Return(Some(borrowed(failed)))
+  terminate builder, Terminator.Return(borrowed(failed))
 }
 
 /** A member of a literal type as the text it is written as: `online`, `42`, `a`. */
@@ -511,7 +511,7 @@ fn containerBody(
   }
   const target = addTemporary builder, builder.function.signature.result
   emit builder, Instruction.ContainerNew(target, kind, elements)
-  terminate builder, Terminator.Return(Some(owned(target)))
+  terminate builder, Terminator.Return(owned(target))
 }
 
 /** Whether the first type argument of a container is a key of the hash table: the map's key, and the set's item. */
@@ -539,8 +539,8 @@ fn operationBody(var lowering: Lowering, var builder: FunctionBuilder, intrinsic
     return
   }
   const target = addTemporary builder, result
-  emit builder, Instruction.Intrinsic(Some(target), intrinsic, operands, location)
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  emit builder, Instruction.Intrinsic(target, intrinsic, operands, location)
+  terminate builder, Terminator.Return(borrowed(target))
 }
 
 /**
@@ -579,13 +579,13 @@ fn runtimeCallBody(
   const location = locationOf lowering, at
   const empty: List<WitnessSource> = []
   if isVoidLike(lowering, result) {
-    emit builder, Instruction.Call(None, called, given, empty, Some(location))
+    emit builder, Instruction.Call(None, called, given, empty, location)
     terminate builder, Terminator.Return(None)
     return
   }
   const target = addTemporary builder, result
-  emit builder, Instruction.Call(Some(target), called, given, empty, Some(location))
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  emit builder, Instruction.Call(target, called, given, empty, location)
+  terminate builder, Terminator.Return(borrowed(target))
 }
 
 /** `String.show()` is the text itself; `Void.equals` is always true. Both are one answer and no work. */
@@ -594,7 +594,7 @@ fn identityBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   const result = signature.result
   if const Some(first) = signature.parameters.first() {
     if first.annotation == result {
-      terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+      terminate builder, Terminator.Return(borrowed(Slot(0)))
       return
     }
   }
@@ -620,10 +620,10 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   const boolean = booleanTypeOf lowering
   const isNegative = addTemporary builder, boolean
   const location = locationOf lowering, at
-  const less = Intrinsic IntrinsicOperation.Less, Some(kind)
-  emit builder, Instruction.Intrinsic(Some(isNegative), less, [Slot(0), zero], location)
-  const negated = addBlock builder, "negated", Some(location)
-  const same = addBlock builder, "same", Some(location)
+  const less = Intrinsic IntrinsicOperation.Less, kind
+  emit builder, Instruction.Intrinsic(isNegative, less, [Slot(0), zero], location)
+  const negated = addBlock builder, "negated", location
+  const same = addBlock builder, "same", location
   terminate builder, Terminator.Branch(isNegative, negated, same)
   switchTo builder, negated
   // The smallest value of a signed integer has no positive counterpart: the panic names `absolute`, not the `-` that
@@ -633,10 +633,10 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
     const bound = if width >= 64 { Int.minimum } else { 0 - (1 << (width - 1)) }
     emit builder, Instruction.Constant(smallest, internStatic(lowering, StaticContents.Literal(LiteralValue.Integer(bound)), annotation))
     const isSmallest = addTemporary builder, boolean
-    const equal = Intrinsic IntrinsicOperation.Equal, Some(kind)
-    emit builder, Instruction.Intrinsic(Some(isSmallest), equal, [Slot(0), smallest], location)
-    const overflow = addBlock builder, "overflow", Some(location)
-    const fits = addBlock builder, "fits", Some(location)
+    const equal = Intrinsic IntrinsicOperation.Equal, kind
+    emit builder, Instruction.Intrinsic(isSmallest, equal, [Slot(0), smallest], location)
+    const overflow = addBlock builder, "overflow", location
+    const fits = addBlock builder, "fits", location
     terminate builder, Terminator.Branch(isSmallest, overflow, fits)
     switchTo builder, overflow
     const textType = lowering.program.internType IrType.Text
@@ -648,11 +648,11 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
     switchTo builder, fits
   }
   const target = addTemporary builder, annotation
-  const negate = Intrinsic IntrinsicOperation.Negate, Some(kind)
-  emit builder, Instruction.Intrinsic(Some(target), negate, [Slot(0)], location)
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  const negate = Intrinsic IntrinsicOperation.Negate, kind
+  emit builder, Instruction.Intrinsic(target, negate, [Slot(0)], location)
+  terminate builder, Terminator.Return(borrowed(target))
   switchTo builder, same
-  terminate builder, Terminator.Return(Some(borrowed(Slot(0))))
+  terminate builder, Terminator.Return(borrowed(Slot(0)))
 }
 
 /** A slot holding the zero of a numeric type, which is what a sign test and a running hash start from. */
@@ -677,7 +677,7 @@ fn answerBoolean(var lowering: Lowering, var builder: FunctionBuilder, value: Bo
   const contents = StaticContents.Literal LiteralValue.Boolean(value)
   const found = internStatic lowering, contents, boolean
   emit builder, Instruction.Constant(target, found)
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  terminate builder, Terminator.Return(borrowed(target))
 }
 
 // --- The fields a generated body walks --------------------------------------------------------------------------------
@@ -721,7 +721,7 @@ fn derivedFieldsOf(
     }
     found.append DerivedField(field.name, field.annotation, subjects[position], step)
   }
-  Some found
+  found
 }
 
 fn commonOrAllFields(shape: Layout): List<FieldLayout> {
@@ -742,7 +742,7 @@ fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
       for field in fields {
         found.append field.annotation
       }
-      Some found
+      found
     }
     .Nominal(symbol, arguments) => {
       const identifier = typeSignatureOf lowering.checker, symbol
@@ -760,7 +760,7 @@ fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
           found.append substitute(lowering.checker.types, field.annotation, mapping)
         }
       }
-      Some found
+      found
     }
     _ => None
   }
@@ -784,7 +784,7 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
     }
   }
   const location = locationOf lowering, at
-  const failed = addBlock builder, "differs", Some(location)
+  const failed = addBlock builder, "differs", location
   const shape = lowering.program.layoutAt layout
   const isVariant = !shape.variants.isEmpty()
   var tag = Slot 0
@@ -807,7 +807,7 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
     answerBoolean lowering, builder, false
     return
   }
-  const equal = addBlock builder, "equal", Some(location)
+  const equal = addBlock builder, "equal", location
   const head = builder.currentBlock()
   var values: List<Int> = []
   var targets: List<BlockId> = []
@@ -822,7 +822,7 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
     if fields.isEmpty() {
       continue
     }
-    const arm = addBlock builder, "case {index}", Some(location)
+    const arm = addBlock builder, "case {index}", location
     switchTo builder, arm
     if !compareFields(lowering, builder, fields, failed, at) {
       return
@@ -854,9 +854,9 @@ fn sameTagBlock(
   emit builder, Instruction.Tag(right, Slot(1))
   const boolean = booleanTypeOf lowering
   const sameTag = addTemporary builder, boolean
-  const intrinsic = Intrinsic IntrinsicOperation.Equal, Some(NumericKind.Signed(64))
-  emit builder, Instruction.Intrinsic(Some(sameTag), intrinsic, [left, right], location)
-  const chosen = addBlock builder, "same case", Some(location)
+  const intrinsic = Intrinsic IntrinsicOperation.Equal, NumericKind.Signed(64)
+  emit builder, Instruction.Intrinsic(sameTag, intrinsic, [left, right], location)
+  const chosen = addBlock builder, "same case", location
   terminate builder, Terminator.Branch(sameTag, chosen, failed)
   switchTo builder, chosen
   left
@@ -878,7 +878,7 @@ fn compareFields(
     if !lowering.isSupported {
       return false
     }
-    const next = addBlock builder, "equal", Some(location)
+    const next = addBlock builder, "equal", location
     terminate builder, Terminator.Branch(equal, next, failed)
     switchTo builder, next
   }
@@ -899,18 +899,18 @@ fn fieldEquality(
   const target = addTemporary builder, boolean
   const location = locationOf lowering, at
   if const Some(kind) = numericKindOf(lowering.program, annotation) {
-    const intrinsic = Intrinsic IntrinsicOperation.Equal, Some(kind)
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location)
+    const intrinsic = Intrinsic IntrinsicOperation.Equal, kind
+    emit builder, Instruction.Intrinsic(target, intrinsic, [left, right], location)
     return target
   }
   if isPlainEquality(lowering, annotation) {
     const intrinsic = Intrinsic IntrinsicOperation.Equal, None
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location)
+    emit builder, Instruction.Intrinsic(target, intrinsic, [left, right], location)
     return target
   }
   if isTextType(lowering, annotation) {
     const intrinsic = Intrinsic IntrinsicOperation.TextEqual, None
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location)
+    emit builder, Instruction.Intrinsic(target, intrinsic, [left, right], location)
     return target
   }
   const called = match traitMemberFunction(lowering, field.subject, "Equals", "equals", at) {
@@ -921,7 +921,7 @@ fn fieldEquality(
   }
   const arguments = [borrowed(left), borrowed(right)]
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), called, arguments, empty, Some(location))
+  emit builder, Instruction.Call(target, called, arguments, empty, location)
   target
 }
 
@@ -943,7 +943,7 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     Some(found) => found
     None => {
       // `Void.hash`, and every value that carries nothing: one constant is a valid hash
-      terminate builder, Terminator.Return(Some(borrowed(accumulated)))
+      terminate builder, Terminator.Return(borrowed(accumulated))
       return
     }
   }
@@ -968,10 +968,10 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     return
   }
   if !isVariant {
-    terminate builder, Terminator.Return(Some(borrowed(accumulated)))
+    terminate builder, Terminator.Return(borrowed(accumulated))
     return
   }
-  const exit = addBlock builder, "hashed", Some(location)
+  const exit = addBlock builder, "hashed", location
   const head = builder.currentBlock()
   var values: List<Int> = []
   var targets: List<BlockId> = []
@@ -986,7 +986,7 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     if fields.isEmpty() {
       continue
     }
-    const arm = addBlock builder, "case {index}", Some(location)
+    const arm = addBlock builder, "case {index}", location
     switchTo builder, arm
     hashFields lowering, builder, fields, accumulated, at
     if !lowering.isSupported {
@@ -998,7 +998,7 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
   }
   terminateBlock builder, head, Terminator.Switch(tag, values, targets, exit)
   switchTo builder, exit
-  terminate builder, Terminator.Return(Some(borrowed(accumulated)))
+  terminate builder, Terminator.Return(borrowed(accumulated))
 }
 
 fn hashFields(
@@ -1036,7 +1036,7 @@ fn fieldHash(
     }
   }
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location))
+  emit builder, Instruction.Call(target, called, [borrowed(value)], empty, location)
   target
 }
 
@@ -1046,16 +1046,16 @@ fn mixInto(var lowering: Lowering, var builder: FunctionBuilder, accumulated: Sl
   const kind = NumericKind.Signed 64
   const location = locationOf lowering, at
   const combined = addTemporary builder, integer
-  const exclusive = Intrinsic IntrinsicOperation.BitwiseExclusiveOr, Some(kind)
-  emit builder, Instruction.Intrinsic(Some(combined), exclusive, [accumulated, value], location)
+  const exclusive = Intrinsic IntrinsicOperation.BitwiseExclusiveOr, kind
+  emit builder, Instruction.Intrinsic(combined, exclusive, [accumulated, value], location)
   const amount = addTemporary builder, integer
   const contents = StaticContents.Literal LiteralValue.Integer(17)
   const found = internStatic lowering, contents, integer
   emit builder, Instruction.Constant(amount, found)
   const shifted = addTemporary builder, integer
-  const shift = Intrinsic IntrinsicOperation.ShiftedLeft, Some(kind)
-  emit builder, Instruction.Intrinsic(Some(shifted), shift, [combined, amount], location)
-  emit builder, Instruction.Intrinsic(Some(accumulated), exclusive, [combined, shifted], location)
+  const shift = Intrinsic IntrinsicOperation.ShiftedLeft, kind
+  emit builder, Instruction.Intrinsic(shifted, shift, [combined, amount], location)
+  emit builder, Instruction.Intrinsic(accumulated, exclusive, [combined, shifted], location)
 }
 
 // --- `Compare` --------------------------------------------------------------------------------------------------------
@@ -1084,8 +1084,8 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Ty
   if !emitOrdering(lowering, builder, annotation, isLess, IntrinsicOperation.Less, at) {
     return
   }
-  const less = addBlock builder, "less", Some(location)
-  const other = addBlock builder, "not less", Some(location)
+  const less = addBlock builder, "less", location
+  const other = addBlock builder, "not less", location
   terminate builder, Terminator.Branch(isLess, less, other)
   switchTo builder, less
   answerOrdering lowering, builder, layout, "Less", at
@@ -1094,8 +1094,8 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Ty
   if !emitOrdering(lowering, builder, annotation, isGreater, IntrinsicOperation.Greater, at) {
     return
   }
-  const greater = addBlock builder, "greater", Some(location)
-  const equal = addBlock builder, "equal", Some(location)
+  const greater = addBlock builder, "greater", location
+  const equal = addBlock builder, "equal", location
   terminate builder, Terminator.Branch(isGreater, greater, equal)
   switchTo builder, greater
   answerOrdering lowering, builder, layout, "Greater", at
@@ -1133,18 +1133,18 @@ public fn orderingOutOfSign(
   // The entry block dominates both comparisons, so one zero serves them both
   const zero = zeroSlot lowering, builder, annotation
   const isLess = addTemporary builder, boolean
-  emit builder, Instruction.Intrinsic(Some(isLess), Intrinsic(IntrinsicOperation.Less, Some(kind)), [sign, zero], location)
-  const less = addBlock builder, "less", Some(location)
-  const other = addBlock builder, "not less", Some(location)
+  emit builder, Instruction.Intrinsic(isLess, Intrinsic(IntrinsicOperation.Less, kind), [sign, zero], location)
+  const less = addBlock builder, "less", location
+  const other = addBlock builder, "not less", location
   terminate builder, Terminator.Branch(isLess, less, other)
   switchTo builder, less
   answerOrdering lowering, builder, ordering, "Less", at
   switchTo builder, other
   const isGreater = addTemporary builder, boolean
-  const greaterThan = Intrinsic IntrinsicOperation.Greater, Some(kind)
-  emit builder, Instruction.Intrinsic(Some(isGreater), greaterThan, [sign, zero], location)
-  const greater = addBlock builder, "greater", Some(location)
-  const equal = addBlock builder, "equal", Some(location)
+  const greaterThan = Intrinsic IntrinsicOperation.Greater, kind
+  emit builder, Instruction.Intrinsic(isGreater, greaterThan, [sign, zero], location)
+  const greater = addBlock builder, "greater", location
+  const equal = addBlock builder, "equal", location
   terminate builder, Terminator.Branch(isGreater, greater, equal)
   switchTo builder, greater
   answerOrdering lowering, builder, ordering, "Greater", at
@@ -1212,18 +1212,18 @@ fn compareTupleBody(
     }
     const order = addTemporary builder, result
     const arguments = [borrowed(left), borrowed(right)]
-    emit builder, Instruction.Call(Some(order), called, arguments, empty, Some(location))
+    emit builder, Instruction.Call(order, called, arguments, empty, location)
     const tag = addTemporary builder, integer
     emit builder, Instruction.Tag(tag, order)
     const wanted = integerSlotOf lowering, builder, equal, integer
     const isEqual = addTemporary builder, boolean
-    const intrinsic = Intrinsic IntrinsicOperation.Equal, Some(NumericKind.Signed(64))
-    emit builder, Instruction.Intrinsic(Some(isEqual), intrinsic, [tag, wanted], location)
-    const next = addBlock builder, "equal", Some(location)
-    const decided = addBlock builder, "decided", Some(location)
+    const intrinsic = Intrinsic IntrinsicOperation.Equal, NumericKind.Signed(64)
+    emit builder, Instruction.Intrinsic(isEqual, intrinsic, [tag, wanted], location)
+    const next = addBlock builder, "equal", location
+    const decided = addBlock builder, "decided", location
     terminate builder, Terminator.Branch(isEqual, next, decided)
     switchTo builder, decided
-    terminate builder, Terminator.Return(Some(borrowed(order)))
+    terminate builder, Terminator.Return(borrowed(order))
     switchTo builder, next
   }
   answerOrdering lowering, builder, ordering, "Equal", at
@@ -1261,24 +1261,24 @@ fn emitOrdering(
 ): Bool {
   const location = locationOf lowering, at
   if const Some(kind) = numericKindOf(lowering.program, annotation) {
-    const intrinsic = Intrinsic operation, Some(kind)
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [Slot(0), Slot(1)], location)
+    const intrinsic = Intrinsic operation, kind
+    emit builder, Instruction.Intrinsic(target, intrinsic, [Slot(0), Slot(1)], location)
     return true
   }
   if isTextType(lowering, annotation) {
     const integer = lowering.program.internType IrType.Integer(64, true)
     const order = addTemporary builder, integer
     const compared = Intrinsic IntrinsicOperation.TextCompare, None
-    emit builder, Instruction.Intrinsic(Some(order), compared, [Slot(0), Slot(1)], location)
+    emit builder, Instruction.Intrinsic(order, compared, [Slot(0), Slot(1)], location)
     const zero = zeroSlot lowering, builder, integer
-    const intrinsic = Intrinsic operation, Some(NumericKind.Signed(64))
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [order, zero], location)
+    const intrinsic = Intrinsic operation, NumericKind.Signed(64)
+    emit builder, Instruction.Intrinsic(target, intrinsic, [order, zero], location)
     return true
   }
   if isCharacterType(lowering, annotation) {
     // A `Char` is a code point, and the order of the code points is the order of the characters
     const intrinsic = Intrinsic operation, None
-    emit builder, Instruction.Intrinsic(Some(target), intrinsic, [Slot(0), Slot(1)], location)
+    emit builder, Instruction.Intrinsic(target, intrinsic, [Slot(0), Slot(1)], location)
     return true
   }
   const shown = describeIrType lowering.program, annotation
@@ -1300,7 +1300,7 @@ fn answerOrdering(
   const target = addTemporary builder, builder.function.signature.result
   const empty: List<Argument> = []
   emit builder, Instruction.Construct(target, layout, variant, empty)
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  terminate builder, Terminator.Return(borrowed(target))
 }
 
 // --- `Show` -----------------------------------------------------------------------------------------------------------
@@ -1389,7 +1389,7 @@ fn showVariantBody(
   var fallback = BlockId 0
   for index in 0..shape.variants.length() {
     const group = shape.variants[index]
-    const arm = addBlock builder, "case {index}", Some(location)
+    const arm = addBlock builder, "case {index}", location
     switchTo builder, arm
     const fields = match derivedFieldsOf(lowering, subject, layout, index) {
       Some(found) => found
@@ -1465,7 +1465,7 @@ fn fieldShown(
     }
   }
   const empty: List<WitnessSource> = []
-  emit builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location))
+  emit builder, Instruction.Call(target, called, [borrowed(value)], empty, location)
   target
 }
 
@@ -1543,8 +1543,8 @@ fn concatenateInto(var lowering: Lowering, var builder: FunctionBuilder, parts: 
   const target = addTemporary builder, text
   const location = locationOf lowering, at
   const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
-  emit builder, Instruction.Intrinsic(Some(target), intrinsic, parts, location)
-  terminate builder, Terminator.Return(Some(borrowed(target)))
+  emit builder, Instruction.Intrinsic(target, intrinsic, parts, location)
+  terminate builder, Terminator.Return(borrowed(target))
 }
 
 // --- The small questions every body asks ------------------------------------------------------------------------------

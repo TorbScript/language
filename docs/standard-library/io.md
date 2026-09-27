@@ -82,7 +82,7 @@ fn countLines(): Task<Result<Int, IoError>> {
   while const Some(_) = input.next().await()? {
     count = count + 1
   }
-  Ok count
+  count
 }
 ```
 

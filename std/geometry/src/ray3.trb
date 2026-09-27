@@ -64,11 +64,11 @@ public type Ray3<Scalar: Real = Float> {
     const root = under.squareRoot()
     const near = (-half - root) / along
     if near >= nothing {
-      return Some near
+      return near
     }
     // The near crossing is behind the origin, so the origin is either inside the shape or past it altogether
     const far = (-half + root) / along
-    if far >= nothing { Some nothing } else { None }
+    if far >= nothing { nothing } else { None }
   }
 
   /** How far along the ray the plane is crossed, or `None` where the ray runs parallel to it or points away from it. */
@@ -79,7 +79,7 @@ public type Ray3<Scalar: Real = Float> {
     }
     const nothing = Scalar.zero
     const found = (plane.distance - plane.normal.dot(origin)) / towards
-    if found >= nothing { Some found } else { None }
+    if found >= nothing { found } else { None }
   }
 
   /** How far along the ray the box is first met, or `None` where the ray misses it. This is the slab test in space. */
@@ -126,7 +126,7 @@ public type Ray3<Scalar: Real = Float> {
       return None
     }
     const first = entering.max nothing
-    if first > leaving { None } else { Some first }
+    if first > leaving { None } else { first }
   }
 
   /**
@@ -138,7 +138,7 @@ public type Ray3<Scalar: Real = Float> {
   fn hitsTriangle(triangle: Triangle3<Scalar>): Scalar? {
     match hitsPlane(triangle.plane()) {
       Some(found) => {
-        if triangle.contains(at(found)) { Some found } else { None }
+        if triangle.contains(at(found)) { found } else { None }
       }
       None => None
     }

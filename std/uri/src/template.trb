@@ -260,7 +260,7 @@ public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriE
         }
       }
     }
-    Ok out
+    out
   }
 
   /**
@@ -398,7 +398,7 @@ public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriE
         }
       }
     }
-    Some values
+    values
   }
 
   /** The template as it was written. */
@@ -540,7 +540,7 @@ fn piecesOf(text: String): Result<List<Piece>, UriError> {
   if !literal.isEmpty() {
     pieces.append Piece.Literal(literal)
   }
-  Ok pieces
+  pieces
 }
 
 /** Whether an ASCII byte may stand in the literal text of a template (RFC 6570 section 2.1). */
@@ -600,7 +600,7 @@ fn expressionOf(template: String, inside: String): Result<Piece, UriError> {
   for specification in body.split(",") {
     variables.append(variableOf(template, specification)?)
   }
-  Ok Piece.Expression(operator, variables)
+  Piece.Expression operator, variables
 }
 
 /** One `varspec`: `varname [ ":" max-length / "*" ]`. */
@@ -614,12 +614,12 @@ fn variableOf(template: String, specification: String): Result<Variable, UriErro
   } else if const Some(colon) = specification.byteOffsetOf(":") {
     name = specification.sliceBytes 0, colon
     const digits = specification.sliceBytes(colon + 1, specification.byteLength())
-    prefix = Some(prefixOf(template, digits)?)
+    prefix = prefixOf(template, digits)?
   }
   if !isVariableName(name) {
     return Fail UriError.InvalidTemplate(template, "`{specification}` is not a variable name, a prefix or an explode")
   }
-  Ok Variable(name, prefix, explode)
+  Variable name, prefix, explode
 }
 
 /** `max-length`: one to four digits, the first not `0`, so 1 to 9999. */
@@ -638,7 +638,7 @@ fn prefixOf(template: String, digits: String): Result<Int, UriError> {
     value = value * 10 + byte - 48
     index = index + 1
   }
-  Ok value
+  value
 }
 
 /** `varname = varchar *( ["."] varchar )`, where `varchar` is a letter, a digit, `_` or an escape. */
@@ -690,7 +690,7 @@ fn expression(
     any = true
     out = out + expandedVariable(template, operator, variable, value)?
   }
-  Ok out
+  out
 }
 
 /** Whether a value counts as defined: an empty list and an empty list of pairs do not (RFC 6570 section 2.3). */
@@ -721,7 +721,7 @@ fn expandedVariable(
       if named {
         out = variable.name + if text.isEmpty() { operator.ifEmpty() } else { "=" }
       }
-      Ok(out + templateEncoded(kept, reserved))
+      out + templateEncoded(kept, reserved)
     }
     .Items(items) => {
       if variable.prefix.isSome() {
@@ -733,7 +733,7 @@ fn expandedVariable(
           parts.append templateEncoded(item, reserved)
         }
         const joined = parts.joined separator: ","
-        return Ok(if named { "{variable.name}={joined}" } else { joined })
+        return if named { "{variable.name}={joined}" } else { joined }
       }
       for item in items {
         if named {
@@ -743,7 +743,7 @@ fn expandedVariable(
           parts.append templateEncoded(item, reserved)
         }
       }
-      Ok parts.joined(separator: operator.separator())
+      parts.joined separator: operator.separator()
     }
     .Pairs(pairs) => {
       if variable.prefix.isSome() {
@@ -755,7 +755,7 @@ fn expandedVariable(
           parts.append(templateEncoded(key, reserved) + "," + templateEncoded(item, reserved))
         }
         const joined = parts.joined separator: ","
-        return Ok(if named { "{variable.name}={joined}" } else { joined })
+        return if named { "{variable.name}={joined}" } else { joined }
       }
       for (key, item) in pairs {
         const name = templateEncoded key, reserved
@@ -765,7 +765,7 @@ fn expandedVariable(
           parts.append(name + "=" + templateEncoded(item, reserved))
         }
       }
-      Ok parts.joined(separator: operator.separator())
+      parts.joined separator: operator.separator()
     }
   }
 }
@@ -825,7 +825,7 @@ fn matchedPath(pieces: List<Piece>, index: Int, target: String, position: Int): 
   if index == pieces.length() {
     if position == target.byteLength() {
       const empty: Map<String, TemplateValue> = [:]
-      return Some empty
+      return empty
     }
     return None
   }
@@ -872,7 +872,7 @@ fn matchedSimple(
           }
         }
         if decodedAll {
-          return Some rest
+          return rest
         }
       }
     }
@@ -921,7 +921,7 @@ fn matchedSegments(
           rest[variables[step].name] = TemplateValue.Text decoded[step]
         }
       }
-      return Some rest
+      return rest
     }
     count = count - 1
   }

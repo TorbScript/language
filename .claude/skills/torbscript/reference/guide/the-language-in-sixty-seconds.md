@@ -56,8 +56,8 @@ fn firstLine(path: String): Result<String, Error> {
   const text = File.readText(path)?
   const lines = text.lines()
   match lines.first() {
-    Some(line) => Ok line
-    None => Ok ""
+    Some(line) => line
+    None => ""
   }
 }
 ```

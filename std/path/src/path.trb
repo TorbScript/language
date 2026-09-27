@@ -88,15 +88,15 @@ public type Path with Show, Equals, Hash, Compare {
     if suffix.isEmpty() {
       return None
     }
-    Some suffix
+    suffix
   }
 
   /** The name without its extension and without the dot. `main` for `src/main.trb`. */
   fn nameWithoutExtension(): String? {
     const found = name()?
     match extension() {
-      Some(suffix) => Some(found.withoutSuffix(".{suffix}") ?? found)
-      None => Some found
+      Some(suffix) => found.withoutSuffix(".{suffix}") ?? found
+      None => found
     }
   }
 
@@ -105,7 +105,7 @@ public type Path with Show, Equals, Hash, Compare {
     if componentValues.isEmpty() {
       return None
     }
-    Some Path(rootValue, componentValues.take(componentValues.length() - 1).toList())
+    Path rootValue, componentValues.take(componentValues.length() - 1).toList()
   }
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
@@ -116,7 +116,7 @@ public type Path with Show, Equals, Hash, Compare {
   /** The same path with its last component replaced. `None` where there is no name to replace. */
   fn withName(name: String): Path? {
     const above = parent()?
-    Some above.joined(Path(None, [name]))
+    above.joined Path(None, [name])
   }
 
   /** The same path with a different extension, added where there was none. An empty `extension` removes it. */
@@ -162,7 +162,7 @@ public type Path with Show, Equals, Hash, Compare {
     for index in common..componentValues.length() {
       walked.append componentValues[index]
     }
-    Some Path(None, walked)
+    Path None, walked
   }
 
   /**
@@ -216,7 +216,7 @@ public type Path with Show, Equals, Hash, Compare {
     }
     const candidate = if isAbsolute() { normalized() } else { base.joined(self).normalized() }
     if candidate.startsWith(base) {
-      return Ok candidate
+      return candidate
     }
     Fail PathError.Outside(candidate, base)
   }
@@ -289,14 +289,14 @@ extend Path with From<String> {
   static fn from(value: String): Path {
     const slashed = value.replace "\\", "/"
     if const Some((root, rest)) = shareRootOf(slashed) {
-      return Path Some(root), rest
+      return Path root, rest
     }
     if slashed.dropping(characters: 1).startsWith(":") {
       const letter = slashed.chars().first() ?? 'C'
-      return Path Some(Root.Drive(letter.toUpperCase())), componentsOf(slashed.dropping(characters: 2))
+      return Path Root.Drive(letter.toUpperCase()), componentsOf(slashed.dropping(characters: 2))
     }
     if slashed.startsWith("/") {
-      return Path Some(Root.Unix), componentsOf(slashed)
+      return Path Root.Unix, componentsOf(slashed)
     }
     Path None, componentsOf(slashed)
   }
@@ -342,7 +342,7 @@ fn shareRootOf(text: String): (Root, List<String>)? {
   if parts.length() < 2 {
     return None
   }
-  Some((Root.Share(parts[0], parts[1]), parts.skip(2).toList()))
+  (Root.Share(parts[0], parts[1]), parts.skip(2).toList())
 }
 
 /** Where a root sorts: the absent root of a relative path sorts before `Unix`, `Drive` and `Share`, in that order. */

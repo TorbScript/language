@@ -94,7 +94,7 @@ match <subject> {
      }
    }
 
-   print describe(Some(3))
+   print describe(3)
    print describe(None)
    ```
 

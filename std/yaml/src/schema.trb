@@ -47,40 +47,40 @@ public type ResolvedScalar {
 /** A plain scalar without a tag, read by `schema`. `None` where the JSON schema refuses it. */
 public fn resolvedPlain(text: String, schema: YamlSchema): ResolvedScalar? {
   match schema {
-    .Failsafe => Some ResolvedScalar.String(text)
+    .Failsafe => ResolvedScalar.String text
     .Json => {
       if text == "null" {
-        return Some ResolvedScalar.Null
+        return ResolvedScalar.Null
       }
       if text == "true" || text == "false" {
-        return Some ResolvedScalar.Bool(text == "true")
+        return ResolvedScalar.Bool(text == "true")
       }
       if isJsonInteger(text) {
         if const Some(whole) = wholeOf(text, schema) {
-          return Some whole
+          return whole
         }
       }
       if isJsonFloat(text) {
         if const Some(number) = floatOf(text, schema) {
-          return Some ResolvedScalar.Float(number)
+          return ResolvedScalar.Float number
         }
       }
       None
     }
     _ => {
       if isNullText(text, schema) {
-        return Some ResolvedScalar.Null
+        return ResolvedScalar.Null
       }
       if const Some(truth) = boolOf(text, schema) {
-        return Some ResolvedScalar.Bool(truth)
+        return ResolvedScalar.Bool truth
       }
       if const Some(whole) = wholeOf(text, schema) {
-        return Some whole
+        return whole
       }
       if const Some(number) = floatOf(text, schema) {
-        return Some ResolvedScalar.Float(number)
+        return ResolvedScalar.Float number
       }
-      Some ResolvedScalar.String(text)
+      ResolvedScalar.String text
     }
   }
 }
@@ -97,15 +97,15 @@ public fn isNullText(text: String, schema: YamlSchema): Bool {
 /** A truth value written as `schema` spells one. */
 public fn boolOf(text: String, schema: YamlSchema): Bool? {
   match text {
-    "true" | "True" | "TRUE" => Some true
-    "false" | "False" | "FALSE" => Some false
+    "true" | "True" | "TRUE" => true
+    "false" | "False" | "FALSE" => false
     _ => {
       if schema != YamlSchema.Yaml11 {
         return None
       }
       match text {
-        "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" => Some true
-        "n" | "N" | "no" | "No" | "NO" | "off" | "Off" | "OFF" => Some false
+        "y" | "Y" | "yes" | "Yes" | "YES" | "on" | "On" | "ON" => true
+        "n" | "N" | "no" | "No" | "NO" | "off" | "Off" | "OFF" => false
         _ => None
       }
     }
@@ -147,8 +147,8 @@ public fn wholeOf(text: String, schema: YamlSchema): ResolvedScalar? {
   const found = magnitude?
   if !negative {
     return match Int64.tryFrom(found) {
-      Ok(value) => Some ResolvedScalar.Int(value)
-      Fail(_) => Some ResolvedScalar.Unsigned(found)
+      Ok(value) => ResolvedScalar.Int value
+      Fail(_) => ResolvedScalar.Unsigned found
     }
   }
   // The magnitude of `Int64.minimum` is one more than `Int64.maximum`
@@ -157,10 +157,10 @@ public fn wholeOf(text: String, schema: YamlSchema): ResolvedScalar? {
     return None
   }
   if found == largest + 1 {
-    return Some ResolvedScalar.Int(Int64.minimum)
+    return ResolvedScalar.Int Int64.minimum
   }
   match Int64.tryFrom(found) {
-    Ok(value) => Some ResolvedScalar.Int(-value)
+    Ok(value) => ResolvedScalar.Int(-value)
     Fail(_) => None
   }
 }
@@ -192,7 +192,7 @@ fn digitsValue(digits: String, base: Int, underscores: Bool): UInt64? {
   if !any {
     return None
   }
-  Some value
+  value
 }
 
 /** YAML 1.1's base 60: `190:20:30` is 190 * 3600 + 20 * 60 + 30. */
@@ -211,7 +211,7 @@ fn sexagesimalValue(digits: String): UInt64? {
     value = value * 60 + piece
     first = false
   }
-  Some value
+  value
 }
 
 fn digitOf(character: Char): Int {
@@ -232,13 +232,13 @@ fn digitOf(character: Char): Int {
 public fn floatOf(text: String, schema: YamlSchema): Float64? {
   match text {
     ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => {
-      return if schema == YamlSchema.Json { None } else { Some Float64.infinity }
+      return if schema == YamlSchema.Json { None } else { Float64.infinity }
     }
     "-.inf" | "-.Inf" | "-.INF" => {
-      return if schema == YamlSchema.Json { None } else { Some Float64.negativeInfinity }
+      return if schema == YamlSchema.Json { None } else { Float64.negativeInfinity }
     }
     ".nan" | ".NaN" | ".NAN" => {
-      return if schema == YamlSchema.Json { None } else { Some Float64.nan }
+      return if schema == YamlSchema.Json { None } else { Float64.nan }
     }
     _ => {}
   }
@@ -250,7 +250,7 @@ public fn floatOf(text: String, schema: YamlSchema): Float64? {
   }
   if const Some(whole) = wholeOf(text, schema) {
     return match whole {
-      .Int(value) => Some Float64.from(value)
+      .Int(value) => Float64.from value
       .Unsigned(value) => Float64.tryFrom("{value}").ok()
       _ => None
     }
@@ -290,7 +290,7 @@ fn sexagesimalFloat(text: String): Float64? {
     const piece = floatOf(part, YamlSchema.Core)?
     value = value * 60.0 + piece
   }
-  Some(if negative { -value } else { value })
+  if negative { -value } else { value }
 }
 
 /** `[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?`: the floating point numbers of the core schema. */
@@ -348,7 +348,7 @@ fn isJsonFloat(text: String): Bool {
     return false
   }
   const digits = if text.startsWith("-") { text.sliceBytes 1, text.byteLength() } else { text }
-  !(digits.startsWith("0") && digits.byteLength() > 1 && digits.charAtByte(1).map({ _.isDigit() }) == Some(true))
+  !(digits.startsWith("0") && digits.byteLength() > 1 && digits.charAtByte(1).map({ _.isDigit() }) == true)
 }
 
 /** Whether YAML 1.1 reads a plain text as a timestamp: `2001-12-14`, `2001-12-14t21:59:43.10-05:00`. */
@@ -439,7 +439,7 @@ public fn base64Decoded(text: String): List<UInt8>? {
       bytes.append(UInt8.tryFrom(byte) ?? 0)
     }
   }
-  Some bytes
+  bytes
 }
 
 /** The bytes as base64 text, with padding. */

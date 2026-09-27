@@ -543,13 +543,13 @@ task to stop, and whoever awaits it stops at that `await()` too. `result()` is f
 
 ```trb run
 fn doubled(value: Int): Task<Result<Int, String>> {
-  Ok(value * 2)
+  value * 2
 }
 
 fn sum(): Task<Result<Int, String>> {
   const first = doubled(1).await()?
   const second = doubled(2).await()?
-  Ok(first + second)
+  first + second
 }
 
 print sum().await()    // prints Ok(6)

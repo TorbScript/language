@@ -14,7 +14,7 @@ public fn version(): Result<SystemVersion, OsError> {
   const release = sysctlText("kern.osproductversion")?
   const build = sysctlText("kern.osversion").ok()
   const kernel = sysctlText("kern.osrelease")?
-  Ok SystemVersion("macOS {release}", "macos", release, build, kernel)
+  SystemVersion "macOS {release}", "macos", release, build, kernel
 }
 
 /**
@@ -22,8 +22,8 @@ public fn version(): Result<SystemVersion, OsError> {
  * `sysctl.proc_translated` gives away: the machine under it is Apple silicon.
  */
 public fn machineArchitecture(): Result<Architecture, OsError> {
-  if sysctlInteger("sysctl.proc_translated").ok() == Some(1) {
-    return Ok Architecture.Arm64
+  if sysctlInteger("sysctl.proc_translated").ok() == 1 {
+    return Architecture.Arm64
   }
   const names = systemNames()?
   architectureOf names.machine

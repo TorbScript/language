@@ -162,7 +162,7 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
   } else {
     printError "{counted(problems, "problem")} in {filesWithProblems} of {counted(files.length(), "file")}"
   }
-  Ok problems
+  problems
 }
 
 /**
@@ -210,7 +210,7 @@ fn checkProjects(
     }
     printError "error: {named.joined(separator: ", ")} holds no TorbScript file to check"
     printError "  a file is checked when it is named, or lies below `src/` or the test directory of a project"
-    return Ok(problems + 1)
+    return problems + 1
   }
   if problems == 0 {
     print "{counted(checked.files.length(), "file")}, no problems"
@@ -219,13 +219,13 @@ fn checkProjects(
     printError "{counted(problems, "problem")} in {filesWithProblems} of {total}"
   }
   if withEveryTarget && problems == 0 {
-    return Ok checkEveryTarget(checked, tree)
+    return checkEveryTarget checked, tree
   }
   // An audit and no error: the partial operations are listed, and the answer is still the problems of the check
   if withPartial && problems == 0 {
     const _ = printPartialOperations checked
   }
-  Ok problems
+  problems
 }
 
 /**
@@ -313,7 +313,7 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool, asByt
   }
   // Nothing is lowered from a program that does not check: every table the lowering reads would be half filled
   if problems > 0 {
-    return Ok problems
+    return problems
   }
   var lowering = lowerChecked checked
   // Phase one plus ownership is the IR both back ends read; `--no-ownership` shows what the lowering alone writes
@@ -321,7 +321,7 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool, asByt
     insertOwnership lowering.program
   }
   if asBytecode {
-    return Ok printBytecode(checked, lowering)
+    return printBytecode checked, lowering
   }
   if !onlyStatistics {
     const text = loweredText lowering
@@ -338,7 +338,7 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool, asByt
   for line in broken {
     printError "internal error: {line}"
   }
-  Ok(found + broken.length())
+  found + broken.length()
 }
 
 /**
@@ -416,7 +416,7 @@ fn profileChoiceOf(arguments: List<String>, fallback: Profile): ProfileChoice? {
     printError "error: `--profile` needs a name: `dev` or `release`"
     return None
   }
-  Some ProfileChoice(profile, rest)
+  ProfileChoice profile, rest
 }
 
 /**
@@ -441,7 +441,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
     if wantsTarget {
       wantsTarget = false
       target = match targetNamed(argument) {
-        Some(found) => Some found
+        Some(found) => found
         None => {
           const known = everyTarget().map({ _.name() }).toList().joined(separator: ", ")
           printError "error: `{argument}` is no target: the targets are {known}"
@@ -473,7 +473,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
     return None
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
-  Some BuildOptions(given, onlyC, output, profile: choice.profile, target: target, embedsMachine: embedsMachine)
+  BuildOptions given, onlyC, output, profile: choice.profile, target: target, embedsMachine: embedsMachine
 }
 
 /**
@@ -509,7 +509,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     paths.append argument
   }
   const given = if paths.isEmpty() { ["tests"] } else { paths }
-  Some TestOptions(given, choice.profile, usesMachine)
+  TestOptions given, choice.profile, usesMachine
 }
 
 /**
@@ -555,7 +555,7 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     index = index + 2
   }
   const path = arguments.get(index)?
-  Some RunOptions(path, arguments.skip(index + 1).toList(), profile, usesMachine, withTimings)
+  RunOptions path, arguments.skip(index + 1).toList(), profile, usesMachine, withTimings
 }
 
 /**
@@ -567,7 +567,7 @@ fn newOptionsOf(arguments: List<String>): NewOptions? {
   if name.isEmpty() {
     return None
   }
-  Some NewOptions(name)
+  NewOptions name
 }
 
 /**
@@ -581,7 +581,7 @@ fn upgradeOptionsOf(arguments: List<String>): UpgradeOptions? {
   var wantsChannel = false
   for argument in arguments {
     if wantsChannel {
-      channel = Some argument
+      channel = argument
       wantsChannel = false
       continue
     }
@@ -593,12 +593,12 @@ fn upgradeOptionsOf(arguments: List<String>): UpgradeOptions? {
       list = true
       continue
     }
-    version = Some argument
+    version = argument
   }
   if wantsChannel {
     return None
   }
-  Some UpgradeOptions(version, channel, list)
+  UpgradeOptions version, channel, list
 }
 
 /**
@@ -611,7 +611,7 @@ fn writeNativesHeader(directory: String): Result<Int, IoError> {
   writeGenerated("{directory}/include/torb_natives.h", renderNativesHeader(nativeEntries()))?
   // The table of thunks the VM calls the runtime through is the same manifest's (docs/design/VM.md section 6)
   writeGenerated("{directory}/machine_natives.c", renderMachineNatives(nativeEntries()))?
-  Ok 0
+  0
 }
 
 /** A generated file, written only where it is not what it has to be. */
@@ -801,7 +801,7 @@ match Process.arguments() {
   ["tokens", path] => printTokens(path)?
   ["ast", path] => printTree(path)?
   ["highlight", "--stdin"] => runHighlight None
-  ["highlight", path] => runHighlight Some(path)
+  ["highlight", path] => runHighlight path
 
   ["format", "--help"] | ["format", "help"] => print formatUsage()
   ["format", ...more] => {

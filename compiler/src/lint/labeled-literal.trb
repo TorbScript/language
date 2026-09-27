@@ -98,8 +98,8 @@ fn findingsOfCall(
 /** `true`, `false` and `None` as written: the literals that have no name of their own. */
 fn literalText(value: Expression): String? {
   match value.kind {
-    .BoolLiteral(flag) => Some(if flag { "true" } else { "false" })
-    .Name(text) if text == "None" => Some text
+    .BoolLiteral(flag) => if flag { "true" } else { "false" }
+    .Name(text) if text == "None" => text
     _ => None
   }
 }
@@ -151,7 +151,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       for parameter in signature.form.parameters {
         targets.append Target(parameter.name?, parameter.annotation)
       }
-      Some targets
+      targets
     }
     .Construct(owner) => {
       const shape = typeSignatureOf(checker, owner)?
@@ -159,7 +159,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       for field in shape.fields {
         targets.append Target(field.name, field.annotation)
       }
-      Some targets
+      targets
     }
     .CaseOf(owner, variant) => {
       const shape = typeSignatureOf(checker, owner)?
@@ -168,7 +168,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       for field in found.fields {
         targets.append Target(field.name, field.annotation)
       }
-      Some targets
+      targets
     }
     _ => None
   }
@@ -195,21 +195,21 @@ fn typeSignatureOf(checker: Checker, owner: TypeId): TypeSignature? {
     }
   }
   match checker.typeSignatureStates.get(symbol) {
-    Some(.Ready(index)) => Some checker.typeSignatures[index]
+    Some(.Ready(index)) => checker.typeSignatures[index]
     _ => None
   }
 }
 
 fn isBool(checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
-    .Nominal(symbol, arguments) => arguments.isEmpty() && checker.wellKnown.boolean == Some(symbol)
+    .Nominal(symbol, arguments) => arguments.isEmpty() && checker.wellKnown.boolean == symbol
     _ => false
   }
 }
 
 fn isOptional(checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
-    .Nominal(symbol, _) => checker.wellKnown.option == Some(symbol)
+    .Nominal(symbol, _) => checker.wellKnown.option == symbol
     _ => false
   }
 }

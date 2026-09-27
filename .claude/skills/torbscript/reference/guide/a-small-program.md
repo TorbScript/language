@@ -76,7 +76,7 @@ fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
   if title.isEmpty() {
     return Fail TaskError.EmptyTitle
   }
-  Ok Task(title, priority)
+  Task title, priority
 }
 
 match newTask("", Priority.Low) {
@@ -113,7 +113,7 @@ fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
   if title.isEmpty() {
     return Fail TaskError.EmptyTitle
   }
-  Ok Task(title, priority)
+  Task title, priority
 }
 
 fn priorityLabel(priority: Priority): String {

@@ -31,7 +31,7 @@ type Celsius with TryFrom<Reading, String> {
     if value.degrees < -273 {
       return Fail "{value.degrees} is below absolute zero"
     }
-    Ok Self(value.degrees)
+    Self value.degrees
   }
 
   /** The accessor. It cannot be called `value`, and the field cannot be called `degrees`. */
@@ -95,7 +95,7 @@ fn accepts(): Bool {
 fn roundTripsThroughReading(): Bool {
   const warm = Celsius.tryFrom(Reading(21)).expect("a temperature")
   const back = Reading.from warm
-  back == Reading(21) && Celsius.tryFrom(back) == Ok(warm)
+  back == Reading(21) && Celsius.tryFrom(back) == warm
 }
 
 /** The same pair without a failure on the way in, and with a normalization the way in performs. */
@@ -116,7 +116,7 @@ fn comparesByValue(): Bool {
 fn worksAsKey(): Bool {
   const slug = Slug.from Title("One Two")
   const seen: Map<Slug, Int> = [slug: 1]
-  seen.get(Slug.from(Title("ONE TWO"))) == Some(1)
+  seen.get(Slug.from(Title("ONE TWO"))) == 1
 }
 
 fn showsItsField(): Bool {

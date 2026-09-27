@@ -29,7 +29,7 @@ type Counter {
 }
 
 fn run() {
-  var current: Counter? = Some Counter()
+  var current: Counter? = Counter()
   if var Some(counter) = current {
     counter.increment()
   }
@@ -80,7 +80,7 @@ type Counter {
 }
 
 fn run() {
-  var current: Counter? = Some Counter()
+  var current: Counter? = Counter()
   if var Some(counter) = current {
     counter.increment()
   }
@@ -100,7 +100,7 @@ type Counter {
 }
 
 fn run() {
-  var current: Counter? = Some Counter()
+  var current: Counter? = Counter()
   if const Some(counter) = current {
     var mutableCopy = counter
     mutableCopy.increment()

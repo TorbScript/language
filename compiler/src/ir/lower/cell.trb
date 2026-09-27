@@ -113,7 +113,7 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
     flag,
     .Write,
   )
-  Some EntryCellAccesses(write, mark, held, cell, flag, accessor, lowering.checker.symbolAt(symbol).name)
+  EntryCellAccesses write, mark, held, cell, flag, accessor, lowering.checker.symbolAt(symbol).name
 }
 
 fn cellAccess(
@@ -124,7 +124,7 @@ fn cellAccess(
   cell: String,
   access: CellAccess,
 ): FunctionId {
-  var builder = newFunction name, Some(symbol), signature, "cell"
+  var builder = newFunction name, symbol, signature, "cell"
   setFunctionKind builder, FunctionKind.EntryCell(cell, access)
   const empty = builder.function
   builder.function = empty.copy blocks: []
@@ -157,7 +157,7 @@ public fn entryCellRead(var lowering: Lowering, symbol: SymbolId): EntryCellAcce
   if !isSharedObject(lowering, accesses.held) && staticOfConstant(lowering, symbol).isSome() {
     return None
   }
-  Some accesses
+  accesses
 }
 
 /**
@@ -197,17 +197,17 @@ public fn readEntryCell(
   const reads = readAccessesOf lowering, symbol, accesses
   const none: List<WitnessSource> = []
   const isSet = addTemporary builder, booleanTypeOf(lowering)
-  emit builder, Instruction.Call(Some(isSet), reads.flag, [], none)
+  emit builder, Instruction.Call(isSet, reads.flag, [], none)
   const location = locationOf lowering, at
-  const unset = addBlock builder, "cell.unset", Some(location)
-  const set = addBlock builder, "cell.set", Some(location)
+  const unset = addBlock builder, "cell.unset", location
+  const set = addBlock builder, "cell.set", location
   finishBlock lowering, builder, Terminator.Branch(isSet, set, unset)
   continueIn lowering, builder, unset
   const message = textSlot lowering, builder, "The top-level const `{accesses.name}` is read before its statement ran"
   emit builder, Instruction.Panic(borrowed(message), location)
   finishBlock lowering, builder, Terminator.Unreachable
   continueIn lowering, builder, set
-  emit builder, Instruction.Call(Some(target), reads.value, [], none)
+  emit builder, Instruction.Call(target, reads.value, [], none)
 }
 
 /**

@@ -106,11 +106,11 @@ source.collect(accumulator)
      var fn add(value: Item) {
        min = match min {
          Some(current) if current <= value => min
-         _ => Some value
+         _ => value
        }
        max = match max {
          Some(current) if current >= value => max
-         _ => Some value
+         _ => value
        }
      }
 

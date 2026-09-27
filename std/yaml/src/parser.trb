@@ -70,7 +70,7 @@ type Parser {
     if nextComment < comments.length() && comments[nextComment].trailing && comments[nextComment].line == line {
       const text = comments[nextComment].text
       nextComment = nextComment + 1
-      return Some text
+      return text
     }
     None
   }
@@ -131,7 +131,7 @@ type Parser {
       const endComments = takeLeading peek().start.line
       documents.append document.copy(endComments: document.endComments.appendedAll(endComments))
     }
-    Ok documents
+    documents
   }
 
   var fn document(previousEnded: Bool): Result<YamlDocument, YamlError> {
@@ -150,7 +150,7 @@ type Parser {
           if version.isSome() {
             return Fail failure(directive.start, "a document has one `%YAML` directive")
           }
-          version = Some directive.text
+          version = directive.text
         }
         .TagDirective => {
           if tagDirectives.any({ _.handle == directive.handle }) {
@@ -189,7 +189,7 @@ type Parser {
         endComments.append text
       }
     }
-    Ok YamlDocument(root, version, tagDirectives, explicitStart, explicitEnd, leading, endComments)
+    YamlDocument root, version, tagDirectives, explicitStart, explicitEnd, leading, endComments
   }
 
   /** Whether the next token begins a node, as opposed to ending the document. */
@@ -218,7 +218,7 @@ type Parser {
         return Fail failure(start.start, "the alias `*{start.text}` names no anchor before it")
       }
       const trailing = trailingOfCompleted()
-      return Ok YamlNode(YamlContent.Alias(start.text), comments: YamlComments(leading, trailing), line: line, column: column)
+      return YamlNode YamlContent.Alias(start.text), comments: YamlComments(leading, trailing), line: line, column: column
     }
     var anchor: String? = None
     var tag: String? = None
@@ -228,7 +228,7 @@ type Parser {
         if anchor.isSome() {
           return Fail failure(token.start, "a node has one anchor")
         }
-        anchor = Some token.text
+        anchor = token.text
         continue
       }
       if isAt(TokenKind.Tag) {
@@ -236,7 +236,7 @@ type Parser {
         if tag.isSome() {
           return Fail failure(token.start, "a node has one tag")
         }
-        tag = Some(resolvedTag(token)?)
+        tag = resolvedTag(token)?
         continue
       }
       break
@@ -266,7 +266,7 @@ type Parser {
       if scalar.style == ScalarStyle.Literal || scalar.style == ScalarStyle.Folded {
         // The comment on the header line of a block scalar is the block scalar's
         if const Some(text) = takeTrailing(scalar.start.line) {
-          propertiesTrailing = Some text
+          propertiesTrailing = text
         }
       }
     } else if next.kind == TokenKind.FlowSequenceStart {
@@ -284,24 +284,24 @@ type Parser {
     if trailing.isNone() {
       trailing = trailingOfCompleted()
     }
-    Ok YamlNode(content, tag: tag, anchor: anchor, comments: YamlComments(leading, trailing), line: line, column: column)
+    YamlNode content, tag: tag, anchor: anchor, comments: YamlComments(leading, trailing), line: line, column: column
   }
 
   /** The tag a token names, with its handle replaced by the prefix it stands for. */
   fn resolvedTag(token: Token): Result<String, YamlError> {
     if token.handle.isEmpty() {
-      return Ok token.text
+      return token.text
     }
     for directive in tagDirectives {
       if directive.handle == token.handle {
-        return Ok(directive.prefix + token.text)
+        return directive.prefix + token.text
       }
     }
     if token.handle == "!!" {
-      return Ok(coreTagPrefix + token.text)
+      return coreTagPrefix + token.text
     }
     if token.handle == "!" {
-      return Ok("!" + token.text)
+      return "!" + token.text
     }
     Fail failure(token.start, "the tag handle `{token.handle}` is not declared by a `%TAG` directive")
   }
@@ -325,7 +325,7 @@ type Parser {
       }
       return Fail failure(peek().start, "{describe(peek())} cannot stand here: a `- ` item was expected")
     }
-    Ok YamlContent.Sequence(items, CollectionStyle.Block)
+    YamlContent.Sequence items, CollectionStyle.Block
   }
 
   /** The empty item of a `-` with nothing after it, which takes the comment of its line. */
@@ -346,7 +346,7 @@ type Parser {
         items.append(node(true, false)?)
       }
     }
-    Ok YamlContent.Sequence(items, CollectionStyle.Block)
+    YamlContent.Sequence items, CollectionStyle.Block
   }
 
   var fn blockMapping(): Result<YamlContent, YamlError> {
@@ -378,26 +378,26 @@ type Parser {
       }
       return Fail failure(peek().start, "{describe(peek())} cannot stand here: a key of this mapping was expected")
     }
-    Ok YamlContent.Mapping(entries, CollectionStyle.Block)
+    YamlContent.Mapping entries, CollectionStyle.Block
   }
 
   /** The value of a block mapping's entry, and the comment behind its `:` where the value starts on a later line. */
   var fn blockMappingValue(after: Mark): Result<MappingValue, YamlError> {
     if !isAt(TokenKind.Value) {
-      return Ok MappingValue(emptyAt(after))
+      return MappingValue emptyAt(after)
     }
     const valueToken = advance()
     const kind = peekKind()
     if kind == TokenKind.Key || kind == TokenKind.Value || kind == TokenKind.BlockEnd {
       const trailing = takeTrailing valueToken.start.line
-      return Ok MappingValue(emptyAt(valueToken.end).copy(comments: YamlComments(trailing: trailing)))
+      return MappingValue emptyAt(valueToken.end).copy(comments: YamlComments(trailing: trailing))
     }
     var keyComment: String? = None
     if peek().start.line > valueToken.start.line {
       keyComment = takeTrailing valueToken.start.line
     }
     const value = node(true, true)?
-    Ok MappingValue(value, keyComment)
+    MappingValue value, keyComment
   }
 
   var fn flowSequence(): Result<YamlContent, YamlError> {
@@ -436,7 +436,7 @@ type Parser {
       }
       items.append(node(false, false)?)
     }
-    Ok YamlContent.Sequence(items, CollectionStyle.Flow)
+    YamlContent.Sequence items, CollectionStyle.Flow
   }
 
   var fn flowMapping(): Result<YamlContent, YamlError> {
@@ -471,17 +471,17 @@ type Parser {
       const value = flowValue(TokenKind.FlowMappingEnd)?
       entries.append YamlEntry(key, value)
     }
-    Ok YamlContent.Mapping(entries, CollectionStyle.Flow)
+    YamlContent.Mapping entries, CollectionStyle.Flow
   }
 
   /** The value after a key of a flow collection: after its `:`, or empty where there is none. */
   var fn flowValue(closing: TokenKind): Result<YamlNode, YamlError> {
     if !isAt(TokenKind.Value) {
-      return Ok emptyAt(peek().start)
+      return emptyAt peek().start
     }
     const valueToken = advance()
     if isAt(TokenKind.FlowEntry) || isAt(closing) {
-      return Ok emptyAt(valueToken.end)
+      return emptyAt valueToken.end
     }
     node false, false
   }
@@ -496,7 +496,7 @@ type MappingValue {
 
 fn entryOf(key: YamlNode, value: MappingValue): YamlEntry {
   match value.keyComment {
-    Some(text) => YamlEntry key.copy(comments: key.comments.copy(trailing: Some(text))), value.value
+    Some(text) => YamlEntry key.copy(comments: key.comments.copy(trailing: text)), value.value
     None => YamlEntry key, value.value
   }
 }

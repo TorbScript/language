@@ -17,7 +17,7 @@ fn shownVersion6(text: String): String {
 group "IPv4" {
   test "four decimal parts from 0 to 255 read and show as they were written" {
     for text in ["0.0.0.0", "127.0.0.1", "255.255.255.255", "10.1.2.3"] {
-      assert(Ipv4Address.tryFrom(text).map({ _.show() }) == Ok(text))
+      assert(Ipv4Address.tryFrom(text).map({ _.show() }) == text)
     }
   }
 
@@ -35,10 +35,10 @@ group "IPv4" {
   test "the classification questions" {
     assert Ipv4Address.loopback.isLoopback()
     assert Ipv4Address.unspecified.isUnspecified()
-    assert(Ipv4Address.tryFrom("172.16.0.1").map({ _.isPrivate() }) == Ok(true))
-    assert(Ipv4Address.tryFrom("172.32.0.1").map({ _.isPrivate() }) == Ok(false))
-    assert(Ipv4Address.tryFrom("169.254.3.4").map({ _.isLinkLocal() }) == Ok(true))
-    assert(Ipv4Address.tryFrom("239.1.1.1").map({ _.isMulticast() }) == Ok(true))
+    assert(Ipv4Address.tryFrom("172.16.0.1").map({ _.isPrivate() }) == true)
+    assert(Ipv4Address.tryFrom("172.32.0.1").map({ _.isPrivate() }) == false)
+    assert(Ipv4Address.tryFrom("169.254.3.4").map({ _.isLinkLocal() }) == true)
+    assert(Ipv4Address.tryFrom("239.1.1.1").map({ _.isMulticast() }) == true)
   }
 }
 
@@ -56,7 +56,7 @@ group "IPv6" {
   test "an IPv4 address may stand for the last two segments, and a mapped one shows as one" {
     assert(shownVersion6("::ffff:192.0.2.1") == "::ffff:192.0.2.1")
     assert(shownVersion6("64:ff9b::192.0.2.33") == "64:ff9b::c000:221")
-    assert(Ipv6Address.tryFrom("::ffff:10.0.0.1").map({ _.mappedVersion4() }) == Ok(Ipv4Address.tryFrom("10.0.0.1").ok()))
+    assert(Ipv6Address.tryFrom("::ffff:10.0.0.1").map({ _.mappedVersion4() }) == Ipv4Address.tryFrom("10.0.0.1").ok())
   }
 
   test "two `::`, too many segments, a long segment, a zone or a stray character is refused" {
@@ -67,9 +67,9 @@ group "IPv6" {
 
   test "the classification questions" {
     assert Ipv6Address.loopback.isLoopback()
-    assert(Ipv6Address.tryFrom("fe80::1").map({ _.isLinkLocal() }) == Ok(true))
-    assert(Ipv6Address.tryFrom("fd00::1").map({ _.isUniqueLocal() }) == Ok(true))
-    assert(Ipv6Address.tryFrom("ff02::1").map({ _.isMulticast() }) == Ok(true))
+    assert(Ipv6Address.tryFrom("fe80::1").map({ _.isLinkLocal() }) == true)
+    assert(Ipv6Address.tryFrom("fd00::1").map({ _.isUniqueLocal() }) == true)
+    assert(Ipv6Address.tryFrom("ff02::1").map({ _.isMulticast() }) == true)
   }
 
   test "the halves carry every bit, the high one included" {
@@ -81,8 +81,8 @@ group "IPv6" {
 
 group "IpAddress and SocketAddress" {
   test "a colon is IPv6, anything else IPv4" {
-    assert(IpAddress.tryFrom("::1").map({ _.version() }) == Ok(6))
-    assert(IpAddress.tryFrom("127.0.0.1").map({ _.version() }) == Ok(4))
+    assert(IpAddress.tryFrom("::1").map({ _.version() }) == 6)
+    assert(IpAddress.tryFrom("127.0.0.1").map({ _.version() }) == 4)
   }
 
   test "every IPv4 address sorts before every IPv6 address" {
@@ -92,9 +92,9 @@ group "IpAddress and SocketAddress" {
   }
 
   test "a socket address shows with brackets around IPv6" {
-    assert(SocketAddress.tryFrom("127.0.0.1:80").map({ _.show() }) == Ok("127.0.0.1:80"))
-    assert(SocketAddress.tryFrom("[::1]:8080").map({ _.show() }) == Ok("[::1]:8080"))
-    assert(SocketAddress.tryFrom("[::1]:8080").map({ _.port }) == Ok(8080))
+    assert(SocketAddress.tryFrom("127.0.0.1:80").map({ _.show() }) == "127.0.0.1:80")
+    assert(SocketAddress.tryFrom("[::1]:8080").map({ _.show() }) == "[::1]:8080")
+    assert(SocketAddress.tryFrom("[::1]:8080").map({ _.port }) == 8080)
   }
 
   test "a missing or wrong port is refused" {
