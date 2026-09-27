@@ -131,7 +131,26 @@ print "{server.host}:{server.port} has {server.connections} connections"
    print entries(Server())
    ```
 
-6. **A field is a promise, not a first draft.** It is a parameter of the generated constructor, a position in a
+6. **A field may be named after a reserved word, and is then reached through a `.`.** `type: String` declares a field
+   `type`; outside the type it is `event.type` and `Event(type: "click")`, inside it is `self.type`, because a bare
+   keyword is always the keyword. The derived `Encode` and `Decode` use the field's name as the key, so a JSON document
+   with a `"type"` needs no renamed field. The same holds for a method and for the field of a case. See
+   [Lexical structure](../syntax/lexical-structure.md), rule 6.
+
+   ```trb check
+   type Event {
+     type: String
+     var in: Int = 0
+
+     fn describe(): String {
+       "{self.type} ({self.in})"
+     }
+   }
+
+   print Event(type: "click", in: 2).describe()
+   ```
+
+7. **A field is a promise, not a first draft.** It is a parameter of the generated constructor, a position in a
    pattern, a parameter of `copy`, and a step of every `var` path into the type - replacing it with a method later
    changes all four. What might one day be computed, cached or validated is a method from the start.
 

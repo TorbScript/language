@@ -213,6 +213,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
 | `trait-constants.trb` | A constant a trait requires or defaults, read through a type parameter: the implementation's own, the default with `Self` bound, `Numeric.zero`/`one` of every number type, and a generic type's constants over them |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
+| `keyword-members.trb` | A field, a method, a `var fn`, a `static fn` and a case field named after a reserved word: declared in the type body, reached after a `.`, as a label and in a pattern, `self.type` inside the type, and derived JSON that uses the name as the key |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 
 **Paths** - `std/path`'s `Path`: a capsule over a root and a list of components, never a string, and nothing about a disk.

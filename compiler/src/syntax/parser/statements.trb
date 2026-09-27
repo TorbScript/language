@@ -54,6 +54,18 @@ public fn parseBlockAfterBrace(var parser: Parser, start: Span): Block {
 
 fn parseStatement(var parser: Parser): Statement {
   const start = parser.span()
+  // `type = "click"` in a receiver closure or a method: a bare keyword always begins its own construct, so a field named
+  // after one is written through `self`. `self = ...` itself is the checker's message about replacing the receiver
+  if const .Reserved(keyword) = parser.kind() {
+    if parser.kindAt(1) == TokenKind.Equal && keyword != Keyword.SelfValue {
+      const word = parser.text parser.span()
+      const note = "A field named after a keyword is reached through `self`: `self.{word} = ...`"
+      parser.errorWithNote "`{word}` is a keyword and cannot be assigned bare", note, parser.span()
+      parser.recoverToLineEnd()
+      const invalid = Expression ExpressionKind.Invalid, start
+      return Statement StatementKind.Evaluate(invalid), start.to(parser.previousSpan())
+    }
+  }
   const kind = match parser.kind() {
     .Reserved(.Public | .Private | .Native | .Shared | .Fn | .Type | .Trait | .Extend | .Use | .Foreign) => {
       StatementKind.Declare parseDeclaration(parser)

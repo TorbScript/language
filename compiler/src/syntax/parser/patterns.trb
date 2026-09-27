@@ -8,6 +8,7 @@ use TokenKind, Keyword from "../token"
 use Pattern, PatternKind, RestPattern, FieldPattern, Name, Expression, ExpressionKind, PrefixOperator from "../ast"
 use Parser from "./parser"
 use parsePrimaryExpression from "./expressions"
+use isNameOrKeyword from "./types"
 
 /** A pattern, including alternatives: `1 | 2 | 3` */
 public fn parsePattern(var parser: Parser): Pattern {
@@ -126,8 +127,9 @@ fn parseVariantFields(var parser: Parser): WrittenFields {
  */
 fn parseVariantField(var parser: Parser): FieldPattern {
   var label: Name? = None
-  if parser.isAt(TokenKind.Identifier) && parser.kindAt(1) == TokenKind.Colon {
-    label = Some parser.name()
+  // A label is the name of a field, and a field may be named after a reserved word: `.Click(type: kind)`
+  if isNameOrKeyword(parser.kind()) && parser.kindAt(1) == TokenKind.Colon {
+    label = Some parser.nameOrKeyword()
     parser.bump()
   }
   FieldPattern label, parsePattern(parser)

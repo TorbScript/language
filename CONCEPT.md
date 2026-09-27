@@ -197,9 +197,14 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   `Point`"). The reason it is a rule and not a lint: the first letter of a name in a pattern already decides whether
   the pattern binds or names a case, so it has to mean the same thing at every declaration. A pattern binding needs no
   check of its own for exactly that reason - an uppercase name there *is* a case.
-- Keywords are reserved, except where they cannot be confused: after a `.` and as argument labels they are ordinary
-  names (`query.where { ... }`, `move(from: a, to: b)`). A parameter cannot be named like a keyword (it would be
-  unusable inside of the function). `from`, `as` and `by` are contextual and not reserved at all.
+- Keywords are reserved, except where they cannot be confused: **a field, a method, a case field and a label may be
+  named after one** - in its declaration inside a type body (`type: String`, `fn match(pattern: String): Bool`), after a
+  `.` (`event.type`, `query.where { ... }`) and as a label (`Event(type: "click")`, `.Click(type: kind)`). Inside the
+  type it is reached as `self.type`: a bare keyword always begins its own construct, in a method and in a receiver
+  closure alike, so `self.type = "click"` is how a receiver closure sets it. Derived encoding uses the field name as the
+  key, so a JSON `"type"` is a field `type`. A parameter, a binding, a function and a type cannot be named like a keyword
+  (a parameter has no `self.` path and would be unusable inside of the function). `from`, `as` and `by` are contextual
+  and not reserved at all.
 - A `{` at the start of a line never continues the line above: a closure on its own line is a value (the result of a
   function, for example). Only the body of a `type`, `trait` or `extend` may start on its own line, after a long
   `with ...` or `where ...`.
@@ -2566,6 +2571,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   only as its exact `Value`; the payload of a written `Some(...)`/`Ok(...)` never wraps, so nesting stays written; no
   inference variable is solved by the wrap; `None`, `Fail` and `Task` are unchanged. One spelling per meaning: the lint
   rule `redundant-wrap` finds a written `Some`/`Ok` the coercion would add, and fixes it.
+- **A reserved word may name a field, a method, a case field or a label** (2026-09-27, owner;
+  docs/language/syntax/lexical-structure.md rule 6). Where it can only be a name - declared inside a type body, after
+  a `.`, as a label - a keyword is one: `type: String`, `event.type`, `Event(type: "click")`. A bare keyword stays the
+  keyword, so inside the type the member is `self.type`, in a receiver closure too (`self.type = "click"`; a bare
+  `type = ...` is an error that says so). A parameter stays a plain name: it has no `self.` path. Derived `Encode` and
+  `Decode` use the field name, so a JSON `"type"` needs no rename.
 - **A string literal adapts to a closed list of checked types, and a template or a pattern is read verbatim**
   (2026-09-25; docs/design/URI.md section 9, docs/language/values-and-types/checked-literals.md). Where a `Path`, a
   `Uri`, a `UriReference`, a `UriTemplate`, a `Regex` or a resource type of `std/resource` is expected, a string literal

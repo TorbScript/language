@@ -441,6 +441,28 @@ group "One root cause, one message" {
     assert(problems("fn if(value: Int): Int \{\n  value\n\}") == ["`if` is a keyword and cannot be used as a name here"])
   }
 
+  test "a field, a method and a case field may be named after a keyword, and are reached after a `.` and as a label" {
+    const source = "type Event \{\n  type: String\n  var in: Int = 0\n\n"
+      + "  fn match(pattern: String): Bool \{\n    self.type == pattern\n  \}\n\n"
+      + "  var fn for(count: Int) \{\n    self.in = self.in + count\n  \}\n\n"
+      + "  static fn if(kind: String): Self \{\n    Self(type: kind)\n  \}\n\}\n\n"
+      + "type Signal \{\n  case Click(type: String)\n\}\n\n"
+      + "fn probe(): Bool \{\n  var event = Event.if(\"click\")\n  event.for 2\n"
+      + "  const same = match Signal.Click(type: \"click\") \{\n    .Click(type: kind) => kind == event.type\n  \}\n"
+      + "  same && event.match(\"click\") && event.copy(type: \"x\").in == 2\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a bare keyword stays the keyword: a field named after one is assigned through `self`" {
+    const source = "type Event \{\n  var type: String\n\n  var fn reset() \{\n    type = \"\"\n  \}\n\}"
+    assert(problems(source) == ["`type` is a keyword and cannot be assigned bare"])
+  }
+
+  test "a parameter, a binding and a free function still cannot be named after a keyword" {
+    assert(problems("fn move(where: Int) \{\n\}") == ["`where` is a keyword and cannot be used as a name here"])
+    assert(problems("fn probe() \{\n  const in = 1\n\}").first() == Some("Expected a pattern, found a keyword"))
+  }
+
   test "arguments beyond what the callee takes are not matched against its parameters" {
     const source = "fn apply(value: Int, body: (Int) => Int): Int \{\n  body(value)\n\}\n\n"
       + inBody("  print apply(1, 2, \{ x => x \})")

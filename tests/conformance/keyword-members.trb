@@ -1,0 +1,56 @@
+/**
+ * An event as a browser sends it: `type` is the name the JSON uses. A reserved word may name a field, a method, a case
+ * field and a label - in its declaration inside a type body, after a `.`, and as a label - because there it can only be
+ * a name. Inside the type it is reached as `self.type`, and derived encoding uses the field's name as the key.
+ */
+type Event {
+  type: String
+  target: String
+  var in: Int = 0
+
+  /** A method named after a keyword, reached as `event.match(...)`. */
+  fn match(pattern: String): Bool {
+    self.type == pattern
+  }
+
+  var fn for(count: Int) {
+    self.in = self.in + count
+  }
+
+  static fn if(kind: String): Self {
+    Self type: kind, target: "window"
+  }
+}
+
+/** A case field named after a keyword, matched by its label. */
+type Signal {
+  case Click(type: String, at: Int)
+  case Quit
+}
+
+fn describe(signal: Signal): String {
+  match signal {
+    .Click(type: kind, at: position) => "{kind} at {position}"
+    .Quit => "quit"
+  }
+}
+
+var event = Event type: "click", target: "button"
+event.for 2
+event.for 3
+print event.type
+print event.in
+print event.match("click")
+print event.match("keydown")
+print Event.if("resize").type
+print event.copy(type: "keyup").type
+print describe(Signal.Click(type: "double", at: 4))
+print describe(Signal.Quit)
+
+const json = Json()
+print json.encode(event)
+const decoded = json.decode<Event>(raw"""{"type": "submit", "target": "form", "in": 7}""")
+match decoded {
+  Ok(found) => print "{found.type} {found.target} {found.in}"
+  Fail(problem) => print "failed: {problem}"
+}

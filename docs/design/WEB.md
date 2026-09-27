@@ -439,7 +439,7 @@ extend<Message> Markup<Message> {
 - **The element table is generated, not written by hand.** About 110 elements and their attributes come from the WHATWG
   tables; a TorbScript program in `tools/` writes `std/html/src/elements.trb`, which is checked in, the way
   `torb natives --header` writes the thunk table. Nothing about it is a build step.
-- **Two attribute names are reserved words.** `type` and `for` cannot be parameter names (lexical structure, rule 6),
+- **Two attribute names are reserved words.** `type` and `for` cannot be parameter names (lexical structure, rule 7 - a field may be named after one, a parameter may not),
   so `input kind: .Email` writes `type="email"` and `label target: "email"` writes `for="email"`. `class` is not
   reserved and keeps its name.
 - **Rare attributes** go through `attributes: ["itemprop": "name"]`: the names are checked against the HTML name

@@ -38,6 +38,10 @@ public fn parseDeclaration(var parser: Parser): Declaration {
 fn parseModifiers(var parser: Parser): Modifiers {
   var modifiers = Modifiers()
   loop {
+    // `private: Bool` is a field named after a keyword, not a modifier in front of one
+    if parser.kindAt(1) == TokenKind.Colon {
+      break
+    }
     match parser.kind() {
       .Reserved(.Public) => {
         modifiers = modifiers.copy visibility: Visibility.Public
@@ -206,10 +210,13 @@ fn parsePlainText(var parser: Parser, what: String): String {
   ""
 }
 
-/** The position is at `fn`. */
-public fn parseFunction(var parser: Parser): FunctionDeclaration {
+/**
+ * The position is at `fn`. A member (`isMember`) may be named after a reserved word, because it is only ever reached
+ * after a `.` - `event.type()`, `self.match(pattern)` - where the parser reads a keyword as a name already.
+ */
+public fn parseFunction(var parser: Parser, isMember: Bool = false): FunctionDeclaration {
   parser.bump()
-  const name = parser.name()
+  const name = if isMember { parser.nameOrKeyword() } else { parser.name() }
   const generics = parseGenericParameters parser
   parser.expect TokenKind.ParenOpen
   const parameters = parser.withTrailingClosures(true, { parser => parser.commaSeparated TokenKind.ParenClose, parseParameter })
@@ -528,6 +535,8 @@ fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
   }
   const modifiers = parseModifiers parser
   const kind = match parser.kind() {
+    // `type: String`, `case: Int`: a reserved word followed by `:` names a field, which is reached as `self.type`
+    .Reserved(_) if hasReceiver && parser.kindAt(1) == TokenKind.Colon => MemberKind.Field parseField(parser, false)
     .Reserved(.Static) if hasReceiver => parseStaticMember parser
     .Reserved(.Fn) => MemberKind.Function parseMethod(parser, hasReceiver, isVar: false)
     .Reserved(.Var) if hasReceiver && parser.kindAt(1) == TokenKind.Reserved(Keyword.Fn) => {
@@ -558,7 +567,7 @@ fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
  * span is the name of the function, which is where a message about the receiver has to point.
  */
 fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDeclaration {
-  const function = parseFunction parser
+  const function = parseFunction parser, isMember: hasReceiver
   if !hasReceiver {
     return function
   }
@@ -586,7 +595,7 @@ fn parseStaticMember(var parser: Parser): MemberKind {
     parser.errorWithNote "`const` is what a `{staticKeyword}` member is without it", note, at
   }
   if parser.isAt(TokenKind.Reserved(Keyword.Fn)) {
-    return MemberKind.Function parseFunction(parser)
+    return MemberKind.Function parseFunction(parser, isMember: true)
   }
   // `static zero: Self` without a value is what a trait requires of its implementations. Whether the member stands in a
   // trait is the checker's question: the parser only knows it has a name and a type and no `=`
@@ -619,9 +628,10 @@ fn parseConstantMember(var parser: Parser): MemberKind {
   MemberKind.Field parseField(parser, false)
 }
 
+/** A field of a type or of a case. Its name may be a reserved word (`type: String`): a field is reached after a `.`. */
 fn parseField(var parser: Parser, isVar: Bool): Field {
   const doc = parser.takeDoc()
-  const name = parser.name()
+  const name = parser.nameOrKeyword()
   parser.expect TokenKind.Colon
   const annotation = parseType parser
   const default = if parser.eat(TokenKind.Equal) {

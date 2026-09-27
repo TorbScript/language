@@ -375,7 +375,8 @@ fn continuesTheLineBefore(current: Context, first: TokenKind): Bool {
 fn isMatchKeyword(tokens: List<Token>, code: List<Int>, position: Int): Bool {
   if position > 0 {
     const before = tokens[code[position - 1]].kind
-    if before == TokenKind.Dot || before == TokenKind.QuestionDot {
+    // `fn match(pattern: String)` declares a method named after the keyword
+    if before == TokenKind.Dot || before == TokenKind.QuestionDot || before == TokenKind.Reserved(Keyword.Fn) {
       return false
     }
   }
@@ -388,6 +389,10 @@ fn isMatchKeyword(tokens: List<Token>, code: List<Int>, position: Int): Bool {
  * a head is one level deeper than its first line, not than its last.
  */
 fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>): Bool {
+  // `type: String` is a field named after the keyword, not a declaration
+  if code.length() > 1 && tokens[code[1]].kind == TokenKind.Colon {
+    return false
+  }
   match tokens[code[0]].kind {
     .BraceClose => true
     .Reserved(.If | .Else | .While | .For | .Match | .Loop | .Fn | .Type | .Trait | .Extend | .Foreign) => true
@@ -609,6 +614,24 @@ fn spaced(left: Role, leftKind: TokenKind, right: Role, rightKind: TokenKind): B
   true
 }
 
+/**
+ * The kind a token has for the spaces behind it. A reserved word right after a `.` or a `fn` is the name of a member
+ * (`event.match(pattern)`, `fn match(pattern: String)`), so an argument list follows it without a space, as it follows
+ * any other name.
+ */
+fn spacingKindOf(tokens: List<Token>, index: Int): TokenKind {
+  const kind = tokens[index].kind
+  if const .Reserved(_) = kind {
+    if index > 0 {
+      const before = tokens[index - 1].kind
+      if before == TokenKind.Dot || before == TokenKind.QuestionDot || before == TokenKind.Reserved(Keyword.Fn) {
+        return TokenKind.Identifier
+      }
+    }
+  }
+  kind
+}
+
 /** The pieces of one line, each with the spaces in front of it that the layout decides. */
 fn renderLine(var parts: List<String>, source: String, line: Line, indent: Int, tokens: List<Token>, roles: List<Role>) {
   for (position, piece) in line.pieces.indexed() {
@@ -616,7 +639,7 @@ fn renderLine(var parts: List<String>, source: String, line: Line, indent: Int, 
       const previous = line.pieces[position - 1]
       match (previous.token, piece.token) {
         (Some(left), Some(right)) => {
-          if spaced(roles[left], tokens[left].kind, roles[right], tokens[right].kind) {
+          if spaced(roles[left], spacingKindOf(tokens, left), roles[right], tokens[right].kind) {
             parts.append " "
           }
         }

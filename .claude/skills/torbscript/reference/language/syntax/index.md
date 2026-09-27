@@ -18,7 +18,7 @@ an example first, then the syntax, then numbered rules, then what the construct 
 
 ## Pages
 
-- **[Lexical structure](lexical-structure.md)** - A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, and only three keywords are never reserved.
+- **[Lexical structure](lexical-structure.md)** - A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, three keywords are never reserved, and a member may be named after a reserved one.
 - **[Literals](literals.md)** - An integer, a decimal, a character and a string each have exactly one literal form, and a literal adapts to the type it is expected to have.
 - **[String interpolation](string-interpolation.md)** - `{expression}` inside a string runs the expression and shows it, a literal brace is written `\{` or `\}`, and the expression inside the braces has to fit on one line.
 - **[Multi-line strings](multi-line-strings.md)** - A `\"\"\"` string is dedented by the indentation of its first line with content, so a block of text reads at the indentation of the code around it instead of jammed against the left margin.

@@ -1,6 +1,6 @@
 ---
 title: Lexical structure
-summary: A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, and only three keywords are never reserved.
+summary: A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, three keywords are never reserved, and a member may be named after a reserved one.
 kind: reference
 status: stable
 order: 1
@@ -80,9 +80,49 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    `raw"""text"""`) only directly in front of `"`, and is an ordinary name everywhere else - `const raw = 1` and
    `fn raw(): Int` both declare a `raw`. See [Literals](literals.md), rule 9.
 
-6. **After a `.` and as an argument label, the parser accepts a reserved word as a name too** - but a *declaration's*
-   name always has to be a plain identifier, so nothing can be declared with a keyword's spelling. The rule therefore
-   has an effect only for `from`, `as` and `by`, which are not reserved to begin with.
+6. **A field, a method, a case field and a label may be named after a reserved word.** Where a name can only be a
+   name, a keyword is one: declared inside a type body (`type: String`, `var in: Int`, `fn match(...)`, a case field
+   `case Click(type: String)`), after a `.` (`event.type`, `event.match("click")`) and as a label of an argument or a
+   pattern (`Event(type: "click")`, `.Click(type: kind)`). A bare keyword is always the keyword, so inside the type the
+   member is reached as `self.type` - in a method and in a receiver closure alike. Derived `Encode` and `Decode` use the
+   field's name as the key, so a JSON `"type"` needs no rename.
+
+   ```trb check
+   type Event {
+     type: String
+     var in: Int = 0
+
+     fn match(pattern: String): Bool {
+       self.type == pattern
+     }
+   }
+
+   const event = Event type: "click"
+   print "{event.type} {event.in} {event.match("click")}"
+   ```
+
+   ```trb error
+   type Event {
+     var type: String
+   }
+
+   fn configure(block: (var self: Event) => Void): Event {
+     var event = Event(type: "")
+     block event
+     event
+   }
+
+   print configure({ type = "click" }).type
+   // error: `type` is a keyword and cannot be assigned bare
+   ```
+
+   A receiver closure writes `self.type = "click"`: its bare names are the receiver's fields, but a bare `type` at the
+   start of a line begins a declaration there as everywhere else.
+
+7. **A parameter, a binding, a function and a type cannot be named after a keyword.** A parameter has no `self.` to
+   reach it through, so a keyword there would be a name the body can never read. The message names the participle a
+   reader is looking for. A label only reaches a parameter that exists, so `accept(in: 3)` is a message about the
+   parameter, not about the keyword.
 
    ```trb check
    fn move(from: Int, to: Int): Int {
@@ -100,9 +140,6 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    print accept(in: 3)
    // error: `accept` has no parameter `in`
    ```
-
-7. **A parameter, a field, a function or a type cannot be named after a keyword.** The message names the participle a
-   reader is looking for.
 
    ```trb error
    fn move(where: Int) {
@@ -131,10 +168,7 @@ print "moved {move(from: 3, to: 10)}, total {total}"
 
 ## What this is not
 
-**A block comment is not nestable, even though CONCEPT.md's own prose reads as if a keyword could label a real
-member after a dot (`query.where { ... }`).** Rule 7 is why that never happens today: every declaration goes through
-the same name parser, so no package - not even `std/` - has ever given a method a keyword's spelling. Only the three
-contextual words reach a real name.
+**A block comment is not nestable.** Text that looks like a nested comment ends the outer one at its first `*/`.
 
 ```trb check
 const first = "a"

@@ -333,6 +333,28 @@ group "Highlight: parameters, locals and fields" {
     assert(nth(found, "x", 1).kind == "property")
   }
 
+  test "a field and a method named after a keyword are a property and a method, where declared and where read" {
+    const source = raw"""
+      type Event {
+        type: String
+
+        fn match(pattern: String): Bool {
+          self.type == pattern
+        }
+      }
+      fn check(event: Event): Bool {
+        event.match(event.type)
+      }
+      """
+    const found = tokensOf source
+    assert(nth(found, "type", 0).kind == "property")
+    assert(nth(found, "type", 0).modifiers == ["declaration", "readonly"])
+    assert(nth(found, "type", 1).kind == "property")
+    assert(nth(found, "type", 2).kind == "property")
+    assert(nth(found, "match", 0).kind == "method")
+    assert(nth(found, "match", 1).kind == "method")
+  }
+
   test "a var binding and a const binding share a kind and differ only by a modifier" {
     const found = tokensOf(raw"""
       const a = 1

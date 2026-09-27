@@ -120,7 +120,32 @@ print counter.value
    // error: This closure captures the `var` parameter `s` and may outlive the call
    ```
 
-6. **A receiver closure is an ordinary closure value, passed as an argument.** The receiver type never declares it,
+6. **A field named after a keyword is written through `self`, in a receiver closure as in a method.** A bare name
+   reaches the receiver's fields, but a bare keyword is always the keyword - `type = "click"` at the start of a line
+   begins a declaration - so the one spelling for that field is `self.type = "click"`, and the bare form is an error
+   that says so ([Lexical structure](../syntax/lexical-structure.md), rule 6).
+
+   ```trb check
+   type Event {
+     var type: String = ""
+     var target: String = ""
+   }
+
+   fn event(configure: (var self: Event) => Void): Event {
+     var built = Event()
+     configure built
+     built
+   }
+
+   const clicked = event {
+     self.type = "click"
+     target = "button"
+   }
+
+   print "{clicked.type} {clicked.target}"
+   ```
+
+7. **A receiver closure is an ordinary closure value, passed as an argument.** The receiver type never declares it,
    so two functions that both take a `(var self: Counter) => Void` can build completely different things out of the
    same receiver - what a receiver closure does is decided by the function it is passed to, not by the receiver type.
 
