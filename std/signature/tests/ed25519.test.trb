@@ -1,0 +1,158 @@
+/**
+ * Ed25519 against the test vectors of RFC 8032 section 7.1 and four vectors of Node's `crypto`: every seed makes its
+ * public key, every message signs to the printed signature, and every signature verifies - and stops verifying when
+ * the message, the signature or the key changes. Then what the factories refuse, and what a private key shows.
+ */
+
+use test, group from "std/test"
+use Json from "std/json"
+use Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature, SignatureError from "../src/lib"
+use Vector, rfcVectors, nodeVectors from "./vectors"
+
+/** The bytes of a hexadecimal text the vectors spell. */
+fn bytesOf(hex: String): List<UInt8> {
+  const digits = "0123456789abcdef"
+  var bytes: List<UInt8> = []
+  const codes = hex.bytes().toList()
+  var index = 0
+  while index < codes.length() {
+    const high = digits.bytes().toList().indexOf(codes[index]) ?? 0
+    const low = digits.bytes().toList().indexOf(codes[index + 1]) ?? 0
+    bytes.append(UInt8.tryFrom(high * 16 + low).ok() ?? 0)
+    index = index + 2
+  }
+  bytes
+}
+
+/** `bytes` with the lowest bit of the byte at `index` flipped. */
+fn flipped(bytes: List<UInt8>, index: Int): List<UInt8> {
+  bytes.updated(index, UInt8.tryFrom(Int.from(bytes[index]) ^ 1).ok() ?? 0)
+}
+
+/** Every step of a vector: the key, the signature, the verification. */
+fn checkVector(vector: Vector) {
+  const key = Ed25519PrivateKey.fromHex(vector.seed).expect("the seed of {vector.name}")
+  assert(key.publicKey().hex() == vector.publicKey)
+  const message = bytesOf vector.message
+  const signature = key.signature message
+  assert(signature.hex() == vector.signature)
+  const publicKey = Ed25519PublicKey.tryFrom(vector.publicKey).expect("the public key of {vector.name}")
+  // Equal as keys, although the point of the one was multiplied out and the point of the other decoded
+  assert(key.publicKey() == publicKey)
+  const printed = Ed25519Signature.tryFrom(vector.signature).expect("the signature of {vector.name}")
+  assert publicKey.verifies(message, printed)
+}
+
+group "Ed25519" {
+  test "the five vectors of RFC 8032 section 7.1" {
+    for vector in rfcVectors() {
+      checkVector vector
+    }
+  }
+
+  test "four vectors Node's crypto made" {
+    for vector in nodeVectors() {
+      checkVector vector
+    }
+  }
+
+  test "a changed message, signature or key does not verify" {
+    const vector = rfcVectors()[2]
+    const key = Ed25519PublicKey.tryFrom(vector.publicKey).expect("a key")
+    const message = bytesOf vector.message
+    const signature = bytesOf vector.signature
+    const printed = Ed25519Signature.fromBytes(signature).expect("a signature")
+    assert key.verifies(message, printed)
+    assert(!key.verifies(flipped(message, 0), printed))
+    assert(!key.verifies(message.appended(0), printed))
+    assert(!key.verifies(message, Ed25519Signature.fromBytes(flipped(signature, 0)).expect("R changed")))
+    assert(!key.verifies(message, Ed25519Signature.fromBytes(flipped(signature, 32)).expect("S changed")))
+    const other = Ed25519PublicKey.tryFrom(rfcVectors()[1].publicKey).expect("another key")
+    assert(!other.verifies(message, printed))
+  }
+
+  test "signing is deterministic" {
+    const key = Ed25519PrivateKey.fromSeed(List.filled(32, 9)).expect("a key")
+    const message = "the same message".bytes().toList()
+    assert(key.signature(message) == key.signature(message))
+    assert(key.signature(message) != key.signature(message.appended(0)))
+  }
+
+  test "a seed has 32 bytes" {
+    assert(
+      Ed25519PrivateKey.fromSeed(List.filled(31, 0)) == Fail(SignatureError.WrongLength("an Ed25519 seed", 32, 31)),
+    )
+    const shown = Ed25519PrivateKey.fromHex("abc").map({ _.show() }).mapError({ _.show() })
+    assert(shown == Fail("an Ed25519 seed is not hexadecimal: 3 digits, an odd number"))
+  }
+
+  test "a public key is a point of the curve, encoded canonically" {
+    // y = 0 is a point (x is a square root of -1), and so is y = 1 with x = 0, the neutral element
+    const zero = "0000000000000000000000000000000000000000000000000000000000000000"
+    assert Ed25519PublicKey.tryFrom(zero).isOk()
+    const neutral = "0100000000000000000000000000000000000000000000000000000000000000"
+    assert Ed25519PublicKey.tryFrom(neutral).isOk()
+    // y = p is y = 0 again, written with a number that is not below p
+    const unreduced = "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+    assert(Ed25519PublicKey.tryFrom(unreduced) == Fail(SignatureError.NotAPoint))
+    // x = 0 with the sign bit set is refused: zero has no negative
+    const negativeZero = "0100000000000000000000000000000000000000000000000000000000000080"
+    assert(Ed25519PublicKey.tryFrom(negativeZero) == Fail(SignatureError.NotAPoint))
+    // For y = 2, (y^2 - 1) / (d y^2 + 1) has no square root
+    const noRoot = "0200000000000000000000000000000000000000000000000000000000000000"
+    assert(Ed25519PublicKey.tryFrom(noRoot) == Fail(SignatureError.NotAPoint))
+    assert(
+      Ed25519PublicKey.fromBytes(List.filled(33, 0))
+        == Fail(SignatureError.WrongLength("an Ed25519 public key", 32, 33)),
+    )
+    const letter = Ed25519PublicKey.tryFrom("x".repeat(64)).mapError({ _.show() })
+    assert(letter == Fail("an Ed25519 public key is not hexadecimal: the character at 0 is no hexadecimal digit"))
+  }
+
+  test "a signature has an S below the group order" {
+    const vector = rfcVectors()[0]
+    const signature = bytesOf vector.signature
+    // S = L, and S = L plus the S of the vector: both verify in an implementation that does not check, and are refused
+    const order = bytesOf "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+    const withOrder = signature[0..32].appendedAll(order)
+    assert(Ed25519Signature.fromBytes(withOrder) == Fail(SignatureError.ScalarOutOfRange))
+    const belowOrder = bytesOf "ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+    assert Ed25519Signature.fromBytes(signature[0..32].appendedAll(belowOrder)).isOk()
+    assert(
+      Ed25519Signature.fromBytes(List.filled(63, 0))
+        == Fail(SignatureError.WrongLength("an Ed25519 signature", 64, 63)),
+    )
+  }
+
+  test "keys and signatures read back from their text" {
+    const vector = rfcVectors()[1]
+    const key = Ed25519PublicKey.tryFrom(vector.publicKey.toUpperCase()).expect("either case")
+    assert(String.from(key) == vector.publicKey)
+    assert(key.show() == vector.publicKey)
+    assert(key.bytes() == bytesOf(vector.publicKey))
+    const signature = Ed25519Signature.tryFrom(vector.signature).expect("a signature")
+    assert(String.from(signature) == vector.signature)
+    assert(Ed25519Signature.tryFrom(String.from(signature)) == signature)
+    const privateKey = Ed25519PrivateKey.fromHex(vector.seed).expect("a seed")
+    assert(privateKey.seedHex() == vector.seed)
+    assert(privateKey.seed() == bytesOf(vector.seed))
+  }
+
+  test "a private key shows and encodes its public key, never its seed" {
+    const vector = rfcVectors()[0]
+    const key = Ed25519PrivateKey.fromHex(vector.seed).expect("a seed")
+    assert(key.show() == "Ed25519PrivateKey(public key {vector.publicKey})")
+    const encoded = Json().encode(key)
+    assert(!encoded.contains(vector.seed))
+    assert encoded.contains(vector.publicKey)
+  }
+
+  test "a public key and a signature encode as their text" {
+    const vector = rfcVectors()[0]
+    const key = Ed25519PublicKey.tryFrom(vector.publicKey).expect("a key")
+    assert(Json().encode(key) == "\"{vector.publicKey}\"")
+    assert(Json().decode<Ed25519PublicKey>("\"{vector.publicKey}\"") == key)
+    const signature = Ed25519Signature.tryFrom(vector.signature).expect("a signature")
+    assert(Json().decode<Ed25519Signature>(Json().encode(signature)) == signature)
+  }
+}

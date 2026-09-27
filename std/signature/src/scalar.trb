@@ -1,0 +1,96 @@
+/**
+ * Arithmetic modulo the order of the base point, L = 2^252 + 27742317777372353535851937790883648493 (RFC 8032 section
+ * 5.1): a hash of 64 bytes reduced to a scalar, and the S = r + k * s of a signature. A scalar is 32 bytes little
+ * endian.
+ *
+ * Both reduce with the method of TweetNaCl's `modL`, over 64 signed byte-sized words: the words above 2^256 are folded
+ * down with 2^256 = -16 (L - 2^252) modulo L, and what is left is brought below L by one more fold and a correction.
+ * The loops run the same number of times for every input and nothing branches on a word, so a secret scalar goes
+ * through in constant time. [isBelowOrder] branches, and is only asked about the S of a signature, which is public.
+ */
+
+/** L, 32 bytes little endian. */
+const order: Array<Int, 32> = [
+  237, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 16,
+]
+
+/** 64 bytes little endian - a SHA-512 digest - reduced modulo L. */
+public fn reduced(bytes: List<UInt8>): List<UInt8> {
+  var words: Array<Int, 64> = Array.filled 0
+  for index in 0..64 {
+    words[index] = Int.from bytes[index]
+  }
+  reducedWords words
+}
+
+/** `(first * second + addend) modulo L`, all three 32 bytes little endian: the S of a signature. */
+public fn multipliedAdded(first: List<UInt8>, second: List<UInt8>, addend: List<UInt8>): List<UInt8> {
+  var words: Array<Int, 64> = Array.filled 0
+  for index in 0..32 {
+    words[index] = Int.from addend[index]
+  }
+  for index in 0..32 {
+    const factor = Int.from first[index]
+    for other in 0..32 {
+      words[index + other] = words[index + other] + factor * Int.from(second[other])
+    }
+  }
+  reducedWords words
+}
+
+/**
+ * Whether 32 bytes little endian are a number below L. RFC 8032 section 5.1.7 refuses a signature whose S is not, which
+ * is what keeps a signature from having a second form that verifies too.
+ */
+public fn isBelowOrder(bytes: List<UInt8>): Bool {
+  var index = 31
+  while index >= 0 {
+    const byte = Int.from bytes[index]
+    if byte != order[index] {
+      return byte < order[index]
+    }
+    index = index - 1
+  }
+  false
+}
+
+/**
+ * 64 words of about a byte each, least significant first, as the 32 bytes of their sum modulo L - TweetNaCl's `modL`.
+ * A word above 2^256 is replaced by 16 (L - 2^252) times it, subtracted twenty words further down with the carries
+ * rounded; the top nibble of the result is folded the same way, and the one L that may still be too much comes off by
+ * a carry that is 0 or -1 rather than by a comparison.
+ */
+fn reducedWords(input: Array<Int, 64>): List<UInt8> {
+  var words = input
+  var top = 63
+  while top >= 32 {
+    var carry = 0
+    var index = top - 32
+    while index < top - 12 {
+      words[index] = words[index] + carry - 16 * words[top] * order[index - (top - 32)]
+      carry = (words[index] + 128) >> 8
+      words[index] = words[index] - carry * 256
+      index = index + 1
+    }
+    words[index] = words[index] + carry
+    words[top] = 0
+    top = top - 1
+  }
+  var carry = 0
+  const high = words[31] >> 4
+  for index in 0..32 {
+    words[index] = words[index] + carry - high * order[index]
+    carry = words[index] >> 8
+    words[index] = words[index] & 255
+  }
+  for index in 0..32 {
+    words[index] = words[index] - carry * order[index]
+  }
+  var bytes: List<UInt8> = []
+  for index in 0..32 {
+    words[index + 1] = words[index + 1] + (words[index] >> 8)
+    bytes.append(UInt8.tryFrom(words[index] & 255).ok() ?? 0)
+  }
+  bytes
+}

@@ -1,9 +1,10 @@
 /**
- * Message digests: [Sha256], the SHA-256 of FIPS 180-4, and the [Digest] it answers. What the package manager pins a
- * package by (docs/design/RELEASE.md section 7.2), and what a download is checked against.
+ * Message digests: [Sha256] and [Sha512], the SHA-256 and SHA-512 of FIPS 180-4, and the [Digest] both answer.
+ * SHA-256 is what the package manager pins a package by (docs/design/RELEASE.md section 7.2) and what a download is
+ * checked against; SHA-512 is what Ed25519 hashes with (`std/signature`).
  *
- * Ordinary TorbScript over `Int`, with no native: every word is kept below 2^32 by a mask, so nothing overflows and the
- * same bytes give the same digest in both back ends.
+ * Ordinary TorbScript with no native. SHA-256 works over `Int`, every word kept below 2^32 by a mask, so nothing
+ * overflows; SHA-512 over `UInt64` and its wrapping sum. The same bytes give the same digest in both back ends.
  *
  * # Examples
  *
@@ -18,6 +19,8 @@
 
 use ByteWriter from "std/binary"
 use Bytes from "std/stream"
+
+public use Sha512 from "./sha512"
 
 /** What a hash function answers: its bytes, most significant first, shown as lowercase hexadecimal. */
 public type Digest with Show {
@@ -53,7 +56,7 @@ public type Sha256 {
 
   /** The digest of `bytes` in one call. */
   static fn of(bytes: Bytes): Digest {
-    var hasher = Sha256()
+    var hasher = Self()
     hasher.add bytes
     hasher.finished()
   }

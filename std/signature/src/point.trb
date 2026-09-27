@@ -1,0 +1,389 @@
+/**
+ * The group of Ed25519: the points of the twisted Edwards curve -x^2 + y^2 = 1 + d x^2 y^2 over the field of
+ * `./field` (RFC 8032 section 5.1), in the four coordinate systems of ref10, and the two scalar multiplications a
+ * signature needs - [baseMultiple] for signing, which takes the same steps whatever the scalar is, and
+ * [doubleMultiple] for verifying, where nothing is secret and speed is what counts.
+ *
+ * An addition goes from an [ExtendedPoint] and a [CachedPoint] to a [CompletedPoint], a doubling from a
+ * [ProjectivePoint] to a [CompletedPoint], and a completed point is turned into whichever of the other two the next
+ * step needs - the cheaper projective one where only a doubling follows. The addition is the unified one of Hisil,
+ * Wong, Carter and Dawson, which is complete on this curve: it adds any two points, the neutral element and a point to
+ * itself included, without a case.
+ */
+
+use FieldElement from "./field"
+
+/** A point in extended coordinates (X : Y : Z : T), where x = X / Z, y = Y / Z and x * y = T / Z: ref10's `ge_p3`. */
+public type ExtendedPoint {
+  /** X: x times Z. */
+  x: FieldElement
+  /** Y: y times Z. */
+  y: FieldElement
+  /** Z, the common denominator. */
+  z: FieldElement
+  /** T: x times y times Z, which the addition needs and the doubling does not. */
+  t: FieldElement
+
+  /** The neutral element, (0, 1). */
+  static identity = Self(
+    FieldElement([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+  )
+
+  /** The base point B of RFC 8032 section 5.1: y = 4 / 5, and the x that is even. */
+  static base = Self(
+    FieldElement([52811034, 25909283, 16144682, 17082669, 27570973, 30858332, 40966398, 8378388, 20764389, 8758491]),
+    FieldElement([40265304, 26843545, 13421772, 20132659, 26843545, 6710886, 53687091, 13421772, 40265318, 26843545]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([28827043, 27438313, 39759291, 244362, 8635006, 11264893, 19351346, 13413597, 16611511, 27139452]),
+  )
+
+  /**
+   * The point 32 bytes encode (RFC 8032 section 5.1.3), or `None` where they encode none: y is read from the low 255
+   * bits and has to be below p, x is the square root of (y^2 - 1) / (d y^2 + 1) whose parity the highest bit names, and
+   * an x of zero with that bit set is refused. It takes variable time, which is right for a public key, the one thing it
+   * reads.
+   *
+   * The caller checks that there are 32 bytes.
+   */
+  static fn decoded(bytes: List<UInt8>): Self? {
+    const y = FieldElement.fromBytes bytes
+    // A y from p to 2^255 - 1 is not canonical: its encoding differs from the bytes it was read from
+    const withoutSign = bytes.updated 31, byteOf(Int.from(bytes[31]) & 127)
+    if y.bytes() != withoutSign {
+      return None
+    }
+    const ySquared = y.squared()
+    const u = ySquared - FieldElement.one
+    const v = ySquared * FieldElement.curveConstant + FieldElement.one
+    const vCubed = v.squared() * v
+    const vToTheSeventh = vCubed.squared() * v
+    // The candidate root u v^3 (u v^7)^((p - 5) / 8), which is right up to a factor of the square root of -1
+    var x = (u * vToTheSeventh).raisedToQuarterOfPMinus5() * vCubed * u
+    const check = x.squared() * v
+    if !(check - u).isZero() {
+      if !(check + u).isZero() {
+        return None
+      }
+      x = x * FieldElement.squareRootOfMinusOne
+    }
+    const sign = Int.from(bytes[31]) >> 7
+    if x.isZero() && sign == 1 {
+      return None
+    }
+    const parity = if x.isNegative() { 1 } else { 0 }
+    if parity != sign {
+      x = -x
+    }
+    Self(x, y, FieldElement.one, x * y)
+  }
+
+  /** -P: x negated. */
+  fn negated(): Self {
+    Self(-x, y, z, -t)
+  }
+
+  /** The point without T, for a doubling: ref10's `ge_p3_to_p2`. */
+  fn projective(): ProjectivePoint {
+    ProjectivePoint x, y, z
+  }
+
+  /** The point prepared to be added to others: ref10's `ge_p3_to_cached`. */
+  fn cached(): CachedPoint {
+    CachedPoint(y + x, y - x, z, t * FieldElement.doubledCurveConstant)
+  }
+
+  /** 2P, through its projective coordinates. */
+  fn doubled(): CompletedPoint {
+    projective().doubled()
+  }
+
+  /** P + Q: ref10's `ge_add`. */
+  fn plus(other: CachedPoint): CompletedPoint {
+    const a = (y + x) * other.yPlusX
+    const b = (y - x) * other.yMinusX
+    const c = other.tTimesTwoD * t
+    const product = z * other.z
+    const d = product + product
+    CompletedPoint(a - b, a + b, d + c, d - c)
+  }
+
+  /** P - Q: [ExtendedPoint.plus] with Q negated, which swaps its two sums and negates its T: ref10's `ge_sub`. */
+  fn minus(other: CachedPoint): CompletedPoint {
+    const a = (y + x) * other.yMinusX
+    const b = (y - x) * other.yPlusX
+    const c = other.tTimesTwoD * t
+    const product = z * other.z
+    const d = product + product
+    CompletedPoint(a - b, a + b, d - c, d + c)
+  }
+}
+
+/** A point in projective coordinates (X : Y : Z), where x = X / Z and y = Y / Z: ref10's `ge_p2`. */
+public type ProjectivePoint {
+  /** X: x times Z. */
+  x: FieldElement
+  /** Y: y times Z. */
+  y: FieldElement
+  /** Z, the common denominator. */
+  z: FieldElement
+
+  /** The neutral element, (0, 1). */
+  static identity = Self(
+    FieldElement([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+  )
+
+  /** 2P: ref10's `ge_p2_dbl`, four squarings and no multiplication. */
+  fn doubled(): CompletedPoint {
+    const xSquared = x.squared()
+    const ySquared = y.squared()
+    const doubledZSquared = z.doubledSquare()
+    const sumSquared = (x + y).squared()
+    const sum = ySquared + xSquared
+    const difference = ySquared - xSquared
+    CompletedPoint(sumSquared - sum, sum, difference, doubledZSquared - difference)
+  }
+
+  /**
+   * The encoding of RFC 8032 section 5.1.2: y in the low 255 bits, and the parity of x in the highest one. One
+   * inversion, whose steps do not depend on the point.
+   */
+  fn bytes(): List<UInt8> {
+    const inverse = z.inverted()
+    const affineX = x * inverse
+    const affineY = y * inverse
+    const encoded = affineY.bytes()
+    const sign = if affineX.isNegative() { 128 } else { 0 }
+    encoded.updated 31, byteOf(Int.from(encoded[31]) | sign)
+  }
+}
+
+/** The result of an addition or a doubling, ((X : Z), (Y : T)), with x = X / Z and y = Y / T: ref10's `ge_p1p1`. */
+public type CompletedPoint {
+  /** X: x times Z. */
+  x: FieldElement
+  /** Y: y times T. */
+  y: FieldElement
+  /** Z, the denominator of x. */
+  z: FieldElement
+  /** T, the denominator of y. */
+  t: FieldElement
+
+  /** Three multiplications: what the next doubling needs. ref10's `ge_p1p1_to_p2`. */
+  fn projective(): ProjectivePoint {
+    ProjectivePoint(x * t, y * z, z * t)
+  }
+
+  /** Four multiplications: what the next addition needs. ref10's `ge_p1p1_to_p3`. */
+  fn extended(): ExtendedPoint {
+    ExtendedPoint(x * t, y * z, z * t, x * y)
+  }
+}
+
+/** A point prepared to be added, (Y + X, Y - X, Z, 2 d T): ref10's `ge_cached`. */
+public type CachedPoint {
+  /** Y + X of the extended coordinates. */
+  yPlusX: FieldElement
+  /** Y - X of the extended coordinates. */
+  yMinusX: FieldElement
+  /** Z of the extended coordinates. */
+  z: FieldElement
+  /** T times 2 d, the product every addition of this point needs. */
+  tTimesTwoD: FieldElement
+
+  /** The neutral element, prepared. */
+  static identity = Self(
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([1, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    FieldElement([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+  )
+
+  /** `other` where `flag` is 1 and this point where it is 0, with a mask instead of a branch. */
+  fn chosen(other: Self, flag: Int): Self {
+    Self(
+      yPlusX.chosen(other.yPlusX, flag),
+      yMinusX.chosen(other.yMinusX, flag),
+      z.chosen(other.z, flag),
+      tTimesTwoD.chosen(other.tTimesTwoD, flag),
+    )
+  }
+
+  /** -Q: the two sums swapped and T negated. */
+  fn negated(): Self {
+    Self(yMinusX, yPlusX, z, -tTimesTwoD)
+  }
+}
+
+/**
+ * `scalar` times the base point, taking the same steps for every scalar: what signing computes, where the scalar is
+ * the secret. `scalar` is 32 bytes little endian with a last byte of at most 127, which a clamped secret scalar and
+ * every number reduced modulo the group order are.
+ *
+ * The scalar is written as 64 signed digits from -8 to 8 of base 16. From the top digit down, the sum is multiplied by
+ * 16 - four doublings - and the multiple of the base point the digit names is added: all nine multiples from 0 to 8
+ * are read every time and the one wanted is kept by a mask, and a negative digit negates it by a mask too. No branch
+ * and no index depends on the scalar.
+ */
+public fn baseMultiple(scalar: List<UInt8>): ExtendedPoint {
+  var multiples: List<CachedPoint> = [CachedPoint.identity, ExtendedPoint.base.cached()]
+  const baseCached = ExtendedPoint.base.cached()
+  var current = ExtendedPoint.base
+  for _ in 2..9 {
+    current = current.plus(baseCached).extended()
+    multiples.append current.cached()
+  }
+  const digits = signedDigits scalar
+  var sum = ExtendedPoint.identity
+  var index = 63
+  while index >= 0 {
+    if index < 63 {
+      const twice = sum.doubled().projective()
+      const four = twice.doubled().projective()
+      const eight = four.doubled().projective()
+      sum = eight.doubled().extended()
+    }
+    sum = sum.plus(selected(multiples, digits[index])).extended()
+    index = index - 1
+  }
+  sum
+}
+
+/**
+ * `first * point + second * base`, in variable time: what verifying computes, where every input is public (ref10's
+ * `ge_double_scalarmult_vartime`). Both scalars are written as sparse signed digits of a sliding window of five bits,
+ * the odd multiples from 1 to 15 of both points are prepared once, and one run of doublings serves both sums. Both
+ * scalars are 32 bytes little endian with a last byte of at most 127.
+ */
+public fn doubleMultiple(first: List<UInt8>, point: ExtendedPoint, second: List<UInt8>): ProjectivePoint {
+  const firstDigits = slidingDigits first
+  const secondDigits = slidingDigits second
+  const pointMultiples = oddMultiples point
+  const baseMultiples = oddMultiples ExtendedPoint.base
+  var index = 255
+  while index >= 0 && firstDigits[index] == 0 && secondDigits[index] == 0 {
+    index = index - 1
+  }
+  var sum = ProjectivePoint.identity
+  while index >= 0 {
+    var step = sum.doubled()
+    const firstDigit = firstDigits[index]
+    if firstDigit > 0 {
+      step = step.extended().plus(pointMultiples[firstDigit / 2])
+    } else if firstDigit < 0 {
+      step = step.extended().minus(pointMultiples[(0 - firstDigit) / 2])
+    }
+    const secondDigit = secondDigits[index]
+    if secondDigit > 0 {
+      step = step.extended().plus(baseMultiples[secondDigit / 2])
+    } else if secondDigit < 0 {
+      step = step.extended().minus(baseMultiples[(0 - secondDigit) / 2])
+    }
+    sum = step.projective()
+    index = index - 1
+  }
+  sum
+}
+
+/**
+ * The multiple of the base point `digit` names, from -8 to 8, out of `multiples` (0 to 8 times it): every entry is
+ * read, the one whose index is the digit's magnitude is kept by a mask, and a negative digit negates it by a mask.
+ */
+fn selected(multiples: List<CachedPoint>, digit: Int): CachedPoint {
+  const negative = (digit >> 63) & 1
+  const magnitude = digit - 2 * ((0 - negative) & digit)
+  var chosen = multiples[0]
+  for index in 1..9 {
+    chosen = chosen.chosen multiples[index], equalFlag(magnitude, index)
+  }
+  chosen.chosen chosen.negated(), negative
+}
+
+/** 1 where `first` and `second` are equal and 0 where not, for two small non-negative numbers, without a comparison. */
+fn equalFlag(first: Int, second: Int): Int {
+  (((first ^ second) - 1) >> 63) & 1
+}
+
+/**
+ * The 64 digits of base 16 of a scalar whose last byte is at most 127, each moved into -8 to 7 by a carry into the next
+ * one - the last into 0 to 8. Arithmetic only, so it takes the same steps for every scalar.
+ */
+fn signedDigits(scalar: List<UInt8>): Array<Int, 64> {
+  var digits: Array<Int, 64> = Array.filled 0
+  for index in 0..32 {
+    const byte = Int.from scalar[index]
+    digits[2 * index] = byte & 15
+    digits[2 * index + 1] = (byte >> 4) & 15
+  }
+  var carry = 0
+  for index in 0..63 {
+    const digit = digits[index] + carry
+    carry = (digit + 8) >> 4
+    digits[index] = digit - carry * 16
+  }
+  digits[63] = digits[63] + carry
+  digits
+}
+
+/**
+ * The 256 bits of a scalar as digits of a sliding window: every digit is 0 or odd from -15 to 15, and between two
+ * digits that are not 0 lie at least four that are - ref10's `slide`. It branches on the bits, which is why only
+ * [doubleMultiple] uses it.
+ */
+fn slidingDigits(scalar: List<UInt8>): Array<Int, 256> {
+  var digits: Array<Int, 256> = Array.filled 0
+  for index in 0..256 {
+    digits[index] = (Int.from(scalar[index >> 3]) >> (index & 7)) & 1
+  }
+  for index in 0..256 {
+    if digits[index] == 0 {
+      continue
+    }
+    var width = 1
+    while width <= 6 && index + width < 256 {
+      if digits[index + width] != 0 {
+        const shifted = digits[index + width] << width
+        if digits[index] + shifted <= 15 {
+          digits[index] = digits[index] + shifted
+          digits[index + width] = 0
+        } else if digits[index] - shifted >= -15 {
+          digits[index] = digits[index] - shifted
+          var carryAt = index + width
+          while carryAt < 256 {
+            if digits[carryAt] == 0 {
+              digits[carryAt] = 1
+              break
+            }
+            digits[carryAt] = 0
+            carryAt = carryAt + 1
+          }
+        } else {
+          break
+        }
+      }
+      width = width + 1
+    }
+  }
+  digits
+}
+
+/** 1, 3, 5 and so on to 15 times `point`, prepared to be added. */
+fn oddMultiples(point: ExtendedPoint): List<CachedPoint> {
+  const twice = point.doubled().extended().cached()
+  var multiples = [point.cached()]
+  var current = point
+  for _ in 1..8 {
+    current = current.plus(twice).extended()
+    multiples.append current.cached()
+  }
+  multiples
+}
+
+/** The low eight bits of `value`, which the caller keeps between 0 and 255. */
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

@@ -1,0 +1,58 @@
+/**
+ * Ed25519 of `std/signature`: keys made from seeds, messages of the size of an index record signed, and the
+ * signatures verified, with the rate of each printed - the numbers `docs/standard-library/signature.md` quotes.
+ *
+ * It has no C twin and `run.sh` does not run it: build it with `torb build benchmarks/signature.trb --release` (or run
+ * it with `torb run --native`, or in the VM with `torb run`) and read the three lines.
+ */
+
+use Clock from "std/time"
+use Ed25519PrivateKey, Ed25519Signature from "std/signature"
+
+/** How many keys are made from seeds. */
+const keyRounds = 50
+
+/** How many messages are signed, and how many signatures verified. */
+const rounds = 200
+
+/** A message of about the size of a release record of the index. */
+fn messageOf(index: Int): List<UInt8> {
+  "torb index release 1\npackage acme/http\nversion 1.2.{index}\nhash sha256:{index}\nruntime acme/json:^2.0.1\n"
+    .bytes()
+    .toList()
+}
+
+fn rate(count: Int, seconds: Float): String {
+  const perSecond = Float.from(count) / seconds
+  "{count} in {seconds} s, {perSecond} per second"
+}
+
+var start = Clock.now()
+var keys: List<Ed25519PrivateKey> = []
+for index in 0..keyRounds {
+  const seed: List<UInt8> = List.filled(32, UInt8.tryFrom(index).ok() ?? 0)
+  keys.append Ed25519PrivateKey.fromSeed(seed).expect("32 bytes")
+}
+const keySeconds = (Clock.now() - start).seconds()
+
+const key = keys[0]
+start = Clock.now()
+var signatures: List<Ed25519Signature> = []
+for index in 0..rounds {
+  signatures.append key.signature(messageOf(index))
+}
+const signSeconds = (Clock.now() - start).seconds()
+
+const publicKey = key.publicKey()
+start = Clock.now()
+var verified = 0
+for index in 0..rounds {
+  if publicKey.verifies(messageOf(index), signatures[index]) {
+    verified = verified + 1
+  }
+}
+const verifySeconds = (Clock.now() - start).seconds()
+
+print "keys:   {rate(keyRounds, keySeconds)}"
+print "sign:   {rate(rounds, signSeconds)}"
+print "verify: {rate(rounds, verifySeconds)} ({verified} verified)"

@@ -1,0 +1,64 @@
+/**
+ * Bytes as hexadecimal text and back: how a key and a signature are written where text is needed - an index file, an
+ * environment variable, a configuration. Two digits per byte, written lowercase and read in either case.
+ */
+
+use SignatureError from "./error"
+
+const digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+/** Two lowercase hexadecimal digits per byte. */
+public fn hexadecimalOf(bytes: List<UInt8>): String {
+  var pieces: List<String> = []
+  for byte in bytes {
+    const value = Int.from byte
+    pieces.append digits[value >> 4]
+    pieces.append digits[value & 15]
+  }
+  pieces.joined separator: ""
+}
+
+/**
+ * The `expected` bytes a hexadecimal text of `what` stands for.
+ *
+ * # Errors
+ *
+ * - [SignatureError.NotHexadecimal] for a character that is no hexadecimal digit, and
+ *   [SignatureError.WrongLength] for a number of digits that is not twice `expected`.
+ */
+public fn bytesOfHexadecimal(text: String, what: String, expected: Int): Result<List<UInt8>, SignatureError> {
+  const codes = text.bytes().toList()
+  if codes.length() != 2 * expected {
+    if codes.length() % 2 != 0 {
+      return Fail SignatureError.NotHexadecimal(what, "{codes.length()} digits, an odd number")
+    }
+    return Fail SignatureError.WrongLength(what, expected, codes.length() / 2)
+  }
+  var bytes: List<UInt8> = []
+  var index = 0
+  while index < codes.length() {
+    const high = digitValue Int.from(codes[index])
+    const low = digitValue Int.from(codes[index + 1])
+    if high < 0 || low < 0 {
+      const at = if high < 0 { index } else { index + 1 }
+      return Fail SignatureError.NotHexadecimal(what, "the character at {at} is no hexadecimal digit")
+    }
+    bytes.append(UInt8.tryFrom(high * 16 + low).ok() ?? 0)
+    index = index + 2
+  }
+  bytes
+}
+
+/** The value of one hexadecimal digit of either case, by its code, or -1. */
+fn digitValue(code: Int): Int {
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  -1
+}

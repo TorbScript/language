@@ -1,0 +1,26 @@
+/** [SignatureError]: why bytes or a text are not an Ed25519 key or signature. */
+
+/**
+ * Why bytes or a text are not an Ed25519 key or signature. A failed verification is not one: `verifies` of a public key
+ * answers `false`, since a signature that does not verify has nothing more to say.
+ */
+public type SignatureError with Show, Error {
+  /** `what` has `expected` bytes, and `found` were given. */
+  case WrongLength(what: String, expected: Int, found: Int)
+  /** The text of `what` is not two hexadecimal digits per byte: `reason` says where. */
+  case NotHexadecimal(what: String, reason: String)
+  /** The 32 bytes of a public key do not encode a point of the curve, or not in the one canonical way. */
+  case NotAPoint
+  /** The S half of a signature is not below the group order L, which RFC 8032 section 5.1.7 refuses. */
+  case ScalarOutOfRange
+
+  /** One line: what was expected, and what was there instead. */
+  fn show(): String {
+    match self {
+      .WrongLength(what, expected, found) => "{what} is {expected} bytes, not {found}"
+      .NotHexadecimal(what, reason) => "{what} is not hexadecimal: {reason}"
+      .NotAPoint => "an Ed25519 public key encodes a point of the curve, and these 32 bytes encode none"
+      .ScalarOutOfRange => "the S of an Ed25519 signature is below the group order, and this one is not"
+    }
+  }
+}

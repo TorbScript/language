@@ -1,0 +1,292 @@
+/**
+ * Ed25519 (RFC 8032 section 5.1): [Ed25519PrivateKey] signs, [Ed25519PublicKey] verifies, and [Ed25519Signature] is
+ * the 64 bytes between them. Three capsules, each made by a factory that checks what it is given, so a public key is
+ * always a point of the curve and a signature always has an S below the group order.
+ *
+ * A private key is its 32-byte seed; everything else - the secret scalar, the prefix the nonce is hashed from, and the
+ * public key - is derived from the seed once, when the key is made. Signing is deterministic: the same key and message
+ * give the same signature, and no randomness is needed after the seed.
+ */
+
+use Sha512 from "std/digest"
+use Bytes from "std/stream"
+use SignatureError from "./error"
+use hexadecimalOf, bytesOfHexadecimal from "./hexadecimal"
+use ExtendedPoint, baseMultiple, doubleMultiple from "./point"
+use reduced, multipliedAdded, isBelowOrder from "./scalar"
+
+/**
+ * An Ed25519 private key: the 32-byte seed RFC 8032 calls the private key, with the secret scalar, the prefix and the
+ * public key derived from it once. It signs with [Ed25519PrivateKey.signature].
+ *
+ * Its [Show] and its [Encode] write the public key and never the seed, so a key that ends up in a log line or in an
+ * encoded configuration does not leak; [Ed25519PrivateKey.seed] is the one way to the secret.
+ *
+ * # Examples
+ *
+ *     const seed: List<UInt8> = List.filled 32, 7
+ *     const key = Ed25519PrivateKey.fromSeed(seed).expect("32 bytes")
+ *     const message = "a release of acme/http".bytes().toList()
+ *     const signature = key.signature message
+ *     print key.publicKey().verifies(message, signature)
+ *
+ * # Pitfalls
+ *
+ * - Where the seed comes from is the caller's: `std/signature` makes no randomness (docs/design/RANDOM.md). A seed has
+ *   to be 32 bytes of the system's source of randomness, never a password or a hash of one.
+ * - `==` compares the seeds byte by byte and stops at the first difference, which is not constant time; compare public
+ *   keys instead.
+ */
+public type Ed25519PrivateKey with Show, Encode {
+  /** The 32 bytes everything else is derived from: the secret. */
+  private seedValue: List<UInt8>
+  /** The secret scalar s: the lower half of the seed's SHA-512, clamped (RFC 8032 section 5.1.5), little endian. */
+  private scalar: List<UInt8>
+  /** The upper half of the seed's SHA-512, which the nonce of every signature is hashed from. */
+  private prefix: List<UInt8>
+  /** The public key, [ExtendedPoint.base] times the secret scalar. */
+  private publicKeyValue: Ed25519PublicKey
+
+  /**
+   * The key of a 32-byte seed (RFC 8032 section 5.1.5). One multiplication of the base point, the cost of a signature.
+   *
+   * # Errors
+   *
+   * - [SignatureError.WrongLength] for a seed that is not 32 bytes.
+   */
+  static fn fromSeed(seed: Bytes): Result<Self, SignatureError> {
+    if seed.length() != 32 {
+      return Fail SignatureError.WrongLength("an Ed25519 seed", 32, seed.length())
+    }
+    const hash = Sha512.of(seed).bytes
+    var scalar = hash[0..32]
+    scalar[0] = byteOf(Int.from(scalar[0]) & 248)
+    scalar[31] = byteOf((Int.from(scalar[31]) & 127) | 64)
+    const point = baseMultiple scalar
+    const publicKey = Ed25519PublicKey point.projective().bytes(), point.negated()
+    Self seed, scalar, hash[32..64], publicKey
+  }
+
+  /**
+   * The key of a seed written as 64 hexadecimal digits, either case: how a key comes out of an environment variable.
+   *
+   * # Errors
+   *
+   * - [SignatureError.NotHexadecimal] or [SignatureError.WrongLength] for a text that is not 64 hexadecimal digits.
+   */
+  static fn fromHex(text: String): Result<Self, SignatureError> {
+    Self.fromSeed(bytesOfHexadecimal(text.trim(), "an Ed25519 seed", 32)?)
+  }
+
+  /** The 32 bytes of the seed: the secret itself, for the one place that keeps it. */
+  fn seed(): List<UInt8> {
+    seedValue
+  }
+
+  /** The seed as 64 lowercase hexadecimal digits, which [Ed25519PrivateKey.fromHex] reads back. */
+  fn seedHex(): String {
+    hexadecimalOf seedValue
+  }
+
+  /** The public key that verifies what this key signs. */
+  fn publicKey(): Ed25519PublicKey {
+    publicKeyValue
+  }
+
+  /**
+   * The signature of `message` (RFC 8032 section 5.1.6): R = r B for the nonce r hashed from the prefix and the message,
+   * then S = r + k s modulo L for the challenge k hashed from R, the public key and the message. The multiplication of
+   * the base point and the arithmetic on the secret scalar take the same steps for every key and message.
+   */
+  fn signature(message: Bytes): Ed25519Signature {
+    var nonceHasher = Sha512()
+    nonceHasher.add prefix
+    nonceHasher.add message
+    const nonce = reduced nonceHasher.finished().bytes
+    const commitment = baseMultiple(nonce).projective().bytes()
+    const challenge = challengeOf commitment, publicKeyValue.bytes(), message
+    const response = multipliedAdded challenge, scalar, nonce
+    Ed25519Signature commitment.appendedAll(response)
+  }
+
+  /** `Ed25519PrivateKey(public key <hex>)`: the seed is never shown. */
+  fn show(): String {
+    "Ed25519PrivateKey(public key {publicKeyValue.hex()})"
+  }
+
+  /** What [Ed25519PrivateKey.show] writes, as a string: an encoded configuration never carries the seed. */
+  fn encode<Target: Encoder>(var target: Target) {
+    target.string show()
+  }
+}
+
+/**
+ * An Ed25519 public key: 32 bytes that encode a point of the curve, checked when the key is made - a y below p, an x
+ * that exists, and the canonical sign (RFC 8032 section 5.1.3). It verifies with [Ed25519PublicKey.verifies].
+ *
+ * Written as text it is 64 lowercase hexadecimal digits: [Ed25519PublicKey.hex], its `show()` and `String.from(key)`
+ * write them, and `Ed25519PublicKey.tryFrom(text)` reads them back, which is also how the key is encoded and decoded.
+ *
+ * # Examples
+ *
+ *     const key = Ed25519PublicKey.tryFrom "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+ *     print key.isOk()
+ */
+public type Ed25519PublicKey with Show, Equals, Hash, TryFrom<String, SignatureError> {
+  /** The 32 bytes of the encoding. */
+  private bytesValue: List<UInt8>
+  /** The point the bytes encode, negated: verifying computes S B - k A, and negating it once saves doing it every time. */
+  private negatedPoint: ExtendedPoint
+
+  /**
+   * The key 32 bytes encode.
+   *
+   * # Errors
+   *
+   * - [SignatureError.WrongLength] for other than 32 bytes, and [SignatureError.NotAPoint] for bytes that encode no
+   *   point of the curve or encode one in a form that is not canonical.
+   */
+  static fn fromBytes(bytes: Bytes): Result<Self, SignatureError> {
+    if bytes.length() != 32 {
+      return Fail SignatureError.WrongLength("an Ed25519 public key", 32, bytes.length())
+    }
+    match ExtendedPoint.decoded(bytes) {
+      Some(point) => Self bytes, point.negated()
+      None => Fail SignatureError.NotAPoint
+    }
+  }
+
+  /**
+   * The key 64 hexadecimal digits of either case write.
+   *
+   * # Errors
+   *
+   * - [SignatureError.NotHexadecimal] or [SignatureError.WrongLength] for a text that is not 64 hexadecimal digits,
+   *   and [SignatureError.NotAPoint] as for [Ed25519PublicKey.fromBytes].
+   */
+  static fn tryFrom(value: String): Result<Self, SignatureError> {
+    Self.fromBytes(bytesOfHexadecimal(value.trim(), "an Ed25519 public key", 32)?)
+  }
+
+  /** The 32 bytes of the encoding. */
+  fn bytes(): List<UInt8> {
+    bytesValue
+  }
+
+  /** The 32 bytes as 64 lowercase hexadecimal digits. */
+  fn hex(): String {
+    hexadecimalOf bytesValue
+  }
+
+  /** The same as [Ed25519PublicKey.hex]. */
+  fn show(): String {
+    hex()
+  }
+
+  /** Whether the two keys are the same 32 bytes: the point is derived from them, in whichever limbs it came out. */
+  fn equals(other: Self): Bool {
+    bytesValue == other.bytesValue
+  }
+
+  /** The hash of the 32 bytes, so that a key is a key of a `Map` or a member of a `Set` by its bytes alone. */
+  fn hash(): Int {
+    bytesValue.hash()
+  }
+
+  /**
+   * Whether `signature` is this key's signature of `message` (RFC 8032 section 5.1.7): with k the challenge hashed from
+   * R, the key and the message, whether S B - k A encodes as R. That is the equation without the cofactor, as ref10,
+   * libsodium and OpenSSL check it; the S of the signature was checked to be below L when the signature was made.
+   *
+   * It takes variable time - everything it reads is public - and about as long as three signatures.
+   */
+  fn verifies(message: Bytes, signature: Ed25519Signature): Bool {
+    const both = signature.bytes()
+    const commitment = both[0..32]
+    const challenge = challengeOf commitment, bytesValue, message
+    doubleMultiple(challenge, negatedPoint, both[32..64]).bytes() == commitment
+  }
+}
+
+/** A public key as its 64 lowercase hexadecimal digits: the way back of `Ed25519PublicKey.tryFrom`. */
+extend String with From<Ed25519PublicKey> {
+  static fn from(value: Ed25519PublicKey): Self {
+    value.hex()
+  }
+}
+
+/**
+ * An Ed25519 signature: 64 bytes, the encoded point R and then the scalar S, checked to be below the group order L
+ * when the signature is made (RFC 8032 section 5.1.7). As text it is 128 lowercase hexadecimal digits, read back by
+ * `Ed25519Signature.tryFrom`.
+ */
+public type Ed25519Signature with Show, TryFrom<String, SignatureError> {
+  /** The 64 bytes: R, then S. */
+  private value: List<UInt8>
+
+  /**
+   * The signature 64 bytes are.
+   *
+   * # Errors
+   *
+   * - [SignatureError.WrongLength] for other than 64 bytes, and [SignatureError.ScalarOutOfRange] for an S that is not
+   *   below L.
+   */
+  static fn fromBytes(bytes: Bytes): Result<Self, SignatureError> {
+    if bytes.length() != 64 {
+      return Fail SignatureError.WrongLength("an Ed25519 signature", 64, bytes.length())
+    }
+    if !isBelowOrder(bytes[32..64]) {
+      return Fail SignatureError.ScalarOutOfRange
+    }
+    Self bytes
+  }
+
+  /**
+   * The signature 128 hexadecimal digits of either case write.
+   *
+   * # Errors
+   *
+   * - [SignatureError.NotHexadecimal] or [SignatureError.WrongLength] for a text that is not 128 hexadecimal digits,
+   *   and [SignatureError.ScalarOutOfRange] as for [Ed25519Signature.fromBytes].
+   */
+  static fn tryFrom(value: String): Result<Self, SignatureError> {
+    Self.fromBytes(bytesOfHexadecimal(value.trim(), "an Ed25519 signature", 64)?)
+  }
+
+  /** The 64 bytes: R, then S. */
+  fn bytes(): List<UInt8> {
+    value
+  }
+
+  /** The 64 bytes as 128 lowercase hexadecimal digits. */
+  fn hex(): String {
+    hexadecimalOf value
+  }
+
+  /** The same as [Ed25519Signature.hex]. */
+  fn show(): String {
+    hex()
+  }
+}
+
+/** A signature as its 128 lowercase hexadecimal digits: the way back of `Ed25519Signature.tryFrom`. */
+extend String with From<Ed25519Signature> {
+  static fn from(value: Ed25519Signature): Self {
+    value.hex()
+  }
+}
+
+/** k = SHA-512(R || A || message) modulo L: the challenge both signing and verifying compute. */
+fn challengeOf(commitment: List<UInt8>, publicKey: List<UInt8>, message: Bytes): List<UInt8> {
+  var hasher = Sha512()
+  hasher.add commitment
+  hasher.add publicKey
+  hasher.add message
+  reduced hasher.finished().bytes
+}
+
+/** The low eight bits of `value`, which the caller keeps between 0 and 255. */
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

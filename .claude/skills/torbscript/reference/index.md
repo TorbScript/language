@@ -276,7 +276,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/compression.md` - **std/compression** (package): DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
 - `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
-- `standard-library/digest.md` - **std/digest** (package): Sha256 and the Digest it answers - SHA-256 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
+- `standard-library/digest.md` - **std/digest** (package): Sha256, Sha512 and the Digest they answer - SHA-256 and SHA-512 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
 - `standard-library/dns.md` - **std/dns** (package): Domain names with IDNA and the comparison of RFC 4343, DNS records as typed cases, and the RFC 1035 wire format with compression and EDNS0 - values with no natives and no capability, for the transports of std/network and std/http.
 - `standard-library/encoding.md` - **std/encoding** (package): Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
@@ -302,6 +302,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/regex.md` - **std/regex** (package): Regex, a compiled pattern with the syntax and the linear-time semantics of RE2, with whole and partial matches, named groups that decode into a type, replace and split.
 - `standard-library/resource.md` - **std/resource** (package): Resource, EmbeddedBytes and EmbeddedText - a file of the package named by a string literal, resolved by the compiler where it is written; reading the bytes comes with the next slices.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
+- `standard-library/signature.md` - **std/signature** (package): Ed25519 of RFC 8032 in TorbScript - a private key from a 32-byte seed signs, a public key verifies, and keys and signatures are capsules that read and write themselves as bytes and hexadecimal.
 - `standard-library/storage.md` - **std/storage** (package): Storage, a capability over a Uri whose scheme chooses the driver - FileStorage for files, MemoryStorage for tests - and Storage.registry, one storage over the drivers a program names.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
 - `standard-library/task.md` - **std/task** (package): Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.

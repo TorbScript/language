@@ -1,0 +1,22 @@
+/**
+ * Digital signatures: Ed25519 of RFC 8032, in TorbScript with no native. [Ed25519PrivateKey] is made from a 32-byte
+ * seed and signs, [Ed25519PublicKey] verifies, [Ed25519Signature] is what passes between them, and [SignatureError]
+ * says why bytes or a text are not one of the three. What the package registry signs its index with
+ * (docs/design/RELEASE.md section 7.4), so that a mirror can withhold a release but not change one.
+ *
+ * A signature is not a digest (`std/digest`): a digest says two byte sequences are the same, a signature says who
+ * wrote them - anybody can recompute a digest, only the holder of the private key can make a signature that verifies.
+ *
+ * # Examples
+ *
+ *     const seed: List<UInt8> = List.filled 32, 1
+ *     const key = Ed25519PrivateKey.fromSeed(seed).expect("32 bytes")
+ *     const message = "index/acme/http.trb".bytes().toList()
+ *     const signature = key.signature message
+ *     const published = key.publicKey().hex()
+ *     const reader = Ed25519PublicKey.tryFrom(published).expect("the key just written")
+ *     print reader.verifies(message, signature)
+ */
+
+public use Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature from "./ed25519"
+public use SignatureError from "./error"

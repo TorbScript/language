@@ -1,0 +1,424 @@
+/**
+ * The field Ed25519 computes in: the integers modulo p = 2^255 - 19 (RFC 8032 section 5.1). A [FieldElement] is ten
+ * signed limbs of alternately 26 and 25 bits, the representation of ref10, the reference implementation by Bernstein,
+ * Duif, Lange, Schwabe and Yang: a product of two limbs, times 38 at most, summed ten times, stays below 2^63, so every
+ * operation is ordinary `Int` arithmetic, and an operation that ever left the bounds below would panic with an overflow
+ * instead of answering a wrong number.
+ *
+ * **The bounds.** [FieldElement.multiply] and [FieldElement.squared] take limbs of at most 1.65 * 2^26 (the even ones)
+ * and 1.65 * 2^25 (the odd ones) and answer limbs of at most 2^25 and 2^24. A sum or a difference of two such answers
+ * stays inside what a product may take, and the formulas of `./point` never add more than three answers before
+ * multiplying - the same discipline as ref10's `ge_*.c`.
+ *
+ * **Constant time.** Nothing here branches on a limb or indexes by one: every operation is the same sequence of
+ * additions, multiplications and shifts whatever the numbers are, and [FieldElement.chosen] picks one of two elements
+ * with a mask instead of an `if`. What the C compiler makes of that is not verified here - `std/signature`'s page says
+ * what is and is not constant time.
+ */
+
+/** 2^24, 2^25 and 2^26: the rounding offsets and the weights of the carries between limbs. */
+const twoTo24 = 16777216
+const twoTo25 = 33554432
+const twoTo26 = 67108864
+
+/**
+ * An element of the field modulo 2^255 - 19: `limbs[0] + limbs[1] * 2^26 + limbs[2] * 2^51 + limbs[3] * 2^77 + ...`,
+ * the even limbs 26 bits wide and the odd ones 25. The limbs are signed and need not be reduced: two elements are the
+ * same number when their [FieldElement.bytes] are equal, not when their limbs are.
+ */
+public type FieldElement with Add, Subtract, Multiply, Negate {
+  /** The ten limbs, least significant first. */
+  limbs: Array<Int, 10>
+
+  /** The additive identity: every limb 0. */
+  static zero = Self([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+  /** The multiplicative identity: the lowest limb 1, the others 0. */
+  static one = Self([1, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+  /** d = -121665 / 121666, the constant of the curve -x^2 + y^2 = 1 + d x^2 y^2. */
+  static curveConstant = Self([
+    56195235, 13857412, 51736253, 6949390, 114729, 24766616, 60832955, 30306712, 48412415, 21499315,
+  ])
+  /** 2 * d, which the cached form of a point multiplies by once. */
+  static doubledCurveConstant = Self([
+    45281625, 27714825, 36363642, 13898781, 229458, 15978800, 54557047, 27058993, 29715967, 9444199,
+  ])
+  /** A square root of -1: 2^((p - 1) / 4). */
+  static squareRootOfMinusOne = Self([
+    34513072, 25610706, 9377949, 3500415, 12389472, 33281959, 41962654, 31548777, 326685, 11406482,
+  ])
+
+  /**
+   * The element 32 bytes stand for, little endian, with the highest bit - the sign of x in an encoded point - left out.
+   * A number from p to 2^255 - 1 is read as it is, so a caller that needs the canonical encoding compares
+   * [FieldElement.bytes] with what it read. The caller checks that there are 32 bytes; fewer panic at the index.
+   */
+  static fn fromBytes(bytes: List<UInt8>): Self {
+    var limbs: Array<Int, 10> = Array.filled 0
+    var accumulated = 0
+    var bits = 0
+    var at = 0
+    for index in 0..10 {
+      const width = if index % 2 == 0 { 26 } else { 25 }
+      while bits < width {
+        accumulated = accumulated | (Int.from(bytes[at]) << bits)
+        at = at + 1
+        bits = bits + 8
+      }
+      limbs[index] = accumulated & ((1 << width) - 1)
+      accumulated = accumulated >> width
+      bits = bits - width
+    }
+    Self limbs
+  }
+
+  /** The sum, limb by limb and without a carry: the limbs grow by at most a bit, which the next product absorbs. */
+  fn add(other: Self): Self {
+    const g = other.limbs
+    Self([
+      limbs[0] + g[0],
+      limbs[1] + g[1],
+      limbs[2] + g[2],
+      limbs[3] + g[3],
+      limbs[4] + g[4],
+      limbs[5] + g[5],
+      limbs[6] + g[6],
+      limbs[7] + g[7],
+      limbs[8] + g[8],
+      limbs[9] + g[9],
+    ])
+  }
+
+  /** The difference, limb by limb and without a carry, as [FieldElement.add]. */
+  fn subtract(other: Self): Self {
+    const g = other.limbs
+    Self([
+      limbs[0] - g[0],
+      limbs[1] - g[1],
+      limbs[2] - g[2],
+      limbs[3] - g[3],
+      limbs[4] - g[4],
+      limbs[5] - g[5],
+      limbs[6] - g[6],
+      limbs[7] - g[7],
+      limbs[8] - g[8],
+      limbs[9] - g[9],
+    ])
+  }
+
+  /** The negation, every limb negated. */
+  fn negate(): Self {
+    Self([
+      0 - limbs[0],
+      0 - limbs[1],
+      0 - limbs[2],
+      0 - limbs[3],
+      0 - limbs[4],
+      0 - limbs[5],
+      0 - limbs[6],
+      0 - limbs[7],
+      0 - limbs[8],
+      0 - limbs[9],
+    ])
+  }
+
+  /**
+   * The product, reduced to limbs of 25 and 24 bits. A product of limbs `i` and `j` counts twice where both are odd,
+   * because the odd limbs are half a bit short of their place, and 19 times where `i + j` reaches 10, because 2^255 is
+   * 19 modulo p.
+   */
+  fn multiply(other: Self): Self {
+    const f0 = limbs[0]
+    const f1 = limbs[1]
+    const f2 = limbs[2]
+    const f3 = limbs[3]
+    const f4 = limbs[4]
+    const f5 = limbs[5]
+    const f6 = limbs[6]
+    const f7 = limbs[7]
+    const f8 = limbs[8]
+    const f9 = limbs[9]
+    const g0 = other.limbs[0]
+    const g1 = other.limbs[1]
+    const g2 = other.limbs[2]
+    const g3 = other.limbs[3]
+    const g4 = other.limbs[4]
+    const g5 = other.limbs[5]
+    const g6 = other.limbs[6]
+    const g7 = other.limbs[7]
+    const g8 = other.limbs[8]
+    const g9 = other.limbs[9]
+    const g1by19 = 19 * g1
+    const g2by19 = 19 * g2
+    const g3by19 = 19 * g3
+    const g4by19 = 19 * g4
+    const g5by19 = 19 * g5
+    const g6by19 = 19 * g6
+    const g7by19 = 19 * g7
+    const g8by19 = 19 * g8
+    const g9by19 = 19 * g9
+    const f1by2 = 2 * f1
+    const f3by2 = 2 * f3
+    const f5by2 = 2 * f5
+    const f7by2 = 2 * f7
+    const f9by2 = 2 * f9
+    const h0 = f0 * g0 + f1by2 * g9by19 + f2 * g8by19 + f3by2 * g7by19 + f4 * g6by19 + f5by2 * g5by19 + f6 * g4by19
+      + f7by2 * g3by19 + f8 * g2by19 + f9by2 * g1by19
+    const h1 = f0 * g1 + f1 * g0 + f2 * g9by19 + f3 * g8by19 + f4 * g7by19 + f5 * g6by19 + f6 * g5by19 + f7 * g4by19
+      + f8 * g3by19 + f9 * g2by19
+    const h2 = f0 * g2 + f1by2 * g1 + f2 * g0 + f3by2 * g9by19 + f4 * g8by19 + f5by2 * g7by19 + f6 * g6by19
+      + f7by2 * g5by19 + f8 * g4by19 + f9by2 * g3by19
+    const h3 = f0 * g3 + f1 * g2 + f2 * g1 + f3 * g0 + f4 * g9by19 + f5 * g8by19 + f6 * g7by19 + f7 * g6by19
+      + f8 * g5by19 + f9 * g4by19
+    const h4 = f0 * g4 + f1by2 * g3 + f2 * g2 + f3by2 * g1 + f4 * g0 + f5by2 * g9by19 + f6 * g8by19 + f7by2 * g7by19
+      + f8 * g6by19 + f9by2 * g5by19
+    const h5 = f0 * g5 + f1 * g4 + f2 * g3 + f3 * g2 + f4 * g1 + f5 * g0 + f6 * g9by19 + f7 * g8by19 + f8 * g7by19
+      + f9 * g6by19
+    const h6 = f0 * g6 + f1by2 * g5 + f2 * g4 + f3by2 * g3 + f4 * g2 + f5by2 * g1 + f6 * g0 + f7by2 * g9by19
+      + f8 * g8by19 + f9by2 * g7by19
+    const h7 = f0 * g7 + f1 * g6 + f2 * g5 + f3 * g4 + f4 * g3 + f5 * g2 + f6 * g1 + f7 * g0 + f8 * g9by19
+      + f9 * g8by19
+    const h8 = f0 * g8 + f1by2 * g7 + f2 * g6 + f3by2 * g5 + f4 * g4 + f5by2 * g3 + f6 * g2 + f7by2 * g1 + f8 * g0
+      + f9by2 * g9by19
+    const h9 = f0 * g9 + f1 * g8 + f2 * g7 + f3 * g6 + f4 * g5 + f5 * g4 + f6 * g3 + f7 * g2 + f8 * g1 + f9 * g0
+    carried h0, h1, h2, h3, h4, h5, h6, h7, h8, h9
+  }
+
+  /** The square: [FieldElement.multiply] with itself, in the 55 products its symmetry leaves instead of 100. */
+  fn squared(): Self {
+    const h = squareSums()
+    carried h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9]
+  }
+
+  /** Twice the square, which a doubling of a point needs: the sums of [FieldElement.squared], doubled before the carry. */
+  fn doubledSquare(): Self {
+    const h = squareSums()
+    carried(2 * h[0], 2 * h[1], 2 * h[2], 2 * h[3], 2 * h[4], 2 * h[5], 2 * h[6], 2 * h[7], 2 * h[8], 2 * h[9])
+  }
+
+  /** The element squared `count` times over: to the power 2^count. */
+  fn squaredTimes(count: Int): Self {
+    var result = self
+    for _ in 0..count {
+      result = result.squared()
+    }
+    result
+  }
+
+  /**
+   * The inverse, as the power p - 2 = 2^255 - 21 (Fermat): 254 squarings and 11 multiplications, the chain of ref10's
+   * `fe_invert`. Zero has no inverse and answers zero.
+   */
+  fn inverted(): Self {
+    const z2 = squared()
+    const z9 = multiply z2.squaredTimes(2)
+    const z11 = z2 * z9
+    const z2to5minus1 = z9 * z11.squared()
+    const z2to10minus1 = z2to5minus1.squaredTimes(5) * z2to5minus1
+    const z2to20minus1 = z2to10minus1.squaredTimes(10) * z2to10minus1
+    const z2to40minus1 = z2to20minus1.squaredTimes(20) * z2to20minus1
+    const z2to50minus1 = z2to40minus1.squaredTimes(10) * z2to10minus1
+    const z2to100minus1 = z2to50minus1.squaredTimes(50) * z2to50minus1
+    const z2to200minus1 = z2to100minus1.squaredTimes(100) * z2to100minus1
+    const z2to250minus1 = z2to200minus1.squaredTimes(50) * z2to50minus1
+    z2to250minus1.squaredTimes(5) * z11
+  }
+
+  /**
+   * The power (p - 5) / 8 = 2^252 - 3, which a square root modulo p is made of (RFC 8032 section 5.1.3): the chain of
+   * ref10's `fe_pow22523`.
+   */
+  fn raisedToQuarterOfPMinus5(): Self {
+    const z2 = squared()
+    const z9 = multiply z2.squaredTimes(2)
+    const z11 = z2 * z9
+    const z2to5minus1 = z9 * z11.squared()
+    const z2to10minus1 = z2to5minus1.squaredTimes(5) * z2to5minus1
+    const z2to20minus1 = z2to10minus1.squaredTimes(10) * z2to10minus1
+    const z2to40minus1 = z2to20minus1.squaredTimes(20) * z2to20minus1
+    const z2to50minus1 = z2to40minus1.squaredTimes(10) * z2to10minus1
+    const z2to100minus1 = z2to50minus1.squaredTimes(50) * z2to50minus1
+    const z2to200minus1 = z2to100minus1.squaredTimes(100) * z2to100minus1
+    const z2to250minus1 = z2to200minus1.squaredTimes(50) * z2to50minus1
+    multiply z2to250minus1.squaredTimes(2)
+  }
+
+  /**
+   * The canonical encoding: the number reduced below p, 32 bytes little endian, the highest bit zero. The reduction is
+   * ref10's `fe_tobytes` - a quotient of 0 or 1 found by arithmetic, then subtracted - so it takes the same steps for
+   * every element.
+   */
+  fn bytes(): List<UInt8> {
+    const reduced = carried(
+      limbs[0],
+      limbs[1],
+      limbs[2],
+      limbs[3],
+      limbs[4],
+      limbs[5],
+      limbs[6],
+      limbs[7],
+      limbs[8],
+      limbs[9],
+    )
+    var h = reduced.limbs
+    // The quotient of the number by p, 0 or 1, from the top limb down
+    var quotient = (19 * h[9] + twoTo24) >> 25
+    for index in 0..10 {
+      const width = if index % 2 == 0 { 26 } else { 25 }
+      quotient = (h[index] + quotient) >> width
+    }
+    h[0] = h[0] + 19 * quotient
+    // The carries without rounding leave every limb in its width; the one out of the top limb is 2^255 * quotient
+    for index in 0..9 {
+      const width = if index % 2 == 0 { 26 } else { 25 }
+      const carry = h[index] >> width
+      h[index + 1] = h[index + 1] + carry
+      h[index] = h[index] - carry * (1 << width)
+    }
+    h[9] = h[9] - (h[9] >> 25) * twoTo25
+    var bytes: List<UInt8> = []
+    var accumulated = 0
+    var bits = 0
+    for index in 0..10 {
+      accumulated = accumulated | (h[index] << bits)
+      bits = bits + (if index % 2 == 0 { 26 } else { 25 })
+      while bits >= 8 {
+        bytes.append byteOf(accumulated)
+        accumulated = accumulated >> 8
+        bits = bits - 8
+      }
+    }
+    bytes.append byteOf(accumulated)
+    bytes
+  }
+
+  /** Whether the canonical encoding is odd: the "negative" x of RFC 8032, whose sign bit is 1. */
+  fn isNegative(): Bool {
+    (Int.from(bytes()[0]) & 1) == 1
+  }
+
+  /** Whether the element is zero modulo p. */
+  fn isZero(): Bool {
+    bytes().all({ _ == 0 })
+  }
+
+  /**
+   * `other` where `flag` is 1 and this element where it is 0, chosen with a mask rather than a branch, so that which one
+   * it was does not show in the time it took.
+   */
+  fn chosen(other: Self, flag: Int): Self {
+    const mask = 0 - flag
+    const g = other.limbs
+    Self([
+      limbs[0] ^ ((limbs[0] ^ g[0]) & mask),
+      limbs[1] ^ ((limbs[1] ^ g[1]) & mask),
+      limbs[2] ^ ((limbs[2] ^ g[2]) & mask),
+      limbs[3] ^ ((limbs[3] ^ g[3]) & mask),
+      limbs[4] ^ ((limbs[4] ^ g[4]) & mask),
+      limbs[5] ^ ((limbs[5] ^ g[5]) & mask),
+      limbs[6] ^ ((limbs[6] ^ g[6]) & mask),
+      limbs[7] ^ ((limbs[7] ^ g[7]) & mask),
+      limbs[8] ^ ((limbs[8] ^ g[8]) & mask),
+      limbs[9] ^ ((limbs[9] ^ g[9]) & mask),
+    ])
+  }
+
+  /** The ten sums of a square before the carry: the products of limbs `i <= j`, weighted as in [FieldElement.multiply]. */
+  private fn squareSums(): Array<Int, 10> {
+    const f0 = limbs[0]
+    const f1 = limbs[1]
+    const f2 = limbs[2]
+    const f3 = limbs[3]
+    const f4 = limbs[4]
+    const f5 = limbs[5]
+    const f6 = limbs[6]
+    const f7 = limbs[7]
+    const f8 = limbs[8]
+    const f9 = limbs[9]
+    const f0by2 = 2 * f0
+    const f1by2 = 2 * f1
+    const f2by2 = 2 * f2
+    const f3by2 = 2 * f3
+    const f4by2 = 2 * f4
+    const f5by2 = 2 * f5
+    const f6by2 = 2 * f6
+    const f7by2 = 2 * f7
+    const f5by38 = 38 * f5
+    const f6by19 = 19 * f6
+    const f7by38 = 38 * f7
+    const f8by19 = 19 * f8
+    const f9by38 = 38 * f9
+    [
+      f0 * f0 + f1by2 * f9by38 + f2by2 * f8by19 + f3by2 * f7by38 + f4by2 * f6by19 + f5 * f5by38,
+      f0by2 * f1 + f2 * f9by38 + f3by2 * f8by19 + f4 * f7by38 + f5by2 * f6by19,
+      f0by2 * f2 + f1by2 * f1 + f3by2 * f9by38 + f4by2 * f8by19 + f5by2 * f7by38 + f6 * f6by19,
+      f0by2 * f3 + f1by2 * f2 + f4 * f9by38 + f5by2 * f8by19 + f6 * f7by38,
+      f0by2 * f4 + f1by2 * f3by2 + f2 * f2 + f5by2 * f9by38 + f6by2 * f8by19 + f7 * f7by38,
+      f0by2 * f5 + f1by2 * f4 + f2by2 * f3 + f6 * f9by38 + f7by2 * f8by19,
+      f0by2 * f6 + f1by2 * f5by2 + f2by2 * f4 + f3by2 * f3 + f7by2 * f9by38 + f8 * f8by19,
+      f0by2 * f7 + f1by2 * f6 + f2by2 * f5 + f3by2 * f4 + f8 * f9by38,
+      f0by2 * f8 + f1by2 * f7by2 + f2by2 * f6 + f3by2 * f5by2 + f4 * f4 + f9 * f9by38,
+      f0by2 * f9 + f1by2 * f8 + f2by2 * f7 + f3by2 * f6 + f4by2 * f5,
+    ]
+  }
+}
+
+/**
+ * Ten sums of products brought back into the limbs' widths, each carry rounded to the nearest so that a limb ends
+ * between -2^25 and 2^25 (an even one) or -2^24 and 2^24 (an odd one); the carry out of the top limb comes back into
+ * the bottom one 19 times, because 2^255 is 19 modulo p. The order is ref10's, which keeps every intermediate small.
+ */
+fn carried(h0: Int, h1: Int, h2: Int, h3: Int, h4: Int, h5: Int, h6: Int, h7: Int, h8: Int, h9: Int): FieldElement {
+  var r0 = h0
+  var r1 = h1
+  var r2 = h2
+  var r3 = h3
+  var r4 = h4
+  var r5 = h5
+  var r6 = h6
+  var r7 = h7
+  var r8 = h8
+  var r9 = h9
+  var carry = (r0 + twoTo25) >> 26
+  r1 = r1 + carry
+  r0 = r0 - carry * twoTo26
+  carry = (r4 + twoTo25) >> 26
+  r5 = r5 + carry
+  r4 = r4 - carry * twoTo26
+  carry = (r1 + twoTo24) >> 25
+  r2 = r2 + carry
+  r1 = r1 - carry * twoTo25
+  carry = (r5 + twoTo24) >> 25
+  r6 = r6 + carry
+  r5 = r5 - carry * twoTo25
+  carry = (r2 + twoTo25) >> 26
+  r3 = r3 + carry
+  r2 = r2 - carry * twoTo26
+  carry = (r6 + twoTo25) >> 26
+  r7 = r7 + carry
+  r6 = r6 - carry * twoTo26
+  carry = (r3 + twoTo24) >> 25
+  r4 = r4 + carry
+  r3 = r3 - carry * twoTo25
+  carry = (r7 + twoTo24) >> 25
+  r8 = r8 + carry
+  r7 = r7 - carry * twoTo25
+  carry = (r4 + twoTo25) >> 26
+  r5 = r5 + carry
+  r4 = r4 - carry * twoTo26
+  carry = (r8 + twoTo25) >> 26
+  r9 = r9 + carry
+  r8 = r8 - carry * twoTo26
+  carry = (r9 + twoTo24) >> 25
+  r0 = r0 + carry * 19
+  r9 = r9 - carry * twoTo25
+  carry = (r0 + twoTo25) >> 26
+  r1 = r1 + carry
+  r0 = r0 - carry * twoTo26
+  FieldElement([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9])
+}
+
+/** The low eight bits of `value`, which the caller keeps non-negative. */
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}

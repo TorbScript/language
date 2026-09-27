@@ -63,9 +63,10 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/tls](tls.md)** - TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 - **[std/http](http.md)** - HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - **[std/binary](binary.md)** - ByteReader, ByteWriter, BitReader and BitWriter - numbers of every width in either byte order, IEEE 754 floats, LEB128, runs of bytes and text, read with a ReadError instead of a panic and written into a growable buffer.
-- **[std/digest](digest.md)** - Sha256 and the Digest it answers - SHA-256 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
+- **[std/digest](digest.md)** - Sha256, Sha512 and the Digest they answer - SHA-256 and SHA-512 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
 - **[std/compression](compression.md)** - DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - **[std/archive](archive.md)** - POSIX ustar archives - tarred writes entries as bytes that depend on nothing but the entries, untarred reads the regular files back and refuses links.
+- **[std/signature](signature.md)** - Ed25519 of RFC 8032 in TorbScript - a private key from a 32-byte seed signs, a public key verifies, and keys and signatures are capsules that read and write themselves as bytes and hexadecimal.
 - **[std/sandbox](sandbox.md)** - Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
 - **[std/project](project.md)** - The receiver type of project.trb - Project, Dependencies, Program, Profile, Test, Tasks, Workspace, Registry and Source.
 - **[std/prelude](prelude.md)** - The package of re-exports that is in scope in every file of a project, unless project.trb names another one.

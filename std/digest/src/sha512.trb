@@ -1,0 +1,199 @@
+/**
+ * [Sha512], the SHA-512 of FIPS 180-4: the hash Ed25519 is defined over (RFC 8032 section 5.1, `std/signature`), and
+ * the same shape as `Sha256` - fed at once or in pieces, answering a [Digest] of 64 bytes.
+ *
+ * Its words are 64 bits wide, so they are `UInt64`s and every sum is [UInt64.addedWrapping], the one arithmetic of the
+ * language that wraps instead of panicking; the shifts of an unsigned word are logical. No native, and the same bytes
+ * give the same digest in both back ends.
+ */
+
+use ByteWriter from "std/binary"
+use Bytes from "std/stream"
+use Digest from "./lib"
+
+/**
+ * SHA-512, fed in pieces: [Sha512.add] takes the next bytes and [Sha512.finished] answers the digest of everything added
+ * so far without changing the hasher, so a hasher can be read, fed more, and read again.
+ *
+ * # Examples
+ *
+ *     print Sha512.of("abc".bytes().toList()).hex()
+ */
+public type Sha512 {
+  /** The eight words of the state; empty until the first block, which starts it from [startingState]. */
+  private var state: List<UInt64> = []
+  /** The bytes of a block that is not full yet: fewer than 128. */
+  private var pending: List<UInt8> = []
+  /** Every byte added so far. */
+  private var length: Int = 0
+
+  /** The digest of `bytes` in one call. */
+  static fn of(bytes: Bytes): Digest {
+    var hasher = Self()
+    hasher.add bytes
+    hasher.finished()
+  }
+
+  /** Feeds the next bytes. */
+  var fn add(bytes: Bytes) {
+    length = length + bytes.length()
+    var at = 0
+    if !pending.isEmpty() {
+      while at < bytes.length() && pending.length() < 128 {
+        pending.append bytes[at]
+        at = at + 1
+      }
+      if pending.length() < 128 {
+        return
+      }
+      const block = pending
+      compress block, 0
+      pending = []
+    }
+    while at + 128 <= bytes.length() {
+      compress bytes, at
+      at = at + 128
+    }
+    while at < bytes.length() {
+      pending.append bytes[at]
+      at = at + 1
+    }
+  }
+
+  /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
+  fn finished(): Digest {
+    var last = self
+    var padding = ByteWriter()
+    padding.uint8 0x80
+    // The length in bits is a 128-bit number in the last sixteen bytes of a block, so the padding ends 112 bytes into one
+    while (pending.length() + padding.length()) % 128 != 112 {
+      padding.uint8 0
+    }
+    // Its upper half is zero for every length an `Int` can count
+    padding.uint64 0
+    padding.uint64(UInt64.tryFrom(length * 8).ok() ?? 0)
+    last.add padding.bytes()
+    var digest = ByteWriter()
+    for word in last.state {
+      digest.uint64 word
+    }
+    Digest digest.bytes()
+  }
+
+  /** One 128-byte block of `bytes`, starting at `offset`, folded into the state. */
+  private var fn compress(bytes: Bytes, offset: Int) {
+    if state.isEmpty() {
+      state = startingState()
+    }
+    var schedule: Array<UInt64, 80> = Array.filled 0
+    for index in 0..16 {
+      const at = offset + index * 8
+      schedule[index] = (halfWord(bytes, at) << 32) | halfWord(bytes, at + 4)
+    }
+    for index in 16..80 {
+      const early = schedule[index - 15]
+      const late = schedule[index - 2]
+      const small0 = rotated(early, 1) ^ rotated(early, 8) ^ (early >> 7)
+      const small1 = rotated(late, 19) ^ rotated(late, 61) ^ (late >> 6)
+      schedule[index] = schedule[index - 16]
+        .addedWrapping(small0)
+        .addedWrapping(schedule[index - 7])
+        .addedWrapping(small1)
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    var f = state[5]
+    var g = state[6]
+    var h = state[7]
+    for index in 0..80 {
+      const big1 = rotated(e, 14) ^ rotated(e, 18) ^ rotated(e, 41)
+      const choice = (e & f) ^ (~e & g)
+      const first = h
+        .addedWrapping(big1)
+        .addedWrapping(choice)
+        .addedWrapping((roundHalves[2 * index] << 32) | roundHalves[2 * index + 1])
+        .addedWrapping(schedule[index])
+      const big0 = rotated(a, 28) ^ rotated(a, 34) ^ rotated(a, 39)
+      const majority = (a & b) ^ (a & c) ^ (b & c)
+      const second = big0.addedWrapping majority
+      h = g
+      g = f
+      f = e
+      e = d.addedWrapping first
+      d = c
+      c = b
+      b = a
+      a = first.addedWrapping second
+    }
+    state[0] = state[0].addedWrapping(a)
+    state[1] = state[1].addedWrapping(b)
+    state[2] = state[2].addedWrapping(c)
+    state[3] = state[3].addedWrapping(d)
+    state[4] = state[4].addedWrapping(e)
+    state[5] = state[5].addedWrapping(f)
+    state[6] = state[6].addedWrapping(g)
+    state[7] = state[7].addedWrapping(h)
+  }
+}
+
+/** The four bytes of `bytes` at `at`, big endian, as the lower half of a word. */
+fn halfWord(bytes: Bytes, at: Int): UInt64 {
+  const high = (Int.from(bytes[at]) << 24) | (Int.from(bytes[at + 1]) << 16)
+  const value = high | (Int.from(bytes[at + 2]) << 8) | Int.from(bytes[at + 3])
+  // Four bytes are below 2^32, so the conversion never fails
+  UInt64.tryFrom(value).ok() ?? 0
+}
+
+/** The eight words a hash starts from, joined from `initialHalves`. */
+fn startingState(): List<UInt64> {
+  var words: List<UInt64> = []
+  for index in 0..8 {
+    words.append((initialHalves[2 * index] << 32) | initialHalves[2 * index + 1])
+  }
+  words
+}
+
+/** A 64-bit word rotated right by `count` bits. */
+fn rotated(word: UInt64, count: Int): UInt64 {
+  (word >> count) | (word << (64 - count))
+}
+
+/**
+ * The first 64 bits of the fractional parts of the square roots of the first eight primes, as their upper and lower 32
+ * bits: a `UInt64` literal above the largest `Int64` is not a compile-time constant of a module yet, so each word is
+ * two literals that are, joined by [startingState].
+ */
+const initialHalves: Array<UInt64, 16> = [
+  0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1,
+  0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179,
+]
+
+/**
+ * The first 64 bits of the fractional parts of the cube roots of the first 80 primes, as their upper and lower 32
+ * bits, for the same reason as `initialHalves`: round `index` joins the two at `2 * index`.
+ */
+const roundHalves: Array<UInt64, 160> = [
+  0x428a2f98, 0xd728ae22, 0x71374491, 0x23ef65cd, 0xb5c0fbcf, 0xec4d3b2f, 0xe9b5dba5, 0x8189dbbc,
+  0x3956c25b, 0xf348b538, 0x59f111f1, 0xb605d019, 0x923f82a4, 0xaf194f9b, 0xab1c5ed5, 0xda6d8118,
+  0xd807aa98, 0xa3030242, 0x12835b01, 0x45706fbe, 0x243185be, 0x4ee4b28c, 0x550c7dc3, 0xd5ffb4e2,
+  0x72be5d74, 0xf27b896f, 0x80deb1fe, 0x3b1696b1, 0x9bdc06a7, 0x25c71235, 0xc19bf174, 0xcf692694,
+  0xe49b69c1, 0x9ef14ad2, 0xefbe4786, 0x384f25e3, 0x0fc19dc6, 0x8b8cd5b5, 0x240ca1cc, 0x77ac9c65,
+  0x2de92c6f, 0x592b0275, 0x4a7484aa, 0x6ea6e483, 0x5cb0a9dc, 0xbd41fbd4, 0x76f988da, 0x831153b5,
+  0x983e5152, 0xee66dfab, 0xa831c66d, 0x2db43210, 0xb00327c8, 0x98fb213f, 0xbf597fc7, 0xbeef0ee4,
+  0xc6e00bf3, 0x3da88fc2, 0xd5a79147, 0x930aa725, 0x06ca6351, 0xe003826f, 0x14292967, 0x0a0e6e70,
+  0x27b70a85, 0x46d22ffc, 0x2e1b2138, 0x5c26c926, 0x4d2c6dfc, 0x5ac42aed, 0x53380d13, 0x9d95b3df,
+  0x650a7354, 0x8baf63de, 0x766a0abb, 0x3c77b2a8, 0x81c2c92e, 0x47edaee6, 0x92722c85, 0x1482353b,
+  0xa2bfe8a1, 0x4cf10364, 0xa81a664b, 0xbc423001, 0xc24b8b70, 0xd0f89791, 0xc76c51a3, 0x0654be30,
+  0xd192e819, 0xd6ef5218, 0xd6990624, 0x5565a910, 0xf40e3585, 0x5771202a, 0x106aa070, 0x32bbd1b8,
+  0x19a4c116, 0xb8d2d0c8, 0x1e376c08, 0x5141ab53, 0x2748774c, 0xdf8eeb99, 0x34b0bcb5, 0xe19b48a8,
+  0x391c0cb3, 0xc5c95a63, 0x4ed8aa4a, 0xe3418acb, 0x5b9cca4f, 0x7763e373, 0x682e6ff3, 0xd6b2b8a3,
+  0x748f82ee, 0x5defb2fc, 0x78a5636f, 0x43172f60, 0x84c87814, 0xa1f0ab72, 0x8cc70208, 0x1a6439ec,
+  0x90befffa, 0x23631e28, 0xa4506ceb, 0xde82bde9, 0xbef9a3f7, 0xb2c67915, 0xc67178f2, 0xe372532b,
+  0xca273ece, 0xea26619c, 0xd186b8c7, 0x21c0c207, 0xeada7dd6, 0xcde0eb1e, 0xf57d4f7f, 0xee6ed178,
+  0x06f067aa, 0x72176fba, 0x0a637dc5, 0xa2c898a6, 0x113f9804, 0xbef90dae, 0x1b710b35, 0x131c471b,
+  0x28db77f5, 0x23047d84, 0x32caab7b, 0x40c72493, 0x3c9ebe0a, 0x15c9bebc, 0x431d67c4, 0x9c100d4c,
+  0x4cc5d4be, 0xcb3e42b6, 0x597f299c, 0xfc657e2a, 0x5fcb6fab, 0x3ad6faec, 0x6c44198c, 0x4a475817,
+]
