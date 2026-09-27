@@ -340,10 +340,17 @@ because the first question the server has to answer is whether it is correct.
   the listener and cancels every loop. `serve()` answers the first failure of a loop, or `Ok`.
 - **A server with TLS runs one loop**, because its `ServerIdentity` is an object and a loop that holds it cannot move;
   handing the identity's handle across is the refinement when a benchmark asks for it.
+- **On epoll and kqueue a listener has a queue of waiting accepts**, one per loop, where a stream has one reader and
+  one writer: a readiness serves them oldest first until one would block, a cancel takes one out wherever it stands, and
+  a close fails every one of them with a closed socket. IOCP needed nothing, because every `AcceptEx` is an overlapped
+  call of its own. The first version kept one reader per socket for a listener too, and on Linux every accept after
+  the first failed at once with "the address or the argument is not valid": the one loop left served every request,
+  and `serve()` answered the others' failure after the shutdown. `runtime/tests/io_test.c` holds several accepts
+  waiting at once, cancels one in the middle and closes the listener under the rest.
 - **Verified** by `tests/conformance/http-workers.trb`, twelve requests at once and a graceful shutdown, with four workers
-  and with one (the `.workers` file), natively and in the VM; the emitted C starts the loop with
-  `torb_task_start_portable` where the handler may cross. Which worker runs which loop is the scheduler's, and not
-  printed.
+  and with one (the `.workers` file), natively and in the VM, on Windows and on Linux (gcc 16, in a container); the
+  emitted C starts the loop with `torb_task_start_portable` where the handler may cross. Which worker runs which loop is
+  the scheduler's, and not printed.
 
 ## 5. TLS
 

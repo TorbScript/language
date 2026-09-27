@@ -259,6 +259,56 @@ TORB_TEST(test_io_a_cancelled_accept_leaves_the_connection_to_the_next) {
   TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
 }
 
+/*
+ * Several accept loops on one listening socket (docs/design/NETWORK.md section 4): accepts that wait at once each take
+ * a connection of their own, one of them can be cancelled, and a close wakes every one that still waits with "closed".
+ * The readiness pollers once had room for one waiting reader a socket, and every accept after the first failed at once
+ * with "not valid".
+ */
+TORB_TEST(test_io_several_accepts_wait_on_one_listener) {
+  int64_t listener = torb_network_listen(4, 0, LOOPBACK4, 0, 8);
+  int64_t port = port_of(listener);
+  torb_task *first;
+  torb_task *second;
+  torb_task *third;
+  torb_task *fourth;
+  torb_task *fifth;
+  int64_t clients[2];
+  int64_t servers[2];
+  TORB_CHECK(port > 0);
+  first = torb_network_accept(listener);
+  second = torb_network_accept(listener);
+  let_them_start();
+  TORB_CHECK(!torb_task_is_complete(first));
+  TORB_CHECK(!torb_task_is_complete(second));
+  clients[0] = answer_of(torb_network_connect(4, 0, LOOPBACK4, port));
+  clients[1] = answer_of(torb_network_connect(4, 0, LOOPBACK4, port));
+  TORB_CHECK(clients[0] > 0 && clients[1] > 0);
+  /* Whichever took which connection, each took one */
+  servers[0] = answer_of(first);
+  servers[1] = answer_of(second);
+  TORB_CHECK(servers[0] > 0 && servers[1] > 0 && servers[0] != servers[1]);
+  third = torb_network_accept(listener);
+  fourth = torb_network_accept(listener);
+  fifth = torb_network_accept(listener);
+  let_them_start();
+  TORB_CHECK(!torb_task_is_complete(third));
+  TORB_CHECK(!torb_task_is_complete(fourth));
+  TORB_CHECK(!torb_task_is_complete(fifth));
+  /* The one in the middle goes; the two around it still wait */
+  torb_task_cancel(fourth);
+  TORB_CHECK_INTEGER(answer_of(fourth), CANCELLED);
+  torb_network_close(listener);
+  TORB_CHECK_INTEGER(kind_of(answer_of(third)), 10);
+  TORB_CHECK_INTEGER(kind_of(answer_of(fifth)), 10);
+  torb_network_close(servers[0]);
+  torb_network_close(servers[1]);
+  torb_network_close(clients[0]);
+  torb_network_close(clients[1]);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
 TORB_TEST(test_io_closing_wakes_a_receive_that_waits) {
   int64_t server = 0;
   int64_t client = 0;
@@ -554,6 +604,7 @@ void torb_register_io_tests(void) {
   TORB_ADD(test_io_an_address_in_use_fails);
   TORB_ADD(test_io_a_cancelled_receive_loses_nothing);
   TORB_ADD(test_io_a_cancelled_accept_leaves_the_connection_to_the_next);
+  TORB_ADD(test_io_several_accepts_wait_on_one_listener);
   TORB_ADD(test_io_closing_wakes_a_receive_that_waits);
   TORB_ADD(test_io_the_end_of_the_program_stops_what_waits);
   TORB_ADD(test_io_resolving_localhost);

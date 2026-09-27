@@ -506,11 +506,13 @@ int64_t torb_io_posix_perform(torb_io_operation *operation) {
 /* ------------------------------------------------------------------------ the readiness poller, either of them --- */
 
 /*
- * What epoll and kqueue have in common: a socket has at most one operation waiting to read (a receive, an accept) and
- * one waiting to write (a send, a connect), in `reading` and `writing` under the socket's lock. A submission makes the
- * call at once, on the worker, and registers the operation only where it would block; the IO thread makes the call
- * again when the socket is ready. Registrations are one-shot, so the IO thread arms the socket again for whatever still
- * waits after every event.
+ * What epoll and kqueue have in common: a stream has at most one operation waiting to read (a receive) and one waiting
+ * to write (a send, a connect), in `reading` and `writing` under the socket's lock. A listener has as many accepts
+ * waiting as there are accept loops on it (docs/design/NETWORK.md section 4): `reading` is the oldest, and the others
+ * follow it through their `queued_next`. A submission makes the call at once, on the worker, and registers the
+ * operation only where it would block; the IO thread makes the call again when the socket is ready - for every reader
+ * that waits, the oldest first, until one would block. Registrations are one-shot, so the IO thread arms the socket
+ * again for whatever still waits after every event.
  *
  * A record the IO thread might still find in an event it holds is not freed at once: `torb_io_system_forget` puts it
  * on the retired list, and the IO thread frees what was retired before a wait once that wait's events are handled.
@@ -536,6 +538,44 @@ static int64_t torb_posix_perform_guarded(torb_io_socket *socket, torb_io_operat
   socket->performing -= 1u;
   torb_spin_unlock(&socket->lock);
   return answer;
+}
+
+/* Queues `operation` behind the readers that wait on `socket`: a stream's one receive, or one more accept of a
+   listener. The socket's lock held. */
+static void torb_posix_add_reader(torb_io_socket *socket, torb_io_operation *operation) {
+  torb_io_operation **last = &socket->reading;
+  while (*last != NULL) {
+    last = &(*last)->queued_next;
+  }
+  operation->queued_next = NULL;
+  *last = operation;
+}
+
+/* Takes `operation` out of the readers that wait on `socket`, where it is one of them. The socket's lock held. */
+static bool torb_posix_remove_reader(torb_io_socket *socket, torb_io_operation *operation) {
+  torb_io_operation **link = &socket->reading;
+  while (*link != NULL) {
+    if (*link == operation) {
+      *link = operation->queued_next;
+      operation->queued_next = NULL;
+      return true;
+    }
+    link = &(*link)->queued_next;
+  }
+  return false;
+}
+
+/* The oldest reader that waits on `socket`, taken out, or `NULL`. */
+static torb_io_operation *torb_posix_take_reader(torb_io_socket *socket) {
+  torb_io_operation *operation;
+  torb_spin_lock(&socket->lock);
+  operation = socket->reading;
+  if (operation != NULL) {
+    socket->reading = operation->queued_next;
+    operation->queued_next = NULL;
+  }
+  torb_spin_unlock(&socket->lock);
+  return operation;
 }
 
 /* Frees every record on `list`. */
@@ -608,8 +648,11 @@ void torb_io_system_submit(torb_io_operation *operation) {
     torb_io_complete(operation, torb_io_failed(TORB_IO_CLOSED, 0u));
     return;
   }
-  /* One reader and one writer at a time: a second one is a program that pulls a stream from two places */
-  if (torb_io_posix_wants_writable(operation) ? socket->writing != NULL : socket->reading != NULL) {
+  /* One reader and one writer at a time - a second one is a program that pulls a stream from two places - but any
+     number of accepts: each is one more accept loop on the listener, as IOCP has any number of `AcceptEx` in flight */
+  if (torb_io_posix_wants_writable(operation)
+          ? socket->writing != NULL
+          : socket->reading != NULL && operation->kind != (uint8_t)TORB_IO_ACCEPT) {
     torb_spin_unlock(&socket->lock);
     torb_io_complete(operation, torb_io_failed(TORB_IO_INVALID, 0u));
     return;
@@ -617,14 +660,14 @@ void torb_io_system_submit(torb_io_operation *operation) {
   if (torb_io_posix_wants_writable(operation)) {
     socket->writing = operation;
   } else {
-    socket->reading = operation;
+    torb_posix_add_reader(socket, operation);
   }
   armed = torb_io_poller_arm(socket);
   if (armed != 0) {
     if (socket->writing == operation) {
       socket->writing = NULL;
     } else {
-      socket->reading = NULL;
+      (void)torb_posix_remove_reader(socket, operation);
     }
   }
   torb_spin_unlock(&socket->lock);
@@ -633,45 +676,55 @@ void torb_io_system_submit(torb_io_operation *operation) {
   }
 }
 
-void torb_io_posix_ready(torb_io_socket *socket, bool readable, bool writable) {
-  torb_io_operation *taken[2] = { NULL, NULL };
-  int index;
-  torb_spin_lock(&socket->lock);
-  if (readable && socket->reading != NULL) {
-    taken[0] = socket->reading;
-    socket->reading = NULL;
+/*
+ * Makes the call of an operation the IO thread took off `socket` again, and completes it. False where it would still
+ * block: then it waits again - at the front of the readers, or as the writer - or fails where the socket was closed
+ * in the meantime.
+ */
+static bool torb_posix_retry(torb_io_socket *socket, torb_io_operation *operation, bool reader) {
+  int64_t answer = torb_posix_perform_guarded(socket, operation);
+  bool kept = false;
+  if (answer != TORB_IO_POSIX_AGAIN) {
+    torb_io_complete(operation, answer);
+    return true;
   }
-  if (writable && socket->writing != NULL) {
-    taken[1] = socket->writing;
-    socket->writing = NULL;
+  /* Ready and still nothing to do (a spurious wakeup, a connection reset before its accept, or one that a worker's
+     accept took first): wait again */
+  torb_spin_lock(&socket->lock);
+  if (socket->closed == 0u) {
+    if (reader) {
+      operation->queued_next = socket->reading;
+      socket->reading = operation;
+    } else {
+      socket->writing = operation;
+    }
+    kept = true;
   }
   torb_spin_unlock(&socket->lock);
-  for (index = 0; index < 2; index += 1) {
-    torb_io_operation *operation = taken[index];
-    int64_t answer;
-    if (operation == NULL) {
-      continue;
+  if (!kept) {
+    torb_io_complete(operation, torb_io_failed(TORB_IO_CLOSED, 0u));
+  }
+  return false;
+}
+
+void torb_io_posix_ready(torb_io_socket *socket, bool readable, bool writable) {
+  /* The readers, the oldest first, until one would block: a stream's one receive, or as many of a listener's accepts
+     as connections arrived */
+  while (readable) {
+    torb_io_operation *reader = torb_posix_take_reader(socket);
+    if (reader == NULL || !torb_posix_retry(socket, reader, true)) {
+      break;
     }
-    answer = torb_posix_perform_guarded(socket, operation);
-    if (answer == TORB_IO_POSIX_AGAIN) {
-      /* Ready and still nothing to do (a spurious wakeup, a connection reset before its accept): wait again */
-      bool kept = false;
-      torb_spin_lock(&socket->lock);
-      if (socket->closed == 0u) {
-        if (index == 0) {
-          socket->reading = operation;
-        } else {
-          socket->writing = operation;
-        }
-        kept = true;
-      }
-      torb_spin_unlock(&socket->lock);
-      if (!kept) {
-        torb_io_complete(operation, torb_io_failed(TORB_IO_CLOSED, 0u));
-      }
-      continue;
+  }
+  if (writable) {
+    torb_io_operation *writer;
+    torb_spin_lock(&socket->lock);
+    writer = socket->writing;
+    socket->writing = NULL;
+    torb_spin_unlock(&socket->lock);
+    if (writer != NULL) {
+      (void)torb_posix_retry(socket, writer, false);
     }
-    torb_io_complete(operation, answer);
   }
   torb_spin_lock(&socket->lock);
   if (socket->closed == 0u && (socket->reading != NULL || socket->writing != NULL)) {
@@ -687,10 +740,7 @@ void torb_io_system_cancel(torb_io_operation *operation) {
     return;
   }
   torb_spin_lock(&socket->lock);
-  if (socket->reading == operation) {
-    socket->reading = NULL;
-    found = true;
-  }
+  found = torb_posix_remove_reader(socket, operation);
   if (socket->writing == operation) {
     socket->writing = NULL;
     found = true;
@@ -725,8 +775,12 @@ void torb_io_system_close(torb_io_socket *socket) {
   }
   torb_spin_unlock(&socket->lock);
   (void)close((int)socket->system);
-  if (reading != NULL) {
+  /* Every reader that waits: a stream's receive, or each accept loop of a listener */
+  while (reading != NULL) {
+    torb_io_operation *next = reading->queued_next;
+    reading->queued_next = NULL;
     torb_io_complete(reading, torb_io_failed(TORB_IO_CLOSED, 0u));
+    reading = next;
   }
   if (writing != NULL) {
     torb_io_complete(writing, torb_io_failed(TORB_IO_CLOSED, 0u));

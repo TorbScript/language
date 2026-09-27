@@ -116,7 +116,10 @@ struct torb_io_socket {
   /** A datagram socket is connected to one peer: a send without an address goes there, and nothing else arrives. */
   uint8_t connected;
   /* ---- the readiness pollers' (epoll, kqueue) ---- */
-  /** The operation that waits for the socket to become readable, and the one that waits for it to become writable. */
+  /**
+   * The operation that waits for the socket to become readable, and the one that waits for it to become writable. A
+   * listener has one waiting accept per accept loop: `reading` is the oldest, the others follow through `queued_next`.
+   */
   torb_io_operation *reading;
   torb_io_operation *writing;
   /** Registered with the poller at all. */
@@ -167,7 +170,7 @@ struct torb_io_operation {
   char *host;
   torb_io_address *addresses;
   size_t address_count;
-  /** The queue of the resolver threads. */
+  /** The queue it waits in: the resolver threads' for a resolution, a listener's accepts on epoll and kqueue. */
   torb_io_operation *queued_next;
   uint8_t in_queue;
 };
