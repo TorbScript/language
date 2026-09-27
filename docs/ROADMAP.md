@@ -119,7 +119,15 @@ the natives that exist.** In this order, because each part stands on the one bef
 1. **File systems.** `std/fs` stays the native driver on `Path`. Above it, a storage layer chooses a driver by the
    scheme of a URI - local files, memory for tests, then S3 and WebDAV as packages of their own - and `std/fs` gains
    `remove` and `rename` ([design/URI.md](design/URI.md) sections 11 and 14, [design/PATH.md](design/PATH.md)).
-   Connections to databases and caches are URIs whose scheme chooses the driver in the same way.
+   Connections to databases and caches are URIs whose scheme chooses the driver in the same way. **Built
+   (2026-09-27):** `std/fs` has the synchronous `readBytes`/`writeBytes` beside the task `read`, `remove`,
+   `removeDirectory`, `rename`, `copy`, `walk`, `metadata` and `linkMetadata` with `Metadata`, `FileKind` and
+   `Permissions`, `setPermissions`, symbolic links, temporary files and directories and `writeBytesAtomically` - one
+   text form on every system, converted in `runtime/platform.c`, so the compiler's C stays the same for every target;
+   `std/time` has `Timestamp`; a `var` file handed to a `var Sink` parameter builds in both back ends; and `std/storage`
+   has `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` and `MemoryStorage` over `Schemes` of `std/uri`
+   (URI.md slice 12). **Left:** S3 and WebDAV as packages of their own; the `Into<Path>` signatures of PATH.md slice 2;
+   the `Sandbox` half of URI.md gap 13; `Connection` and `Cache`, which wait for a second driver each.
 2. **The network.** `std/network` (sockets), then `std/http` (client and server, TLS through the platform), then gRPC
    and OpenAPI on top of it. `std/uri` is finished before `std/http` grows further (the owner, 2026-09-25): the URI
    types, IRIs, URNs, templates and the pure address package `std/ip` come first

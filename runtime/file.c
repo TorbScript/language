@@ -1,7 +1,11 @@
 /*
- * file.c - `std/fs`: `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open
- * handle (`File.open`/`readAll`/`close`) that lets a program read a file without holding it in memory as one
- * `readText`.
+ * file.c - `std/fs`: `readText`, `writeText`, `readBytes`, `writeBytes`, `exists`, `isDirectory`, `list` (sorted),
+ * `absolutePath`, the open handle (`File.open`/`readAll`/`close`) that lets a program read a file without holding it in
+ * memory as one `readText`, and the tree around the contents: `remove`, `rename`, `copy`, `metadata`, `setPermissions`,
+ * symbolic links, temporary files and directories, and the replacement of a file whole (`writeBytesAtomically`).
+ *
+ * Nothing here branches on the operating system: every function reaches the system through `runtime/platform.c`, which
+ * holds both halves, so a program - the compiler among them - is the same C for every target.
  *
  * Every function answers false on failure and puts the message of the `IoError` into `*error` (owned): the operating
  * system's words alone, because the `path` of the `IoError` is the parameter of that name and its `show` writes the two
@@ -15,6 +19,7 @@
  */
 
 #include "torb.h"
+#include "torb_pool.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -127,6 +132,409 @@ bool torb_file_list(torb_text path, torb_list *out, torb_text *error) {
   }
   torb_list_sort(&entries, torb_compare_text_elements, NULL);
   *out = entries;
+  return true;
+}
+
+/* ------------------------------------------------------------------------------------------------ bytes --- */
+
+bool torb_file_read_bytes(torb_text path, torb_list *into, torb_text *failure) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, false, &capacity);
+  const char *message = NULL;
+  uint8_t *bytes = NULL;
+  size_t length = 0u;
+  bool read = torb_platform_read_file(name, &bytes, &length, &message);
+  torb_raw_free(name, capacity);
+  if (!read) {
+    *failure = torb_io_message(message);
+    return false;
+  }
+  if (length > 0u) {
+    torb_list_add_plain(into, bytes, length);
+  }
+  torb_raw_free(bytes, length);
+  return true;
+}
+
+/*
+ * The bytes of a list of `UInt8`, borrowed from it: one byte an element, in one piece. The declaration says `UInt8`, so
+ * an element of another size is a defect of the lowering and never a failure of the program.
+ */
+static const uint8_t *torb_list_bytes(torb_list bytes, size_t *length) {
+  *length = (size_t)torb_list_length(bytes);
+  if (*length == 0u) {
+    return NULL;
+  }
+  if (torb_list_element(bytes)->size != 1u) {
+    torb_panic_text("internal error: the bytes of a file are not a list of UInt8", torb_location_unknown);
+  }
+  return (const uint8_t *)torb_list_at(bytes, 0, torb_location_unknown);
+}
+
+bool torb_file_write_bytes(torb_text path, torb_list bytes, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  const char *message = NULL;
+  size_t length = 0u;
+  const uint8_t *data = torb_list_bytes(bytes, &length);
+  bool written = torb_platform_write_file(name, data, length, &message);
+  torb_raw_free(name, capacity);
+  if (!written) {
+    *error = torb_io_message(message);
+    return false;
+  }
+  return true;
+}
+
+/* ------------------------------------------------------------------------------- temporary names, replacing --- */
+
+/*
+ * Twelve letters and digits, a new draw each call: SplitMix64 over a seed of the platform (the clock, the process) and a
+ * counter, so two calls of one process in the same tick differ as well. A name is only ever a proposal - what makes it
+ * the caller's is that the file is created where nothing was, and a name that is taken is drawn again.
+ */
+static void torb_random_name(char *into) {
+  static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+  static uint32_t counter = 0u;
+  uint64_t state = torb_platform_unique_seed() ^ ((uint64_t)torb_atomic_add_u32(&counter, 1u) << 48);
+  size_t index;
+  for (index = 0u; index < 12u; index += 1u) {
+    uint64_t mixed;
+    state += UINT64_C(0x9E3779B97F4A7C15);
+    mixed = state;
+    mixed = (mixed ^ (mixed >> 30)) * UINT64_C(0xBF58476D1CE4E5B9);
+    mixed = (mixed ^ (mixed >> 27)) * UINT64_C(0x94D049BB133111EB);
+    mixed ^= mixed >> 31;
+    into[index] = alphabet[mixed % 36u];
+  }
+  into[12] = '\0';
+}
+
+/*
+ * A new entry `<directory>/<prefix><random>`, made where nothing was: a `FILE *` open for writing, or the token of a
+ * directory. `*made` owned: the path it has. Tries another name while one is taken, and gives up after a hundred.
+ */
+static void *torb_create_unique(
+  const char *directory,
+  const char *prefix,
+  bool as_directory,
+  int64_t mode,
+  char **made,
+  size_t *made_capacity,
+  const char **message
+) {
+  const size_t directory_length = strlen(directory);
+  const size_t prefix_length = strlen(prefix);
+  const size_t capacity = directory_length + 1u + prefix_length + 12u + 1u;
+  int attempt;
+  char *path = (char *)torb_raw_allocate(capacity);
+  memcpy(path, directory, directory_length);
+  path[directory_length] = '/';
+  memcpy(path + directory_length + 1u, prefix, prefix_length);
+  for (attempt = 0; attempt < 100; attempt += 1) {
+    bool exists = false;
+    void *created;
+    torb_random_name(path + directory_length + 1u + prefix_length);
+    created = torb_platform_create_new(path, as_directory, mode, &exists, message);
+    if (created != NULL) {
+      *made = path;
+      *made_capacity = capacity;
+      return created;
+    }
+    if (!exists) {
+      torb_raw_free(path, capacity);
+      return NULL;
+    }
+  }
+  *message = "no name that is not taken was found in a hundred tries";
+  torb_raw_free(path, capacity);
+  return NULL;
+}
+
+bool torb_file_create_temporary(torb_text path, torb_text prefix, bool directory, torb_text *out, torb_text *error) {
+  size_t directory_capacity = 0u;
+  char *inside;
+  size_t prefix_capacity = (size_t)prefix.length + 1u;
+  char *prefix_bytes;
+  char *made = NULL;
+  size_t made_capacity = 0u;
+  const char *message = NULL;
+  void *created;
+  if (path.length == 0u) {
+    size_t length = 0u;
+    char *system = torb_platform_temporary_directory(&length);
+    torb_text found;
+    if (system == NULL) {
+      *error = torb_io_message("the system names no directory for temporary files");
+      return false;
+    }
+    found = torb_text_from_bytes((const uint8_t *)system, length, torb_location_unknown);
+    torb_raw_free(system, length + 1u);
+    inside = torb_path_bytes(found, true, &directory_capacity);
+    torb_text_release(found);
+  } else {
+    inside = torb_path_bytes(path, true, &directory_capacity);
+  }
+  prefix_bytes = (char *)torb_raw_allocate(prefix_capacity);
+  if (prefix.length > 0u) {
+    memcpy(prefix_bytes, prefix.storage->data + prefix.offset, (size_t)prefix.length);
+  }
+  prefix_bytes[prefix.length] = '\0';
+  /* A separator in the prefix would put the entry somewhere else than where the caller asked for it */
+  if (strchr(prefix_bytes, '/') != NULL || strchr(prefix_bytes, '\\') != NULL) {
+    torb_raw_free(prefix_bytes, prefix_capacity);
+    torb_raw_free(inside, directory_capacity);
+    *error = torb_io_message("the prefix of a temporary name may not contain a separator");
+    return false;
+  }
+  /* Only the owner may read it: what a program keeps in a temporary file is often what nobody else should see */
+  created = torb_create_unique(inside, prefix_bytes, directory, directory ? 0700 : 0600, &made, &made_capacity, &message);
+  torb_raw_free(prefix_bytes, prefix_capacity);
+  torb_raw_free(inside, directory_capacity);
+  if (created == NULL) {
+    *error = torb_io_message(message);
+    return false;
+  }
+  if (!directory) {
+    fclose((FILE *)created);
+  }
+  {
+    size_t index;
+    for (index = 0u; made[index] != '\0'; index += 1u) {
+      if (made[index] == '\\') {
+        made[index] = '/';
+      }
+    }
+  }
+  *out = torb_text_from_cstring(made);
+  torb_raw_free(made, made_capacity);
+  return true;
+}
+
+/* The directory a path is in: everything before its last separator, `.` where it has none. Owned. */
+static char *torb_folder_of(const char *path, size_t *capacity) {
+  size_t length = strlen(path);
+  char *folder;
+  while (length > 0u && path[length - 1u] != '/' && path[length - 1u] != '\\') {
+    length -= 1u;
+  }
+  if (length == 0u) {
+    *capacity = 2u;
+    folder = (char *)torb_raw_allocate(*capacity);
+    memcpy(folder, ".", 2u);
+    return folder;
+  }
+  /* `/x` is in `/` and `C:/x` in `C:/`, so a root keeps its separator; everything else loses it */
+  if (length > 1u && !(length == 3u && path[1] == ':')) {
+    length -= 1u;
+  }
+  *capacity = length + 1u;
+  folder = (char *)torb_raw_allocate(*capacity);
+  memcpy(folder, path, length);
+  folder[length] = '\0';
+  return folder;
+}
+
+/* The name of a path: everything after its last separator. Borrowed from `path`. */
+static const char *torb_name_of(const char *path) {
+  const char *name = path;
+  const char *cursor;
+  for (cursor = path; *cursor != '\0'; cursor += 1) {
+    if (*cursor == '/' || *cursor == '\\') {
+      name = cursor + 1;
+    }
+  }
+  return name;
+}
+
+bool torb_file_replace(torb_text path, torb_list bytes, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  size_t folder_capacity = 0u;
+  char *folder = torb_folder_of(name, &folder_capacity);
+  const char *base = torb_name_of(name);
+  const size_t prefix_capacity = strlen(base) + 3u;
+  char *prefix = (char *)torb_raw_allocate(prefix_capacity);
+  char *staging = NULL;
+  size_t staging_capacity = 0u;
+  const char *message = NULL;
+  size_t length = 0u;
+  const uint8_t *data = torb_list_bytes(bytes, &length);
+  torb_path_metadata before;
+  const bool existed = torb_platform_metadata(name, true, &before, &message);
+  FILE *file;
+  bool ok = true;
+  /* `.<name>.` - hidden where a leading dot hides, and beside the file, because a rename moves nothing across volumes */
+  prefix[0] = '.';
+  memcpy(prefix + 1, base, prefix_capacity - 3u);
+  prefix[prefix_capacity - 2u] = '.';
+  prefix[prefix_capacity - 1u] = '\0';
+  file = (FILE *)torb_create_unique(folder, prefix, false, 0666, &staging, &staging_capacity, &message);
+  torb_raw_free(prefix, prefix_capacity);
+  if (file == NULL) {
+    *error = torb_io_message(message);
+    torb_raw_free(folder, folder_capacity);
+    torb_raw_free(name, capacity);
+    return false;
+  }
+  if (length > 0u && fwrite(data, 1u, length, file) != length) {
+    message = strerror(errno);
+    ok = false;
+  }
+  /* On the disk before the rename, or a crash right after it could leave the new name with nothing behind it */
+  if (ok && !torb_platform_sync_file(file, &message)) {
+    ok = false;
+  }
+  if (fclose(file) != 0 && ok) {
+    message = strerror(errno);
+    ok = false;
+  }
+  if (ok && existed && !torb_platform_set_mode(staging, before.mode, &message)) {
+    ok = false;
+  }
+  if (ok && !torb_platform_rename(staging, name, &message)) {
+    ok = false;
+  }
+  if (ok) {
+    torb_platform_sync_directory(folder);
+  } else {
+    const char *ignored = NULL;
+    (void)torb_platform_remove_entry(staging, &ignored);
+    *error = torb_io_message(message);
+  }
+  torb_raw_free(staging, staging_capacity);
+  torb_raw_free(folder, folder_capacity);
+  torb_raw_free(name, capacity);
+  return ok;
+}
+
+/* ----------------------------------------------------------------------- removing, renaming, copying, links --- */
+
+bool torb_file_remove(torb_text path, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  const char *message = NULL;
+  bool removed = torb_platform_remove_entry(name, &message);
+  torb_raw_free(name, capacity);
+  if (!removed) {
+    *error = torb_io_message(message);
+  }
+  return removed;
+}
+
+bool torb_file_rename(torb_text path, torb_text to, torb_text *error) {
+  size_t from_capacity = 0u;
+  size_t to_capacity = 0u;
+  char *from_name = torb_path_bytes(path, true, &from_capacity);
+  char *to_name = torb_path_bytes(to, true, &to_capacity);
+  const char *message = NULL;
+  bool moved = torb_platform_rename(from_name, to_name, &message);
+  torb_raw_free(from_name, from_capacity);
+  torb_raw_free(to_name, to_capacity);
+  if (!moved) {
+    *error = torb_io_message(message);
+  }
+  return moved;
+}
+
+bool torb_file_copy(torb_text path, torb_text to, torb_text *error) {
+  size_t from_capacity = 0u;
+  size_t to_capacity = 0u;
+  char *from_name = torb_path_bytes(path, false, &from_capacity);
+  char *to_name = torb_path_bytes(to, true, &to_capacity);
+  const char *message = NULL;
+  bool copied;
+  /* Refused the same way everywhere: `CopyFileW` would say "access denied" about a directory, `read` "is a directory" */
+  if (torb_platform_path_kind(from_name) == TORB_PATH_DIRECTORY) {
+    message = "Is a directory";
+    copied = false;
+  } else {
+    copied = torb_platform_copy_file(from_name, to_name, &message);
+  }
+  torb_raw_free(from_name, from_capacity);
+  torb_raw_free(to_name, to_capacity);
+  if (!copied) {
+    *error = torb_io_message(message);
+  }
+  return copied;
+}
+
+bool torb_file_metadata(
+  torb_text path,
+  bool follow,
+  int64_t *kind,
+  int64_t *size,
+  int64_t *modified,
+  int64_t *mode,
+  torb_text *failure
+) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, false, &capacity);
+  const char *message = NULL;
+  torb_path_metadata metadata;
+  bool found = torb_platform_metadata(name, follow, &metadata, &message);
+  torb_raw_free(name, capacity);
+  if (!found) {
+    *failure = torb_io_message(message);
+    return false;
+  }
+  *kind = metadata.kind;
+  *size = metadata.size;
+  *modified = metadata.modified;
+  *mode = metadata.mode;
+  return true;
+}
+
+bool torb_file_set_mode(torb_text path, int64_t mode, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  const char *message = NULL;
+  bool set = torb_platform_set_mode(name, mode, &message);
+  torb_raw_free(name, capacity);
+  if (!set) {
+    *error = torb_io_message(message);
+  }
+  return set;
+}
+
+/*
+ * The target is text the link stores and not a path this program reaches, so it is not the sandbox's to resolve: what
+ * the sandbox checks is the place of the link, and what the link leads to is checked where it is followed - every
+ * component of a path a script reaches is refused where it is a link (runtime/sandbox.c).
+ */
+bool torb_file_create_symbolic_link(torb_text path, torb_text target, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, true, &capacity);
+  const size_t target_capacity = (size_t)target.length + 1u;
+  char *target_bytes = (char *)torb_raw_allocate(target_capacity);
+  const char *message = NULL;
+  bool made;
+  if (target.length > 0u) {
+    memcpy(target_bytes, target.storage->data + target.offset, (size_t)target.length);
+  }
+  target_bytes[target.length] = '\0';
+  made = torb_platform_create_symbolic_link(name, target_bytes, &message);
+  torb_raw_free(target_bytes, target_capacity);
+  torb_raw_free(name, capacity);
+  if (!made) {
+    *error = torb_io_message(message);
+  }
+  return made;
+}
+
+bool torb_file_symbolic_link_target(torb_text path, torb_text *out, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, false, &capacity);
+  const char *message = NULL;
+  size_t length = 0u;
+  char *target = torb_platform_link_target(name, &length, &message);
+  torb_raw_free(name, capacity);
+  if (target == NULL) {
+    *error = torb_io_message(message);
+    return false;
+  }
+  *out = torb_text_from_bytes((const uint8_t *)target, length, torb_location_unknown);
+  torb_raw_free(target, length + 1u);
   return true;
 }
 

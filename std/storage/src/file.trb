@@ -1,0 +1,105 @@
+/** [FileStorage]: the driver of `file:`, over `std/fs`. */
+
+use File, FileKind, IoError from "std/fs"
+use Path from "std/path"
+use Uri from "std/uri"
+use Bytes from "std/stream"
+use Storage, StorageFailure from "./storage"
+
+/**
+ * `file:` - the local disk, through `std/fs`. A reference is a `file:` URI of RFC 8089 (`file:///srv/data/index`,
+ * `file:///C:/data/index`), read as a `Path` and handed to `std/fs` in its text form.
+ *
+ * - **A write replaces the file whole or not at all** (`File.writeBytesAtomically`), and creates the directories above
+ *   it, so a reader - or the program after a crash - never finds half of what was written.
+ * - **A read runs on the blocking pool** (`File.read`), so a large file does not stop the worker it was asked on.
+ * - **A directory is listed** with the references of its entries, and deleting one deletes everything in it; a
+ *   symbolic link inside is removed and never followed.
+ *
+ * # Examples
+ *
+ *     fn settings(): Task<Result<String, StorageFailure>> {
+ *       const storage = FileStorage()
+ *       storage.readText("file:///etc/hostname").await()
+ *     }
+ */
+public shared type FileStorage with Storage {
+  fn schemes(): List<String> {
+    ["file"]
+  }
+
+  fn read(uri: Uri): Task<Result<Bytes, StorageFailure>> {
+    const path = pathOf(uri)?
+    if !File.exists(path) {
+      return Fail StorageFailure.NotFound(uri.show())
+    }
+    if File.isDirectory(path) {
+      return Fail StorageFailure.Refused(uri.show(), "it is a directory")
+    }
+    File.read(path).await().mapError({ refused uri, _ })
+  }
+
+  fn exists(uri: Uri): Task<Result<Bool, StorageFailure>> {
+    Ok File.exists(pathOf(uri)?)
+  }
+
+  fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>> {
+    const path = pathOf(uri)?
+    if !File.exists(path) {
+      return Fail StorageFailure.NotFound(uri.show())
+    }
+    if !File.isDirectory(path) {
+      return Fail StorageFailure.Refused(uri.show(), "it is not a directory")
+    }
+    const directory = Path.from path
+    var found: List<Uri> = []
+    for name in File.list(path).mapError({ refused uri, _ })? {
+      match Uri.tryFrom(directory.joined(Path.from(name))) {
+        Ok(reference) => found.append reference
+        Fail(problem) => {
+          return Fail StorageFailure.Refused(uri.show(), problem.show())
+        }
+      }
+    }
+    Ok found.sorted({ _ })
+  }
+
+  var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>> {
+    const path = pathOf(uri)?
+    if const Some(parent) = Path.from(path).parent() {
+      File.createDirectory(String.from(parent)).mapError({ refused uri, _ })?
+    }
+    File.writeBytesAtomically(path, content).mapError({ refused uri, _ })
+  }
+
+  var fn delete(uri: Uri): Task<Result<Void, StorageFailure>> {
+    const path = pathOf(uri)?
+    const found = match File.linkMetadata(path) {
+      Ok(metadata) => metadata
+      Fail(problem) => {
+        if File.exists(path) {
+          return Fail refused(uri, problem)
+        }
+        return Fail StorageFailure.NotFound(uri.show())
+      }
+    }
+    if found.kind == FileKind.Directory {
+      File.removeDirectory(path).mapError({ refused uri, _ })
+    } else {
+      File.remove(path).mapError({ refused uri, _ })
+    }
+  }
+}
+
+/** The path a `file:` reference names, in the text form `std/fs` takes. */
+fn pathOf(uri: Uri): Result<String, StorageFailure> {
+  match Path.tryFrom(uri) {
+    Ok(path) => Ok String.from(path)
+    Fail(problem) => Fail StorageFailure.NotAddressable(uri.show(), problem.show())
+  }
+}
+
+/** What `std/fs` refused, about the reference it was asked for. */
+fn refused(uri: Uri, problem: IoError): StorageFailure {
+  StorageFailure.Refused uri.show(), problem.message
+}

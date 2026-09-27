@@ -1,6 +1,6 @@
 ---
 title: std/time
-summary: Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
+summary: Instant and Duration, the two time values, Timestamp, a point on the wall clock, plus Clock and sleep, which read and wait on the clock.
 kind: package
 status: stable
 order: 120
@@ -8,20 +8,22 @@ keywords:
   - std/time
   - Instant
   - Duration
+  - Timestamp
   - Clock
   - sleep
 source:
   - std/time/src/lib.trb
 ---
 
-`std/time` is wall-clock time: points in time (`Instant`) and the spans between them (`Duration`). Both are a count of
-nanoseconds in an `Int64` and cost what the number costs. `Instant` and `Duration` are values and are in the prelude;
-`Clock`, which reads the current time, is a capability and stays an explicit import.
+`std/time` is time: points in time (`Instant`) and the spans between them (`Duration`), and a point on the wall clock
+(`Timestamp`). All three are a count of nanoseconds in an `Int64` and cost what the number costs. `Instant` and
+`Duration` are values and are in the prelude; `Timestamp` is an import, and so is `Clock`, which reads the current time
+and is a capability.
 
 ## Import
 
 ```trb fragment
-use Instant, Duration from "std/time"
+use Instant, Duration, Timestamp from "std/time"
 use Clock from "std/time"
 ```
 
@@ -65,6 +67,31 @@ round is negative. It shows as its seconds with an `s` behind them (`2.5s`), and
 `2.seconds()` and `250.milliseconds()` come from `extend Int64 { fn seconds(): Duration }` and its sibling, which the
 prelude re-exports by name; mainly for sandbox and task limits. `nanoseconds()` is the exact count, which is what a
 `Duration` crosses into the runtime as (`Task.within`).
+
+### Timestamp
+
+```trb fragment
+public type Timestamp with Compare, Equals, Hash, Show, Subtract<Timestamp, Duration>, Add<Duration, Timestamp> {
+  private value: Int64
+
+  static fn fromUnixNanoseconds(nanoseconds: Int64): Timestamp
+  fn unixNanoseconds(): Int64
+}
+```
+
+A point on the wall clock: nanoseconds since 1970-01-01 00:00:00 UTC. It means something on its own - when a file was
+last written, which is what `File.metadata` answers it for ([std/fs](fs.md)) - where an `Instant` only means something
+against another reading, and it can jump, because the clock of a machine is set. It shows as RFC 3339 in UTC, with as
+many digits of the second's fraction as it has: `2026-09-21T14:13:20.5Z`. The difference of two is a `Duration`, and a
+`Duration` added to one is another.
+
+```trb check
+use Timestamp from "std/time"
+
+const written = Timestamp.fromUnixNanoseconds 1_790_000_000_500_000_000
+print written
+print(written + 2.seconds())
+```
 
 ### Clock
 

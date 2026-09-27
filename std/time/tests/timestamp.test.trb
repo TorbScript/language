@@ -1,0 +1,53 @@
+/**
+ * `Timestamp`: RFC 3339 in UTC for dates on both sides of 1970 and of a leap day, the fraction of a second as long as it
+ * has to be, and the arithmetic with a `Duration`.
+ */
+
+use test, group from "std/test"
+use Timestamp from "../src/lib"
+
+fn at(seconds: Int64, nanoseconds: Int64 = 0): Timestamp {
+  Timestamp.fromUnixNanoseconds(seconds * 1_000_000_000 + nanoseconds)
+}
+
+group "the text of a timestamp" {
+  test "the epoch, and a day and a second after it" {
+    assert(at(0).show() == "1970-01-01T00:00:00Z")
+    assert(at(86_401).show() == "1970-01-02T00:00:01Z")
+  }
+
+  test "a leap day and the day after it" {
+    assert(at(1_709_164_800).show() == "2024-02-29T00:00:00Z")
+    assert(at(1_709_251_199).show() == "2024-02-29T23:59:59Z")
+    assert(at(1_709_251_200).show() == "2024-03-01T00:00:00Z")
+  }
+
+  test "the fraction has as many digits as it needs" {
+    assert(at(1_790_000_000, 500_000_000).show() == "2026-09-21T14:13:20.5Z")
+    assert(at(0, 1).show() == "1970-01-01T00:00:00.000000001Z")
+    assert(at(0, 120_000).show() == "1970-01-01T00:00:00.00012Z")
+  }
+
+  test "before 1970 counts backwards, with the fraction still forwards" {
+    assert(at(-1).show() == "1969-12-31T23:59:59Z")
+    assert(Timestamp.fromUnixNanoseconds(-1).show() == "1969-12-31T23:59:59.999999999Z")
+    assert(at(-2_208_988_800).show() == "1900-01-01T00:00:00Z")
+  }
+}
+
+group "arithmetic" {
+  test "a duration added, and the difference of two" {
+    const start = at 1_000
+    const later = start + 90.seconds()
+    assert(later == at(1_090))
+    assert(later - start == 90.seconds())
+    const back: Int64 = -90
+    assert(start - later == back.seconds())
+  }
+
+  test "the earlier one is the smaller one" {
+    assert(at(1) < at(2))
+    assert(at(2).compare(at(1)) == Ordering.Greater)
+    assert(at(5).unixNanoseconds() == 5_000_000_000)
+  }
+}

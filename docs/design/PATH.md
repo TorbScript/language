@@ -2,6 +2,13 @@
 
 **Status: partly implemented** — slice 1 of section 8, `std/path` itself, is in; the boundary to `std/fs` and the
 compiler's own paths (slices 2 to 5) are not, and `std/path/tests` does not build natively yet (`docs/RUST-EXIT.md` 2.4).
+Of slice 2 the runtime half is in: the Windows half of `runtime/platform.c` calls the wide API through
+`torb_platform_system_path`, with the extended form above `MAX_PATH`. Since 2026-09-27 `std/fs` also has every
+operation around the contents - `remove`, `removeDirectory`, `rename`, `copy`, `walk`, `metadata`, symbolic links,
+temporary files and `writeBytesAtomically` - on the same one text form, converted in the runtime, so no function of
+`std/fs` branches on the system. What slice 2 still names is the signature: `Into<Path>` parameters, `list` answering
+`List<Path>` and `IoError.path` a `Path`; the new operations take a `String` like the old ones, so that step stays one
+change over the whole package.
 
 **A path is a root and a list of components, and never a string.** That is the whole design of `std/path`. Everything
 else follows from it: `joined` cannot be given a root, `parent` cannot fall off the top, `..` cannot be resolved by

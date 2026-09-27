@@ -90,6 +90,123 @@ public type Duration with Compare, Show, Add, Subtract {
   }
 }
 
+/**
+ * A point on the wall clock: nanoseconds since 1970-01-01 00:00:00 UTC. It means something on its own - when a file
+ * was last written - where an [Instant] only means something against another reading; and it can jump, because the
+ * clock of a machine is set.
+ *
+ * # Examples
+ *
+ *     const written = Timestamp.fromUnixNanoseconds 1_790_000_000_500_000_000
+ *     print written
+ *     print(written + 2.seconds())
+ *     // prints 2026-09-21T14:13:20.5Z
+ *     // prints 2026-09-21T14:13:22.5Z
+ *
+ * # Related
+ *
+ * - [Instant] - the monotonic reading, for measuring.
+ * - [Duration] - what the difference of two of them is.
+ */
+public type Timestamp with Compare, Equals, Hash, Show, Subtract<Timestamp, Duration>, Add<Duration, Timestamp> {
+  /** Nanoseconds since 1970-01-01 00:00:00 UTC, negative before it. */
+  private value: Int64
+
+  /** The point in time `nanoseconds` after 1970-01-01 00:00:00 UTC - before it, where the number is negative. */
+  static fn fromUnixNanoseconds(nanoseconds: Int64): Self {
+    Self nanoseconds
+  }
+
+  /** Nanoseconds since 1970-01-01 00:00:00 UTC, which is exactly what it holds. */
+  fn unixNanoseconds(): Int64 {
+    value
+  }
+
+  /** Which of the two points in time came first. */
+  fn compare(other: Self): Ordering {
+    value.compare other.value
+  }
+
+  /** The span from `other` to this one: negative where `other` is the later one. */
+  fn subtract(other: Self): Duration {
+    Duration(value - other.value)
+  }
+
+  /** The point in time `other` after this one. */
+  fn add(other: Duration): Self {
+    Self(value + other.nanoseconds())
+  }
+
+  /**
+   * RFC 3339 in UTC: `2026-09-27T08:15:00Z`, with as many digits of the second's fraction as it has and none where it
+   * has none (`08:15:00.25Z`).
+   */
+  fn show(): String {
+    const second: Int64 = 1_000_000_000
+    const seconds = floorDivided value, second
+    const fraction = value - seconds * second
+    const days = floorDivided seconds, 86_400
+    const ofDay = seconds - days * 86_400
+    const (year, month, day) = civilDate days
+    const hour = ofDay / 3_600
+    const minute = (ofDay % 3_600) / 60
+    const rest = ofDay % 60
+    const date = "{padded(year, 4)}-{padded(month, 2)}-{padded(day, 2)}"
+    const time = "{padded(hour, 2)}:{padded(minute, 2)}:{padded(rest, 2)}"
+    if fraction == 0 {
+      return "{date}T{time}Z"
+    }
+    var digits = padded fraction, 9
+    while digits.endsWith("0") {
+      digits = digits.sliceBytes(0, digits.byteLength() - 1)
+    }
+    "{date}T{time}.{digits}Z"
+  }
+}
+
+/** `value / divisor` rounded towards negative infinity, where `/` rounds towards zero. */
+fn floorDivided(value: Int64, divisor: Int64): Int64 {
+  const quotient = value / divisor
+  if value % divisor != 0 && (value < 0) != (divisor < 0) {
+    quotient - 1
+  } else {
+    quotient
+  }
+}
+
+/**
+ * The year, month and day of the day `days` after 1970-01-01 in the proleptic Gregorian calendar: Howard Hinnant's
+ * `civil_from_days`, which counts in eras of 400 years from 0000-03-01 so that the leap day is the last day of a year.
+ */
+fn civilDate(days: Int64): (Int64, Int64, Int64) {
+  const shifted = days + 719_468
+  const era = floorDivided shifted, 146_097
+  const ofEra = shifted - era * 146_097
+  const yearOfEra = (ofEra - ofEra / 1_460 + ofEra / 36_524 - ofEra / 146_096) / 365
+  const ofYear = ofEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+  const shiftedMonth = (5 * ofYear + 2) / 153
+  const day = ofYear - (153 * shiftedMonth + 2) / 5 + 1
+  const month = if shiftedMonth < 10 { shiftedMonth + 3 } else { shiftedMonth - 9 }
+  const year = yearOfEra + era * 400 + (if month <= 2 { 1 } else { 0 })
+  (year, month, day)
+}
+
+/** The number with zeros in front, to at least `width` digits; a negative year keeps its sign in front of them. */
+fn padded(value: Int64, width: Int): String {
+  const digits = if value < 0 { "{0 - value}" } else { "{value}" }
+  var zeros = ""
+  var count = digits.byteLength()
+  while count < width {
+    zeros = zeros + "0"
+    count = count + 1
+  }
+  if value < 0 {
+    "-{zeros}{digits}"
+  } else {
+    "{zeros}{digits}"
+  }
+}
+
 /** The short way to write a [Duration]: `2.seconds()` instead of a constructor. */
 extend Int64 {
   /**

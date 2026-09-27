@@ -1,0 +1,332 @@
+/**
+ * Every operation of `std/fs` against the disk of the machine the test runs on, each in a directory of its own below
+ * one temporary directory that the last test removes again. What differs between the systems - permission bits,
+ * whether a program may create a symbolic link - is asked of `OperatingSystem.current` and checked per system.
+ *
+ * A test body is no task and cannot `await()`, so what `read`, `write` and a file as a `Sink` answer is computed at the
+ * top of the file, where the file's own task can wait, and the tests compare it.
+ */
+
+use test, group from "std/test"
+use OperatingSystem from "std/core"
+use Source from "std/stream"
+use Timestamp from "std/time"
+use File, FileKind, IoError, Permissions from "../src/lib"
+
+const root = File.createTemporaryDirectory(prefix: "torb-fs-test-").expect("a temporary directory")
+
+/** A new, empty directory below the root of this file, for one test. */
+fn place(name: String): String {
+  const directory = "{root}/{name}"
+  File.createDirectory(directory).expect("the directory of a test")
+  directory
+}
+
+/** Every byte from 0 to 255 once, and a few that would end a text early. */
+fn everyByte(): List<UInt8> {
+  var bytes: List<UInt8> = []
+  for value in 0..256 {
+    bytes.append UInt8.tryFrom(value).expect("a byte")
+  }
+  bytes.appendAll([0, 13, 10, 26, 255])
+  bytes
+}
+
+// The task-based half, waited for here
+const streamed = place "streamed"
+const readByTask = File.read("{streamed}/nothing").await()
+File.writeBytes("{streamed}/bytes", everyByte()).expect("the bytes written")
+const readBack = File.read("{streamed}/bytes").await()
+const chunks: List<List<UInt8>> = [[104, 105], [10]]
+const writtenBySource = File.write("{streamed}/from-source", Source.from(chunks)).await()
+
+group "bytes" {
+  test "every byte written is the byte read back, synchronously" {
+    const directory = place "bytes"
+    File.writeBytes("{directory}/every", everyByte()).expect("the bytes written")
+    assert(File.readBytes("{directory}/every").expect("the bytes read") == everyByte())
+  }
+
+  test "an empty file is no bytes, and writing replaces what was there" {
+    const directory = place "empty"
+    File.writeText("{directory}/file", "something longer").expect("the text written")
+    File.writeBytes("{directory}/file", []).expect("nothing written")
+    assert File.readBytes("{directory}/file").expect("the bytes read").isEmpty()
+  }
+
+  test "a file that is not there is an IoError that names it" {
+    const directory = place "missing"
+    match File.readBytes("{directory}/nothing") {
+      Ok(_) => panic "a missing file was read"
+      Fail(problem) => assert(problem.path == "{directory}/nothing")
+    }
+  }
+
+  test "read answers what readBytes answers, in a task" {
+    assert(readBack == Ok(everyByte()))
+    assert readByTask.isError()
+  }
+
+  test "a source written into a file arrives whole: a file is the sink write fills" {
+    assert(writtenBySource == Ok(void))
+    assert(File.readText("{streamed}/from-source") == Ok("hi\n"))
+  }
+}
+
+group "replacing a file whole" {
+  test "the new content replaces the old and nothing is left beside it" {
+    const directory = place "atomic"
+    File.writeText("{directory}/index", "old").expect("the old content")
+    File.writeBytesAtomically("{directory}/index", [110, 101, 119]).expect("the new content")
+    assert(File.readText("{directory}/index") == Ok("new"))
+    assert(File.list(directory) == Ok(["index"]))
+  }
+
+  test "a file that was not there is created" {
+    const directory = place "atomic-new"
+    File.writeTextAtomically("{directory}/fresh", "first").expect("the first content")
+    assert(File.readText("{directory}/fresh") == Ok("first"))
+    assert(File.list(directory) == Ok(["fresh"]))
+  }
+
+  test "the permissions of the file it replaces are kept" {
+    const directory = place "atomic-permissions"
+    const path = "{directory}/script"
+    File.writeText(path, "old").expect("the old content")
+    const wanted = Permissions 0b111_101_000
+    File.setPermissions(path, wanted).expect("the permissions set")
+    const before = File.metadata(path).expect("the metadata before").permissions
+    File.writeTextAtomically(path, "new").expect("the new content")
+    assert(File.metadata(path).expect("the metadata after").permissions == before)
+    match OperatingSystem.current {
+      .Windows => void
+      .Linux | .MacOs | .FreeBsd => assert(before == wanted)
+    }
+  }
+
+  test "a read-only file is replaced whole, and stays read-only" {
+    const directory = place "atomic-read-only"
+    const path = "{directory}/locked"
+    File.writeText(path, "old").expect("the old content")
+    File.setPermissions(path, Permissions(0b100_100_100)).expect("read-only")
+    File.writeTextAtomically(path, "new").expect("the new content")
+    assert(File.readText(path) == Ok("new"))
+    assert(!File.metadata(path).expect("the metadata").permissions.writable())
+    assert(File.list(directory) == Ok(["locked"]))
+  }
+
+  test "a directory that is not there fails, and leaves nothing" {
+    const directory = place "atomic-nowhere"
+    assert File.writeTextAtomically("{directory}/missing/file", "text").isError()
+    assert(File.list(directory) == Ok([]))
+  }
+}
+
+group "the tree" {
+  test "remove takes a file and an empty directory, and fails where nothing is" {
+    const directory = place "remove"
+    File.writeText("{directory}/file", "x").expect("a file")
+    File.createDirectory("{directory}/empty").expect("a directory")
+    File.remove("{directory}/file").expect("the file removed")
+    File.remove("{directory}/empty").expect("the directory removed")
+    assert(File.list(directory) == Ok([]))
+    assert File.remove("{directory}/file").isError()
+  }
+
+  test "remove refuses a directory that is not empty" {
+    const directory = place "remove-full"
+    File.createDirectory("{directory}/inner").expect("a directory")
+    File.writeText("{directory}/inner/file", "x").expect("a file inside")
+    assert File.remove("{directory}/inner").isError()
+    assert File.exists("{directory}/inner/file")
+  }
+
+  test "a read-only file is removed as well" {
+    const directory = place "remove-read-only"
+    const path = "{directory}/locked"
+    File.writeText(path, "x").expect("a file")
+    File.setPermissions(path, Permissions(0b100_100_100)).expect("read-only")
+    assert(!File.metadata(path).expect("the metadata").permissions.writable())
+    File.remove(path).expect("the read-only file removed")
+    assert(!File.exists(path))
+  }
+
+  test "removeDirectory takes everything inside, and nothing is there is no failure" {
+    const directory = place "remove-tree"
+    File.createDirectory("{directory}/tree/a/b").expect("the directories")
+    File.writeText("{directory}/tree/a/b/deep", "x").expect("a deep file")
+    File.writeText("{directory}/tree/top", "x").expect("a file at the top")
+    File.removeDirectory("{directory}/tree").expect("the tree removed")
+    assert(!File.exists("{directory}/tree"))
+    File.removeDirectory("{directory}/tree").expect("nothing to remove")
+  }
+
+  test "removeDirectory refuses a file" {
+    const directory = place "remove-tree-file"
+    File.writeText("{directory}/file", "x").expect("a file")
+    assert File.removeDirectory("{directory}/file").isError()
+    assert File.exists("{directory}/file")
+  }
+
+  test "rename moves a file and replaces what is at the target" {
+    const directory = place "rename"
+    File.writeText("{directory}/first", "one").expect("the first file")
+    File.writeText("{directory}/second", "two").expect("the second file")
+    File.rename("{directory}/first", "{directory}/second").expect("the rename")
+    assert(File.readText("{directory}/second") == Ok("one"))
+    assert(!File.exists("{directory}/first"))
+    assert File.rename("{directory}/first", "{directory}/third").isError()
+  }
+
+  test "rename moves a directory with everything in it" {
+    const directory = place "rename-directory"
+    File.createDirectory("{directory}/before/inner").expect("the directories")
+    File.writeText("{directory}/before/inner/file", "x").expect("a file")
+    File.rename("{directory}/before", "{directory}/after").expect("the rename")
+    assert(File.readText("{directory}/after/inner/file") == Ok("x"))
+    assert(!File.exists("{directory}/before"))
+  }
+
+  test "copy takes the content and the permissions, and refuses a directory" {
+    const directory = place "copy"
+    File.writeBytes("{directory}/source", everyByte()).expect("the source")
+    File.setPermissions("{directory}/source", Permissions(0b110_100_000)).expect("its permissions")
+    File.writeText("{directory}/target", "to be replaced").expect("the target")
+    File.copy("{directory}/source", "{directory}/target").expect("the copy")
+    assert(File.readBytes("{directory}/target") == Ok(everyByte()))
+    const source = File.metadata("{directory}/source").expect("the source's metadata")
+    const target = File.metadata("{directory}/target").expect("the target's metadata")
+    assert(source.permissions == target.permissions)
+    File.createDirectory("{directory}/folder").expect("a directory")
+    assert File.copy("{directory}/folder", "{directory}/copied").isError()
+  }
+
+  test "list is sorted, and walk puts a directory before what is in it" {
+    const directory = place "walk"
+    File.createDirectory("{directory}/b/inner").expect("the directories")
+    File.writeText("{directory}/b/inner/deep", "x").expect("a deep file")
+    File.writeText("{directory}/a", "x").expect("a file")
+    File.writeText("{directory}/c", "x").expect("another file")
+    assert(File.list(directory) == Ok(["a", "b", "c"]))
+    assert(File.walk(directory) == Ok(["a", "b", "b/inner", "b/inner/deep", "c"]))
+  }
+}
+
+group "metadata" {
+  test "a file is a file with its size, and a directory a directory" {
+    const directory = place "metadata"
+    File.writeText("{directory}/file", "12345").expect("a file")
+    const file = File.metadata("{directory}/file").expect("the file's metadata")
+    assert(file.kind == FileKind.File)
+    assert file.isFile()
+    assert(file.size == 5)
+    const folder = File.metadata(directory).expect("the directory's metadata")
+    assert(folder.kind == FileKind.Directory)
+    assert folder.isDirectory()
+    assert File.metadata("{directory}/nothing").isError()
+  }
+
+  test "the time a file was written is after 2020 and moves forward with a write" {
+    const directory = place "modified"
+    File.writeText("{directory}/file", "x").expect("a file")
+    const first = File.metadata("{directory}/file").expect("the metadata").modified
+    assert(first > Timestamp.fromUnixNanoseconds(1_577_836_800_000_000_000))
+    File.writeText("{directory}/file", "xy").expect("a second write")
+    const second = File.metadata("{directory}/file").expect("the metadata again").modified
+    assert(second >= first)
+  }
+
+  test "permissions set are permissions read, as far as the system has them" {
+    const directory = place "permissions"
+    const path = "{directory}/file"
+    File.writeText(path, "x").expect("a file")
+    File.setPermissions(path, Permissions(0b100_000_000)).expect("read-only")
+    const locked = File.metadata(path).expect("the metadata").permissions
+    assert(!locked.writable())
+    assert locked.readable()
+    File.setPermissions(path, Permissions(0b110_100_100)).expect("writable")
+    const open = File.metadata(path).expect("the metadata").permissions
+    assert open.writable()
+    match OperatingSystem.current {
+      .Windows => assert(open == Permissions(0b110_110_110))
+      .Linux | .MacOs | .FreeBsd => {
+        assert(locked == Permissions(0b100_000_000))
+        assert(open == Permissions(0b110_100_100))
+      }
+    }
+  }
+
+  test "permissions show as ls shows them" {
+    assert(Permissions(0b111_101_101).show() == "rwxr-xr-x")
+    assert(Permissions(0b110_100_000).show() == "rw-r-----")
+    assert(Permissions(0b110_100_000).withWritable(false) == Permissions(0b100_100_000))
+    assert(Permissions(0b100_100_000).withWritable(true) == Permissions(0b110_100_000))
+  }
+}
+
+group "symbolic links" {
+  test "a link is seen by linkMetadata, followed by everything else, and removed as a link" {
+    const directory = place "links"
+    File.createDirectory("{directory}/target").expect("the target directory")
+    File.writeText("{directory}/target/file", "inside").expect("a file in the target")
+    File.writeText("{directory}/plain", "plain").expect("a plain file")
+    match File.createSymbolicLink("{directory}/to-file", "plain") {
+      Fail(problem) => {
+        // Windows lets a program create one only in developer mode or with the privilege to
+        match OperatingSystem.current {
+          .Windows => assert problem.message.contains("not permitted")
+          .Linux | .MacOs | .FreeBsd => panic "no symbolic link: {problem}"
+        }
+      }
+      Ok(_) => {
+        File.createSymbolicLink("{directory}/to-directory", "target").expect("a link to a directory")
+        assert(File.symbolicLinkTarget("{directory}/to-file") == Ok("plain"))
+        assert(File.linkMetadata("{directory}/to-file").expect("the link").kind == FileKind.SymbolicLink)
+        assert(File.metadata("{directory}/to-file").expect("what it points at").kind == FileKind.File)
+        assert(File.readText("{directory}/to-file") == Ok("plain"))
+        assert(File.readText("{directory}/to-directory/file") == Ok("inside"))
+        // A walk lists a link and does not follow it, and removing the tree leaves what it pointed at
+        assert(File.walk(directory) == Ok(["plain", "target", "target/file", "to-directory", "to-file"]))
+        File.remove("{directory}/to-file").expect("the link removed")
+        assert File.exists("{directory}/plain")
+        File.createDirectory("{directory}/holder").expect("a directory holding a link")
+        File.createSymbolicLink("{directory}/holder/out", "../target").expect("a link out of it")
+        File.removeDirectory("{directory}/holder").expect("the holder removed")
+        assert(File.readText("{directory}/target/file") == Ok("inside"))
+      }
+    }
+  }
+
+  test "the target of something that is no link is a failure" {
+    const directory = place "no-link"
+    File.writeText("{directory}/file", "x").expect("a file")
+    assert File.symbolicLinkTarget("{directory}/file").isError()
+  }
+}
+
+group "temporary files and directories" {
+  test "each one is new, carries its prefix and is where it was asked for" {
+    const directory = place "temporary"
+    const first = File.createTemporaryFile(prefix: "piece-", inside: Some(directory)).expect("a temporary file")
+    const second = File.createTemporaryFile(prefix: "piece-", inside: Some(directory)).expect("another one")
+    assert(first != second)
+    assert first.startsWith("{directory}/piece-")
+    assert(File.readBytes(first) == Ok([]))
+    const folder = File.createTemporaryDirectory(inside: Some(directory)).expect("a temporary directory")
+    assert File.isDirectory(folder)
+    assert(File.list(directory).expect("the entries").length() == 3)
+  }
+
+  test "without a directory they go to the system's, and a prefix with a separator is refused" {
+    const path = File.createTemporaryFile(prefix: "torb-fs-probe-").expect("a file in the system's directory")
+    assert File.exists(path)
+    File.remove(path).expect("the file removed")
+    assert File.createTemporaryFile(prefix: "a/b").isError()
+  }
+
+  // Last, and it removes everything the tests above made
+  test "the root of these tests is removed with everything in it" {
+    File.removeDirectory(root).expect("the root removed")
+    assert(!File.exists(root))
+  }
+}

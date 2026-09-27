@@ -1,0 +1,26 @@
+/**
+ * Bytes at a reference, wherever the scheme of the reference reaches (docs/design/URI.md section 11). [Storage] is the
+ * capability - read, exists, list, write, delete - and a driver is a `shared type` that has it for its schemes:
+ * [FileStorage] for `file:` over `std/fs`, and [MemoryStorage] for `memory:`, the double every test of a program that
+ * stores things needs. S3, WebDAV and the rest are packages of their own, whose drivers have the same trait.
+ *
+ * **The program names its drivers, and nothing registers itself.** `Storage.registry` is one storage over several
+ * drivers, chosen by the scheme of each reference it is handed, and a scheme it was not given is a failure that lists
+ * the ones it was:
+ *
+ *     use Storage, StorageFailure, FileStorage, MemoryStorage from "std/storage"
+ *
+ *     fn stored(): Task<Result<String, StorageFailure>> {
+ *       var storage = Storage.registry([FileStorage(), MemoryStorage()])
+ *       storage.writeText("memory:/notes/first", "hello").await()?
+ *       storage.readText("memory:/notes/first").await()
+ *     }
+ *
+ * A reference is a `Uri`, so a relative one has no scheme to choose a driver by and is resolved against a base first
+ * (`reference.resolved(against: base)`). Every failure carries the reference as `show()` wrote it, so a password in a
+ * reference never reaches a log through a failure.
+ */
+
+public use Storage, StorageFailure from "./storage"
+public use FileStorage from "./file"
+public use MemoryStorage from "./memory"

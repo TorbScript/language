@@ -1283,9 +1283,14 @@ fn sharedObjectAsTraitPlace(
   Some PlacePath(Reference(boxed, []), annotation, path.taken)
 }
 
+/**
+ * Whether a place holds an object with an identity: a `shared type` of the program, or `File`, the `native shared type`
+ * whose representation the runtime owns - a `var File` handed to a `var Sink<Bytes, IoError>` is boxed like any other.
+ */
 fn isSharedObjectType(lowering: Lowering, annotation: IrTypeId): Bool {
   match lowering.program.typeAt(annotation) {
     .SharedObject(_) => true
+    .Runtime(kind, _) => kind == RuntimeKind.FileHandle
     _ => false
   }
 }

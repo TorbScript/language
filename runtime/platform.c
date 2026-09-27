@@ -1,11 +1,13 @@
 /*
  * platform.c - the only file in the runtime with an `#ifdef _WIN32`.
  *
- * Fourteen functions: what kind of thing a path is, the working directory, the entries of a directory, creating one
- * directory and everything above it, opening a file, removing one, reading and writing a whole file, running a child
- * process to its end, a monotonic clock reading, sleeping until a timer is due, the program's own arguments,
- * reading and setting an environment variable, and the memory limit the operating system holds the process to (with the
- * physical memory and the size of a block that go with it). Everything above this file is portable, and what it hands out and takes in is always UTF-8.
+ * What kind of thing a path is, the working directory, the entries of a directory, creating one directory and
+ * everything above it, opening a file, removing, renaming and copying one, what a path is (its metadata) and its
+ * permissions, symbolic links, the directory for temporary files and an entry created where nothing was, reading and
+ * writing a whole file and flushing one to the disk, running a child process to its end, a monotonic clock reading,
+ * sleeping until a timer is due, the program's own arguments, reading and setting an environment variable, and the
+ * memory limit the operating system holds the process to (with the physical memory and the size of a block that go with
+ * it). Everything above this file is portable, and what it hands out and takes in is always UTF-8.
  *
  * On Windows that last sentence is the whole point of the file. A `String` of the language is UTF-8, every call of the
  * operating system comes in a narrow and a wide form, and the narrow one reads the **code page of the machine** (1252 on
@@ -52,9 +54,12 @@
 #  if defined(_MSC_VER)
 #    pragma comment(lib, "shell32.lib")
 #  endif
+#  include <winioctl.h> /* FSCTL_GET_REPARSE_POINT */
 #  include <direct.h>
+#  include <fcntl.h>
 #  include <io.h>
 #  include <malloc.h> /* _msize */
+#  include <sys/stat.h>
 #  include <wchar.h>
 #else
 #  include <dirent.h>
@@ -255,6 +260,17 @@ static const char *torb_windows_message(DWORD code) {
       return "Not enough space";
     case ERROR_DISK_FULL:
       return "No space left on device";
+    case ERROR_DIR_NOT_EMPTY:
+      return "Directory not empty";
+    case ERROR_ALREADY_EXISTS:
+    case ERROR_FILE_EXISTS:
+      return "File exists";
+    case ERROR_NOT_SAME_DEVICE:
+      return "Invalid cross-device link";
+    case ERROR_PRIVILEGE_NOT_HELD:
+      return "Operation not permitted";
+    case ERROR_NOT_A_REPARSE_POINT:
+      return "Invalid argument";
     default:
       return "the operating system refused the operation";
   }
@@ -404,23 +420,499 @@ void *torb_platform_open_file(const char *path, bool writing, const char **messa
   return file;
 }
 
-bool torb_platform_remove(const char *path) {
+bool torb_platform_remove_entry(const char *path, const char **message) {
   size_t capacity = 0u;
   wchar_t *wide = torb_platform_system_path(path, &capacity);
   DWORD attributes;
+  bool directory;
   bool removed;
   if (wide == NULL) {
+    *message = "No such file or directory";
     return false;
   }
   attributes = GetFileAttributesW(wide);
   if (attributes == INVALID_FILE_ATTRIBUTES) {
+    *message = torb_windows_message(GetLastError());
     torb_raw_free(wide, capacity);
     return false;
   }
-  /* Two calls, because a directory is not a file to this platform: `DeleteFileW` refuses one */
-  removed = (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u ? RemoveDirectoryW(wide) != 0 : DeleteFileW(wide) != 0;
+  /* Two calls, because a directory is not a file to this platform: `DeleteFileW` refuses one. A link to a directory (and
+     a junction) carries the directory attribute too, and `RemoveDirectoryW` removes the link and not its target */
+  directory = (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u;
+  removed = directory ? RemoveDirectoryW(wide) != 0 : DeleteFileW(wide) != 0;
+  if (!removed && GetLastError() == ERROR_ACCESS_DENIED && (attributes & (DWORD)FILE_ATTRIBUTE_READONLY) != 0u) {
+    /* A read-only file is removed on POSIX wherever its directory may be written, so it is here too */
+    if (SetFileAttributesW(wide, attributes & ~(DWORD)FILE_ATTRIBUTE_READONLY) != 0) {
+      removed = directory ? RemoveDirectoryW(wide) != 0 : DeleteFileW(wide) != 0;
+      if (!removed) {
+        DWORD code = GetLastError();
+        (void)SetFileAttributesW(wide, attributes);
+        SetLastError(code);
+      }
+    }
+  }
+  if (!removed) {
+    *message = torb_windows_message(GetLastError());
+  }
   torb_raw_free(wide, capacity);
   return removed;
+}
+
+bool torb_platform_rename(const char *from, const char *to, const char **message) {
+  size_t from_capacity = 0u;
+  size_t to_capacity = 0u;
+  wchar_t *wide_from = torb_platform_system_path(from, &from_capacity);
+  wchar_t *wide_to = torb_platform_system_path(to, &to_capacity);
+  bool moved = false;
+  if (wide_from == NULL || wide_to == NULL) {
+    *message = "No such file or directory";
+  } else if (MoveFileExW(wide_from, wide_to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+    moved = true;
+  } else {
+    DWORD code = GetLastError();
+    const DWORD attributes = GetFileAttributesW(wide_to);
+    /* A read-only file is replaced on POSIX wherever its directory may be written, so it is here too: the attribute is
+       cleared for the move, and put back where the move fails after all */
+    if (code == ERROR_ACCESS_DENIED && attributes != INVALID_FILE_ATTRIBUTES
+        && (attributes & (DWORD)FILE_ATTRIBUTE_READONLY) != 0u && (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) == 0u
+        && SetFileAttributesW(wide_to, attributes & ~(DWORD)FILE_ATTRIBUTE_READONLY) != 0) {
+      if (MoveFileExW(wide_from, wide_to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+        moved = true;
+      } else {
+        code = GetLastError();
+        (void)SetFileAttributesW(wide_to, attributes);
+      }
+    }
+    if (!moved) {
+      *message = torb_windows_message(code);
+    }
+  }
+  torb_raw_free(wide_from, from_capacity);
+  torb_raw_free(wide_to, to_capacity);
+  return moved;
+}
+
+bool torb_platform_copy_file(const char *from, const char *to, const char **message) {
+  size_t from_capacity = 0u;
+  size_t to_capacity = 0u;
+  wchar_t *wide_from = torb_platform_system_path(from, &from_capacity);
+  wchar_t *wide_to = torb_platform_system_path(to, &to_capacity);
+  bool copied = false;
+  if (wide_from == NULL || wide_to == NULL) {
+    *message = "No such file or directory";
+  } else if (CopyFileW(wide_from, wide_to, FALSE) != 0) {
+    /* `CopyFileW` carries the attributes over, the read-only one among them: the permissions, as on POSIX */
+    copied = true;
+  } else {
+    *message = torb_windows_message(GetLastError());
+  }
+  torb_raw_free(wide_from, from_capacity);
+  torb_raw_free(wide_to, to_capacity);
+  return copied;
+}
+
+/* The `FILETIME` of Windows - hundreds of nanoseconds since 1601 - as nanoseconds since 1970. */
+static int64_t torb_windows_unix_nanoseconds(FILETIME time) {
+  const int64_t ticks = (int64_t)(((uint64_t)time.dwHighDateTime << 32) | (uint64_t)time.dwLowDateTime);
+  return (ticks - INT64_C(116444736000000000)) * 100;
+}
+
+/*
+ * The permission bits the C library of Windows makes up for `_wstat`: everybody may read, everybody may write unless the
+ * file is read-only, and a directory or a program (`.exe`, `.com`, `.bat`, `.cmd`) may be executed.
+ */
+static int64_t torb_windows_mode(const wchar_t *path, DWORD attributes) {
+  int64_t mode = 0444;
+  if ((attributes & (DWORD)FILE_ATTRIBUTE_READONLY) == 0u) {
+    mode |= 0222;
+  }
+  if ((attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+    mode |= 0111;
+  } else {
+    const wchar_t *dot = wcsrchr(path, L'.');
+    if (dot != NULL && (_wcsicmp(dot, L".exe") == 0 || _wcsicmp(dot, L".com") == 0 || _wcsicmp(dot, L".bat") == 0
+                        || _wcsicmp(dot, L".cmd") == 0)) {
+      mode |= 0111;
+    }
+  }
+  return mode;
+}
+
+/*
+ * Whether a reparse point is a link - a symbolic link or a junction - rather than one of the many other kinds (a file
+ * of OneDrive that is not downloaded yet, a file deduplication moved, ...), which are files like any other.
+ */
+static bool torb_windows_is_link_tag(const wchar_t *path, DWORD attributes) {
+  WIN32_FIND_DATAW entry;
+  HANDLE handle;
+  bool link;
+  if ((attributes & (DWORD)FILE_ATTRIBUTE_REPARSE_POINT) == 0u) {
+    return false;
+  }
+  handle = FindFirstFileW(path, &entry);
+  if (handle == INVALID_HANDLE_VALUE) {
+    return false;
+  }
+  link = entry.dwReserved0 == IO_REPARSE_TAG_SYMLINK || entry.dwReserved0 == IO_REPARSE_TAG_MOUNT_POINT;
+  FindClose(handle);
+  return link;
+}
+
+bool torb_platform_metadata(const char *path, bool follow, torb_path_metadata *out, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  bool link;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return false;
+  }
+  if (GetFileAttributesExW(wide, GetFileExInfoStandard, &data) == 0) {
+    *message = torb_windows_message(GetLastError());
+    torb_raw_free(wide, capacity);
+    return false;
+  }
+  link = torb_windows_is_link_tag(wide, data.dwFileAttributes);
+  if (link && follow) {
+    /* `GetFileAttributesExW` describes the link itself; opening it follows it to what it points at */
+    BY_HANDLE_FILE_INFORMATION information;
+    HANDLE handle = CreateFileW(wide, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+      *message = torb_windows_message(GetLastError());
+      torb_raw_free(wide, capacity);
+      return false;
+    }
+    if (GetFileInformationByHandle(handle, &information) == 0) {
+      *message = torb_windows_message(GetLastError());
+      CloseHandle(handle);
+      torb_raw_free(wide, capacity);
+      return false;
+    }
+    CloseHandle(handle);
+    data.dwFileAttributes = information.dwFileAttributes;
+    data.ftLastWriteTime = information.ftLastWriteTime;
+    data.nFileSizeHigh = information.nFileSizeHigh;
+    data.nFileSizeLow = information.nFileSizeLow;
+    link = false;
+  }
+  if (link) {
+    out->kind = 3;
+  } else if ((data.dwFileAttributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+    out->kind = 2;
+  } else if ((data.dwFileAttributes & (DWORD)FILE_ATTRIBUTE_DEVICE) != 0u) {
+    out->kind = 4;
+  } else {
+    out->kind = 1;
+  }
+  out->size = out->kind == 2 ? 0 : (int64_t)(((uint64_t)data.nFileSizeHigh << 32) | (uint64_t)data.nFileSizeLow);
+  out->modified = torb_windows_unix_nanoseconds(data.ftLastWriteTime);
+  out->mode = torb_windows_mode(wide, data.dwFileAttributes);
+  torb_raw_free(wide, capacity);
+  return true;
+}
+
+bool torb_platform_set_mode(const char *path, int64_t mode, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  DWORD attributes;
+  DWORD wanted;
+  bool set = true;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return false;
+  }
+  attributes = GetFileAttributesW(wide);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    *message = torb_windows_message(GetLastError());
+    torb_raw_free(wide, capacity);
+    return false;
+  }
+  wanted = (mode & 0200) != 0 ? attributes & ~(DWORD)FILE_ATTRIBUTE_READONLY : attributes | FILE_ATTRIBUTE_READONLY;
+  if (wanted != attributes && SetFileAttributesW(wide, wanted) == 0) {
+    *message = torb_windows_message(GetLastError());
+    set = false;
+  }
+  torb_raw_free(wide, capacity);
+  return set;
+}
+
+/* Where an SDK is older than Windows 10's 1703, which let a symbolic link be created without the privilege */
+#  if !defined(SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)
+#    define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#  endif
+
+bool torb_platform_create_symbolic_link(const char *path, const char *target, const char **message) {
+  size_t link_capacity = 0u;
+  size_t target_capacity = 0u;
+  wchar_t *wide_link = torb_platform_system_path(path, &link_capacity);
+  wchar_t *wide_target;
+  DWORD flags = SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE;
+  size_t index;
+  bool made;
+  if (wide_link == NULL) {
+    *message = "No such file or directory";
+    return false;
+  }
+  /* The target is stored as it is written - a relative one stays relative to the link - only with `\`, because a link
+     whose target has `/` in it is followed by nothing on this platform */
+  wide_target = torb_platform_wide(target, &target_capacity);
+  if (wide_target == NULL) {
+    *message = "No such file or directory";
+    torb_raw_free(wide_link, link_capacity);
+    return false;
+  }
+  for (index = 0u; wide_target[index] != L'\0'; index += 1u) {
+    if (wide_target[index] == L'/') {
+      wide_target[index] = L'\\';
+    }
+  }
+  /* A link to a directory is a link of another kind here, so the target decides - read relative to the link's folder */
+  {
+    const bool absolute = wide_target[0] == L'\\' || (wide_target[0] != L'\0' && wide_target[1] == L':');
+    DWORD attributes;
+    if (absolute) {
+      attributes = GetFileAttributesW(wide_target);
+    } else {
+      const size_t link_length = wcslen(wide_link);
+      const size_t target_length = wcslen(wide_target);
+      size_t folder = link_length;
+      size_t joined_capacity;
+      wchar_t *joined;
+      while (folder > 0u && wide_link[folder - 1u] != L'\\') {
+        folder -= 1u;
+      }
+      joined_capacity = (folder + target_length + 1u) * sizeof(wchar_t);
+      joined = (wchar_t *)torb_raw_allocate(joined_capacity);
+      memcpy(joined, wide_link, folder * sizeof(wchar_t));
+      memcpy(joined + folder, wide_target, (target_length + 1u) * sizeof(wchar_t));
+      attributes = GetFileAttributesW(joined);
+      torb_raw_free(joined, joined_capacity);
+    }
+    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u) {
+      flags |= SYMBOLIC_LINK_FLAG_DIRECTORY;
+    }
+  }
+  made = CreateSymbolicLinkW(wide_link, wide_target, flags) != 0;
+  if (!made && GetLastError() == ERROR_INVALID_PARAMETER) {
+    /* A Windows older than 1703 does not know the flag at all */
+    made = CreateSymbolicLinkW(wide_link, wide_target, flags & ~(DWORD)SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE) != 0;
+  }
+  if (!made) {
+    *message = torb_windows_message(GetLastError());
+  }
+  torb_raw_free(wide_target, target_capacity);
+  torb_raw_free(wide_link, link_capacity);
+  return made;
+}
+
+/*
+ * The part of `REPARSE_DATA_BUFFER` that a symbolic link and a junction have: the structure is in the driver kit's
+ * `ntifs.h` and in no header of the SDK, so it is written out here.
+ */
+typedef struct torb_reparse_data {
+  ULONG tag;
+  USHORT data_length;
+  USHORT reserved;
+  union {
+    struct {
+      USHORT substitute_offset;
+      USHORT substitute_length;
+      USHORT print_offset;
+      USHORT print_length;
+      ULONG flags;
+      WCHAR buffer[1];
+    } symbolic_link;
+    struct {
+      USHORT substitute_offset;
+      USHORT substitute_length;
+      USHORT print_offset;
+      USHORT print_length;
+      WCHAR buffer[1];
+    } mount_point;
+  } data;
+} torb_reparse_data;
+
+#  if !defined(FSCTL_GET_REPARSE_POINT)
+#    define FSCTL_GET_REPARSE_POINT 0x000900A8
+#  endif
+
+char *torb_platform_link_target(const char *path, size_t *length, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  HANDLE handle;
+  const DWORD size = 16u * 1024u;
+  torb_reparse_data *reparse;
+  DWORD returned = 0u;
+  const WCHAR *buffer;
+  USHORT offset;
+  USHORT bytes;
+  size_t count;
+  size_t target_capacity;
+  wchar_t *target;
+  size_t index;
+  char *text;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return NULL;
+  }
+  handle = CreateFileW(wide, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                       OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  torb_raw_free(wide, capacity);
+  if (handle == INVALID_HANDLE_VALUE) {
+    *message = torb_windows_message(GetLastError());
+    return NULL;
+  }
+  reparse = (torb_reparse_data *)torb_raw_allocate(size);
+  if (DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0u, reparse, size, &returned, NULL) == 0) {
+    *message = torb_windows_message(GetLastError());
+    torb_raw_free(reparse, size);
+    CloseHandle(handle);
+    return NULL;
+  }
+  CloseHandle(handle);
+  if (reparse->tag == IO_REPARSE_TAG_SYMLINK) {
+    buffer = reparse->data.symbolic_link.buffer;
+    offset = reparse->data.symbolic_link.print_offset;
+    bytes = reparse->data.symbolic_link.print_length;
+    if (bytes == 0u) {
+      offset = reparse->data.symbolic_link.substitute_offset;
+      bytes = reparse->data.symbolic_link.substitute_length;
+    }
+  } else if (reparse->tag == IO_REPARSE_TAG_MOUNT_POINT) {
+    buffer = reparse->data.mount_point.buffer;
+    offset = reparse->data.mount_point.print_offset;
+    bytes = reparse->data.mount_point.print_length;
+    if (bytes == 0u) {
+      offset = reparse->data.mount_point.substitute_offset;
+      bytes = reparse->data.mount_point.substitute_length;
+    }
+  } else {
+    *message = "Invalid argument";
+    torb_raw_free(reparse, size);
+    return NULL;
+  }
+  count = (size_t)bytes / sizeof(WCHAR);
+  buffer += offset / sizeof(WCHAR);
+  /* The name the kernel substitutes starts with `\??\`, which is the form of a call and never one a path is shown in */
+  if (count >= 4u && buffer[0] == L'\\' && buffer[1] == L'?' && buffer[2] == L'?' && buffer[3] == L'\\') {
+    buffer += 4;
+    count -= 4u;
+  }
+  target_capacity = (count + 1u) * sizeof(wchar_t);
+  target = (wchar_t *)torb_raw_allocate(target_capacity);
+  for (index = 0u; index < count; index += 1u) {
+    target[index] = buffer[index] == L'\\' ? L'/' : buffer[index];
+  }
+  target[count] = L'\0';
+  torb_raw_free(reparse, size);
+  text = torb_platform_utf8(target, length);
+  torb_raw_free(target, target_capacity);
+  if (text == NULL) {
+    *message = "the target of this link is not valid Unicode";
+  }
+  return text;
+}
+
+/* `GetTempPath2W` is Windows 11's and the one that is right for a service, so it is looked up where it may be missing */
+typedef DWORD(WINAPI *torb_get_temp_path)(DWORD length, LPWSTR buffer);
+
+char *torb_platform_temporary_directory(size_t *length) {
+  HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+  torb_get_temp_path get = NULL;
+  wchar_t buffer[MAX_PATH + 2];
+  DWORD written;
+  size_t index;
+  if (kernel != NULL) {
+    FARPROC found = GetProcAddress(kernel, "GetTempPath2W");
+    memcpy(&get, &found, sizeof get);
+  }
+  if (get == NULL) {
+    get = GetTempPathW;
+  }
+  written = get(MAX_PATH + 1, buffer);
+  if (written == 0u || written > MAX_PATH + 1) {
+    return NULL;
+  }
+  /* Without the separator it ends in, and with `/`: the form every path of a program has */
+  while (written > 3u && buffer[written - 1u] == L'\\') {
+    written -= 1u;
+  }
+  buffer[written] = L'\0';
+  for (index = 0u; index < written; index += 1u) {
+    if (buffer[index] == L'\\') {
+      buffer[index] = L'/';
+    }
+  }
+  return torb_platform_utf8(buffer, length);
+}
+
+void *torb_platform_create_new(const char *path, bool directory, int64_t mode, bool *exists, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  void *made = NULL;
+  (void)mode;
+  *exists = false;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return NULL;
+  }
+  if (directory) {
+    /* A directory answers a token that only says "made": the path it was handed, which the caller has anyway */
+    if (CreateDirectoryW(wide, NULL) != 0) {
+      made = (void *)path;
+    } else {
+      const DWORD code = GetLastError();
+      *exists = code == ERROR_ALREADY_EXISTS;
+      *message = torb_windows_message(code);
+    }
+  } else {
+    const int descriptor = _wopen(wide, _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY, _S_IREAD | _S_IWRITE);
+    if (descriptor < 0) {
+      *exists = errno == EEXIST;
+      *message = strerror(errno);
+    } else {
+      made = _fdopen(descriptor, "wb");
+      if (made == NULL) {
+        *message = strerror(errno);
+        _close(descriptor);
+      }
+    }
+  }
+  torb_raw_free(wide, capacity);
+  return made;
+}
+
+bool torb_platform_sync_file(void *file, const char **message) {
+  FILE *handle = (FILE *)file;
+  if (fflush(handle) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  if (FlushFileBuffers((HANDLE)_get_osfhandle(_fileno(handle))) == 0) {
+    *message = torb_windows_message(GetLastError());
+    return false;
+  }
+  return true;
+}
+
+/* `MOVEFILE_WRITE_THROUGH` already made the rename durable, and a directory has no handle to flush here */
+void torb_platform_sync_directory(const char *path) {
+  (void)path;
+}
+
+uint64_t torb_platform_unique_seed(void) {
+  LARGE_INTEGER counter;
+  FILETIME now;
+  (void)QueryPerformanceCounter(&counter);
+  GetSystemTimeAsFileTime(&now);
+  return (uint64_t)counter.QuadPart ^ ((uint64_t)GetCurrentProcessId() << 32) ^ ((uint64_t)now.dwHighDateTime << 20)
+         ^ (uint64_t)now.dwLowDateTime;
+}
+
+bool torb_platform_remove(const char *path) {
+  const char *message = NULL;
+  return torb_platform_remove_entry(path, &message);
 }
 
 int64_t torb_platform_monotonic_nanoseconds(void) {
@@ -807,8 +1299,268 @@ void *torb_platform_open_file(const char *path, bool writing, const char **messa
   return file;
 }
 
+bool torb_platform_remove_entry(const char *path, const char **message) {
+  struct stat information;
+  if (lstat(path, &information) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  /* `lstat`, so a link to a directory is a link and `unlink` removes it, never what it points at */
+  if (S_ISDIR(information.st_mode) ? rmdir(path) != 0 : unlink(path) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  return true;
+}
+
 bool torb_platform_remove(const char *path) {
-  return remove(path) == 0;
+  const char *message = NULL;
+  return torb_platform_remove_entry(path, &message);
+}
+
+bool torb_platform_rename(const char *from, const char *to, const char **message) {
+  if (rename(from, to) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  return true;
+}
+
+/* Until every byte is written: `write` may take fewer than it is handed, and a signal may interrupt it. */
+static bool torb_write_all(int descriptor, const uint8_t *bytes, size_t length) {
+  while (length > 0u) {
+    const ssize_t written = write(descriptor, bytes, length);
+    if (written < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return false;
+    }
+    bytes += (size_t)written;
+    length -= (size_t)written;
+  }
+  return true;
+}
+
+bool torb_platform_copy_file(const char *from, const char *to, const char **message) {
+  struct stat information;
+  uint8_t buffer[65536];
+  int source = open(from, O_RDONLY);
+  int target;
+  bool ok = true;
+  if (source < 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  if (fstat(source, &information) != 0) {
+    *message = strerror(errno);
+    close(source);
+    return false;
+  }
+  if (S_ISDIR(information.st_mode)) {
+    *message = strerror(EISDIR);
+    close(source);
+    return false;
+  }
+  target = open(to, O_WRONLY | O_CREAT | O_TRUNC, (mode_t)(information.st_mode & 0777));
+  if (target < 0) {
+    *message = strerror(errno);
+    close(source);
+    return false;
+  }
+  for (;;) {
+    const ssize_t read_count = read(source, buffer, sizeof buffer);
+    if (read_count == 0) {
+      break;
+    }
+    if (read_count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      *message = strerror(errno);
+      ok = false;
+      break;
+    }
+    if (!torb_write_all(target, buffer, (size_t)read_count)) {
+      *message = strerror(errno);
+      ok = false;
+      break;
+    }
+  }
+  /* A file that was there keeps the mode `open` does not change: the permissions of the source are set on it */
+  if (ok && fchmod(target, (mode_t)(information.st_mode & 07777)) != 0) {
+    *message = strerror(errno);
+    ok = false;
+  }
+  if (close(target) != 0 && ok) {
+    *message = strerror(errno);
+    ok = false;
+  }
+  close(source);
+  return ok;
+}
+
+/* The time a file was last written, as nanoseconds since 1970: `st_mtim` of POSIX 2008, `st_mtimespec` on macOS. */
+static int64_t torb_modified_nanoseconds(const struct stat *information) {
+#  if defined(__APPLE__)
+  return (int64_t)information->st_mtimespec.tv_sec * INT64_C(1000000000) + (int64_t)information->st_mtimespec.tv_nsec;
+#  else
+  return (int64_t)information->st_mtim.tv_sec * INT64_C(1000000000) + (int64_t)information->st_mtim.tv_nsec;
+#  endif
+}
+
+bool torb_platform_metadata(const char *path, bool follow, torb_path_metadata *out, const char **message) {
+  struct stat information;
+  if ((follow ? stat(path, &information) : lstat(path, &information)) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  if (S_ISREG(information.st_mode)) {
+    out->kind = 1;
+  } else if (S_ISDIR(information.st_mode)) {
+    out->kind = 2;
+  } else if (S_ISLNK(information.st_mode)) {
+    out->kind = 3;
+  } else {
+    out->kind = 4;
+  }
+  out->size = (int64_t)information.st_size;
+  out->modified = torb_modified_nanoseconds(&information);
+  out->mode = (int64_t)(information.st_mode & 07777);
+  return true;
+}
+
+bool torb_platform_set_mode(const char *path, int64_t mode, const char **message) {
+  if (chmod(path, (mode_t)(mode & 07777)) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  return true;
+}
+
+bool torb_platform_create_symbolic_link(const char *path, const char *target, const char **message) {
+  if (symlink(target, path) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  return true;
+}
+
+char *torb_platform_link_target(const char *path, size_t *length, const char **message) {
+  size_t capacity = 256u;
+  for (;;) {
+    char *buffer = (char *)torb_raw_allocate(capacity);
+    const ssize_t count = readlink(path, buffer, capacity);
+    if (count < 0) {
+      *message = strerror(errno);
+      torb_raw_free(buffer, capacity);
+      return NULL;
+    }
+    /* A target that filled the buffer may have been cut, so it is read again into one twice the size */
+    if ((size_t)count < capacity) {
+      size_t bad = 0u;
+      char *text;
+      if (!torb_utf8_validate((const uint8_t *)buffer, (size_t)count, &bad)) {
+        *message = "the target of this link is not valid UTF-8";
+        torb_raw_free(buffer, capacity);
+        return NULL;
+      }
+      text = (char *)torb_raw_allocate((size_t)count + 1u);
+      memcpy(text, buffer, (size_t)count);
+      text[count] = '\0';
+      torb_raw_free(buffer, capacity);
+      *length = (size_t)count;
+      return text;
+    }
+    torb_raw_free(buffer, capacity);
+    if (capacity >= 65536u) {
+      *message = strerror(ENAMETOOLONG);
+      return NULL;
+    }
+    capacity *= 2u;
+  }
+}
+
+char *torb_platform_temporary_directory(size_t *length) {
+  const char *given = getenv("TMPDIR");
+  size_t count;
+  char *text;
+#  if defined(__APPLE__)
+  char darwin[1024];
+#  endif
+  if (given == NULL || given[0] != '/') {
+    given = "/tmp";
+#  if defined(__APPLE__)
+    /* The user's own directory under `/var/folders`, which `TMPDIR` names in every session of a user anyway */
+    {
+      const size_t needed = confstr(_CS_DARWIN_USER_TEMP_DIR, darwin, sizeof darwin);
+      if (needed > 1u && needed <= sizeof darwin) {
+        given = darwin;
+      }
+    }
+#  endif
+  }
+  count = strlen(given);
+  while (count > 1u && given[count - 1u] == '/') {
+    count -= 1u;
+  }
+  text = (char *)torb_raw_allocate(count + 1u);
+  memcpy(text, given, count);
+  text[count] = '\0';
+  *length = count;
+  return text;
+}
+
+void *torb_platform_create_new(const char *path, bool directory, int64_t mode, bool *exists, const char **message) {
+  *exists = false;
+  if (directory) {
+    /* A directory answers a token that only says "made": the path it was handed, which the caller has anyway */
+    if (mkdir(path, (mode_t)(mode & 07777)) == 0) {
+      return (void *)path;
+    }
+    *exists = errno == EEXIST;
+    *message = strerror(errno);
+    return NULL;
+  }
+  {
+    const int descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, (mode_t)(mode & 07777));
+    FILE *file;
+    if (descriptor < 0) {
+      *exists = errno == EEXIST;
+      *message = strerror(errno);
+      return NULL;
+    }
+    file = fdopen(descriptor, "wb");
+    if (file == NULL) {
+      *message = strerror(errno);
+      close(descriptor);
+    }
+    return file;
+  }
+}
+
+bool torb_platform_sync_file(void *file, const char **message) {
+  FILE *handle = (FILE *)file;
+  if (fflush(handle) != 0 || fsync(fileno(handle)) != 0) {
+    *message = strerror(errno);
+    return false;
+  }
+  return true;
+}
+
+/* Best effort: a rename is durable once its directory is, and some file systems refuse to sync a directory at all */
+void torb_platform_sync_directory(const char *path) {
+  const int descriptor = open(path, O_RDONLY);
+  if (descriptor >= 0) {
+    (void)fsync(descriptor);
+    close(descriptor);
+  }
+}
+
+uint64_t torb_platform_unique_seed(void) {
+  struct timespec now;
+  (void)clock_gettime(CLOCK_REALTIME, &now);
+  return ((uint64_t)now.tv_sec << 30) ^ (uint64_t)now.tv_nsec ^ ((uint64_t)getpid() << 40);
 }
 
 int64_t torb_platform_monotonic_nanoseconds(void) {

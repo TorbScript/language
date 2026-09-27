@@ -23,6 +23,7 @@ keywords:
   - queryParameters
   - formEncoded
   - formDecoded
+  - Schemes
 source:
   - std/uri/src/lib.trb
   - std/uri/src/uri.trb
@@ -31,6 +32,7 @@ source:
   - std/uri/src/form.trb
   - std/uri/src/template.trb
   - std/uri/src/route.trb
+  - std/uri/src/schemes.trb
   - docs/design/URI.md
 ---
 
@@ -50,6 +52,7 @@ prelude; everything else is an import. The design, and why it reads RFC 3986 rat
 use Uri, UriReference, UriError, Urn, UriTemplate, TemplateValue, TemplateValues, Authority, Host from "std/uri"
 use TemplateVariable, TemplateCase, TemplateRoute, TemplateRoutes, route from "std/uri"
 use formEncoded, formDecoded, percentDecoded from "std/uri"
+use Schemes from "std/uri"
 ```
 
 ```trb check
@@ -315,6 +318,18 @@ public fn percentDecoded(text: String): Result<String, UriError>
 bytes that are not UTF-8 read as U+FFFD, and only ASCII letters, digits and `*-._` stay unescaped. It is the reading of
 `queryParameters()` and the writing of `withQueryParameters`, and the format of an HTML form's body.
 
+### Schemes
+
+```trb fragment
+public trait Schemes {
+  fn schemes(): List<String>
+}
+```
+
+The schemes a driver answers to, in lower case: the one member a registry of drivers dispatches on
+([URI.md](../design/URI.md) section 11). It is here rather than in [std/storage](storage.md) because it declares no
+scheme and opens nothing, so a package of a database driver can take it without taking a storage package.
+
 ### UriError
 
 ```trb fragment
@@ -342,4 +357,5 @@ so a password never reaches a message.
 - [std/ip](ip.md) - the addresses an IP literal host is.
 - [std/path](path.md) - `Path`, and why it is not a URI.
 - [std/http](http.md) - a client that takes a `Uri`, and a server whose requests carry one.
+- [std/storage](storage.md) - bytes at a `Uri`, with a driver chosen by its scheme.
 - [The standard library](index.md) - the other packages.

@@ -1355,6 +1355,51 @@ bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
  * arithmetic, not a lookup: the file does not have to exist and links are not followed.
  */
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
+/**
+ * `File.readBytes`: the whole file appended to `*into` (a list of `UInt8`, the caller's), synchronously. False with
+ * the operating system's words in `*failure` (owned; what it held before is the caller's, as for every `var` text).
+ */
+bool torb_file_read_bytes(torb_text path, torb_list *into, torb_text *failure);
+/** `File.writeBytes`: creates or empties the file and writes `bytes` (borrowed, a list of `UInt8`) into it. */
+bool torb_file_write_bytes(torb_text path, torb_list bytes, torb_text *error);
+/**
+ * `File.writeBytesAtomically`: the bytes written into a new file beside `path`, flushed to the disk, and moved over
+ * `path` in one step, so a reader sees the old content or the new one and never a part. A file that was there keeps
+ * its permissions. Nothing is left behind where it fails.
+ */
+bool torb_file_replace(torb_text path, torb_list bytes, torb_text *error);
+/** `File.remove`: one file, one symbolic link (not what it points at) or one empty directory. */
+bool torb_file_remove(torb_text path, torb_text *error);
+/** `File.rename`: `path` moved to `to`, replacing a file that is there, in one step. Both on one volume. */
+bool torb_file_rename(torb_text path, torb_text to, torb_text *error);
+/** `File.copy`: the content and the permissions of the file `path` into `to`, which is created or replaced. */
+bool torb_file_copy(torb_text path, torb_text to, torb_text *error);
+/**
+ * `File.metadata`/`File.linkMetadata`: what `path` is - `*kind` 1 a file, 2 a directory, 3 a symbolic link, 4 anything
+ * else - its size in bytes, when it was last written (nanoseconds since 1970-01-01 UTC) and its permission bits.
+ * `follow` false describes a symbolic link itself rather than what it points at.
+ */
+bool torb_file_metadata(
+  torb_text path,
+  bool follow,
+  int64_t *kind,
+  int64_t *size,
+  int64_t *modified,
+  int64_t *mode,
+  torb_text *failure
+);
+/** `File.setPermissions`: the permission bits of `path`. On Windows only the owner's write bit counts: read-only. */
+bool torb_file_set_mode(torb_text path, int64_t mode, torb_text *error);
+/** `File.createSymbolicLink`: a symbolic link at `path` whose target is the text `target`, exactly as written. */
+bool torb_file_create_symbolic_link(torb_text path, torb_text target, torb_text *error);
+/** `File.symbolicLinkTarget`: the target of the symbolic link at `path`, as it is stored, with `/` separators. */
+bool torb_file_symbolic_link_target(torb_text path, torb_text *out, torb_text *error);
+/**
+ * `File.createTemporaryFile`/`createTemporaryDirectory`: a new, empty file (or directory) with a name nobody else has,
+ * `<path>/<prefix><twelve random letters and digits>`, created so that it cannot have existed before. An empty `path`
+ * is the system's directory for temporary files. Only the owner may read it on POSIX. `*out` owned: its path.
+ */
+bool torb_file_create_temporary(torb_text path, torb_text prefix, bool directory, torb_text *out, torb_text *error);
 
 /**
  * `File`: a `native shared type` (BACKEND 3.7) with no fields the language can see, so the runtime owns its whole
@@ -1394,7 +1439,8 @@ void torb_file_drop(void *block);
 /* ---------------------------------------------------------------------------------------- the platform layer --- */
 
 /**
- * Windows and POSIX behind fourteen functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`.
+ * Windows and POSIX behind one set of functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32` - besides
+ * the files of `runtime/os/`, each of which belongs to one system as a whole.
  *
  * Every path and every text here is **UTF-8**, on both platforms. On Windows the file converts to UTF-16 and calls the
  * wide API, because the narrow one reads the code page of the machine and a `String` is UTF-8 (`docs/design/PATH.md`,
@@ -1429,12 +1475,68 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
  */
 void *torb_platform_open_file(const char *path, bool writing, const char **message);
 /**
- * One file, or one directory that is empty, removed. Only `runtime/tests` calls this: `std/fs` has no `delete` and
- * `docs/design/PATH.md` does not give it one, so there is no native above the platform layer to route it through. It is here
- * because a test that writes a file with a non-ASCII name cannot remove it with `remove` from `<stdio.h>` - that is the
+ * One file, one symbolic link or one directory that is empty, removed: `torb_platform_remove_entry` without the
+ * message, for `runtime/tests`, whose files with a non-ASCII name `remove` of `<stdio.h>` cannot remove - that is the
  * narrow call, and the whole point of this layer is that the narrow calls are gone.
  */
 bool torb_platform_remove(const char *path);
+/**
+ * `File.remove`: one file, one symbolic link (the link, never what it points at) or one directory that is empty. A
+ * read-only file is removed as well, on Windows too, where the attribute is cleared first - on POSIX what decides is the
+ * directory, and the platforms agree that way. False with a libc message in `*message` (borrowed, static).
+ */
+bool torb_platform_remove_entry(const char *path, const char **message);
+/**
+ * `rename(2)`, `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`: a file that is at `to` is replaced in one step - a
+ * read-only one too, on Windows as well, where the attribute is cleared for the move as POSIX never asks for it.
+ */
+bool torb_platform_rename(const char *from, const char *to, const char **message);
+/** The content of the file `from` into `to`, created or emptied, and the permissions of `from` onto it. */
+bool torb_platform_copy_file(const char *from, const char *to, const char **message);
+
+/** What `torb_platform_metadata` answers. */
+typedef struct torb_path_metadata {
+  /** 1 a file, 2 a directory, 3 a symbolic link, 4 anything else (a device, a pipe, a socket). */
+  int64_t kind;
+  int64_t size;
+  /** When it was last written: nanoseconds since 1970-01-01 00:00:00 UTC. */
+  int64_t modified;
+  /** The permission bits, `0777` and set-id and sticky; on Windows made up from the read-only attribute. */
+  int64_t mode;
+} torb_path_metadata;
+
+/**
+ * What `path` is. `follow` false describes a symbolic link itself - on Windows a symbolic link or a junction, and not
+ * any other reparse point (a file of OneDrive is a file). False with a libc message in `*message`.
+ */
+bool torb_platform_metadata(const char *path, bool follow, torb_path_metadata *out, const char **message);
+/** `chmod`; on Windows the read-only attribute, set where the owner's write bit (`0200`) is clear. */
+bool torb_platform_set_mode(const char *path, int64_t mode, const char **message);
+/**
+ * A symbolic link at `path` to `target`, which is stored as it is written (relative stays relative). On Windows the
+ * link is a directory link where the target is a directory, and it needs the developer mode or the privilege to create
+ * one - without either the message says `Operation not permitted`.
+ */
+bool torb_platform_create_symbolic_link(const char *path, const char *target, const char **message);
+/** The target of the symbolic link at `path`, UTF-8 with `/` separators. Result owned (`torb_raw_free(r, *length + 1)`). */
+char *torb_platform_link_target(const char *path, size_t *length, const char **message);
+/**
+ * The directory for temporary files, without a separator at its end: `GetTempPath2W` on Windows, `$TMPDIR` elsewhere,
+ * the user's own temporary directory on macOS, and `/tmp` as the last resort. Result owned, as the working directory's.
+ */
+char *torb_platform_temporary_directory(size_t *length);
+/**
+ * A file (a `FILE *` open for writing) or a directory (`directory` true, and the answer a non-`NULL` token that is not a
+ * file) that is created only where nothing is at `path` yet: `*exists` says that was the reason it failed. `mode` is
+ * the permission bits of POSIX, which the umask narrows.
+ */
+void *torb_platform_create_new(const char *path, bool directory, int64_t mode, bool *exists, const char **message);
+/** The buffers of a `FILE *` written through to the disk: `fflush` and `fsync`, `FlushFileBuffers` on Windows. */
+bool torb_platform_sync_file(void *file, const char **message);
+/** A rename inside the directory `path` made durable where the system has a way (`fsync` of the directory). */
+void torb_platform_sync_directory(const char *path);
+/** A number that differs between two calls and two processes: what the name of a temporary file is made from. */
+uint64_t torb_platform_unique_seed(void);
 /** Read a whole file. `*bytes` owned (`torb_raw_free`). False on failure with a libc message in `*message`. */
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message);
 bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t length, const char **message);

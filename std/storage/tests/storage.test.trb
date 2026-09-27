@@ -1,0 +1,165 @@
+/**
+ * `std/storage` with its two drivers and the registry over them: every member of `MemoryStorage`, a scheme the registry
+ * was not given, a password that never reaches a failure, and `FileStorage` in a temporary directory.
+ *
+ * A test body is no task and cannot `await()`, so every call runs at the top of the file, where the file's own task can
+ * wait, and the tests compare what the calls answered.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use Path from "std/path"
+use Uri from "std/uri"
+use Storage, StorageFailure, FileStorage, MemoryStorage from "../src/lib"
+
+// --- the memory driver ---------------------------------------------------------------------------------------------
+
+var memory = MemoryStorage()
+const firstWritten = memory.writeText("memory:/notes/first", "one").await()
+const secondWritten = memory.writeText("memory:/notes/deeper/second", "two").await()
+const firstRead = memory.readText("memory:/notes/first").await()
+const missingRead = memory.read("memory:/notes/none").await()
+const listed = memory.list("memory:/notes").await()
+const directoryExists = memory.exists("memory:/notes").await()
+const leafExists = memory.exists("memory:/notes/first").await()
+const nothingExists = memory.exists("memory:/elsewhere").await()
+const otherScheme = memory.read("https://example.test/notes").await()
+const invalid: List<UInt8> = [0xFF, 0xFE]
+const invalidWritten = memory.write("memory:/binary", invalid).await()
+const notText = memory.readText("memory:/binary").await()
+const deletedTree = memory.delete("memory:/notes").await()
+const afterDelete = memory.exists("memory:/notes/deeper/second").await()
+const deletedAgain = memory.delete("memory:/notes").await()
+
+group "the memory driver" {
+  test "what is written is read back, and a missing reference is not found" {
+    assert(firstWritten == Ok(void))
+    assert(secondWritten == Ok(void))
+    assert(firstRead == Ok("one"))
+    assert(missingRead == Fail(StorageFailure.NotFound("memory:/notes/none")))
+  }
+
+  test "a directory is a prefix: it exists, and lists its entries once, sorted" {
+    const deeper: Uri = "memory:/notes/deeper"
+    const first: Uri = "memory:/notes/first"
+    assert(listed == Ok([deeper, first]))
+    assert(directoryExists == Ok(true))
+    assert(leafExists == Ok(true))
+    assert(nothingExists == Ok(false))
+  }
+
+  test "another scheme is not its to reach, and bytes that are not UTF-8 are not text" {
+    assert(invalidWritten == Ok(void))
+    match otherScheme {
+      Fail(.NotAddressable(uri, ...)) => assert(uri == "https://example.test/notes")
+      other => panic "not refused as unreachable: {other}"
+    }
+    match notText {
+      Fail(.NotText(uri, ...)) => assert(uri == "memory:/binary")
+      other => panic "not refused as text: {other}"
+    }
+  }
+
+  test "deleting a directory deletes what is below it, and a second time finds nothing" {
+    assert(deletedTree == Ok(void))
+    assert(afterDelete == Ok(false))
+    assert(deletedAgain == Fail(StorageFailure.NotFound("memory:/notes")))
+  }
+}
+
+// --- the registry --------------------------------------------------------------------------------------------------
+
+var registry = Storage.registry([FileStorage(), MemoryStorage()])
+const throughRegistry = registry.writeText("memory:/greeting", "hello").await()
+const readThrough = registry.readText("memory:/greeting").await()
+const unknownScheme = registry.read("webdav://host/file").await()
+const secret = registry.read("s3://ada:hunter2@bucket/key").await()
+const registrySchemes = registry.schemes()
+
+group "the registry" {
+  test "it answers to the schemes of its drivers and hands a reference to the right one" {
+    assert(registrySchemes == ["file", "memory"])
+    assert(throughRegistry == Ok(void))
+    assert(readThrough == Ok("hello"))
+  }
+
+  test "a scheme no driver answers to fails, naming what the registry knows" {
+    assert(unknownScheme == Fail(StorageFailure.UnknownScheme("webdav://host/file", ["file", "memory"])))
+    assert unknownScheme.show().contains("the registry knows file, memory")
+  }
+
+  test "a failure carries the reference with its password redacted" {
+    match secret {
+      Fail(.UnknownScheme(uri, ...)) => {
+        assert(!uri.contains("hunter2"))
+        assert uri.contains("***")
+      }
+      other => panic "not refused: {other}"
+    }
+  }
+}
+
+// --- the file driver -----------------------------------------------------------------------------------------------
+
+const root = File.createTemporaryDirectory(prefix: "torb-storage-test-").expect("a temporary directory")
+const base = Uri.tryFrom(Path.from(root)).expect("the directory as a file: URI")
+fn inside(relative: String): Uri {
+  Uri.tryFrom(Path.from("{root}/{relative}")).expect("a file: URI")
+}
+
+var files = FileStorage()
+const fileWritten = files.writeText(inside("reports/2026/summary.md"), "# Summary").await()
+const fileReplaced = files.writeText(inside("reports/2026/summary.md"), "# Summary, again").await()
+const fileRead = files.readText(inside("reports/2026/summary.md")).await()
+const fileEntries = File.list "{root}/reports/2026"
+const fileMissing = files.read(inside("reports/none")).await()
+const fileListed = files.list(inside("reports/2026")).await()
+const fileExists = files.exists(inside("reports")).await()
+const fileDirectoryRead = files.read(inside("reports")).await()
+const fileDeleted = files.delete(inside("reports")).await()
+const fileGone = files.exists(inside("reports/2026/summary.md")).await()
+const fileDeletedAgain = files.delete(inside("reports")).await()
+const fileQuery = files.read(Uri.tryFrom("{base.text()}/x?y=1").expect("a URI with a query")).await()
+
+group "the file driver" {
+  test "a write creates the directories above it and replaces the file whole" {
+    assert(fileWritten == Ok(void))
+    assert(fileReplaced == Ok(void))
+    assert(fileRead == Ok("# Summary, again"))
+    assert(fileEntries == Ok(["summary.md"]))
+  }
+
+  test "a missing file is not found, and a directory is listed and not read" {
+    match fileMissing {
+      Fail(.NotFound(_)) => void
+      other => panic "not missing: {other}"
+    }
+    assert(fileListed == Ok([inside("reports/2026/summary.md")]))
+    assert(fileExists == Ok(true))
+    match fileDirectoryRead {
+      Fail(.Refused(_, reason)) => assert reason.contains("directory")
+      other => panic "a directory was read: {other}"
+    }
+  }
+
+  test "deleting a directory deletes everything in it" {
+    assert(fileDeleted == Ok(void))
+    assert(fileGone == Ok(false))
+    match fileDeletedAgain {
+      Fail(.NotFound(_)) => void
+      other => panic "deleted twice: {other}"
+    }
+  }
+
+  test "a file has no query, so such a reference is not the driver's to reach" {
+    match fileQuery {
+      Fail(.NotAddressable(...)) => void
+      other => panic "a query was read: {other}"
+    }
+  }
+
+  test "the temporary directory is removed again" {
+    File.removeDirectory(root).expect("the root removed")
+    assert(!File.exists(root))
+  }
+}

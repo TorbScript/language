@@ -47,11 +47,12 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/yaml](yaml.md)** - Yaml reads and writes any Encode/Decode type as YAML 1.2 or 1.1, with the target type resolving every scalar, and YamlNode is the tree of a document with its anchors, tags, styles and comments.
 - **[std/regex](regex.md)** - Regex, a compiled pattern with the syntax and the linear-time semantics of RE2, with whole and partial matches, named groups that decode into a type, replace and split.
 - **[std/markdown](markdown.md)** - Markdown reads CommonMark with GitHub's tables and front matter into a document tree that is a value, with the lines of every block and link; HTML and Markdown are written from the tree.
-- **[std/time](time.md)** - Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
+- **[std/time](time.md)** - Instant and Duration, the two time values, Timestamp, a point on the wall clock, plus Clock and sleep, which read and wait on the clock.
 - **[std/path](path.md)** - Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - **[std/uri](uri.md)** - Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, UriTemplate, the file bridge to Path and the form codec of HTML - values that open nothing.
-- **[std/fs](fs.md)** - File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
+- **[std/fs](fs.md)** - File and IoError - whole files as text or bytes, a File as both ends of a byte stream, and the tree around them - remove, rename, copy, metadata, links, temporary files and atomic replacement.
 - **[std/resource](resource.md)** - Resource, EmbeddedBytes and EmbeddedText - a file of the package named by a string literal, resolved by the compiler where it is written; reading the bytes comes with the next slices.
+- **[std/storage](storage.md)** - Storage, a capability over a Uri whose scheme chooses the driver - FileStorage for files, MemoryStorage for tests - and Storage.registry, one storage over the drivers a program names.
 - **[std/io](io.md)** - Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - **[std/process](process.md)** - Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
 - **[std/os](os.md)** _(draft)_ - Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.

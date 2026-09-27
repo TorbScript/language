@@ -1,12 +1,20 @@
 /**
  * The file system: `File`, which is both a stream's reading end and its writing end, and `IoError`, what every
- * operation here fails with. The whole-file helpers (`readText`, `writeText`) are for what fits in memory; `chunks()`,
- * `lines()` and the `Sink` side are for everything else (`docs/design/STREAMS.md`).
+ * operation here fails with. The whole-file helpers (`readText`, `writeText`, `readBytes`, `writeBytes`) are for what
+ * fits in memory; `chunks()`, `lines()` and the `Sink` side are for everything else (`docs/design/STREAMS.md`).
+ *
+ * Around the contents: `remove`, `rename`, `copy`, `createDirectory`, `removeDirectory`, `list` and `walk` for the tree,
+ * `metadata` for what a path is, symbolic links, temporary files and directories, and `writeBytesAtomically` for a
+ * file that is replaced whole or not at all. Every one of them takes the same path text on every system - `/` between
+ * the names, a drive letter on Windows - and the runtime converts it where it calls the system (`docs/design/PATH.md`
+ * section 6), so nothing here branches on the operating system.
  */
 
 use Source, Sink, Bytes, Utf8Error from "std/stream"
 use ArrayList from "std/collections"
+use Timestamp from "std/time"
 use lines as streamLines from "std/stream"
+public use FileKind, Permissions, Metadata from "./metadata"
 
 /** What went wrong with which path. */
 public type IoError with Show, Error {
@@ -41,7 +49,7 @@ extend IoError with From<Utf8Error> {
  *
  * An open file is both ends of a stream: `chunks()`/`lines()` read it, and the file *is* a `Sink<Bytes, IoError>` for
  * writing, so everything that writes into a sink writes into a file. Most code needs neither: the functions without
- * `self` read and write whole files.
+ * `self` read and write whole files, and move, copy, remove and describe what a path names.
  *
  * # Related
  *
@@ -107,6 +115,46 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   native static fn writeText(path: String, text: String): Result<Void, IoError>
 
   /**
+   * The whole file as bytes, synchronously: for what fits in memory, and for code that cannot wait for a task - a tool,
+   * a test, the top level of a program. `read` is the same for a task, and `chunks()` reads a file of any size.
+   *
+   * # Examples
+   *
+   *     fn sizeOf(path: String): Result<Int, IoError> {
+   *       const bytes = File.readBytes(path)?
+   *       Ok bytes.length()
+   *     }
+   */
+  static fn readBytes(path: String): Result<Bytes, IoError> {
+    var bytes: ArrayList<UInt8> = ArrayList.withCapacity 0
+    var failure = ""
+    if !fileReadBytes(path, bytes, failure) {
+      return Fail IoError(path, failure)
+    }
+    Ok bytes
+  }
+
+  /** Creates or empties `path` and writes `bytes` into it in one call, synchronously - the counterpart of `readBytes`. */
+  static fn writeBytes(path: String, bytes: Bytes): Result<Void, IoError> {
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    fileWriteBytes path, buffer
+  }
+
+  /**
+   * The whole file as bytes, read chunk by chunk on a thread of the blocking pool so the worker goes on meanwhile: what
+   * `readBytes` is for a task. The counterpart of `write`, which takes a source: `Source.from([bytes])` is one.
+   */
+  static fn read(path: String): Task<Result<Bytes, IoError>> {
+    var file = Self.open(path)?
+    var chunks = file.chunks()
+    var bytes: List<UInt8> = []
+    while const Some(chunk) = chunks.next().await()? {
+      bytes.appendAll chunk
+    }
+    Ok bytes
+  }
+
+  /**
    * Creates `path` and writes everything `source` delivers into it, of any size and without holding it in memory:
    * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
    */
@@ -116,12 +164,40 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   }
 
   /**
+   * Replaces `path` whole or not at all: the bytes go into a new file beside it, which is flushed to the disk and then
+   * moved over `path` in one step. A reader - or the program after a crash - finds the old content or the new one and
+   * never a part of either, which `writeBytes` cannot promise. A file that was there keeps its permissions, and where
+   * this fails nothing is left behind.
+   *
+   * # Examples
+   *
+   *     fn saveIndex(path: String, entries: List<String>): Result<Void, IoError> {
+   *       File.writeTextAtomically path, entries.joined(separator: "\n")
+   *     }
+   *
+   * # Pitfalls
+   *
+   * - On Windows a file that another program holds open without allowing its deletion cannot be replaced, and the call
+   *   fails; the old content stays.
+   */
+  static fn writeBytesAtomically(path: String, bytes: Bytes): Result<Void, IoError> {
+    const buffer: ArrayList<UInt8> = ArrayList.from bytes
+    fileReplace path, buffer
+  }
+
+  /** [File.writeBytesAtomically] for text, which is always UTF-8. */
+  static fn writeTextAtomically(path: String, text: String): Result<Void, IoError> {
+    const buffer: ArrayList<UInt8> = ArrayList.from text.bytes()
+    fileReplace path, buffer
+  }
+
+  /**
    * The path as an absolute path, with `.` and `..` resolved against the working directory. The file does not have
    * to exist: this is text arithmetic, not a lookup, so it does not follow links either.
    */
   native static fn absolutePath(path: String): Result<String, IoError>
 
-  /** Whether something exists at `path`, file or directory. */
+  /** Whether something exists at `path`, file or directory. A symbolic link counts as what it points at. */
   native static fn exists(path: String): Bool
 
   /** Whether `path` is a directory rather than a file. */
@@ -142,6 +218,148 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    *   so such an entry has no name to answer: the message shows its bytes, and no replacement character is invented.
    */
   native static fn list(path: String): Result<List<String>, IoError>
+
+  /**
+   * Every entry below the directory, as a path relative to it with `/` between the names: a directory comes before what
+   * is in it, and the entries of one directory come in the order `list` answers them. A symbolic link is an entry and
+   * is never followed, so a link that points back up cannot make the walk endless.
+   *
+   * # Examples
+   *
+   *     fn sources(root: String): Result<List<String>, IoError> {
+   *       const entries = File.walk(root)?
+   *       Ok entries.filter({ _.endsWith ".trb" }).toList()
+   *     }
+   */
+  static fn walk(path: String): Result<List<String>, IoError> {
+    var found: List<String> = []
+    walkInto path, "", found
+    Ok found
+  }
+
+  /**
+   * Removes one file, one symbolic link - the link, never what it points at - or one empty directory. A read-only file
+   * is removed as well, on Windows too. Fails where nothing is there.
+   */
+  native static fn remove(path: String): Result<Void, IoError>
+
+  /**
+   * Removes the directory and everything in it, and does nothing where nothing is there - the counterpart of
+   * `createDirectory`, which does nothing where the directory is already there. A symbolic link inside is removed and
+   * never followed, so nothing outside the directory is touched; `path` itself being a link removes the link.
+   *
+   * # Errors
+   *
+   * - `path` is a file, or something inside cannot be removed. What was removed before that stays removed.
+   */
+  static fn removeDirectory(path: String): Result<Void, IoError> {
+    const found = match Self.linkMetadata(path) {
+      Ok(metadata) => metadata
+      Fail(problem) => {
+        if Self.exists(path) {
+          return Fail problem
+        }
+        return Ok void
+      }
+    }
+    match found.kind {
+      .Directory => {
+        for name in Self.list(path)? {
+          const child = joinedPath path, name
+          const inside = Self.linkMetadata(child)?
+          if inside.kind == FileKind.Directory {
+            Self.removeDirectory(child)?
+          } else {
+            Self.remove(child)?
+          }
+        }
+        Self.remove path
+      }
+      .SymbolicLink => Self.remove path
+      .File | .Other => Fail IoError(path, "Not a directory")
+    }
+  }
+
+  /**
+   * Moves `path` to `to` in one step, replacing a file that is at `to` - which is what makes it the last step of every
+   * replacement that must not be seen half done. Both have to be on one volume: across volumes a move is a `copy` and a
+   * `remove`, and no system does that in one step.
+   */
+  native static fn rename(path: String, to: String): Result<Void, IoError>
+
+  /**
+   * Copies the content and the permissions of the file `path` to `to`, which is created or replaced. A symbolic link is
+   * followed; a directory is refused.
+   */
+  native static fn copy(path: String, to: String): Result<Void, IoError>
+
+  /**
+   * What `path` is, how large, when it was last written and who may do what with it - of what a symbolic link points
+   * at, the way every other function here follows one. `linkMetadata` describes the link itself.
+   *
+   * # Examples
+   *
+   *     fn isNewer(first: String, second: String): Result<Bool, IoError> {
+   *       const one = File.metadata(first)?
+   *       const other = File.metadata(second)?
+   *       Ok(one.modified > other.modified)
+   *     }
+   */
+  static fn metadata(path: String): Result<Metadata, IoError> {
+    metadataOf path, follow: true
+  }
+
+  /** [File.metadata] of a symbolic link itself rather than of what it points at: the one way to see that a path is a link. */
+  static fn linkMetadata(path: String): Result<Metadata, IoError> {
+    metadataOf path, follow: false
+  }
+
+  /**
+   * Sets the permission bits of `path`. On Windows only the owner's write bit counts: without it the file is read-only,
+   * and with it it is not.
+   */
+  static fn setPermissions(path: String, permissions: Permissions): Result<Void, IoError> {
+    fileSetMode path, permissions.mode
+  }
+
+  /**
+   * Creates a symbolic link at `path` whose target is `target`, stored exactly as written: a relative target is read
+   * from the directory of the link, not from the working directory.
+   *
+   * # Pitfalls
+   *
+   * - Windows lets a program create one only in developer mode or with the privilege to; without either this fails with
+   *   `Operation not permitted`, and a program that must run everywhere copies instead.
+   */
+  native static fn createSymbolicLink(path: String, target: String): Result<Void, IoError>
+
+  /** The target of the symbolic link at `path` as it was stored, with `/` between its names on every system. */
+  native static fn symbolicLinkTarget(path: String): Result<String, IoError>
+
+  /**
+   * Creates a new, empty file with a name nobody else has - `prefix` and twelve letters and digits - and answers its
+   * path. It is created where nothing was, so no other program can have it too, and on POSIX only its owner may read
+   * it. It lives in `inside`, or in the system's directory for temporary files; removing it is the caller's.
+   *
+   * # Examples
+   *
+   *     fn scratch(content: String): Result<String, IoError> {
+   *       const path = File.createTemporaryFile(prefix: "report-")?
+   *       File.writeText(path, content)?
+   *       Ok path
+   *     }
+   */
+  static fn createTemporaryFile(prefix: String = "", inside: String? = None): Result<String, IoError> {
+    temporaryEntry prefix, inside, directory: false
+  }
+
+  /**
+   * Creates a new, empty directory with a name nobody else has, the way [File.createTemporaryFile] creates a file, and
+   * answers its path. `removeDirectory` removes it with everything that was put into it.
+   */
+  static fn createTemporaryDirectory(prefix: String = "", inside: String? = None): Result<String, IoError> {
+    temporaryEntry prefix, inside, directory: true
+  }
 }
 
 /** The reading direction of a [File]: a `Source<Bytes, IoError>` of chunks of at most `size` bytes. */
@@ -170,6 +388,87 @@ shared type FileChunks with Source<Bytes, IoError> {
   /** Nothing of its own: the file closes once its last holder is gone. */
   var fn close() {}
 }
+
+/** `path/name`, without a second separator where `path` already ends in one. */
+fn joinedPath(path: String, name: String): String {
+  if path.endsWith("/") || path.endsWith("\\") {
+    "{path}{name}"
+  } else {
+    "{path}/{name}"
+  }
+}
+
+/** The entries below `root/relative` appended to `into`, each directory before its contents. */
+fn walkInto(root: String, relative: String, var into: List<String>): Result<Void, IoError> {
+  const directory = if relative.isEmpty() { root } else { joinedPath root, relative }
+  for name in File.list(directory)? {
+    const entry = if relative.isEmpty() { name } else { "{relative}/{name}" }
+    into.append entry
+    const found = File.linkMetadata(joinedPath(root, entry))?
+    if found.kind == FileKind.Directory {
+      walkInto(root, entry, into)?
+    }
+  }
+  Ok void
+}
+
+/** What `fileMetadata` wrote, as the value `metadata` and `linkMetadata` answer. */
+fn metadataOf(path: String, follow: Bool): Result<Metadata, IoError> {
+  var kind = 0
+  var size = 0
+  var modified = 0
+  var mode = 0
+  var failure = ""
+  if !fileMetadata(path, follow, kind, size, modified, mode, failure) {
+    return Fail IoError(path, failure)
+  }
+  const found = match kind {
+    1 => FileKind.File
+    2 => FileKind.Directory
+    3 => FileKind.SymbolicLink
+    _ => FileKind.Other
+  }
+  Ok Metadata(found, size, Timestamp.fromUnixNanoseconds(modified), Permissions(mode))
+}
+
+/** A new temporary file or directory, and a failure that names the directory it was to be made in. */
+fn temporaryEntry(prefix: String, inside: String?, directory: Bool): Result<String, IoError> {
+  match fileCreateTemporary(inside ?? "", prefix, directory) {
+    Ok(path) => Ok path
+    Fail(problem) => Fail IoError(inside ?? "the directory for temporary files", problem.message)
+  }
+}
+
+// --- the natives of runtime/file.c -----------------------------------------------------------------------------------
+
+/** The whole file appended to `into`, synchronously; false with the operating system's words in `failure`. */
+native fn fileReadBytes(path: String, var into: ArrayList<UInt8>, var failure: String): Bool
+
+/** Creates or empties the file and writes `bytes` into it. */
+native fn fileWriteBytes(path: String, bytes: ArrayList<UInt8>): Result<Void, IoError>
+
+/** `bytes` into a new file beside `path`, flushed to the disk and moved over `path` in one step. */
+native fn fileReplace(path: String, bytes: ArrayList<UInt8>): Result<Void, IoError>
+
+/**
+ * What `path` is: `kind` 1 a file, 2 a directory, 3 a symbolic link, 4 anything else; its size, when it was last written
+ * in nanoseconds since 1970, and its permission bits. `follow` false describes a link itself.
+ */
+native fn fileMetadata(
+  path: String,
+  follow: Bool,
+  var kind: Int,
+  var size: Int,
+  var modified: Int,
+  var mode: Int,
+  var failure: String,
+): Bool
+
+/** Sets the permission bits of `path`. */
+native fn fileSetMode(path: String, mode: Int): Result<Void, IoError>
+
+/** A new file or directory `<path>/<prefix><random>`, `path` empty for the system's directory for temporary files. */
+native fn fileCreateTemporary(path: String, prefix: String, directory: Bool): Result<String, IoError>
 
 // --- the natives of runtime/stream.c ---------------------------------------------------------------------------------
 

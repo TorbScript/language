@@ -1,0 +1,113 @@
+/** [MemoryStorage]: the driver of `memory:`, a table in memory for as long as the driver lives. */
+
+use Uri from "std/uri"
+use Bytes from "std/stream"
+use Storage, StorageFailure from "./storage"
+
+/**
+ * `memory:` - bytes kept in a table for as long as the driver lives, and the double every test of a program that
+ * stores things needs: the same trait as the drivers that reach a disk or a network, with nothing to set up and nothing
+ * to clean away.
+ *
+ * A reference is its whole text (`memory:/notes/first`), and a directory is only a prefix of other references:
+ * `memory:/notes` exists and lists `memory:/notes/first` because something is stored below it, and deleting it deletes
+ * everything below it.
+ *
+ * # Examples
+ *
+ *     fn remembered(): Task<Result<List<Uri>, StorageFailure>> {
+ *       var storage = MemoryStorage()
+ *       storage.writeText("memory:/notes/first", "one").await()?
+ *       storage.writeText("memory:/notes/second", "two").await()?
+ *       storage.list("memory:/notes").await()
+ *     }
+ */
+public shared type MemoryStorage with Storage {
+  private var entries: Map<String, Bytes> = [:]
+
+  fn schemes(): List<String> {
+    ["memory"]
+  }
+
+  fn read(uri: Uri): Task<Result<Bytes, StorageFailure>> {
+    const key = keyOf(uri)?
+    match entries.get(key) {
+      Some(content) => Ok content
+      None => Fail StorageFailure.NotFound(uri.show())
+    }
+  }
+
+  fn exists(uri: Uri): Task<Result<Bool, StorageFailure>> {
+    const key = keyOf(uri)?
+    Ok(entries.containsKey(key) || !below(key).isEmpty())
+  }
+
+  fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>> {
+    const key = keyOf(uri)?
+    const prefix = directoryOf key
+    var children: List<String> = []
+    for stored in below(key) {
+      const rest = stored.sliceBytes prefix.byteLength(), stored.byteLength()
+      const name = rest.split("/").first() ?? rest
+      const child = "{prefix}{name}"
+      if !children.contains(child) {
+        children.append child
+      }
+    }
+    if children.isEmpty() && !entries.containsKey(key) {
+      return Fail StorageFailure.NotFound(uri.show())
+    }
+    var found: List<Uri> = []
+    for child in children.sorted({ _ }) {
+      match Uri.tryFrom(child) {
+        Ok(reference) => found.append reference
+        Fail(problem) => {
+          return Fail StorageFailure.Refused(uri.show(), problem.show())
+        }
+      }
+    }
+    Ok found
+  }
+
+  var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>> {
+    const key = keyOf(uri)?
+    entries.set key, content
+    Ok void
+  }
+
+  var fn delete(uri: Uri): Task<Result<Void, StorageFailure>> {
+    const key = keyOf(uri)?
+    const inside = below key
+    if inside.isEmpty() && !entries.containsKey(key) {
+      return Fail StorageFailure.NotFound(uri.show())
+    }
+    const _ = entries.remove key
+    for stored in inside {
+      const _ = entries.remove stored
+    }
+    Ok void
+  }
+
+  /** The keys stored below `key`, as if it were a directory. */
+  private fn below(key: String): List<String> {
+    const prefix = directoryOf key
+    entries.keys().filter({ _.startsWith prefix }).toList()
+  }
+}
+
+/** The key of a reference: its whole text, which only `memory:` may start. */
+fn keyOf(uri: Uri): Result<String, StorageFailure> {
+  if uri.scheme() != "memory" {
+    return Fail StorageFailure.NotAddressable(uri.show(), "the scheme is not `memory`")
+  }
+  Ok uri.text()
+}
+
+/** The key as the prefix of what is below it: with a `/` at its end. */
+fn directoryOf(key: String): String {
+  if key.endsWith("/") {
+    key
+  } else {
+    "{key}/"
+  }
+}

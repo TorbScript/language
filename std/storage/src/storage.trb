@@ -1,0 +1,153 @@
+/**
+ * [Storage], the capability, [StorageFailure], what a storage refuses with, and the registry `Storage.registry` answers:
+ * one storage over several drivers, itself a storage.
+ */
+
+use Schemes, Uri from "std/uri"
+use Bytes, textOf from "std/stream"
+
+/**
+ * What a storage refuses with. Every case carries the reference as `Uri.show()` wrote it, so a password in the user
+ * information of a reference is `***` in every failure that reaches a log or a user.
+ */
+public type StorageFailure with Show, Equals, Error {
+  /** The registry has no driver for the scheme of `uri`; `known` is what it has. */
+  case UnknownScheme(uri: String, known: List<String>)
+  /** The driver cannot reach a reference of this form: a `file:` URI with a query, another driver's scheme. */
+  case NotAddressable(uri: String, reason: String)
+  /** Nothing is stored at `uri`. */
+  case NotFound(uri: String)
+  /** What is stored at `uri` is not UTF-8, and a `String` always is. */
+  case NotText(uri: String, reason: String)
+  /** The driver tried and the store refused, in its own words. */
+  case Refused(uri: String, reason: String)
+
+  /** One sentence that names the reference and what went wrong with it. */
+  fn show(): String {
+    match self {
+      .UnknownScheme(uri, known) => "no driver for `{uri}`: the registry knows {known.joined(separator: ", ")}"
+      .NotAddressable(uri, reason) => "`{uri}` is not a reference this driver can reach: {reason}"
+      .NotFound(uri) => "nothing is stored at `{uri}`"
+      .NotText(uri, reason) => "`{uri}` is not text: {reason}"
+      .Refused(uri, reason) => "`{uri}` was refused: {reason}"
+    }
+  }
+}
+
+/**
+ * Bytes at a reference, wherever the scheme reaches: five members every driver writes, and two over them. A driver
+ * that cannot do one of them - a store that cannot list - says so in the `Result` of that member rather than by missing
+ * it, so a program holds one type whatever it stores in.
+ *
+ * Every member reaches the outside world and answers a `Task`. A storage has an identity - a connection, a disk, a
+ * table in memory - and a writing member changes it while a task waits, so the trait is a `shared trait` and every
+ * driver a `shared type`.
+ *
+ * # Examples
+ *
+ *     fn copied(var storage: Storage, from: Uri, to: Uri): Task<Result<Void, StorageFailure>> {
+ *       const content = storage.read(from).await()?
+ *       storage.write(to, content).await()
+ *     }
+ *
+ * # Related
+ *
+ * - [Storage.registry] - one storage over several drivers, by scheme.
+ * - [Schemes] - what a driver says it answers to.
+ */
+public shared trait Storage with Schemes {
+  /** The bytes stored at `uri`. */
+  fn read(uri: Uri): Task<Result<Bytes, StorageFailure>>
+
+  /** Whether anything is stored at `uri`. */
+  fn exists(uri: Uri): Task<Result<Bool, StorageFailure>>
+
+  /** The references directly below `uri`, sorted. */
+  fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>>
+
+  /** Stores `content` at `uri`, replacing whatever was there - whole or not at all, where the store can promise it. */
+  var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>>
+
+  /** Removes whatever is stored at `uri`, and everything below it. */
+  var fn delete(uri: Uri): Task<Result<Void, StorageFailure>>
+
+  /** The bytes read as UTF-8, which is the ninety-percent call. */
+  fn readText(uri: Uri): Task<Result<String, StorageFailure>> {
+    const content = read(uri).await()?
+    textOf(content).mapError({ problem => StorageFailure.NotText uri.show(), problem.show() })
+  }
+
+  /** `text` stored as UTF-8 at `uri`: [Storage.write] for text. */
+  var fn writeText(uri: Uri, text: String): Task<Result<Void, StorageFailure>> {
+    write(uri, text.bytes().toList()).await()
+  }
+
+  /**
+   * One storage over `drivers`, which hands every reference to the driver whose [Schemes] hold its scheme - and is
+   * itself a [Storage], so whoever holds it does not know how many drivers are behind it. The program names every
+   * driver it can reach, here, and nothing adds itself.
+   *
+   * # Errors
+   *
+   * - [StorageFailure.UnknownScheme] from every member, for a reference whose scheme no driver answers to. It lists
+   *   the schemes the registry does know.
+   */
+  static fn registry(drivers: List<Storage>): Storage {
+    Registry.of drivers
+  }
+}
+
+/** What [Storage.registry] answers: the drivers, asked in their order. */
+shared type Registry with Storage {
+  private var drivers: List<Storage>
+
+  /** The registry over `drivers`. */
+  static fn of(drivers: List<Storage>): Self {
+    Self drivers
+  }
+
+  /** Every scheme of every driver, in the order of the drivers. */
+  fn schemes(): List<String> {
+    var known: List<String> = []
+    for driver in drivers {
+      known.appendAll driver.schemes()
+    }
+    known
+  }
+
+  fn read(uri: Uri): Task<Result<Bytes, StorageFailure>> {
+    const index = driverOf(uri)?
+    drivers[index].read(uri).await()
+  }
+
+  fn exists(uri: Uri): Task<Result<Bool, StorageFailure>> {
+    const index = driverOf(uri)?
+    drivers[index].exists(uri).await()
+  }
+
+  fn list(uri: Uri): Task<Result<List<Uri>, StorageFailure>> {
+    const index = driverOf(uri)?
+    drivers[index].list(uri).await()
+  }
+
+  var fn write(uri: Uri, content: Bytes): Task<Result<Void, StorageFailure>> {
+    const index = driverOf(uri)?
+    drivers[index].write(uri, content).await()
+  }
+
+  var fn delete(uri: Uri): Task<Result<Void, StorageFailure>> {
+    const index = driverOf(uri)?
+    drivers[index].delete(uri).await()
+  }
+
+  /** Which driver answers to the scheme of `uri`: the first that lists it. */
+  private fn driverOf(uri: Uri): Result<Int, StorageFailure> {
+    const scheme = uri.scheme()
+    for index in 0..drivers.length() {
+      if drivers[index].schemes().contains(scheme) {
+        return Ok index
+      }
+    }
+    Fail StorageFailure.UnknownScheme(uri.show(), schemes())
+  }
+}

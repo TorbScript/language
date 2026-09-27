@@ -348,6 +348,110 @@ TORB_TEST(creating_a_directory_under_a_file_is_an_error_with_a_message) {
   torb_text_release(error);
 }
 
+/* ----------------------------------------------------------------------------- the tree around the contents --- */
+
+static const torb_element element_byte = { 1u, 1u, NULL, NULL, NULL, NULL };
+
+/** A list of `UInt8` holding the bytes of `text`. Owned. */
+static torb_list bytes_of(const char *text) {
+  torb_list bytes = torb_list_new(&element_byte);
+  torb_list_add_plain(&bytes, text, strlen(text));
+  return bytes;
+}
+
+/**
+ * A temporary directory made where nothing was, then every byte written and read back, a file replaced whole with
+ * nothing left beside it, renamed, copied, described and removed - and the directory removed at the end.
+ */
+TORB_TEST(bytes_replacing_renaming_copying_and_removing_in_a_temporary_directory) {
+  torb_text nowhere = torb_text_empty();
+  torb_text prefix = torb_text_from_cstring("torb-runtime-test-");
+  torb_text directory = torb_text_empty();
+  torb_text error = torb_text_empty();
+  torb_text path;
+  torb_text moved;
+  torb_text copied;
+  torb_list written;
+  torb_list read = torb_list_new(&element_byte);
+  torb_list entries;
+  int64_t kind = 0;
+  int64_t size = 0;
+  int64_t modified = 0;
+  int64_t mode = 0;
+
+  TORB_CHECK(torb_file_create_temporary(nowhere, prefix, true, &directory, &error));
+  TORB_CHECK(torb_file_is_directory(directory));
+  path = path_in(directory, "index");
+  moved = path_in(directory, "moved");
+  copied = path_in(directory, "copied");
+
+  written = bytes_of("first");
+  TORB_CHECK(torb_file_write_bytes(path, written, &error));
+  torb_list_release(written);
+  TORB_CHECK(torb_file_read_bytes(path, &read, &error));
+  TORB_CHECK(torb_list_length(read) == 5);
+
+  written = bytes_of("second!");
+  TORB_CHECK(torb_file_replace(path, written, &error));
+  torb_list_release(written);
+  TORB_CHECK(torb_file_metadata(path, true, &kind, &size, &modified, &mode, &error));
+  TORB_CHECK(kind == 1);
+  TORB_CHECK(size == 7);
+  TORB_CHECK(modified > INT64_C(1577836800000000000));
+  /* Nothing is left beside the file it replaced */
+  TORB_CHECK(torb_file_list(directory, &entries, &error));
+  TORB_CHECK(torb_list_length(entries) == 1);
+  torb_list_release(entries);
+
+  TORB_CHECK(torb_file_rename(path, moved, &error));
+  TORB_CHECK(!torb_file_exists(path));
+  TORB_CHECK(torb_file_copy(moved, copied, &error));
+  TORB_CHECK(torb_file_metadata(copied, false, &kind, &size, &modified, &mode, &error));
+  TORB_CHECK(size == 7);
+  TORB_CHECK(!torb_file_copy(directory, path, &error));
+  torb_text_release(error);
+  error = torb_text_empty();
+
+  TORB_CHECK(torb_file_remove(moved, &error));
+  TORB_CHECK(torb_file_remove(copied, &error));
+  TORB_CHECK(!torb_file_remove(copied, &error));
+  TORB_CHECK(torb_text_byte_length(error) > 0);
+  torb_text_release(error);
+  error = torb_text_empty();
+  TORB_CHECK(torb_file_remove(directory, &error));
+  TORB_CHECK(!torb_file_exists(directory));
+
+  torb_list_release(read);
+  torb_text_release(copied);
+  torb_text_release(moved);
+  torb_text_release(path);
+  torb_text_release(directory);
+  torb_text_release(prefix);
+  torb_text_release(error);
+}
+
+/** A prefix with a separator would put the entry elsewhere than asked, and a missing file has no metadata. */
+TORB_TEST(a_temporary_name_with_a_separator_and_the_metadata_of_nothing_are_errors) {
+  torb_text nowhere = torb_text_empty();
+  torb_text prefix = torb_text_from_cstring("a/b");
+  torb_text missing = torb_text_from_cstring("torb-runtime-test-no-such-entry");
+  torb_text out = torb_text_empty();
+  torb_text error = torb_text_empty();
+  int64_t kind = 0;
+  int64_t size = 0;
+  int64_t modified = 0;
+  int64_t mode = 0;
+  TORB_CHECK(!torb_file_create_temporary(nowhere, prefix, false, &out, &error));
+  TORB_CHECK(torb_text_byte_length(error) > 0);
+  torb_text_release(error);
+  error = torb_text_empty();
+  TORB_CHECK(!torb_file_metadata(missing, true, &kind, &size, &modified, &mode, &error));
+  TORB_CHECK(torb_text_byte_length(error) > 0);
+  torb_text_release(error);
+  torb_text_release(missing);
+  torb_text_release(prefix);
+}
+
 void torb_register_file_tests(void) {
   TORB_ADD(writing_reading_and_listing_a_directory);
   TORB_ADD(reading_a_file_that_is_not_there_is_an_error_with_a_message);
@@ -358,4 +462,6 @@ void torb_register_file_tests(void) {
   TORB_ADD(releasing_a_file_without_closing_it_still_closes_the_handle);
   TORB_ADD(creating_a_directory_makes_every_level_and_succeeds_twice);
   TORB_ADD(creating_a_directory_under_a_file_is_an_error_with_a_message);
+  TORB_ADD(bytes_replacing_renaming_copying_and_removing_in_a_temporary_directory);
+  TORB_ADD(a_temporary_name_with_a_separator_and_the_metadata_of_nothing_are_errors);
 }

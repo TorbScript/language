@@ -3,7 +3,9 @@
 **Status: slices 1 to 4 and 7 built (2026-09-25), slice 5's hosts (2026-09-26)** — `std/ip`, `std/uri` with `Uri`,
 `UriReference`, `Urn`, IRIs, the `file:` bridge and `UriTemplate`, `std/http` on `Uri`, and the literal rule of section 9
 with typed templates and routes (section 9a); a non-ASCII host is mapped to its A-labels by `std/dns`'s IDNA, and
-`iriText()` shows U-labels. The owner asked for the whole URI layer before HTTP grows further: IRIs, URI references as a
+`iriText()` shows U-labels; slice 12's driver layer (2026-09-27): `Schemes` in `std/uri`, and `std/storage` with
+`Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` and `MemoryStorage`, asynchronous as section 11 designs
+it. The owner asked for the whole URI layer before HTTP grows further: IRIs, URI references as a
 type, URI templates, every standard that touches them, and the IP address values shared with `std/network`. Sections
 2a, 3a, 4a, 8a and 9a are that revision, and section 14's slice order replaces the old one; `repaired(text)`, `data:`
 and the rest are the later slices it lists.
@@ -1677,13 +1679,13 @@ since 2026-09-23 it costs the failure type nothing: `await()` passes a cancellat
 answering it, so a caller writes `storage.read(uri).await()?` and `StorageFailure` needs no `Stopped` case and no
 `From<Cancelled>`.
 
-**What runs today is the synchronous form**, and the reason is `std/fs`: `File.readText`, `File.writeText`,
-`File.exists` and `File.list` are synchronous natives, and only the streaming side (`chunks`, `fill`) is a `Task`. So
-`FileStorage` and `MemoryStorage` — the two drivers that exist before milestone 7 — have nothing to wait for, and the
-probe is synchronous throughout and builds as a native binary.
+**What runs today is this asynchronous form, in both back ends** (`std/storage`, 2026-09-27). `FileStorage.read` reads
+on the blocking pool through `File.read`; `write` replaces the file with `File.writeBytesAtomically`, which is
+synchronous and short; `MemoryStorage` has nothing to wait for and answers finished tasks. A `shared trait` with a
+`List<Storage>` of `shared type` drivers builds natively and in the VM, which is what the two reasons below were about.
 
-**The asynchronous form type checks and does not build, for two independent reasons**, both measured in a scratch
-package that is deleted:
+**When this section was written the asynchronous form type checked and did not build, for two independent reasons**,
+both measured in a scratch package that is deleted:
 
 ```text
 error: `write` changes `self` and answers a `Task`, and `Storage` is not a `shared trait`
@@ -1966,7 +1968,9 @@ Gaps 1 to 9 are the type; gaps 10 to 13 are the driver layer of section 11.
 13. **`std/fs` has no `remove`, and `Sandbox` reads only a `Path`.** `FileStorage.delete` has no native to call, and
     a script a program fetched through a `Storage` cannot be handed to `Sandbox` without being written to a file
     first. *Smallest fix:* `File.remove(path)` and `File.rename(from, to)` in `std/fs`; the `Sandbox` half belongs to
-    `docs/design/RESOURCES.md` and is named here so that it is not discovered twice.
+    `docs/design/RESOURCES.md` and is named here so that it is not discovered twice. **The `std/fs` half is answered
+    (2026-09-27):** `File.remove`, `File.rename`, `File.removeDirectory` and `File.writeBytesAtomically`, which
+    `FileStorage.delete` and `write` are built on; the `Sandbox` half is still open.
 
 ## 14. Migration
 
@@ -1996,7 +2000,7 @@ literal) and drops `raw` from the templates and patterns of the tests and the pa
 | 9 | **The manifest.** `source "...", git:/archive:/path:` and `registry "...", url:` are read as `Uri`s when the manifest is evaluated; the lock records the canonical text | `compiler/src/project/*`, `docs/design/PROJECT.md` section 7 | `docs/design/PROJECT.md` slices 1 to 4 | later |
 | 10 | **The documentation tooling.** `links.trb`'s four `startsWith` tests become `UriReference.tryFrom(target)` and `resolved(against:)`, answering exactly what they answer today | `compiler/src/documentation/links.trb` | 7 (the compiler has to import `std/uri`) | later |
 | 11 | **`std/identifier`.** `Identifier`, `Uuid`, `Ulid`, `IdentifierError`, the `urn:uuid:` bridge | `std/identifier/*` | `std/random` (`docs/design/RANDOM.md`) | blocked |
-| 12 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage` | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | gap 10 and `docs/design/CONCURRENCY.md`'s cancellation slice | blocked |
+| 12 | **The driver layer.** `Schemes` in `std/uri`; `std/storage` with `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` over `std/fs` and `MemoryStorage` | `std/uri/src/*`, `std/storage/*`, `std/fs/src/lib.trb` for gap 13's `remove` | gap 10 and `docs/design/CONCURRENCY.md`'s cancellation slice | **done** (2026-09-27): asynchronous, with `list`, `delete` and `writeText`. S3 and WebDAV are packages of their own and later |
 
 **The prose.** `docs/standard-library/uri.md` and `docs/standard-library/ip.md` with slices 1 to 3,
 `docs/standard-library/http.md` and `network.md` with slice 4; later `docs/standard-library/identifier.md` and

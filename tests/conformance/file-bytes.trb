@@ -1,0 +1,66 @@
+/**
+ * **The bytes of a whole file, synchronously and as a task.** `File.readBytes` and `File.writeBytes` read and write
+ * every byte from 0 to 255 without a task - what a tool, a test or the top level of a program needs, and what the
+ * package manager reads its archives with. `File.read` is the same read on the blocking pool, and `File.write` fills a
+ * new file from a source: the file is the `Sink` that `fill` writes into, handed to a `var` parameter of the trait,
+ * which both back ends box because a file has an identity. The same happens where a program hands its own `var` file
+ * to `into`.
+ *
+ * Everything happens in a new directory in the system's directory for temporary files, which the program removes
+ * again.
+ */
+use File, IoError from "std/fs"
+use Source from "std/stream"
+
+fn everyByte(): List<UInt8> {
+  var bytes: List<UInt8> = []
+  for value in 0..256 {
+    bytes.append UInt8.tryFrom(value).expect("a byte")
+  }
+  bytes
+}
+
+fn synchronous(directory: String): Result<Void, IoError> {
+  const path = "{directory}/every"
+  File.writeBytes(path, everyByte())?
+  const read = File.readBytes(path)?
+  print "{read.length()} bytes read back, the same: {read == everyByte()}"
+  const metadata = File.metadata(path)?
+  print "the size on the disk: {metadata.size}"
+  File.writeBytes(path, [])?
+  const empty = File.readBytes(path)?
+  print "empty: {empty.isEmpty()}"
+  match File.readBytes("{directory}/missing") {
+    Ok(_) => print "a missing file was read"
+    Fail(problem) => print "a missing file fails, naming it: {problem.path.endsWith("/missing")}"
+  }
+  Ok void
+}
+
+fn streamed(directory: String): Task<Result<Void, IoError>> {
+  const chunks: List<List<UInt8>> = [[104, 101, 108], [108, 111, 10]]
+  File.write("{directory}/filled", Source.from(chunks)).await()?
+  const filled = File.readText("{directory}/filled")?
+  print "filled: {filled.trim()}"
+  var target = File.create("{directory}/into")?
+  var source: Source<List<UInt8>, IoError> = Source.from chunks
+  source.into(target).await()?
+  const poured = File.readText("{directory}/into")?
+  print "into a var file: {poured.trim()}"
+  File.writeBytes("{directory}/every", everyByte())?
+  const read = File.read("{directory}/every").await()?
+  print "read as a task: {read.length()} bytes, the same: {read == everyByte()}"
+  Ok void
+}
+
+const directory = File.createTemporaryDirectory(prefix: "conformance-bytes-").expect("a directory")
+match synchronous(directory) {
+  Ok(_) => void
+  Fail(problem) => print "error: {problem.message}"
+}
+match streamed(directory).await() {
+  Ok(_) => void
+  Fail(problem) => print "error: {problem.message}"
+}
+File.removeDirectory(directory).expect("the directory removed")
+print "removed: {!File.exists(directory)}"

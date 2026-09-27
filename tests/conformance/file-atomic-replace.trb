@@ -1,0 +1,57 @@
+/**
+ * **A file replaced whole or not at all, and the tree around it.** `File.writeBytesAtomically` writes into a new file
+ * beside the target, flushes it and renames it over the target, so the directory never holds half a file and never
+ * keeps the staging file - on success or on failure. `rename` replaces what is at its target, `copy` takes the content
+ * and the permissions, `remove` takes one entry and `removeDirectory` a whole tree; the entries are listed after every
+ * step, which is what shows that nothing was left behind.
+ *
+ * Everything happens in a new directory in the system's directory for temporary files, which the program removes
+ * again.
+ */
+use File, IoError, Permissions from "std/fs"
+
+fn replacing(directory: String): Result<Void, IoError> {
+  const path = "{directory}/index"
+  File.writeTextAtomically(path, "first")?
+  print "created: {File.readText(path)?}, entries {File.list(directory)?}"
+  File.setPermissions(path, Permissions(0b110_100_000))?
+  const before = File.metadata(path)?
+  File.writeBytesAtomically(path, [115, 101, 99, 111, 110, 100])?
+  const after = File.metadata(path)?
+  print "replaced: {File.readText(path)?}, entries {File.list(directory)?}"
+  print "the permissions kept: {before.permissions == after.permissions}, writable: {after.permissions.writable()}"
+  match File.writeTextAtomically("{directory}/missing/index", "never") {
+    Ok(_) => print "a file in a missing directory was written"
+    Fail(_) => print "a missing directory fails, entries {File.list(directory)?}"
+  }
+  Ok void
+}
+
+fn moving(directory: String): Result<Void, IoError> {
+  File.writeText("{directory}/draft", "draft")?
+  File.rename("{directory}/draft", "{directory}/index")?
+  print "renamed over it: {File.readText("{directory}/index")?}, entries {File.list(directory)?}"
+  File.copy("{directory}/index", "{directory}/copy")?
+  print "copied: {File.readText("{directory}/copy")?}, entries {File.list(directory)?}"
+  File.createDirectory("{directory}/tree/inner")?
+  File.writeText("{directory}/tree/inner/leaf", "leaf")?
+  print "walked: {File.walk(directory)?}"
+  File.remove("{directory}/copy")?
+  File.removeDirectory("{directory}/tree")?
+  print "removed: entries {File.list(directory)?}"
+  print "removing it again is no failure: {File.removeDirectory("{directory}/tree").isOk()}"
+  print "removing a missing file is one: {File.remove("{directory}/copy").isError()}"
+  Ok void
+}
+
+const directory = File.createTemporaryDirectory(prefix: "conformance-replace-").expect("a directory")
+match replacing(directory) {
+  Ok(_) => void
+  Fail(problem) => print "error: {problem.message}"
+}
+match moving(directory) {
+  Ok(_) => void
+  Fail(problem) => print "error: {problem.message}"
+}
+File.removeDirectory(directory).expect("the directory removed")
+print "removed: {!File.exists(directory)}"

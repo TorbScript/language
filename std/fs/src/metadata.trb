@@ -1,0 +1,116 @@
+/**
+ * What `File.metadata` answers about a path: [Metadata], with its [FileKind] and its [Permissions].
+ */
+
+use Timestamp from "std/time"
+
+/** What a path names. */
+public type FileKind with Show, Equals, Hash {
+  /** A regular file: bytes with a length. */
+  case File
+  case Directory
+  /**
+   * A symbolic link - on Windows a junction as well - which only `File.linkMetadata` answers: `File.metadata` follows
+   * it to what it points at.
+   */
+  case SymbolicLink
+  /** A device, a pipe, a socket: something that is none of the three. */
+  case Other
+}
+
+/**
+ * The permission bits of a file, the way POSIX writes them: read, write and execute for the owner, the group and
+ * everybody else - `0b111_101_101`, which is `0o755` - plus the set-id and sticky bits above them.
+ *
+ * Windows has one bit of its own, read-only, and the bits are made up from it the way its C library does: everybody may
+ * read, everybody may write unless the file is read-only, and a directory or a program (`.exe`, `.com`, `.bat`,
+ * `.cmd`) may be executed. Setting them there sets read-only where the owner's write bit is clear, and nothing else.
+ *
+ * # Examples
+ *
+ *     const permissions = Permissions 0b110_100_000
+ *     print permissions
+ *     print permissions.writable()
+ *     // prints rw-r-----
+ *     // prints true
+ */
+public type Permissions with Show, Equals, Hash {
+  /** The bits, `0b111_111_111_111` at most. */
+  mode: Int
+
+  /** Whether the owner may read it. */
+  fn readable(): Bool {
+    mode & 0b100_000_000 != 0
+  }
+
+  /** Whether the owner may write it: on Windows, whether it is not read-only. */
+  fn writable(): Bool {
+    mode & 0b010_000_000 != 0
+  }
+
+  /** Whether the owner may execute it - a directory: enter it. */
+  fn executable(): Bool {
+    mode & 0b001_000_000 != 0
+  }
+
+  /** The same permissions with the owner's write bit set, or cleared where `writable` is false. */
+  fn withWritable(writable: Bool): Self {
+    if writable {
+      Self(mode | 0b010_000_000)
+    } else {
+      Self(mode & ~0b010_010_010)
+    }
+  }
+
+  /** The nine letters `ls -l` shows: `rwxr-xr-x`. */
+  fn show(): String {
+    const letters = ["r", "w", "x"]
+    var text = ""
+    var bit = 0b100_000_000
+    var index = 0
+    while bit > 0 {
+      text = text + (if mode & bit != 0 { letters[index % 3] } else { "-" })
+      bit = bit >> 1
+      index = index + 1
+    }
+    text
+  }
+}
+
+/**
+ * What a path is, how large, when it was last written, and who may do what with it.
+ *
+ * # Examples
+ *
+ *     use File from "std/fs"
+ *
+ *     fn describe(path: String): String {
+ *       match File.metadata(path) {
+ *         Ok(found) => "{found.kind}, {found.size} bytes, written {found.modified}"
+ *         Fail(problem) => problem.show()
+ *       }
+ *     }
+ */
+public type Metadata with Show, Equals {
+  kind: FileKind
+  /** In bytes. Nothing a program can rely on for a directory (0 on Windows, a block's size elsewhere). */
+  size: Int
+  /** When its content was last written. */
+  modified: Timestamp
+  permissions: Permissions
+
+  /** Whether it is a regular file. */
+  fn isFile(): Bool {
+    kind == FileKind.File
+  }
+
+  /** Whether it is a directory. */
+  fn isDirectory(): Bool {
+    kind == FileKind.Directory
+  }
+
+  /** Whether it is a symbolic link, which only `File.linkMetadata` can answer. */
+  fn isSymbolicLink(): Bool {
+    kind == FileKind.SymbolicLink
+  }
+}

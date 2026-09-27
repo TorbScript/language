@@ -93,10 +93,16 @@ double torb_exponential_f64(double value);
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 /* File.close */
 void torb_file_close(torb_file **self);
+/* File.copy */
+bool torb_file_copy(torb_text path, torb_text to, torb_text *error);
 /* File.create */
 bool torb_file_create(torb_text path, torb_file **out, torb_text *error);
 /* File.createDirectory */
 bool torb_file_create_directory(torb_text path, torb_text *error);
+/* File.createSymbolicLink */
+bool torb_file_create_symbolic_link(torb_text path, torb_text target, torb_text *error);
+/* fileCreateTemporary */
+bool torb_file_create_temporary(torb_text path, torb_text prefix, bool directory, torb_text *out, torb_text *error);
 /* File.exists */
 bool torb_file_exists(torb_text path);
 /* fileFlush */
@@ -105,6 +111,8 @@ torb_task *torb_file_flush(torb_file *file);
 bool torb_file_is_directory(torb_text path);
 /* File.list */
 bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
+/* fileMetadata */
+bool torb_file_metadata(torb_text path, bool follow, int64_t *kind, int64_t *size, int64_t *modified, int64_t *mode, torb_text *failure);
 /* File.open */
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
 /* filePath */
@@ -113,12 +121,26 @@ torb_text torb_file_path(torb_file *file);
 torb_task *torb_file_read(torb_file *file, int64_t maximum);
 /* File.readAll */
 bool torb_file_read_all(torb_file **self, torb_text *out, torb_text *path, torb_text *error);
+/* fileReadBytes */
+bool torb_file_read_bytes(torb_text path, torb_list *into, torb_text *failure);
 /* File.readText */
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);
+/* File.remove */
+bool torb_file_remove(torb_text path, torb_text *error);
+/* File.rename */
+bool torb_file_rename(torb_text path, torb_text to, torb_text *error);
+/* fileReplace */
+bool torb_file_replace(torb_text path, torb_list bytes, torb_text *error);
+/* fileSetMode */
+bool torb_file_set_mode(torb_text path, int64_t mode, torb_text *error);
+/* File.symbolicLinkTarget */
+bool torb_file_symbolic_link_target(torb_text path, torb_text *out, torb_text *error);
 /* fileTakeRead */
 void torb_file_take_read(torb_file *file, torb_list *into);
 /* fileWrite */
 torb_task *torb_file_write(torb_file *file, torb_list bytes, int64_t from);
+/* fileWriteBytes */
+bool torb_file_write_bytes(torb_text path, torb_list bytes, torb_text *error);
 /* File.writeText */
 bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);
 /* Float64.floor */

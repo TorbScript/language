@@ -10,7 +10,8 @@ without C; `runtime/os/` holds one guarded file per family and `runtime/include/
 has `Environment` and `EnvironmentVariables`, `System` (without `bootTime`), `Directories` (the base six) and `OsError`,
 with the raw layers `windows/`, `linux/`, `macos/`, `posix/` and `bsd/` and the rule of `xdg/` (see "How slice 1
 landed" in section 10); `std/environment` is gone. `Process.executablePath()` in `std/process` still answers on Windows
-and Linux only.
+and Linux only. `std/time` has `Timestamp` since 2026-09-27 (section 4, built for the metadata of `std/fs`), so
+`System.bootTime()` waits for its slice and no longer for a type.
 
 **An operating-system branch is a `match`, and the compiler decides it.** That is the whole design of `std/os`.
 Operating systems differ and always will, so the language does not hide the branch in C or in a build file: it is
@@ -565,9 +566,9 @@ contents of a file, never starts or ends a program, and never does path arithmet
 | `std/core` | the target constants: `OperatingSystem`, `Architecture`, `ByteOrder` and their `current` | anything that asks the machine |
 | `std/os` | identity and version, processors, memory, volumes, network interfaces, the environment, the user, well-known directories, what the machine knows *about* the current process (id, parent, executable, working directory, uptime, resources, limits) | files (`std/fs`), running programs (`std/process`), paths (`std/path`) |
 | `std/process` | what a program *does* with processes: its arguments, `exit`, starting and running children (with the environment they get), and signals | information about the current process, which moves to `std/os` |
-| `std/fs` | the contents of files and directories, existence, creation, listing | how full a volume is, which is `std/os` (a volume is not a file) |
+| `std/fs` | the contents of files and directories, existence, creation, listing, removal, renaming, copying, metadata and permissions, symbolic links, temporary files and directories (2026-09-27) | how full a volume is, which is `std/os` (a volume is not a file) |
 | `std/path` | `Path` as a value | where a directory is by convention, which is `std/os` answering a `Path` |
-| `std/time` | `Duration`, `Instant`, and (proposed, section 9) `Timestamp` | uptime and boot time, which `std/os` answers in those types |
+| `std/time` | `Duration`, `Instant`, and `Timestamp` (built 2026-09-27, with the metadata of `std/fs`) | uptime and boot time, which `std/os` answers in those types |
 | `std/number` | `ByteSize` (section 4), a quantity like `Duration` | — |
 | `std/network` (new, pure) | `IpAddress`, `Ipv4Address`, `Ipv6Address`, `MacAddress`, `Subnet` as values | interfaces (`std/os`), sockets (a future `std/socket`) |
 
@@ -673,7 +674,9 @@ public type Timestamp with Show, Compare, Subtract<Timestamp, Duration>, Add<Dur
 }
 ```
 
-Until it exists, `System.bootTime()` is not declared and `System.uptime()` is the answer. The boot time is not the
+It exists since 2026-09-27 - `fromUnixNanoseconds`, `unixNanoseconds()`, RFC 3339 in UTC as its `show()`, and the
+arithmetic with a `Duration` - because `File.metadata` answers when a file was last written in it. `System.bootTime()`
+is still not declared, and `System.uptime()` is the answer until its slice. The boot time is not the
 wall clock minus the uptime computed by a caller, because the two readings are not taken at one moment and the wall
 clock may have jumped since boot; each system has a stored boot time (`kern.boottime`, `btime` in `/proc/stat`), and
 Windows is the exception that does compute it (`GetTickCount64` against the system time), which its arm says.
@@ -1284,6 +1287,14 @@ public type Directories {
 | `cache` | `$XDG_CACHE_HOME`, else `~/.cache` | `FOLDERID_LocalAppData` | `~/Library/Caches` |
 | `temporary` | `$TMPDIR`, else `/tmp` | `GetTempPath2W` (`GetTempPathW` before Windows 11) | `$TMPDIR`, else `confstr(_CS_DARWIN_USER_TEMP_DIR)` |
 | `documents` and the rest | `XDG_DOCUMENTS_DIR` and its siblings in `user-dirs.dirs`, else `~/Documents` | `FOLDERID_Documents`, `FOLDERID_Downloads`, … | `~/Documents`, `~/Downloads`, … |
+
+**`std/fs` creates its temporary entries in the same directory, found without this module.**
+`File.createTemporaryFile` and `File.createTemporaryDirectory` default to the directory `temporary` answers - the
+same rules, `GetTempPath2W`, `$TMPDIR`, `confstr(_CS_DARWIN_USER_TEMP_DIR)`, `/tmp` - but ask `runtime/platform.c`
+for it rather than calling `Directories.temporary()`, because the package manager reaches them and the compiler's own C
+has to be the same for every target: code the compiler reaches may not branch on `OperatingSystem.current` or call a
+native of one system (`compiler/src/cli/upgrade.trb`, `torbHome`). The rules are written twice, once per layer, and
+this table is where both are held to.
 
 **The base, not a per-application directory.** `Directories.cache().joined("torb")` is one join, and it is the same
 join on every system; a helper that also took an application and an organization name would have to decide how
