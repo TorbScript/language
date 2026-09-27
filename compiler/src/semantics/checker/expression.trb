@@ -3460,10 +3460,15 @@ fn noteRedundantWrap(var checker: Checker, expression: Expression, found: TypeId
     return
   }
   const value = arguments[0].value
-  if !isSelfTyped(checker, value) {
+  const wanted = resolveType checker, annotation
+  // `Some(.LittleEndian)`: the short case finds the same case without the `Some`, unless the wrapper has one so named
+  if const Some(name) = shortCaseOf(value) {
+    if lookupStaticMember(checker, wanted, name).isSome() {
+      return
+    }
+  } else if !isSelfTyped(checker, value) {
     return
   }
-  const wanted = resolveType checker, annotation
   if !sameType(checker.types, resolveType(checker, found), wanted) {
     return
   }
@@ -3490,8 +3495,22 @@ fn hasTypeArguments(checker: Checker, owner: TypeId): Bool {
   match checker.types.form(owner) {
     .Nominal(_, arguments) => !arguments.isEmpty()
     // `Set.of()`: a trait named as the owner of a static member is a trait type
-    .Traits(bounds) => bounds.any({ hasTypeArguments(checker, _) })
+    .Traits(bounds) => bounds.any({ hasTypeArguments checker, _ })
     _ => false
+  }
+}
+
+/** The name of a short case written as a value, `.LittleEndian` or `.Circle(1.0)`. */
+fn shortCaseOf(value: Expression): String? {
+  match value.kind {
+    .ImplicitMember(name) => Some name.text
+    .Call(callee, _, _) => {
+      if const .ImplicitMember(name) = callee.kind {
+        return Some name.text
+      }
+      None
+    }
+    _ => None
   }
 }
 

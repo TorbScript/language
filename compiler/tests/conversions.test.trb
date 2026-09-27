@@ -449,6 +449,18 @@ group "the wrap into `Some` and `Ok`" {
     assert(found.adaptationsOf(".Node(1)") == ["wrap into Option<Tree>"])
   }
 
+  test "a short case where an optional parameter expects its type names the case of the inner type, and wraps" {
+    const source = "type ByteOrder \{\n  case BigEndian\n  case LittleEndian\n\}\n\n"
+      + "fn read(order: ByteOrder? = None): Int \{\n  1\n\}\n\n"
+      + "fn ordered(): Result<ByteOrder, String> \{\n  .BigEndian\n\}\n\n"
+      + "fn probe(): Int \{\n  read(order: .LittleEndian)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf(".LittleEndian") == "ByteOrder")
+    assert(found.adaptationsOf(".LittleEndian") == ["wrap into Option<ByteOrder>"])
+    assert(found.adaptationsOf(".BigEndian") == ["wrap into Result<ByteOrder, String>"])
+  }
+
   test "an argument, an element and the result of a closure wrap as well" {
     const source = "fn describe(value: Int?): Int \{\n  value ?? 0\n\}\n\n"
       + "fn probe() \{\n  const shown = describe(7)\n  const holes: List<Int?> = [8, None]\n"

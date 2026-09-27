@@ -288,6 +288,26 @@ group "redundant-wrap" {
     expectText fixed(source, wrapFindings(source)), expected
   }
 
+  test "a short case inside a written `Some` is found, unless the `Option` has a case of that name itself" {
+    const source = [
+      "type ByteOrder \{",
+      "  case BigEndian",
+      "  case LittleEndian",
+      "  case None",
+      "\}",
+      "",
+      "fn read(order: ByteOrder? = None): Int \{",
+      "  1",
+      "\}",
+      "",
+      "print read(order: Some(.LittleEndian))",
+      "print read(order: Some(.None))",
+      "",
+    ].joined(separator: "\n")
+    assert(wrapTexts(source) == ["Some(.LittleEndian)"])
+    assert fixed(source, wrapFindings(source)).contains("print read(order: .LittleEndian)")
+  }
+
   test "a case the value needs is kept: a nested one, `Ok(void)`, `None` and a generic call inside, and no expectation" {
     const source = [
       "fn same<Item>(value: Item): Item \{",
