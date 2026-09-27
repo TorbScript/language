@@ -172,7 +172,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
       Some(found) => found
       None => {
         printError "error: no test file (`*.test.trb`) below {options.paths.joined(", ")}"
-        return Ok buildFailedCode
+        return buildFailedCode
       }
     }
     return buildProgram tree, requested, options, checked, modules, normalizePath(options.output)
@@ -183,16 +183,16 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
       // A library builds nothing, which is no error; a library that is to be run is one
       if options.command == "run" {
         printError "error: {what}: there is nothing to run"
-        return Ok buildFailedCode
+        return buildFailedCode
       }
       if options.saysWhatItWrote {
         print "{what}: checked, nothing to build"
       }
-      return Ok 0
+      return 0
     }
     .Refused(message) => {
       printError "error: {message}"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   if programs.length() > 1 && (!options.output.isEmpty() || options.onlyC) {
@@ -201,15 +201,15 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     if options.command == "build" {
       printError "  `{flag}` is for one program"
     }
-    return Ok buildFailedCode
+    return buildFailedCode
   }
   for program in programs {
     const code = buildProgram(tree, requested, options, checked, [program.module], program.binary)?
     if code != 0 {
-      return Ok code
+      return code
     }
   }
-  Ok 0
+  0
 }
 
 /** One program - or, in a test run, every test file as one - built into `binary`. */
@@ -225,14 +225,14 @@ fn buildProgram(
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const pool = match poolOfManifest(checked, modules[0], manifest) {
     Ok(found) => found
     Fail(problem) => {
       printError "error: {problem}"
-      return Ok buildFailedCode
+      return buildFailedCode
     }
   }
   const settings = match profileSettingsOf(checked, modules[0], manifest, options.profile) {
@@ -390,7 +390,7 @@ public fn poolOf(checked: Checked, entry: ModuleId): Result<(workers: Int, block
 public fn manifestOfEntry(checked: Checked, entry: ModuleId): Result<Manifest, String> {
   const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
   if package.directory.isEmpty() {
-    return Ok package.manifest
+    return package.manifest
   }
   manifestOfProject package.directory, package.manifest
 }
@@ -428,18 +428,18 @@ fn profileSettingsOf(
   }
   const name = profile.name()
   if manifest.configures(name) {
-    return Ok manifest.profileNamed(name)
+    return manifest.profileNamed name
   }
   const package = checked.program.workspace.packages[checked.program.graph.at(entry).package]
   if !package.directory.isEmpty() {
     for other in checked.program.workspace.packages {
       const isRoot = other.manifest.isWorkspace() && !other.directory.isEmpty() && other.directory != package.directory
       if isRoot && isInside(package.directory, other.directory) && other.manifest.configures(name) {
-        return Ok other.manifest.profileNamed(name)
+        return other.manifest.profileNamed name
       }
     }
   }
-  Ok ProfileSettings.named(name)
+  ProfileSettings.named name
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------

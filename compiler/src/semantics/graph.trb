@@ -257,10 +257,10 @@ public fn programOfEntry(package: Package, path: String): String? {
   }
   if path == joinPath(package.directory, defaultEntry) {
     const renamed = package.manifest.programs.find({ _.renamesDefault() })
-    return Some(renamed.map({ _.name }) ?? shortNameOf(package.name, package.directory))
+    return renamed.map({ _.name }) ?? shortNameOf(package.name, package.directory)
   }
   const line = package.manifest.programs.find({ !_.renamesDefault() && joinPath(package.directory, _.entry) == path })?
-  Some line.name
+  line.name
 }
 
 /**
@@ -394,7 +394,7 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
     return Import.Entry path, program
   }
   // `"owner/name/main"` names a program whether or not the file is there (docs/design/PROJECT.md section 3)
-  if segments.length() > 2 && segments.last() == Some("main") {
+  if segments.length() > 2 && segments.last() == "main" {
     return Import.Entry path, shortNameOf(package.name, package.directory)
   }
   if const Some(id) = graph.moduleAt(target) {
