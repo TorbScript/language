@@ -31,18 +31,22 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   (archives the old one to `../torbscript-seeds/`, the five newest kept) only after a merge whose tier A is green -
   never by copying files into `seed/`, which skips the archive. Never delete an archive. A missing or broken seed makes
   `tools/bootstrap.sh` fall back to the newest archived seed that still builds the compiler.
-- Seeds are also **published**: `program.c` plus the runtime of its commit, as `torb-seed-<commit>.tar.gz` on the GitHub
-  release `seeds`, listed newest first in its `seeds.txt`. `sh tools/fetch-seed.sh [commit]` downloads one over HTTPS
-  (curl or wget, no `gh`), checks its SHA-256, compiles it with the local C compiler into `build/seed/torb`. Bootstrap
-  order: `$TORB_SEED`, `seed/`, `../torbscript-seeds/`, `build/seed/` - and with none of them it runs
-  `tools/fetch-seed.sh` itself (`TORB_SEED_FETCH=0` forbids that). CI and fresh clones bootstrap this way. The nightly
-  and every release publish the seed of main; Actions -> `seed` -> Run workflow publishes one at once
-  (`docs/contributing/releasing.md`).
+- The repository lives on the project's Forgejo, **git.torb.dev** (`torbscript/language`, remote `forgejo`, SSH on port
+  2223); its CI is `.forgejo/workflows/`, and GitHub (`origin`) is a push mirror whose one workflow,
+  `.github/workflows/portable.yml`, tests the targets the forge has no runner for (`docs/design/RELEASE.md` section 14).
+- Seeds are also **published**: `program.c` plus the runtime of its commit, as `torb-seed-<commit>.tar.gz` on the release
+  `seeds` of git.torb.dev, listed newest first in its `seeds.txt`. `sh tools/fetch-seed.sh [commit]` downloads one over
+  HTTPS (curl or wget, no `gh`) - from the forge, and from GitHub's old `seeds` release only for a seed the forge lacks -
+  checks its SHA-256, compiles it with the local C compiler into `build/seed/torb`. Bootstrap order: `$TORB_SEED`,
+  `seed/`, `../torbscript-seeds/`, `build/seed/` - and with none of them it runs `tools/fetch-seed.sh` itself
+  (`TORB_SEED_FETCH=0` forbids that). CI and fresh clones bootstrap this way. The nightly and every release publish the
+  seed of main; the forge's Actions -> `seed` -> Run workflow publishes one at once, and `sh tools/publish-seed.sh`
+  with `TORB_FORGE_TOKEN` by hand (`docs/contributing/releasing.md`).
 - A syntax change, a new native, a new driver flag the build uses, or renaming a std name the compiler looks up by
   string (`semantics/checker/wellknown.trb`, operator traits in `checker/expression.trb`, member lookups in
   `ir/lower/collection.trb`) takes two commits: teach both forms and refresh the seed, then migrate
   (`docs/design/COLLECTIONS.md` 6a, `docs/RUST-EXIT.md` 4.2). The published seed has to know the new form too before
-  the migration is pushed, or CI cannot bootstrap it: run the `seed` workflow after the first commit is on main.
+  the migration is pushed, or CI cannot bootstrap it: run the forge's `seed` workflow after the first commit is on main.
 
 ## Traps
 

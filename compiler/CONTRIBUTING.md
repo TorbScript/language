@@ -128,10 +128,19 @@ Conventional Commit that builds) or squashed into one commit, and `main` only mo
 change that needs a seed refresh stay two commits. `sh tools/check-commits.sh <base>` checks a range - no merge
 commit, every subject a Conventional Commit - and CI runs it on every push and pull request.
 
+**The forge.** The repository lives on the project's Forgejo, git.torb.dev (`torbscript/language`; the remote
+`forgejo`, SSH on port 2223). Its CI is `.forgejo/workflows/`, it holds the seeds and the releases, and its container
+registry cr.torb.dev holds the images. GitHub (`github.com/TorbScript/language`, the remote `origin`) is a push mirror
+of it: nothing is pushed there by hand once the mirror is set up, and its one workflow tests the targets the forge has
+no runner for yet (docs/design/RELEASE.md section 14). A pull request from a fork runs no CI on the forge; a
+maintainer pushes its branch into the repository to test it.
+
 **Landing.** `sh tools/land.sh` lands finished branches together: `prepare <name> <branch>...` picks their commits onto
 a landing worktree beside the checkout, `build` bootstraps it and writes the generated files (the natives table, the docs
 indexes, the skill) and the format again, `gates` runs both tiers on a gate slot of its own, and `publish` moves `main`
-there, refreshes and publishes the seed and pushes. A conflict in a generated file is never resolved by hand.
+there, refreshes the seed, publishes it to the forge (`TORB_FORGE_TOKEN`, a token of git.torb.dev that may write the
+releases) and pushes to the forge (`TORB_PUBLISH_REMOTES`, default `forgejo`). A conflict in a generated file is never
+resolved by hand.
 
 **The seed.** `seed/` holds `torb(.exe)` and `program.c`, is not in git, and exists only in the main checkout of this
 machine; a worktree has none and bootstraps with `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh` (a
@@ -143,14 +152,16 @@ by copying one of them into `seed/`. Never delete `seed/`, and never refresh it 
 
 **The published seed.** A checkout without `seed/` - a fresh clone, a CI runner - bootstraps from a *published* seed:
 `torb-seed-<commit>.tar.gz`, the compiler's `program.c` and the runtime of the same commit plus `build.sh`, an asset of
-the GitHub release `seeds`, whose `seeds.txt` lists every seed with its SHA-256, the newest first.
+the release `seeds` on git.torb.dev, whose `seeds.txt` lists every seed with its SHA-256, the newest first.
 `sh tools/fetch-seed.sh` downloads the newest (or `sh tools/fetch-seed.sh <commit>` a named one) with curl or wget,
 checks the hash, compiles `program.c` with the local C compiler (`tools/build-seed.sh`, `$TORB_CC`) into
 `build/seed/torb`, and keeps it only when it checks a one-line program. `tools/bootstrap.sh` takes its seed from
 `$TORB_SEED`, `seed/`, the archives and `build/seed/`, in that order, and runs `tools/fetch-seed.sh` itself when there
-is none (`TORB_SEED_FETCH=0` forbids it). A private repository needs `GH_TOKEN` for the download. The nightly and every
-release publish the seed of main once linux-x64 passes tier A and tier B; the `seed` workflow (Actions -> seed -> Run
-workflow) publishes one at once, which is the second half of the rule below.
+is none (`TORB_SEED_FETCH=0` forbids it). A seed the forge does not list is looked for in GitHub's old `seeds` release,
+which needs `GH_TOKEN` while that repository is private; `sh tools/migrate-seeds.sh` copies those to the forge once. The
+nightly and every release publish the seed of main once linux-x64 passes tier A and tier B; the forge's `seed` workflow
+(Actions -> seed -> Run workflow) publishes one at once, which is the second half of the rule below, and
+`sh tools/publish-seed.sh` publishes one by hand.
 
 **Two commits for a breaking change.** The checkout builds from the seed, so the seed has to understand the sources. A
 syntax change, a new native, or renaming a std name the compiler looks up by string

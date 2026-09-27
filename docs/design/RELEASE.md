@@ -1,6 +1,7 @@
 # Releasing TorbScript
 
-**Status: planning; the CI and the release pipeline of section 13 are built and have not run yet** — this record plans
+**Status: planning; the CI and the release pipeline of section 13 are built, and since 2026-09-27 they run on the
+project's own forge at git.torb.dev (section 14)** — this record plans
 the public release of the language: what has to exist first, what a download contains, the website at **torb.dev** and
 the package registry at **packages.torb.dev**. Apart from section 13 and the package manager's client of section 7.13,
 no command, page, server or file described here exists yet, the domain serves nothing, and nothing has been registered, published or announced. Every statement about what the repository does today comes from section 1, which was measured on the
@@ -38,6 +39,7 @@ that does not block core work can be built now, in the order of section 10.
 - **[11. What this is not](#11-what-this-is-not)**
 - **[12. Open](#12-open)** — the questions for the owner
 - **[13. The release pipeline, as built](#13-the-release-pipeline-as-built)** — CI, the published seed, nightlies, releases, signing
+- **[14. The forge](#14-the-forge)** — git.torb.dev and cr.torb.dev, runners, the tokens of Authorized Integrations, GitHub as a mirror, security
 
 ---
 
@@ -280,7 +282,9 @@ No beta channel before 1.0: with a minor release every six weeks the nightly is 
   compares the archives, which also means archives carry fixed timestamps, sorted entries and fixed modes.
 - **Signatures**: `SHA256SUMS` plus a keyless Sigstore signature made in CI with the pipeline's OIDC identity, verifiable
   with `cosign verify-blob` against the identity of the release workflow; GitHub's artifact attestations are the same
-  mechanism. A long-lived signing key held by a person is exactly what keyless signing avoids.
+  mechanism. A long-lived signing key held by a person is exactly what keyless signing avoids. **Superseded on the
+  forge** (section 13, "Signing"): Sigstore's certificate authority trusts no identity git.torb.dev issues, so the
+  forge signs with a cosign key of the project, held as a secret of the repository.
 - **Platform signing** is a question of money and not of design (question 7): macOS notarization needs a paid Apple
   developer membership, Authenticode needs a paid certificate or signing service. Both matter only for browser downloads
   and for the `.pkg`/MSI installers; every arm64 macOS binary must carry at least an ad hoc signature, which the pipeline
@@ -333,11 +337,15 @@ It has them since 2026-09-27 (`readBytes`, `rename`, `copy`, symbolic links); mo
 **Package manager channels** (winget, Scoop, a Homebrew tap - the preview's choice, section 5's table): rendered from
 `tools/homebrew/torb.rb.template` and `tools/scoop/torb.json.template` by `tools/render-package-manifests.sh` (its
 placeholders filled from the release's own `SHA256SUMS`, nothing recomputed), and pushed by the `publish-packages` job
-of `release.yml`, after the GitHub release, behind the same `release` environment. Each of the three steps (Homebrew,
-Scoop, winget via `wingetcreate update ... --submit`) reads its own token from a secret and skips itself, in its own
-script, where that secret is empty - the `secrets` context cannot be read in a step's `if:` (a GitHub Actions
-restriction), and a channel nobody has set up yet must never hold back the release. Nightlies publish nothing here:
-`nightly.yml` does not call this job. What the owner sets up once for these three is
+of `release.yml`, after the release. Since the move to the forge (section 14) every URL in them is
+`https://torb.dev/download/<version>/...`, where release-sync places each release, never a forge's; the tap and the
+bucket are repositories of the forge (`torbscript/homebrew-tap`, `torbscript/scoop-bucket`), pushed with the token of
+the Authorized Integration that publishes the release and mirrored to GitHub, where `brew tap torbscript/tap` finds the
+tap without a URL. A manifest is rendered only when the release has every archive it names - the formula needs
+macos-arm64, linux-x64 and linux-arm64, the bucket windows-x64 - and a channel whose repository does not exist yet is
+skipped: a channel must never hold back the release. winget stays a manual step while the forge has no Windows runner
+(`wingetcreate` runs on Windows only); the job prints the command. Nightlies publish nothing here: `nightly.yml` does not
+call this job. What the owner sets up once for these three is
 [docs/contributing/releasing.md](../contributing/releasing.md).
 
 **Tested**: `sh -n tools/install.sh` (shellcheck where the machine has it), a full run of `install.sh` against a
@@ -738,28 +746,34 @@ to close that gap:
 | CI pushes over SSH or `rsync` at release time | no server-side service | a secret that lets a GitHub Actions run write to production, which is what a compromised action or a compromised dependency of one would reach for first; the exhausted Actions budget (this task's own instructions) makes it worse, not better, to add a job that must always run |
 | Make the repository public now | the redirect keeps working, nothing to build | not this record's call, and orthogonal to shipping a preview - question 8 of section 12 |
 
-**`tools/release-sync`** is that pull: a TorbScript program (`std/http` for both the webhook server and the GitHub API
+**`tools/release-sync`** is that pull: a TorbScript program (`std/http` for both the webhook server and the forge's API
 client, `std/json` for the payload and the API's response), built and run as its own container
-(`tools/deploy/Dockerfile.release-sync`). It:
+(`tools/deploy/Dockerfile.release-sync`). Since 2026-09-27 it pulls from the forge, Forgejo at git.torb.dev (section 14),
+and from GitHub only where `RELEASE_SYNC_FORGE=github` says so; the two differ in four places, which are the members of
+`Forge` in `tools/release-sync/src/forge.trb`. It:
 
-1. Listens on `/webhook` for GitHub's "release published" event, its `X-Hub-Signature-256` checked (HMAC-SHA256 over
-   the raw body, computed by shelling out to `openssl dgst -sha256 -hmac`, compared to the header) against a secret
-   only this service and the GitHub webhook configuration know.
-2. Never trusts the webhook's own asset list: it re-fetches the release from the API with a read-only token
-   (`GET /repos/<owner>/<name>/releases/tags/<tag>`, releasing.md's own private-repository path), which is also what a
-   periodic poll (`RELEASE_SYNC_POLL_SECONDS`, default 300) calls for the newest stable release, in case a webhook
-   delivery was ever missed.
-3. Downloads every asset (`curl`, with `Accept: application/octet-stream` and the token), verifies every archive
-   against `SHA256SUMS` (`std/digest` over the file's chunks) and verifies `SHA256SUMS.sigstore.json` with `cosign verify-blob` against the
-   identity of the workflow that made the release (`release.yml`'s for a tagged version, `nightly.yml`'s for a
-   nightly) - **refusing when `cosign` is not on the machine at all**, the same as a signature that does not verify:
-   a release this program cannot check is not placed as if it had been.
+1. Listens on `/webhook` for the forge's "release published" event, its signature checked - `X-Forgejo-Signature`, the
+   bare hex of the HMAC-SHA256 over the raw body, or GitHub's `X-Hub-Signature-256`, `sha256=<hex>`, which Forgejo
+   sends as well - computed by shelling out to `openssl dgst -sha256 -hmac` and compared without stopping at the first
+   digit that differs, against a secret only this service and the webhook's configuration know. It answers `202` at
+   once and syncs in a task of its own: the forge gives a delivery seconds, a download takes longer.
+2. Never trusts the webhook's own asset list: it re-fetches the release from the API (`GET
+   /api/v1/repos/<owner>/<name>/releases/tags/<tag>` on Forgejo, `/repos/...` on GitHub), with a read-only token only
+   while the repository is private, which is also what a periodic poll (`RELEASE_SYNC_POLL_SECONDS`, default 300)
+   calls for the newest stable release (`.../releases/latest`), in case a webhook delivery was ever missed. The
+   workflows publish a release as a draft first and make it public once its last asset is uploaded, which is when the
+   forge sends "published" - measured on Forgejo 16.0.5: creating the draft and uploading send nothing.
+3. Downloads every asset into the container's own `/tmp` (`curl`: Forgejo's `browser_download_url`, GitHub's asset API
+   URL with `Accept: application/octet-stream`), verifies every archive against `SHA256SUMS` (`std/digest` over the file's chunks) and verifies
+   `SHA256SUMS.sig` with `cosign verify-blob --key` against the project's public key, mounted at
+   `/etc/release-sync/cosign.pub` (section 13, "Signing"; a release of GitHub: `SHA256SUMS.sigstore.json` against the
+   identity of the workflow that made it) - **refusing when `cosign` or the key is not on the machine at all**, the same
+   as a signature that does not verify: a release this program cannot check is not placed as if it had been.
 4. Only then moves the files into `<root>/download/<version>/` (`File.rename`), rewrites
    `<root>/download/versions.txt` whole or not at all (`File.writeTextAtomically`; that version's old line, if any,
    replaced; put at the top) and, for a stable release, repoints the `<root>/download/latest` symlink - a new link
    beside it renamed over the old one, so `latest` is never missing, which `ln -sfn` could not promise. A nightly has no
    "latest", only `/docs/nightly/` on the site (section 6), which this program does not touch.
-
 **Why `curl` and not `std/http`'s body all the way to disk**: the download is the one step left outside the language,
 and `File.write(path, response.body)` is its replacement once `std/http`'s client follows the redirects GitHub answers
 an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` on 2026-09-27, when `std/fs` gained
@@ -767,38 +781,43 @@ an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` 
 `curl` and `cosign` are exactly the tools `tools/fetch-seed.sh` already assumes exist on every target, so
 `release-sync`'s one target (its own container) is not a new assumption.
 
-**Tested**: `tools/release-sync/tests/verify.test.trb` covers the pure decisions - which webhook actions to act on,
-whether a signature matches, reading a hash out of `SHA256SUMS` - and `tests/place.test.trb` the placement and the
-hashing in a temporary directory; the network and `cosign` are not, for the same reason `torb upgrade`'s are not
-(section 5): no packaged release and no second machine exist yet to run them against for real.
-
+**Tested**: `tools/release-sync/tests` covers the pure decisions - which webhook actions to act on, which signature a
+request claims and whether it matches, reading a hash out of `SHA256SUMS`, the release JSON of both forges, the
+addresses and headers each is asked with - as ordinary TorbScript tests, and `tests/place.test.trb` the placement and
+the hashing in a temporary directory. The whole program ran once against a Forgejo
+16.0.5 in a local container (2026-09-27): a release published the way `release.yml` publishes one, with `SHA256SUMS`
+signed by a throwaway cosign key, was placed through the webhook, with `versions.txt` and `latest`; a release whose
+archive did not match `SHA256SUMS` and one whose signature did not match were refused and placed nothing.
 ### The root server and the write service, as built (2026-09-27)
 
 **Decided by the owner (2026-09-27): the root server runs behind his existing Traefik, from ready-made images he pulls
-from GHCR.** Nothing is built on the server and nothing in the deployment opens a port or asks for a certificate: the
+from a registry** - GHCR when this was built, the forge's own `cr.torb.dev` since the same day's move (section 14), in
+the compose stack that runs the forge or beside it. Nothing is built on the server and nothing in the deployment opens a port or asks for a certificate: the
 containers join Traefik's network and claim their host and path with labels.
 
 ```text
 existing Traefik (TLS, Let's Encrypt; its network, entrypoint and resolver named in .env)
- ├─ torb.dev, www.torb.dev          ->  ghcr.io/torbscript/site          install.sh, install.ps1, /docs/<version>/reference,
+ ├─ torb.dev, www.torb.dev          ->  cr.torb.dev/torbscript/site      install.sh, install.ps1, /docs/<version>/reference,
  │                                                                       /download/... from /srv/torb/download (read-only)
- ├─ torb.dev/webhook                ->  ghcr.io/torbscript/release-sync  writes /srv/torb/download
- ├─ packages.torb.dev               ->  ghcr.io/torbscript/site          /index, /archives, /docs from /srv/torb/registry (read-only)
- └─ packages.torb.dev/api           ->  ghcr.io/torbscript/registry      writes /srv/torb/registry, /srv/torb/database, the mirror
+ ├─ torb.dev/webhook                ->  cr.torb.dev/torbscript/release-sync writes /srv/torb/download
+ ├─ packages.torb.dev               ->  cr.torb.dev/torbscript/site      /index, /archives, /docs from /srv/torb/registry (read-only)
+ └─ packages.torb.dev/api           ->  cr.torb.dev/torbscript/registry  writes /srv/torb/registry, /srv/torb/database, the mirror
     litestream (sidecar)                  /srv/torb/database/registry.db -> object storage, continuously
     backup (restic, host cron)            /srv/torb/{registry,download,index-mirror} -> object storage, nightly
 ```
 
-**The images** are built by `.github/workflows/images.yml`, which `release.yml` calls once a release is published
-(tags `<version>` and `latest`) and `nightly.yml` once a nightly is (tags `nightly-YYYYMMDD` and `nightly`): three
-images, each for `linux/amd64` and `linux/arm64`, pushed to `ghcr.io/torbscript/` with the job's `GITHUB_TOKEN`
-(`packages: write`), with the OCI labels `source`, `revision`, `version`, `licenses` (MIT) and `url`, and signed with
-`cosign sign` keyless - the identity is `images.yml` of this repository at the tag's or `main`'s ref:
+**The images** are built by `.forgejo/workflows/images.yml`, which `release.yml` calls once a release is published
+(tags `<version>` and `latest`) and `nightly.yml` once a nightly is (tags `nightly-YYYYMMDD` and `nightly`), and which
+runs by hand for a published release: three images, pushed to `cr.torb.dev/torbscript/` with the token of the
+Authorized Integration `torbscript-images` as the password of `docker login` (section 14), with the OCI labels
+`source`, `revision`, `version`, `licenses` (MIT) and `url`, and signed with `cosign sign --key`, the project's key
+(section 13, "Signing"). They are `linux/amd64`; `linux/arm64` joins once a release carries a linux-arm64 toolchain -
+the build stage runs the toolchain of the image's own architecture - and QEMU registers in the runner's Docker, which
+the workflow tries and reports. The images are public, so the server pulls them without a login:
 
 ```sh
-cosign verify ghcr.io/torbscript/registry:0.2.0 \
-  --certificate-identity-regexp '^https://github.com/TorbScript/language/.github/workflows/images.yml@' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+cosign verify --key https://git.torb.dev/torbscript/language/raw/branch/main/tools/deploy/cosign.pub \
+  --insecure-ignore-tlog=true cr.torb.dev/torbscript/registry:0.2.0
 ```
 
 | Decision | Why |
@@ -809,6 +828,7 @@ cosign verify ghcr.io/torbscript/registry:0.2.0 \
 | `nginx.conf` splits by host name: `torb.dev` is the site and the downloads, `packages.torb.dev` the registry's files | the old configuration served `/docs/` from the registry's directory for both hosts |
 | cosign in the `release-sync` image is checked against the SHA-256 its release lists | closes the "TODO(owner)" the first Dockerfile carried |
 | Images are signed, not attested | the same reason as section 13's `SHA256SUMS`: attestations need GitHub Enterprise Cloud while the repository is private, and can be added later without changing a pull |
+| The build runs once without pushing, and is then pushed from the builder's cache with a token asked for right before | the token of an integration lives an hour (`ID_TOKEN_EXPIRATION_TIME`), and an arm64 build under QEMU can take longer |
 
 **`tools/deploy/compose.example.yml`** (copied to `compose.yml`, never `docker-compose.yml`) runs `site`, `release-sync`,
 `registry`, the `litestream` sidecar and a `backup` service in the profile `backup`. No Traefik service: the
@@ -834,7 +854,7 @@ and reads a thirtieth of the repository back every night.
 | Recovery | archive, then index, then database row; the index is the truth of what is published | a crash leaves at worst an archive nothing names, written over by the next attempt, or an index entry without its row, which the next attempt repairs |
 | Accounts | created by the operator's token (`REGISTRY_ADMINISTRATOR_TOKEN`); an account is a person owner of the same name; organisations with `owner` and `publisher` members | sign-in through GitHub, GitLab, Codeberg or a passkey is the web front's, which does not exist yet |
 | Tokens | `torb_` and 256 bits of the system's randomness, stored as SHA-256; scoped to owners, packages (`acme/*`), actions (`publish`, `yank`, `owners`, `tokens`) and up to 365 days; a token never gives an action its maker lacks | section 7.6, "a stolen token"; a high-entropy token needs no slow hash |
-| Trusted publishing | GitHub Actions: `RS256` verified in TorbScript (`src/rsa.trb`, Montgomery over 16-bit limbs) against the key set fetched for every exchange; issuer, audience `packages.torb.dev`, lifetime with a minute's leeway; then repository, workflow file (`job_workflow_ref`) and environment against the package's publishers; the answer is a token of one package for 15 minutes. Owners may configure it before the first release, and `required` switches tokens off | crates.io's, PyPI's and JSR's model; no new native, and both back ends compute the same bits |
+| Trusted publishing | GitHub Actions, and since 2026-09-27 the Forgejo Actions of the forges `REGISTRY_FORGEJO_ISSUERS` names (git.torb.dev; section 14): the token's `iss` picks the issuer, whose key set is fetched for every exchange (GitHub's at `/.well-known/jwks`, a Forgejo's through its discovery document); `RS256` verified in TorbScript (`src/rsa.trb`, Montgomery over 16-bit limbs); issuer, audience `packages.torb.dev`, lifetime with a minute's leeway; then the package's publishers - `owner/name`, the workflow file (`job_workflow_ref`) and the environment on GitHub, `<host>/owner/name` and the workflow file (`workflow`) on a Forgejo, whose tokens name no environment, and a ref (`refs/tags/v*`) on either; the answer is a token of one package for 15 minutes, exchanged at `/api/1/trusted-publishing`. Owners may configure it before the first release, and `required` switches tokens off | crates.io's, PyPI's and JSR's model; no new native, and both back ends compute the same bits |
 | Confusing names | a skeleton - hyphens removed, `1`, `0`, `rn` folded to `l`, `o`, `m` - kept `UNIQUE` for owners and for packages | section 7.1's rule, enforced by the database |
 | Yank | `yank` appends the line of section 7.4; unyank appends `unyank "<version>"`, which the client's reader now understands | append-only either way |
 | The mirror | after every change of an index file, the file is committed into a git working copy (`REGISTRY_MIRROR`), pushed where `REGISTRY_MIRROR_PUSH=1`; a failing mirror never fails the publish | section 7.4's archival export, per change instead of daily because it costs one commit |
@@ -842,12 +862,14 @@ and reads a thirtieth of the repository back every night.
 **The client**: `torb publish` to an `https://` registry uploads with `curl` (else `wget`) and prints the registry's
 answer. The token is `TORB_TOKEN`; without it, in a GitHub Actions job with `id-token: write`, the job's OIDC token is
 requested with the registry's host as audience and exchanged for the short-lived one (`compiler/src/package/upload.trb`,
-`docs/tooling/torb-publish.md`).
+`docs/tooling/torb-publish.md`) - and the same in a Forgejo Actions job with `enable-openid-connect: true`, whose token
+endpoint answers the same request.
 
 **Tested**: `tools/registry/tests` - RSA and JWT verification against a key and tokens made with Node's `crypto`, the
 name and scope rules, every API call over loopback with a database and a `file:` storage in a temporary directory
-(once as it works, once as it is refused), and `torb publish` driven against it; 57 tests, natively and in the VM,
-with `sqlite3` on the `PATH`. The three images were built locally for `linux/amd64` from a `dist` directory made the way
+(once as it works, once as it is refused), and `torb publish` driven against it; since 2026-09-27 also a Forgejo Actions
+token of a second key, its issuer's discovery document and key set served over loopback, and the refusals a Forgejo
+publisher has that a GitHub one has not; 75 tests, natively and in the VM, with `sqlite3` on the `PATH`. The three images were built locally for `linux/amd64` from a `dist` directory made the way
 the release makes it (a Linux `torb` compiled from the fixpoint's `program.c`, the toolchain laid out, the source
 packed): the registry's container answered, created an account and took a `torb publish` from the Windows host, writing
 the index, the archive and a WAL-mode database; the site served `install.sh` and the reference read-only, split by host
@@ -857,9 +879,8 @@ name. `linux/arm64` has not been built outside CI.
 worker, search, verified domains, "elsewhere" owners, the similarity rule against packages with many dependents, an
 `s3:` driver, and `torb yank`, `owner` and `login` as commands over the API that exists.
 
-**What the owner sets up once** is `docs/contributing/releasing.md`, "The root server": DNS, the `.env`, `docker login
-ghcr.io` while the repository is private, the webhook, the first account, trusted publishers, the index mirror and the
-backup storage.
+**What the owner sets up once** is `docs/contributing/releasing.md`, "The root server": DNS, the `.env` and
+`cosign.pub`, the forge's webhook, the first account, trusted publishers, the index mirror and the backup storage.
 
 ### 7.12 Registries compared
 
@@ -1074,29 +1095,42 @@ tests and the conformance suite. The Windows half of every script was run on the
 what the first run on the other targets is expected to report is listed at the end of this section. How the owner
 cuts a release is [docs/contributing/releasing.md](../contributing/releasing.md).
 
+**Since 2026-09-27 the pipeline runs on the forge** (section 14): the workflows moved from `.github/` to `.forgejo/`,
+the seeds and the releases to git.torb.dev, the images to cr.torb.dev, and the signature from keyless Sigstore to the
+project's key. The jobs and their reasons below are the same; where the forge changed one, this section says so, and
+the first runs it reports were GitHub's.
+
 ### The files
 
 | File | What it does |
 |---|---|
-| `.github/workflows/ci.yml` | every push to `main` and every pull request: the gates on the targets the change can affect |
-| `.github/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, conformance, the agreement of the C, and on request the release binaries, the archives and the seed. Read-only |
-| `.github/workflows/nightly.yml` | every night that `main` changed: the gates everywhere, then the seed and a prerelease `nightly-YYYYMMDD` |
-| `.github/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates everywhere, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
-| `.github/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
-| `.github/workflows/images.yml` | called by `release` and `nightly` after publishing: the root server's three container images from the release's assets, pushed to GHCR and signed (section 7.11) |
-| `.github/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC` |
-| `.github/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
+| `.forgejo/workflows/ci.yml` | every push to `main` and every pull request of the repository itself (a fork's runs nothing): the commit messages and the gates |
+| `.forgejo/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, the tests of `tools/`, the agreement of the C, the other targets where they have a runner, and on request the release binaries, the archives and the seed. Writes nothing but artifacts and caches |
+| `.forgejo/workflows/nightly.yml` | every night that `main` changed: the gates, then the seed and a prerelease `nightly-YYYYMMDD` |
+| `.forgejo/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
+| `.forgejo/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
+| `.forgejo/workflows/images.yml` | called by `release` and `nightly` after publishing, or run by hand for a release: the root server's three container images from the release's assets, pushed to cr.torb.dev and signed (section 7.11) |
+| `.forgejo/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC`, and the Debian packages a job needs |
+| `.forgejo/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
+| `.forgejo/actions/portable` | what a target other than linux-x64 runs: bootstrap, `check .`, the conformance suite, the runtime's tests, the C of every target, the release binary |
+| `.forgejo/actions/token` | the token of an Authorized Integration for the job (section 14) |
+| `.forgejo/actions/cosign` | the pinned cosign that signs, the release release-sync verifies with |
+| `.github/workflows/portable.yml` | the GitHub mirror's one workflow: `.forgejo/actions/portable` on windows-x64, linux-arm64 and macos-arm64, and their agreement on the C (section 14) |
+| `tools/forge.sh` | the releases of the forge over its REST API with curl: create, upload, download, publish, delete, list - Forgejo, or GitHub |
+| `tools/agree.sh` | the compiler's C for every target as one host emits it, and whether the lists of several hosts agree |
 | `tools/build-seed.sh` | compiles a seed's `program.c` with its runtime - the one place that knows that command line |
 | `tools/pack-seed.sh` | packs a seed into `torb-seed-<commit>.tar.gz` and its `.sha256`, reproducibly |
-| `tools/fetch-seed.sh` | downloads a published seed, verifies it, compiles it into `build/seed/torb` |
-| `tools/publish-seed.sh` | uploads a packed seed to the `seeds` release and puts it on top of `seeds.txt` (needs `gh`) |
+| `tools/fetch-seed.sh` | downloads a published seed - from the forge, and from GitHub for one the forge lacks - verifies it, compiles it into `build/seed/torb` |
+| `tools/publish-seed.sh` | uploads a packed seed to the `seeds` release of the forge and puts it on top of `seeds.txt` (`tools/forge.sh`) |
+| `tools/migrate-seeds.sh` | copies every seed of GitHub's `seeds` release the forge's lacks, once |
 | `tools/package.sh` | lays out and packs the toolchain of one target (section 4) |
 | `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables |
 
 ### The seed, published
 
-**Decision: a seed is published as `torb-seed-<commit>.tar.gz` on one GitHub release tagged `seeds`, listed in
-`seeds.txt` beside it, and fetched over plain HTTPS without `gh`.**
+**Decision: a seed is published as `torb-seed-<commit>.tar.gz` on one release tagged `seeds` - of GitHub when this was
+built, of the forge at git.torb.dev since 2026-09-27 - listed in `seeds.txt` beside it, and fetched over plain HTTPS
+without `gh`.**
 
 ```text
 torb-seed-1ae963fa1234/
@@ -1122,12 +1156,14 @@ torb-seed-1ae963fa1234/
   often enough for the difference to matter.
 - **Reproducible**: entries sorted, owner 0, modes fixed, every timestamp the commit's, `gzip -n`. Packing the seed of
   `653af8bb` twice gave the same SHA-256.
-- **Verification** is the SHA-256 of the index, over HTTPS. The Sigstore signature of a release (below) covers the
-  seed as one of its assets; a seed published by the nightly or the `seed` workflow carries none, because what signs a
-  release is the tag's identity and a seed between releases has no tag.
-- **A private repository** answers the plain download URL with a login page. With `GH_TOKEN` or `GITHUB_TOKEN` set,
-  `tools/fetch-seed.sh` goes through the REST API instead (the release of the tag, the asset's id, the asset with
-  `Accept: application/octet-stream`) - still curl or wget and no `gh`. CI passes the job's read-only token.
+- **Verification** is the SHA-256 of the index, over HTTPS. The signature of a release (below) covers the seed as one
+  of its assets; a seed published by the nightly or the `seed` workflow carries none, because it is no release.
+- **Two indexes.** `tools/fetch-seed.sh` reads the forge's (public, no token), and GitHub's only when the forge's cannot
+  be read or does not list the seed asked for - the seeds published before the move, until `tools/migrate-seeds.sh`
+  has copied them. GitHub's repository is private and answers the plain download URL with a login page; with
+  `GH_TOKEN` or `GITHUB_TOKEN` set, `tools/fetch-seed.sh` goes through its REST API instead (the release of the tag,
+  the asset's id, the asset with `Accept: application/octet-stream`) - still curl or wget and no `gh`. A private forge
+  would take `TORB_FORGE_TOKEN`.
 
 **Where `tools/bootstrap.sh` takes its seed from**, in this order: `$TORB_SEED` (never falls back), `seed/torb` or
 `seed/program.c`, the newest archive in `../torbscript-seeds/`, `build/seed/torb` - and when there is none,
@@ -1141,25 +1177,34 @@ every target - and at once by the `seed` workflow. That workflow is the CI half 
 (`compiler/CONTRIBUTING.md`): the first commit teaches both forms, `seed` publishes its seed, and only then can the
 second commit bootstrap in CI and in a fresh clone.
 
-**The first seed** cannot come from CI, which needs a seed to build anything. The owner publishes it once from the main
-checkout: `sh tools/pack-seed.sh seed` and `sh tools/publish-seed.sh build/seed-archive/torb-seed-<commit>.tar.gz`
-(with `gh auth login`), or the same two files and a one-line `seeds.txt` uploaded by hand to a prerelease `seeds`.
+**The first seed** cannot come from CI, which needs a seed to build anything. On the forge it comes from GitHub
+(`tools/migrate-seeds.sh`, which copies every seed GitHub's index lists) or from the main checkout:
+`sh tools/pack-seed.sh seed` and `TORB_FORGE_TOKEN=<token> sh tools/publish-seed.sh build/seed-archive/torb-seed-<commit>.tar.gz`.
+Both publish through `tools/forge.sh` - curl and the forge's REST API, no `gh`; the release is created as a prerelease
+on first use, and `seeds.txt` is replaced by deleting the asset and uploading the new one.
 
 ### CI: the jobs and why
 
 | Job | Runner | What | When |
 |---|---|---|---|
-| `bootstrap (linux-x64)` | `ubuntu-latest`, gcc | the seed compiled from `program.c`, seed -> torb -> torb with the fixpoint | always |
+| `bootstrap (linux-x64)` | `ubuntu-latest` (the forge's runner), gcc | the seed compiled from `program.c`, seed -> torb -> torb with the fixpoint | always |
 | `tier A (linux-x64)` | `ubuntu-latest` | `sh tools/gates.sh a` with that compiler | always |
-| `tier B (linux-x64)` | `ubuntu-latest` | `sh tools/gates.sh b` (the fixpoint with the compiler as its own seed), and the runtime's tests with clang | every push to `main`; a pull request that touches `compiler/src/ir`, `compiler/src/backend`, `runtime/`, `tools/` or `.github/` |
-| `bootstrap and conformance (windows-x64)` | `windows-latest`, gcc of MSYS2 UCRT64 | bootstrap with the fixpoint, `torb check .`, the conformance suite, the runtime's tests | always |
-| `... (linux-arm64)` | `ubuntu-24.04-arm`, gcc | the same | public repository: always. Private: a change to `runtime/`, `compiler/src/backend`, `tools/`, `.github/`; the nightly; a release |
-| `... (macos-arm64)` | `macos-latest`, clang | the same | as linux-arm64 |
-| `every target emits the same C` | `ubuntu-latest` | `program.hash` of every target equals linux-x64's | always |
+| `tier B (linux-x64)` | `ubuntu-latest` | `sh tools/gates.sh b` (the fixpoint with the compiler as its own seed), and the runtime's tests with clang | every push to `main`; a pull request that touches `compiler/src/ir`, `compiler/src/backend`, `runtime/`, `tools/` or `.forgejo/` |
+| `tools/release-sync and tools/registry (linux-x64)` | `ubuntu-latest` | their tests, natively, with `sqlite3`; `sh -n` over the shell of `tools/` | always |
+| `bootstrap and conformance (windows-x64)` | a runner labelled `windows-x64`, gcc of MSYS2 UCRT64 | bootstrap with the fixpoint, `torb check .`, the conformance suite, the runtime's tests, the C of every target | once the runner exists and `TORB_RUNNERS` names it; until then on the GitHub mirror after the push |
+| `... (linux-arm64)` | a runner labelled `linux-arm64`, gcc | the same | as windows-x64 |
+| `... (macos-arm64)` | a runner labelled `macos-arm64`, clang | the same | as windows-x64 |
+| `every host emits the same C` | `ubuntu-latest` | `tools/agree.sh`: linux-x64 emits the compiler's C for all eight targets (`torb build --emit-c --target`), `--target linux-x64` has to be the bootstrap's C, and every other runner of the run has to emit the same C for every target | always |
 
 **Why tier A and tier B run on one target only.** Nearly every gate tests the compiler, and the compiler is the same C on
 every machine - which the `agree` job proves on every run, and which is the strongest cross-platform statement the
-repository can make cheaply. What differs per machine is the C compiler, the C library and the runtime's platform
+repository can make cheaply. On the forge's one runner it is proven differently than on GitHub's four: the C a host
+emits for a target is a function of the target, so the check compares what several *hosts* emit for every one of the
+eight targets, and with a single host it shows that every target lowers and that `--target` of the host itself
+reproduces the bootstrap's C. The lists of the other runners, of the GitHub mirror's machines and of the maintainer's
+own (`sh tools/agree.sh emit build/release/torb build/hosts/mine.txt`) are compared the same way; measured on
+2026-09-27, the eight emissions take four to five minutes each on the maintainer's machine, and the C differs only
+between groups of targets (windows; linux and macos-x64; macos-arm64 and the BSDs). What differs per machine is the C compiler, the C library and the runtime's platform
 layer, and exactly those are exercised by the bootstrap (the compiler builds itself natively, twice or three times),
 the conformance suite (every behaviour, built and run natively, byte for byte against its expectation) and the
 runtime's own tests. Tier A on macOS would cost a macOS hour per push for `torb test compiler/tests`, which checks
@@ -1176,28 +1221,31 @@ Linux run tests the POSIX runtime and not a change of compiler; clang meets the 
 last step) and the generated C on macOS, where it is the only one. On Windows `clang` targets MSVC and `torb build`
 passes `-lm`, which MSVC does not have, so the Windows job installs gcc from the MSYS2 that every Windows image has.
 
-**Memory and time.** `TORB_BUILD_SLOTS=1` everywhere: a hosted runner has 7 GB (macOS) to 16 GB, one `cc1` over the
-compiler's C takes 1.5 to 2 GB, and a test suite's C is larger. Timeouts: 60 minutes for the Linux bootstrap, 90 for
-each tier, 150 for a portable target (three cores on macOS, a first seed compile, the whole conformance suite).
+**Memory and time.** `TORB_BUILD_SLOTS=1` in every job: one `cc1` over the compiler's C takes 1.5 to 2 GB, a test
+suite's C is larger, and the forge's runner runs two jobs at once beside the forge itself - its machine wants 8 GB for
+them. Timeouts: 90 minutes for the Linux bootstrap, 120 for each tier, 60 for the agreement of the C, 150 for a portable
+target (a first seed compile, the whole conformance suite).
 
-**Caches**, written only by a push to `main` so a pull request reads them and never fills the repository's 10 GB:
+**Caches** (the runner's own cache server; a runner without one only loses the time), written only by a push to
+`main` so a pull request reads them and never fills the cache:
 `build/release` keyed by the target and the hash of everything `torb` is built from (`compiler/src`, the manifests,
 `std/`, `runtime/`, `tools/bootstrap.sh`) - a hit skips the bootstrap, because those sources were bootstrapped on that
 target before - and `build/seed` keyed by the target and the seed's commit, so an unchanged seed is compiled once.
 
 **Concurrency and permissions.** `ci` cancels the run a newer push to the same branch or pull request supersedes;
-`nightly`, `release` and `seed` never cancel. Every workflow starts from `contents: read`; `contents: write` is given
-to the three publishing jobs only, `id-token: write` to the two that sign and to the image jobs, `packages: write` to
-the image jobs alone (section 7.11). Every checkout has `persist-credentials: false`, every third-party action is
-pinned by commit, and no workflow uses `pull_request_target` or a secret beyond the package manager channels' tokens.
+`nightly`, `release` and `seed` never cancel. On the forge no workflow has a `permissions:` key - Forgejo ignores a job
+that has one - and nothing writes with the job's automatic token: the jobs that publish set `enable-openid-connect:
+true` and write with the token of an Authorized Integration, whose rules admit only the named workflow files, refs and
+events of this repository (section 14). The signing key is a secret only `publish` of `release` and `nightly` and the
+image jobs read. Every checkout has `persist-credentials: false`, every action is pinned by commit, a pull request
+from a fork runs nothing, and no workflow uses `pull_request_target`.
 
 ### Versions, tags and channels
 
 - **A release is a pushed tag `v0.MINOR.PATCH`** and nothing else. `release.yml` refuses a tag that is not
   `0.MINOR.PATCH` without leading zeros, whose version differs from `version` in `project.trb` or
-  `compiler/project.trb` (section 3: one number), whose commit is not on `main`, or - in a public repository - that has
-  no `LICENSE` (section 9; the owner chose MIT, question 5). A private repository may cut test releases, which is
-  slice 7's "private test release".
+  `compiler/project.trb` (section 3: one number), whose commit is not on `main`, or that has no `LICENSE` (section 9;
+  the owner chose MIT, question 5) - the forge's repository is public.
 - **stable**: the release, marked latest, kept forever. **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
   when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on
   one day replaces that day's nightly.
@@ -1213,9 +1261,12 @@ pinned by commit, and no workflow uses `pull_request_target` or a secret beyond 
 | `torb-<version>-source.tar.gz` | `git archive` of the tag |
 | `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |
 | `SHA256SUMS` | the SHA-256 of every asset above |
-| `SHA256SUMS.sigstore.json` | the Sigstore bundle that signs `SHA256SUMS` |
+| `SHA256SUMS.sig` | the cosign signature of `SHA256SUMS`, made with the project's key (`SHA256SUMS.sigstore.json`, the keyless bundle, while releases were made on GitHub) |
 
 - **The seed is beside the archives, not inside each**: it is the same file for every target and 6 MB.
+- **The targets are the ones that have a runner**: linux-x64 always; windows-x64, linux-arm64 and macos-arm64 once the
+  forge has a runner of that label (section 14). The release notes list the targets, and a package manager channel
+  whose archives are missing renders nothing.
 - **The binaries**: linux-x64 and linux-arm64 compile the fixpoint's `program.c` with `musl-gcc -static` (section 5 asks
   it for linux-x64; linux-arm64 gets the same so that one Linux binary runs on every distribution of either
   architecture), and the job fails if `ldd` finds it dynamic. windows-x64 and macos-arm64 ship the bootstrapped binary
@@ -1228,22 +1279,42 @@ pinned by commit, and no workflow uses `pull_request_target` or a secret beyond 
 
 ### Signing
 
-**Decision: keyless Sigstore with `cosign sign-blob` over `SHA256SUMS`**, in the publishing job, with that job's OIDC
-identity; the bundle `SHA256SUMS.sigstore.json` is a release asset.
+**Decision (2026-09-27, the forge): `cosign sign-blob` over `SHA256SUMS` with the project's own key**, in the publishing
+job; the signature `SHA256SUMS.sig` is a release asset, the public half of the key is `tools/deploy/cosign.pub` in the
+repository and `https://torb.dev/cosign.pub`, and the same key signs the container images. The private half is the
+secret `COSIGN_PRIVATE_KEY` of the repository, with its password `COSIGN_PASSWORD`. Signing and verifying use the same
+pinned cosign 2.4.1 (`.forgejo/actions/cosign`, `tools/deploy/Dockerfile.release-sync`), and neither writes to nor
+reads from Sigstore's transparency log.
 
 ```sh
-cosign verify-blob --bundle SHA256SUMS.sigstore.json \
-  --certificate-identity "https://github.com/TorbScript/language/.github/workflows/release.yml@refs/tags/v0.2.0" \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+cosign verify-blob --key https://git.torb.dev/torbscript/language/raw/branch/main/tools/deploy/cosign.pub \
+  --signature SHA256SUMS.sig --insecure-ignore-tlog=true SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 ```
+
+**Why the keyless signature of the first decision (below) could not move with the rest.** Keyless signing needs a
+certificate from Sigstore's Fulcio, which issues one only for the OIDC identity of an issuer it trusts - GitHub's, among a
+handful - and git.torb.dev's Actions issuer is not one of them (an issue asks Sigstore to trust Codeberg's; a private
+instance never will be). The choices were a key of the project, a Sigstore of the project's own (Fulcio, Rekor and a
+trust root to run and back up), or signing on the GitHub mirror, which would make the mirror the signer of what the forge
+publishes. A key it is:
+
+| Question | Decision | Why |
+|---|---|---|
+| Who holds the key | a secret of the repository on the forge, and an offline copy of the owner's | a secret is readable by any workflow of a push to the repository, so the key is as safe as write access - which only the owner has, and a fork's pull request runs nothing |
+| The transparency log | not used (`--tlog-upload=false`, and `--insecure-ignore-tlog=true` to verify) | the log's value is a public record of what a keyless identity signed; with a key, the key is the identity, and a dependency on rekor.sigstore.dev would make every release wait for a service the project does not run |
+| Rotation | a new key pair: the new `cosign.pub` committed and copied to the root server, the secrets replaced | releases stay verifiable with the key of their time, which the repository's history keeps |
+
+The first decision, while releases were made on GitHub (kept for the releases made there, and for `release-sync` with
+`RELEASE_SYNC_FORGE=github`): **keyless Sigstore with `cosign sign-blob` over `SHA256SUMS`**, in the publishing job,
+with that job's OIDC identity; the bundle `SHA256SUMS.sigstore.json` was a release asset.
 
 | Option | For | Against |
 |---|---|---|
 | **cosign keyless over `SHA256SUMS`** — the decision | exactly section 5's plan; one signature covers every asset; verifiable with `cosign` alone, and later by `torb upgrade` from the bundle; works in a private repository | a tool to install in the job; the identity (repository, workflow, tag) goes into the public Rekor log, so a private test release makes the repository's name public |
 | `actions/attest-build-provenance` | first party, SLSA provenance per file, `gh attestation verify` | for a private repository it needs GitHub Enterprise Cloud; verifying needs `gh` or the attestation API; the same public Sigstore log for a public repository |
 
-Attestations can be added beside the signature once the repository is public, without changing anything a user does.
+Attestations were to be added beside the signature once the repository was public; on the forge there are none to add.
 
 ### Where this departs from sections 4 and 5, and why
 
@@ -1315,7 +1386,10 @@ expected; all of them are fixed:
 Items 2, 4, 5 and 9 did not come up: macOS builds with the feature macros as they are, clang and the unsigned `char` of
 arm64 add no warning to the generated C, and the network programs pass on every target.
 
-### What the owner sets up on GitHub
+### What the owner set up on GitHub
+
+While GitHub carried the pipeline, this was the owner's list; section 14 and `docs/contributing/releasing.md` have the
+forge's, which replaces it.
 
 - **The first seed**, once, as above.
 - **Actions minutes**: on a private repository hosted runners are billed, macOS at ten times and Windows at twice the
@@ -1339,3 +1413,124 @@ arm64 add no warning to the generated C, and the network programs pass on every 
   `microsoft/winget-pkgs`, so a classic token with `public_repo` is what `wingetcreate` itself documents). None of the
   three is required: the job skips a channel whose secret is absent (`docs/contributing/releasing.md` has the full list
   of one-time setup, including `release-sync`'s).
+
+## 14. The forge
+
+**Decided by the owner (2026-09-27): the repository, its CI, its seeds and its releases live on the project's own
+Forgejo; GitHub becomes a mirror and is not deleted.** Built on the same day; the server side - the forge, its runner,
+the compose stack - is the owner's and existed before it.
+
+```text
+                git.torb.dev (Forgejo 16.0.5, SSH on port 2223)            cr.torb.dev (the forge's container registry)
+  ┌───────────────────────────────────────────────────────────┐        ┌──────────────────────────────────────────┐
+  │ torbscript/language   the repository, .forgejo/workflows/ │ ─────> │ torbscript/site, release-sync, registry  │
+  │   releases: v*, nightly-*, seeds (seeds.txt + archives)   │ images └──────────────────────────────────────────┘
+  │ torbscript/homebrew-tap, torbscript/scoop-bucket          │                    │ pulled by
+  │ runner torb-runner-1: ubuntu-latest, ubuntu-24.04 (DinD)  │                    v
+  └───────────────────────────────────────────────────────────┘        the root server: torb.dev, packages.torb.dev
+        │ push mirror                     │ webhook "published"   ──────────> release-sync -> /srv/torb/download
+        v
+  github.com/TorbScript/language   .github/workflows/portable.yml: windows-x64, linux-arm64, macos-arm64
+```
+
+### What moved, and where it went
+
+| What | Before | Now |
+|---|---|---|
+| The repository | `github.com/TorbScript/language` (private) | `git.torb.dev/torbscript/language` (public); GitHub a push mirror |
+| CI | `.github/workflows/`, GitHub's hosted runners | `.forgejo/workflows/` on the forge's runner; the GitHub mirror runs `portable.yml` only |
+| Seeds | the release `seeds` of GitHub | the release `seeds` of the forge; GitHub's is read only for a seed the forge lacks |
+| Releases and nightlies | GitHub releases | releases of the forge, drafts until their last asset is there |
+| Images | `ghcr.io/torbscript/*` | `cr.torb.dev/torbscript/*`, public |
+| Signatures | keyless Sigstore, the workflow's identity | the project's cosign key (section 13, "Signing") |
+| Downloads | release-sync pulled GitHub's releases | release-sync pulls the forge's; installers and manifests name `torb.dev/download` only |
+| Trusted publishing | GitHub Actions | GitHub Actions and the Forgejo Actions of git.torb.dev (section 7.11) |
+| Landing | `tools/land.sh publish` pushed to `origin` | it pushes to `forgejo` and publishes the seed to the forge |
+
+### Writing from a workflow: Authorized Integrations
+
+**Forgejo ignores every job whose job or workflow has a `permissions:` key**, and the token it gives a job
+automatically (`forgejo.token`) is limited. A workflow of the forge that writes asks for an **Authorized
+Integration**'s token instead: the job sets `enable-openid-connect: true`, requests an ID token from
+`$ACTIONS_ID_TOKEN_REQUEST_URL` with the integration's audience, and sends it as `Authorization: Bearer` - or as the
+password of `docker login` and of git over HTTPS, which the forge accepts in both places. The forge checks it against
+the integration's claim rules (the repository by its id, the workflow file, the ref, the event), and the request may do
+what the integration's permissions allow, as the user who created it. `.forgejo/actions/token` does the request; the
+audience is not a secret and lives in a repository variable. Forgejo 16 has no API to create an integration: the owner
+creates both in the web interface (`docs/contributing/releasing.md`, "One-time setup"):
+
+| Integration | Workflow file | Git reference | Events | Access | Permissions | Variable |
+|---|---|---|---|---|---|---|
+| `torbscript-publish` | `{release,nightly,seed}.yml` | `{refs/heads/main,refs/tags/v*}` | push, schedule, workflow_dispatch | specific repositories: `torbscript/language`, `torbscript/homebrew-tap`, `torbscript/scoop-bucket` | repository: read and write | `TORB_PUBLISH_AUDIENCE` |
+| `torbscript-images` | `{release,nightly,images}.yml` | `{refs/heads/main,refs/tags/v*}` | push, schedule, workflow_dispatch | public only | package: read and write | `TORB_IMAGES_AUDIENCE` |
+
+- **Two integrations, not one**: an integration limited to specific repositories may only hold the repository and issue
+  permissions, and pushing an image is a package permission.
+- **The workflow file of a reusable workflow's job** is the calling run's: `images.yml` runs inside `release.yml` and
+  `nightly.yml`, which is why those two are in the image integration's rule, and `images.yml` itself for a run by hand.
+- **The patterns** are `gobwas/glob`'s, which the forge compiles when the integration is saved; `{a,b}` is an
+  alternative, `*` crosses `/`.
+- **An hour**: a token lives `[actions] ID_TOKEN_EXPIRATION_TIME` (an hour by default), so every job asks for its token
+  right before the step that needs it, and the image job builds first and pushes from the build cache afterwards.
+
+### Runners
+
+The forge has one runner, `torb-runner-1` (labels `ubuntu-latest` and `ubuntu-24.04`, the image
+`catthehacker/ubuntu:act-24.04`, Docker in Docker, two jobs at a time). **Decision: the jobs of the other tier 1
+targets are declared in `gates.yml` and run only for the targets the repository variable `TORB_RUNNERS` names**
+(`windows-x64 linux-arm64 macos-arm64`, or any of them), on a runner whose label is the target's name. A job whose
+label no runner has would wait for ever - "your pipeline will halt", the forge's documentation says - so each such job
+reads the variable through a first job and has an `if:` on its output alone, which the forge evaluates itself and skips
+before any runner is asked. Until those runners exist:
+
+- **A release carries the linux-x64 toolchain only** (section 13, "What a release contains"), the Homebrew formula and
+  the Scoop manifest are not rendered, and winget's update is a command the release job prints. The
+  `linux/arm64` images wait for a linux-arm64 toolchain.
+- **The GitHub mirror runs the three targets after every push** (`.github/workflows/portable.yml`): bootstrap,
+  `check .`, the conformance suite, the runtime's tests and the agreement of the C among them - as a report, not a gate,
+  and only while the mirror is public, where GitHub's standard runners cost nothing.
+- **Cross-compiling was considered and left**: windows-x64 with Debian's MinGW-w64 and linux-arm64 with a musl cross
+  compiler would build binaries on the one runner, but nothing could run them there - no smoke test, no conformance
+  suite - and a binary no gate has run is not one to release. QEMU for linux-arm64 in the runner's Docker would run
+  them, at a slowdown that makes the compiler's 100 MB of C a matter of hours.
+
+### GitHub as the mirror
+
+**Decision: the forge pushes every change to GitHub through a push mirror, and `.github/workflows/` keeps one
+workflow, `portable.yml`**; the six workflows that built, published and signed on GitHub are deleted, since two
+pipelines publishing the same release would race. `portable.yml` reuses `.forgejo/actions/portable` (a composite
+action works on both), reads no secret, publishes nothing and fetches the seed from the forge. Recommended over deleting
+`.github/` entirely because it is the only place windows-x64 and macos-arm64 run at all until the forge has runners,
+and it costs nothing once the mirror is public; recommended over keeping more because a job that could publish on the
+mirror would need a secret there, which is what the mirror should never hold. The mirror's setup - a token with
+Contents and Workflows write access, the forge's Settings -> Repository -> Mirror settings - is
+`docs/contributing/releasing.md`. Releases are not mirrored; GitHub's old `seeds` release stays as an archive that
+`tools/fetch-seed.sh` falls back to.
+
+### Security
+
+- **No run of untrusted code on the runner.** The runner has Docker, so a job can do almost anything to the runner's
+  machine: a pull request from a fork runs nothing (`ci.yml` skips every job when the head repository is not this one;
+  a maintainer who wants CI for such a change pushes its branch into the repository), and the forge's own rule that a
+  fork's workflow gets no secrets and no ID token stays as a second line.
+- **Runners never touch the registry's data.** No runner mounts `/srv/torb` or joins the Docker network of the
+  registry and release-sync; the root server pulls releases and images (section 7.11, "the root server pulls, CI never
+  pushes"), and nothing of CI can write `/srv/torb` - a compromised job could at worst publish a release, which
+  release-sync refuses unless its signature verifies.
+- **Tokens are short and narrow.** An integration's token lives an hour, admits one repository's named workflows, refs
+  and events, and holds the repository or package permission only. The signing key is the one long-lived secret, read by
+  the jobs that sign.
+- **Protected refs**: `main` against force pushes and deletion, the tags `v*` and `seeds` so that only the owner - and
+  the integration, which acts as the owner - creates them.
+- **Pinned actions**: every `uses:` names a commit. `actions/checkout` and `actions/cache` resolve through the forge's
+  default actions URL (data.forgejo.org mirrors them with the same commits as github.com), the artifact actions are
+  Forgejo's own forks at `code.forgejo.org` - `actions/upload-artifact` v4 refuses to run anywhere but github.com.
+
+### What the forge's first runs reported (2026-09-27)
+
+The forge picked up `.github/workflows/ci.yml` first, since `.forgejo/` did not exist yet: every job with a
+`permissions:` key was ignored; with the key removed, checkout, the commit check and the change scope passed, the
+runner reached the forge at https://git.torb.dev, and the bootstrap failed where `tools/fetch-seed.sh` asked GitHub's
+private API for the seed (401) - the reason seeds come from the forge now - and `actions/upload-artifact` v4 refused
+with "not currently supported on GHES", the reason for Forgejo's forks. The workflows of `.forgejo/` pass
+`forgejo-runner validate` (runner 13); they had not run on the forge when this was written.
