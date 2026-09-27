@@ -1,6 +1,6 @@
 ---
 title: Write a test
-summary: Put a test in tests/*.test.trb, group related ones, and let assert show the source and the values instead of writing a matcher.
+summary: Put a test in a file called *.test.trb, by convention under tests/, group related ones, and let assert show the source and the values instead of writing a matcher.
 kind: how-to
 status: stable
 order: 50
@@ -20,8 +20,8 @@ when it fails.
 
 ## Steps
 
-1. **Create the file under `tests/`, named `<something>.test.trb`.** This is one of the four places top-level code is
-   allowed, so the file is a script and needs no `fn main`.
+1. **Create a file named `<something>.test.trb`, by convention under `tests/`.** The name is what makes it a test,
+   wherever it lies in the package, and a test file may hold top-level code, so it is a script and needs no `fn main`.
 
    ```text
    my-project/
@@ -52,7 +52,8 @@ when it fails.
    `Expression<Bool>`, so a failure already shows the source text of the condition and the values it closed over -
    there is nothing to add by writing a message.
 
-5. **Run the tests with `torb test`:**
+5. **Run the tests with `torb test`.** Without a path it runs every test of the package the working directory is in;
+   a path runs the ones below it:
 
    ```console
    $ torb test my-project/tests
@@ -66,8 +67,10 @@ when it fails.
 
 - **A test fails by panicking, not by returning a value.** `assert` panics on a false condition, and the test runner
   catches that panic per test - a test function never returns a `Result` or a `Bool` for the runner to check.
-- **Nothing outside `tests/*.test.trb`, `src/main.trb`, a script or a receiver script may hold top-level code.** Test
-  helpers that are more than one file belong in an ordinary module under `src/` and are imported like any other name.
+- **Nothing but a `*.test.trb` file, a program's entry, a script or a receiver script may hold top-level code.** Test
+  helpers that are more than one file belong in an ordinary module and are imported like any other name.
+- **A test cannot import the program.** `src/main.trb` and the `entry` of a `program` line are never importable, so
+  what a test calls lives in a module - `src/<something>.trb` - that the program imports too.
 - **`assert` needs no message argument to be useful.** `assert(actual == expected, "should be equal")` adds a second
   argument the failure text does not use; the condition alone already carries the values through the expression tree.
 - **A failing assertion names the location, not a stack.** The output is one line for what failed and one for where -

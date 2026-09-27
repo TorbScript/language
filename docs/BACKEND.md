@@ -768,10 +768,11 @@ torb ir <path>                          The IR of a file or project, in the text
   `<workspace>/.torb/cache/<profile>/<key>/program` and runs it, forwarding the arguments, the three standard
   streams and the exit code. It prints nothing extra on a cache hit. After 7.2 the VM becomes the default and this
   path stays as `torb run --native`.
-- **Output paths.** From `project.trb`: `build { input = "src/main.trb", output = "build/{target}/torb" }`. The static
-  manifest reader (`compiler/src/project/manifest.trb`) gains `buildOutput` and `buildTarget`, and keeps the
-  interpolation as literal text; the driver substitutes `{target}` (the profile) and `{binary}` (the part of `name`
-  after the `/`). `--out` overrides. A workspace root builds its members in dependency order.
+- **Output paths.** Planned from `build { input, output }`, and replaced before it was built (2026-09-27,
+  `docs/design/PROJECT.md` sections 4 and 5): the programs of a package are its `src/main.trb` and its `program`
+  lines, and a binary goes to `<package>/build/<profile>/<program>`, to `build/<target>/<profile>/<program>` for
+  another machine, or to the literal `output` of its `program` line. `--output` overrides. A workspace root builds the
+  programs of every member.
 - **Incremental rebuild by content hash.** The cache key is a 64-bit FNV-1a over: the bytes of every file in the
   `SourceTree`, its relative path, the profile, the compiler's version string and the C compiler's identification
   line. On a hit, nothing runs. Otherwise the C is written and compiled. There is no finer granularity in v1 - one

@@ -4,7 +4,11 @@
 refuses one of its settings that is computed, and where a setting it uses is computed it evaluates the manifest in the
 sandbox of section 8 and reads that (docs/design/SCRIPTS.md slice 5, section 12's slice 7); `torb publish` reads the
 evaluation too, and the package manager of milestone 8 resolves (section 6a), writes and reads `project.lock.trb`
-(section 11) and builds from it; profiles and targets are not built.
+(section 11) and builds from it. Since 2026-09-27 the names of the files decide what a package produces (section 3),
+`build { }` and `test { input }` are gone, `program` lines, `torb run <name>` and a `torb build` of every program are
+built (section 4), and so are the two profiles with their `profile` blocks and the output layout per profile and target
+(section 5), the refusal of a relative path that leaves its package (section 6) and `torb lock` with its `--check`
+gate (section 8). What is not built is listed at the end of section 12.
 
 **The names of the files say what a package produces, `project.trb` says what the names cannot, and a program is the
 one thing it says by hand.** A file called `lib.trb` is the library, a file called `main.trb` is the program, a file
@@ -113,7 +117,8 @@ Two further facts, each from a probe rather than from reading the code:
 
 - **A file outside `src/` is not a module of the package.** `use helper from "../tools/helper"` in `src/main.trb`,
   with a real `tools/helper.trb`, answers ``error: There is no module `../tools/helper` ``. The package's modules are
-  `src/**` plus whatever `test { input }` names, and nothing else.
+  `src/**` plus whatever `test { input }` names, and nothing else. **Fixed 2026-09-27** by section 3's rule: a
+  package's files are every `.trb` file below its directory.
 - **A workspace member pattern is relative to the root that writes it, and a pattern that reaches far enough out of
   the tree stops matching.** `members "<absolute path>/std/*"` answers ``error: The workspace member pattern ...
   matches no project``, and so does the same path written with eleven `../`. The patterns in the repository
@@ -131,17 +136,21 @@ today and nothing else**, which is why section 8's slice is a 7.x slice.
 1. **"Nothing outside a package can name its `src/main.trb`."** `docs/language/modules-and-packages/packages.md`
    rule 2. Probe 17 imports one. Worse, that `src/main.trb` is an entry file by the manifest's own rule, so it may
    hold top-level code *and* be imported — the one combination the language forbids, reachable without a diagnostic.
+   **Fixed 2026-09-27:** `"owner/name/main"` and every import of a program's entry are errors (section 3).
 2. **"Top-level code is only allowed in entry files."** Probe 18: `build { input = "src/lib.trb" }` — which is what
    thirty-two of the repository's thirty-five `project.trb` files write — makes `src/lib.trb` an entry file and
    switches the rule off for the one file it exists to protect. The two rules are written in two places that do not
    agree: `isEntryFile` asks the manifest, `isLibraryModule` hardcodes `src/lib.trb`, and `isEntryFile` is asked
-   first.
+   first. **Fixed 2026-09-27:** the names of the files decide, `src/lib.trb` is never an entry, and removing the
+   thirty-two blocks found no top-level code in any library.
 3. **"A name is `owner/name`."** `packages.md` rule 1 and `std/project`'s own doc comment. Probe 12: a bare name is
    accepted everywhere, and the static reader has no validation of any kind.
 4. **`build { target, output }` and `test { input }`.** `torb build` hardcodes the profile name `"release"` and the
    path `<project>/build/<profile>/<name>`; `torb test` hardcodes the directory `tests`. `output` is read by nobody —
    `compiler/project.trb` writes `output = "build/{target}/torb"` and the binary is not called `torb`. An interpolated
-   string is not a literal, so the static reader cannot read it at all, and it ignores it silently.
+   string is not a literal, so the static reader cannot read it at all, and it ignores it silently. **Fixed
+   2026-09-27:** both blocks are gone, a binary goes to `build/<profile>/<program>` or to the literal `output` of its
+   `program` line, and `torb test` tests the package it is run in.
 
 Every one of the four is a consequence of the same thing: a manifest setting that says what a file name already says,
 and then disagrees with it. The fourth is also the shape of the one setting this design *adds*: `program` says what no
@@ -256,6 +265,13 @@ directories, `target`, `node_modules` and `build`. That is one rule instead of t
 already assumes when they say "the project". It is also what lets a `program` name an `entry` outside `src/`:
 `tools/migrate.trb` is a file of the package, so it may import the package's modules like any other file of it.
 
+**As built (2026-09-27).** `packageAt` of `compiler/src/project/workspace.trb` takes every `.trb` file below the
+package directory that no nested `project.trb` claims, skipping hidden directories, `build`, `target` and
+`node_modules`; `project.trb` and `project.lock.trb` are never files of it. `isEntryFile` of
+`compiler/src/semantics/graph.trb` reads the file name and the `program` lines and nothing else, so `src/lib.trb` of
+a named package holds declarations only, always. `torb test` without a path tests the package the working directory
+is in: every `*.test.trb` below the innermost directory above it with a `project.trb`.
+
 ## 4. Programs
 
 **A program is `src/main.trb`, or a `program` line.** One setting, three arguments, all of them plain string literals.
@@ -325,7 +341,7 @@ that has nothing to put in it and an invitation to put the static three inside i
 | an `entry` that does not exist | the workspace reader | ``error: The entry `tools/migrate.trb` of the program `migrate` is not a file`` |
 | an `entry` outside the package directory | the workspace reader | ``error: The entry `../tools/migrate.trb` of the program `migrate` is outside `acme/shop` `` |
 | `entry: "src/lib.trb"` | the workspace reader | ``error: `src/lib.trb` is the library of `acme/shop`, so it cannot be the entry of a program`` |
-| an `entry` that some module imports | the **module graph**, at the `use` | ``error: `tools/migrate.trb` is the entry of the program `migrate`, so nothing can import it`` |
+| an `entry` that some module imports | the **module graph**, at the `use` | ``error: `../tools/migrate` is the entry of the program `migrate`, so nothing can import it`` |
 | two programs that resolve to one output path | the build, per profile | ``error: `migrate` and `importer` both build to `dist/tool` `` |
 | an `output` that is interpolated | the static reader | the plain-string rule of section 10, with its own message |
 
@@ -337,9 +353,11 @@ So: a collision with a name-decided role is a manifest error, and a collision wi
 error. Both quote the `program` line.
 
 **A program name is a `segment`** of section 6's grammar: lowercase, digits and `-`, no dot, no slash. That makes
-`torb run <argument>` decidable without touching the disk: **an argument that contains `/` or `\`, or ends in `.trb`,
-is a path; everything else is a program name.** `torb run migrate` is a name, `torb run tools/migrate.trb` is a file,
-`torb run .` is a directory, and there is no case where the two readings are both possible.
+`torb run <argument>` decidable without touching the disk: **an argument that contains `/` or `\`, ends in `.trb`, or
+is `.` or `..`, is a path; everything else is a program name.** `torb run migrate` is a name, `torb run
+tools/migrate.trb` is a file, `torb run .` is a directory, and there is no case where the two readings are both
+possible. The price is that a directory named without a slash is a name too: `torb build compiler` looks for a
+program called `compiler`, and the directory is written `./compiler`.
 
 ### What `run` and `build` do
 
@@ -355,8 +373,8 @@ torb build --output <file>      one program, somewhere else
   the count. Several programs and no name is an error that lists them:
 
   ```text
-  error: `acme/shop` has three programs. Name one: `torb run server`
-    = server, importer, migrate
+  error: acme/shop has 3 programs. Name one: `torb run shop`
+    = shop, importer, migrate
   ```
 
 - **`torb run <name>`** runs that program. A name nothing declares lists the ones that exist.
@@ -406,6 +424,36 @@ program is `src/<name>/main.trb`, so the compiler's binary is `compiler/src/torb
 entry file while the compiler was compiling itself, and gave nineteen relative imports one more `../` each. A
 configured program costs one line in one manifest and moves no file.
 
+### Programs as built (2026-09-27)
+
+`Program` and `Project.program` are in `std/project` with the signature above; `compiler/src/project/programs.trb`
+lists the programs of a package (`programsOf`) and reports the rules of the table (`programProblemsOf`), each as an
+error of `torb check` with ` --> project.trb:<line>:<column>`. A computed name, `entry` or `output` is refused by the
+static reader with ``The name, the `entry` and the `output` of a `program` have to be plain strings`` and the note
+`The toolchain reads them before it can run anything: the entry decides which files may hold top-level code`. Two
+rules came in beside the table's: `` `Migrate` is no program name`` (a program is named like a package, so `torb run
+<name>` is never a path) and ``The output `../dist/x` of the program `x` is outside `acme/shop` `` - a build writes
+below its project and nowhere else. The module graph refuses `./main`, a relative path to any `entry`, and a package
+path whose last component is `main`, with the note `A file that may hold top-level code is never importable. What two
+programs share belongs in a module of the package, which both import`.
+
+- **`torb run`** without an argument runs the only program below the working directory. `torb run migrate` looks the
+  name up among the programs below it; a name nothing declares answers ``error: There is no program `nothing` here``,
+  `  = the programs are: shop, migrate`, and ``  = a directory or a file is written as a path: `./nothing` ``. A
+  library answers ``error: acme/lib is a library: there is nothing to run``, and a package of scripts - neither
+  `src/main.trb` nor `src/lib.trb` - ``error: acme/tour has no program: there is nothing to run``. Both in the VM and
+  with `--native`.
+- **`torb build`** builds every program whose entry lies below the path (default `.`): per package `src/main.trb` first,
+  then the `program` lines in order, and at a workspace root every program of every member. Where there is none it
+  checks and says why, and leaves with `0`: `acme/lib is a library: checked, nothing to build`, `acme/tour has no
+  program: checked, nothing to build`, or for several packages `no package below <path> has a program: checked,
+  nothing to build`. `--output` and `--emit-c` are for one program: with several the "Name one" error comes with
+  `` `--output` is for one program``. Two programs that resolve to one path answer
+  ``error: `migrate` and `importer` both build to `dist/tool` ``.
+- **A file named directly** builds and runs as before. Where it is the entry of a program, it keeps that program's name
+  and `output`.
+- **`compiler/project.trb`** says `program "torb"`, and the thirty-two library manifests say nothing.
+
 ## 5. Profiles and targets
 
 `build { target = "release" }` puts two different things under one word. They separate:
@@ -419,7 +467,8 @@ configured program costs one line in one manifest and moves no file.
   compile there, which is what `native` and `foreign` already make visible.
 
 ```text
-torb build --profile dev            the default, decided
+torb build                          release, the default of build (decided 2026-09-27, below)
+torb build --profile dev            the profile torb run --native and torb test build by default
 torb build --release                the shorthand for --profile release
 torb build --target linux-x64       cross-compile; the default is the host
 ```
@@ -432,10 +481,16 @@ profile "release" {
 }
 ```
 
-**`dev` is the default and `release` is explicit.** That is Cargo's and Zig's default and the opposite of what the
-toolchain does today (`buildTarget = "release"` is one hardcoded constant): the first build somebody runs should be
-fast and its panics should carry frames, and the one place that pays is the toolchain building itself, which passes
-`--release` in a script that already exists.
+**The first round of this design made `dev` the default of `torb build`**, Cargo's and Zig's default: the first build
+somebody runs should be fast and its panics should carry frames.
+
+**Decided when it was built (2026-09-27): `torb build` keeps `release` as its default, and `torb run --native` and
+`torb test` keep `dev`.** The argument for `dev` is served already, by a different command: the first thing a
+newcomer runs is `torb run`, which compiles nothing at all, and the two commands that build to be run once -
+`torb run --native` and `torb test` - build `dev`. What is left for `torb build` is the build somebody asks for by
+name, and that is the one that is shipped, measured or installed, so it builds what ships. The repository relies on it
+besides: `tools/bootstrap.sh`, the gates and CLAUDE.md name `build/release/torb`, and a default that moved would move
+every binary they name. `--profile dev` is one flag for the other case.
 
 `profile` is a method on `Project` taking a name and a receiver closure, so the vocabulary does not grow a field per
 profile and a fourth profile name is a diagnostic rather than a parse error. A setting a back end does not have yet
@@ -456,6 +511,19 @@ today it is ignored without a word. The replacement says the two useful things s
 the profile and the target because it is a convention, and an `output` that overrides it is a fixed place somebody
 wants a file, which is a literal by definition. A project that wants one program under two profiles in two places
 wants `--output`, which is an argument of the invocation that knows which profile it is.
+
+**As built (2026-09-27).** `std/project` has `Profile { name, var optimize: Int, var debugInformation: Bool = false,
+var panicFrames: Bool }` with `static fn named(name: String): Self` - `optimize` 1 and `panicFrames` true in `dev`,
+2 and false in `release` - and `Project.profile(name: String, configure: (var self: Profile) => Void)`. The build
+passes `-O<optimize>` (MSVC: `/Od`, `/O1`, `/O2`) and `-g` where `debugInformation` is true; `panicFrames` is read and
+ignored, because whether a panic prints frames is still decided by the profile itself - a `dev` binary does, a
+`release` binary does not - and not by the block. A member without a
+block of a name takes its workspace root's. A literal block is read statically; a computed one makes the toolchain
+evaluate the manifest in the sandbox, as a computed `version` does. The problems, each at its block:
+`` `fast` is no profile: the profiles are `dev` and `release` ``, ``There are two `profile "dev"` blocks`` and
+`` `optimize = 4` of `profile "dev"` is outside 0 to 3``. The flags `--profile`, `--release` and `--target` were there
+before and did not change, and a `--target` that is not this machine still needs `--emit-c`. The binary lands where
+this section says, with `program.c` beside it.
 
 ## 6. The specifier grammar
 
@@ -483,7 +551,12 @@ word        = lowercase (lowercase | digit)*
   its name, and reserving the dot is what keeps `use logo from "./logo.png"` unavailable — which `docs/design/RESOURCES.md`
   lists as a non-goal and not as a gap.
 - **A relative specifier may leave `src/`**, because section 3 widened a package to its whole directory. It may not
-  leave the *package*: a `../` that climbs past the package directory is an error naming the package.
+  leave the *package*: a `../` that climbs past the package directory is an error naming the package. As built
+  (2026-09-27), so is a relative path to a file of a nested package, which is another package:
+  ``error: `../../linear/src/vector2` leaves `std/geometry` ``, with the note ``A relative path names a file of the
+  same package. Another package is imported by its name: `"owner/name/path"`, and it has to be a dependency``.
+  `std/geometry` and five conformance programs imported their neighbours that way and now write
+  `"std/linear/vector2"`.
 - **A package specifier is `owner/name`, optionally followed by a module path.** The path is resolved under `src/`,
   it may not contain `.` or `..`, and its last component may not be `main` — a program is not importable (section 3).
 - **An owner that contains a dot is host-qualified and is reserved.** `github.com/project/x` parses as the name it
@@ -821,7 +894,10 @@ that differs between two machines is a file everybody learns to ignore.
   repository already runs on every change, so it costs a gate and no new machinery. Two further checks fall out of it
   for free: writing the lock twice must produce the same bytes (idempotence, asserted in the toolchain's own tests),
   and once the VM exists, stage 0 and the compiled `torb` must write the same bytes for one project — which is the
-  conformance suite's contract applied to a file instead of to standard output.
+  conformance suite's contract applied to a file instead of to standard output. **Built 2026-09-27:** `torb lock
+  --check` fails with ``error: project.lock.trb is not what `torb lock` writes``, the first ten lines that differ as
+  ``line N: on disk `...`, written `...` `` and the command that writes it; `tools/gates.sh a` runs it over every
+  `project.lock.trb` git knows.
 
 ### Which manifest is evaluated, and which is read from a lock
 
@@ -910,10 +986,11 @@ the toolchain reads it, too, where the static read is not enough:
 
 - **A static setting that is computed is refused**, at its value, with the file, the line and the column and the note
   of section 10 (`manifestProblemsOf` of `compiler/src/project/manifest.trb`, a problem of the workspace): the nine
-  static rows, and `input` of `build { }` and `test { }`, which name the entry files. It is never evaluated.
-- **A setting the toolchain uses that is computed is evaluated**: `version`, `tasks { ... }`, or a line that is no
-  setting at all - an `if`, a loop - which may configure anything (`needsEvaluation`). The build, `torb run` and
-  `torb test` evaluate that manifest and read `version` and `tasks` from the settings it answers
+  static rows, `program` among them, whose `entry` names an entry file. It is never evaluated.
+- **A setting the toolchain uses that is computed is evaluated**: `version`, `tasks { ... }`, a `profile` block, or a
+  line that is no setting at all - an `if`, a loop - which may configure anything (`needsEvaluation`). The build,
+  `torb run` and `torb test` evaluate that manifest and read `version`, `tasks` and the profiles from the settings it
+  answers
   (`manifestOfProject` of `compiler/src/vm/manifest.trb`); everything that decides the workspace still comes from the
   static read. A stop of the script is an error of the build, with the line of `project.trb`.
 - **What is computed and read by nobody** - `description`, `license`, a `const` - **is not evaluated at all.** So
@@ -1202,10 +1279,13 @@ with an optional `capabilities` block, and `package "<name>", path:` for a `path
 owner is bound to**, as the `registry` line writes it (`https://packages.torb.dev` for an unbound owner), not the
 owner's name the sketch of section 8 used: a binding that changes after locking is then a mismatch the build
 reports, which is the point of pinning the registry. `git:` and `archive:` rows are not written yet. The top-level
-`language` is the root project's `language`, and a `settings` block carries `language`, `prelude`, `dependencies`,
-`version`, `authors`, `description`, `license` and `repository` - no `program` lines and no `resource` list yet,
-because the toolchain reads neither, and no `from` section, because the sandbox does not record what an evaluation
-read yet.
+`language` is the root project's `language`, and a `settings` block - written by `torb publish` for the package it
+publishes and, since 2026-09-27, by `torb lock` for every member, each from its evaluated manifest - carries
+`language`, `prelude`, `dependencies`, `version`, `authors`, `description`, `license` and `repository`: no `program`
+lines and no `resource` list yet, because nothing reads either from a lock, and no `from` section, because the sandbox
+does not record what an evaluation read yet. `torb lock` keeps the `graph` as it is - only `add`, `remove` and
+`update` change it - and refuses a graph that does not match `project.trb` with the problems that say `run torb
+update`.
 
 ## 12. Migration
 
@@ -1228,21 +1308,45 @@ every `.trb` file and nothing should be rebased across it.
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/design/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 
-**Where the slices stand (2026-09-26), from the package manager's round.** Slice 5's grammar exists as one function,
-`specifierOf` in `compiler/src/package/specifier.trb`, with a message per shape; the dependency lines and `torb add` use
-it, and a `use` that names no module or no package reports its message where it has one (a URL, a host-qualified
-owner, a dot in a component) - the climb out of the package is not checked yet. Slice 6 is half done: `source`, `registry`, `language`, `description`,
-`license` and `repository` are in `std/project` and in the static reader, without the plain-string diagnostic. Slice 8
-is the part the package manager needed: `Lock` with its `settings` and `graph`, the deterministic printer, `torb
-publish` writing the `settings` block from the evaluation and carrying both files in the archive, and the consumer side
-reading a dependency's `settings` instead of its `project.trb`; `torb lock` and `torb lock --check` are not built.
+**Where the slices stand (2026-09-27).** Slices 1 to 6 and 8 are done; slice 7 was done before, as SCRIPTS.md's
+slice 5.
 
-**The prose.** `docs/tooling/project-trb.md` (the settings table is rewritten), `torb-build.md`, `torb-run.md`,
-`torb-test.md`, `docs/language/modules-and-packages/{packages,top-level-code,use,workspaces}.md`,
-`docs/standard-library/project.md`, `docs/glossary.md`'s "entry file" and "package", `docs/guide/modules-and-packages.md`,
-`docs/how-to/{add-a-dependency,build-a-native-binary}.md`, CONCEPT's project layout, its `project.trb` example and
-four entries in its decision log. `docs/internals/index.md` lists this document and `docs/design/RESOURCES.md`, which is
-already done, so that `docs check` never sees a design document nothing links to.
+- **Slice 1**: the names of the files decide (section 3, "As built"). `Manifest` has no `buildInput` and no
+  `testInput`, a package is its whole directory, `src/lib.trb` is never an entry, and `torb test` without a path tests
+  the package it is run in. Removing the thirty-two `build { input = "src/lib.trb" }` blocks found no top-level code in
+  any library.
+- **Slice 2**: no `project.trb` of the repository writes `build { }` or `test { input }`. `Build` is gone from
+  `std/project` and `Test` keeps `coverageThreshold` alone, which nothing reads yet; a manifest that still writes
+  `build { }` does not check, because `Project` has no `build`.
+- **Slice 3**: `Program` and `Project.program`, the static reader's `program` lines, `torb run [name]`, `torb build
+  [name]`, "Name one", "nothing to build" and every rule of section 4's table, at the manifest or at the import
+  (section 4, "Programs as built"). `compiler/project.trb` says `program "torb"`.
+- **Slice 4**: the `profile` block, `Profile` and `Project.profile`, `-O<optimize>` and `-g`, inheritance from the
+  workspace root, `build/<profile>/<program>` and `build/<target>/<profile>/<program>`, and a literal `output`
+  (section 5, "As built"). `torb build` kept `release` as its default, which section 5 decides and argues.
+- **Slice 5**: `specifierOf` in `compiler/src/package/specifier.trb` takes a specifier apart with a message per shape
+  (a URL, a host-qualified owner, a dot in a component), and the module graph now refuses a relative path that leaves
+  its package or names a file of a nested one (section 6).
+- **Slice 6**: `source`, `registry`, `language`, `description`, `license` and `repository` are in `std/project` and in
+  the static reader, and the plain-string rule of the nine static settings (`manifestProblemsOf`) has tests for
+  `source`, `registry`, `language` and `program` besides the others.
+- **Slice 8**: `Lock` with its `settings` and `graph`, the deterministic printer, `torb publish` writing the `settings`
+  block from the evaluation and carrying both files in the archive, the consumer side reading a dependency's `settings`
+  instead of its `project.trb`, and `torb lock [--check]` (section 8), which is a gate of tier A.
+
+**What is left.** `panicFrames` is read and ignored until the runtime's frames follow the block rather than the
+profile. A `settings` block carries no `program` lines, no `resource` list and no `from` section yet, because nothing
+reads them from a lock. The first line of a written lock does not name `torb lock`, because changing it changes the
+tree hashes the package manager's transcript pins. `test { coverageThreshold }` is read by nobody. A
+`program "migrate" { ... }` block is not added, as section 4 says it should not be until a setting needs it. Slice 9
+is `docs/design/RESOURCES.md`'s own plan.
+
+**The prose** was rewritten with the slices: `docs/tooling/project-trb.md`, `project-lock-trb.md`, `torb-build.md`,
+`torb-run.md`, `torb-test.md`, `torb-new.md`, `the-torb-command.md` and the new `torb-lock.md`,
+`docs/language/modules-and-packages/{packages,top-level-code,use,workspaces}.md`, `docs/standard-library/project.md`,
+`docs/glossary.md`, the guide's first steps, modules and tests, the how-tos that build, test or add a dependency, and
+CONCEPT's project layout, its `project.trb` example and its decision log. `docs/internals/index.md` lists this
+document and `docs/design/RESOURCES.md`, so that `docs check` never sees a design document nothing links to.
 
 ## 13. What this is not
 

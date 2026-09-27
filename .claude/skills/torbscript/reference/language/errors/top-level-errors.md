@@ -33,14 +33,14 @@ print config
 ## Syntax
 
 ```text
-<result-expression>?      at the top level of src/main.trb, a script, or a receiver script
+<result-expression>?      at the top level of an entry file, a script, or a receiver script
 ```
 
 ## Rules
 
-1. **Top-level code, and therefore a top-level `?`, is only legal in an entry file (`src/main.trb`), a script, a
-   receiver script, or a `tests/*.test.trb` file.** A `src/lib.trb` consists of declarations only, because it is what
-   other packages import, and importing it must not run anything.
+1. **Top-level code, and therefore a top-level `?`, is only legal in an entry file (`src/main.trb`, or the `entry`
+   of a `program` line), a script, a receiver script, or a `*.test.trb` file.** A `src/lib.trb` consists of
+   declarations only, because it is what other packages import, and importing it must not run anything.
 
 2. **`?` at the top level behaves exactly as `?` inside a function that returns `Result<Void, Error>` does**, with one
    difference: there is no `return` to make, because there is nothing above the top level to return into. The program

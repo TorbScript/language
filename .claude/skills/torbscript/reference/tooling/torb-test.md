@@ -23,7 +23,7 @@ panics - there are no matchers to learn beyond [`assert`](../standard-library/ex
 ## Synopsis
 
 ```text
-torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests) in the bytecode VM
+torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: this package) in the bytecode VM
     --native                        Build them into one binary and run it instead
     --profile dev|release           Build natively, this hard does the C compiler optimize (default: dev)
     --release                       The same as --profile release
@@ -34,9 +34,11 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
 
 ### Finding the tests
 
-Every file below a `path` whose name ends in `.test.trb` is collected, recursively, sorted by path. `path` defaults to
-`tests`, the directory [`project.trb`](project-trb.md)'s `test { input "..." }` names by default, but `test` itself
-does not read `project.trb` - it only ever looks at the paths you give it.
+Every file below a `path` whose name ends in `.test.trb` is collected, recursively, sorted by path. **A file called
+`*.test.trb` is a test wherever it lies in the package** - `tests/` is a convention, not a setting - so nothing in
+[`project.trb`](project-trb.md) says where the tests are. Without a path, `test` tests **the package the working
+directory is in**: every `*.test.trb` below the innermost directory above it that has a `project.trb`, or below the
+working directory itself where there is none. So `torb test` in `shop/src/` runs the tests of `shop`.
 
 **Several paths are one run**, and therefore one binary and one report over all of them, in the order the paths sort
 in: `torb test std/path/tests std/linear/tests` builds both packages together. Any test package works the same way -
@@ -135,7 +137,8 @@ test "adds two numbers" { assert(1 + 1 == 2) }
 ## Related
 
 - [std/test](../standard-library/test.md) - `test` and `group` as a package, and where `assert` comes from.
-- [project.trb](project-trb.md) - `test { input, coverageThreshold }`, and which of them `test` reads today.
+- [project.trb](project-trb.md) - what the names of the files decide, and `test { coverageThreshold }`, which nothing
+  reads yet.
 - [torb check](torb-check.md) - the gate that runs before a test file is worth trusting.
 - [The torb command](the-torb-command.md) - every subcommand in one table.
 

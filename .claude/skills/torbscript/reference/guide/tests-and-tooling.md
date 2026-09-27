@@ -26,9 +26,10 @@ program before you hand it over.
 
 ## Writing a test
 
-A test file lives under `tests/` and ends in `.test.trb`. It is a
-[script](../language/modules-and-packages/top-level-code.md) made of `test` and `group` calls: nothing imports it, so
-it may hold this top-level code the way an entry file can.
+A test file ends in `.test.trb`, and the name is what makes it one: it may lie anywhere in the package, and `tests/` is
+where it lies by convention. It is a [script](../language/modules-and-packages/top-level-code.md) made of `test` and
+`group` calls: nothing imports it, so it may hold this top-level code the way an entry file can. `torb test` in the
+package's directory runs every one of them.
 
 ```trb check
 use test from "std/test"

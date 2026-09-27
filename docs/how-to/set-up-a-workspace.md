@@ -52,7 +52,9 @@ be there in source, and the workspace is what makes that legal.
    ```
 
 4. **Run `check`, `build` and `test` at the root to work across every member at once**, in the order their
-   dependencies require. Point the same commands at one member's directory to work on it alone.
+   dependencies require: `torb build` builds every program of every member, and a member without a program - a
+   library - is checked and builds nothing. Point the same commands at one member's directory -
+   `torb build ./packages/api` - to work on it alone.
 
 5. **Commit one `project.lock.trb`, at the root.** Every member shares that resolution, so two members can never end
    up depending on different versions of the same package.
@@ -65,8 +67,10 @@ be there in source, and the workspace is what makes that legal.
 - **A cycle between members is an error.** The root works through members in the order their dependencies require,
   which a cycle between two members makes impossible to compute; a cycle between ordinary modules of one package is
   fine, because nothing runs when a module is only imported.
-- **`version`, `authors` and the registries are inherited from the root**, not copied. A member that sets its own
-  overrides the root for itself only, and one that sets nothing changes when the root does.
+- **`version`, `authors`, the registries and the `profile` blocks are inherited from the root**, not copied. A member
+  that sets its own overrides the root for itself only, and one that sets nothing changes when the root does.
+- **A sibling is imported by its name, never by a relative path.** `"../../core/src/cart"` from inside `api` is an
+  error that says it leaves the package; `"acme/shop-core/cart"` is the import.
 - **The root does not need an empty `src/`.** `workspace { members ... }` can stand next to a root that also has its
   own sources; the two are independent.
 

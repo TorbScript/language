@@ -31,10 +31,10 @@ the language server are all in it. That keeps a project's setup to one installat
 ## Synopsis
 
 ```text
-torb run <path> [...]  Run a file or a project in the VM; --native builds and runs it
+torb run [path|name] [...]  Run a file or a program in the VM; --native builds and runs it
 torb repl              Read entries from standard input, run each in the VM, keep their bindings
 torb check [path]...   Check projects, workspaces or single files
-torb build [path]      Compile an entry file to a native binary through C
+torb build [path|name]  Compile every program below the path, or the one named, through C
 torb ir <path>...      Print the typed IR the back end lowers
 torb parse <path>...   Check the syntax of files or directories
 torb tokens <file>     Print the tokens of a file
@@ -53,6 +53,7 @@ torb remove <package>...  Remove a dependency from project.trb and project.lock.
 torb update [package]...  Resolve every package, or the named ones, to the highest version allowed
 torb install           Fetch and verify every package project.lock.trb pins into the cache
 torb publish           Build and check the archive of a package, and publish it (--dry-run: build only)
+torb lock [--check]    Write the settings of every member into project.lock.trb; --check only compares
 ```
 
 `torb` is `build/release/torb`, what `sh tools/bootstrap.sh` writes, and every command below is
@@ -68,9 +69,11 @@ torb format --check .
 
 ### `run`
 
-Runs a file, or the `build { input }` of a project directory, in the bytecode VM inside `torb`, passing the rest of
-the command line to the program as `Process.arguments()` and the program's three streams and its exit code through. A
-script may hold top-level code because nothing imports it.
+Runs a file, the only program below a directory (the working directory where nothing is named), or the program a name
+names, in the bytecode VM inside `torb`, passing the rest of the command line to the program as `Process.arguments()`
+and the program's three streams and its exit code through. An argument with a `/` or a `\`, one that ends in `.trb`,
+and `.` and `..` are paths; anything else is a program name. A script may hold top-level code because nothing imports
+it.
 
 `torb run --native` builds it into `build/run/<key>/` instead and starts the binary [`build`](torb-build.md) would have
 written; the key is a hash of every source file that was read, so an unchanged program is not rebuilt. Both run the same
@@ -101,9 +104,12 @@ a caret under the span.
 
 ### `build`
 
-Compiles the typed IR ahead of time. The first back end prints C and hands it to a C compiler, so `torb build` needs one
-on the machine; `--emit-c` writes the C and stops, which needs nothing. `--output <file>` says where the binary goes, and
-the C is written next to it. Nothing observable differs between a binary and the same program under `torb run`.
+Compiles the typed IR ahead of time: every program below the path (default `.`) - each package's `src/main.trb` and
+its `program` lines - or the one a name names, each into `build/<profile>/<program>` of its package; a library is
+checked and builds nothing. The first back end prints C and hands it to a C compiler, so `torb build` needs one on the
+machine; `--emit-c` writes the C and stops, which needs nothing. `--output <file>` says where the binary of one program
+goes, and the C is written next to it. Nothing observable differs between a binary and the same program under
+`torb run` ([torb build](torb-build.md)).
 
 ### `parse`, `tokens`, `ast` and `ir`
 
@@ -170,9 +176,10 @@ and ignored, because `format` runs every rule of the canon ([torb canon](torb-ca
 ### `test`
 
 Runs every `*.test.trb` file below the paths it is given - any test package, and several of them at once, which is
-still one binary and one report. The output is the name of a file, then one line per test of it, then the next file -
-**in the order of the files**, which is the order their paths sort in - and at the end a blank line and
-`N passed, M failed (K files)`. The command leaves with 0 where nothing failed and 1 otherwise.
+still one binary and one report - and without a path every one of the package the working directory is in. The output
+is the name of a file, then one line per test of it, then the next file - **in the order of the files**, which is the
+order their paths sort in - and at the end a blank line and `N passed, M failed (K files)`. The command leaves with 0
+where nothing failed and 1 otherwise.
 
 **One binary for all of them**, and not one per file, because every test file imports its harness and through it
 whatever it tests: one binary per file would be one C compile of a translation unit that size per file, and the C
@@ -194,15 +201,17 @@ calls. With `--check` it prints nothing but a summary, and fails where the stati
 anything else out of those settings than out of the file itself; `tools/gates.sh a` runs it over every manifest of the
 repository.
 
-### `add`, `remove`, `update`, `install` and `publish`
+### `add`, `remove`, `update`, `install`, `publish` and `lock`
 
 The package manager. `add`, `remove` and `update` edit `project.trb` where they must, resolve every member of the
 workspace together by PubGrub - the highest version every requirement allows, and an explanation where there is none -
 and write [project.lock.trb](project-lock-trb.md); `install` fetches what the lock pins into the cache and checks every
 tree hash; `publish` builds the archive of a package exactly as a registry receives it and writes it into a `file:`
-registry. Every one of them takes `--project <directory>` and `--offline`. See [torb add](torb-add.md),
-[torb remove](torb-remove.md), [torb update](torb-update.md), [torb install](torb-install.md) and
-[torb publish](torb-publish.md).
+registry; `lock` writes the `settings` block of every member from its evaluated manifest and leaves the graph alone,
+and `lock --check` writes nothing and fails where the file is not what `lock` would write. Every one of them takes
+`--project <directory>` and `--offline`. See [torb add](torb-add.md), [torb remove](torb-remove.md),
+[torb update](torb-update.md), [torb install](torb-install.md), [torb publish](torb-publish.md) and
+[torb lock](torb-lock.md).
 
 ### `docs`
 

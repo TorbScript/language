@@ -45,9 +45,10 @@ every package the checked files belong to is documented. The program is checked 
 is refused: the model is read out of the checked program - the syntax trees the checker holds, the scopes it built -
 and not out of a second parse.
 
-- **A package is documented by what its entry module exports**: the `public use` lines of `src/lib.trb` (the
-  `build { input }` of its `project.trb`) name the public API, and each exported construct is shown in the module
-  that declares it. A package whose entry exports nothing, an application, is documented by every `public` declaration.
+- **A package is documented by what its entry module exports**: the `public use` lines of `src/lib.trb` - or of
+  `src/main.trb` in a package that has no library - name the public API, and each exported construct is shown in the
+  module that declares it. A package whose entry exports nothing, an application, is documented by every `public`
+  declaration of its `src/`.
 - **A construct is shown with its members**: the fields, cases, `static` members and methods of a type or a trait that
   are not `private`, and every `extend` of the package with the members it adds. Tests, `project.trb` and every
   declaration that is not public are left out.

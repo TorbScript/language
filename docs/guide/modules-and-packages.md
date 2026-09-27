@@ -80,11 +80,19 @@ hello/
 ├ src/
 ├─ main.trb
 ├─ lib.trb
+├─ greeting.trb
+├ tests/
+├─ greeting.test.trb
 └ project.trb
 ```
 
-`src/main.trb` is what `torb run` executes, `src/lib.trb` is what another package imports, and `project.trb` names the
-package `owner/name`. Only a package listed as a dependency can be reached from another one - see
+The names of the files say what each one is. `src/main.trb` is the program `torb run` executes, `src/lib.trb` is what
+another package imports, `src/greeting.trb` is a module, and a file whose name ends in `.test.trb` is a test that
+`torb test` runs wherever it lies. `project.trb` names the package `owner/name` and needs no line for any of them.
+
+The program is never imported - a file that may hold top-level code cannot be - so what the program and a test share
+lives in a module like `src/greeting.trb`, and both import it. Only a package listed as a dependency can be reached
+from another one, by its name and never by a relative path - see
 [Packages](../language/modules-and-packages/packages.md).
 
 ## Next

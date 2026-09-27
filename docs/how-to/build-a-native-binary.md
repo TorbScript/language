@@ -1,6 +1,6 @@
 ---
 title: Build a native binary
-summary: Point torb build at the entry file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
+summary: Run torb build in a package or point it at a file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
 kind: how-to
 status: stable
 order: 60
@@ -20,27 +20,29 @@ the part of the language the native back end already covers.
 
 ## Steps
 
-1. **Point `torb build` at the entry file:**
+1. **Run `torb build` in the package, or name the directory or the file:**
 
    ```console
-   $ torb build my-project
+   $ torb build ./my-project
    ```
 
-   A path to a project with a `build { input "src/main.trb" }` works the same way; `torb build` reads that project's
-   entry file.
+   A directory builds every program below it - its `src/main.trb`, and every `program` line of its `project.trb` -
+   into `my-project/build/release/<program>`. A file builds that file. Write a directory with a slash: a word without
+   one, `torb build my-project`, is the name of a program, and `torb build migrate` builds the one program called
+   `migrate`.
 
 2. **Look at the generated C first with `--emit-c` if there is no C compiler on the machine yet.** It writes the C
    next to where the binary would go and stops - no C compiler needed for this step at all.
 
    ```console
-   $ torb build my-project --emit-c
+   $ torb build ./my-project --emit-c
    ```
 
 3. **Choose where the binary goes with `--output <path>`.** The C file is written next to it, so both ends of the
-   build are in one place.
+   build are in one place. `--output` and `--emit-c` are for one program: in a package with two, name the one.
 
    ```console
-   $ torb build my-project --output build/my-project
+   $ torb build ./my-project --output build/my-project
    ```
 
 4. **Make sure a C compiler is reachable.** `torb build` tries, in order, `$TORB_CC`, `clang`, `gcc`, `cc`, then `cl`.
@@ -62,6 +64,8 @@ the part of the language the native back end already covers.
 
 ## Pitfalls
 
+- **A package without a program builds nothing, and that is not an error.** A library - `src/lib.trb` and no
+  `src/main.trb` - is checked and answers `acme/lib is a library: checked, nothing to build`, with exit code `0`.
 - **`print`, `printError`, string interpolation, and `for` over a range - a literal one or a `Range<Int>` value -
   build.** These were the most common reasons a program refused to build; a program built from arithmetic, control
   flow, functions and these no longer needs `--emit-c` just to read the generated code.

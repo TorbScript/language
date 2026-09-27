@@ -67,7 +67,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/compression](compression.md)** - DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - **[std/archive](archive.md)** - POSIX ustar archives - tarred writes entries as bytes that depend on nothing but the entries, untarred reads the regular files back and refuses links.
 - **[std/sandbox](sandbox.md)** - Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
-- **[std/project](project.md)** - The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.
+- **[std/project](project.md)** - The receiver type of project.trb - Project, Dependencies, Program, Profile, Test, Tasks, Workspace, Registry and Source.
 - **[std/prelude](prelude.md)** - The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - **[std/stream](stream.md)** - Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
 

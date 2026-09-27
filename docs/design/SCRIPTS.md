@@ -143,7 +143,7 @@ and which never collides with the entry function of the same module.
   answering the script function as a closure and the modules its `use` lines name with their lines. It is ordinary IR,
   and it is what `Sandbox.load` - TorbScript now - reads. The one native only the VM has is `runScript`: the lowering
   refuses it for the C back end and hands it to the bytecode emitter as the instruction `run.script` otherwise.
-- **A loaded file is a script wherever it lies**, also where a test directory swept it in as a module of the package:
+- **A loaded file is a script wherever it lies**, also among the files of a package, which would make it a module:
   the load decides (`addReceiverScripts` in `semantics/graph.trb`).
 
 ## 4. The sandbox
@@ -273,14 +273,14 @@ public fn evaluated(script: (var self: Project) => Void): String {
   1 000 000 steps, 16 MB and 2 s. A dependency's manifest will get the same without `std/os/environment` once
   dependencies are resolved (PROJECT.md section 7).
 - **`settings()` prints what differs from the vocabulary's defaults**, in the order of the vocabulary, every argument a
-  literal. A default is not printed because the static reader has defaults of its own - a workspace without a `test`
-  section has no test directory, which a printed `test { input = "tests" }` would contradict.
+  literal. A default is not printed because the static reader has defaults of its own, and a line that repeats one
+  would only be a second place to keep in step with it.
 - **One front end run evaluates every manifest below a path.** `torb manifest --check .` checks the workspace once,
   lowers every manifest's script function next to `evaluated` into one program, and runs each in its own sandbox. That
   is what makes the comparison with the static reader cheap enough to be a gate of tier A: the two must agree on every
   `Manifest` field of every `project.trb` of the repository before anything reads the evaluated one (BACKEND row 7.5).
 - **The static reader stays** for the settings that decide the workspace - `name`, `prelude`, `dependencies`,
-  `workspace`, the entry files - because they are needed before anything can be checked, and "the static read comes
+  `workspace`, the `program` lines - because they are needed before anything can be checked, and "the static read comes
   first" (PROJECT.md section 8). One of them written as something that would have to run is refused at its value, with
   the file, the line and the column (`manifestProblemsOf`), and never evaluated.
 - **The toolchain reads the evaluation (slice 5, as built)** where a setting it uses is computed - `version`, or

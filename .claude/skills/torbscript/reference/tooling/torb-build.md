@@ -1,11 +1,13 @@
 ---
 title: torb build
-summary: torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
+summary: torb build type checks every program below a path, or the one named, lowers each to C and hands the C to whatever compiler it finds - a library is checked and builds nothing.
 kind: tooling
 status: stable
 order: 50
 keywords:
   - torb build
+  - program
+  - profile
   - native binary
   - C back end
   - emit-c
@@ -14,6 +16,8 @@ keywords:
   - TORB_MEMORY_LIMIT
 source:
   - compiler/src/cli/build.trb
+  - compiler/src/project/programs.trb
+  - docs/design/PROJECT.md
 ---
 
 `build` is `check` plus the C back end: a program that does not type check is never handed to a C compiler, and a
@@ -22,29 +26,69 @@ construct the back end cannot lower yet is reported the same way a type error is
 ## Synopsis
 
 ```text
-torb build [path]         Compile an entry file to a native binary through C
+torb build [path | name]    Compile every program below the path, or the one named, through C
     --profile dev|release   How hard the C compiler optimizes (default: release)
     --release               The same as --profile release
-    --emit-c                Write the C and stop, which needs no C compiler at all
-    --output <file>          Where the binary goes (the C is written next to it)
+    --emit-c                Write the C and stop, which needs no C compiler at all (one program)
+    --output <file>          Where the binary goes, the C next to it (one program)
     --target <os>-<arch>     What the program is built for (default: this machine), with --emit-c for another one
     --embed-vm               A native binary of the VM that runs the program's bytecode, as torb run does
 ```
 
 ## What it does
 
-### Finding the entry
+### A path or a name
 
-`path` (default `.`) is checked exactly like a `check` target. What is compiled is one entry file: either `path`
-itself, when it names a file directly, or the single file requested when `path` names a project whose
-`build { input "..." }` (or the default `src/main.trb`) matches one of its modules. A path that resolves to more
-than one file with none of them the project's build input is refused:
+**An argument that contains `/` or `\`, ends in `.trb`, or is `.` or `..` is a path; anything else is the name of a
+program.** A program is named like a package - lowercase letters, digits and `-` - so the two readings never overlap,
+and nothing has to be asked of the disk to tell them apart. `torb build compiler` looks for a program called
+`compiler`; the directory is `torb build ./compiler`.
+
+### What is built
+
+Every path (default `.`) is checked exactly like a `check` target, and then:
+
+- **A directory builds every program whose entry lies below it**: per package its `src/main.trb` first, named after
+  the package's short name (`acme/shop` builds `shop`) or renamed by a `program` line, then its `program` lines in the
+  order [`project.trb`](project-trb.md) writes them. At a workspace root that is every program of every member.
+- **A name builds the one program of that name** below the paths, the working directory where none is given. A name
+  nothing declares is refused with the names that exist:
+
+  ```text
+  error: There is no program `nothing` here
+    = the programs are: shop, migrate
+    = a directory or a file is written as a path: `./nothing`
+  ```
+
+- **A file named directly is the one program**, whatever it is: a script, or the entry of a program, which then keeps
+  that program's name and `output`.
+
+**A package without a program builds nothing, and that is not an error.** There is no artifact a library produces on
+its own, so `build` checks it, says so and leaves with `0`: `acme/lib is a library: checked, nothing to build` where
+the package has a `src/lib.trb`, `acme/tour has no program: checked, nothing to build` for a package of scripts with
+neither `src/main.trb` nor `src/lib.trb`, and `no package below <path> has a program: checked, nothing to build` for a
+directory of several.
+
+**`--output` and `--emit-c` are for one program.** Where the path has several, `build` names them instead of guessing:
 
 ```text
-error: `torb build` needs one entry file. Name the file, or a project with a `build` input
+error: acme/shop has 2 programs. Name one: `torb build shop`
+  = shop, migrate
+  `--output` is for one program
 ```
 
-Only what the entry file reaches is emitted - a function nothing calls from `main` never becomes C.
+Two programs whose binaries would land on one path are refused before either is built:
+``error: `migrate` and `importer` both build to `dist/tool` ``.
+
+Only what a program's entry reaches is emitted - a function nothing calls from its top-level code never becomes C.
+
+### Where the binary goes
+
+`<package>/build/<profile>/<program>`, and `<package>/build/<target>/<profile>/<program>` when `--target` names
+another machine, so that two targets never write over each other. The `output` of a `program` line replaces the whole
+path and is taken literally, relative to the project: `output: "dist/migrate"` is `dist/migrate` under every profile
+and every target. `--output <file>` overrides both, for one program and one invocation. The C of a program is written
+beside its binary as `program.c`.
 
 A program may have **more than one entry file**, and `torb test` is the one command that builds one: every `*.test.trb`
 of a directory is an entry of one binary, and the generated `main` runs them in the order of their paths with the name
@@ -59,7 +103,7 @@ parameter of a function you declare is one of the constructs still missing (`pri
 back-end intrinsic and builds regardless):
 
 ```console
-$ torb build my-project
+$ torb build ./my-project
 error: a variadic argument list is not supported by the native back end yet (at my-project/src/main.trb:5:7)
 1 problem the native back end cannot compile yet, nothing was built
 ```
@@ -68,7 +112,7 @@ A program that only uses what the back end already lowers - functions, types, co
 string interpolation, `Process.exit` - builds and runs like any other native binary:
 
 ```console
-$ torb build my-project --output build/dev/my-project
+$ torb build ./my-project --output build/dev/my-project
 wrote ../build/dev/my-project.exe
 ```
 
@@ -112,7 +156,17 @@ Listening on 0.0.0.0:8443 (tls: true)
 A profile is how hard the C compiler works on the one C file: `dev` is `-O1`, `release` is `-O2`. The C is the same
 under both, so a profile never changes what a program means - only how long the build takes and how fast the binary
 is. `build` builds `release` unless told otherwise, and the default path of the binary is `build/<profile>/<name>`;
-`torb test` and `torb run` build `dev`.
+`torb test` and `torb run --native` build `dev`.
+
+A `profile` block of [`project.trb`](project-trb.md) sets how its profile builds: `optimize` is the level, 0 to 3
+(`-O<optimize>`, and `/Od`, `/O1` or `/O2` with MSVC), and `debugInformation = true` adds `-g`. A member of a
+workspace without a block of that name takes its workspace root's:
+
+```trb fragment
+profile "release" {
+  optimize = 3
+}
+```
 
 One of the two things besides speed a profile decides is the **default memory limit**. A `dev` binary stops at the
 smaller of 8 GiB and half the physical memory, with `panic: out of memory: the limit of ... was reached` and exit code `102`, so
@@ -166,10 +220,22 @@ $ torb build examples/tour/src/scratch.trb --output build/dev/scratch
 wrote ../build/dev/scratch.exe
 ```
 
+A package with `src/main.trb` and the line `program "migrate", entry: "tools/migrate.trb"` has two programs, and
+`build` in its directory builds both, the default program first; a name builds one:
+
+```console
+$ torb build
+wrote C:/work/shop/build/release/shop.exe
+wrote C:/work/shop/build/release/migrate.exe
+$ torb build migrate --profile dev
+wrote C:/work/shop/build/dev/migrate.exe
+```
+
 ## Related
 
 - [torb check](torb-check.md) - what `build` runs before it emits anything.
 - [torb run](torb-run.md) - running the same program without a build step.
-- [project.trb](project-trb.md) - `build { input, target, output }`, and which of them `build` reads today.
+- [project.trb](project-trb.md) - the `program` lines and `profile` blocks `build` reads, and what the names of the
+  files decide.
 - [The torb command](the-torb-command.md) - every subcommand in one table.
 

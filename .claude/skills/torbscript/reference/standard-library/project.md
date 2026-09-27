@@ -1,6 +1,6 @@
 ---
 title: std/project
-summary: The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.
+summary: The receiver type of project.trb - Project, Dependencies, Program, Profile, Test, Tasks, Workspace, Registry and Source.
 kind: package
 status: stable
 order: 200
@@ -8,6 +8,8 @@ keywords:
   - std/project
   - project.trb
   - Project
+  - Program
+  - Profile
   - manifest
 source:
   - std/project/src/lib.trb
@@ -15,8 +17,12 @@ source:
 
 `std/project` is the vocabulary of `project.trb`. A project file is a receiver script against `Project`, so everything
 a project can say about itself is a `var` field or a method of the types here, and nothing else is needed to write one:
-a setting is written `name = "acme/shop"` and a section `build { ... }`. The types are ordinary data, not `native` -
-a project file is deterministic and has no IO, so evaluating it is nothing but running these members.
+a setting is written `name = "acme/shop"`, a section `tasks { ... }` and a program `program "migrate", entry:
+"tools/migrate.trb"`. The types are ordinary data, not `native` - a project file is deterministic and has no IO, so
+evaluating it is nothing but running these members.
+
+What a package produces is not in this vocabulary at all: the names of its files say it (`src/main.trb`, `src/lib.trb`,
+`*.test.trb`), and [project.trb](../tooling/project-trb.md) has the table.
 
 ## Import
 
@@ -24,7 +30,7 @@ a project file is deterministic and has no IO, so evaluating it is nothing but r
 tool that reads a manifest programmatically imports them like anything else.
 
 ```trb fragment
-use Project, Dependencies, Build, Test, Tasks, Workspace, Registry, Source from "std/project"
+use Project, Dependencies, Program, Profile, Test, Tasks, Workspace, Registry, Source from "std/project"
 ```
 
 ```trb check
@@ -49,7 +55,6 @@ public type Project {
   var repository: String = ""
   var prelude: String = "std/prelude"
   var dependencies: Dependencies = Dependencies()
-  var build: Build = Build()
   var test: Test = Test()
   var tasks: Tasks = Tasks()
   var workspace: Workspace = Workspace()
@@ -57,14 +62,19 @@ public type Project {
   var fn authors(...names: String)
   var fn registry(owner: String, url: String)
   var fn source(package: String, path: String = "", git: String = "", revision: String = "", archive: String = "", hash: String = "")
+  var fn program(name: String, entry: String = "", output: String = "")
+  var fn profile(name: String, configure: (var self: Profile) => Void)
 }
 ```
 
 The receiver of `project.trb`. A setting is a `var` field (`name = "acme/shop"` writes it), a section is a field
-configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`, `source`). `name` is
-`owner/name` - owners are verified namespaces of a registry, so a bare name is not publishable. The fields are
-readable, which is what lets a project file compute from what it already said:
-`const binary = name.substringAfter("/") ?? name`.
+configured in place (`tasks { ... }`), and only what is more than that is a method (`authors`, `registry`, `source`,
+`program`, `profile`). `name` is `owner/name` - owners are verified namespaces of a registry, so a bare name is not
+publishable. The fields are readable, which is what lets a project file compute from what it already said:
+`description = "The {name} package"`.
+
+`program` declares a [Program](#program) and `profile` configures a [Profile](#profile). There is no `build`: a
+manifest that writes `build { }` does not check.
 
 ### Dependencies
 
@@ -79,23 +89,63 @@ public type Dependencies {
 as it is published (`"acme/http:^1.2.3"`), because the version is the package manager's business and the project file
 only names what it wants.
 
-### Build and Test
+### Program
 
 ```trb fragment
-public type Build {
-  var target: String = "dev"
-  var input: String = "src/main.trb"
-  var output: String = ""
+public type Program {
+  name: String
+  entry: String = ""
+  output: String = ""
 }
+```
 
+A program of the package beyond the `src/main.trb` that needs no line, declared with `Project.program`:
+`program "migrate", entry: "tools/migrate.trb"`. `entry` is the file whose top-level code the program is, relative to
+the project; a line without one renames the default program (`program "torb"`). `output` is where the binary goes,
+relative to the project and taken literally; empty is `build/<profile>/<name>`. The toolchain reads the three before
+it can run anything, so each is a plain string, and `name` is lowercase letters, digits and `-`.
+
+```trb fragment
+program "migrate", entry: "tools/migrate.trb", output: "dist/migrate"
+```
+
+### Profile
+
+```trb fragment
+public type Profile {
+  name: String
+  var optimize: Int
+  var debugInformation: Bool = false
+  var panicFrames: Bool
+
+  static fn named(name: String): Self
+}
+```
+
+How one of the two profiles builds, configured with `Project.profile`. `name` is `dev` or `release` and there is no
+third. `optimize` is the level of the C compiler, 0 to 3 - `1` in `dev` and `2` in `release`. `debugInformation` makes
+the binary carry debug information for a debugger. `panicFrames` - `true` in `dev`, `false` in `release` - is read and
+ignored for now. `Profile.named` is the profile where no block says otherwise, and the block of `profile` starts from
+it:
+
+```trb fragment
+profile "release" {
+  optimize = 3
+  debugInformation = true
+}
+```
+
+### Test
+
+```trb fragment
 public type Test {
-  var input: String = "tests"
   var coverageThreshold: Int = 0
 }
 ```
 
-`Build` is what `torb build` produces; `output` is interpolated eagerly, so it reads `target` and the script's own
-bindings. `Test.coverageThreshold` is the share of lines a test run has to cover, in percent, and `0` asks for nothing.
+`coverageThreshold` is the share of lines a test run has to cover, in percent, and `0` asks for nothing. No command
+reads it yet. Which files are tests is not a setting: a file called `*.test.trb` is one wherever it lies in the
+package.
 
 ### Tasks
 
@@ -159,6 +209,8 @@ are refused by it ([project.lock.trb](../tooling/project-lock-trb.md)).
 
 ## Related
 
+- [project.trb](../tooling/project-trb.md) - what the toolchain reads out of these settings, and what the names of the
+  files decide instead.
 - [std/sandbox](sandbox.md) - `Sandbox`, the mechanism `project.trb` is loaded through.
 - [The standard library](index.md) - the other packages.
 

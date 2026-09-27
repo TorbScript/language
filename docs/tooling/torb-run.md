@@ -1,11 +1,12 @@
 ---
 title: torb run
-summary: torb run runs a file or a project in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
+summary: torb run runs a file, the only program below a directory or the program named in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 kind: tooling
 status: stable
 order: 40
 keywords:
   - torb run
+  - program
   - cache
   - arguments
   - entry point
@@ -27,7 +28,7 @@ way when it is shipped.
 ## Synopsis
 
 ```text
-torb run [--native] [--profile dev|release] <path> [arguments]   Run a file, or a project's build { input }
+torb run [--native] [--profile dev|release] [path | name] [arguments]   Run a file or a program
     --native                In front of the path: build it natively and run the binary
     --profile dev|release   In front of the path: build it natively, this hard does the C compiler optimize
     --release               The same as --profile release
@@ -37,21 +38,39 @@ torb run [--native] [--profile dev|release] <path> [arguments]   Run a file, or 
 
 ## What it does
 
-### The entry point
+### What it runs
 
-Given a file, `run` runs that file. Given a directory, it runs the `build { input }` of that directory's
-[`project.trb`](project-trb.md) - so `torb run my-project` and `torb run my-project/src/main.trb` reach the same file
-when the manifest says `input "src/main.trb"`. A file that nothing imports may hold top-level code and needs no
-`fn main`, which is what makes a single script runnable at all.
+**An argument that contains `/` or `\`, ends in `.trb`, or is `.` or `..` is a path; anything else is the name of a
+program** ([project.trb](project-trb.md#programs)). So:
+
+- **A file** is run as it is: a script, or the entry of a program. A file that nothing imports may hold top-level code
+  and needs no `fn main`, which is what makes a single script runnable at all.
+- **A directory**, and the working directory where nothing is named, runs **the only program below it**: a package's
+  `src/main.trb`, or the `entry` of one of its `program` lines. `torb run ./my-project` and
+  `torb run my-project/src/main.trb` reach the same file. Where there are several, `run` names them instead of
+  guessing:
+
+  ```text
+  error: acme/shop has 2 programs. Name one: `torb run shop`
+    = shop, migrate
+  ```
+
+- **A name** runs the program of that name below the working directory - `torb run migrate`. A name nothing declares
+  answers ``error: There is no program `migrate` here`` with the names that exist and the reminder that a directory is
+  written as a path, `./migrate`.
+
+A package without a program has nothing to run: ``error: acme/lib is a library: there is nothing to run``, or
+``error: acme/tour has no program: there is nothing to run`` for a package of scripts with neither `src/main.trb` nor
+`src/lib.trb` - its files are run by naming them. All of this is the same in the VM and with `--native`.
 
 ### The cache of `--native`
 
 The binary goes into `build/run/<profile>/<key>/` under the workspace root, and `<key>` is a hash of **every file the
-front end read**, with its path and its text, plus the entry that was named and **the toolchain that builds it**: the
-hash of the compiler's own C that `torb build` wrote beside the running `torb` (`program.hash`, or `program.c` where
-only that is there) and the text of every C file and header of the runtime it links. The profile is `dev` unless the command
-line says `--profile release` or `--release` in front of the path. An unchanged program is therefore not rebuilt: the
-first run costs a build, every run after it costs a process start.
+front end read**, with its path and its text, plus the path and the program name that were given and **the toolchain
+that builds it**: the hash of the compiler's own C that `torb build` wrote beside the running `torb` (`program.hash`,
+or `program.c` where only that is there) and the text of every C file and header of the runtime it links. The profile
+is `dev` unless the command line says `--profile release` or `--release` in front of the path. An unchanged program is
+therefore not rebuilt: the first run costs a build, every run after it costs a process start.
 
 Keying on every file that was read rather than on the ones the program imports is the same trade
 [`check`](torb-check.md) makes when it reads the whole workspace: an edit to a file the program does not import costs
@@ -63,9 +82,9 @@ known by its path alone, which is the one case that asks for it.
 
 ### Arguments
 
-Everything after the path is what the program's own `Process.arguments()` sees - `run` itself reads none of it - so
-`torb run tool.trb --verbose input.txt` hands `["--verbose", "input.txt"]` to `tool.trb`, and a word that looks like a
-flag of `run` is passed on rather than read.
+Everything after the path or the name is what the program's own `Process.arguments()` sees - `run` itself reads none
+of it - so `torb run tool.trb --verbose input.txt` hands `["--verbose", "input.txt"]` to `tool.trb`, and a word that
+looks like a flag of `run` is passed on rather than read.
 
 ### What `run` puts on the output
 
@@ -127,6 +146,16 @@ $ torb run tools/report.trb --since 2026-09-01
 14 commits, 3 authors
 ```
 
+In a package with a second program, `run` wants a name, and everything behind the name is the program's:
+
+```console
+$ torb run
+error: acme/shop has 2 programs. Name one: `torb run shop`
+  = shop, migrate
+$ torb run migrate --dry-run
+3 tables to migrate
+```
+
 Built natively, the second run of an unchanged program starts immediately, because the key of its sources did not
 change:
 
@@ -141,5 +170,6 @@ list: [1, 2, 3], first: 1, a: 1
 
 - [torb build](torb-build.md) - the build `run` is made of, and where the binary goes when you ask for one.
 - [torb check](torb-check.md) - the same front end without the back end, for when only the diagnostics are wanted.
+- [project.trb](project-trb.md) - the `program` lines a name is looked up in.
 - [The torb command](the-torb-command.md) - every subcommand in one table.
 - [Top-level code](../language/modules-and-packages/top-level-code.md) - what makes a file runnable on its own.

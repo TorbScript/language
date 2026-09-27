@@ -38,10 +38,12 @@ where the standard library the path depends on lives - except in a hidden direct
 holds what a build, a test run or a docs check wrote and never a source. A file with no `project.trb` above it at all is checked alone,
 against the default prelude.
 
-A file that is named directly is checked even where no project would sweep it in - at the root of a workspace, beside
-`src/` rather than in it. A workspace without a standard library of its own - a file below no `project.trb`, a project
-that is nobody's member - gets the toolchain's: the `std` of the nearest directory above the named path, then above
-the working directory, then above `torb` itself, that has `std/prelude/project.trb`, or `$TORB_STD`.
+The files of a package are every `.trb` file below its directory that no nested `project.trb` claims, so a file beside
+`src/` - `tools/migrate.trb` - is one of them. A file that is named directly is checked even where no package sweeps
+it in, in a hidden or a `build` directory. A workspace without a standard library of its own - a file below no
+`project.trb`, a project that is nobody's member - gets the toolchain's: the `std` of the nearest directory above the
+named path, then above the working directory, then above `torb` itself, that has `std/prelude/project.trb`, or
+`$TORB_STD`.
 
 Passing several paths checks several targets in one run; each is resolved this way independently. A path that reaches
 no file at all is an error, not a clean run.
@@ -49,9 +51,11 @@ no file at all is an error, not a clean run.
 ### What is checked
 
 Every module, every `use`, the visibility of every name, every name in a type position, and the type of every
-expression. A clean run answers `<n> files, no problems`, where `<n>` counts only the files the given paths asked
-for - the files of the standard library and of other workspace members that had to be read along the way are not
-counted, even though they were type checked too.
+expression - and every `project.trb` on the way: a static setting that is computed, a `program` line the tree
+contradicts and a `profile` block that is no profile are errors at their line
+([project.trb](project-trb.md)). A clean run answers `<n> files, no problems`, where `<n>` counts only the files the
+given paths asked for - the files of the standard library and of other workspace members that had to be read along the
+way are not counted, even though they were type checked too.
 
 ```console
 $ torb check examples/tour

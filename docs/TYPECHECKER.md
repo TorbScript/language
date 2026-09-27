@@ -780,10 +780,10 @@ html { root =>
 ```
 
 `swap(a, a)` and `swap(items[i], items[j])` are errors (the second with the note "use `items.swapAt(i, j)`").
-Different fields are fine (`project.build { output = "{project.name}" }`), because `Field` steps with different symbols
-never conflict. A closure that captures a `var` binding counts as an access to that binding for every call that may
-run it. A quotation is not a closure here: it is never run at the call site. The check is conservative and static;
-correct programs it rejects go into the Open Questions of CONCEPT.md.
+Different fields are fine (`project.dependencies { runtime "{project.name}-core" }`), because `Field` steps with
+different symbols never conflict. A closure that captures a `var` binding counts as an access to that binding for
+every call that may run it. A quotation is not a closure here: it is never run at the call site. The check is
+conservative and static; correct programs it rejects go into the Open Questions of CONCEPT.md.
 
 The subject of a `for` loop is evaluated once into a temporary, so `for x in xs { xs.add(y) }` is allowed - the loop
 iterates over a copy, as the concept promises.
@@ -855,9 +855,9 @@ advances `current` (gap 3); the subject must then be a mutable place and the exc
 
 ### 5.6 Top level, modules and constants
 
-- Top-level code is allowed in an entry file (`src/main.trb`), in a script, in a receiver script and in a
-  `tests/*.test.trb` file (which is one long call of `group` and `test`). In every other module only declarations are
-  allowed: "Top-level code is only allowed in entry files. `./syntax/lexer.trb` is imported."
+- Top-level code is allowed in an entry file (`src/main.trb`, or the `entry` of a `program` line), in a script, in a
+  receiver script and in a `*.test.trb` file (which is one long call of `group` and `test`). In every other module
+  only declarations are allowed: "Top-level code is only allowed in entry files. `./syntax/lexer.trb` is imported."
 - A top-level `const` of a module must be **compile-time evaluable**: a literal, a tuple/list/map literal of such, a
   constructor or case constructor call whose arguments are such, a reference to another compile-time constant, string
   interpolation of such, a unary minus on a literal, and the arithmetic, comparison and logical operators of the

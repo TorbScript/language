@@ -15,8 +15,8 @@ source:
 
 `new` is where a package starts: one command instead of copying an example by hand and editing its name everywhere it
 appears. What it writes is exactly what [`torb run`](torb-run.md) and [`torb test`](torb-test.md) already know how to
-build - a `project.trb` with a `build { input }` and a `test { input }`, a `src/main.trb` and a `tests/main.test.trb`
-below it.
+build - a `project.trb` with a name and a version and nothing else, a `src/main.trb` that is the program because of
+its name, and a `tests/main.test.trb` that is a test because of its name.
 
 ## Synopsis
 
@@ -34,13 +34,21 @@ torb new <name>   Write <name>/project.trb, <name>/src/main.trb and <name>/tests
 │ └ main.trb          print "Hello, <name>"
 ├ tests/
 │ └ main.test.trb      use test from "std/test", one passing test
-└ project.trb          name "<name>", build { input "src/main.trb" }, test { input "tests" }
+└ project.trb          name = "<name>", version = "0.1.0"
 ```
 
-`<name>` is both the directory `new` creates and the package's `name` in the manifest it writes there. `src/main.trb`
-is a script - nothing imports it, so it needs no `fn main` - and prints its one line as soon as it runs.
-`tests/main.test.trb` uses the bare `use test from "std/test"` form (see [std/test](../standard-library/test.md)) with
-one `test` call that always passes, so `torb test <name>` has something to report from the first run.
+`<name>` is both the directory `new` creates and the package's `name` in the manifest it writes there, which is the
+whole manifest:
+
+```trb fragment
+name = "hello"
+version = "0.1.0"
+```
+
+`src/main.trb` is the package's program, named after the package, and it needs no line in the manifest: it may hold
+top-level code, needs no `fn main`, and prints its one line as soon as it runs. `tests/main.test.trb` uses the bare
+`use test from "std/test"` form (see [std/test](../standard-library/test.md)) with one `test` call that always passes,
+so `torb test` has something to report from the first run.
 
 ### Where it finds `std` and the runtime
 
@@ -60,16 +68,19 @@ is no flag to force it or to pick a different layout.
 ```console
 $ torb new hello
 wrote hello/project.trb, hello/src/main.trb, hello/tests/main.test.trb
-$ torb run hello
+$ torb new hello
+error: `hello` already exists
+$ cd hello
+$ torb run
 Hello, hello
-$ torb test hello
-hello/tests/main.test.trb
+$ torb test
+tests/main.test.trb
   ok      hello runs
 
 1 passed, 0 failed (1 file)
-$ torb new hello
-error: `hello` already exists
 ```
+
+From the directory above it, the package is a path: `torb run ./hello` and `torb test hello`.
 
 ## Related
 

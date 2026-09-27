@@ -55,20 +55,24 @@ shop/
    every member together, and where two members want what no version satisfies, the explanation names both. See
    [project.lock.trb](../../tooling/project-lock-trb.md).
 
-5. **A member inherits `version`, `authors` and the registries of the root unless it sets its own.** Setting them
-   again in a member's `project.trb` overrides the root for that member only.
+5. **A member inherits `version`, `authors`, the registries and the `profile` blocks of the root unless it sets its
+   own.** Setting them again in a member's `project.trb` overrides the root for that member only; a member without a
+   `profile "release"` block builds `release` the way the root's block says.
 
 6. **A cycle between members is an error.** `torb build`, `test` and `check` at the root run on every member in the
-   order their dependencies require, which a cycle makes impossible to compute.
+   order their dependencies require, which a cycle makes impossible to compute. `torb build` at the root builds every
+   program of every member, and `torb build <name>` the one program of that name.
 
 7. **The root may have sources of its own, or be nothing but the list of members.** A workspace root is a project
-   like any other; `workspace { ... }` does not require it to have an empty `src/`.
+   like any other; `workspace { ... }` does not require it to have an empty `src/`. A member is a nested package, so
+   its files are never files of the root, even though they lie below it.
 
 ## What this is not
 
 **A workspace is not a way to skip declaring a dependency.** A member still names every other member it uses in its
-own `dependencies { runtime ... }`; what the workspace changes is where that dependency's source comes from, not
-whether it has to be named.
+own `dependencies { runtime ... }` and imports it by its name; what the workspace changes is where that dependency's
+source comes from, not whether it has to be named. A relative path into a sibling - `"../../core/src/cart"` - is an
+error that says it leaves the package.
 
 ```trb
 name = "acme/shop-api"

@@ -38,9 +38,9 @@
 ## Toolchain
 
 ```text
-torb run [file]     # Run src/main.trb (or a single script file) directly
-torb build          # Build a native executable
-torb test           # Run tests/
+torb run [name]     # Run the program (or the one named, or a single script file) directly
+torb build [name]   # Build every program, or the one named, to a native executable
+torb test           # Run every *.test.trb of the package
 torb format         # Formatter
 torb lint           # Linter
 torb doc            # Documentation from the doc comments
@@ -56,13 +56,19 @@ belong into version control.
 ```text
 my-project/
 ├ src/
-├─ main.trb      # Entry point for execution (may contain top-level code)
-├─ lib.trb       # Entry point for import (public surface of a library)
+├─ main.trb      # The program: entry point for execution (may contain top-level code, never imported)
+├─ lib.trb       # The library: entry point for import (public surface, declarations only)
 ├ tests/
-├─ *.test.trb
+├─ *.test.trb    # A test, found by its name wherever it lies
 ├ project.trb
 └ README.md
 ```
+
+**The names of the files say what a package produces, and `project.trb` says what no file name can.** `src/main.trb`
+is the program, named after the package, `src/lib.trb` the library and a file called `*.test.trb` a test, without a
+line in the manifest. A package's files are every `.trb` file below its directory that no nested `project.trb`
+claims, so `tools/migrate.trb` is one of them. A second program is a line - `program "migrate", entry:
+"tools/migrate.trb"` - and an entry is never importable (docs/design/PROJECT.md sections 3 and 4).
 
 ### project.trb
 
@@ -71,8 +77,8 @@ _receiver script_ (see [Configuration DSL](#configuration-dsl)) against the buil
 without any IO capability. It is deterministic, so tools can evaluate it safely and cache the result.
 
 ```trb
-name "my-project"
-version "0.1.0"
+name = "acme/my-project"
+version = "0.1.0"
 authors "Author Name <author@example.com>",
   "Another Author <another@example.com>"
 dependencies {
@@ -80,16 +86,10 @@ dependencies {
   development "acme/mock-server:^3.4.5"    // Tests and tools. Never part of what dependents get.
 }
 
-const binary = name.substringAfter("/") ?? name
+program "migrate", entry: "tools/migrate.trb", output: "dist/migrate"   // src/main.trb needs no line
 
-build {
-  target "dev"
-  input "src/main.trb"
-  output "build/{target}/{binary}"         // Eager interpolation: `target` was set one line above
-}
-test {
-  input "tests"
-  coverageThreshold 80
+profile "release" {
+  optimize = 3                             // How hard the C compiler optimizes; `dev` and `release` are the profiles
 }
 ```
 
@@ -97,7 +97,7 @@ This is nothing but sugar-free TorbScript. Fully written out it is:
 
 ```trb
 // The file body is a closure of type `(var self: Project) => Void`
-self.name = "my-project"                   // `name` and `version` are `var` fields of Project
+self.name = "acme/my-project"              // `name` and `version` are `var` fields of Project
 self.version = "0.1.0"
 self.authors("Author Name <author@example.com>", "Another Author <another@example.com>")   // Variadic method
 
@@ -106,15 +106,21 @@ const configureDependencies: (var self: Dependencies) => Void = { dependencies =
 }
 configureDependencies(self.dependencies)   // `dependencies` is a field, configured in place
 
-const configureBuild: (var self: Build) => Void = { build =>
-  build.target = "dev"
-  build.output = "build/{build.target}/{binary}"
+self.program("migrate", entry: "tools/migrate.trb", output: "dist/migrate")   // A method with labels
+
+const configureRelease: (var self: Profile) => Void = { profile =>
+  profile.optimize = 3
 }
-configureBuild(self.build)
+self.profile("release", configureRelease)  // A method whose last parameter is a receiver closure
 ```
 
-(`binary` is read before the block, because only the innermost receiver is implicit - see
-[Configuration DSL](#configuration-dsl). A `Build` is a value and does not know the project it belongs to.)
+(Only the innermost receiver is implicit - see [Configuration DSL](#configuration-dsl): inside
+`profile "release" { ... }`, `name` is the profile's own, `"release"`, and not the project's. A `Profile` is a value
+and does not know the project it belongs to.)
+
+The settings the toolchain needs before it can run anything - `name`, `dependencies`, `workspace`, the `program`
+lines and the rest of docs/design/PROJECT.md section 10's static nine - are plain literals, read from the syntax tree;
+`version`, `tasks` and a `profile` block may be computed, and the toolchain evaluates the file where one is.
 
 ### Workspaces
 
@@ -122,8 +128,8 @@ A project can consist of several projects. The root names its members, every mem
 `project.trb` of its own:
 
 ```trb
-name "acme/shop"
-version "1.4.0"
+name = "acme/shop"
+version = "1.4.0"
 
 workspace {
   members "packages/*", "tools/importer"
@@ -133,8 +139,8 @@ workspace {
 ```text
 shop/
 ├ packages/
-├─ core/            name "acme/shop-core"
-├─ api/             name "acme/shop-api", dependencies { runtime "acme/shop-core" }
+├─ core/            name = "acme/shop-core"
+├─ api/             name = "acme/shop-api", dependencies { runtime "acme/shop-core" }
 ├ tools/
 ├─ importer/
 ├ project.trb       the workspace
@@ -144,10 +150,11 @@ shop/
 - A dependency whose name is a member of the workspace is that member, from source. It needs no version inside of
   the workspace; publishing a member writes the current versions of its siblings into what is published.
 - There is one `project.lock.trb`, at the root. All members share one resolution, so they cannot drift apart.
-- Members inherit `version`, `authors` and the registries of the root unless they set their own.
+- Members inherit `version`, `authors`, the registries and the `profile` blocks of the root unless they set their own.
 - `torb build`, `test` and `check` at the root work on all members, in the order of their dependencies
-  (`torb test packages/api` for one). Cycles between members are an error. The root may have sources of its own, or
-  be nothing but the list of members.
+  (`torb test packages/api` for one); `torb build` builds every program of every member. Cycles between members are
+  an error. The root may have sources of its own, or be nothing but the list of members; a member's files are never
+  the root's.
 - The toolchain is a workspace itself: `std/*`, `compiler`, `examples/*`.
 
 ### Packages and the Supply Chain
@@ -1105,9 +1112,9 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   is left is what really overlaps: two `var` accesses of the **same** call (`swap(a, a)`, `move(list[0], list)`), and a
   closure argument of a call reaching the path that call is changing - the closure runs *inside* the access, which is
   what makes changing `root` inside `root.div { ... }` an error. Different fields are fine
-  (`project.build { output "{project.name}" }`). Two indices or ranges of the same collection are not, because they
-  cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`). The check is static and
-  conservative: what the compiler cannot prove is an error, and there is no check at runtime.
+  (`project.dependencies { runtime "{project.name}-core" }`). Two indices or ranges of the same collection are not,
+  because they cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`). The check is
+  static and conservative: what the compiler cannot prove is an error, and there is no check at runtime.
 - A temporary is not a `var` path: `iterate().next()` is a compile error, `var cursor = iterate()` comes first.
   (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
@@ -2194,10 +2201,12 @@ use Shape.Circle                                         // Without `from`: the 
 public use Stack, ArrayStack from "./collections/stack"      // Re-export
 ```
 
-- `src/main.trb` is what `torb run` executes, `src/lib.trb` is what other packages import.
-- A path that starts with `./` or `../` is a file. Everything else starts with the name of a package:
-  `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it. Only `public` declarations can
-  be imported from another package, and only packages that `project.trb` lists as dependencies.
+- `src/main.trb` is what `torb run` executes, `src/lib.trb` is what other packages import. A program's entry -
+  `src/main.trb` or the `entry` of a `program` line - is never importable: `"owner/name/main"` is an error.
+- A path that starts with `./` or `../` is a file of the same package, and it never leaves the package. Everything
+  else starts with the name of a package: `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb`
+  of it. Only `public` declarations can be imported from another package, and only packages that `project.trb` lists
+  as dependencies.
 - **After `from` there is always a module.** A path names a case of the type it belongs to
   (`use Option.Some from "./option"`) or a member another package attaches to it with an `extend`
   (`use Int64.seconds from "std/time"`, see [Traits](#traits)); a method, a constant or a field of the type's own body
@@ -2237,11 +2246,12 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   reviewer and for `torb add`; (2) a receiver script and a sandbox are defined as "the prelude and the receiver, and
   nothing else", which would need a second, trimmed prelude if `File` were in this one; (3) on a target that has no
   file system a missing import is a compile error at one line, while a prelude name that is sometimes there is not.
-- **Top-level code is only allowed in entry files (`src/main.trb`), scripts, receiver scripts and
-  `tests/*.test.trb`.** A test file consists of nothing but top-level `group` and `test` calls, and the test
-  framework is ordinary functions, so its files are scripts. Everything that is imported consists of declarations
-  only. So there is no module initialization order, and cyclic imports are unproblematic.
-- The rule is about being *imported*, not about the file name: a file that nothing imports cannot create an
+- **Top-level code is only allowed in entry files (`src/main.trb` and the `entry` of a `program` line), scripts,
+  receiver scripts and `*.test.trb` files.** A test file consists of nothing but top-level `group` and `test` calls,
+  and the test framework is ordinary functions, so its files are scripts. Everything that is imported consists of
+  declarations only. So there is no module initialization order, and cyclic imports are unproblematic.
+- The entry files are decided by their names and by the `program` lines, never by another setting, and an entry file
+  is never imported. Beyond them the rule is about being *imported*: a file that nothing imports cannot create an
   initialization order, so it is a script and may hold top-level code. That is what the twelve files of
   `examples/tour` are. The `src/lib.trb` of a named package is always a module, because it is what others import.
 - In exactly those files a top-level `?` ends the program with the error, and top-level `await()` is allowed.
@@ -2577,6 +2587,18 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   keyword, so inside the type the member is `self.type`, in a receiver closure too (`self.type = "click"`; a bare
   `type = ...` is an error that says so). A parameter stays a plain name: it has no `self.` path. Derived `Encode` and
   `Decode` use the field name, so a JSON `"type"` needs no rename.
+- **The names of the files say what a package produces, and `project.trb` says only what no file name can**
+  (2026-09-27; docs/design/PROJECT.md sections 3 to 5). `src/main.trb` is the program, named after the package,
+  `src/lib.trb` the library and `*.test.trb` a test wherever it lies; a package's files are every `.trb` file below its
+  directory that no nested `project.trb` claims. `build { input }` and `test { input }` are gone: they said what the
+  names say, and `build { input = "src/lib.trb" }` had switched the top-level rule off for the one file it protects. A
+  second program is `program "migrate", entry: "tools/migrate.trb"`, a line without `entry` renames the default
+  program, and an entry is never importable. An argument of `torb run` and `torb build` with a `/` or a `\`, one
+  ending in `.trb`, `.` and `..` are paths, anything else a program name. The profiles are `dev` and `release`, set by
+  `profile` blocks; `torb build` keeps `release` as its default and `torb run --native` and `torb test` keep `dev`,
+  because the fast first build is `torb run`'s and the build asked for by name is the one that ships. A relative
+  `use` never leaves its package. Weighed and refused: a directory convention for a second program
+  (`src/<name>/main.trb`), which would have moved the compiler's own entry file while it compiled itself.
 - **A string literal adapts to a closed list of checked types, and a template or a pattern is read verbatim**
   (2026-09-25; docs/design/URI.md section 9, docs/language/values-and-types/checked-literals.md). Where a `Path`, a
   `Uri`, a `UriReference`, a `UriTemplate`, a `Regex` or a resource type of `std/resource` is expected, a string literal

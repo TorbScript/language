@@ -186,8 +186,10 @@ does, and a `break` never carries a value. `while true` is an error that names i
 
 ### Entry file
 
-The one file `torb run` interprets or `torb build` compiles - named directly, or reached as `src/main.trb` of a
-project directory, or as the project's own `build { input = "..." }`. See [torb build](tooling/torb-build.md).
+A file whose top-level code is a program: `src/main.trb` of a package, the `entry` of a `program` line of its
+`project.trb`, a `*.test.trb` file, or a script named on the command line. The names of the files decide which they
+are, and an entry file is never importable. See [Top-level code](language/modules-and-packages/top-level-code.md) and
+[torb build](tooling/torb-build.md).
 
 ### Error trait
 
@@ -276,9 +278,10 @@ there are no unions of types.
 
 ### Manifest
 
-The settings of a [`project.trb`](tooling/project-trb.md) the toolchain reads today - `name`, `dependencies`,
-`workspace { members }`, and the `input` of `build` and `test` - read from its syntax tree rather than by running the
-file. A setting outside that list type checks but is not consulted by any command yet.
+The settings of a [`project.trb`](tooling/project-trb.md) the toolchain reads: the ones that decide the workspace
+and its files - `name`, `dependencies`, `workspace { members }`, the `program` lines and the rest of the static
+settings - read from its syntax tree rather than by running the file, and `version`, `tasks` and the `profile`
+blocks, which may be computed and are then read from the file's evaluation.
 
 ### Member import
 
@@ -328,8 +331,10 @@ The trait behind `a ?? b`, `fn orElse(fallback: lazy Value): Value`, in the prel
 
 ### Package
 
-A directory with a `project.trb` and a `src/`, named `owner/name`. `src/lib.trb` is what other packages import and
-`src/main.trb` is what `torb run` executes. See [Packages](language/modules-and-packages/packages.md).
+A directory with a `project.trb`, named `owner/name`, whose files are every `.trb` file below it that no nested
+package claims. The names of its files say what it produces: `src/lib.trb` is the library other packages import,
+`src/main.trb` the program `torb run` executes, and a `*.test.trb` file a test. See
+[Packages](language/modules-and-packages/packages.md).
 
 ### Page
 
@@ -362,6 +367,19 @@ A source, zero or more lazy stages (`map`, `filter`, `take`, `sorted`), and one 
 The package whose public names - the members it re-exports by path included - are in scope in every file, `std/prelude`
 by default. It holds the pure part of the standard library; what a program can touch stays an explicit import. See
 [The prelude](language/modules-and-packages/the-prelude.md).
+
+### Profile
+
+How a program is built, `dev` or `release`, and there is no third: how hard the C compiler optimizes, whether the
+binary carries debug information, and the default memory limit. `torb build` builds `release`, `torb run --native`
+and `torb test` build `dev`, and a `profile` block of `project.trb` sets its knobs. See
+[project.trb](tooling/project-trb.md#profiles).
+
+### Program
+
+What `torb run` runs and `torb build` builds: the `src/main.trb` of a package, named after it, or a `program` line of
+its `project.trb` with an `entry` of its own. A program is named like a package, so `torb run <name>` is never a
+path. See [project.trb](tooling/project-trb.md#programs).
 
 ### Property command
 

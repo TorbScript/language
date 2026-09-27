@@ -38,7 +38,8 @@ from, before a single line of the dependency's code runs.
 
 3. **Import from it by package name**, `"owner/name"` for its `src/lib.trb`, `"owner/name/path"` for `src/path.trb`
    of it. Nothing needs re-declaring at the `use` line - the dependency list is the only place the version is
-   written.
+   written. A relative path never reaches another package, even one whose files lie beside yours: `"../other/src/x"`
+   is an error that says it leaves your package.
 
    ```trb fragment
    use Router from "acme/http/routing"
@@ -73,7 +74,8 @@ from, before a single line of the dependency's code runs.
   ```
 
 - **Commit `project.lock.trb`.** It is what makes two checkouts build the same files; `torb install` fetches what it
-  pins into the cache, and only `torb add`, `remove` and `update` ever write it
+  pins into the cache, and only `torb add`, `remove` and `update` ever write its graph - `torb lock` writes the
+  evaluated settings beside it, and `torb lock --check` says whether the file is current
   ([project.lock.trb](../tooling/project-lock-trb.md)).
 - **The requirement grammar**: `^1.2.3` (the default, also written `1.2.3`) is `>=1.2.3 <2.0.0`, `^0.2.3` is
   `>=0.2.3 <0.3.0`; `~1.2.3` is `>=1.2.3 <1.3.0`; `=1.2.3` is the one version; comparators joined by spaces all hold

@@ -83,45 +83,53 @@ hello/
 ├─ main.trb          print "Hello, hello"
 ├ tests/
 ├─ main.test.trb      use test from "std/test", one passing test
-└ project.trb          name "hello", build { input "src/main.trb" }, test { input "tests" }
+└ project.trb          name = "hello", version = "0.1.0"
 ```
 
-Run it by naming its directory:
+Run it from its directory:
 
 ```console
-$ torb run hello
+$ cd hello
+$ torb run
 Hello, hello
 ```
 
 `project.trb` is a TorbScript file, not a configuration language. It runs against a built-in `Project` value in a
-sandbox with no access to files or the network, so a tool can read it safely:
+sandbox that may read files below its own directory and nothing outside it, so a tool can read it safely:
 
-```trb
-name "hello"
-version "0.1.0"
+```trb fragment
+name = "hello"
+version = "0.1.0"
 ```
 
-`name "hello"` writes the field `name`. That is a **property command**: a call on a field does not call the field, it
-writes it. `torb new` writes the bare name it was given; a package meant to be published uses `owner/name` instead,
-because an owner is a verified namespace of a registry. See [torb new](../tooling/torb-new.md) for the rest of what it
-writes and why.
+`name = "hello"` writes the field `name` of that `Project`, and that is the whole manifest: `src/main.trb` is the
+program because of its name and `tests/main.test.trb` is a test because of its name, so neither needs a line.
+`torb new` writes the bare name it was given; a package meant to be published uses `owner/name` instead, because an
+owner is a verified namespace of a registry. See [torb new](../tooling/torb-new.md) for the rest of what it writes and
+why.
 
 ## Extend it
 
-`src/main.trb` is what runs. Replace the one line `torb new` wrote with a function the test below can call:
+`src/main.trb` is what runs, and a program is never imported - a file that may hold top-level code cannot be - so the
+function the test below calls goes into a module of its own, `src/greeting.trb`:
 
 ```trb
 public fn greeting(name: String): String {
   "Hello, {name}!"
 }
+```
+
+`public` is what lets another file import `greeting`: a declaration is private to its file unless it says otherwise.
+Replace the one line `torb new` wrote in `src/main.trb` with a call of it:
+
+```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
+use greeting from "./greeting"
 
 print greeting("World")
 ```
 
-`public` is what lets the test import `greeting`: a declaration is private to its file unless it says otherwise.
-
 ```console
-$ torb run hello
+$ torb run
 Hello, World!
 ```
 
@@ -130,13 +138,23 @@ Hello, World!
 A test file is a script made of `test` and `group` calls, and the only assertion is `assert`. Replace the placeholder
 test `torb new` wrote in `tests/main.test.trb` with one that calls `greeting`:
 
-```trb skip it imports the 'src/main.trb' of the project this page creates, which one snippet of this documentation cannot provide
+```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
 use test from "std/test"
-use greeting from "../src/main"
+use greeting from "../src/greeting"
 
 test "greets by name" {
   assert(greeting("World") == "Hello, World!")
 }
+```
+
+`torb test` runs every file of the package whose name ends in `.test.trb`:
+
+```console
+$ torb test
+tests/main.test.trb
+  ok      greets by name
+
+1 passed, 0 failed (1 file)
 ```
 
 `test` is an ordinary function of `std/test` whose last parameter is a closure, which is why the block can follow the
@@ -150,9 +168,9 @@ The two commands you will run most often:
 
 ```console
 $ torb check .
-144 files, no problems
+4 files, no problems
 $ torb format --check .
-0 of 144 files would change
+0 of 4 files would change
 ```
 
 `check` type checks everything and answers `no problems` or points at a line. `format` writes the one layout of the

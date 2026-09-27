@@ -11,6 +11,7 @@ keywords:
   - compile-time constant
 source:
   - CONCEPT.md#modules-and-packages
+  - docs/design/PROJECT.md
 ---
 
 A file that nothing imports has no initialization order to protect, so it is free to run statements from top to
@@ -34,14 +35,17 @@ const <name> = <compile-time expression>    a module's only top-level statement
 
 ## Rules
 
-1. **Whether a file may have top-level code depends on being imported, not on its name.** `src/main.trb`, a receiver
-   script, and every file of `examples/tour` qualify because nothing imports them; `src/lib.trb` of a named package
-   never does, because it is what other packages import. `torb check src/main.trb` checks the files that file imports
-   through a relative path as well, so top-level code in one of them is reported even when only the entry file is
-   named, and `torb build` refuses the program.
+1. **An entry file may hold top-level code, and so may every file that nothing imports.** The entry files are named,
+   not configured: `src/main.trb`, the `entry` of a `program` line of
+   [project.trb](../../tooling/project-trb.md#programs), and every `*.test.trb` file. An entry file is never
+   importable - a `use` of one is an error at the `use` - and `src/lib.trb` of a named package is never one, because
+   it is what other packages import. Every other file may hold top-level code exactly when nothing imports it, which
+   is what makes a receiver script, the files of `examples/tour` and a loose `scratch.trb` scripts.
+   `torb check src/main.trb` checks the files that file imports through a relative path as well, so top-level code in
+   one of them is reported even when only the entry file is named, and `torb build` refuses the program.
 
-2. **A `tests/*.test.trb` file consists of nothing but top-level `group` and `test` calls.** The test framework is
-   ordinary functions, so a test file is a script like any other.
+2. **A `*.test.trb` file consists of nothing but top-level `group` and `test` calls**, wherever it lies in the
+   package. The test framework is ordinary functions, so a test file is a script like any other.
 
 3. **In an entry file, a script or a test file, a top-level `?` ends the program with the error, printed and exited
    the same way as any other top-level failure** (see [Result](../errors/result.md) for the exact text and exit
@@ -163,7 +167,8 @@ const <name> = <compile-time expression>    a module's only top-level statement
 ## What this is not
 
 **Top-level code is not something a module can opt into.** Whether a file may hold a statement outside a declaration
-follows from whether anything imports it, and nothing in the file itself changes that.
+follows from its name and from whether anything imports it. Nothing in the file itself changes that, and nothing in
+`project.trb` does either: no setting makes `src/lib.trb` an entry file.
 
 ```trb check
 use File from "std/fs"
