@@ -532,7 +532,7 @@ fn writeHeader(var output: ByteWriter, message: Message, additionalCount: Int) {
 
 /** A question, its name compressed. */
 fn writeQuestion(var writer: MessageWriter, question: Question) {
-  writer.name question.name, true
+  writer.name question.name, compressed: true
   writer.output.uint16 lowest16(question.recordType.code())
   writer.output.uint16 lowest16(question.recordClass.code())
 }
@@ -556,7 +556,7 @@ fn writeEdns(var output: ByteWriter, edns: Edns, extendedCode: Int) {
 
 /** A record: its owner compressed, the fixed part, and its data with the length in front. */
 fn writeRecord(var writer: MessageWriter, record: Record): Result<Void, DnsError> {
-  writer.name record.name, true
+  writer.name record.name, compressed: true
   writer.output.uint16 lowest16(record.recordType().code())
   writer.output.uint16 lowest16(record.recordClass.code())
   writer.output.uint32(narrowed(record.timeToLive, "the time to live of a record")?)
@@ -583,12 +583,12 @@ fn writeData(var writer: MessageWriter, data: RecordData): Result<Void, DnsError
         writer.output.uint16 lowest16(segment)
       }
     }
-    .Cname(target) => writer.name target, true
-    .Ns(server) => writer.name server, true
-    .Ptr(target) => writer.name target, true
+    .Cname(target) => writer.name target, compressed: true
+    .Ns(server) => writer.name server, compressed: true
+    .Ptr(target) => writer.name target, compressed: true
     .Mx(preference, exchange) => {
       writer.output.uint16(narrowed(preference, "the preference of an MX record")?)
-      writer.name exchange, true
+      writer.name exchange, compressed: true
     }
     .Txt(strings) => {
       for string in strings {
@@ -603,11 +603,11 @@ fn writeData(var writer: MessageWriter, data: RecordData): Result<Void, DnsError
       writer.output.uint16(narrowed(priority, "the priority of an SRV record")?)
       writer.output.uint16(narrowed(weight, "the weight of an SRV record")?)
       writer.output.uint16(narrowed(port, "the port of an SRV record")?)
-      writer.name target, false
+      writer.name target, compressed: false
     }
     .Soa(primaryServer, responsibleMailbox, serial, refresh, retry, expire, minimum) => {
-      writer.name primaryServer, true
-      writer.name responsibleMailbox, true
+      writer.name primaryServer, compressed: true
+      writer.name responsibleMailbox, compressed: true
       writer.output.uint32(narrowed(serial, "the serial of an SOA record")?)
       writer.output.uint32(narrowed(refresh, "the refresh interval of an SOA record")?)
       writer.output.uint32(narrowed(retry, "the retry interval of an SOA record")?)
@@ -644,7 +644,7 @@ fn writeBinding(
   parameters: List<ServiceParameter>,
 ): Result<Void, DnsError> {
   writer.output.uint16(narrowed(priority, "the priority of a service binding")?)
-  writer.name target, false
+  writer.name target, compressed: false
   var previous = -1
   for parameter in parameters.sorted(by: { _.key() }) {
     const key: UInt16 = narrowed(parameter.key(), "the key of a service parameter")?
