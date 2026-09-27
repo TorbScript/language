@@ -83,7 +83,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## how-to
 
 - `how-to/add-a-dependency.md` - **Add a dependency** (how-to): Declare the package in project.trb before importing from it, tell a runtime dependency from a development one, and read what the imports of everything you depend on say it can reach.
-- `how-to/build-a-native-binary.md` - **Build a native binary** (how-to): Point torb build at the entry file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
+- `how-to/build-a-native-binary.md` - **Build a native binary** (how-to): Run torb build in a package or point it at a file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
 - `how-to/collect-a-pipeline.md` - **Collect a pipeline into what you need** (how-to): Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with an Accumulator for anything else, including your own accumulator.
 - `how-to/convert-between-types.md` - **Convert between types** (how-to): Implement From when the conversion cannot fail and TryFrom when it can - text is a source like any other - and call to<Target>() to collect a pipeline into any type built from one.
 - `how-to/define-an-error-type.md` - **Define an error type** (how-to): Declare a type with one case per distinct failure, add Show and Error where a layer above needs to hand it further up, and let the generated From do the conversion at every ?.
@@ -96,7 +96,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `how-to/use-a-type-as-a-map-key.md` - **Use a type as a map key** (how-to): An ordinary type is already a legal key once every field is Hash, which the compiler generates for free; a field that cannot be Hash is the one thing that rules a type out.
 - `how-to/write-a-builder.md` - **Write a builder** (how-to): Write a function that creates a value, hands it to a receiver closure, and returns it - three lines that make every property command, nested block and method call in the closure statically typed.
 - `how-to/write-a-configuration-file.md` - **Write a configuration file** (how-to): Declare a type for the configuration, write the file as TorbScript against it, and load it through the sandbox with the capabilities you grant.
-- `how-to/write-a-test.md` - **Write a test** (how-to): Put a test in tests/*.test.trb, group related ones, and let assert show the source and the values instead of writing a matcher.
+- `how-to/write-a-test.md` - **Write a test** (how-to): Put a test in a file called *.test.trb, by convention under tests/, group related ones, and let assert show the source and the values instead of writing a matcher.
 
 ## language
 
@@ -182,7 +182,7 @@ that answers the question. A page marked (planned) describes a feature that does
 
 - `language/modules-and-packages/cyclic-imports.md` - **Cyclic imports** (reference): Two modules may import each other, because nothing runs when a module is imported and its exports are computed to a fixpoint, but the same cycle between top-level statements is an error.
 - `language/modules-and-packages/index.md` - **Modules and packages** (index): How a file brings in names from elsewhere, what a package is, and the two rules - visibility and top-level code - that decide what a module may contain.
-- `language/modules-and-packages/packages.md` - **Packages** (reference): A package is a directory with a project.trb and a src/, named owner/name, and it can only be reached by a project that lists it as a dependency.
+- `language/modules-and-packages/packages.md` - **Packages** (reference): A package is a directory with a project.trb, named owner/name, whose file names say what it produces - src/lib.trb, src/main.trb, *.test.trb - and it can only be reached by a project that lists it as a dependency.
 - `language/modules-and-packages/the-prelude.md` - **The prelude** (reference): The prelude is the package whose public names are in scope in every file without an import, and it holds only the pure part of the standard library.
 - `language/modules-and-packages/top-level-code.md` - **Top-level code** (reference): A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
 - `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
@@ -276,7 +276,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/compression.md` - **std/compression** (package): DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
 - `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
-- `standard-library/digest.md` - **std/digest** (package): Sha256 and the Digest it answers - SHA-256 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
+- `standard-library/digest.md` - **std/digest** (package): Sha256, Sha512 and the Digest they answer - SHA-256 and SHA-512 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
 - `standard-library/dns.md` - **std/dns** (package): Domain names with IDNA and the comparison of RFC 4343, DNS records as typed cases, and the RFC 1035 wire format with compression and EDNS0 - values with no natives and no capability, for the transports of std/network and std/http.
 - `standard-library/encoding.md` - **std/encoding** (package): Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
@@ -298,10 +298,11 @@ that answers the question. A page marked (planned) describes a feature that does
 - `standard-library/path.md` - **std/path** (package): Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - `standard-library/process.md` - **std/process** (package): Process for arguments, exiting and running a program to its end as a task, Child for a running program's pipes, and ProcessOutput for what it left behind.
-- `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test, Tasks and Workspace.
+- `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Program, Profile, Test, Tasks, Workspace, Registry and Source.
 - `standard-library/regex.md` - **std/regex** (package): Regex, a compiled pattern with the syntax and the linear-time semantics of RE2, with whole and partial matches, named groups that decode into a type, replace and split.
 - `standard-library/resource.md` - **std/resource** (package): Resource, EmbeddedBytes and EmbeddedText - a file of the package named by a string literal, resolved by the compiler where it is written; reading the bytes comes with the next slices.
 - `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
+- `standard-library/signature.md` - **std/signature** (package): Ed25519 of RFC 8032 in TorbScript - a private key from a 32-byte seed signs, a public key verifies, and keys and signatures are capsules that read and write themselves as bytes and hexadecimal.
 - `standard-library/storage.md` - **std/storage** (package): Storage, a capability over a Uri whose scheme chooses the driver - FileStorage for files, MemoryStorage for tests - and Storage.registry, one storage over the drivers a program names.
 - `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
 - `standard-library/task.md` - **std/task** (package): Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
@@ -315,11 +316,11 @@ that answers the question. A page marked (planned) describes a feature that does
 ## tooling
 
 - `tooling/index.md` - **The toolchain** (index): The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
-- `tooling/project-lock-trb.md` - **project.lock.trb** (tooling): The locked manifest - the exact version, tree hash and registry of every package a workspace depends on, and the evaluated settings of a published package - written deterministically and read without running anything.
-- `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
+- `tooling/project-lock-trb.md` - **project.lock.trb** (tooling): The locked manifest - the exact version, tree hash and registry of every package a workspace depends on, and the evaluated settings of each of its packages - written deterministically and read without running anything.
+- `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - its name, dependencies, workspace, further programs and profiles. The names of its files say what it produces, and the settings that decide its files are read before anything runs.
 - `tooling/the-torb-command.md` - **The torb command** (tooling): Every subcommand of the toolchain, what it does today, and which of them are still planned.
 - `tooling/torb-add.md` - **torb add** (tooling): torb add writes a dependency into project.trb, resolves the workspace with it, writes project.lock.trb and installs what is new - or changes nothing and explains why there is no solution.
-- `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
+- `tooling/torb-build.md` - **torb build** (tooling): torb build type checks every program below a path, or the one named, lowers each to C and hands the C to whatever compiler it finds - a library is checked and builds nothing.
 - `tooling/torb-canon.md` - **torb canon** (tooling): torb canon is deprecated - it runs torb format now, with a warning - and the formatter canon it enforced, every rule of it, is what torb format runs first, over the syntax tree and with a safety net.
 - `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - `tooling/torb-doc.md` - **torb doc** (tooling): torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
@@ -327,11 +328,12 @@ that answers the question. A page marked (planned) describes a feature that does
 - `tooling/torb-format.md` - **torb format** (tooling): torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces, blank lines and a width of 120 columns - and --check fails on every file that is not in it.
 - `tooling/torb-install.md` - **torb install** (tooling): torb install fetches every package project.lock.trb pins that is not in the cache yet, checks its tree hash before a file is written, and never changes the lock.
 - `tooling/torb-lint.md` - **torb lint** (tooling): torb lint reports the style rules the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a redundant Some or Ok, private(var) - each with its id and, where certain, a fix.
+- `tooling/torb-lock.md` - **torb lock** (tooling): torb lock writes the settings block of every member of a workspace into project.lock.trb from its evaluated manifest and keeps the graph as it is; with --check it writes nothing and fails where the file is not what it would write.
 - `tooling/torb-new.md` - **torb new** (tooling): torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
 - `tooling/torb-publish.md` - **torb publish** (tooling): torb publish builds and checks a package's archive as a registry receives it, prints its tree hash and capabilities, and writes it into a directory registry or uploads it with a token or through trusted publishing.
 - `tooling/torb-remove.md` - **torb remove** (tooling): torb remove takes a dependency out of project.trb, resolves the workspace again, and drops from project.lock.trb every package nothing needs any more.
 - `tooling/torb-repl.md` - **torb repl** (tooling): torb repl reads entries from standard input, checks each against the session, runs it in the bytecode VM and keeps what it binds and declares for the next entry - a typed session and a piped file behave the same.
-- `tooling/torb-run.md` - **torb run** (tooling): torb run runs a file or a project in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
+- `tooling/torb-run.md` - **torb run** (tooling): torb run runs a file, the only program below a directory or the program named in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 - `tooling/torb-test.md` - **torb test** (tooling): torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.
 - `tooling/torb-update.md` - **torb update** (tooling): torb update resolves every package of the workspace, or only the named ones, to the highest version project.trb allows, writes project.lock.trb, and refuses an update that gains a capability unless --accept-capabilities says it is wanted.
 - `tooling/verifying-your-work.md` - **Verify your work** (tooling): The commands that decide whether TorbScript you wrote is correct and in the layout of the formatter, in the order to run them.

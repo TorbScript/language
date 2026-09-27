@@ -237,7 +237,9 @@ group "A property command is a place that is written" {
   }
 
   test "a `protected var` field is written by `=` in the file of its type and by nobody else" {
-    assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
+    assert(
+      problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty(),
+    )
     // `private` reaches as far as the file that declares it, so "outside" is a second file
     const outside = [
       "app/src/account.trb": account,
@@ -246,7 +248,7 @@ group "A property command is a place that is written" {
     assert(problemsOf(outside) == ["`balance` is write-protected: only the file that declares `Account` writes it"])
     assert(
       notesOf(outside)
-        == ["A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it"]
+        == ["A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it"],
     )
   }
 
