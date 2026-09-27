@@ -1871,40 +1871,45 @@ fn markLayoutFlag(program: IrProgram, var flags: List<Bool>, layout: LayoutId) {
   flags.set layout.value, true
 }
 
-/** A helper walks the fields of its layout, and a counted field may need a helper of its own. */
+/**
+ * A helper walks the fields of its layout, and a counted field may need a helper of its own.
+ *
+ * A mark only ever turns a flag on, so a round changed something exactly when it turned more flags on than there were:
+ * two counts per round, where a copy and a comparison of both lists per field made this quadratic in the layouts.
+ */
 fn closeHelperDemand(program: IrProgram, var retains: List<Bool>, var drops: List<Bool>) {
   const limit = program.layouts.length() + 1
   var rounds = 0
   var isChanged = true
   while isChanged {
-    isChanged = false
     rounds = rounds + 1
     if rounds > limit {
       return
     }
+    const before = markedCount(retains) + markedCount(drops)
     for index in 0..program.layouts.length() {
       const layout = program.layouts[index]
       for field in layout.fields {
         if retains[index] {
-          var grown = retains
-          markRetained program, grown, field.annotation
-          if grown != retains {
-            retains = grown
-            isChanged = true
-          }
+          markRetained program, retains, field.annotation
         }
-        if !drops[index] {
-          continue
-        }
-        var found = drops
-        markDropped program, found, field.annotation
-        if found != drops {
-          drops = found
-          isChanged = true
+        if drops[index] {
+          markDropped program, drops, field.annotation
         }
       }
     }
+    isChanged = markedCount(retains) + markedCount(drops) != before
   }
+}
+
+fn markedCount(flags: List<Bool>): Int {
+  var count = 0
+  for flag in flags {
+    if flag {
+      count = count + 1
+    }
+  }
+  count
 }
 
 /** The marked layouts that are emitted at all, sorted by name so that the output is a function of the program. */
