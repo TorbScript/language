@@ -11,6 +11,13 @@
 #   sh tools/land.sh gates <name>                 # tier A, then tier B, on the landing's own gate slot
 #   sh tools/land.sh publish <name>               # main -> the landing, the seed refreshed and published, pushed
 #
+# **Where `publish` pushes**: to the forge, the remote `forgejo` (ssh://git@git.torb.dev:2223/torbscript/language.git),
+# whose push mirror carries every push on to GitHub. `$TORB_PUBLISH_REMOTES` names other remotes to push to as well,
+# separated by spaces (`forgejo origin` pushes to GitHub directly too, for as long as the mirror is not set up). The
+# seed goes to the forge's release `seeds` with `$TORB_FORGE_TOKEN`, an access token of the owner with the permission
+# "repository: read and write" (tools/publish-seed.sh); `TORB_SEED_PUBLISH=0` skips that, and the nightly publishes
+# the seed of main instead.
+#
 # **Generated files are never merged by hand.** A conflict in `runtime/machine_natives.c`,
 # `runtime/include/torb_natives.h`, a generated docs index or the skill takes either side; `build` writes them again from
 # the merged sources. `machine_natives.c` is compiled into `torb` itself, so a table that two branches both renumbered
@@ -156,6 +163,14 @@ case "$command" in
 
   publish)
     [ -z "$(git status --porcelain -- compiler std runtime project.trb)" ] || fail "the main checkout has changes"
+    remotes=${TORB_PUBLISH_REMOTES:-forgejo}
+    for remote in $remotes; do
+      git remote get-url "$remote" >/dev/null 2>&1 ||
+        fail "there is no remote \`$remote\`: git remote add forgejo ssh://git@git.torb.dev:2223/torbscript/language.git"
+    done
+    if [ "${TORB_SEED_PUBLISH-1}" != "0" ] && [ -z "${TORB_FORGE_TOKEN-}" ]; then
+      fail "publishing the seed needs TORB_FORGE_TOKEN (a token of git.torb.dev that may write the releases), or TORB_SEED_PUBLISH=0"
+    fi
     git merge --ff-only "$branch"
     [ "$(git rev-parse HEAD)" = "$(git -C "$landing" rev-parse HEAD)" ] || fail "main is not the landing's commit"
     mkdir -p build/release
@@ -163,12 +178,20 @@ case "$command" in
       cp "$file" build/release/
     done
     : >build/release/fixpoint
-    sh tools/check-commits.sh origin/main
+    first=${remotes%% *}
+    git fetch -q "$first" main
+    sh tools/check-commits.sh FETCH_HEAD
     sh tools/refresh-seed.sh
-    archive=$(sh tools/pack-seed.sh seed)
-    sh tools/publish-seed.sh "$archive"
-    git push origin main
-    say "published: main is $(git rev-parse --short HEAD); remove the landing with: git worktree remove $landing"
+    if [ "${TORB_SEED_PUBLISH-1}" != "0" ]; then
+      archive=$(sh tools/pack-seed.sh seed)
+      sh tools/publish-seed.sh "$archive"
+    else
+      say "TORB_SEED_PUBLISH=0: the seed is not published; the nightly publishes the seed of main"
+    fi
+    for remote in $remotes; do
+      git push "$remote" main
+    done
+    say "published: main is $(git rev-parse --short HEAD) on $remotes; remove the landing with: git worktree remove $landing"
     ;;
 
   *)
