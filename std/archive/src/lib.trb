@@ -14,6 +14,7 @@
  *     print untarred(archive).map({ found => found.map({ _.path }).toList() })
  */
 
+use ByteReader, ByteWriter, ReadError from "std/binary"
 use Bytes from "std/stream"
 use textOf from "std/stream"
 
@@ -33,6 +34,13 @@ public type ArchiveError with Show, Error {
   }
 }
 
+/** A read of `std/binary` that failed on the bytes of an archive, with its own words and offset. */
+extend ArchiveError with From<ReadError> {
+  static fn from(value: ReadError): ArchiveError {
+    ArchiveError value.show(), value.offset()
+  }
+}
+
 /**
  * The entries as a ustar archive, sorted by path, with nothing of the machine in it: every mode `0644`, every time 0, no
  * owner, no group. The same entries give the same bytes everywhere.
@@ -45,19 +53,19 @@ public type ArchiveError with Show, Error {
 public fn tarred(entries: List<TarEntry>): Result<Bytes, ArchiveError> {
   var sorted = entries
   sorted.sort by: { _.path }
-  var output: List<UInt8> = []
+  var writer = ByteWriter()
   var previous = ""
   for entry in sorted {
     if entry.path == previous {
-      return Fail ArchiveError("two entries of the path `{entry.path}`", output.length())
+      return Fail ArchiveError("two entries of the path `{entry.path}`", writer.length())
     }
     previous = entry.path
-    output.appendAll(header(entry, output.length())?)
-    output.appendAll entry.bytes
-    appendZeros(output, (512 - entry.bytes.length() % 512) % 512)
+    writeHeader(writer, entry)?
+    writer.append entry.bytes
+    padded(writer, [], (512 - entry.bytes.length() % 512) % 512)
   }
-  appendZeros output, 1024
-  Ok output
+  padded writer, [], 1024
+  Ok writer.bytes()
 }
 
 /**
@@ -70,9 +78,10 @@ public fn tarred(entries: List<TarEntry>): Result<Bytes, ArchiveError> {
  */
 public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
   var entries: List<TarEntry> = []
-  var at = 0
-  while at + 512 <= bytes.length() {
-    const block = bytes[at..(at + 512)]
+  var reader = ByteReader bytes
+  while reader.remaining() >= 512 {
+    const at = reader.position()
+    const block = reader.bytes(512)?
     if block.all({ _ == 0 }) {
       return Ok entries
     }
@@ -93,26 +102,32 @@ public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
     const name = fieldText(block, 0, 100, at)?
     const prefix = fieldText(block, 345, 155, at)?
     const path = if prefix.isEmpty() { name } else { "{prefix}/{name}" }
-    const start = at + 512
-    if start + size > bytes.length() {
+    if size > reader.remaining() {
       return Fail ArchiveError("the archive ends inside `{path}`", at)
     }
     // `0` and the NUL of old archives are a regular file, `5` a directory
     if kind == 48 || kind == 0 {
-      entries.append TarEntry(path, bytes[start..(start + size)])
-    } else if kind != 53 {
+      entries.append TarEntry(path, reader.bytes(size)?)
+    } else if kind == 53 {
+      reader.skip(size)?
+    } else {
       return Fail ArchiveError("`{path}` is not a regular file or a directory (type {kind})", at + 156)
     }
-    at = start + size + (512 - size % 512) % 512
+    // The last block of an entry is filled up with zeros; an archive that ends inside them has no end blocks either
+    const padding = (512 - size % 512) % 512
+    if reader.skip(padding).isError() {
+      return Fail ArchiveError("the archive ends without its two blocks of zeros", reader.position() + padding)
+    }
   }
   if bytes.isEmpty() {
     return Ok entries
   }
-  Fail ArchiveError("the archive ends without its two blocks of zeros", at)
+  Fail ArchiveError("the archive ends without its two blocks of zeros", reader.position())
 }
 
 /** The 512 bytes in front of an entry. */
-fn header(entry: TarEntry, at: Int): Result<Bytes, ArchiveError> {
+fn writeHeader(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveError> {
+  const at = writer.length()
   const pathBytes = entry.path.bytes().toList()
   if pathBytes.isEmpty() || pathBytes.length() > 255 {
     return Fail ArchiveError("the path `{entry.path}` has {pathBytes.length()} bytes, and ustar holds 1 to 255", at)
@@ -134,29 +149,44 @@ fn header(entry: TarEntry, at: Int): Result<Bytes, ArchiveError> {
     prefix = pathBytes[0..split]
     name = pathBytes[(split + 1)..pathBytes.length()]
   }
-  var block = List.filled 512, UInt8.minimum
-  write block, 0, name
-  // The mode 0644, in decimal
-  write block, 100, octal(420, 7)
-  write block, 108, octal(0, 7)
-  write block, 116, octal(0, 7)
-  write block, 124, octal(entry.bytes.length(), 11)
-  write block, 136, octal(0, 11)
-  block[156] = 48
-  write block, 257, "ustar".bytes().toList()
-  write block, 263, "00".bytes().toList()
-  write block, 345, prefix
   // The checksum is taken with its own field as eight spaces, then written as six digits, a NUL and a space
-  write block, 148, "        ".bytes().toList()
+  const blank = headerOf name, prefix, entry.bytes.length(), "        ".bytes().toList()
   var sum = 0
-  for byte in block {
+  for byte in blank {
     sum = sum + Int.from(byte)
   }
   var digits = octal sum, 6
   digits.append 0
   digits.append 32
-  write block, 148, digits
-  Ok block
+  writer.append headerOf(name, prefix, entry.bytes.length(), digits)
+  Ok void
+}
+
+/**
+ * The fields of a ustar header in their order, every one filled up with zeros to its width: nothing of the machine, a
+ * regular file of `size` bytes, and `checksum` as the eight bytes of its field.
+ */
+fn headerOf(name: Bytes, prefix: Bytes, size: Int, checksum: Bytes): Bytes {
+  var writer = ByteWriter()
+  padded writer, name, 100
+  // The mode 0644, in decimal, then the owner and the group
+  padded writer, octal(420, 7), 8
+  padded writer, octal(0, 7), 8
+  padded writer, octal(0, 7), 8
+  padded writer, octal(size, 11), 12
+  // The time of modification
+  padded writer, octal(0, 11), 12
+  writer.append checksum
+  // A regular file, and the name it links to, which it has none of
+  writer.uint8 48
+  padded writer, [], 100
+  padded writer, "ustar".bytes().toList(), 6
+  writer.text "00"
+  // The names of the owner and the group, and the two device numbers
+  padded writer, [], 80
+  padded writer, prefix, 155
+  padded writer, [], 12
+  writer.bytes()
 }
 
 /** `value` as `width` octal digits, padded with zeros. */
@@ -206,14 +236,10 @@ fn fieldText(block: Bytes, start: Int, width: Int, at: Int): Result<String, Arch
   }
 }
 
-fn write(var block: List<UInt8>, at: Int, bytes: Bytes) {
-  for index in 0..bytes.length() {
-    block[at + index] = bytes[index]
-  }
-}
-
-fn appendZeros(var output: List<UInt8>, count: Int) {
-  for _ in 0..count {
-    output.append 0
+/** `bytes`, and zeros after them up to `width`. */
+fn padded(var writer: ByteWriter, bytes: Bytes, width: Int) {
+  writer.append bytes
+  for _ in bytes.length()..width {
+    writer.uint8 0
   }
 }
