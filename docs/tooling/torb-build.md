@@ -81,7 +81,11 @@ error: acme/shop has 2 programs. Name one: `torb build shop`
 Two programs whose binaries would land on one path are refused before either is built:
 ``error: `migrate` and `importer` both build to `dist/tool` ``.
 
-Only what a program's entry reaches is emitted - a function nothing calls from its top-level code never becomes C.
+Only what a program's entry reaches is emitted - a function nothing calls from its top-level code never becomes C. The
+same goes for checking: every body of what the command names is checked and reported as `check` does, and a module of
+another package - `std` included - has its bodies checked the first time the lowering reaches it, so a program that
+prints one line does not check every body of every package its workspace holds. A program the back end refuses is
+checked whole and lowered again before anything is reported, so what it is told is the same either way.
 
 ### Where the binary goes
 
@@ -155,7 +159,8 @@ Listening on 0.0.0.0:8443 (tls: true)
 ### `--timings`
 
 Prints the wall time of every step on standard error, in the order they ran: the passes of the checker as
-[`torb check --timings`](torb-check.md) prints them, indented, then checking, lowering, ownership, verifying, emitting and writing the C, and compiling and linking it. It is what says
+[`torb check --timings`](torb-check.md) prints them, indented, then checking, lowering (which includes the bodies it
+checks on the way), ownership, verifying, emitting and writing the C, and compiling and linking it. It is what says
 where the time of a build goes before anybody guesses:
 
 ```console

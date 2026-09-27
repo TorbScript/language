@@ -23,8 +23,7 @@ use check, Checked, modulesOfProgram from "../semantics/check"
 use checkBodiesOf from "../semantics/checker/check"
 use SymbolId from "../semantics/symbols"
 use insertOwnership from "../ir/ownership"
-use Lowering from "../ir/lower/context"
-use lowerLibrary, pathsOfModules from "../ir/lower/lower"
+use lowerLibrary, pathsOfModules, isLowered from "../ir/lower/lower"
 use emitProgram, ProgramExport from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
 use scriptHostLoadFunction, scriptHostRunFunction from "../backend/c/natives"
@@ -229,12 +228,6 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
 fn exportedOf(checked: Checked, path: String, name: String): SymbolId? {
   const module = checked.program.graph.moduleAt(path)?
   checked.program.scopes[module.value].exported.get name
-}
-
-/** Whether the lowering found nothing to refuse. */
-fn isLowered(lowering: Lowering): Bool {
-  lowering.problems.isEmpty() && lowering.unsupported.isEmpty() && lowering.program.planned.isEmpty()
-    && lowering.program.problems.isEmpty()
 }
 
 /**
