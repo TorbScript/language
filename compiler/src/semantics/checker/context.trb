@@ -906,12 +906,20 @@ public type Checker {
   var expectedAliases: Map<String, String> = [:]
   var bindingAliases: Map<Int, String> = [:]
   var parameterAliases: Map<String, String> = [:]
-  /** One per module, in the order of `program.graph.modules`: the type of every type position, by its span. */
-  var typePositions: List<Map<Span, TypeId>> = []
+  /**
+   * One per module, in the order of `program.graph.modules`: the type of every type position, by its span.
+   *
+   * This and the two tables below are an `ArrayList` and not a `List`, because every expression the checker types is a
+   * write through one of them (`tables[module.value].expressionTypes.set(at, id)`): through the trait the element is
+   * taken out and put back, the table it holds has a second owner while it changes, and every write copied the whole
+   * table of the module - a third of the time of a small build. The runtime's list is written in place
+   * (docs/PERFORMANCE.md, finding 3).
+   */
+  var typePositions: ArrayList<Map<Span, TypeId>>
   /** One per module, in the same order: everything about the expressions of that module. */
-  var tables: List<Tables> = []
+  var tables: ArrayList<Tables>
   /** One per module, so a message can be rendered with the file it belongs to. */
-  var diagnostics: List<List<Diagnostic>> = []
+  var diagnostics: ArrayList<List<Diagnostic>>
   /** What every pass of the run cost, for `torb check --timings`. Empty unless the flag was given. */
   var timings: List<Timing> = []
   /** Whether the clock is read at all. Two passes run per module and have to add their time up themselves. */
@@ -1962,9 +1970,10 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
   const invalid = types.intern TypeForm.Invalid
   const deferred = types.intern TypeForm.Deferred
   var definitions: List<Map<Span, SymbolId>> = []
-  var typePositions: List<Map<Span, TypeId>> = []
-  var tables: List<Tables> = []
-  var diagnostics: List<List<Diagnostic>> = []
+  const count = program.graph.modules.length()
+  var typePositions: ArrayList<Map<Span, TypeId>> = ArrayList.withCapacity count
+  var tables: ArrayList<Tables> = ArrayList.withCapacity count
+  var diagnostics: ArrayList<List<Diagnostic>> = ArrayList.withCapacity count
   for module in program.graph.modules {
     var bySpan: Map<Span, SymbolId> = [:]
     for definition in program.definitions[module.id.value] {
