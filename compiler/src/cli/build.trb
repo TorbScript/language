@@ -5,8 +5,10 @@
  * (build into a cache and execute) and `torb test` (every `*.test.trb` as one binary) are additions on top of it, never
  * a rewrite of it, and a `profile` block and a `build { output }` read from the manifest will be the same.
  *
- * A C file the size of the compiler's is compiled while holding one of a few machine-wide build slots
- * (`tools/build-slot.sh`), so that several checkouts building at once do not run the machine out of memory.
+ * A program the size of the compiler is written as several units besides its one `program.c`, and every C file of the
+ * build is compiled at the same time into an object that a cache keeps ([compileInParallel], docs/BACKEND.md 4.1). A
+ * batch of that size holds one of a few machine-wide build slots (`tools/build-slot.sh`), so that several checkouts
+ * building at once do not run the machine out of memory.
  *
  * Nothing is compiled that the back end cannot emit yet: a construct the lowering does not support becomes a
  * finding, and `torb build` reports every finding and refuses to produce a binary. A C compiler error, on the other
@@ -31,6 +33,7 @@ use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
 use entryNameOf from "../ir/lower/function"
 use emitProgram, ProgramEntry from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
+use EmittedUnits, emittedUnits, headerFileName, unitFileName from "../backend/c/units"
 use tlsPartMacro, tlsSymbolPrefix, machineKernelSymbol, hostsMachineMacro, scriptHostSymbolPrefix from "../backend/c/natives"
 use findCompilerSources from "../project/toolchain"
 use scriptHostObjectOf, programSourcesOf, hostedStandardLibraryOf from "./host"
@@ -210,9 +213,15 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   File.writeText(source, text)?
   // What says which program this is without reading it again: `torb run` keys its cache on the one beside `torb`
   File.writeText(joinPath(directory, identityFileName), "{text.hash()}")?
+  // The same C cut into units that compile in parallel, where the program is large enough (docs/BACKEND.md 4.1)
+  const units = emittedUnits emission, forcedUnitCount()
+  const program = writeUnits(directory, source, text, units)?
   if options.onlyC {
     if options.saysWhatItWrote {
       print "wrote {source}"
+      if units.isSplit() {
+        print "wrote {joinPath(directory, headerFileName)} and {counted(units.units.length(), "unit")} beside it"
+      }
     }
     return Ok 0
   }
@@ -221,7 +230,78 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   const hostsScripts = text.contains scriptHostSymbolPrefix
   const hostsMachine = text.contains(machineKernelSymbol) || hostsScripts
   const usesTls = text.contains(tlsSymbolPrefix) || hostsMachine
-  compile source, text.byteLength(), binary, options, usesTls, hostsMachine, pool, hostsScripts
+  compile program, binary, options, usesTls, hostsMachine, pool, hostsScripts
+}
+
+/**
+ * `$TORB_UNITS`: the number of units a program is split into whatever its size, 0 where it is not set. It is what
+ * tests the split on small programs (`sh tools/conformance.sh` with it set), and it cannot change `program.c` or its
+ * hash, which the split is cut from.
+ */
+fn forcedUnitCount(): Int {
+  const given = Environment.get("TORB_UNITS") ?? ""
+  Int.parseDigits(given, radix: 10).ok() ?? 0
+}
+
+/**
+ * The C a build compiles: `program.c` alone, or the units beside it - each with the hash that keys its object in the
+ * cache, which for a unit includes the header it reads.
+ */
+type ProgramSources {
+  /** `program.c`, the whole program as one unit: what is compiled where nothing can be compiled in parallel. */
+  whole: String
+  size: Int
+  /** The files compiled in parallel: the units, or `program.c` itself for a program of one unit. */
+  jobs: List<CompileJob>
+  isSplit: Bool
+}
+
+/** One C file compiled into one object, and the hash of everything in the file that decides that object. */
+type CompileJob {
+  source: String
+  /** The name of the object in the cache, in front of its key: `program-03`, `runtime-memory`. */
+  stem: String
+  contentHash: Int
+  size: Int
+  /** A flag this file is compiled with beyond every file's: `-flto` for a unit that is optimized across units. */
+  extra: String = ""
+  /** Whether this is a unit of the program's code, which is what is optimized across units where that is done. */
+  isCode: Bool = false
+}
+
+/**
+ * Writes the header and the units beside `program.c`, where the program is split. A unit an earlier build wrote and
+ * this one does not is emptied, because nothing may read a stale unit as part of this program and `torb` has no way
+ * to delete a file.
+ */
+fn writeUnits(directory: String, source: String, text: String, units: EmittedUnits): Result<ProgramSources, IoError> {
+  var written: Set<String> = Set.of()
+  var jobs: List<CompileJob> = []
+  if units.isSplit() {
+    File.writeText(joinPath(directory, headerFileName), units.header)?
+    const headerHash = units.header.hash()
+    for index in 0..units.units.length() {
+      const name = unitFileName index
+      const unit = units.units[index]
+      const path = joinPath directory, name
+      File.writeText(path, unit)?
+      written.insert name
+      const stem = name.withoutSuffix(".c") ?? name
+      const size = unit.byteLength() + units.header.byteLength()
+      // The first unit is the data (`units.trb`)
+      jobs.append CompileJob(path, stem, combineHashes(headerHash, unit.hash()), size, isCode: index > 0)
+    }
+  } else {
+    jobs.append CompileJob(source, "program", text.hash(), text.byteLength())
+  }
+  for entry in File.list(directory)? {
+    const isUnit = entry.startsWith("program-") && entry.endsWith(".c")
+    const isStale = (isUnit && !written.contains(entry)) || (entry == headerFileName && !units.isSplit())
+    if isStale {
+      File.writeText(joinPath(directory, entry), "")?
+    }
+  }
+  Ok ProgramSources(source, text.byteLength(), jobs, units.isSplit())
 }
 
 /**
@@ -419,6 +499,11 @@ public type CCompiler {
   command: String
   /** MSVC takes `/`-flags and names its output differently, so the two shapes are told apart once. */
   isMicrosoft: Bool
+  /**
+   * The first line of `--version`: part of the key of every object in the cache, so a C compiler that was upgraded
+   * in place compiles everything again. Empty where the compiler does not answer it.
+   */
+  version: String = ""
 }
 
 /**
@@ -429,18 +514,29 @@ public type CCompiler {
 fn findCompiler(): CCompiler? {
   if const Some(given) = Environment.get("TORB_CC") {
     if !given.isEmpty() {
-      return Some CCompiler(given, isMicrosoftName(given))
+      const isMicrosoft = isMicrosoftName given
+      const version = if isMicrosoft { "" } else { versionOf(given) ?? "" }
+      return Some CCompiler(given, isMicrosoft, version)
     }
   }
   for candidate in ["clang", "gcc", "cc"] {
-    if canRun(candidate, ["--version"]) {
-      return Some CCompiler(candidate, false)
+    if const Some(version) = versionOf(candidate) {
+      return Some CCompiler(candidate, false, version)
     }
   }
   if canRun("cl", []) {
     return Some CCompiler("cl", true)
   }
   None
+}
+
+/** The first line `--version` prints, or `None` where the command does not start or does not answer it. */
+fn versionOf(command: String): String? {
+  const output = Process.runBlocking(command, ["--version"]).ok()?
+  if output.exitCode != 0 {
+    return None
+  }
+  Some(output.standardOutput.lines().first() ?? "")
 }
 
 fn isMicrosoftName(command: String): Bool {
@@ -487,6 +583,22 @@ public fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
  * of a program; where that directory cannot be written, they are compiled beside the program instead.
  */
 public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, binary: String): Result<List<String>, IoError> {
+  const parts = tlsPartsOf(runtime, command, microsoft, binary)?
+  var arguments: List<String> = []
+  arguments.appendAll parts.flags
+  arguments.appendAll parts.sources
+  arguments.appendAll parts.objects
+  Ok arguments
+}
+
+/** [tlsArgumentsOf] apart: the flags every C file of the program is compiled with, the glue's sources, mbedTLS. */
+type TlsParts {
+  flags: List<String>
+  sources: List<String>
+  objects: List<String>
+}
+
+fn tlsPartsOf(runtime: String, command: String, microsoft: Bool, binary: String): Result<TlsParts, IoError> {
   const tls = joinPath runtime, "tls"
   const vendor = joinPath runtime, "vendor/mbedtls"
   const prefix = if microsoft { "/" } else { "-" }
@@ -497,11 +609,10 @@ public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, bina
     "{prefix}I{tls}",
     "{prefix}I{joinPath(vendor, "include")}",
   ]
-  var arguments: List<String> = []
-  arguments.appendAll flags
+  var sources: List<String> = []
   for entry in File.list(tls)? {
     if entry.endsWith(".c") {
-      arguments.append joinPath(tls, entry)
+      sources.append joinPath(tls, entry)
     }
   }
   const versionText = File.readText(joinPath(vendor, "VERSION"))?
@@ -516,8 +627,7 @@ public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, bina
     Ok(found) => found
     Fail(_) => vendorObjectsOf(joinPath(parentPath(binary), key), unique, vendor, flags, command, microsoft)?
   }
-  arguments.appendAll objects
-  Ok arguments
+  Ok TlsParts(flags, sources, objects)
 }
 
 /**
@@ -582,8 +692,7 @@ fn objectsIn(directory: String, suffix: String): Result<List<String>, IoError> {
 }
 
 fn compile(
-  source: String,
-  size: Int,
+  program: ProgramSources,
   binary: String,
   options: BuildOptions,
   usesTls: Bool,
@@ -591,6 +700,7 @@ fn compile(
   pool: (workers: Int, blocking: Int),
   hostsScripts: Bool = false,
 ): Result<Int, IoError> {
+  const source = program.whole
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
@@ -609,33 +719,54 @@ fn compile(
       return Ok noCompilerCode
     }
   }
-  var sources = runtimeSourcesOf(runtime)?
+  var runtimeSources = runtimeSourcesOf(runtime)?
+  // What every C file of the program is compiled with beyond the profile's flags, and the objects compiled already
+  var flags: List<String> = []
+  var objects: List<String> = []
   // The script host is an object of its own, compiled once per toolchain (`cli/host.trb`)
   if hostsScripts {
     match scriptHostObjectOf(options, runtime, compiler)? {
-      Some(object) => sources.append object
+      Some(object) => objects.append object
       None => {
         return Ok buildFailedCode
       }
     }
   }
   if usesTls {
-    sources.appendAll(tlsArgumentsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?)
+    const parts = tlsPartsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?
+    flags.appendAll parts.flags
+    runtimeSources.appendAll parts.sources
+    objects.appendAll parts.objects
   }
+  const define = if compiler.isMicrosoft { "/D" } else { "-D" }
   // `TORB_MEMORY_LIMIT` of a binary that runs programs in the VM is the limit of those programs (runtime/memory.c)
   if hostsMachine {
-    sources.append(if compiler.isMicrosoft { "/D{hostsMachineMacro}" } else { "-D{hostsMachineMacro}" })
+    flags.append "{define}{hostsMachineMacro}"
   }
   // `tasks { workers, blocking }`: the defaults of the program's pool, which `TORB_WORKERS` and `TORB_BLOCKING` override
-  const define = if compiler.isMicrosoft { "/D" } else { "-D" }
   if pool.workers != 0 {
-    sources.append "{define}TORB_MANIFEST_WORKERS={pool.workers}u"
+    flags.append "{define}TORB_MANIFEST_WORKERS={pool.workers}u"
   }
   if pool.blocking != 0 {
-    sources.append "{define}TORB_MANIFEST_BLOCKING={pool.blocking}u"
+    flags.append "{define}TORB_MANIFEST_BLOCKING={pool.blocking}u"
   }
-  const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
-  const output = match runCompiler(compiler, arguments, source, size, runtime) {
+  const parallel: ProcessOutput? = if compiler.isMicrosoft {
+    None
+  } else {
+    const parts = CompileParts runtimeSources, flags, objects
+    compileInParallel(compiler, program, binary, runtime, parts, options.profile)?
+  }
+  const attempt = match parallel {
+    Some(found) => Ok found
+    None => {
+      var sources = runtimeSources
+      sources.appendAll flags
+      sources.appendAll objects
+      const arguments = compilerArguments compiler, source, binary, runtime, sources, options.profile
+      runCompiler compiler, arguments, source, program.size, runtime
+    }
+  }
+  const output = match attempt {
     Ok(found) => found
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
     Fail(problem) => {
@@ -698,6 +829,197 @@ public fn runCompiler(
     // No `sh` to start the script with
     Fail(_) => Process.runBlocking compiler.command, arguments
   }
+}
+
+// --- Units in parallel, and the cache of their objects --------------------------------------------------------------
+
+/** What is compiled beside the program: the runtime's C files, the flags every file gets, the objects of mbedTLS. */
+type CompileParts {
+  runtimeSources: List<String>
+  flags: List<String>
+  objects: List<String>
+}
+
+/**
+ * Compiles every C file of the build - the units of the program or its one `program.c`, and every file of the runtime
+ * - into objects at the same time, then links them (docs/BACKEND.md 4.1). `None` where that cannot be done here: no
+ * `sh`, or no `tools/build-units.sh` beside the runtime - and then the caller compiles `program.c` and the runtime in
+ * one call of the C compiler, as a build always did.
+ *
+ * Every object is kept in a cache under the name of its **key**: the hash of the C compiler and its version, every
+ * flag, every header of the runtime, and the text of the file - for a unit, of the header it includes too. An object
+ * whose key is there already is not compiled again, so a second build of an unchanged program links and nothing else,
+ * the second step of a bootstrap whose C agrees with the first compiles nothing, and the runtime is compiled once per
+ * flag set and not once per program.
+ *
+ * `tools/build-units.sh` runs the compiles, as many at a time as the machine has processors, and moves each object
+ * into the cache only once it is complete, so two builds that compile the same key at once never read half a file.
+ * Where the files to compile are at least [slottedSize] together, the whole batch holds one machine-wide build slot
+ * (`tools/build-slot.sh`).
+ */
+fn compileInParallel(
+  compiler: CCompiler,
+  program: ProgramSources,
+  binary: String,
+  runtime: String,
+  parts: CompileParts,
+  profile: Profile,
+): Result<ProcessOutput?, IoError> {
+  const tools = joinPath parentPath(runtime), "tools"
+  const script = joinPath tools, "build-units.sh"
+  if !File.exists(script) {
+    return Ok None
+  }
+  const cache = objectCacheOf runtime, binary
+  var flags = ["-std=c11", profile.optimization(), "-g0", "-Wall", "-Wextra", "-Werror", "-I{joinPath(runtime, "include")}"]
+  for macro in profile.macros() {
+    flags.append "-D{macro}"
+  }
+  flags.appendAll parts.flags
+  flags.appendAll threadArguments()
+  // What decides every object besides the text of its own file
+  var identity = combineHashes compiler.command.hash(), compiler.version.hash()
+  identity = combineHashes identity, flags.joined(separator: "\n").hash()
+  identity = combineHashes identity, runtimeHeadersHashOf(runtime)
+  // A split program is optimized across its units of code when it is linked, where the C compiler can (docs/BACKEND.md
+  // 4.1): without it a call from one unit into another is never inlined, and the program runs a fifth slower
+  const optimizesAcross = program.isSplit && isGnuCompiler(compiler)
+  var jobs: List<CompileJob> = []
+  for job in program.jobs {
+    if optimizesAcross && job.isCode {
+      jobs.append job.copy(extra: "-flto")
+    } else {
+      jobs.append job
+    }
+  }
+  for source in parts.runtimeSources {
+    const text = File.readText(source)?
+    const name = pathName source
+    jobs.append CompileJob(source, "runtime-{name.withoutSuffix(".c") ?? name}", text.hash(), text.byteLength())
+  }
+  var linked: List<String> = []
+  var pending: List<(size: Int, line: String)> = []
+  var kept: List<String> = []
+  var pendingSize = 0
+  for job in jobs {
+    // A hash below zero would put `--` into the name: its sign is a letter
+    const key = "{combineHashes(combineHashes(identity, job.contentHash), job.extra.hash())}".replace("-", "n")
+    const object = joinPath cache, "{job.stem}-{key}.o"
+    linked.append object
+    if File.exists(object) {
+      kept.append "keep\t{object}\t{job.source}\t{job.extra}"
+    } else {
+      const line = "compile\t{object}\t{job.source}\t{job.extra}"
+      pending.append((size: job.size, line: line))
+      pendingSize = pendingSize + job.size
+    }
+  }
+  // The largest first, so that the unit that takes longest never starts last
+  pending.sort({ 0 - _.size })
+  var lines: List<String> = []
+  for one in pending {
+    lines.append one.line
+  }
+  lines.appendAll kept
+  // The link, one argument per line: the objects in the order of the program's units, then the runtime's
+  var inputs = linked
+  inputs.appendAll parts.objects
+  inputs.appendAll threadArguments()
+  inputs.append "-lm"
+  if optimizesAcross {
+    inputs.appendAll([profile.optimization(), "-g0", "-Wall", "-Wextra", "-Werror"])
+  }
+  for argument in [compiler.command, "-o", binary] {
+    lines.append "link\t{argument}"
+  }
+  for argument in inputs {
+    lines.append "link\t{argument}"
+  }
+  // `-flto=` and the number of compiles the script runs at a time, which it knows and this process does not
+  if optimizesAcross {
+    lines.append "link-jobs\t-flto="
+  }
+  // The binary is a function of what is linked, so it is kept too: a build whose objects all come from the cache - the
+  // second step of a bootstrap - copies the binary of the one before instead of linking it again
+  const linkKey = "{combineHashes(identity, inputs.joined(separator: "\n").hash())}".replace("-", "n")
+  lines.append "link-output\t{binary}"
+  lines.append "link-cache\t{joinPath(cache, "{pathName(binary)}-{linkKey}.linked")}"
+  const list = joinPath parentPath(binary), "c-units.txt"
+  File.writeText(list, lines.joined(separator: "\n") + "\n")?
+  var arguments = [script, list, cache, compiler.command]
+  arguments.appendAll flags
+  // The link of a program optimized across its units is as heavy as a compile of its size, so it counts too
+  const weight = if optimizesAcross { pendingSize + program.size } else { pendingSize }
+  match runUnits(tools, arguments, weight, binary) {
+    Ok(found) => Ok Some(found)
+    // No `sh` to start the script with
+    Fail(_) => Ok None
+  }
+}
+
+/**
+ * Whether the C compiler is gcc, whose `-flto` needs nothing beyond itself - clang's needs a linker that can read its
+ * objects, which a Linux machine may not have - so only gcc optimizes a split program across its units.
+ */
+fn isGnuCompiler(compiler: CCompiler): Bool {
+  const name = pathName compiler.command
+  const isNamed = name.endsWith("gcc") || name.endsWith("gcc.exe")
+  isNamed || (compiler.version.contains("gcc") || compiler.version.contains("GCC")) && !compiler.version.contains("clang")
+}
+
+/**
+ * Runs `tools/build-units.sh`, through `tools/build-slot.sh` where what it compiles is at least [slottedSize]: the slot
+ * says on standard error when it waits, so it is started with this process's streams and the compilers' output comes
+ * back through a file beside the binary.
+ */
+fn runUnits(tools: String, arguments: List<String>, size: Int, binary: String): Result<ProcessOutput, IoError> {
+  const slot = joinPath tools, "build-slot.sh"
+  if size < slottedSize || !File.exists(slot) {
+    return Process.runBlocking "sh", arguments
+  }
+  const log = joinPath parentPath(binary), "c-compiler.log"
+  var slotted = [slot, log, "sh"]
+  slotted.appendAll arguments
+  const code = Process.runPassingThrough("sh", slotted)?
+  const text = File.readText(log).ok() ?? ""
+  Ok ProcessOutput(code, text, "")
+}
+
+/**
+ * `build/objects/` beside the runtime - the checkout's, for a checkout - where every build of the checkout finds the
+ * objects of every other; `objects/` beside the binary where that cannot be written, as an installed toolchain's
+ * directory may not be.
+ */
+fn objectCacheOf(runtime: String, binary: String): String {
+  const common = joinPath parentPath(runtime), "build/objects"
+  if File.createDirectory(common).isOk() {
+    return common
+  }
+  const beside = joinPath parentPath(binary), "objects"
+  const _ = File.createDirectory beside
+  beside
+}
+
+/**
+ * The names and texts of every header of the runtime, of its `os/` and `tls/` directories and of the version of mbedTLS:
+ * what a C file of the program or of the runtime may include, and so part of the key of every object.
+ */
+fn runtimeHeadersHashOf(runtime: String): Int {
+  var seed = 0
+  const directories = [runtime, joinPath(runtime, "include"), joinPath(runtime, "os"), joinPath(runtime, "tls")]
+  for directory in directories {
+    const names = File.list(directory).ok() ?? []
+    for name in names {
+      if !name.endsWith(".h") {
+        continue
+      }
+      const text = File.readText(joinPath(directory, name)).ok() ?? ""
+      seed = combineHashes seed, name.hash()
+      seed = combineHashes seed, text.hash()
+    }
+  }
+  const version = File.readText(joinPath(runtime, "vendor/mbedtls/VERSION")).ok() ?? ""
+  combineHashes seed, version.hash()
 }
 
 /**

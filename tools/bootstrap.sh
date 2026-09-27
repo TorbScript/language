@@ -213,7 +213,18 @@ install() {
 
 refresh_hint="A merge whose tier A is green refreshes the seed from it: sh tools/refresh-seed.sh"
 
-if cmp -s "$staging/bootstrap/program.c" "$staging/release/program.c"; then
+# Whether two steps emitted the same C: `program.c`, the whole program, and - where both steps split it into units
+# (docs/BACKEND.md 4.1; a seed older than the split writes none) - the header and every unit as well
+same_c() {
+  cmp -s "$1/program.c" "$2/program.c" || return 1
+  [ -f "$1/program.h" ] && [ -f "$2/program.h" ] || return 0
+  for file in "$1"/program.h "$1"/program-*.c "$2"/program-*.c; do
+    name=$(basename "$file")
+    cmp -s "$1/$name" "$2/$name" || return 1
+  done
+}
+
+if same_c "$staging/bootstrap" "$staging/release"; then
   install
   say ""
   say "the fixpoint holds: both steps emitted the same C."
@@ -229,7 +240,7 @@ say "step 3: the compiler of step 2 builds the compiler once more"
 third=$(binary_of "$staging/fixpoint/torb")
 [ -n "$third" ] || fail "step 3 wrote no binary"
 
-if cmp -s "$staging/release/program.c" "$staging/fixpoint/program.c"; then
+if same_c "$staging/release" "$staging/fixpoint"; then
   install
   say ""
   say "the fixpoint holds: steps 2 and 3 emitted the same C. The seed is older than the code generation."

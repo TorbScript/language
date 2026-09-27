@@ -10,6 +10,7 @@
 #   std/                    every std package, as source
 #   runtime/                include/, *.c, os/*.c and README.md - not its tests and not its test runner
 #   tools/build-slot.sh     the machine-wide build slots `torb build` looks for beside the runtime
+#   tools/build-units.sh    the parallel compile of the units and the object cache (docs/BACKEND.md 4.1)
 #   LICENSE*, NOTICE*       when the repository has them
 #   README.md               three lines
 #
@@ -86,7 +87,7 @@ lay_out() {
   mkdir -p "$into/bin"
   extras=$(git ls-files -- 'LICENSE*' 'NOTICE*')
   # shellcheck disable=SC2086
-  git archive --format=tar HEAD -- std runtime tools/build-slot.sh $extras | (cd "$into" && tar -xf -)
+  git archive --format=tar HEAD -- std runtime tools/build-slot.sh tools/build-units.sh $extras | (cd "$into" && tar -xf -)
   rm -rf "$into/runtime/tests" "$into/runtime/build.sh"
   case "$binary" in
     *.exe) cp "$binary" "$into/bin/torb.exe" ;;
