@@ -1,0 +1,50 @@
+# ghcr.io/torbscript/registry: the write service of packages.torb.dev (tools/registry, docs/design/RELEASE.md section
+# 7.11), built from a release - never from a checkout. The build context is a directory with the release's assets:
+#
+#   torb-<version>-linux-x64.tar.gz     the toolchain the build stage compiles with (linux-arm64 for an arm64 image)
+#   torb-<version>-linux-arm64.tar.gz
+#   torb-<version>-source.tar.gz        `git archive` of the tag: tools/registry and the compiler code it reuses
+#
+#   docker buildx build -f tools/deploy/Dockerfile.registry --build-arg VERSION=0.2.0 \
+#     --platform linux/amd64,linux/arm64 dist/
+#
+# `.github/workflows/images.yml` does exactly this with the `dist` artifact of the release, pushes the image and signs
+# it; the runtime stage has the programs the service runs - `sqlite3` for its database, `git` for the index mirror.
+
+FROM debian:bookworm-slim AS build
+ARG VERSION
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY torb-${VERSION}-source.tar.gz torb-${VERSION}-linux-*.tar.gz /dist/
+# The toolchain of the image's own architecture: its binary runs here and its runtime is compiled into the program
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) target=linux-x64 ;; \
+      arm64) target=linux-arm64 ;; \
+      *) echo "no toolchain is released for $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/torb /src; \
+    tar -xzf "/dist/torb-$VERSION-$target.tar.gz" -C /opt/torb --strip-components=1; \
+    tar -xzf "/dist/torb-$VERSION-source.tar.gz" -C /src --strip-components=1
+WORKDIR /src
+RUN /opt/torb/bin/torb build tools/registry/src/main.trb --release --output /out/registry
+
+FROM debian:bookworm-slim
+ARG VERSION
+LABEL org.opencontainers.image.title="registry" \
+      org.opencontainers.image.description="The write service of packages.torb.dev: publish, yank, owners, tokens and trusted publishing" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="MIT"
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates sqlite3 git curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /srv/torb/registry /srv/torb/database \
+    && chown 1000:1000 /srv/torb/registry /srv/torb/database
+COPY --from=build /out/registry /usr/local/bin/registry
+ENV REGISTRY_LISTEN=0.0.0.0:8089 \
+    REGISTRY_STORAGE=file:///srv/torb/registry \
+    REGISTRY_DATABASE=/srv/torb/database/registry.db
+USER 1000:1000
+EXPOSE 8089
+HEALTHCHECK --interval=30s --timeout=5s CMD curl -fsS http://127.0.0.1:8089/api/1/health || exit 1
+ENTRYPOINT ["/usr/local/bin/registry"]

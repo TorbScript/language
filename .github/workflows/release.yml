@@ -6,10 +6,13 @@
 #   2. gates      every gate on every tier 1 target (gates.yml), the release binaries, the archives, the seed
 #   3. publish    SHA256SUMS signed with Sigstore (keyless, this job's OIDC identity), the GitHub release with every
 #                 archive, the source, the seed and the signature, and the seed added to the `seeds` index
+#   4. images     the root server's container images from the release's assets, pushed to GHCR and signed
+#                 (images.yml), and the package manager channels (publish-packages)
 #
 # A red gate anywhere stops the release before anything is published. Nothing here runs for a pull request: the only
-# trigger is a tag, which only somebody with write access can push, and the only job with write permissions is the
-# last one, which runs no code of the repository except tools/publish-seed.sh from the tagged commit.
+# trigger is a tag, which only somebody with write access can push. The jobs with write permissions are `publish`,
+# which runs no code of the repository except tools/publish-seed.sh from the tagged commit, and `images`, which may
+# write packages and builds from the assets `publish` released.
 name: release
 
 on:
@@ -145,6 +148,20 @@ jobs:
           for archive in dist/torb-seed-*.tar.gz; do
             sh tools/publish-seed.sh "$archive"
           done
+
+  images:
+    name: container images (docs/design/RELEASE.md section 7.11)
+    needs: [check, publish]
+    # The images are built from the release's own assets, so they wait for the release; `images.yml` pushes them to
+    # GHCR tagged <version> and latest, and signs them with this run's identity
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/images.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+      channel: stable
 
   publish-packages:
     name: package manager channels (docs/design/RELEASE.md section 5)

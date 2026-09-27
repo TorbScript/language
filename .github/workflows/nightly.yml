@@ -6,6 +6,7 @@
 #   - a prerelease `nightly-YYYYMMDD` with the archives of every target, the source, the seed, SHA256SUMS and its
 #     Sigstore signature, once every target is green
 #   - the nightlies older than 30 days are deleted, with their tags
+#   - the root server's container images, built from the nightly's assets and pushed to GHCR as `nightly` (images.yml)
 #
 # Only main is ever published: the schedule runs on the default branch, and a manual run from another branch runs the
 # gates and publishes nothing.
@@ -141,6 +142,7 @@ jobs:
           gh release create "$VERSION" --repo "$REPOSITORY" --target "$COMMIT" --prerelease --latest=false \
             --title "Nightly $(date -u +%Y-%m-%d)" --notes-file notes.md dist/*
       - name: Delete the nightlies older than 30 days
+        # The images of a deleted nightly stay on GHCR under their dated tag; `nightly` always names the newest
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -153,3 +155,16 @@ jobs:
                 gh release delete "$tag" --repo "$REPOSITORY" --cleanup-tag --yes
               fi
             done
+
+  images:
+    name: container images, tagged nightly (docs/design/RELEASE.md section 7.11)
+    needs: [plan, publish]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/images.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      channel: nightly
