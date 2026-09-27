@@ -1084,5 +1084,41 @@ the one thing value semantics otherwise hides.
   does not, because bytecode has no 139-byte names.
 - **Peak memory.** The suite counts allocations and bytes asked for, which is exact and portable; peak resident set is
   not obtainable from a POSIX shell on Windows and is left out rather than guessed.
-- **The build time of the compiler itself.** [BACKEND 6.3](BACKEND.md) measures it and says what the levers are.
+- **The build time of the compiler itself.** [BACKEND 6.3](BACKEND.md) measures where the C comes from; section 8
+  measures what compiling it costs.
 - **Threads and tasks.** Milestone 7.3 and 7.7.
+
+---
+
+## 8. The build time of a large program
+
+A C compiler compiles one translation unit on one core, and the compiler's C was one unit of 60 MB, its test suite's
+one of 87 MB. [BACKEND 4.1](BACKEND.md) cuts such a program into a unit of data and up to sixteen units of code that
+compile at the same time, optimizes them across each other at the link with gcc's `-flto`, and keeps every object and
+the binary in a cache. Measured on the machine of this document (16 threads, 32 GB, gcc 13.2.0), with other work
+running beside it, so a number is good to about ten percent.
+
+| What | one unit (before) | units (after) |
+|------|-------------------|---------------|
+| The C of the compiler, compiled and linked (`release`, 60 MB) | 170 s, one `cc1`, 1.6 GB | 6 s compile + 38 s link (`-flto=16`); a copy of the binary when nothing changed |
+| The same, sixteen plain units without `-flto` (for comparison) | | 25 s, sixteen `cc1`, 3.2 GB together |
+| The compiler building itself (front end + C) | 353 s | about 230 s; 182 s when its C did not change |
+| `tools/bootstrap.sh`, with a seed that splits, empty cache | 725 s (372 + 353) | 395 s (208 + 182) |
+| `tools/bootstrap.sh` with today's seed, which does not split yet | 725 s | about 600 s (step 1 is the seed's own compile, 372 s) |
+| `torb test --native compiler/tests`: the C (`dev`, 87 MB) | 141 s | 35 s (7 s compile + 25 s link) |
+| `torb test --native compiler/tests`, all of it | 712 s (build 386, run 326) | 571 s (build 271, run 300) |
+| A small program (`tests/conformance/adts.trb`, `release`) | 19.0 s | 12.2 s on an empty cache, 9.0 s for a new program once the runtime is cached, 8.7 s unchanged |
+| `torb check compiler` with the binary that came out | 21.9 s | 23.5 s from plain units (+8%), 21.2 s with `-flto` |
+| `torb build ./compiler --emit-c` with the binary that came out | 182 s | 223 s from plain units (+20%), 178 s with `-flto` |
+| The compiler's tests, run (`dev`) | 326 s | 373 s from plain units (+14%), 300 to 312 s with `-flto` |
+| The size of `torb.exe` | 10.6 MB | 15.3 MB from plain units, 12.9 MB with `-flto` |
+
+So the C compile of a large program is four times as fast with `-flto` and seven times without it, and `-flto` is what
+keeps the binary as fast as the one-unit binary was: sixteen plain units lose every inlining between two of them, and
+the compiler's own front end ran a fifth slower. A small program is faster because the runtime is compiled once per
+flag set and cached, where it used to be compiled into every binary.
+
+What did not change: `program.c` is the same bytes as before, a program with less than 4 MB of code - every program of
+the conformance suite and every example - is still one unit, and the front end (checking, lowering, emitting) is the
+same 180 to 250 seconds of the compiler's own build it was. That part is now most of a bootstrap, and it is the next
+lever: a faster C compile cannot make a bootstrap more than twice as fast.

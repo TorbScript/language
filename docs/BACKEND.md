@@ -632,7 +632,9 @@ the offset in the message (gap 7). `String` is therefore always valid UTF-8 - a 
   TorbScript today and lands well inside what clang, gcc and MSVC compile in under a minute. Milestone 6.3 adds
   sharding when the measurement says so: `shards = N`, a function goes to shard `fnv1a(mangled) % N` (stable under
   insertion, unlike index ranges), with all declarations in one generated `program.h`. The fixpoint compares the
-  shards concatenated in sorted order, so the shard count never changes the comparison.
+  shards concatenated in sorted order, so the shard count never changes the comparison. *What was built (section
+  4.1): `program.c` stays the one unit and the fixpoint's input, and a large program is additionally cut into
+  contiguous ranges of that file, not hashed shards.*
 - **Everything is sorted before it is written**: layouts, element descriptors, witness tables, static values and
   functions, each by mangled name. So the C file is a pure function of the *instance set*, not of the traversal that
   found it - which is what makes the fixpoint test about the compiler and not about a `Map` iteration order.
@@ -792,6 +794,86 @@ torb ir <path>                          The IR of a file or project, in the text
   entry module that calls them in sorted path order; `test`/`group` are runtime functions that collect results,
   print them in the format stage 0 prints, and set the exit code. So `compiler/tests/*.test.trb` move from stage 0 to
   the native binary unchanged.
+
+### 4.1 Several translation units, compiled in parallel
+
+**Decided 2026-09-27.** The compiler's C is one file of about 60 MB, its test suite's about 85 MB, and a C compiler
+compiles one translation unit on one core: that compile was most of `tools/bootstrap.sh` (two of them), of tier B's
+fixpoint and of `torb test --native compiler/tests`. So `torb build` cuts a large program into units that compile at
+the same time, and keeps every object in a cache.
+
+- **`program.c` stays the whole program.** The emitter writes one translation unit whatever the size, exactly as
+  before, and `compiler/src/backend/c/units.trb` cuts the very same lines apart afterwards. `program.c` and
+  `program.hash` are unchanged in meaning: the fixpoint compares `program.c`, CI compares `program.hash` across targets,
+  the seed is `program.c` (`tools/pack-seed.sh`, `tools/build-seed.sh`, `tools/fetch-seed.sh` did not change), and
+  `torb run` keys its cache on it. The units are a pure function of the same emission and add nothing any of them has
+  to compare; `tools/bootstrap.sh` compares them as well where both steps wrote them.
+- **The layout of the output directory**, with `--emit-c` too:
+
+  ```text
+  program.c        the whole program as one translation unit (static everything nothing outside names)
+  program.hash     the hash of program.c: the identity of the binary
+  program.h        a split program only: the fixed head, every type, every prototype, every extern declaration
+  program-01.c     #include "program.h", then the static data and nothing else
+  program-02.c     #include "program.h", then the first share of the functions
+  program-03.c     #include "program.h", then the next share
+  ...              up to program-17.c: sixteen shares of code at most
+  c-units.txt      what the last build compiled, what it took from the cache, and the link (tools/build-units.sh)
+  ```
+
+  A unit file an earlier build wrote and this one does not is emptied - `torb` cannot delete a file - so a stale unit
+  is never read as part of another program.
+- **How many.** One unit of code per 2 MB of code (`unitSize`), at most 16 (`maximumUnits`), plus the unit of data -
+  and a program with less than 4 MB of code is not split at all, which is every program of the conformance suite and
+  every example, so their build is what it was. The count depends on the program and nothing else, never on the
+  machine: the units of one program are the same bytes everywhere. `$TORB_UNITS=<n>` forces n units of code, which is
+  how the split is tested on small programs (`TORB_UNITS=3 sh tools/conformance.sh`); it cannot change `program.c`.
+- **Where each declaration goes** is recorded as it is written (`Placement` in `emission.trb`): a type, a typedef,
+  a prototype and a section comment into the header; a function definition into one unit, with its prototype in the
+  header; static data code names into the unit of data, declared `extern` in the header; the storage of a string
+  literal and the two arrays of a witness table - named only by other data - stay `static` beside it. What another unit
+  names loses its `static`, and that is the whole difference between the two forms. `main` is a fixed block and still
+  code. The data has a unit of its own because it is compiled differently (below) and takes a C compiler next to no
+  time, so it weighs nothing in the shares of the code.
+- **Which functions go together.** The emitter's order - helpers, thunks, then every function sorted by its mangled
+  name - is cut into contiguous shares of equal size. The mangled name begins with the module, so the functions of one
+  module land side by side and a C compiler can still inline between them. Section 3.6 planned `fnv1a(mangled) % N`
+  for stability under insertion; the ranges were chosen instead, because the header changes with every new function or
+  literal anyway (and with it every unit's key), while an edit inside a function moves no boundary unless it crosses
+  one, and a hash spreads every module over every unit.
+- **Linkage.** In a split program every function and every datum another unit names has external linkage under its
+  mangled name. The mangling is unique within a program and has no prefix the runtime (`torb_`) or the C library
+  uses. A binary that links two programs' C (a host and the program it embeds) links their `program.c`, whose symbols
+  are `static`, and is never split.
+- **The build.** `torb build` writes the units, then hands every C file of the build - the units or the one
+  `program.c`, and every file of the runtime - and the link to `tools/build-units.sh` in one list (`c-units.txt`). The
+  script compiles them as many at a time as the machine has processors (`$TORB_BUILD_JOBS`), each into a temporary
+  file that is moved into place once complete, then links. Where what is compiled is 8 MB or more, the whole batch
+  holds one machine-wide build slot (`tools/build-slot.sh`); sixteen `cc1` over the compiler's units peak at about
+  3 GB together, twice the one `cc1` over `program.c`.
+- **The cache** is `build/objects/` beside the runtime (the checkout's), or `objects/` beside the binary where that
+  cannot be written. An object is named after its key: the hash of the C compiler's command and first `--version`
+  line, every flag, every header of the runtime and mbedTLS's version, and the text of the file - for a unit, of
+  `program.h` too. So an unchanged program links and compiles nothing, the second step of a bootstrap whose C agrees
+  with the first compiles nothing, and the runtime is compiled once per flag set instead of once per program. The
+  script trims the cache to `$TORB_OBJECT_CACHE_MB` (2048), oldest first, never an object used in the last hour.
+- **Without `sh`, or with MSVC,** the build is what it always was: one call of the C compiler over `program.c` and the
+  runtime's sources, without a cache.
+- **Optimized across units.** A call from one unit into another cannot be inlined, and a function that another unit
+  names cannot be dropped or specialized: the compiler built from sixteen plain units ran its own build about 20%
+  slower than the one-unit binary, and the compiler's test suite 14% slower (`docs/PERFORMANCE.md` section 8). So the
+  units of code of a split program compiled by gcc get `-flto`, and the link `-flto=<jobs>`, which does the
+  whole-program optimization of the one unit again, in parallel partitions: the binary is as fast as the one-unit one,
+  and the compile plus the link take a quarter of the one-unit compile or less - in both profiles, because the test
+  suite gains more at run time than the link costs. The unit of data stays out of it: tens of thousands of
+  initializers compiled with `-flto` are more sections than a COFF object may have (`file too big`), and
+  `-Wa,-mbig-obj` gives an object the linker plugin of MinGW cannot read. So do the runtime's files, as they were
+  separate units before. clang is left without it: its `-flto` needs a linker that reads its objects, which a Linux
+  machine with plain `ld` does not have.
+- **The binary is cached too.** It is a function of what is linked, so it is kept beside the objects under the hash of
+  the link's inputs (everything but the output path): a build whose objects all come from the cache copies it instead
+  of linking - the second step of a bootstrap whose C agrees with the first, a second `torb test --native` of an
+  unchanged suite.
 
 ---
 

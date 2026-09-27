@@ -77,6 +77,11 @@ wrote ../build/dev/my-project.exe
 Writes the generated C next to where the binary would have gone and stops, needing no C compiler on the machine at
 all. This is what lets a change to the back end be reviewed as a diff of the C it emits.
 
+What it writes is `program.c`, the whole program as one translation unit, and `program.hash`, the hash of that file.
+A program of 4 MB of C or more gets its units beside them as well - `program.h`, which every unit includes, and
+`program-01.c` onwards, the first of which holds the static data and every other a share of the functions - the same
+C cut apart so that the units compile in parallel. `program.c` alone builds the same program: `cc -I<runtime>/include program.c <runtime>/*.c <runtime>/os/*.c`.
+
 ### `--target`
 
 What `OperatingSystem.current`, `Architecture.current` and `ByteOrder.current` answer in the program, and so which
@@ -130,9 +135,18 @@ program's. `$TORB_RUNTIME` says where the C runtime (`runtime/`) is; without it,
 then from the working directory and then from `torb` itself to a directory that has `runtime/include/torb.h`, which a
 checkout of the toolchain has - so `<checkout>/build/release/torb` finds its runtime from anywhere.
 
-A C file of 8 MB or more is compiled while holding one of `$TORB_BUILD_SLOTS` (default 3) machine-wide build slots,
-through `tools/build-slot.sh` beside the runtime, so that several builds of that size at once do not run the machine
-out of memory; `build` prints one line when it has to wait for one.
+Every C file of a build - the program's and the runtime's - is compiled into an object of its own, as many at a time as
+the machine has processors (`$TORB_BUILD_JOBS` says otherwise), and the objects are linked. A program of 4 MB of C or
+more is written as several units besides `program.c`: `program.h` and `program-01.c` up to at most `program-17.c` in
+the output directory, which compile in parallel and, with gcc, are optimized across each other when they are linked. Every object is kept in `build/objects/` beside the runtime, named
+after the hash of everything that decides it, so a file that did not change is not compiled again - an unchanged program
+only links, and the runtime is compiled once and not with every program. `$TORB_OBJECT_CACHE_MB` (default 2048) bounds
+that directory. Without `sh` (`tools/build-units.sh` runs the compiles) or with MSVC, `program.c` and the runtime are
+compiled in one call of the C compiler instead.
+
+When what is compiled is 8 MB or more, the whole batch holds one of `$TORB_BUILD_SLOTS` (default 3) machine-wide build
+slots, through `tools/build-slot.sh` beside the runtime, so that several builds of that size at once do not run the
+machine out of memory; `build` prints one line when it has to wait for one.
 
 ### Exit codes
 

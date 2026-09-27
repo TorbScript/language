@@ -173,6 +173,7 @@ torb-0.4.0-linux-x64/
 ├ std/                        every std package, as source: the checker reads it, the VM runs it, the C back end builds it
 ├ runtime/                    the C runtime: include/, *.c, os/*.c, without its tests - `torb build` compiles it with each program
 ├ tools/build-slot.sh         the machine-wide build slots of `torb build` (fact 6)
+├ tools/build-units.sh        the parallel compile of a large program's units and the object cache (BACKEND 4.1)
 ├ LICENSE, NOTICE             section 9
 └ README.md                   three lines and the link to torb.dev/learn
 ```
@@ -1130,7 +1131,7 @@ to the three publishing jobs only, `id-token: write` to the two that sign. Every
 
 | Asset | Content |
 |---|---|
-| `torb-<version>-<target>.tar.gz` | per target: `bin/torb`, `std/`, `runtime/` without its tests, `tools/build-slot.sh`, `LICENSE` (MIT; `runtime/` and `std/` carry their own, MIT-0), `README.md` |
+| `torb-<version>-<target>.tar.gz` | per target: `bin/torb`, `std/`, `runtime/` without its tests, `tools/build-slot.sh`, `tools/build-units.sh`, `LICENSE` (MIT; `runtime/` and `std/` carry their own, MIT-0), `README.md` |
 | `torb-<version>-windows-x64.zip` | the same for Windows, as a zip as well |
 | `torb-<version>-source.tar.gz` | `git archive` of the tag |
 | `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |

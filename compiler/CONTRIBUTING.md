@@ -161,9 +161,15 @@ driver is the same: `tools/bootstrap.sh` passes the seed nothing it may not know
 seed, so between the two commits the `seed` workflow publishes the seed of the first one, and the second is pushed only
 after it.
 
-**Build slots.** A C file of 8 MB or more - the compiler, a test suite of it - is compiled through
-`tools/build-slot.sh`, which `torb build` finds beside the runtime: at most `$TORB_BUILD_SLOTS` (default 3) such
-compiles run at the same time on the machine, whichever checkout they come from, each one a directory
+**Units and the object cache.** The compiler's C is cut into a unit of data and sixteen units of code (`program.h`,
+`program-01.c`, ... beside `program.c`, docs/BACKEND.md 4.1) that `tools/build-units.sh` compiles in parallel, one per
+processor (`$TORB_BUILD_JOBS`), and links with gcc's `-flto`. Every object - the units' and the runtime's - and the
+binary itself are kept in `build/objects/` under the hash of everything that decides them: a build whose C did not
+change copies the binary and compiles nothing. The fixpoint still compares `program.c`, which is the whole program.
+
+**Build slots.** A build whose C files to compile are 8 MB or more together - the compiler, a test suite of it - runs
+its compiles through `tools/build-slot.sh`, which `torb build` finds beside the runtime: at most `$TORB_BUILD_SLOTS`
+(default 3) such batches run at the same time on the machine, whichever checkout they come from, each one a directory
 `torb-build-slots/slot-<n>` under `$TMPDIR`/`$TEMP` taken with `mkdir`. A slot whose holder died is taken over (a dead
 process id, or older than an hour). `torb` prints one line while it waits. `cc1: out of memory` should not happen any
 more; if it does, lower `TORB_BUILD_SLOTS` and retry alone.
