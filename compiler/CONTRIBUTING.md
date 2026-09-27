@@ -147,10 +147,16 @@ maintainer pushes its branch into the repository to test it.
 
 **Landing.** `sh tools/land.sh` lands finished branches together: `prepare <name> <branch>...` picks their commits onto
 a landing worktree beside the checkout, `build` bootstraps it and writes the generated files (the natives table, the docs
-indexes, the skill) and the format again, `gates` runs both tiers on a gate slot of its own, and `publish` moves `main`
-there, refreshes the seed, publishes it to the forge (`TORB_FORGE_TOKEN`, a token of git.torb.dev that may write the
-releases) and pushes to the forge (`TORB_PUBLISH_REMOTES`, default `forgejo`). A conflict in a generated file is never
-resolved by hand.
+indexes, the skill) and the format again, `gates` runs both tiers side by side (`tools/gates.sh ab`), and `publish`
+moves `main` there, refreshes the seed, publishes it to the forge (`TORB_FORGE_TOKEN`, a token of git.torb.dev that may
+write the releases) and pushes to the forge (`TORB_PUBLISH_REMOTES`, default `forgejo`). `build` and `gates` each take
+the third gate slot (`TORB_GATE_SLOTS=3`), which agents' gates never reach. A conflict in a generated file is never
+resolved by hand. **A format in `build` needs no second bootstrap**: the formatter changes the layout and nothing else
+(its safety net drops any other edit), and what the compiler does with a program never depends on its own source
+positions, which only its own panic messages name - so the binary of the bootstrap is the compiler of the formatted
+sources, and `build` marks it current instead of building it again. Only the `program.c` the seed is refreshed from
+then carries the positions of before the format; to keep that exact in the common case, the seed formats the files
+the picks touched before the first bootstrap.
 
 **The seed.** `seed/` holds `torb(.exe)` and `program.c`, is not in git, and exists only in the main checkout of this
 machine; a worktree has none and bootstraps with `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh` (a

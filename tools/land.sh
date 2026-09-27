@@ -8,7 +8,7 @@
 #   sh tools/land.sh prepare <name> <branch>...   # a worktree ../torbscript-<name> on main with every branch's commits
 #   sh tools/land.sh continue <name>              # after resolving a conflict by hand: the rest of the picks
 #   sh tools/land.sh build <name>                 # bootstrap, the generated files, and a commit for what they changed
-#   sh tools/land.sh gates <name>                 # tier A, then tier B, on the landing's own gate slot
+#   sh tools/land.sh gates <name>                 # tier A and tier B side by side, on the landing's own gate slot
 #   sh tools/land.sh publish <name>               # main -> the landing, the seed refreshed and published, pushed
 #
 # **Where `publish` pushes**: to the forge, the remote `forgejo` (ssh://git@git.torb.dev:2223/torbscript/language.git),
@@ -24,8 +24,21 @@
 # cannot build the compiler that would regenerate it: `build` then starts from main's table, regenerates it with that
 # compiler, and builds once more.
 #
-# **The landing's gates take a third gate slot** (`TORB_GATE_SLOTS=3`): agents' gates hold at most two, and the landing
-# is what every agent waits for.
+# **The landing takes a third gate slot** (`TORB_GATE_SLOTS=3`) for `build` and for `gates`: agents' gates hold at most
+# two, and the landing is what every agent waits for. `gates` is `tools/gates.sh ab`, both tiers side by side on that
+# one slot; `build` has bootstrapped already, so the binary both tiers run is current before either starts.
+#
+# **A format needs no second bootstrap.** `build` formats the repository with the landing's own compiler after the
+# bootstrap, and a file of `compiler/src` or `std/` it changes makes the binary older than its sources - which made
+# tier A bootstrap a second time, ten to seventeen minutes for a change of layout. The formatter changes the layout and
+# nothing else (its safety net drops any other edit), and what the compiler does with a program never depends on its
+# own source positions: they are in the C it was built from only as the `file:line:column` of its own panic sites. So
+# the binary of the bootstrap is the compiler of the formatted sources - every gate answers with it what it would answer
+# with a second build, and the fixpoint of the formatted sources follows from the one the bootstrap proved - and `build`
+# marks it current instead of building it again. What differs is `program.c`, which `publish` refreshes the seed from:
+# it names the positions of before the format. To keep it the C of its commit in the common case, the seed - main's
+# compiler, whose formatter is the landing's unless a branch changed it - formats the `.trb` files of `compiler/` and
+# `std/` the picked commits touched before the first bootstrap, which is where a merge leaves a layout to change.
 #
 # `publish` reuses the landing's build for `main` - it is the same commit - so the seed is refreshed without a third
 # bootstrap. It runs from the main checkout, the one that has `seed/`.
@@ -125,8 +138,19 @@ case "$command" in
     ;;
 
   build)
+    # The whole build on one slot, the third: the bootstraps inside it take none of their own
+    if [ "${TORB_GATE_SLOT_HELD-}" != "1" ]; then
+      exec env TORB_GATE_SLOTS=3 sh "$root/tools/gate-slot.sh" sh "$root/tools/land.sh" build "$name"
+    fi
     cd "$landing"
     export TORB_SEED="${TORB_SEED:-$seed_binary}"
+    # The layout of what the picks touched, with the seed's formatter, before anything is built from it (see above);
+    # a file the seed cannot read yet (new syntax) is left for the landing's own formatter
+    touched=$(git diff --name-only --diff-filter=AMR main...HEAD -- compiler std | grep '\.trb$' || true)
+    if [ -n "$touched" ] && [ -f "$TORB_SEED" ]; then
+      # shellcheck disable=SC2086
+      "$TORB_SEED" format $touched >/dev/null 2>&1 || true
+    fi
     if ! sh tools/bootstrap.sh; then
       say "the bootstrap failed; building once more from main's natives table"
       for file in $generated; do
@@ -150,14 +174,25 @@ case "$command" in
       git commit -q -m "chore: regenerate the natives table, the docs indexes and the skill, and format, after the landing"
       say "committed what the generated files and the formatter changed"
     fi
+    # The format changed a file the compiler is built from, and only its layout: the binary is the compiler of these
+    # sources (see above), so it is marked current - `fixpoint` last, newer than the binary, as the bootstrap leaves it
+    newer=$(find compiler/src compiler/project.trb std runtime project.trb -name build -prune -o -type f \
+      \( -name '*.trb' -o -name '*.c' -o -name '*.h' \) -newer "$torb" -print 2>/dev/null | head -n 1)
+    if [ -n "$newer" ]; then
+      say "the format changed the layout of $newer and more: the binary is theirs, and is marked current"
+      for file in "$torb" build/release/program.c build/release/program.hash build/release/fixpoint; do
+        if [ -f "$file" ]; then
+          touch "$file"
+        fi
+      done
+    fi
     say "built; next: sh tools/land.sh gates $name"
     ;;
 
   gates)
     cd "$landing"
     export TORB_SEED="${TORB_SEED:-$seed_binary}" TORB_GATE_SLOTS=3
-    sh tools/gates.sh a
-    sh tools/gates.sh b
+    sh tools/gates.sh ab
     say "both tiers are green; next: sh tools/land.sh publish $name"
     ;;
 
