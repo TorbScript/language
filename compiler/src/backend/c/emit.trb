@@ -31,6 +31,7 @@ use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries, scriptHostPrototypes from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
 use Emission, write, reportUnsupported, emittedText, locationExpression, slotNameOf from "./emission"
+use writePlaced, Placement from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf, arrayDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
@@ -716,7 +717,9 @@ fn emitWitnessTable(
   if !members.isEmpty() {
     const annotation = "static const torb_witness_member"
     const array = "{arrayName}[{members.length()}]"
-    write emission, CDeclaration.StaticData(annotation, array, CExpression.Initializer(members))
+    // Only the table names its two arrays, and the table is data as well: they stay `static` in a split program
+    const datum = CDeclaration.StaticData annotation, array, CExpression.Initializer(members)
+    writePlaced emission, datum, Placement.LocalData
   }
   var nested: List<CExpression> = []
   for inner in table.nested {
@@ -737,7 +740,8 @@ fn emitWitnessTable(
   if !nested.isEmpty() {
     const annotation = "static const torb_witness_table *const"
     const array = "{nestedName}[{nested.length()}]"
-    write emission, CDeclaration.StaticData(annotation, array, CExpression.Initializer(nested))
+    const datum = CDeclaration.StaticData annotation, array, CExpression.Initializer(nested)
+    writePlaced emission, datum, Placement.LocalData
   }
   const payload = payloadLayoutOfTable program, table
   const drop = match payload {
@@ -2112,7 +2116,9 @@ fn emitTextStorage(var emission: Emission, program: IrProgram, id: StaticId) {
   ])
   // The type is a whole anonymous struct, so this one declaration is the only line the emitter breaks
   const annotation = "static struct \{ torb_header header; uint32_t capacity; uint8_t data[{count}]; \}"
-  write emission, CDeclaration.StaticData(annotation, storageNameOf(value), initializer, true)
+  // Only the constants over it name the storage, and they are data too: it stays `static` in a split program
+  const storage = CDeclaration.StaticData annotation, storageNameOf(value), initializer, true
+  writePlaced emission, storage, Placement.LocalData
 }
 
 fn storageNameOf(value: StaticValue): String {
@@ -2631,7 +2637,9 @@ fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List
   for line in lines {
     body = body + "  " + line + "\n"
   }
-  write emission, CDeclaration.Fixed("int main(int argument_count, char **argument_values) \{\n" + body + "\}")
+  const definition = CDeclaration.Fixed("int main(int argument_count, char **argument_values) \{\n" + body + "\}")
+  // A fixed block, and code all the same: it goes into a unit of a split program and not into its header
+  writePlaced emission, definition, Placement.Code
 }
 
 /**

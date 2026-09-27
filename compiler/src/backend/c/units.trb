@@ -1,0 +1,225 @@
+/**
+ * A large program's C as several translation units that a C compiler builds at the same time (docs/BACKEND.md 4.1):
+ * one header every unit includes, a unit that holds the static data, and the functions spread over the units in the
+ * order the emitter wrote them.
+ *
+ * The emitter writes **one** translation unit whatever the size of the program ([emittedText], `program.c`), and this
+ * file cuts the very same lines apart afterwards. So the split is a pure function of the one-unit text: it adds nothing
+ * the fixpoint of the compiler would have to compare separately, a program too small to split is compiled from
+ * `program.c` exactly as before, and every tool that reads `program.c` - the seed, `torb run`'s cache key, the C that
+ * every target has to agree on - reads the whole program still.
+ *
+ * What changes between the two forms is linkage and nothing else: whatever one unit defines and another names loses its
+ * `static` and is declared in the header - a function by its prototype, a datum by an `extern` declaration - while the
+ * data that only other data names stays `static` beside it in the data unit.
+ *
+ * # Related
+ *
+ * - [Placement] - where each declaration goes, recorded by `emission.trb` as it is written.
+ * - `cli/build.trb` - writes the units, compiles them in parallel and caches each unit's object.
+ */
+
+use Emission, Piece, Placement, withoutStorageClass from "./emission"
+
+/**
+ * How much code one unit is meant to hold, in bytes: the compiler's own C, about 60 MB, is sixteen units of code, and a
+ * program with less than twice this much code stays one unit.
+ */
+public const unitSize = 2_097_152
+
+/** No more units of code than this, however large the program: the machines that build it have about as many cores. */
+public const maximumUnits = 16
+
+/** The name of the header every unit includes, beside the units in the output directory. */
+public const headerFileName = "program.h"
+
+/** `program-01.c`: the file name of unit `index` (from zero), two digits so that the names sort in unit order. */
+public fn unitFileName(index: Int): String {
+  const number = index + 1
+  if number < 10 {
+    return "program-0{number}.c"
+  }
+  "program-{number}.c"
+}
+
+/** A program's C cut into units: empty where it is one unit, and then `program.c` is what is compiled. */
+public type EmittedUnits {
+  /** `program.h`: every type, prototype and `extern` declaration of the program. */
+  header: String = ""
+  /**
+   * The units in order, each opening with `#include "program.h"`: the first one holds the static data and nothing else,
+   * every other one a share of the code.
+   */
+  units: List<String> = []
+
+  fn isSplit(): Bool {
+    !units.isEmpty()
+  }
+}
+
+/**
+ * How many units of code a program with this many bytes of code is split into: one below twice [unitSize], never more
+ * than [maximumUnits]. A split program has one unit of data besides them.
+ */
+public fn unitCountFor(weight: Int): Int {
+  const count = weight / unitSize
+  count.clamp 1, maximumUnits
+}
+
+/**
+ * The units of an emitted program: the static data in a unit of its own, and the functions spread over the others in
+ * the order the emitter wrote them - helpers, thunks, then every function sorted by its mangled name, which puts the
+ * functions of one module side by side - cut where the running size passes the next equal share, so an edit inside one
+ * function moves no boundary unless it crosses one.
+ *
+ * The data is apart because it is compiled apart: it is never optimized across units (a unit of tens of thousands of
+ * initializers is more sections than a COFF object compiled with `-flto` may have), and it takes a C compiler no
+ * optimization to speak of, so it weighs nothing in the shares of the code.
+ *
+ * `forced` above zero is the number of units of code whatever the size (`$TORB_UNITS`, and the tests): a small program
+ * split into several is how the split itself is tested, and the one-unit text it is cut from does not change.
+ */
+public fn emittedUnits(emission: Emission, forced: Int = 0): EmittedUnits {
+  var codeWeight = 0
+  var weights: List<Int> = []
+  for piece in emission.pieces {
+    const size = sizeOf emission, piece
+    weights.append size
+    if piece.placement == Placement.Code {
+      codeWeight = codeWeight + size
+    }
+  }
+  const count = if forced > 0 { forced.min maximumUnits } else { unitCountFor codeWeight }
+  if count < 2 {
+    return EmittedUnits()
+  }
+  // Which unit each piece goes into, and the header on the way: -1 for what is only declared, 0 for the data unit, and
+  // the code from 1 on
+  var unitOfPiece: List<Int> = []
+  var header = headerOpening()
+  var declared: Set<String> = Set.of()
+  var running = 0
+  var unit = 1
+  for index in 0..emission.pieces.length() {
+    const piece = emission.pieces[index]
+    match piece.placement {
+      .Shared => {
+        addShared emission, piece, header, declared
+        unitOfPiece.append(-1)
+      }
+      .Data => {
+        addDeclaration header, declared, piece.declaration
+        unitOfPiece.append 0
+      }
+      .LocalData => unitOfPiece.append 0
+      .Code => {
+        while unit < count && running * count >= unit * codeWeight {
+          unit = unit + 1
+        }
+        if piece.headOffset >= 0 {
+          const head = withoutStorageClass emission.lines[piece.first + piece.headOffset]
+          const prototype = head.withoutSuffix(" \{") ?? head
+          addDeclaration header, declared, "{prototype};"
+        }
+        unitOfPiece.append unit
+        running = running + weights[index]
+      }
+    }
+  }
+  header.append ""
+  header.append "#endif"
+  var units: List<String> = []
+  for current in 0..count + 1 {
+    var body = ["#include \"{headerFileName}\""]
+    for index in 0..emission.pieces.length() {
+      if unitOfPiece[index] == current {
+        const piece = emission.pieces[index]
+        const isExternal = piece.placement != Placement.LocalData
+        addLines emission, piece, body, isExternal
+      }
+    }
+    units.append textOf(body)
+  }
+  EmittedUnits textOf(header), units
+}
+
+/** The bytes of a piece's lines, each with its line break. */
+fn sizeOf(emission: Emission, piece: Piece): Int {
+  var size = 0
+  for offset in 0..piece.count {
+    size = size + emission.lines[piece.first + offset].byteLength() + 1
+  }
+  size
+}
+
+fn headerOpening(): List<String> {
+  [
+    "/*",
+    " * Generated by the TorbScript compiler. Do not edit.",
+    " *",
+    " * What every unit of this program includes (docs/BACKEND.md 4.1): its types, the prototype of every function and",
+    " * the `extern` declaration of every datum another unit defines. program.c is the same program as one unit.",
+    " */",
+    "",
+    "#ifndef TORB_PROGRAM_H",
+    "#define TORB_PROGRAM_H",
+    "",
+  ]
+}
+
+/**
+ * A shared declaration as it stands, but a prototype without its `static`: the function it declares is defined in one
+ * unit and called from the others. A prototype the header already has - the destructor of a layout is declared twice,
+ * once for its drop function - is written once.
+ */
+fn addShared(emission: Emission, piece: Piece, var header: List<String>, var declared: Set<String>) {
+  if piece.count == 1 {
+    const line = withoutStorageClass emission.lines[piece.first]
+    if line.endsWith(";") {
+      addDeclaration header, declared, line
+      return
+    }
+  }
+  if piece.first > 0 && emission.lines[piece.first - 1].isEmpty() {
+    header.append ""
+  }
+  for offset in 0..piece.count {
+    const line = emission.lines[piece.first + offset]
+    if offset == piece.headOffset {
+      header.append withoutStorageClass(line)
+    } else {
+      header.append line
+    }
+  }
+}
+
+fn addDeclaration(var header: List<String>, var declared: Set<String>, line: String) {
+  if line.isEmpty() || declared.contains(line) {
+    return
+  }
+  declared.insert line
+  header.append line
+}
+
+/**
+ * A piece's lines into one unit, after the blank line that stood in front of it. `isExternal` drops the `static` of its
+ * head, because another unit names what it defines.
+ */
+fn addLines(emission: Emission, piece: Piece, var body: List<String>, isExternal: Bool) {
+  if piece.first > 0 && emission.lines[piece.first - 1].isEmpty() {
+    body.append ""
+  }
+  for offset in 0..piece.count {
+    const line = emission.lines[piece.first + offset]
+    if isExternal && offset == piece.headOffset {
+      body.append withoutStorageClass(line)
+    } else {
+      body.append line
+    }
+  }
+}
+
+fn textOf(lines: List<String>): String {
+  // Always `\n`, as the one-unit text is: the fixpoint compares the units of two builds byte for byte
+  lines.joined(separator: "\n") + "\n"
+}

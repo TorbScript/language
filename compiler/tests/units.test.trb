@@ -1,0 +1,134 @@
+/**
+ * A program's C cut into a header and several units (docs/BACKEND.md 4.1): what the header declares, which unit holds
+ * what, and which `static` goes.
+ *
+ * The programs are small, so every test forces the number of units, which is exactly what `$TORB_UNITS` does for a
+ * real build. That the units **compile and link** into the same program is the conformance suite run with
+ * `TORB_UNITS` set, and the compiler itself, which is split by its size.
+ */
+
+use test, group from "std/test"
+use lowered from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emitProgram, ProgramEntry from "../src/backend/c/emit"
+use emittedText from "../src/backend/c/emission"
+use EmittedUnits, emittedUnits, unitFileName, unitCountFor, unitSize, maximumUnits from "../src/backend/c/units"
+
+/** The entry function of `app/src/main.trb`, which is what the `main` of the program calls. */
+const entryName = "t_acme_x2f_app_main"
+
+fn unitsOf(source: String, count: Int): EmittedUnits {
+  var found = lowered source
+  insertOwnership found.program
+  const emission = emitProgram found.program, [ProgramEntry(entryName)]
+  emittedUnits emission, count
+}
+
+fn wholeOf(source: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  emittedText emitProgram(found.program, [ProgramEntry(entryName)])
+}
+
+/** How many lines of all the units together are exactly `line`. */
+fn countOf(units: EmittedUnits, line: String): Int {
+  var count = 0
+  for unit in units.units {
+    count = count + unit.lines().filter({ _ == line }).count()
+  }
+  count
+}
+
+const doubling = raw"""
+  fn double(value: Int): Int {
+    value * 2
+  }
+
+  const _ = double(21)
+  """
+
+const greeting = raw"""
+  fn greet(name: String): String {
+    "hello, {name}"
+  }
+
+  print greet("units")
+  """
+
+group "How many units" {
+  test "a program below twice the size of a unit is one, and nothing is split" {
+    assert(unitCountFor(0) == 1)
+    assert(unitCountFor(unitSize * 2 - 1) == 1)
+    assert(unitCountFor(unitSize * 2) == 2)
+    assert(unitCountFor(unitSize * 1000) == maximumUnits)
+    assert(!unitsOf(doubling, 0).isSplit())
+  }
+
+  test "the units are named in their order, with two digits" {
+    assert(unitFileName(0) == "program-01.c")
+    assert(unitFileName(9) == "program-10.c")
+    assert(unitFileName(15) == "program-16.c")
+  }
+}
+
+group "The header" {
+  test "it declares every function and every datum another unit names, and nothing in it is static" {
+    const units = unitsOf doubling, 2
+    const lines = units.header.lines().toList()
+    assert lines.contains("int64_t t_acme_x2f_app_main_double(int64_t s0_value);")
+    assert lines.contains("void t_acme_x2f_app_main(void);")
+    assert lines.contains("extern const int64_t s_literal__Int64_2;")
+    assert lines.contains("#include \"torb.h\"")
+    assert(!lines.any({ _.startsWith "static " }))
+  }
+
+  test "a prototype is written once, however often the one unit declares it" {
+    const units = unitsOf doubling, 2
+    const prototypes = units.header.lines().filter({ _ == "void t_acme_x2f_app_main(void);" }).count()
+    assert(prototypes == 1)
+  }
+}
+
+group "The units" {
+  test "a split program is its units of code and one unit of data in front of them, each including the header first" {
+    const units = unitsOf doubling, 3
+    assert(units.units.length() == 4)
+    for unit in units.units {
+      assert unit.startsWith("#include \"program.h\"\n")
+    }
+  }
+
+  test "every function is defined in exactly one unit, without `static`" {
+    const units = unitsOf doubling, 2
+    assert(countOf(units, "int64_t t_acme_x2f_app_main_double(int64_t s0_value) \{") == 1)
+    assert(countOf(units, "void t_acme_x2f_app_main(void) \{") == 1)
+    assert(countOf(units, "int main(int argument_count, char **argument_values) \{") == 1)
+    for unit in units.units {
+      assert(!unit.contains("static int64_t t_acme"))
+    }
+  }
+
+  test "the first unit defines the data and nothing else, and the storage of a literal stays static beside its text" {
+    const units = unitsOf greeting, 2
+    const first = units.units[0]
+    assert first.contains("\nstatic struct \{ torb_header header; uint32_t capacity; uint8_t data[")
+    assert first.contains("\nconst torb_text s_literal__String_")
+    assert(!first.contains(") \{\n"))
+    assert(!units.units[1].contains("s_literal__String_units_storage ="))
+    assert units.header.contains("\nextern const torb_text s_literal__String_units;")
+  }
+
+  test "splitting leaves the one-unit text alone" {
+    const before = wholeOf greeting
+    const _ = unitsOf greeting, 4
+    assert(wholeOf(greeting) == before)
+    assert before.contains("\nstatic const torb_text s_literal__String_units =")
+  }
+
+  test "the split is a pure function of the program" {
+    const first = unitsOf greeting, 3
+    const second = unitsOf greeting, 3
+    assert(first.header == second.header)
+    assert(first.units == second.units)
+  }
+}

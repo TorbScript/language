@@ -14,7 +14,7 @@ use IrProgram, IrFunction, Slot, LocationId, Location from "../../ir/ir"
 use escapedComponent from "../../ir/mangle"
 use unsupportedMessage from "../../ir/unsupported"
 use CExpression, CStatement, CDeclaration from "./writer"
-use declarationLines, needsBlankLine, cStringOf from "./writer"
+use declarationLines, needsBlankLine, cStringOf, declarationOf from "./writer"
 
 /**
  * The translation unit as it is written so far, and every construct found on the way that the C back end cannot emit
@@ -26,9 +26,48 @@ use declarationLines, needsBlankLine, cStringOf from "./writer"
  */
 public type Emission {
   var lines: List<String> = []
+  /**
+   * One entry per declaration written, in order: which of the lines it is and where it goes when the program is split
+   * into several translation units (`units.trb`). The one-unit text of [emittedText] never reads it.
+   */
+  var pieces: List<Piece> = []
   /** Deduplicated, in the order they were found: the walk is deterministic, so this list is too. */
   var unsupported: List<String> = []
   var unsupportedIndex: Map<String, Bool> = [:]
+}
+
+/**
+ * Where a declaration goes when the program is split into several translation units (docs/BACKEND.md 4.1): the header
+ * every unit includes, one of the units, or the unit that holds the data.
+ *
+ * The emitter writes one translation unit whatever the size of the program, with `static` on everything nothing
+ * outside it names. That is what lets `units.trb` cut the very same lines into a header and several units afterwards,
+ * dropping the `static` of whatever another unit names.
+ */
+public type Placement {
+  /** A type, a typedef, a prototype, a section comment, the fixed head: in the header, as it is written. */
+  case Shared
+  /** A function: its definition in exactly one unit, its prototype in the header. */
+  case Code
+  /** Static data that code names: defined in the data unit, declared `extern` in the header. */
+  case Data
+  /** Static data that only other static data names - the storage of a string literal, the arrays of a witness table. */
+  case LocalData
+}
+
+/** The lines one declaration was written as, and where they go in a split program. */
+public type Piece {
+  placement: Placement
+  /** The index of its first line in [Emission.lines], after the blank line in front of it. */
+  first: Int
+  count: Int
+  /**
+   * Which of its lines carries the storage class: the head of a definition comes after its comment. -1 for a fixed
+   * block, which has none.
+   */
+  headOffset: Int = 0
+  /** For [Placement.Data]: the `extern` declaration the header gets. */
+  declaration: String = ""
 }
 
 /**
@@ -37,11 +76,58 @@ public type Emission {
  * the emitter that builds one.
  */
 public fn write(var emission: Emission, declaration: CDeclaration) {
+  writePlaced emission, declaration, placementOf(declaration)
+}
+
+/**
+ * [write], for the few declarations whose place in a split program is not the one their kind implies: `main`, which is
+ * a fixed block and still code, and the static data that only other static data names.
+ */
+public fn writePlaced(var emission: Emission, declaration: CDeclaration, placement: Placement) {
   if needsBlankLine(declaration) && !emission.lines.isEmpty() {
     emission.lines.append ""
   }
   const lines = declarationLines declaration
+  const first = emission.lines.length()
   emission.lines.appendAll lines
+  const headOffset = match declaration {
+    .Definition(comment, _, _) => if comment.isEmpty() { 0 } else { 1 }
+    // `main`: nothing names it, so it needs no prototype, and it has no storage class to drop
+    .Fixed(_) => -1
+    _ => 0
+  }
+  const external = match placement {
+    .Data => externDeclarationOf declaration
+    _ => ""
+  }
+  emission.pieces.append Piece(placement, first, lines.length(), headOffset, external)
+}
+
+/** Where a declaration of this kind goes: a definition is code, static data is data, everything else is shared. */
+fn placementOf(declaration: CDeclaration): Placement {
+  match declaration {
+    .Definition(_, _, _) => Placement.Code
+    .StaticData(_, _, _, _) => Placement.Data
+    .Variable(_, _) => Placement.Data
+    _ => Placement.Shared
+  }
+}
+
+/** `extern const int64_t s_x;`: what the header says about a datum the data unit defines. */
+fn externDeclarationOf(declaration: CDeclaration): String {
+  match declaration {
+    .StaticData(annotation, name, _, _) => "{declarationOf("extern {withoutStorageClass(annotation)}", name)};"
+    .Variable(annotation, name) => "{declarationOf("extern {withoutStorageClass(annotation)}", name)};"
+    _ => ""
+  }
+}
+
+/**
+ * A line or a type spelling without the `static` in front of it: how a declaration that another unit names is written
+ * in a split program, where it needs external linkage.
+ */
+public fn withoutStorageClass(text: String): String {
+  text.withoutPrefix("static ") ?? text
 }
 
 /**
