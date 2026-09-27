@@ -71,34 +71,43 @@ public type BitReader {
       if width > 56 || width < 0 {
         panic "BitReader.bits reads 0 to 56 bits at a time, not {width}"
       }
-      const needed = (width - count + 7) / 8
-      if needed > input.length() - cursor {
-        return Fail ReadError.TruncatedBits(cursor, width, count + (input.length() - cursor) * 8)
+      // The list is read through a local, which a read of the field would retain and release for every byte
+      const bytes = input
+      const left = bytes.length() - cursor
+      if (width - count + 7) / 8 > left {
+        return Fail ReadError.TruncatedBits(cursor, width, count + left * 8)
       }
-      if order == BitOrder.LeastSignificantFirst {
-        while count < width {
-          buffer = buffer | (Int.from(input[cursor]) << count)
-          cursor = cursor + 1
-          count = count + 8
+      match order {
+        .LeastSignificantFirst => {
+          while count < width {
+            buffer = buffer | (Int.from(bytes[cursor]) << count)
+            cursor = cursor + 1
+            count = count + 8
+          }
         }
-      } else {
-        while count < width {
-          buffer = (buffer << 8) | Int.from(input[cursor])
-          cursor = cursor + 1
-          count = count + 8
+        .MostSignificantFirst => {
+          while count < width {
+            buffer = (buffer << 8) | Int.from(bytes[cursor])
+            cursor = cursor + 1
+            count = count + 8
+          }
         }
       }
     }
     const mask = (1 << width) - 1
     count = count - width
-    if order == BitOrder.LeastSignificantFirst {
-      const value = buffer & mask
-      buffer = buffer >> width
-      return Ok value
+    match order {
+      .LeastSignificantFirst => {
+        const value = buffer & mask
+        buffer = buffer >> width
+        Ok value
+      }
+      .MostSignificantFirst => {
+        const value = (buffer >> count) & mask
+        buffer = buffer & ((1 << count) - 1)
+        Ok value
+      }
     }
-    const value = (buffer >> count) & mask
-    buffer = buffer & ((1 << count) - 1)
-    Ok value
   }
 
   /**
@@ -118,14 +127,18 @@ public type BitReader {
       count = 8
     }
     count = count - 1
-    if order == BitOrder.LeastSignificantFirst {
-      const set = buffer & 1 == 1
-      buffer = buffer >> 1
-      return Ok set
+    match order {
+      .LeastSignificantFirst => {
+        const set = buffer & 1 == 1
+        buffer = buffer >> 1
+        Ok set
+      }
+      .MostSignificantFirst => {
+        const set = (buffer >> count) & 1 == 1
+        buffer = buffer & ((1 << count) - 1)
+        Ok set
+      }
     }
-    const set = (buffer >> count) & 1 == 1
-    buffer = buffer & ((1 << count) - 1)
-    Ok set
   }
 
   /** Drops the bits left of the byte the last read came from, so the next read starts at a byte boundary. */
