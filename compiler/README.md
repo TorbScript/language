@@ -7,7 +7,7 @@ the repository root:
 ```text
 torb check .
 torb build tests/conformance/arithmetic.trb
-torb run examples/tour
+torb run examples/config-dsl
 torb test compiler/tests
 torb ir examples/tour/src/01-bindings-and-values.trb
 torb parse compiler std examples
