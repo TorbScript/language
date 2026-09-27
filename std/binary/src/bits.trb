@@ -135,6 +135,23 @@ public type BitReader {
   }
 
   /**
+   * Moves to the first bit of the byte at `position`, dropping the bits left of the current byte; the end itself is a
+   * position too. What a format that starts inside other bytes begins with: a DEFLATE stream after a gzip header.
+   *
+   * # Errors
+   *
+   * - [ReadError.OutOfRange] for a position below zero or past the end.
+   */
+  var fn seek(position: Int): Result<Void, ReadError> {
+    if position < 0 || position > input.length() {
+      return Fail ReadError.OutOfRange(cursor, position, input.length())
+    }
+    alignToByte()
+    cursor = position
+    Ok void
+  }
+
+  /**
    * The next `count` whole bytes, after the bits left of the current byte are dropped as [BitReader.alignToByte] drops
    * them: the stored block of DEFLATE.
    *
