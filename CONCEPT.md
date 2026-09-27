@@ -1289,8 +1289,8 @@ account.balance = 1_000_000              // Compile error in another file: `bala
   nobody writes a const field anyway, and on a method, a case, a constant or a top-level declaration there is no `var`
   at all: both are errors. A member has one visibility, so `private protected` is an error too. `protected` is a word
   only in front of a member: a field may be named `protected`, and outside a type body it is an ordinary name.
-- `private(var) x`, the spelling `protected var x` replaces, still compiles and means the same; `torb lint --fix --rule
-  protected-field` rewrites it.
+- `private(var) x`, the spelling `protected var x` replaces, is an error that names the new one; `torb lint --fix
+  --rule protected-field` rewrites it.
 - **`private` reaches as far as the file that declares it.** A private member is visible in the body of its type, in
   an `extend` of that type written in the same file, and in the free functions of that file - and nowhere else. One
   rule, and the same reach a `private` top-level declaration has: what is private is what its file can see. The
@@ -2593,7 +2593,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   writable field does, instead of inside a parenthesized modifier; `protected` without `var`, on anything but a field,
   or next to `private` is an error. It is a contextual word, a modifier only in front of a member, so `protected: Bool`
   and `self.protected` stay names. The semantics are unchanged: the constructor and `copy` take the field from
-  outside, and only the file of the type writes it. The lint rule `protected-field` rewrites the old spelling.
+  outside, and only the file of the type writes it. `private(var)` is an error that names `protected var`, and the
+  lint rule `protected-field` rewrites it.
 - **A reserved word may name a field, a method, a case field or a label** (2026-09-27, owner;
   docs/language/syntax/lexical-structure.md rule 6). Where it can only be a name - declared inside a type body, after
   a `.`, as a label - a keyword is one: `type: String`, `event.type`, `Event(type: "click")`. A bare keyword stays the

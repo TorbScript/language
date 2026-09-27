@@ -111,8 +111,15 @@ print "{server.host}:{server.port} has {server.connections} connections"
    // error: `protected` needs `var`: a const field is write-protected already
    ```
 
-   `private(var) connections: Int` is the spelling `protected var` replaces. It still compiles and means the same, and
-   `torb lint --fix --rule protected-field` rewrites it.
+   `private(var) connections: Int`, the spelling `protected var` replaces, is an error that names it, and
+   `torb lint --fix --rule protected-field` rewrites every one:
+
+   ```trb error
+   type Server {
+     private(var) connections: Int = 0
+   }
+   // error: `private(var)` is written `protected var`
+   ```
 
 5. **`private` reaches as far as the file that declares it.** A `private` member is visible in the body of its type,
    in an `extend` of that type in the same file, and in the functions of that file - and nowhere else. Reading it from

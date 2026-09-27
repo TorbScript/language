@@ -1017,8 +1017,9 @@ fn checkMemberShape(var checker: Checker, module: ModuleId, member: Member, isTr
 
 /**
  * `protected var connections: Int = 0` is the whole spelling. Without the `var` the word protects nothing, because a
- * const field is written by nobody already; `private(var)`, the spelling it replaces, carries its `var` inside and
- * takes no second one.
+ * const field is written by nobody already. `private(var)`, the spelling it replaces, is refused with the one that
+ * replaces it, and `torb lint --fix --rule protected-field` writes that; the field still means what it says, so
+ * nothing else about it is reported a second time.
  */
 fn checkFieldModifiers(var checker: Checker, module: ModuleId, modifiers: Modifiers, field: Field) {
   const name = field.name.text
@@ -1033,11 +1034,14 @@ fn checkFieldModifiers(var checker: Checker, module: ModuleId, modifiers: Modifi
         ),
     )
   }
-  if modifiers.visibility == Visibility.PrivateVar && field.isVar {
+  if modifiers.visibility == Visibility.PrivateVar {
     checker.report(
       module,
-      Diagnostic.error("`private(var)` already says `var`", field.name.span)
-        .withNote("Write `protected var {name}: ...`: everybody reads the field, and only its own file writes it"),
+      Diagnostic.error("`private(var)` is written `protected var`", at)
+        .withNote(
+          "`protected var {name}: ...` means the same: everybody reads the field, and only its own file writes it."
+            + " `torb lint --fix --rule protected-field` rewrites every one",
+        ),
     )
   }
 }

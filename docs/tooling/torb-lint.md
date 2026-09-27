@@ -129,9 +129,10 @@ print half(8)
 
 **`protected-field`**: a field that everybody reads and only the file of its type writes is spelled
 `protected var connections: Int`, and `private(var) connections: Int`, the spelling it replaces, is found and rewritten
-to it ([Fields](../language/types/fields.md), rule 3). The two mean the same, so the fix is certain, and
-`torb lint --fix --rule protected-field` is the whole migration of a project. A `private(var)` field that writes `var`
-as well is the checker's error and gets no fix.
+to it ([Fields](../language/types/fields.md), rule 4). The checker refuses `private(var)` with an error that names
+this rule, which is its fix: the two mean the same, so the fix is certain, and `torb lint --fix --rule protected-field`
+is the whole migration of a project. A `private(var)` field that writes `var` as well gets no fix, because the one it
+would get says `var` twice.
 
 ```trb check
 type Server {

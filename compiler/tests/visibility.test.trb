@@ -304,7 +304,7 @@ group "`protected var`" {
     assert problemsOf(files).isEmpty()
   }
 
-  test "`private(var)`, the spelling it replaces, means the same" {
+  test "`private(var)`, the spelling it replaces, is an error and still means the same" {
     const files = outside(
       "Wallet",
       raw"""
@@ -324,7 +324,10 @@ group "`protected var`" {
         }
         """,
     )
-    assert(problemsOf(files) == ["`coins` is write-protected: only the file that declares `Wallet` writes it"])
+    const found = problemsOf files
+    assert(found.length() == 2)
+    assert found.contains("`private(var)` is written `protected var`")
+    assert found.contains("`coins` is write-protected: only the file that declares `Wallet` writes it")
   }
 
   test "`protected` is a word only in front of a member: everywhere else it is a name" {

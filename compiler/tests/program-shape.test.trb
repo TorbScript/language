@@ -639,17 +639,29 @@ group "`protected` is a modifier of a `var` field (gap 30)" {
     assert(problems(source) == [refused, refused, refused])
   }
 
-  test "and `private(var)` already says `var`, so a second one is a mistake" {
+  test "and on a field `private(var)` is an error that names `protected var` and its fix" {
+    const source = raw"""
+      type Account {
+        private(var) balance: Int = 0
+      }
+      """
+    assert(problems(source) == ["`private(var)` is written `protected var`"])
+    assert(
+      notes(source)
+        == [
+          "`protected var balance: ...` means the same: everybody reads the field, and only its own file writes it."
+            + " `torb lint --fix --rule protected-field` rewrites every one",
+        ],
+    )
+  }
+
+  test "a second `var` next to `private(var)` is the same one error" {
     const source = raw"""
       type Account {
         private(var) var balance: Int = 0
       }
       """
-    assert(problems(source) == ["`private(var)` already says `var`"])
-    assert(
-      notes(source)
-        == ["Write `protected var balance: ...`: everybody reads the field, and only its own file writes it"],
-    )
+    assert(problems(source) == ["`private(var)` is written `protected var`"])
   }
 }
 

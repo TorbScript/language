@@ -82,8 +82,8 @@ C#, Kotlin, TypeScript and C++ `protected` opens a member to subclasses, and her
 - **`private(set)`**, Swift's spelling. Rejected as an extra keyword (`set`) for a fact the existing `var` already
   states.
 - **`private(var)`**, the spelling `protected var` replaces. It was the one modifier with parentheses, and it carried
-  the field's `var` inside them, so a writable field did not say `var` where the others do. It still compiles and means
-  the same, and `torb lint --fix --rule protected-field` rewrites it.
+  the field's `var` inside them, so a writable field did not say `var` where the others do. It is an error that names
+  `protected var`, and `torb lint --fix --rule protected-field` rewrites it.
 - **A `guarded` keyword** tried during design for the read-everyone/write-only-the-type case. Rejected because it named
   neither half of the rule, where `protected var` keeps the `var` and names what is protected.
 
