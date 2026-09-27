@@ -19,11 +19,13 @@ source:
   - docs/design/RELEASE.md#7.11-hosting-and-the-server
   - .github/workflows/release.yml
   - .github/workflows/seed.yml
+  - .github/workflows/images.yml
   - tools/fetch-seed.sh
   - tools/install.sh
   - tools/install.ps1
   - tools/render-package-manifests.sh
   - tools/release-sync
+  - tools/registry
   - tools/deploy
 ---
 
@@ -49,6 +51,8 @@ source, the portable seed and a signed `SHA256SUMS` as a GitHub release. The des
    of them does.
 7. **Check the release page**: one `.tar.gz` per target and a `.zip` for Windows, the source, the seed with its
    `.sha256`, `SHA256SUMS` and `SHA256SUMS.sigstore.json`. The seed is also added to `seeds.txt` of the release `seeds`.
+   The job `images` pushes `ghcr.io/torbscript/release-sync`, `site` and `registry` tagged with the version and
+   `latest`, signed; the root server takes them with `docker compose pull && docker compose up -d`.
 
 **Publishing a seed without a release** is Actions -> `seed` -> Run workflow on `main`. It bootstraps on linux-x64, runs
 tier A and tier B, and publishes the seed of `main`. That is what the second commit of a breaking change waits for:
@@ -131,21 +135,68 @@ release: a channel whose secret is missing is skipped by the workflow that would
    documents needing).
 
 **The root server** ([RELEASE.md section
-7.11](../design/RELEASE.md#public-downloads-while-the-repository-is-private-decided-here)), which makes
-`torb.dev/download/...` answer while the repository is private:
+7.11](../design/RELEASE.md#the-root-server-and-the-write-service-as-built-2026-09-27)): torb.dev with the downloads,
+packages.torb.dev with the registry, from the images every release pushes to GHCR, behind the Traefik that already
+runs on the machine. Nothing is built on the server.
 
-1. A machine with Docker and Docker Compose, and DNS for `torb.dev` and `packages.torb.dev` pointed at it (or at a CDN
-   in front of it).
-2. Copy `tools/deploy/docker-compose.example.yml` to `docker-compose.yml` next to a `.env` (never committed) with
-   `ACME_EMAIL`, `RELEASE_SYNC_TOKEN` (a fine-grained token scoped to `contents: read` of this repository - read-only,
-   since this program never publishes anything back to GitHub) and `RELEASE_SYNC_WEBHOOK_SECRET` (any random string).
-   Then `docker compose up -d --build`.
-3. On the repository, Settings -> Webhooks -> Add webhook: payload URL `https://torb.dev/webhook`, content type
-   `application/json`, secret the same `RELEASE_SYNC_WEBHOOK_SECRET`, event "Releases" only.
-4. Verify it: publish a release (or wait for `release-sync`'s periodic check, `RELEASE_SYNC_POLL_SECONDS`, default 300)
-   and look for `<root>/download/<version>/` on the server; `docker compose logs release-sync` says why one is
-   missing - most often `cosign` refusing a signature it could not verify, which is by design (section 7.11, "a
-   release this program cannot check is not placed as if it had been").
+1. **DNS**: `torb.dev`, `www.torb.dev` and `packages.torb.dev` pointed at the machine (or at the CDN in front of it).
+2. **The files**: a directory such as `/opt/torb` with `tools/deploy/compose.example.yml` copied as `compose.yml`,
+   `.env.example` as `.env` (never committed), `litestream.yml` and `backup.sh` beside them. The data directories
+   below `TORB_DATA` (default `/srv/torb`) belong to the containers' user:
+   `mkdir -p /srv/torb/download /srv/torb/registry /srv/torb/database /srv/torb/index-mirror && chown -R 1000:1000 /srv/torb`.
+3. **The `.env`**:
+   - `TRAEFIK_NETWORK`, `TRAEFIK_ENTRYPOINT` and `TRAEFIK_CERTRESOLVER`: the Docker network the existing Traefik watches,
+     its HTTPS entrypoint and its Let's Encrypt resolver, as its own configuration names them (`docker network ls`
+     shows the network).
+   - `RELEASE_SYNC_TOKEN`: a fine-grained token with `contents: read` of this repository and nothing else;
+     `RELEASE_SYNC_WEBHOOK_SECRET`: any random string (`openssl rand -hex 32`), entered in the webhook below too.
+   - `REGISTRY_ADMINISTRATOR_TOKEN`: another random string, for step 7; empty again afterwards.
+   - `BACKUP_ENDPOINT`, `BACKUP_REGION`, `BACKUP_BUCKET`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`: a bucket of
+     S3-compatible object storage at another provider than the server's, and a key limited to it; `RESTIC_PASSWORD`:
+     a random string kept somewhere else too - without it the file backups cannot be read.
+4. **GHCR, while the repository is private**: its packages are private as well, so the machine logs in once with a
+   classic personal access token that has only `read:packages`:
+   `echo "$TOKEN" | docker login ghcr.io -u <github user> --password-stdin`. Once the repository and its packages are
+   public, no login is needed.
+5. **Start**: `docker compose pull && docker compose up -d`. **An update** is the same command; `TORB_VERSION` pins a
+   version, `latest` follows stable releases, `nightly` the nightlies. `docker compose logs <service>` says what each
+   one does.
+6. **The webhook**: on the repository, Settings -> Webhooks -> Add webhook: payload URL `https://torb.dev/webhook`,
+   content type `application/json`, the secret of `RELEASE_SYNC_WEBHOOK_SECRET`, event "Releases" only. Verify it by
+   publishing a release (or waiting for the periodic check, `RELEASE_SYNC_POLL_SECONDS`, default 300) and looking for
+   `/srv/torb/download/<version>/`; `docker compose logs release-sync` says why one is missing - most often `cosign`
+   refusing a signature it could not verify, which is by design.
+7. **The first accounts**: with `REGISTRY_ADMINISTRATOR_TOKEN` set,
+   `curl -X POST https://packages.torb.dev/api/1/accounts -H "Authorization: Bearer $ADMIN" -d '{"name":"torben"}'`
+   answers the account's first token (shown once - keep it); an organisation is
+   `curl -X POST .../api/1/owners -H "Authorization: Bearer $TOKEN" -d '{"name":"acme"}'`, and the reserved owner
+   `torbscript` only with the operator's token and `"account":"torben"`. Then empty `REGISTRY_ADMINISTRATOR_TOKEN` and
+   `docker compose up -d` again. `tools/registry/README.md` lists every call.
+8. **Trusted publishing** for a package, so its CI publishes without a stored token: an owner of it sends
+   `curl -X PUT https://packages.torb.dev/api/1/packages/acme/http/trusted-publishers -H "Authorization: Bearer $TOKEN" -d '{"publishers":[{"repository":"acme/http","workflow":"release.yml","environment":"release"}],"required":true}'`,
+   and the workflow's job gets `permissions: id-token: write` and runs `torb publish` - `required` switches tokens off
+   for the package.
+9. **The index mirror** (optional): an empty public repository, e.g. `TorbScript/index`, cloned into
+   `/srv/torb/index-mirror` with a remote whose URL carries a fine-grained token with `contents: write` of that
+   repository alone (`git clone https://x-access-token:<token>@github.com/TorbScript/index.git /srv/torb/index-mirror`,
+   then `chown -R 1000:1000` it), and in `.env` `REGISTRY_MIRROR=/srv/torb/index-mirror` and
+   `REGISTRY_MIRROR_PUSH=1`.
+10. **Backups**: Litestream runs as a service and replicates the database at once. The files are backed up by the
+    host's cron: `17 3 * * * cd /opt/torb && docker compose --profile backup run --rm backup >> /var/log/torb-backup.log 2>&1`.
+    Restoring the database is
+    `docker compose run --rm litestream restore -config /etc/litestream.yml /srv/torb/database/registry.db` before the
+    registry starts; the files come back with `restic restore latest --target /` from
+    `docker compose --profile backup run --rm --entrypoint sh backup`.
+11. **The CDN** (optional, later): in front of both host names, honouring the `Cache-Control` the site sends - a year
+    for an archive, a minute for an index file.
+
+Verifying an image by hand:
+
+```console
+$ cosign verify ghcr.io/torbscript/registry:0.2.0 \
+    --certificate-identity-regexp '^https://github.com/TorbScript/language/.github/workflows/images.yml@' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## Related
 

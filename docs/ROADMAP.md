@@ -60,11 +60,15 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   `update`, `install` and `publish`, PubGrub resolution with its explanations (PROJECT.md section 6a),
   `project.lock.trb` written deterministically and read by the build, archives with their tree hash checked on every
   install, `curl`/`wget` or a `file:` registry, a content-addressed cache and `--offline`; `std/digest`,
-  `std/compression` and `std/archive` came with it (RELEASE.md section 7.13). **What is left:** the registry's write
-  service - accounts, owners, tokens, trusted publishing from CI, publish and yank over `/api/1` - and its
-  docker-compose deployment behind Traefik with the storage driver of URI.md section 11 (RELEASE.md section 7.11);
-  `torb publish` to a registry on the network, which refuses today; Ed25519 signatures and `config.trb`; `yank`,
-  `owner`, `login`, `audit`, `vendor` and `deprecate`; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
+  `std/compression` and `std/archive` came with it (RELEASE.md section 7.13). **The write service is built
+  (2026-09-27)**: `tools/registry`, the first TorbScript server - accounts, owners, scoped tokens, publish, yank and
+  trusted publishing from GitHub Actions over `/api/1`, SQLite through the `sqlite3` shell, the index and archives
+  through a `file:` storage driver of URI.md section 11, the index mirrored into git - and `torb publish` uploads to it
+  with `TORB_TOKEN` or a CI identity; its images are pushed to GHCR by every release and nightly, and
+  `tools/deploy/compose.example.yml` runs them behind the owner's Traefik with Litestream and restic (RELEASE.md
+  section 7.11). **What is left:** sign-in through GitHub, GitLab, Codeberg or a passkey and a second factor; the
+  documentation worker, search, verified domains and "elsewhere" owners; an `s3:` storage driver; Ed25519 signatures
+  and `config.trb`; `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
   two majors of one package in one graph; `torb lock` and `lock --check`; the variables an evaluation read, printed by
   `publish` and recorded in `from`; a synchronous `File.readBytes`/`writeBytes` (a new native, two commits and a seed
   refresh), which replaces the `od`/PowerShell detour for archives, and a way for `torb` to wait for a task without

@@ -721,7 +721,8 @@ Traefik (TLS, Let's Encrypt)
 **The write service is written in TorbScript**, as the first real server program of the language — which needs the
 HTTP *server* of milestone 10 (`docs/ROADMAP.md` orders `std/net`, then `std/http`, early in 10), TLS terminated by the proxy in
 front of it, and a database. That puts the registry launch after the first part of milestone 10; question 2 of section
-12 is whether to accept a server in another language to open earlier.
+12 is whether to accept a server in another language to open earlier. It is built (2026-09-27, "The root server and the
+write service, as built" below): `std/http`'s server had landed, and TorbScript it is.
 
 ### Public downloads while the repository is private (decided here)
 
@@ -767,24 +768,94 @@ whether a signature matches, reading a hash out of `SHA256SUMS` - as ordinary To
 shelling out and the file placement are not, for the same reason `torb upgrade`'s are not (section 5): no packaged
 release and no second machine exist yet to run them against for real.
 
-**`tools/deploy/`** has the container side: `Dockerfile.release-sync` (built from source, bootstrapping the toolchain
-inside the image, in a `debian:bookworm-slim` with `cosign` pinned in the runtime stage), `Dockerfile.static` and
-`nginx.conf` (the read side: `install.sh`, `install.ps1`, `/download/`, and the registry's future `/index`,
-`/archives`, `/docs`), and `docker-compose.example.yml` wiring both of them and Traefik together with a commented-out
-placeholder for the write service of section 7.2, once it exists.
+### The root server and the write service, as built (2026-09-27)
 
-**What the owner sets up once, beyond what `docs/contributing/releasing.md` already lists for GitHub**:
+**Decided by the owner (2026-09-27): the root server runs behind his existing Traefik, from ready-made images he pulls
+from GHCR.** Nothing is built on the server and nothing in the deployment opens a port or asks for a certificate: the
+containers join Traefik's network and claim their host and path with labels.
 
-- A machine with Docker, a copy of `tools/deploy/docker-compose.example.yml` as `docker-compose.yml`, and a `.env`
-  beside it (never committed) with `ACME_EMAIL`, a read-only `RELEASE_SYNC_TOKEN` (a fine-grained token scoped to
-  `contents: read` of this repository), and `RELEASE_SYNC_WEBHOOK_SECRET` (any random string, the same one entered
-  into GitHub's webhook configuration below).
-- DNS: `torb.dev` and `packages.torb.dev` pointed at the machine (or at the CDN in front of it), and a webhook
-  configured on the repository (Settings -> Webhooks) for the "Releases" event, `https://torb.dev/webhook`, content
-  type `application/json`, the same secret as `RELEASE_SYNC_WEBHOOK_SECRET`.
-- `cosign` on the operator's own machine too, for a manual `cosign verify-blob` when investigating a refused sync
-  (`docs/contributing/releasing.md` already has the exact command).
-- The three package manager repositories and their tokens, listed in `docs/contributing/releasing.md`.
+```text
+existing Traefik (TLS, Let's Encrypt; its network, entrypoint and resolver named in .env)
+ ├─ torb.dev, www.torb.dev          ->  ghcr.io/torbscript/site          install.sh, install.ps1, /docs/<version>/reference,
+ │                                                                       /download/... from /srv/torb/download (read-only)
+ ├─ torb.dev/webhook                ->  ghcr.io/torbscript/release-sync  writes /srv/torb/download
+ ├─ packages.torb.dev               ->  ghcr.io/torbscript/site          /index, /archives, /docs from /srv/torb/registry (read-only)
+ └─ packages.torb.dev/api           ->  ghcr.io/torbscript/registry      writes /srv/torb/registry, /srv/torb/database, the mirror
+    litestream (sidecar)                  /srv/torb/database/registry.db -> object storage, continuously
+    backup (restic, host cron)            /srv/torb/{registry,download,index-mirror} -> object storage, nightly
+```
+
+**The images** are built by `.github/workflows/images.yml`, which `release.yml` calls once a release is published
+(tags `<version>` and `latest`) and `nightly.yml` once a nightly is (tags `nightly-YYYYMMDD` and `nightly`): three
+images, each for `linux/amd64` and `linux/arm64`, pushed to `ghcr.io/torbscript/` with the job's `GITHUB_TOKEN`
+(`packages: write`), with the OCI labels `source`, `revision`, `version`, `licenses` (MIT) and `url`, and signed with
+`cosign sign` keyless - the identity is `images.yml` of this repository at the tag's or `main`'s ref:
+
+```sh
+cosign verify ghcr.io/torbscript/registry:0.2.0 \
+  --certificate-identity-regexp '^https://github.com/TorbScript/language/.github/workflows/images.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+| Decision | Why |
+|---|---|
+| **The images are built from the release's own assets**, the `dist` artifact: the build context is the Linux toolchain archives and `torb-<version>-source.tar.gz`, never a checkout | what runs on the server is exactly what was released and signed; the earlier `Dockerfile.release-sync` bootstrapped the compiler inside the image from the whole checkout, which took the seed, the fixpoint and every source into the build |
+| The build stage runs the released `torb` of the image's own architecture (QEMU for arm64 on the hosted runner) and compiles with Debian's gcc | the C the compiler emits is the same everywhere, but its runtime is compiled into the program, so the compiler and the architecture meet in the build stage; a cross gcc would save emulation time and is a later optimization |
+| `site` generates the standard library's reference with `torb doc std` into `/docs/<version>/reference/`, once, on the building machine | the reference is architecture-independent; the rest of the site waits for `torb docs site` (section 6) |
+| `nginx.conf` splits by host name: `torb.dev` is the site and the downloads, `packages.torb.dev` the registry's files | the old configuration served `/docs/` from the registry's directory for both hosts |
+| cosign in the `release-sync` image is checked against the SHA-256 its release lists | closes the "TODO(owner)" the first Dockerfile carried |
+| Images are signed, not attested | the same reason as section 13's `SHA256SUMS`: attestations need GitHub Enterprise Cloud while the repository is private, and can be added later without changing a pull |
+
+**`tools/deploy/compose.example.yml`** (copied to `compose.yml`, never `docker-compose.yml`) runs `site`, `release-sync`,
+`registry`, the `litestream` sidecar and a `backup` service in the profile `backup`. No Traefik service: the
+external network is `TRAEFIK_NETWORK` (default `traefik`), and the routers' entrypoint and certificate resolver are
+`TRAEFIK_ENTRYPOINT` and `TRAEFIK_CERTRESOLVER` from `.env` (`.env.example` lists every variable). The data lives in
+`TORB_DATA` (default `/srv/torb`) as bind mounts: `download/`, `registry/`, `database/`, `index-mirror/`, each with
+exactly one writer. **Litestream** (`litestream.yml`) replicates the SQLite database to S3-compatible storage at another
+provider within seconds, with a daily snapshot kept 30 days; **restic** (`backup.sh`, run by the host's cron through
+`docker compose --profile backup run --rm backup`) backs up the files nightly to the same storage - the database is
+left out, a copy of a SQLite file being written is not a database - keeps 14 daily, 8 weekly and 12 monthly snapshots,
+and reads a thirtieth of the repository back every night.
+
+**The write service, `tools/registry`** (its README lists the API and the variables):
+
+| Question | Decision | Why |
+|---|---|---|
+| The API | `/api/1/`: accounts, owners and members, tokens, `PUT .../packages/<owner>/<name>/<version>` with the archive as the body and its tree hash in `Torb-Tree-Hash`, yank and unyank, trusted publishers, and the exchange of an OIDC token; JSON in and out | the paths of section 7.4; the archive is the whole upload, because the registry re-reads everything from it (section 7.2) |
+| Checking a publish | the compiler as a `path:` dependency: `unpacked`, `readLock`, `publishProblems` (moved to `compiler/src/package/publish.trb` for this), `capabilitiesOf` and the index writer | "validates exactly as `torb publish --dry-run` does" is the same function, not a copy |
+| The database | **SQLite through the `sqlite3` shell** of the image, in WAL mode, every value an SQL literal whose one escape is the doubled `'` | `std` has no driver. A native binding to a vendored SQLite is a new native (two commits and a seed refresh) and a nine-megabyte C file in every build; an append-only file store would lose what Litestream gives a real SQLite file. A statement batch is one short process, which a service that sees a publish a minute does not notice |
+| Running programs | through a `Child`'s pipes, not `Process.run` | `Process.run` offloads to the blocking pool only when its closure captures nothing counted; with a command line built at run time it runs on the worker, and the registry's handler keeps every connection on one worker - found by the test that runs `torb publish` against the registry in the same process, which deadlocked |
+| Storage | URI.md section 11's `Storage` over a `Uri`, `FileStorage` for `file:` (a write goes to `.part` and is moved into place with `mv`, since `std/fs` has no rename), `Storages` choosing by scheme | the layer the section designed; it stays in the program until `std` ships a second driver, by that section's own rule |
+| Concurrency | one writer of the storage at a time: a lock on the one worker, released by a `using`, which a cancellation closes too; one replica | an index file is read, appended to and written whole |
+| Recovery | archive, then index, then database row; the index is the truth of what is published | a crash leaves at worst an archive nothing names, written over by the next attempt, or an index entry without its row, which the next attempt repairs |
+| Accounts | created by the operator's token (`REGISTRY_ADMINISTRATOR_TOKEN`); an account is a person owner of the same name; organisations with `owner` and `publisher` members | sign-in through GitHub, GitLab, Codeberg or a passkey is the web front's, which does not exist yet |
+| Tokens | `torb_` and 256 bits of the system's randomness, stored as SHA-256; scoped to owners, packages (`acme/*`), actions (`publish`, `yank`, `owners`, `tokens`) and up to 365 days; a token never gives an action its maker lacks | section 7.6, "a stolen token"; a high-entropy token needs no slow hash |
+| Trusted publishing | GitHub Actions: `RS256` verified in TorbScript (`src/rsa.trb`, Montgomery over 16-bit limbs) against the key set fetched for every exchange; issuer, audience `packages.torb.dev`, lifetime with a minute's leeway; then repository, workflow file (`job_workflow_ref`) and environment against the package's publishers; the answer is a token of one package for 15 minutes. Owners may configure it before the first release, and `required` switches tokens off | crates.io's, PyPI's and JSR's model; no new native, and both back ends compute the same bits |
+| Confusing names | a skeleton - hyphens removed, `1`, `0`, `rn` folded to `l`, `o`, `m` - kept `UNIQUE` for owners and for packages | section 7.1's rule, enforced by the database |
+| Yank | `yank` appends the line of section 7.4; unyank appends `unyank "<version>"`, which the client's reader now understands | append-only either way |
+| The mirror | after every change of an index file, the file is committed into a git working copy (`REGISTRY_MIRROR`), pushed where `REGISTRY_MIRROR_PUSH=1`; a failing mirror never fails the publish | section 7.4's archival export, per change instead of daily because it costs one commit |
+
+**The client**: `torb publish` to an `https://` registry uploads with `curl` (else `wget`) and prints the registry's
+answer. The token is `TORB_TOKEN`; without it, in a GitHub Actions job with `id-token: write`, the job's OIDC token is
+requested with the registry's host as audience and exchanged for the short-lived one (`compiler/src/package/upload.trb`,
+`docs/tooling/torb-publish.md`).
+
+**Tested**: `tools/registry/tests` - RSA and JWT verification against a key and tokens made with Node's `crypto`, the
+name and scope rules, every API call over loopback with a database and a `file:` storage in a temporary directory
+(once as it works, once as it is refused), and `torb publish` driven against it; 57 tests, natively and in the VM,
+with `sqlite3` on the `PATH`. The three images were built locally for `linux/amd64` from a `dist` directory made the way
+the release makes it (a Linux `torb` compiled from the fixpoint's `program.c`, the toolchain laid out, the source
+packed): the registry's container answered, created an account and took a `torb publish` from the Windows host, writing
+the index, the archive and a WAL-mode database; the site served `install.sh` and the reference read-only, split by host
+name. `linux/arm64` has not been built outside CI.
+
+**Not built yet**: signatures of the index (no Ed25519 in `std`), sign-in and a second factor, the documentation
+worker, search, verified domains, "elsewhere" owners, the similarity rule against packages with many dependents, an
+`s3:` driver, and `torb yank`, `owner` and `login` as commands over the API that exists.
+
+**What the owner sets up once** is `docs/contributing/releasing.md`, "The root server": DNS, the `.env`, `docker login
+ghcr.io` while the repository is private, the webhook, the first account, trusted publishers, the index mirror and the
+backup storage.
 
 ### 7.12 Registries compared
 
@@ -830,11 +901,12 @@ PROJECT.md section 6a's PubGrub; everything is TorbScript, with no new native. W
 sandbox and writes the `settings` block into the workspace's lock; the archive's own lock holds that block and the
 workspace's `graph` as information. Step 3 is not: the sandbox does not record which variables and files an
 evaluation read, so there is nothing to print. Step 4 is `torb check` of the package against its locked graph, not
-`--every-target`. Step 5 is built, with the summary above. Step 6 writes a `file:` registry and **refuses a registry on
-the network** with a message that names the write service as the later round.
+`--every-target`. Step 5 is built, with the summary above. Step 6 writes a `file:` registry, and since 2026-09-27 uploads
+to a registry on the network with a token or through trusted publishing (7.11, "The root server and the write service,
+as built").
 
-**Not built in this round, and why**: the write service, accounts, tokens, trusted publishing and the docker-compose
-deployment (7.11, the next round); signature checks and key rotation (no Ed25519); `yank`, `owner`, `login`, `audit`,
+**Not built in this round, and why**: the write service, accounts, tokens, trusted publishing and the compose
+deployment (7.11, the next round - built 2026-09-27); signature checks and key rotation (no Ed25519); `yank`, `owner`, `login`, `audit`,
 `vendor` and `deprecate`; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources; two majors of one package
 in one graph (PROJECT.md section 6a); HTTP range requests for an index that grew.
 
@@ -1007,6 +1079,7 @@ cuts a release is [docs/contributing/releasing.md](../contributing/releasing.md)
 | `.github/workflows/nightly.yml` | every night that `main` changed: the gates everywhere, then the seed and a prerelease `nightly-YYYYMMDD` |
 | `.github/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates everywhere, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
 | `.github/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
+| `.github/workflows/images.yml` | called by `release` and `nightly` after publishing: the root server's three container images from the release's assets, pushed to GHCR and signed (section 7.11) |
 | `.github/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC` |
 | `.github/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
 | `tools/build-seed.sh` | compiles a seed's `program.c` with its runtime - the one place that knows that command line |
@@ -1110,9 +1183,9 @@ target before - and `build/seed` keyed by the target and the seed's commit, so a
 
 **Concurrency and permissions.** `ci` cancels the run a newer push to the same branch or pull request supersedes;
 `nightly`, `release` and `seed` never cancel. Every workflow starts from `contents: read`; `contents: write` is given
-to the three publishing jobs only, `id-token: write` to the two that sign. Every checkout has
-`persist-credentials: false`, every third-party action is pinned by commit, and no workflow uses
-`pull_request_target` or a secret.
+to the three publishing jobs only, `id-token: write` to the two that sign and to the image jobs, `packages: write` to
+the image jobs alone (section 7.11). Every checkout has `persist-credentials: false`, every third-party action is
+pinned by commit, and no workflow uses `pull_request_target` or a secret beyond the package manager channels' tokens.
 
 ### Versions, tags and channels
 
