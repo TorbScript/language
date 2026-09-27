@@ -74,8 +74,7 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   documentation worker, search, verified domains and "elsewhere" owners; an `s3:` storage driver; Ed25519 signatures
   and `config.trb`; `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
   two majors of one package in one graph; `torb lock` and `lock --check`; the variables an evaluation read, printed by
-  `publish` and recorded in `from`; a synchronous `File.readBytes`/`writeBytes` (a new native, two commits and a seed
-  refresh), which replaces the `od`/PowerShell detour for archives, and a way for `torb` to wait for a task without
+  `publish` and recorded in `from`; and a way for `torb` to wait for a task without
   making its top level one, which lets the client use `std/http`. **A bug found on the way:** `std/network`'s name
   resolution crashes a native program on Windows for a host that needs a DNS lookup (RELEASE.md section 7.13).
 - **`torb doc`** is built: the reference of a package as a static site or as JSON, and the examples of its doc
@@ -127,7 +126,8 @@ the natives that exist.** In this order, because each part stands on the one bef
    (2026-09-27):** `std/fs` has the synchronous `readBytes`/`writeBytes` beside the task `read`, `remove`,
    `removeDirectory`, `rename`, `copy`, `walk`, `metadata` and `linkMetadata` with `Metadata`, `FileKind` and
    `Permissions`, `setPermissions`, symbolic links, temporary files and directories and `writeBytesAtomically` - one
-   text form on every system, converted in `runtime/platform.c`, so the compiler's C stays the same for every target;
+   text form on every system, converted in `runtime/platform.c`, so the compiler's C stays the same for every target
+   (the package manager reads and writes its archives with them, and its `od`/PowerShell detour is gone);
    `std/time` has `Timestamp`; a `var` file handed to a `var Sink` parameter builds in both back ends; and `std/storage`
    has `Storage`, `StorageFailure`, `Storage.registry`, `FileStorage` and `MemoryStorage` over `Schemes` of `std/uri`
    (URI.md slice 12). **Left:** S3 and WebDAV as packages of their own; the `Into<Path>` signatures of PATH.md slice 2;
