@@ -1,0 +1,120 @@
+/**
+ * Binary formats: a large DNS message decoded again and again, a megabyte of text deflated into a gzip member and
+ * inflated from it, and the same text hashed with SHA-256, with the time of each printed.
+ *
+ * It has no C twin and `run.sh` does not run it. It measures the standard library against itself: build a copy of it
+ * outside the repository once with the `std/` of one commit and once with that of another
+ * (`TORB_STD=<checkout>/std torb build ...`), and the two lines of times are the comparison. docs/design/BINARY.md
+ * section 7 has the numbers of the migration onto `std/binary`, measured this way.
+ */
+
+use Clock from "std/time"
+use Ipv4Address, Ipv6Address from "std/ip"
+use DomainName, Message, MessageKind, Question, Record, RecordData, RecordType from "std/dns"
+use gunzipped, gzipped from "std/compression"
+use Sha256 from "std/digest"
+
+/** How many records of each kind the message holds: six kinds, so six times this many records. */
+const recordsPerKind = 300
+
+/** How many times the message is decoded. */
+const decodeRounds = 40
+
+/** How many bytes of text the gzip member holds. */
+const textSize = 1000000
+
+/** How many times the member is inflated. */
+const inflateRounds = 4
+
+/** How many times the text is hashed. */
+const hashRounds = 4
+
+fn nameOf(text: String): DomainName {
+  match DomainName.ofPresentation(text) {
+    Ok(name) => name
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** A response with every common kind of record, whose names share suffixes so that compression has work to do. */
+fn largeMessage(): Bytes {
+  var answers: List<Record> = []
+  for index in 0..recordsPerKind {
+    const owner = nameOf "host{index}.zone{index % 7}.example.test"
+    const target = nameOf "target{index % 11}.zone{index % 5}.example.test"
+    const octet = UInt8.tryFrom(index % 256).ok() ?? 0
+    answers.append Record(owner, timeToLive: 3600, data: RecordData.A(Ipv4Address.of(192, 0, 2, octet)))
+    const address = match Ipv6Address.of([0x2001, 0xdb8, 0, 0, 0, 0, index % 65536, 1]) {
+      Ok(found) => found
+      Fail(problem) => panic "{problem}"
+    }
+    answers.append Record(owner, timeToLive: 3600, data: RecordData.Aaaa(address))
+    answers.append Record(owner, timeToLive: 300, data: RecordData.Mx(index % 50, target))
+    answers.append Record(owner, timeToLive: 300, data: RecordData.Cname(target))
+    answers.append Record(owner, timeToLive: 60, data: RecordData.Srv(10, 5, 443, target))
+    const text = "v=spf1 include:zone{index % 3}.example.test ~all".bytes().toList()
+    answers.append Record(owner, timeToLive: 60, data: RecordData.Txt([text]))
+  }
+  const message = Message(
+    identifier: 4660,
+    kind: MessageKind.Response,
+    questions: [Question(nameOf("example.test"), RecordType.A)],
+    answers: answers,
+  )
+  match message.encoded() {
+    Ok(bytes) => bytes
+    Fail(problem) => panic "{problem}"
+  }
+}
+
+/** Text of `size` bytes from a small vocabulary in a fixed pseudo-random order: compressible, and never the same. */
+fn largeText(size: Int): Bytes {
+  const words = ["binary", "reader", "writer", "stream", "header", "record", "offset", "length", "window", "symbol"]
+  var bytes: List<UInt8> = []
+  var state = 12345
+  while bytes.length() < size {
+    state = (state * 1103515245 + 12345) % 2147483648
+    bytes.appendAll words[state % words.length()].bytes()
+    bytes.append(if state % 13 == 0 { 10 } else { 32 })
+  }
+  bytes
+}
+
+const message = largeMessage()
+var start = Clock.now()
+var records = 0
+for _ in 0..decodeRounds {
+  match Message.tryFrom(message) {
+    Ok(decoded) => {
+      records = records + decoded.answers.length()
+    }
+    Fail(problem) => panic "{problem}"
+  }
+}
+const decodeSeconds = (Clock.now() - start).seconds()
+
+const text = largeText textSize
+start = Clock.now()
+const member = gzipped text
+const deflateSeconds = (Clock.now() - start).seconds()
+start = Clock.now()
+var inflated = 0
+for _ in 0..inflateRounds {
+  match gunzipped(member) {
+    Ok(bytes) => {
+      inflated = inflated + bytes.length()
+    }
+    Fail(problem) => panic "{problem}"
+  }
+}
+const inflateSeconds = (Clock.now() - start).seconds()
+start = Clock.now()
+var digest = ""
+for _ in 0..hashRounds {
+  digest = Sha256.of(text).hex()
+}
+const hashSeconds = (Clock.now() - start).seconds()
+
+print "dns: {message.length()} bytes, {records} records decoded in {decodeSeconds} s"
+print "gzip: {member.length()} bytes deflated in {deflateSeconds} s, {inflated} bytes inflated in {inflateSeconds} s"
+print "sha256: {digest} of {text.length()} bytes, {hashRounds} times in {hashSeconds} s"

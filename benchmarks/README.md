@@ -69,6 +69,11 @@ Each one is small, deterministic and prints a checksum, so a program that is wro
 | `map-count` | `get` then `set` on a `Map<String, Int>` against one probe of an open addressing table |
 | `nothing` | The process floor that every other row is corrected with. It is not printed as a row of its own |
 
+One program has no twin: `binary-formats` decodes a large DNS message, deflates and inflates a gzip member and hashes
+a megabyte with SHA-256 - the standard library measured against itself. `run.sh` does not run it; a copy of it outside
+the repository (inside, the workspace's own `std/` wins) is built twice, against two checkouts' `std/`
+(`TORB_STD=<checkout>/std torb build binary-formats.trb`), and the two binaries' lines of seconds are the comparison. [docs/design/BINARY.md](../docs/design/BINARY.md) section 7 has what it measured.
+
 Three of the C twins - `list-index`, `list-iterate` and `pipeline` - are sum reductions that gcc vectorizes, and no
 program whose elements come back from a call can. Part of those ratios is the vectorization rather than the dispatch,
 and `docs/PERFORMANCE.md` section 4 says so where the numbers are read.
