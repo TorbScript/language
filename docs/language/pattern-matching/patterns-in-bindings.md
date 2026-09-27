@@ -81,7 +81,10 @@ while const <pattern> = <expression> { ... }     re-evaluates and re-matches bef
    (`A constant starts with a lowercase letter: write `limit``), because a constant starts with a lowercase letter.
 
 3. **A tuple has exactly one shape, so a tuple pattern is irrefutable there, and a case pattern is irrefutable for a
-   type with exactly one constructor.** Both bind directly after `const`/`var`, without a `match`:
+   type with exactly one constructor.** Both bind directly after `const`/`var`, without a `match`. So does a list
+   pattern of an `Array<Item, Size>` with exactly `Size` items, or with a rest and at most `Size` items around it: the
+   length of an array is in its type, as the arity of a tuple is ([Pattern forms](pattern-forms.md), rule 11). A `List`
+   is not such a type - its length is a value, and rule 2 shows what the checker says.
 
    ```trb check
    type Point {
@@ -92,7 +95,9 @@ while const <pattern> = <expression> { ... }     re-evaluates and re-matches bef
    fn run() {
      const (quotient, remainder) = (7 / 2, 7 % 2)
      const Point(x, y) = Point 3, 4
-     print "{quotient} {remainder} {x} {y}"
+     const corners: Array<Int, 3> = [1, 2, 3]
+     const [first, second, third] = corners
+     print "{quotient} {remainder} {x} {y} {first + second + third}"
    }
 
    run()

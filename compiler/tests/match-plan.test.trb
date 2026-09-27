@@ -70,6 +70,42 @@ group "A pattern that has to match every value" {
     assert problems(source).isEmpty()
   }
 
+  /**
+   * The length of an `Array<Item, Size>` is in its type, like the arity of a tuple: a list pattern of exactly `Size`
+   * items, or a rest with at most `Size` items around it, matches every value (patterns-in-bindings.md, rule 3).
+   */
+  test "a list pattern of an `Array` of its length binds, like a tuple pattern" {
+    const source = inBody(raw"""
+      const corners: Array<Int, 3> = [1, 2, 3]
+      const [first, second, third] = corners
+      var [head, ...rest] = corners
+      head = head + first
+      const [front, ...middle, back] = corners
+      const pairs: List<Array<Int, 2>> = [[1, 2]]
+      for [left, right] in pairs {
+        print left + right
+      }
+      print "{second} {third} {head} {rest} {front} {middle} {back}"
+      print first""")
+    assert problems(source).isEmpty()
+  }
+
+  test "a list pattern of another length than an `Array`'s is refused where it is written" {
+    const source = inBody(raw"""
+      const corners: Array<Int, 3> = [1, 2, 3]
+      const [first, second] = corners
+      print first + second""")
+    assert(problems(source) == ["`Array<Int64, 3>` has 3 items and this pattern names 2"])
+  }
+
+  test "a list pattern of a `List` still has to be matched, whatever its length" {
+    const source = inBody(raw"""
+      const numbers = [1, 2, 3]
+      const [first, second, third] = numbers
+      print first + second + third""")
+    assert(problems(source) == ["The pattern of a binding has to match every value, and `[]` does not"])
+  }
+
   test "the parameter of a closure, where the expected function type says what it takes" {
     const source = inBody(raw"""
       const unwrap: (Int?) => Int = { Some(value) => value }

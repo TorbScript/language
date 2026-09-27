@@ -257,6 +257,33 @@ Type(<pattern>, ...)              a trailing `...` stands for every field the pa
    print summarize([1, 2, 3, 4])
    ```
 
+11. **An `Array<Item, Size>` has exactly `Size` items, so its length is part of its type, like the arity of a
+   tuple.** A list pattern of exactly `Size` items, or one with a rest and at most `Size` items around it, matches every
+   array of that type: it binds after `const`, `var` and `for` (see [Patterns in bindings](patterns-in-bindings.md)),
+   and a `match` of such patterns needs no `_` arm. A pattern of any other length matches no array of the type, and the
+   checker refuses it where it is written, as it refuses a record pattern with the wrong number of fields. The length of
+   a `List` is a value, so a list pattern of a `List` still needs a `match`.
+
+   ```trb check
+   fn spread(corners: Array<Int, 3>): String {
+     const [first, ...others] = corners
+     match corners {
+       [0, _, _] => "starts at zero, then {others}"
+       [_, middle, last] => "{first}, {middle}, {last}"
+     }
+   }
+
+   print spread([4, 5, 6])
+   ```
+
+   ```trb error
+   fn firstOf(pair: Array<Int, 2>): Int {
+     const [only] = pair
+     only
+   }
+   // error: `Array<Int64, 2>` has 2 items and this pattern names 1
+   ```
+
 ## What this is not
 
 **A pattern is not resolved against the value it is compared with; it is resolved against the scope and the first

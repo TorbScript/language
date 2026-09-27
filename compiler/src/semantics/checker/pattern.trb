@@ -18,6 +18,7 @@ use TypeId, TypeForm, FieldSignature from "./type"
 use Checker, Expectation, LocalBinding from "./context"
 use caseNamed, caseNamesOf, fieldsOf, hasCases, typeNameOf from "./member"
 use traitArgumentsOf from "./implementation"
+use fixedLengthOf from "./usefulness"
 use checkExpression from "./expression"
 use requireVisibleFields from "./declaration"
 
@@ -47,12 +48,26 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
     // collects a list of the same items
     .ListPattern(items, rest) => {
       const element = itemOfSubject checker, subject
+      // An `Array<Item, Size>` has exactly `Size` items, so a pattern of another length is as wrong as a record
+      // pattern with the wrong number of fields - and it would otherwise be an arm nothing ever reaches, silently
+      if const Some(size) = fixedLengthOf(checker, subject) {
+        const fits = if rest.isSome() { items.length() <= size } else { items.length() == size }
+        if !fits {
+          const shown = checker.describe subject
+          const has = if size == 1 { "1 item" } else { "{size} items" }
+          const named = if rest.isSome() { "{items.length()} besides the rest" } else { "{items.length()}" }
+          checker.reportHere Diagnostic.error("`{shown}` has {has} and this pattern names {named}", pattern.span)
+        }
+      }
       for item in items {
         checkPattern checker, item, element, isVar
       }
       if const Some(more) = rest {
         if const Some(name) = more.name {
           const collected = listOfItems checker, element
+          // The rest is no pattern of its own, so its type is recorded under its name: a top-level binding of an entry
+          // file reads every name's type back from there (`destructuredSignature`)
+          checker.typedPattern name.span, collected
           declareName checker, name.text, collected, name.span, isVar
         }
       }

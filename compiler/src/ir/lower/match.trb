@@ -940,7 +940,7 @@ fn stepTypeOf(var lowering: Lowering, owner: TypeId, step: PatternStep): TypeId?
       }
     }
     .Item(_) | .ItemFromEnd(_) => itemOfSubject lowering.checker, owner
-    .Rest(_) => None
+    .Rest(_, _) => None
   }
 }
 
@@ -1056,9 +1056,11 @@ fn itemFromEndOf(
 }
 
 /**
- * `[first, ...rest]`: the items from `index` on, as a list of their own - `skip(index).toList()`.
+ * `[first, ...rest]`: the items from `index` on, as a list of their own - `skip(index).toList()`. Where the pattern
+ * names `after` items behind the rest (`[first, ...middle, last]`) those are not part of it:
+ * `skip(index).take(length() - index - after).toList()`.
  *
- * Both are members of `Iterate`, which is what makes this work on every subject a list pattern takes. `Slice.slice`
+ * All three are members of `Iterate`, which is what makes this work on every subject a list pattern takes. `Slice.slice`
  * would share the storage of a list - it has a slot in the witness table since it answers exactly `Self`
  * (docs/PERFORMANCE.md, F16) - but the rest is written as a copy, and value semantics make the two indistinguishable.
  */
@@ -1068,6 +1070,7 @@ fn restSlotOf(
   container: Slot,
   containerType: TypeId,
   index: Int,
+  after: Int,
   destination: Slot?,
   at: Span,
 ): Slot? {
@@ -1102,13 +1105,25 @@ fn restSlotOf(
   if !lowering.isSupported {
     return None
   }
-  const stageBound = match boundDeclaring(lowering, stage, "toList", at) {
+  var last = stage
+  var taken = rest
+  if after > 0 {
+    const (shortened, shortenedType) = match takenBefore(lowering, builder, container, containerType, rest, stage, index + after, at) {
+      Some(found) => found
+      None => {
+        return None
+      }
+    }
+    last = shortenedType
+    taken = shortened
+  }
+  const stageBound = match boundDeclaring(lowering, last, "toList", at) {
     Some(found) => found
     None => {
       return None
     }
   }
-  const collected = match dispatchedOn(lowering, stage, stageBound, "toList", at) {
+  const collected = match dispatchedOn(lowering, last, stageBound, "toList", at) {
     Some(found) => found
     None => {
       return None
@@ -1120,11 +1135,44 @@ fn restSlotOf(
     Some(found) => found
     None => addTemporary builder, annotation
   }
-  const found = lowerDispatched lowering, builder, target, at, collected, [rest], places, annotation
+  const found = lowerDispatched lowering, builder, target, at, collected, [taken], places, annotation
   if !lowering.isSupported {
     return None
   }
   found
+}
+
+/**
+ * The items of a `skip` stage without the last ones the pattern names behind its rest: `take(length() - covered)` of
+ * it, where `covered` counts the items in front of the rest and behind it. Answers the new stage and its type.
+ */
+fn takenBefore(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Slot,
+  containerType: TypeId,
+  stage: Slot,
+  stageType: TypeId,
+  covered: Int,
+  at: Span,
+): (Slot, TypeId)? {
+  const counted = lengthSlotOf(lowering, builder, container, containerType, at)?
+  const integer = builder.typeOfSlot counted
+  const besides = integerSlot lowering, builder, covered, integer
+  const kind = NumericKind.Signed 64
+  const operation = IntrinsicOperation.Subtract
+  const amount = intrinsicSlot lowering, builder, None, operation, kind, [counted, besides], integer, at
+  const bound = boundDeclaring(lowering, stageType, "take", at)?
+  const dispatched = dispatchedOn(lowering, stageType, bound, "take", at)?
+  const shortenedType = resultTypeOf lowering, dispatched
+  const annotation = irTypeOfClosed lowering, shortenedType
+  const shortened = addTemporary builder, annotation
+  const places: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, shortened, at, dispatched, [stage, amount], places, annotation
+  if !lowering.isSupported {
+    return None
+  }
+  (shortened, shortenedType)
 }
 
 /**
@@ -1154,7 +1202,7 @@ fn itemStepOf(
       itemSlotOf lowering, builder, base, containerType, position, destination, at
     }
     .ItemFromEnd(index) => itemFromEndOf lowering, builder, base, containerType, index, destination, at
-    .Rest(index) => restSlotOf lowering, builder, base, containerType, index, destination, at
+    .Rest(index, after) => restSlotOf lowering, builder, base, containerType, index, after, destination, at
     _ => {
       reportUnsupported lowering, "an item step that is none", at
       None
@@ -1370,7 +1418,7 @@ fn resolvedStepOn(var lowering: Lowering, owner: IrTypeId, step: PatternStep, at
 
 fn isItemStep(step: PatternStep): Bool {
   match step {
-    .Item(_) | .ItemFromEnd(_) | .Rest(_) => true
+    .Item(_) | .ItemFromEnd(_) | .Rest(_, _) => true
     _ => false
   }
 }

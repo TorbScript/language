@@ -405,6 +405,30 @@ group "Tuples and lists" {
     assert(problems(source) == ["`match` does not handle `[_, _, ...]`"])
   }
 
+  test "an `Array` has one length, so its patterns need no rest and no wildcard" {
+    const source = raw"""
+      fn probe(pair: Array<Int, 2>): Int {
+        match pair {
+          [0, second] => second
+          [first, ...] => first
+        }
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "a pattern of another length than the `Array`'s is refused, and not also an arm never reached" {
+    const source = raw"""
+      fn probe(pair: Array<Int, 2>): Int {
+        match pair {
+          [only] => only
+          [first, _] => first
+        }
+      }
+      """
+    assert(problems(source) == ["`Array<Int64, 2>` has 2 items and this pattern names 1"])
+  }
+
   test "a list pattern with a literal in it is walked into" {
     const source = raw"""
       fn probe(arguments: List<String>): Int {

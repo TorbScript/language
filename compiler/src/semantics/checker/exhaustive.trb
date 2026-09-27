@@ -23,7 +23,7 @@ use Checker, BindingId from "./context"
 use caseNamed, fieldsOf, typeNameOf from "./member"
 use itemOfSubject, declaredCaseName, fieldPatternTargets from "./pattern"
 use literalOf from "./lowering"
-use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal from "./usefulness"
+use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal, fixedLengthOf from "./usefulness"
 
 // --- What the lowering reads -----------------------------------------------------------------------------------------
 
@@ -111,8 +111,11 @@ public type PatternStep {
   case Item(index: Int)
   /** `[..., last]`: the item at that index, counted from the back, `0` being the last one. */
   case ItemFromEnd(index: Int)
-  /** `[first, ...rest]`: the items from that index on, as a list. */
-  case Rest(index: Int)
+  /**
+   * `[first, ...rest]`: the items from that index on, as a list - without the `after` items a pattern names behind the
+   * rest, so the `middle` of `[first, ...middle, last]` is what lies between the two.
+   */
+  case Rest(index: Int, after: Int = 0)
 }
 
 // --- `match` --------------------------------------------------------------------------------------------------------
@@ -392,12 +395,39 @@ fn normalizedPatterns(
         Some(found) => found.position
         None => items.length()
       }
+      const element = itemOfSubject checker, subject
+      // A pattern of another length than an `Array`'s is reported where the pattern is checked, and one message is the
+      // whole finding: nothing more is said about the `match` or the binding it stands in
+      if const Some(size) = fixedLengthOf(checker, subject) {
+        const fits = if rest.isSome() { items.length() <= size } else { items.length() == size }
+        if !fits {
+          state.isBroken = true
+          return [Normal.Anything]
+        }
+      }
       // `[..., last]`: an item behind the rest sits at a position that depends on the length, which the matrix has no
-      // constructor for - so the pattern stands for itself and decides nothing
+      // constructor for - so the pattern stands for itself and decides nothing. An `Array<Item, Size>` has one length,
+      // and there every item has its position: the rest is as many wildcards as the items leave over
       if position < items.length() {
+        if const Some(size) = fixedLengthOf(checker, subject) {
+          var positioned: List<List<Normal>> = []
+          for index in 0..size {
+            const written = if index < position {
+              items.get index
+            } else if index >= size - (items.length() - position) {
+              items.get(index - size + items.length())
+            } else {
+              None
+            }
+            match written {
+              Some(item) => positioned.append normalizedPatterns(checker, state, item, element)
+              None => positioned.append([Normal.Anything])
+            }
+          }
+          return productOf Constructor.ListOf(size, false), positioned
+        }
         return [applied(Constructor.Opaque(pattern.span.start), [])]
       }
-      const element = itemOfSubject checker, subject
       var columns: List<List<Normal>> = []
       for item in items {
         columns.append normalizedPatterns(checker, state, item, element)
@@ -771,6 +801,14 @@ fn listBranches(
     PatternCheck.HasLength items.length()
   }
   var branches: List<PatternBranch> = [PatternBranch([PatternTest(path, check)], [])]
+  // The length of an `Array<Item, Size>` is its type's, so a test the type already answers is no test: that is what
+  // lets `var [a, b, c] = state` bind without deciding anything, like a tuple pattern
+  if const Some(size) = fixedLengthOf(checker, subject) {
+    const isAnswered = if rest.isSome() { items.length() <= size } else { items.length() == size }
+    if isAnswered {
+      branches = [PatternBranch([], [])]
+    }
+  }
   for index in 0..items.length() {
     // An item in front of the `...` is counted from the front, one behind it from the back
     const step = if index < position {
@@ -783,7 +821,7 @@ fn listBranches(
   }
   if const Some(more) = rest {
     if const Some(name) = more.name {
-      const step = PatternStep.Rest position
+      const step = PatternStep.Rest(position, items.length() - position)
       if const Some(bound) = bindingOf(checker, name.text, path.appended(step)) {
         branches = withBinding branches, bound
       }

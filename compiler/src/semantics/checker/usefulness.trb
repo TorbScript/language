@@ -393,6 +393,10 @@ fn splitColumn(
       hasOpaque = true
     }
     if const .ListOf(_, _) = constructor {
+      // An `Array<Item, Size>` has exactly one length, which is in its type the way the arity of a tuple is
+      if const Some(size) = fixedLengthOf(checker, annotation) {
+        return ConstructorSet([Constructor.ListOf(size, false)], false)
+      }
       return splitLists written
     }
   }
@@ -507,6 +511,24 @@ fn constructorKey(constructor: Constructor): String {
     .ListOf(length, hasRest) => "s{length}:{hasRest}"
     .Opaque(identifier) => "o{identifier}"
   }
+}
+
+/**
+ * The length of an `Array<Item, Size>`, which its type fixes: `[a, b, c]` matches every `Array<Int, 3>` and no other
+ * length can arrive, so a list pattern of exactly that many items, or a rest with at most that many around it, binds
+ * after `const`, `var` and `for` like a tuple pattern (docs/language/pattern-matching/patterns-in-bindings.md, rule 3).
+ * `None` for every other type, a `List` above all, whose length is a value and not a type.
+ */
+public fn fixedLengthOf(var checker: Checker, annotation: TypeId): Int? {
+  const array = checker.wellKnown.array?
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    if symbol == array && arguments.length() == 2 {
+      if const .Constant(.Integer(size), _) = checker.types.form(arguments[1]) {
+        return size
+      }
+    }
+  }
+  None
 }
 
 /**
