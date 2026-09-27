@@ -20,7 +20,7 @@ use Uri from "std/uri"
 use Json from "std/json"
 use Config from "../src/config"
 use Database from "../src/database"
-use Storages, FileStorage from "../src/storage"
+use Storage, FileStorage from "std/storage"
 use Registry from "../src/registry"
 use handler from "../src/api"
 use newTokenId from "../src/tokens"
@@ -96,7 +96,7 @@ const config = Config(
 )
 const database = Database config.database, program: config.sqlite
 const migrated = database.migrate().await()
-var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(Registry.of(config, database, Storages.of([FileStorage()]))))?
+var server = Server.listen(SocketAddress(IpAddress.loopback, 0), handler(Registry.of(config, database, Storage.registry([FileStorage()]))))?
 var serving = server.serve()
 const base = "http://{server.localAddress()}"
 

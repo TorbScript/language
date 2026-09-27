@@ -3,13 +3,15 @@
  * with the read-only token, verify `SHA256SUMS` and its cosign signature, and place the result under
  * `<root>/download/<version>/`, updating `versions.txt` and `latest` (docs/design/RELEASE.md section 7.11).
  *
- * Downloading, hashing and moving files shell out to `curl`, `sha256sum` and `mv` - this program's own deployment is
- * one Linux container (`tools/deploy/`), so unlike `torb upgrade` it needs no Windows arm at all - and the signature
- * is checked by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, or
- * whose signature does not verify, is refused and nothing is placed.**
+ * Downloading shells out to `curl`; hashing is `std/digest` over the file's chunks, and moving, linking and rewriting
+ * the list of versions is `std/fs` - `rename` for a move, a symbolic link renamed over `latest`, and
+ * `writeTextAtomically` for `versions.txt`, so the web server in front never reads half a list. The signature is checked
+ * by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, or whose signature
+ * does not verify, is refused and nothing is placed.**
  */
 
 use File, IoError from "std/fs"
+use Sha256 from "std/digest"
 use Process from "std/process"
 use ReleaseInfo, ReleaseAsset from "./github"
 use expectedHash from "./verify"
@@ -86,18 +88,20 @@ public fn downloadRelease(release: ReleaseInfo, token: String?, directory: Strin
   Ok void
 }
 
-/** `sha256sum <path>`'s first word - the hash, nothing shelled out for by anything but this program's own check. */
+/** The SHA-256 of the file at `path` in lowercase hexadecimal, read chunk by chunk on the blocking pool. */
 fn sha256Of(path: String): Task<Result<String, String>> {
-  match Process.run("sha256sum", [path]).await() {
-    Ok(output) => {
-      if output.isSuccess() {
-        Ok(output.standardOutput.trim().split(" ").filter({ !_.isEmpty() }).toList().first() ?? "")
-      } else {
-        Fail "sha256sum {path} failed: {output.standardError.trim()}"
-      }
-    }
-    Fail(error) => Fail "sha256sum could not be started: {error.show()}"
+  const hashed = hashedFile(path).await()
+  hashed.mapError({ "{path} could not be hashed: {_.message}" })
+}
+
+fn hashedFile(path: String): Task<Result<String, IoError>> {
+  using file = File.open(path)?
+  var chunks = file.chunks()
+  var hasher = Sha256()
+  while const Some(chunk) = chunks.next().await()? {
+    hasher.add chunk
   }
+  Ok hasher.finished().hex()
 }
 
 /**
@@ -153,27 +157,41 @@ public fn place(release: ReleaseInfo, sourceDirectory: String, root: String): Ta
   const version = versionOf release.tagName
   const channel = channelOf version
   const destination = "{root}/download/{version}"
-  match run("mkdir", ["-p", destination]).await() {
-    Fail(message) => { return Fail message }
-    Ok(_) => void
-  }
+  placed(release, sourceDirectory, root, destination, version, channel).mapError({ _.show() })
+}
+
+/** [place], with every step a function of `std/fs` that fails with an `IoError`. */
+fn placed(
+  release: ReleaseInfo,
+  sourceDirectory: String,
+  root: String,
+  destination: String,
+  version: String,
+  channel: String,
+): Result<Void, IoError> {
+  File.createDirectory(destination)?
   for asset in release.assets {
-    match run("mv", ["-f", "{sourceDirectory}/{asset.name}", "{destination}/{asset.name}"]).await() {
-      Fail(message) => { return Fail message }
-      Ok(_) => void
-    }
+    File.rename("{sourceDirectory}/{asset.name}", "{destination}/{asset.name}")?
   }
-  match updateVersionsList("{root}/download/versions.txt", version, channel) {
-    Fail(error) => { return Fail error.show() }
-    Ok(_) => void
-  }
+  updateVersionsList("{root}/download/versions.txt", version, channel)?
   if channel == "stable" {
-    match run("ln", ["-sfn", version, "{root}/download/latest"]).await() {
-      Fail(message) => { return Fail message }
-      Ok(_) => void
-    }
+    pointLatestAt root, version
+  } else {
+    Ok void
   }
-  Ok void
+}
+
+/**
+ * `<root>/download/latest` made a symbolic link to `version`: a new link beside it, renamed over the old one in one
+ * step, so a request never finds `latest` missing - which `ln -sfn` cannot promise, because it removes the old link first.
+ */
+fn pointLatestAt(root: String, version: String): Result<Void, IoError> {
+  const staging = "{root}/download/.latest-{version}"
+  if File.linkMetadata(staging).isOk() {
+    File.remove(staging)?
+  }
+  File.createSymbolicLink(staging, version)?
+  File.rename staging, "{root}/download/latest"
 }
 
 /** Rewrites `path`: `version`'s previous line (if any) removed, then `"<version> <channel>"` put at the top. */
@@ -190,7 +208,7 @@ fn updateVersionsList(path: String, version: String, channel: String): Result<Vo
     }
   }
   const rebuilt = ["{version} {channel}", ...kept].joined(separator: "\n")
-  File.writeText path, "{rebuilt}\n"
+  File.writeTextAtomically path, "{rebuilt}\n"
 }
 
 /** The whole thing, for one release: download, verify, place - `Fail` at the first step that does not check out. */

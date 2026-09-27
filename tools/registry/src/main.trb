@@ -10,7 +10,7 @@ use Process from "std/process"
 use Server from "std/http"
 use Config from "./config"
 use Database from "./database"
-use Storages, FileStorage from "./storage"
+use Storage, FileStorage from "std/storage"
 use Registry from "./registry"
 use handler from "./api"
 
@@ -24,7 +24,7 @@ match database.migrate().await() {
   }
 }
 // The drivers this deployment can reach, by scheme: `file:` today; an `s3:` driver is one more entry (URI.md section 11)
-const storage = Storages.of([FileStorage()])
+const storage = Storage.registry([FileStorage()])
 const registry = Registry.of config, database, storage
 const address = SocketAddress.tryFrom(config.listenAddress)?
 var server = Server.listen(address, handler(registry))?

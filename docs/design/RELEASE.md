@@ -326,8 +326,9 @@ torb`, `winget upgrade TorbScript.Torb`, `scoop update torb`), and `--list` show
 and once more if it is the active one. Downloading, hashing and unpacking shell out to `curl`/`wget`, `sha256sum`/
 `shasum`/`certutil` and `tar` (Windows included: `tar` and `curl` have shipped with Windows since 1803, so the
 download and extraction of `torb upgrade` need no PowerShell at all) - the same tools `tools/fetch-seed.sh` already
-assumes on every target - because `std/fs` has no raw byte read or write, rename, copy or delete yet; closing that gap
-is future work the compiler itself would benefit from, not something this slice should grow to include.
+assumes on every target - because `std/fs` had no raw byte read or write, rename, copy or delete when it was written.
+It has them since 2026-09-27 (`readBytes`, `rename`, `copy`, symbolic links); moving `torb upgrade` onto them and onto
+`std/digest` is a round of its own, because nothing short of a packaged release tests it.
 
 **Package manager channels** (winget, Scoop, a Homebrew tap - the preview's choice, section 5's table): rendered from
 `tools/homebrew/torb.rb.template` and `tools/scoop/torb.json.template` by `tools/render-package-manifests.sh` (its
@@ -749,24 +750,27 @@ client, `std/json` for the payload and the API's response), built and run as its
    periodic poll (`RELEASE_SYNC_POLL_SECONDS`, default 300) calls for the newest stable release, in case a webhook
    delivery was ever missed.
 3. Downloads every asset (`curl`, with `Accept: application/octet-stream` and the token), verifies every archive
-   against `SHA256SUMS` (`sha256sum`) and verifies `SHA256SUMS.sigstore.json` with `cosign verify-blob` against the
+   against `SHA256SUMS` (`std/digest` over the file's chunks) and verifies `SHA256SUMS.sigstore.json` with `cosign verify-blob` against the
    identity of the workflow that made the release (`release.yml`'s for a tagged version, `nightly.yml`'s for a
    nightly) - **refusing when `cosign` is not on the machine at all**, the same as a signature that does not verify:
    a release this program cannot check is not placed as if it had been.
-4. Only then moves the files into `<root>/download/<version>/`, rewrites `<root>/download/versions.txt` (that
-   version's old line, if any, replaced; put at the top) and, for a stable release, repoints the `<root>/download/
-   latest` symlink - a nightly has no "latest", only `/docs/nightly/` on the site (section 6), which this program does
-   not touch.
+4. Only then moves the files into `<root>/download/<version>/` (`File.rename`), rewrites
+   `<root>/download/versions.txt` whole or not at all (`File.writeTextAtomically`; that version's old line, if any,
+   replaced; put at the top) and, for a stable release, repoints the `<root>/download/latest` symlink - a new link
+   beside it renamed over the old one, so `latest` is never missing, which `ln -sfn` could not promise. A nightly has no
+   "latest", only `/docs/nightly/` on the site (section 6), which this program does not touch.
 
-**Why shelling out and not `std/http`'s body all the way to disk**: `std/fs` has no raw byte read or write yet (only
-`readText`/`writeText`), and no rename, copy or delete - closing that gap belongs to the standard library, not to this
-one program working around it twice. `curl`, `sha256sum` and `cosign` are exactly the tools `tools/fetch-seed.sh`
-already assumes exist on every target, so `release-sync`'s one target (its own container) is not a new assumption.
+**Why `curl` and not `std/http`'s body all the way to disk**: the download is the one step left outside the language,
+and `File.write(path, response.body)` is its replacement once `std/http`'s client follows the redirects GitHub answers
+an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` on 2026-09-27, when `std/fs` gained
+`rename`, symbolic links and the atomic replacement; before that they shelled out to `sha256sum`, `mv` and `ln`.
+`curl` and `cosign` are exactly the tools `tools/fetch-seed.sh` already assumes exist on every target, so
+`release-sync`'s one target (its own container) is not a new assumption.
 
 **Tested**: `tools/release-sync/tests/verify.test.trb` covers the pure decisions - which webhook actions to act on,
-whether a signature matches, reading a hash out of `SHA256SUMS` - as ordinary TorbScript tests; the network, the
-shelling out and the file placement are not, for the same reason `torb upgrade`'s are not (section 5): no packaged
-release and no second machine exist yet to run them against for real.
+whether a signature matches, reading a hash out of `SHA256SUMS` - and `tests/place.test.trb` the placement and the
+hashing in a temporary directory; the network and `cosign` are not, for the same reason `torb upgrade`'s are not
+(section 5): no packaged release and no second machine exist yet to run them against for real.
 
 ### The root server and the write service, as built (2026-09-27)
 
@@ -825,7 +829,7 @@ and reads a thirtieth of the repository back every night.
 | Checking a publish | the compiler as a `path:` dependency: `unpacked`, `readLock`, `publishProblems` (moved to `compiler/src/package/publish.trb` for this), `capabilitiesOf` and the index writer | "validates exactly as `torb publish --dry-run` does" is the same function, not a copy |
 | The database | **SQLite through the `sqlite3` shell** of the image, in WAL mode, every value an SQL literal whose one escape is the doubled `'` | `std` has no driver. A native binding to a vendored SQLite is a new native (two commits and a seed refresh) and a nine-megabyte C file in every build; an append-only file store would lose what Litestream gives a real SQLite file. A statement batch is one short process, which a service that sees a publish a minute does not notice |
 | Running programs | through a `Child`'s pipes, not `Process.run` | `Process.run` offloads to the blocking pool only when its closure captures nothing counted; with a command line built at run time it runs on the worker, and the registry's handler keeps every connection on one worker - found by the test that runs `torb publish` against the registry in the same process, which deadlocked |
-| Storage | URI.md section 11's `Storage` over a `Uri`, `FileStorage` for `file:` (a write goes to `.part` and is moved into place with `mv`, since `std/fs` has no rename), `Storages` choosing by scheme | the layer the section designed; it stays in the program until `std` ships a second driver, by that section's own rule |
+| Storage | `std/storage`: `Storage` over a `Uri`, `FileStorage` for `file:` (a write replaces the file whole with `File.writeBytesAtomically`), `Storage.registry` choosing by scheme | the layer URI.md section 11 designed; it began in this program and moved to `std` on 2026-09-27, when `std` shipped a second driver (`memory:`), by that section's own rule |
 | Concurrency | one writer of the storage at a time: a lock on the one worker, released by a `using`, which a cancellation closes too; one replica | an index file is read, appended to and written whole |
 | Recovery | archive, then index, then database row; the index is the truth of what is published | a crash leaves at worst an archive nothing names, written over by the next attempt, or an index entry without its row, which the next attempt repairs |
 | Accounts | created by the operator's token (`REGISTRY_ADMINISTRATOR_TOKEN`); an account is a person owner of the same name; organisations with `owner` and `publisher` members | sign-in through GitHub, GitLab, Codeberg or a passkey is the web front's, which does not exist yet |

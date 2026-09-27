@@ -69,9 +69,10 @@ Everything comes from the environment (`tools/deploy/compose.example.yml` sets i
 - **Programs run through a `Child`'s pipes** (`src/program.trb`), not `Process.run`: that offloads to the blocking pool
   only where its closure captures nothing counted, so with a command line built at run time it would stall the one
   worker every connection is served on - and deadlock where the program is a client of this server.
-- **The storage layer is URI.md section 11's shape** (`src/storage.trb`): `Storage` over a `Uri`, a driver per scheme,
-  `Storages` choosing by the scheme and naming what it knows. It lives here, not in `std/storage`, by that section's
-  own rule - a capability trait goes into `std` once `std` ships two drivers for it. `s3:` is one more driver.
+- **The storage layer is `std/storage`** (URI.md section 11): `Storage` over a `Uri`, a driver per scheme, and
+  `Storage.registry` choosing by the scheme and naming what it knows. It started here as `src/storage.trb` and moved to
+  `std` once `std` shipped two drivers for it (`file:` and `memory:`), by that section's own rule. A write replaces the
+  file whole (`File.writeBytesAtomically`) rather than through `mv`. `s3:` is one more driver.
 - **One writer of the storage at a time**: a lock on the one worker, released by a `using`, which a cancellation closes
   too. Run one replica of this service.
 - **RSA in TorbScript** (`src/rsa.trb`): the public operation only, with 16-bit limbs and Montgomery's multiplication,

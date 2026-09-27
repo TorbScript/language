@@ -1,0 +1,79 @@
+/**
+ * Tests for `place` of `src/sync.trb` in a temporary directory: the assets moved under `download/<version>/`, the list
+ * of versions rewritten with the newest first, and `latest` a symbolic link to a stable release and to nothing else.
+ *
+ * A test body is no task and cannot `await()`, so every placement runs at the top of the file and the tests compare
+ * what it left on the disk.
+ */
+
+use test, group from "std/test"
+use OperatingSystem from "std/core"
+use File from "std/fs"
+use Sha256 from "std/digest"
+use ReleaseInfo, ReleaseAsset from "../src/github"
+use place, verifyHashes from "../src/sync"
+
+const root = File.createTemporaryDirectory(prefix: "release-sync-test-").expect("a temporary directory")
+
+/** A download directory holding one archive and the sums, as `downloadRelease` leaves it. */
+fn downloaded(name: String): String {
+  const directory = "{root}/{name}"
+  File.createDirectory(directory).expect("the download directory")
+  File.writeText("{directory}/torb.tar.gz", "archive of {name}").expect("an archive")
+  File.writeText("{directory}/SHA256SUMS", "sums of {name}").expect("the sums")
+  directory
+}
+
+const assets = [ReleaseAsset("torb.tar.gz", "https://example.test/a"), ReleaseAsset("SHA256SUMS", "https://example.test/b")]
+const nightly = place(ReleaseInfo("nightly-20260926", assets), downloaded("nightly"), root).await()
+const stable = place(ReleaseInfo("v0.3.0", assets), downloaded("stable"), root).await()
+const versions = File.readText "{root}/download/versions.txt"
+
+// The hashes of a download, read from the files themselves chunk by chunk
+const checked = downloaded "checked"
+const archiveHash = Sha256.of("archive of checked".bytes().toList()).hex()
+File.writeText("{checked}/SHA256SUMS", "{archiveHash}  torb.tar.gz\n").expect("the right sums")
+const archiveOnly = [ReleaseAsset("torb.tar.gz", "https://example.test/a"), ReleaseAsset("SHA256SUMS", "https://example.test/b")]
+const matching = verifyHashes(ReleaseInfo("v0.3.1", archiveOnly), checked).await()
+File.writeText("{checked}/torb.tar.gz", "another archive").expect("a changed archive")
+const differing = verifyHashes(ReleaseInfo("v0.3.1", archiveOnly), checked).await()
+
+group "placing a release" {
+  test "the assets are moved under the version's directory" {
+    assert(nightly == Ok(void))
+    assert(File.readText("{root}/download/nightly-20260926/torb.tar.gz") == Ok("archive of nightly"))
+    assert(File.list("{root}/nightly") == Ok([]))
+  }
+
+  test "the newest version comes first in versions.txt" {
+    assert(versions == Ok("0.3.0 stable\nnightly-20260926 nightly\n"))
+  }
+
+  test "latest is a link to the stable release, where the system lets a program make one" {
+    match stable {
+      Ok(_) => {
+        assert(File.symbolicLinkTarget("{root}/download/latest") == Ok("0.3.0"))
+        assert(File.readText("{root}/download/latest/SHA256SUMS") == Ok("sums of stable"))
+        assert(!File.exists("{root}/download/.latest-0.3.0"))
+      }
+      Fail(message) => {
+        // Windows lets a program create one only in developer mode or with the privilege to
+        assert(OperatingSystem.current == .Windows)
+        assert message.contains("not permitted")
+      }
+    }
+  }
+
+  test "an archive whose hash is the listed one passes, and a changed one does not" {
+    assert(matching == Ok(void))
+    match differing {
+      Ok(_) => panic "a changed archive passed"
+      Fail(message) => assert message.contains("expected sha256 {archiveHash}")
+    }
+  }
+
+  test "the temporary directory is removed again" {
+    File.removeDirectory(root).expect("the root removed")
+    assert(!File.exists(root))
+  }
+}
