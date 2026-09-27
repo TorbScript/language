@@ -99,7 +99,7 @@ group "`?` and a failure type that carries nothing" {
         == [
           "`Never` has no values, so nothing converts into it: a result of `Result<Value, Never>` says that this"
             + " function cannot fail. Answer with a failure type, or handle the error here",
-        ]
+        ],
     )
   }
 
@@ -111,13 +111,12 @@ group "`?` and a failure type that carries nothing" {
         == [
           "What a type parameter can do is what its bounds say. Write the conversion down at the declaration:"
             + " `where Failure: From<Alpha>`",
-        ]
+        ],
     )
   }
 
   test "with the bound written down it is an ordinary conversion" {
-    const source = alpha
-      + "fn probe<Failure: From<Alpha>>(): Result<Int, Failure> \{\n  Ok(read()?)\n\}"
+    const source = alpha + "fn probe<Failure: From<Alpha>>(): Result<Int, Failure> \{\n  Ok(read()?)\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -140,8 +139,7 @@ group "`?` on an `Option`" {
       + "fn probe(): Result<Int, String> \{\n  const value = find()?\n  Ok(value)\n\}"
     assert(problems(source) == ["`?` on an `Option` in a function that returns `Result<Int64, String>`"])
     assert(
-      notes(source)
-        == ["There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error"]
+      notes(source) == ["There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error"],
     )
   }
 
@@ -162,7 +160,7 @@ group "`?` needs a function that can carry the failure" {
       + "fn probe(): List<Int> \{\n  const value = read()?\n  [value]\n\}"
     assert(
       problems(source)
-        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `List<Int64>`"]
+        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `List<Int64>`"],
     )
     assert(notes(source) == ["`?` hands the failure back to the caller, so there has to be somewhere for it to go"])
   }
@@ -171,7 +169,7 @@ group "`?` needs a function that can carry the failure" {
     const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe(): String \{\n  const value = find()?\n  \"\{value\}\"\n\}"
     assert(
       problems(source)
-        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `String`"]
+        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `String`"],
     )
   }
 
@@ -270,8 +268,7 @@ group "`?.`" {
       + "fn probe() \{\n  const shown = read()?.name\n\}"
     assert(problems(source) == ["`?.` needs an `Option`, and `Result<User, String>` is not one"])
     assert(
-      notes(source)
-        == ["`a?.m` is `Option.map`. On a `Result` it has no meaning: take the `Option` first (`ok()`)"]
+      notes(source) == ["`a?.m` is `Option.map`. On a `Result` it has no meaning: take the `Option` first (`ok()`)"],
     )
   }
 
@@ -300,8 +297,7 @@ group "`into()`, `tryInto()` and their traits" {
       + "fn probe() \{\n  const warm: Celsius = Fahrenheit(100.0).into()\n\}"
     assert(problems(source) == ["`Fahrenheit` does not convert into `Celsius`"])
     assert(
-      notes(source)
-        == ["`into()` is the `From` of the target: `extend Celsius with From<Fahrenheit>` provides it"]
+      notes(source) == ["`into()` is the `From` of the target: `extend Celsius with From<Fahrenheit>` provides it"],
     )
   }
 
@@ -343,9 +339,7 @@ group "`into()`, `tryInto()` and their traits" {
     assert(problems(source) == ["`Int64` does not convert into `Port`"])
     assert(
       notes(source)
-        == [
-          "`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, String>` provides it",
-        ]
+        == ["`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, String>` provides it"],
     )
   }
 
@@ -360,7 +354,7 @@ group "`into()`, `tryInto()` and their traits" {
         == [
           "It comes from the `Result<Target, Failure>` that is expected of the call, or from the type a `?` on it"
             + " unwraps to: annotate one of the two, or write `Target.tryFrom(value)` - the source is `Int64`",
-        ]
+        ],
     )
   }
 
@@ -374,7 +368,7 @@ group "`into()`, `tryInto()` and their traits" {
         == [
           "Write `extend Int64 with TryFrom<Port, String>`: the blanket implementation in `std/prelude` makes"
             + " `Port.tryInto()` out of that",
-        ]
+        ],
     )
   }
 
@@ -441,8 +435,7 @@ group "the wrap into `Some` and `Ok`" {
   }
 
   test "a short case names the case of the value that wraps" {
-    const source = "type Tree \{\n  case Leaf\n  case Node(value: Int)\n\}\n\n"
-      + "fn probe(): Tree? \{\n  .Node(1)\n\}"
+    const source = "type Tree \{\n  case Leaf\n  case Node(value: Int)\n\}\n\n" + "fn probe(): Tree? \{\n  .Node(1)\n\}"
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf(".Node(1)") == "Tree")
@@ -497,7 +490,9 @@ group "the wrap into `Some` and `Ok`" {
   }
 
   test "the payload of a written `Some` never wraps itself, so the inner `Some` of a nested `Option` stays written" {
-    assert(problems("fn probe() \{\n  const nested: Int?? = Some(1)\n\}") == ["Expected `Option<Int64>`, found `Int64`"])
+    assert(
+      problems("fn probe() \{\n  const nested: Int?? = Some(1)\n\}") == ["Expected `Option<Int64>`, found `Int64`"],
+    )
     assert problems("fn probe() \{\n  const nested: Int?? = Some(Some(1))\n\}").isEmpty()
   }
 
@@ -557,8 +552,7 @@ group "`tryInto()` under a `?`" {
   }
 
   test "the result of the function says it at a `return`" {
-    const source = fromText
-      + "fn probe(): Result<Port, String> \{\n  return Ok(\"80\".tryInto()?)\n\}"
+    const source = fromText + "fn probe(): Result<Port, String> \{\n  return Ok(\"80\".tryInto()?)\n\}"
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("\"80\".tryInto()") == "Result<Port, String>")
@@ -590,7 +584,7 @@ group "`tryInto()` under a `?`" {
         == [
           "A `?` says the target and not the failure, and there are several: `String`, `Int64`."
             + " Annotate the `Result<Port, Failure>` that is meant",
-        ]
+        ],
     )
   }
 
@@ -600,9 +594,7 @@ group "`tryInto()` under a `?`" {
     assert(problems(source) == ["`Int64` does not convert into `Port`"])
     assert(
       notes(source)
-        == [
-          "`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, Failure>` provides it",
-        ]
+        == ["`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, Failure>` provides it"],
     )
   }
 

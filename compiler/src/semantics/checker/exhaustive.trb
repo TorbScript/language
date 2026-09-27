@@ -193,12 +193,7 @@ fn isAnyUseful(var checker: Checker, matrix: Matrix, rows: List<List<Normal>>): 
  * already matches everything"); where only all of them together do, the note says that instead. This runs only for an
  * arm that is unreachable already, so its cost never shows.
  */
-fn coveringPattern(
-  var checker: Checker,
-  subject: TypeId,
-  rows: List<List<Normal>>,
-  own: List<List<Normal>>,
-): String {
+fn coveringPattern(var checker: Checker, subject: TypeId, rows: List<List<Normal>>, own: List<List<Normal>>): String {
   for row in rows {
     if !isAnyUseful(checker, Matrix([subject], [row]), own) {
       return describeNormal(row.get(0) ?? Normal.Anything)
@@ -211,7 +206,7 @@ fn reportUnreachable(var checker: Checker, at: Span, shown: String) {
   if shown.isEmpty() {
     checker.reportHere(
       Diagnostic.error("This arm is never reached", at)
-        .withNote("The arms above it already cover every value it could match")
+        .withNote("The arms above it already cover every value it could match"),
     )
     return
   }
@@ -298,13 +293,7 @@ fn onePatternPlan(var checker: Checker, pattern: Pattern, subject: TypeId): Matc
  * `const Point(x, y) = p`, `for (key, value) in map`, `{ (a, b) => ... }`: a pattern that stands where there is no
  * second way to go has to match every value, and the message names one it does not.
  */
-public fn requireIrrefutable(
-  var checker: Checker,
-  pattern: Pattern,
-  subject: TypeId,
-  what: String,
-  kind: String,
-) {
+public fn requireIrrefutable(var checker: Checker, pattern: Pattern, subject: TypeId, what: String, kind: String) {
   // `const total = ...` and `for item in items` are almost every binding of a program, and a name matches everything:
   // asking the matrix about one would build the constructors of its type for nothing
   if alwaysMatches(pattern) {
@@ -323,7 +312,7 @@ public fn requireIrrefutable(
   }
   checker.reportHere(
     Diagnostic.error("{what} has to match every {kind}, and `{witness}` does not", pattern.span)
-      .withNote("A pattern that can fail belongs in a `match` or in an `if const`")
+      .withNote("A pattern that can fail belongs in a `match` or in an `if const`"),
   )
 }
 
@@ -363,12 +352,7 @@ type Normalizing {
 }
 
 /** One row per alternative: `1 | 2 | 3` is three rows of one column, and nested alternatives multiply out. */
-fn normalizedRows(
-  var checker: Checker,
-  var state: Normalizing,
-  pattern: Pattern,
-  subject: TypeId,
-): List<List<Normal>> {
+fn normalizedRows(var checker: Checker, var state: Normalizing, pattern: Pattern, subject: TypeId): List<List<Normal>> {
   var rows: List<List<Normal>> = []
   for one in normalizedPatterns(checker, state, pattern, subject) {
     rows.append([one])
@@ -376,12 +360,7 @@ fn normalizedRows(
   rows
 }
 
-fn normalizedPatterns(
-  var checker: Checker,
-  var state: Normalizing,
-  pattern: Pattern,
-  subject: TypeId,
-): List<Normal> {
+fn normalizedPatterns(var checker: Checker, var state: Normalizing, pattern: Pattern, subject: TypeId): List<Normal> {
   match pattern.kind {
     .Wildcard => [Normal.Anything]
     .Binding(_) => [Normal.Anything]
@@ -462,12 +441,7 @@ fn applied(constructor: Constructor, arguments: List<Normal>): Normal {
   Normal.Applied constructor, arguments
 }
 
-fn normalizedTuple(
-  var checker: Checker,
-  var state: Normalizing,
-  items: List<Pattern>,
-  subject: TypeId,
-): List<Normal> {
+fn normalizedTuple(var checker: Checker, var state: Normalizing, items: List<Pattern>, subject: TypeId): List<Normal> {
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
@@ -696,12 +670,7 @@ public fn armPlanOf(var checker: Checker, arm: MatchArm, subject: TypeId): Match
 }
 
 /** One branch per alternative: what has to hold for it, and what it binds where it does. */
-fn branchesOf(
-  var checker: Checker,
-  pattern: Pattern,
-  subject: TypeId,
-  path: List<PatternStep>,
-): List<PatternBranch> {
+fn branchesOf(var checker: Checker, pattern: Pattern, subject: TypeId, path: List<PatternStep>): List<PatternBranch> {
   match pattern.kind {
     .Wildcard => [PatternBranch([], [])]
     .Binding(name) => {

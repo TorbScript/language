@@ -394,13 +394,7 @@ fn integerResult(
 }
 
 /** The value, with the range of the type it is written at: `Int8` is one byte whatever the arithmetic was done in. */
-fn integerValue(
-  var lowering: Lowering,
-  value: Int,
-  annotation: IrTypeId,
-  operator: String,
-  at: Span,
-): ConstantValue? {
+fn integerValue(var lowering: Lowering, value: Int, annotation: IrTypeId, operator: String, at: Span): ConstantValue? {
   if !fitsNumeric(lowering, value, annotation) {
     reportOverflow lowering, operator, annotation, at
     return None
@@ -462,13 +456,7 @@ fn floatOperation(
  * exception is `lowering.nanConstantAllowed` ([Lowering]), which [staticOfConstant] sets while it folds the
  * initializer of `Float64.nan` or `Float32.nan` and nothing else ever does.
  */
-fn floatResult(
-  var lowering: Lowering,
-  value: Float,
-  annotation: IrTypeId,
-  operator: String,
-  at: Span,
-): ConstantValue? {
+fn floatResult(var lowering: Lowering, value: Float, annotation: IrTypeId, operator: String, at: Span): ConstantValue? {
   if value != value && !lowering.nanConstantAllowed {
     reportProblem lowering, "`{operator}` produces `nan` here, which a compile-time constant cannot hold", at
     return None
@@ -521,12 +509,7 @@ fn floatConstant(
  * number, a `Bool`, a `Char` and a `String` is what the interpreter and the runtime agree on - a `Float` is left out
  * on purpose, because its shortest round-tripping spelling is the runtime's and not this evaluator's.
  */
-fn textConstant(
-  var lowering: Lowering,
-  segments: List<TextSegment>,
-  annotation: IrTypeId,
-  at: Span,
-): ConstantValue? {
+fn textConstant(var lowering: Lowering, segments: List<TextSegment>, annotation: IrTypeId, at: Span): ConstantValue? {
   // A `Uri` or a `Regex` literal is a value its type builds, once, and never the static text it was written as
   if lowering.checker.checkedLiteralAt(lowering.module, at).isSome() {
     return None
@@ -602,12 +585,7 @@ fn staticLayoutOf(var lowering: Lowering, annotation: IrTypeId): LayoutId? {
 }
 
 /** `(1, "one")`: a tuple layout whose fields are static values of their own. */
-fn aggregateConstant(
-  var lowering: Lowering,
-  items: List<Argument>,
-  annotation: IrTypeId,
-  at: Span,
-): ConstantValue? {
+fn aggregateConstant(var lowering: Lowering, items: List<Argument>, annotation: IrTypeId, at: Span): ConstantValue? {
   const layout = staticLayoutOf(lowering, annotation)?
   const shape = lowering.program.layoutAt layout
   if shape.fields.length() != items.length() {
@@ -953,12 +931,7 @@ public fn staticOfConstant(var lowering: Lowering, written: SymbolId, writtenOwn
  * The part of a compile-time value that one name of a destructuring binding stands for. A pattern that is a plain name
  * is the whole value, and every other one is a walk into the fields of the aggregate, position by position.
  */
-fn componentOfBinding(
-  var lowering: Lowering,
-  pattern: Pattern,
-  at: Span,
-  whole: ConstantValue,
-): ConstantValue? {
+fn componentOfBinding(var lowering: Lowering, pattern: Pattern, at: Span, whole: ConstantValue): ConstantValue? {
   const steps = fieldPathTo(pattern, at)?
   var found = whole
   for step in steps {

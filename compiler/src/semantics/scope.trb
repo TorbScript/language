@@ -409,7 +409,7 @@ public fn checkNames(program: Program, id: ModuleId): List<Diagnostic> {
     if declared.contains(definition.name) {
       diagnostics.append(
         Diagnostic.error("`{definition.name}` is already declared in this file", definition.span)
-          .withNote("Two top-level declarations of a file cannot have the same name, even when neither is `public`")
+          .withNote("Two top-level declarations of a file cannot have the same name, even when neither is `public`"),
       )
       continue
     }
@@ -451,7 +451,7 @@ fn checkImport(
           }
           diagnostics.append(
             Diagnostic.error("There is no module `{missing}`", at)
-              .withNote("A path that starts with `./` or `../` is a file next to this one, without its extension")
+              .withNote("A path that starts with `./` or `../` is a file next to this one, without its extension"),
           )
           return
         }
@@ -464,8 +464,8 @@ fn checkImport(
             Diagnostic.error("There is no package `{name}`", at)
               .withNote(
                 "A package is `owner/name`. The standard library comes with the toolchain; everything else has to be a"
-                  + " dependency or a member of the workspace"
-              )
+                  + " dependency or a member of the workspace",
+              ),
           )
           return
         }
@@ -473,14 +473,14 @@ fn checkImport(
           const importer = program.workspace.packages[program.graph.at(id).package].name
           diagnostics.append(
             Diagnostic.error("The package `{name}` is not a dependency of `{importer}`", at)
-              .withNote("Add it: `dependencies \{ runtime \"{name}\" \}` in project.trb")
+              .withNote("Add it: `dependencies \{ runtime \"{name}\" \}` in project.trb"),
           )
           return
         }
         .NoModuleInPackage(name, missing) => {
           diagnostics.append(
             Diagnostic.error("The package `{name}` has no module `{missing}`", at)
-              .withNote("`\"owner/name\"` is `src/lib.trb` of a package, `\"owner/name/path\"` is `src/path.trb` of it")
+              .withNote("`\"owner/name\"` is `src/lib.trb` of a package, `\"owner/name/path\"` is `src/path.trb` of it"),
           )
           return
         }
@@ -605,9 +605,10 @@ fn reportNoStep(program: Program, owner: SymbolId, step: Name, var diagnostics: 
     .Type => {
       // A method, a constant or a field is reached through the type; only a case becomes a name of its own
       if const Some(kind) = memberKindOf(program, owner, step.text) {
-        diagnostics.append(
-          Diagnostic.error("Only a case can be imported from a type: `{step.text}` is a {kind} of `{name}`", step.span)
-        )
+        diagnostics.append(Diagnostic.error(
+          "Only a case can be imported from a type: `{step.text}` is a {kind} of `{name}`",
+          step.span,
+        ))
         return
       }
       diagnostics.append Diagnostic.error("`{name}` has no case `{step.text}`", step.span)
@@ -615,7 +616,7 @@ fn reportNoStep(program: Program, owner: SymbolId, step: Name, var diagnostics: 
     .Namespace(_) => diagnostics.append Diagnostic.error("`{step.text}` is not exported by `{name}`", step.span)
     _ => diagnostics.append(
       Diagnostic.error("{program.symbols.describe(owner)} has no cases", step.span)
-        .withNote("A path in a `use` names a case of a type: `use Shape.Circle from \"./shape\"`")
+        .withNote("A path in a `use` names a case of a type: `use Shape.Circle from \"./shape\"`"),
     )
   }
 }
@@ -673,7 +674,7 @@ fn reportDuplicate(name: Name, declared: Set<String>, var imported: Set<String>,
   if declared.contains(name.text) {
     diagnostics.append(
       Diagnostic.error("`{name.text}` is already declared in this file", name.span)
-        .withNote("An import cannot bring in a name the file declares itself")
+        .withNote("An import cannot bring in a name the file declares itself"),
     )
     return
   }

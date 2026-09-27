@@ -130,12 +130,7 @@ fn boundSince(checker: Checker, start: Int): List<LocalBinding> {
   found
 }
 
-fn compareAlternatives(
-  var checker: Checker,
-  first: List<LocalBinding>,
-  other: List<LocalBinding>,
-  at: Span,
-) {
+fn compareAlternatives(var checker: Checker, first: List<LocalBinding>, other: List<LocalBinding>, at: Span) {
   const note = "Every alternative of a pattern binds the same names, so the body sees one set whichever one matched"
   for binding in first {
     match findBinding(other, binding.name) {
@@ -147,13 +142,13 @@ fn compareAlternatives(
         const given = checker.describe found.annotation
         checker.reportHere(
           Diagnostic.error("`{binding.name}` is `{expected}` in the first alternative and `{given}` here", found.at)
-            .withNote(note)
+            .withNote(note),
         )
       }
       None => {
         checker.reportHere(
           Diagnostic.error("`{binding.name}` is bound by the first alternative and not by this one", at)
-            .withNote(note)
+            .withNote(note),
         )
       }
     }
@@ -164,7 +159,7 @@ fn compareAlternatives(
     }
     checker.reportHere(
       Diagnostic.error("`{binding.name}` is bound by this alternative and not by the first one", binding.at)
-        .withNote(note)
+        .withNote(note),
     )
   }
 }
@@ -191,7 +186,7 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
   if checker.shadowsParameter(name) {
     checker.reportHere(
       Diagnostic.error("`{name}` is already a parameter of this function", at)
-        .withNote("The parameters and the top level of the body are one scope, so nothing there can shadow a parameter")
+        .withNote("The parameters and the top level of the body are one scope, so nothing there can shadow a parameter"),
     )
     return
   }
@@ -221,8 +216,8 @@ public fn requireReadBindings(var checker: Checker, bound: List<BindingId>) {
       Diagnostic.error("`{found.name}` is never read: write `_`, or `_{found.name}` to keep the name", found.at)
         .withNote(
           "A name in a pattern always binds and never compares, so a binding nobody reads hides what the pattern"
-            + " matches"
-        )
+            + " matches",
+        ),
     )
   }
 }
@@ -281,9 +276,10 @@ fn tuplePattern(var checker: Checker, items: List<Pattern>, subject: TypeId, at:
   }
   if !fields.isEmpty() && fields.length() != items.length() {
     const shown = checker.describe subject
-    checker.reportHere(
-      Diagnostic.error("This pattern has {items.length()} positions, `{shown}` has {fields.length()}", at)
-    )
+    checker.reportHere(Diagnostic.error(
+      "This pattern has {items.length()} positions, `{shown}` has {fields.length()}",
+      at,
+    ))
   }
   for index in 0..items.length() {
     const inner = fields.get(index) ?? checker.deferredType
@@ -497,7 +493,7 @@ fn checkFieldPatterns(
     var report = Diagnostic.error "`{name}` has {has} and this pattern names {written.length()}", at
     if isShorter {
       report = report.withNote(
-        "A pattern that does not name every field ends in `...`: `{name}({namedSoFar(written, declared)}...)`"
+        "A pattern that does not name every field ends in `...`: `{name}({namedSoFar(written, declared)}...)`",
       )
     }
     checker.reportHere report
@@ -542,7 +538,7 @@ public fn fieldPatternTargets(
         if hasLabel && reports {
           checker.reportHere(
             Diagnostic.error("A pattern names the fields in order first, and by label after that", field.pattern.span)
-              .withNote("`{name}(first, second, third: ...)`, the way the arguments of a call are written")
+              .withNote("`{name}(first, second, third: ...)`, the way the arguments of a call are written"),
           )
         }
         if next >= declared.length() {

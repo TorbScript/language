@@ -299,7 +299,13 @@ fn hashOf(seed: String): String {
 
 group "The index" {
   test "releases and yanks appended to a file read back" {
-    const first = IndexRelease parsedVersion("1.2.4"), hashOf("0"), language: "0.1.0", dependencies: ["acme/json:^2.0.0"], capabilities: ["network"]
+    const first = IndexRelease(
+      parsedVersion("1.2.4"),
+      hashOf("0"),
+      language: "0.1.0",
+      dependencies: ["acme/json:^2.0.0"],
+      capabilities: ["network"],
+    )
     const text = "{indexStart("acme/http")}{renderRelease(first)}{renderYank(IndexYank(parsedVersion("1.2.4"), "sends a password"))}"
     const index = readIndex(text, "acme/http").expect("an index")
     assert(index.releases == [first])
@@ -320,10 +326,27 @@ group "The lock" {
   test "written twice it is the same bytes, and read back it is the same lock" {
     const lock = Lock(
       language: "0.1.0",
-      settings: [LockedSettings("acme/app", Manifest(name: "acme/app", version: "1.0.0", license: "MIT", runtimeRequirements: ["acme/json:^1.0.0"], runtimeDependencies: ["acme/json"]))],
+      settings: [
+        LockedSettings(
+          "acme/app",
+          Manifest(
+            name: "acme/app",
+            version: "1.0.0",
+            license: "MIT",
+            runtimeRequirements: ["acme/json:^1.0.0"],
+            runtimeDependencies: ["acme/json"],
+          ),
+        ),
+      ],
       graph: [
         LockedPackage("acme/local", path: "../local"),
-        LockedPackage("acme/json", version: "1.2.0", registry: "file:../registry", hash: hashOf("a"), capabilities: ["network", "files"]),
+        LockedPackage(
+          "acme/json",
+          version: "1.2.0",
+          registry: "file:../registry",
+          hash: hashOf("a"),
+          capabilities: ["network", "files"],
+        ),
       ],
     )
     const text = renderLock lock
@@ -338,7 +361,12 @@ group "The lock" {
   }
 
   test "the packages of the graph are sorted by name, whatever order they were resolved in" {
-    const lock = Lock graph: [LockedPackage("acme/b", version: "1.0.0", hash: hashOf("b")), LockedPackage("acme/a", version: "1.0.0", hash: hashOf("a"))]
+    const lock = Lock(
+      graph: [
+        LockedPackage("acme/b", version: "1.0.0", hash: hashOf("b")),
+        LockedPackage("acme/a", version: "1.0.0", hash: hashOf("a")),
+      ],
+    )
     const text = renderLock lock
     const first = text.indexOf("acme/a") ?? text.end()
     const second = text.indexOf("acme/b") ?? text.start()
@@ -383,13 +411,19 @@ group "The build and the lock" {
     const missing = findWorkspace lockedTree(lockOfJson, false), "app"
     assert(missing.problems == ["acme/json 1.2.0 is in project.lock.trb and not installed: run `torb install`"])
     const unpinned = findWorkspace lockedTree("", true), "app"
-    assert(unpinned.problems == ["`acme/app` depends on `acme/json:^1.0.0`, and project.lock.trb does not pin it: run `torb update`"])
+    assert(
+      unpinned.problems
+        == ["`acme/app` depends on `acme/json:^1.0.0`, and project.lock.trb does not pin it: run `torb update`"],
+    )
   }
 
   test "a pinned version the requirement does not allow, or another registry than the owner's, is refused" {
     const old = findWorkspace lockedTree(lockOfJson.replace("1.2.0", "0.9.0"), true), "app"
     assert(old.problems == ["project.lock.trb pins acme/json 0.9.0, and `acme/app` needs `acme/json:^1.0.0`: run `torb update acme/json`"])
-    const elsewhere = findWorkspace lockedTree(lockOfJson.replace("https://packages.torb.dev", "file:../mirror"), true), "app"
+    const elsewhere = findWorkspace(
+      lockedTree(lockOfJson.replace("https://packages.torb.dev", "file:../mirror"), true),
+      "app",
+    )
     assert(elsewhere.problems.length() == 1)
     assert elsewhere.problems[0].contains("its owner is bound to `https://packages.torb.dev`")
   }
@@ -405,7 +439,9 @@ group "Editing project.trb" {
   test "a new line goes at the end of the block, a known package is replaced in place, comments stay" {
     const text = "dependencies \{\n  // the parser\n  runtime \"acme/json:^1.0.0\"\n\}\n"
     const added = withRequirement(text, "development", "acme/mock", "acme/mock").expect("an edit")
-    assert(added == "dependencies \{\n  // the parser\n  runtime \"acme/json:^1.0.0\"\n  development \"acme/mock\"\n\}\n")
+    assert(
+      added == "dependencies \{\n  // the parser\n  runtime \"acme/json:^1.0.0\"\n  development \"acme/mock\"\n\}\n",
+    )
     const replaced = withRequirement(text, "runtime", "acme/json:^2.0.0", "acme/json").expect("an edit")
     assert(replaced == "dependencies \{\n  // the parser\n  runtime \"acme/json:^2.0.0\"\n\}\n")
   }

@@ -256,9 +256,7 @@ fn memberTarget(
         return symbolTarget checker, symbol, text, at, None, explicit
       }
       None => {
-        checker.reportHere(
-          Diagnostic.error("`{text}` is not exported by the module `{owner.name}`", at)
-        )
+        checker.reportHere Diagnostic.error("`{text}` is not exported by the module `{owner.name}`", at)
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
     }
@@ -335,8 +333,8 @@ fn reportCaseAfterFunction(var checker: Checker, base: Expression, receiver: Typ
     Diagnostic.error("`{callee}` is a function, and `.{text}` right after it is a member of it", at)
       .withNote(
         "The first argument of a command may not start with `.`, whatever whitespace stands before it: write"
-          + " `{callee}(.{text})`"
-      )
+          + " `{callee}(.{text})`",
+      ),
   )
   true
 }
@@ -354,7 +352,7 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
         const shown = checker.describe receiver
         checker.reportHere(
           Diagnostic.error("`?.` needs an `Option`, and `{shown}` is not one", at)
-            .withNote("`a?.m` is `Option.map`. On a `Result` it has no meaning: take the `Option` first (`ok()`)")
+            .withNote("`a?.m` is `Option.map`. On a `Result` it has no meaning: take the `Option` first (`ok()`)"),
         )
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
@@ -568,7 +566,7 @@ fn noteDeclaredDefaults(var checker: Checker, own: TypeId) {
 fn reportCaseWithoutType(var checker: Checker, text: String, at: Span) {
   checker.reportHere(
     Diagnostic.error("`.{text}` needs a type, and nothing here says which one", at)
-      .withNote("Write it out: `Shape.{text}(...)`, or annotate what the value goes into")
+      .withNote("Write it out: `Shape.{text}(...)`, or annotate what the value goes into"),
   )
 }
 
@@ -581,7 +579,7 @@ fn reportCaseBeforeTry(var checker: Checker, text: String, at: Span) {
   checker.reportHere(
     Diagnostic.error("`.{text}` needs its type here: nothing expects one before the `?`", at)
       .withNote("Write it out: `ConfigError.{text}(...)`. The `?` only decides the failure type once the argument"
-        + " has been read")
+        + " has been read"),
   )
 }
 
@@ -599,7 +597,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
     if const .Function(_) = checker.types.form(resolved) {
       checker.reportHere(
         Diagnostic.error("`{callee}` is a function, and `[...]` right after it indexes it", at)
-          .withNote("The first argument of a command may not start with `[`: write `{callee}([...])`")
+          .withNote("The first argument of a command may not start with `[`: write `{callee}([...])`"),
       )
       return checker.invalidType
     }
@@ -698,7 +696,7 @@ fn requireSliceInBounds(var checker: Checker, target: Expression, index: Express
   checker.reportHere(
     Diagnostic.error(message, index.span)
       .withNote("How many items there are is known here, so a range that is written out is checked instead of panicking."
-        + " `part(...)` answers an `Option` instead")
+        + " `part(...)` answers an `Option` instead"),
   )
 }
 
@@ -740,7 +738,7 @@ fn requireKeyPresent(var checker: Checker, target: Expression, index: Expression
   }
   checker.reportHere(
     Diagnostic.error("This key is not in the map literal, so `a[key]` panics wherever it runs", index.span)
-      .withNote("Every key of the literal is known here. `get(...)` answers an `Option` for a key that may be missing")
+      .withNote("Every key of the literal is known here. `get(...)` answers an `Option` for a key that may be missing"),
   )
 }
 
@@ -774,8 +772,8 @@ fn requireIndexInBounds(var checker: Checker, receiver: TypeId, target: Expressi
     Diagnostic.error("`{at}` is out of bounds: {held} has {items}", index.span)
       .withNote(
         "How many items there are is known here, so an index that is written out is checked instead of panicking."
-          + " `get({at})` answers an `Option` instead"
-      )
+          + " `get({at})` answers an `Option` instead",
+      ),
   )
 }
 
@@ -877,7 +875,7 @@ fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: Str
     const name = checker.describe receiver
     checker.reportHere(
       Diagnostic.error("`{name}` is not `{capability}`, so `{written}` has no meaning for it", at)
-        .withNote("Add the bound to the declaration: `where {name}: {capability}`")
+        .withNote("Add the bound to the declaration: `where {name}: {capability}`"),
     )
     return
   }
@@ -887,7 +885,7 @@ fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: Str
   const shown = checker.describe receiver
   checker.reportHere(
     Diagnostic.error("`{shown}` does not implement `{capability}`, so `{written}` has no meaning for it", at)
-      .withNote("Operators are traits: a type has the ones it comes `with`, and nothing else")
+      .withNote("Operators are traits: a type has the ones it comes `with`, and nothing else"),
   )
 }
 
@@ -905,12 +903,15 @@ fn coerceToBounds(var checker: Checker, key: TypeId, position: TypeId, at: Span)
   }
   if isNumberRangeForText(checker, key, position) {
     checker.reportHere(
-      Diagnostic.error("A text is sliced at a `TextIndex`, not at an `Int`: a number can point inside of a character", at)
+      Diagnostic.error(
+        "A text is sliced at a `TextIndex`, not at an `Int`: a number can point inside of a character",
+        at,
+      )
         .withNote(
           "`text.dropping(characters: 3)` counts characters; `text.indexOf(part)`, `start()` and `end()` answer positions;"
             + " `text.indexAt(byteOffset: 3)` checks an offset; `text.sliceBytes(from, to)` is the form for a format that"
-            + " counts bytes"
-        )
+            + " counts bytes",
+        ),
     )
     return
   }
@@ -989,8 +990,11 @@ fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expe
     // `0xFF` and `0b1010` spell bits, and only an integer type has them
     if isBitsLiteral(text) && !isIntegerName(name) {
       checker.reportHere(
-        Diagnostic.error("`{text}` is written in another base, and only an integer type takes it: `{name}` is not one", at)
-          .withNote("A hexadecimal or binary literal is an integer. Write the number in decimal for a `{name}`")
+        Diagnostic.error(
+          "`{text}` is written in another base, and only an integer type takes it: `{name}` is not one",
+          at,
+        )
+          .withNote("A hexadecimal or binary literal is an integer. Write the number in decimal for a `{name}`"),
       )
       return checker.invalidType
     }
@@ -1256,7 +1260,7 @@ public fn reportUncalledMethod(var checker: Checker, expression: Expression, fou
     const shown = checker.describe found
     checker.reportHere(
       Diagnostic.error("`{name}` is a method, and this shows the method instead of its answer", expression.span)
-        .withNote("Did you mean `{written}.{name}()`? Without the call the text would be its type, `{shown}`")
+        .withNote("Did you mean `{written}.{name}()`? Without the call the text would be its type, `{shown}`"),
     )
     return true
   }
@@ -1284,7 +1288,7 @@ fn reportNotShowable(var checker: Checker, found: TypeId, at: Span) {
     const name = checker.describe found
     checker.reportHere(
       Diagnostic.error("`{name}` is not `Show`, so it cannot be interpolated", at)
-        .withNote("Add the bound to the declaration: `where {name}: Show`")
+        .withNote("Add the bound to the declaration: `where {name}: Show`"),
     )
     return
   }
@@ -1294,7 +1298,7 @@ fn reportNotShowable(var checker: Checker, found: TypeId, at: Span) {
   const shown = checker.describe found
   checker.reportHere(
     Diagnostic.error("`{shown}` does not implement `Show`, so it cannot be interpolated", at)
-      .withNote("`with Show` on the declaration derives it for a type all of whose fields are `Show`")
+      .withNote("`with Show` on the declaration derives it for a type all of whose fields are `Show`"),
   )
 }
 
@@ -1401,7 +1405,7 @@ fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span)
       if label != other {
         checker.reportHere(
           Diagnostic.error("This position is `{other}`, not `{label}`", at)
-            .withNote("A label is a name for a position of a tuple: the positions have to line up")
+            .withNote("A label is a name for a position of a tuple: the positions have to line up"),
         )
       }
     }
@@ -1499,12 +1503,7 @@ fn defaultListType(
   built
 }
 
-fn mapLiteralType(
-  var checker: Checker,
-  entries: List<(Expression, Expression)>,
-  expected: TypeId?,
-  at: Span,
-): TypeId {
+fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>, expected: TypeId?, at: Span): TypeId {
   const map = match checker.wellKnown.map {
     Some(found) => found
     None => {
@@ -1875,12 +1874,7 @@ fn builtMapType(
 }
 
 /** A map literal against a type that takes no entries. The entries are still checked: they are ordinary expressions. */
-fn wrongMapType(
-  var checker: Checker,
-  entries: List<(Expression, Expression)>,
-  annotation: TypeId,
-  at: Span,
-): TypeId {
+fn wrongMapType(var checker: Checker, entries: List<(Expression, Expression)>, annotation: TypeId, at: Span): TypeId {
   reportWrongTarget checker, annotation, "map", "From<Iterate<(Key, Value)>>", at
   inferEntries checker, entries
   checker.invalidType
@@ -1941,7 +1935,7 @@ fn reportWrongTarget(var checker: Checker, annotation: TypeId, kind: String, pro
   const shown = checker.describe annotation
   checker.reportHere(
     Diagnostic.error("A {kind} literal cannot become a `{shown}`: `{shown}` is not `{protocol}`", at)
-      .withNote("A collection target is `From<Iterate<...>>`, the same one `.to<Target>()` asks for")
+      .withNote("A collection target is `From<Iterate<...>>`, the same one `.to<Target>()` asks for"),
   )
 }
 
@@ -1953,7 +1947,7 @@ fn reportArraySize(var checker: Checker, annotation: TypeId, wanted: Int, given:
   const shown = checker.describe annotation
   checker.reportHere(
     Diagnostic.error("`{shown}` has {wanted} items, and this literal has {given}", at)
-      .withNote("The size of an `Array` is part of its type, so the number of items is counted where it is written")
+      .withNote("The size of an `Array` is part of its type, so the number of items is counted where it is written"),
   )
 }
 
@@ -1962,7 +1956,7 @@ fn reportOpenSpread(var checker: Checker, given: TypeId, at: Span) {
   const shown = checker.describe given
   checker.reportHere(
     Diagnostic.error("`{shown}` does not say how many items it has, so `...` cannot fill an `Array`", at)
-      .withNote("The size of an `Array` is part of its type: only an `Array` of a known size can be spread into one")
+      .withNote("The size of an `Array` is part of its type: only an `Array` of a known size can be spread into one"),
   )
 }
 
@@ -2001,13 +1995,7 @@ fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?):
  * than the `with`-list walk the arithmetic operators use - so a type that implements `Negate` through a supertrait
  * or an `extend` gets `-a` too, and not only one that declares it directly.
  */
-fn unaryType(
-  var checker: Checker,
-  operator: PrefixOperator,
-  operand: Expression,
-  at: Span,
-  expected: TypeId?,
-): TypeId {
+fn unaryType(var checker: Checker, operator: PrefixOperator, operand: Expression, at: Span, expected: TypeId?): TypeId {
   match operator {
     .Not => {
       const boolean = checker.booleanType()
@@ -2065,7 +2053,7 @@ fn bitsCapability(var checker: Checker, found: TypeId, written: String, at: Span
     const shown = checker.describe found
     checker.reportHere(
       Diagnostic.error("`{shown}` has no `^`: it is the exclusive or of two integers", at)
-        .withNote("A power is written `**`: `x ** 2`")
+        .withNote("A power is written `**`: `x ** 2`"),
     )
     return None
   }
@@ -2313,7 +2301,7 @@ fn arithmeticType(
   if const Some(message) = negativeCommandArgument(checker, operator, left, right, found) {
     checker.reportHere(
       Diagnostic.error(message.0, at)
-        .withNote("The first argument of a command may not start with `-`, so this reads as a subtraction: write `{message.1}`")
+        .withNote("The first argument of a command may not start with `-`, so this reads as a subtraction: write `{message.1}`"),
     )
     deferExpression checker, right
     return checker.invalidType
@@ -2462,7 +2450,7 @@ fn reportNoOperator(
   const shown = describeOperands checker, candidates
   checker.reportHere(
     Diagnostic.error("`{receiver}` does not {operatorNameOf(operator)} a `{written}`", at)
-      .withNote("`{operatorOf(operator)}` exists on `{receiver}` for {shown}")
+      .withNote("`{operatorOf(operator)}` exists on `{receiver}` for {shown}"),
   )
 }
 
@@ -2478,7 +2466,7 @@ fn reportAmbiguousOperator(
   const shown = describeOperands checker, fitting
   checker.reportHere(
     Diagnostic.error("`{operatorOf(operator)}` fits more than one implementation of `{receiver}`", at)
-      .withNote("It exists for {shown}: write the type that is expected of this expression")
+      .withNote("It exists for {shown}: write the type that is expected of this expression"),
   )
 }
 
@@ -2704,8 +2692,8 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
       Diagnostic.error("`?` cannot stand in a field default: building a value never fails", at)
         .withNote(
           "A default stands in for an argument the caller left out, and a constructor has no failure."
-            + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`"
-        )
+            + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`",
+        ),
     )
     return checker.invalidType
   }
@@ -2714,9 +2702,7 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
     None => {
       if isFullyKnown(checker, found) {
         const shown = checker.describe found
-        checker.reportHere(
-          Diagnostic.error("`?` needs an `Option` or a `Result`, and `{shown}` is not one", at)
-        )
+        checker.reportHere Diagnostic.error("`?` needs an `Option` or a `Result`, and `{shown}` is not one", at)
         return checker.invalidType
       }
       return checker.deferredType
@@ -2806,7 +2792,7 @@ fn reportOptionIntoResult(var checker: Checker, result: TypeId, at: Span, isClos
   const body = if isClosure { "a closure that produces" } else { "a function that returns" }
   checker.reportHere(
     Diagnostic.error("`?` on an `Option` in {body} `{shown}`", at)
-      .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error")
+      .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error"),
   )
 }
 
@@ -2818,14 +2804,14 @@ fn reportTryWithoutResult(var checker: Checker, result: TypeId, at: Span, isClos
       Diagnostic.error("`?` returns from this closure, and the closure produces `{shown}`", at)
         .withNote(
           "`?` hands the failure to whoever runs the closure, so the closure has to produce an `Option` or a"
-            + " `Result`: end it in `Ok ...` or `Some ...`, or handle the failure right here with `match` or `??`"
-        )
+            + " `Result`: end it in `Ok ...` or `Some ...`, or handle the failure right here with `match` or `??`",
+        ),
     )
     return
   }
   checker.reportHere(
     Diagnostic.error("`?` needs a function that returns an `Option` or a `Result`, and this one returns `{shown}`", at)
-      .withNote("`?` hands the failure back to the caller, so there has to be somewhere for it to go")
+      .withNote("`?` hands the failure back to the caller, so there has to be somewhere for it to go"),
   )
 }
 
@@ -2946,7 +2932,7 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
     const target = checker.describe wanted
     checker.reportHere(
       Diagnostic.error("`{given}` does not convert into `{target}`", at)
-        .withNote("Add a case that wraps it, or `extend {target} with From<{given}>`")
+        .withNote("Add a case that wraps it, or `extend {target} with From<{given}>`"),
     )
     return
   }
@@ -2988,8 +2974,8 @@ fn reportUnconvertibleFailure(var checker: Checker, error: TypeId, wanted: TypeI
       Diagnostic.error("`{given}` does not convert into `Never`", at)
         .withNote(
           "`Never` has no values, so nothing converts into it: a result of `Result<Value, Never>` says that this"
-            + " function cannot fail. Answer with a failure type, or handle the error here"
-        )
+            + " function cannot fail. Answer with a failure type, or handle the error here",
+        ),
     )
     return true
   }
@@ -3018,8 +3004,8 @@ fn reportUnconvertibleFailure(var checker: Checker, error: TypeId, wanted: TypeI
     Diagnostic.error("`{given}` does not convert into `{shown}`", at)
       .withNote(
         "What a type parameter can do is what its bounds say. Write the conversion down at the declaration:"
-          + " `where {shown}: From<{given}>`"
-      )
+          + " `where {shown}: From<{given}>`",
+      ),
   )
   true
 }
@@ -3093,8 +3079,8 @@ fn fallibleConversionType(
     checker.reportHere(
       Diagnostic.error("`{given}` does not convert into `{wanted}`", expression.span)
         .withNote(
-          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, {problem}>` provides it"
-        )
+          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, {problem}>` provides it",
+        ),
     )
     return checker.invalidType
   }
@@ -3153,8 +3139,8 @@ fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, a
     checker.reportHere(
       Diagnostic.error("`{given}` does not convert into `{wanted}`", at)
         .withNote(
-          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, Failure>` provides it"
-        )
+          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, Failure>` provides it",
+        ),
     )
     return None
   }
@@ -3167,8 +3153,8 @@ fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, a
     Diagnostic.error("`{given}` converts into `{wanted}` in more than one way", at)
       .withNote(
         "A `?` says the target and not the failure, and there are several: {listed}."
-          + " Annotate the `Result<{wanted}, Failure>` that is meant"
-      )
+          + " Annotate the `Result<{wanted}, Failure>` that is meant",
+      ),
   )
   None
 }
@@ -3220,8 +3206,8 @@ fn reportOpenConversionTarget(var checker: Checker, source: TypeId, at: Span) {
     Diagnostic.error("The target of `tryInto()` is not known here", at)
       .withNote(
         "It comes from the `Result<Target, Failure>` that is expected of the call, or from the type a `?` on it"
-          + " unwraps to: annotate one of the two, or write `Target.tryFrom(value)` - the source is `{given}`"
-      )
+          + " unwraps to: annotate one of the two, or write `Target.tryFrom(value)` - the source is `{given}`",
+      ),
   )
 }
 
@@ -3288,7 +3274,7 @@ fn conversionType(
       const wanted = checker.describe target
       checker.reportHere(
         Diagnostic.error("`{given}` does not convert into `{wanted}`", expression.span)
-          .withNote("`into()` is the `From` of the target: `extend {wanted} with From<{given}>` provides it")
+          .withNote("`into()` is the `From` of the target: `extend {wanted} with From<{given}>` provides it"),
       )
       return checker.invalidType
     }
@@ -3362,7 +3348,7 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   if isTraitForParameter {
     problem = problem.withNote(
       "A type parameter is opaque inside the body that declares it: it stands for one type the call site chose, and a "
-        + "trait-typed value is any of them. Take the value as the parameter (`value: Value`) or answer the trait"
+        + "trait-typed value is any of them. Take the value as the parameter (`value: Value`) or answer the trait",
     )
   }
   checker.reportHere problem
@@ -3707,8 +3693,8 @@ fn hidesSharedObject(var checker: Checker, found: TypeId, applied: List<TypeId>,
     Diagnostic.error("`{given}` holds an object, and a value of `{wanted}` would hide it", at)
       .withNote(
         "A value of an ordinary trait is a value, and `spawn` lets one cross into another task - the object would go"
-          + " with it, hidden. Declare the trait a `shared trait`, or keep the value as what it is"
-      )
+          + " with it, hidden. Declare the trait a `shared trait`, or keep the value as what it is",
+      ),
   )
   true
 }

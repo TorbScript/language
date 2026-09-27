@@ -333,7 +333,17 @@ group "f: command line arguments" {
 
   test "a nested field is a dashed option, and a truth value needs no argument" {
     const arguments = Arguments.of Shipment.describe
-    const given = ["--order-id", "9", "--recipient", "grace@example.test", "--price-amount", "5.0", "--price-currency", "USD", "--express"]
+    const given = [
+      "--order-id",
+      "9",
+      "--recipient",
+      "grace@example.test",
+      "--price-amount",
+      "5.0",
+      "--price-currency",
+      "USD",
+      "--express",
+    ]
     match arguments.decode(Shipment.decode, given) {
       Ok(shipment) => {
         assert(shipment.orderId == 9)
@@ -357,7 +367,9 @@ group "g: logfmt, the format written last" {
   test "a value round-trips through `key=value` lines" {
     const logfmt = Logfmt()
     const line = logfmt.encode aShipment()
-    assert(line == "orderId=7 recipient=ada@example.test price.amount=19.99 price.currency=EUR tracking=XZ42 express=false")
+    assert(
+      line == "orderId=7 recipient=ada@example.test price.amount=19.99 price.currency=EUR tracking=XZ42 express=false",
+    )
     assert(describe(logfmt.decode(Shipment.decode, line) ?? aShipment()) == describe(aShipment()))
   }
 }

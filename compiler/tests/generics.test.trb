@@ -90,9 +90,7 @@ group "A bound on a type's own generic parameter" {
     const source = "type Holder<Key: Hash> \{\n  key: Key\n\}\n\n"
       + "fn probe(holder: Holder<Float>): Float \{\n  holder.key\n\}"
     assert(problems(source) == ["`Float64` does not implement `Hash`"])
-    assert(
-      notes(source) == ["`Holder` asks for it: the bound on its type parameter holds wherever the type is named"]
-    )
+    assert(notes(source) == ["`Holder` asks for it: the bound on its type parameter holds wherever the type is named"])
   }
 
   test "a nested argument is a type position of its own" {
@@ -152,15 +150,15 @@ group "An unbound generic parameter" {
   test "cannot be indexed, sliced or negated" {
     assert(
       problems("fn at<Value>(value: Value): Int \{\n  value[0]\n\}")
-        == ["`Value` is not `Indexed`, so `a[key]` has no meaning for it"]
+        == ["`Value` is not `Indexed`, so `a[key]` has no meaning for it"],
     )
     assert(
       problems("fn part<Value>(value: Value): Value \{\n  value[0..2]\n\}")
-        == ["`Value` is not `Slice`, so `a[from..to]` has no meaning for it"]
+        == ["`Value` is not `Slice`, so `a[from..to]` has no meaning for it"],
     )
     assert(
       problems("fn flip<Value>(value: Value): Value \{\n  -value\n\}")
-        == ["`Value` is not `Negate`, so `-a` has no meaning for it"]
+        == ["`Value` is not `Negate`, so `-a` has no meaning for it"],
     )
   }
 
@@ -175,7 +173,7 @@ group "An unbound generic parameter" {
     assert(problems(source) == ["`Value` has no member `length`"])
     assert(
       notes(source)
-        == ["What a generic parameter has comes from its bounds: add the trait that declares `length` (`<Value: Length>`)"]
+        == ["What a generic parameter has comes from its bounds: add the trait that declares `length` (`<Value: Length>`)"],
     )
   }
 
@@ -286,9 +284,7 @@ group "Trait-typed values and object safety (gap 7)" {
   test "a member that takes a second `Self` has no meaning on a trait-typed value" {
     const source = "fn probe(left: Equals, right: Equals): Bool \{\n  left.equals(right)\n\}"
     assert(problems(source) == ["`equals` cannot be called on a `Equals` value"])
-    assert(
-      notes(source) == ["It takes a second `Self`, and two values of a trait type need not have the same type"]
-    )
+    assert(notes(source) == ["It takes a second `Self`, and two values of a trait type need not have the same type"])
   }
 
   test "an intersection is one type, and both of its members are reachable" {
@@ -315,8 +311,7 @@ group "Trait-typed values and object safety (gap 7)" {
   }
 
   test "and a near miss gets the same note a concrete type gets" {
-    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
-      + "fn probe(shape: Shape): Int \{\n  shape.aera()\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n" + "fn probe(shape: Shape): Int \{\n  shape.aera()\n\}"
     assert(problems(source) == ["`Shape` has no member `aera`"])
     assert(notes(source) == ["Did you mean `area`?"])
   }
@@ -344,7 +339,7 @@ group "A trait-typed value never becomes a type parameter" {
         "A type parameter is opaque inside the body that declares it: it stands for one type the call site chose, "
           + "and a trait-typed value is any of them. Take the value as the parameter (`value: Value`) or answer the "
           + "trait",
-      ]
+      ],
     )
   }
 
@@ -371,7 +366,7 @@ group "A trait-typed value never becomes a type parameter" {
     // A list literal is checked item by item, so the message stands at each item and not at the list
     assert(
       problems("fn listOf<Item>(): List<Item> \{\n  [1, 2]\n\}")
-        == ["Expected `Item`, found `Int64`", "Expected `Item`, found `Int64`"]
+        == ["Expected `Item`, found `Int64`", "Expected `Item`, found `Int64`"],
     )
   }
 

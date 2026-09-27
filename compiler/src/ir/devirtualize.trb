@@ -145,12 +145,7 @@ fn specializeFrozenCallees(var program: IrProgram): Bool {
  * Whether a copy of this callee could carry a concrete value where the original may not: it is frozen, it is a body of
  * the program's own, and its signature holds a trait-typed value the second run could peel.
  */
-fn isSpecializable(
-  program: IrProgram,
-  frozen: List<Bool>,
-  clones: List<Int>,
-  callee: FunctionId,
-): Bool {
+fn isSpecializable(program: IrProgram, frozen: List<Bool>, clones: List<Int>, callee: FunctionId): Bool {
   if callee.value < 0 || callee.value >= clones.length() {
     return false
   }
@@ -558,13 +553,7 @@ fn freezeOptional(var frozen: List<Bool>, function: FunctionId?) {
  * move, and neither can an **out** parameter or one the runtime takes by address, whose shape belongs to the C
  * implementation and not to the program.
  */
-fn collectSignature(
-  var peeling: Peeling,
-  places: Locations,
-  function: IrFunction,
-  index: Int,
-  isFrozen: Bool,
-) {
+fn collectSignature(var peeling: Peeling, places: Locations, function: IrFunction, index: Int, isFrozen: Bool) {
   const parameters = function.signature.parameters
   for position in 0..parameters.length() {
     if !isFrozen && !parameters[position].isOut && !parameters[position].isByAddress {
@@ -967,13 +956,7 @@ fn refuseUnresolvedCalls(var peeling: Peeling, places: Locations, program: IrPro
  * through a pointer the caller passes first follows from its size (BACKEND 3.2), and the slot the second form writes
  * through belongs to the caller - so a result that would change form keeps its box instead.
  */
-fn refuseMovedResult(
-  var peeling: Peeling,
-  places: Locations,
-  program: IrProgram,
-  function: IrFunction,
-  index: Int,
-) {
+fn refuseMovedResult(var peeling: Peeling, places: Locations, program: IrProgram, function: IrFunction, index: Int) {
   const answer = resultLocation places, index
   if !isPeeled(peeling, answer) {
     return
@@ -1012,12 +995,7 @@ fn refuseCall(
 }
 
 /** The location of the value a witness call reads its table out of, where that value is one this pass peels. */
-fn witnessReceiverLocation(
-  peeling: Peeling,
-  places: Locations,
-  index: Int,
-  witness: WitnessSource,
-): Int {
+fn witnessReceiverLocation(peeling: Peeling, places: Locations, index: Int, witness: WitnessSource): Int {
   const place = match witness.root {
     .Value(found, _) => found
     _ => {
@@ -1176,12 +1154,7 @@ fn isVoidLike(program: IrProgram, result: IrTypeId): Bool {
  * The table one witness source names, once the value's own tables are known: the table of the bound it reads, then one
  * `nested` step per supertrait the lowering walked down - the walk the C back end makes at the same place.
  */
-fn tableAt(
-  program: IrProgram,
-  tables: List<WitnessSource>,
-  bound: Int,
-  steps: List<Int>,
-): WitnessTableId? {
+fn tableAt(program: IrProgram, tables: List<WitnessSource>, bound: Int, steps: List<Int>): WitnessTableId? {
   if bound < 0 || bound >= tables.length() {
     return None
   }

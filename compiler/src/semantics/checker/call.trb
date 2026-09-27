@@ -236,7 +236,7 @@ fn withGeneratedConversion(var checker: Checker, target: Target, arguments: List
     const wanted = checker.describe owner
     checker.reportHere(
       Diagnostic.error("`{shown}` does not convert into `{wanted}`", at)
-        .withNote("Add a case that wraps it, or `extend {wanted} with From<{shown}>`")
+        .withNote("Add a case that wraps it, or `extend {wanted} with From<{shown}>`"),
     )
   }
   target
@@ -279,7 +279,7 @@ fn reportUncallable(var checker: Checker, target: Target, at: Span) {
       const shown = "{checker.describe(owner)}.{checker.symbolAt(variant).name}"
       checker.reportHere(
         Diagnostic.error("`{shown}` has no fields, so it is a value and not a function", at)
-          .withNote("Write it without the parentheses: `{shown}`")
+          .withNote("Write it without the parentheses: `{shown}`"),
       )
     }
     .TypeOf(owner) => reportUncallableType checker, target, owner, at
@@ -295,8 +295,8 @@ fn reportUncallableType(var checker: Checker, target: Target, owner: TypeId, at:
       Diagnostic.error("`{shown}` is a type parameter, so it has no constructor here", at)
         .withNote(
           "`{shown}` stands for whatever type the caller decided on, and its fields are not known at this"
-            + " declaration. Take the value, or a function that makes one, as a parameter"
-        )
+            + " declaration. Take the value, or a function that makes one, as a parameter",
+        ),
     )
     return
   }
@@ -320,12 +320,7 @@ fn isEffectOnly(checker: Checker, result: TypeId): Bool {
  * A fresh variable for every generic parameter the call site did not write out. Explicit type arguments are taken from
  * the left (`into<Set<Employee>>()`), so a call may pin some of them down and leave the rest to inference.
  */
-public fn instantiateTarget(
-  var checker: Checker,
-  target: Target,
-  form: FunctionForm,
-  at: Span,
-): Instantiation {
+public fn instantiateTarget(var checker: Checker, target: Target, form: FunctionForm, at: Span): Instantiation {
   if target.generics.isEmpty() {
     if !target.arguments.isEmpty() {
       reportTypeArity checker, target.name, 0, target.arguments.length(), at
@@ -583,7 +578,7 @@ fn reportNoOverload(var checker: Checker, target: Target, given: List<TypeId?>, 
   const shown = describeWritten checker, given
   checker.reportHere(
     Diagnostic.error("`{target.name}` takes none of these from a `{shown}`", at)
-      .withNote("`{target.name}` exists for {offered.joined(separator: ", ")}")
+      .withNote("`{target.name}` exists for {offered.joined(separator: ", ")}"),
   )
 }
 
@@ -595,9 +590,7 @@ fn reportAmbiguousOverload(var checker: Checker, target: Target, fitting: List<C
   const shown = offered.joined separator: ", "
   checker.reportHere(
     Diagnostic.error("`{target.name}` fits more than one implementation here", at)
-      .withNote(
-        "It exists for {shown}: write the type that is expected of this call, or name it with a type argument"
-      )
+      .withNote("It exists for {shown}: write the type that is expected of this call, or name it with a type argument"),
   )
 }
 
@@ -755,9 +748,7 @@ fn placeTrailingClosure(
   }
   if filled[last] {
     const name = parameters[last].name ?? "the last parameter"
-    checker.reportHere(
-      Diagnostic.error("The trailing closure fills `{name}`, which was already given by name", at)
-    )
+    checker.reportHere Diagnostic.error("The trailing closure fills `{name}`, which was already given by name", at)
     return
   }
   filled.set last, true
@@ -1010,8 +1001,8 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
         .withNote(
           "The closure handed to `spawn \{ ... \}` is one, and so is one whose result is declared a `Task`. To wait"
             + " for many at once use `Task.all(tasks).await()`, and to go on when one finishes use"
-            + " `task.map \{ ... \}`"
-        )
+            + " `task.map \{ ... \}`",
+        ),
     )
     return
   }
@@ -1020,8 +1011,8 @@ fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, a
     Diagnostic.error("`{name}()` is only allowed in a function that returns a `Task`", at)
       .withNote(
         "A function that waits says so in its result type, and this one produces `{shown}`. `spawn \{ ... \}` starts"
-          + " a task, and the top level of an entry file or a script may wait for one"
-      )
+          + " a task, and the top level of an entry file or a script may wait for one",
+      ),
   )
 }
 
@@ -1091,8 +1082,8 @@ fn reportTaskVariable(var checker: Checker, name: String, at: Span) {
       .withNote(
         "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the"
           + " language shares. Read it into a `const` before the closure (`const {name}Now = {name}`), or pass the"
-          + " changes through a `Channel`"
-      )
+          + " changes through a `Channel`",
+      ),
   )
 }
 
@@ -1130,7 +1121,7 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
     const named = parameter.name ?? "its parameter"
     checker.reportHere(
       Diagnostic.error("`{named}` is not a variadic parameter, so `...` cannot spread into it", argument.value.span)
-        .withNote("A `...` fills a `...rest: Item` parameter, and there is none here")
+        .withNote("A `...` fills a `...rest: Item` parameter, and there is none here"),
     )
     return
   }
@@ -1149,9 +1140,10 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
     None => {
       if isConcrete(checker, given) {
         const shown = checker.describe given
-        checker.reportHere(
-          Diagnostic.error("`{shown}` is not `Iterate`, so `...` cannot spread it", argument.value.span)
-        )
+        checker.reportHere(Diagnostic.error(
+          "`{shown}` is not `Iterate`, so `...` cannot spread it",
+          argument.value.span,
+        ))
       }
     }
   }
@@ -1221,7 +1213,7 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
     const name = checker.describe subject
     checker.reportHere(
       Diagnostic.error("`{name}` is not `{shown}`", at)
-        .withNote("Add the bound to the declaration: `where {name}: {shown}`")
+        .withNote("Add the bound to the declaration: `where {name}: {shown}`"),
     )
     return
   }
@@ -1275,11 +1267,7 @@ fn reportMissingTrait(var checker: Checker, subject: TypeId, wanted: TypeId, own
 }
 
 /** The resolution of a call, with everything the call site learned: the type arguments and the witnesses. */
-public fn withInstantiation(
-  resolution: Resolution,
-  arguments: List<TypeId>,
-  witnesses: List<Witness>,
-): Resolution {
+public fn withInstantiation(resolution: Resolution, arguments: List<TypeId>, witnesses: List<Witness>): Resolution {
   if const .Callable(symbol, _, dispatch) = resolution {
     return Resolution.Callable symbol, arguments, withWitnesses(dispatch, witnesses)
   }

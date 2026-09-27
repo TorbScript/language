@@ -21,9 +21,7 @@ group "The copy trap" {
   test "a copy out of a collection that is changed and never read" {
     const source = "{counter}fn probe(counters: List<Counter>) \{\n  var first = counters[0]\n  first.increment()\n\}"
     assert(problems(source) == ["This change has no effect: `first` is never read again"])
-    assert(
-      notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"]
-    )
+    assert(notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"])
   }
 
   test "a read after the change is what makes it worth writing" {
@@ -106,9 +104,7 @@ group "Top-level `var` bindings" {
     const source = "{counter}var counters = [Counter(), Counter()]\nvar first = counters[0]\n"
       + "first.increment()\nprint counters[0].count\n"
     assert(problems(source) == ["This change has no effect: `first` is never read again"])
-    assert(
-      notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"]
-    )
+    assert(notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"])
   }
 
   test "an assignment at the top level that nothing reads afterwards" {
@@ -146,7 +142,7 @@ group "Top-level `var` bindings" {
         == [
           "A function could run while a `var` access to `total` is open: take it as a `var` parameter instead"
             + " (`fn reset(var total: ...)`)",
-        ]
+        ],
     )
     // The initializer of a top-level `const` runs among the statements, in the order they are written
     const initializer = "var totals: List<Int> = []\nconst first = totals.appended(1)\ntotals.append 2\nprint totals, first\n"
@@ -179,7 +175,7 @@ group "Top-level `var` bindings" {
         == [
           "A module has no mutable state: only `const` can be public",
           "`total` is a `const`. Only a `var` binding can be changed",
-        ]
+        ],
     )
   }
 }

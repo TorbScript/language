@@ -230,7 +230,10 @@ fn inlineText(inline: MarkdownInline, inCell: Bool, lineStart: Bool): String {
     }
     .Strong(children) => "**" + inlinesText(children, inCell) + "**"
     .Link(destination, title, children, _) => "[" + inlinesText(children, inCell) + "]" + linkTarget(destination, title)
-    .Image(destination, title, children, _) => "![" + inlinesText(children, inCell) + "]" + linkTarget(destination, title)
+    .Image(destination, title, children, _) => "!["
+      + inlinesText(children, inCell)
+      + "]"
+      + linkTarget(destination, title)
     .Html(html) => html
     .SoftBreak => "\n"
     .HardBreak => "\\\n"
@@ -265,7 +268,9 @@ fn codeSpanText(text: String): String {
     length = length + 1
   }
   const fence = "`".repeat(length)
-  const needsSpace = text.startsWith("`") || text.endsWith("`") || (text.startsWith(" ") && text.endsWith(" ") && !text.isBlank())
+  const needsSpace = text.startsWith("`")
+    || text.endsWith("`")
+    || (text.startsWith(" ") && text.endsWith(" ") && !text.isBlank())
   if needsSpace {
     return fence + " " + text + " " + fence
   }
@@ -294,9 +299,17 @@ fn escapedText(text: String, lineStart: Bool): String {
     }
     var escape = always
     if atStart {
-      escape = escape || character == '#' || character == '-' || character == '+' || character == '=' || character == '~'
+      escape = escape
+        || character == '#'
+        || character == '-'
+        || character == '+'
+        || character == '='
+        || character == '~'
     }
-    if (character == '.' || character == ')') && index > 0 && characters[index - 1].isDigit() && isNumberAtStart(characters, index, lineStart) {
+    if (character == '.' || character == ')')
+      && index > 0
+      && characters[index - 1].isDigit()
+      && isNumberAtStart(characters, index, lineStart) {
       escape = true
     }
     if escape {

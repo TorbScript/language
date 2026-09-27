@@ -178,12 +178,7 @@ fn selfAnswerOf(
  * A supertrait whose own table cannot be built leaves a hole: the narrowing that would have read it is a clean finding
  * at the coercion, and a table nobody narrows through costs one null pointer.
  */
-fn nestedTablesOf(
-  var lowering: Lowering,
-  subject: TypeId,
-  bound: TypeId,
-  at: Span,
-): List<WitnessTableId?> {
+fn nestedTablesOf(var lowering: Lowering, subject: TypeId, bound: TypeId, at: Span): List<WitnessTableId?> {
   const target = irTypeOfClosed lowering, subject
   var found: List<WitnessTableId?> = []
   for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
@@ -354,13 +349,7 @@ fn manifestNameOf(var lowering: Lowering, id: TypeId): String? {
  * what a `for` loop and an interpolation will ask for. It goes through the very same path a witness table member does, so
  * a value that is shown through a table and one that is shown directly run the same code.
  */
-public fn memberOfType(
-  var lowering: Lowering,
-  subject: TypeId,
-  bound: TypeId,
-  name: String,
-  at: Span,
-): FunctionId? {
+public fn memberOfType(var lowering: Lowering, subject: TypeId, bound: TypeId, name: String, at: Span): FunctionId? {
   const implementation = match witnessFor(lowering.checker, subject, bound) {
     .Implementation(found, _, _) => found
     _ => {
@@ -623,12 +612,7 @@ public fn memberMappingOf(
  * The arguments the trait that declares a member has for one type: `TryFrom<String, NumberParseError>` for an `Int64`, whatever
  * bound a call site happened to resolve. The bound's own arguments stand in where the declaring trait cannot be found.
  */
-fn appliedArgumentsOf(
-  var lowering: Lowering,
-  parameter: ParameterId,
-  subject: TypeId,
-  bound: TypeId,
-): List<TypeId> {
+fn appliedArgumentsOf(var lowering: Lowering, parameter: ParameterId, subject: TypeId, bound: TypeId): List<TypeId> {
   if const Some(declaring) = lowering.checker.types.parameter(parameter).owner {
     // The bound is the declaring trait itself: its arguments are the answer, and a type that implements the trait more
     // than once (`AppError` made from a `ConfigError` and from a `Never`) has no other single one
@@ -754,13 +738,7 @@ fn hasMemberNamed(var lowering: Lowering, found: List<TableMember>, name: String
   false
 }
 
-fn addTableMembers(
-  var lowering: Lowering,
-  var found: List<TableMember>,
-  bound: TypeId,
-  subject: TypeId,
-  depth: Int,
-) {
+fn addTableMembers(var lowering: Lowering, var found: List<TableMember>, bound: TypeId, subject: TypeId, depth: Int) {
   if depth > 6 {
     return
   }
@@ -1290,12 +1268,7 @@ public fn genericMemberInValue(
 }
 
 /** Whether a member can be reached through the table of one of the bounds at all, which is what makes a call dynamic. */
-public fn isInTable(
-  var lowering: Lowering,
-  bounds: List<TypeId>,
-  subject: TypeId,
-  member: SymbolId,
-): Bool {
+public fn isInTable(var lowering: Lowering, bounds: List<TypeId>, subject: TypeId, member: SymbolId): Bool {
   memberInValue(lowering, bounds, subject, Reference(Slot(0), []), member).isSome()
 }
 

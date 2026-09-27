@@ -223,7 +223,11 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
     Fail(problem) => {
       // A line rule has said what is wrong already where YAML cannot read the line
       if problems.isEmpty() {
-        problems.append DocumentationProblem(path, problem.line() + from, "The front matter is not YAML: {problem.message()}")
+        problems.append(DocumentationProblem(
+          path,
+          problem.line() + from,
+          "The front matter is not YAML: {problem.message()}",
+        ))
       }
       return ReadFields FrontMatter([]), problems
     }
@@ -243,7 +247,11 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
       }
     }
     if !isFieldKey(key) {
-      problems.append DocumentationProblem(path, number, "`{key}` is not a field name. A field name is lowercase letters and hyphens")
+      problems.append(DocumentationProblem(
+        path,
+        number,
+        "`{key}` is not a field name. A field name is lowercase letters and hyphens",
+      ))
       continue
     }
     if fields.any({ _.key == key }) {
@@ -262,12 +270,20 @@ fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadF
 fn fieldValue(path: String, key: String, node: YamlNode, from: Int): Result<FieldValue, DocumentationProblem> {
   const number = node.line + from
   if node.anchor.isSome() || node.tag.isSome() {
-    return Fail DocumentationProblem(path, number, "`{key}` has an anchor or a tag, which the front matter does not have")
+    return Fail(DocumentationProblem(
+      path,
+      number,
+      "`{key}` has an anchor or a tag, which the front matter does not have",
+    ))
   }
   match node.content {
     .Scalar(text, style) => {
       if style == ScalarStyle.Plain && text.isEmpty() {
-        return Fail DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
+        return Fail(DocumentationProblem(
+          path,
+          number,
+          "`{key}` has no value. A block list needs at least one `- ` item below it",
+        ))
       }
       if style != ScalarStyle.Plain && style != ScalarStyle.DoubleQuoted {
         return Fail DocumentationProblem(path, number, "`{key}` is a value on one line, plain or in double quotes")
@@ -284,13 +300,21 @@ fn fieldValue(path: String, key: String, node: YamlNode, from: Int): Result<Fiel
           .Scalar(text, ScalarStyle.Plain) => values.append text
           .Scalar(text, ScalarStyle.DoubleQuoted) => values.append text
           _ => {
-            return Fail DocumentationProblem(path, item.line + from, "An item of `{key}` is a value on one line, plain or in double quotes")
+            return Fail(DocumentationProblem(
+              path,
+              item.line + from,
+              "An item of `{key}` is a value on one line, plain or in double quotes",
+            ))
           }
         }
       }
       FieldValue.Items values
     }
-    .Mapping(_, _) => Fail DocumentationProblem(path, number, "`{key}` holds a mapping. A value of the front matter is a scalar or a list")
+    .Mapping(_, _) => Fail(DocumentationProblem(
+      path,
+      number,
+      "`{key}` holds a mapping. A value of the front matter is a scalar or a list",
+    ))
     .Alias(_) => Fail DocumentationProblem(path, number, "`{key}` is an alias, which the front matter does not have")
   }
 }
@@ -309,7 +333,11 @@ fn lineProblems(path: String, lines: List<String>, from: Int, to: Int): List<Doc
       continue
     }
     if line.contains("\t") {
-      problems.append DocumentationProblem(path, number, "A tab is not part of the front matter: YAML indents with spaces")
+      problems.append(DocumentationProblem(
+        path,
+        number,
+        "A tab is not part of the front matter: YAML indents with spaces",
+      ))
       continue
     }
     if line.trim().startsWith("#") {
@@ -318,7 +346,11 @@ fn lineProblems(path: String, lines: List<String>, from: Int, to: Int): List<Doc
     }
     if line.startsWith(" ") {
       if !line.startsWith("  - ") {
-        problems.append DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
+        problems.append(DocumentationProblem(
+          path,
+          number,
+          "An indented line in the front matter belongs to a list item and has to start with `- `",
+        ))
         continue
       }
       if const Some(problem) = scalarProblem(path, number, line.sliceBytes(4, line.byteLength()).trim()) {
@@ -329,7 +361,11 @@ fn lineProblems(path: String, lines: List<String>, from: Int, to: Int): List<Doc
     const colon = match line.byteOffsetOf(":") {
       Some(found) => found
       None => {
-        problems.append DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
+        problems.append(DocumentationProblem(
+          path,
+          number,
+          "A line of the front matter is `key: value`. There is no colon on this one",
+        ))
         continue
       }
     }
@@ -359,7 +395,11 @@ fn scalarProblem(path: String, line: Int, text: String): DocumentationProblem? {
     return DocumentationProblem path, line, "`{text}` contains `: ` and has to be written in double quotes"
   }
   if startsWithIndicator(text) {
-    return DocumentationProblem path, line, "`{text}` starts with a character YAML reserves and has to be written in double quotes"
+    return DocumentationProblem(
+      path,
+      line,
+      "`{text}` starts with a character YAML reserves and has to be written in double quotes",
+    )
   }
   None
 }
@@ -532,7 +572,11 @@ type BodyScanner {
     }
     const opening = bodyLines.get(block.line - 1) ?? ""
     if opening.trim().startsWith("~") {
-      problems.append DocumentationProblem(path, line, "A code block is fenced with three backticks and names its language")
+      problems.append(DocumentationProblem(
+        path,
+        line,
+        "A code block is fenced with three backticks and names its language",
+      ))
     }
     var contentLines = 0
     for character in text.chars() {

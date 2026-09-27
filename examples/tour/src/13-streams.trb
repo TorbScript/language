@@ -108,10 +108,7 @@ extend ImportError with From<ChannelClosed> {
 fn download(url: Uri, path: String): Task<Result<Void, ImportError>> {
   var response = http.get(url).await()?
   using file = File.create(path)?
-  response.body
-    .mapFailure(ImportError.requestFailed)
-    .into(file.mapFailure(ImportError.fileFailed))
-    .await()
+  response.body.mapFailure(ImportError.requestFailed).into(file.mapFailure(ImportError.fileFailed)).await()
 }
 
 // --- 2. Importing newline-separated JSON ----------------------------------------------------------
@@ -172,13 +169,7 @@ fn namesOf(users: List<User>): List<String> {
 // `var body`, because reading it is what this does - a `const` body is a read-only view and cannot be consumed.
 /** The same `activeNames` stage as [namesOf], run over a decoded HTTP body instead of a list. */
 fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
-  body
-    .mapFailure(ImportError.requestFailed)
-    .through(Json.items<User>())
-    .checked()
-    .through(activeNames)
-    .toList()
-    .await()
+  body.mapFailure(ImportError.requestFailed).through(Json.items<User>()).checked().through(activeNames).toList().await()
 }
 
 // --- 5. Text on a byte sink, and buffering that says where it flushes ------------------------------

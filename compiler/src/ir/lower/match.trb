@@ -412,12 +412,7 @@ fn lowerIfVarBinding(
  * fields of the case and the positions of the tuple the name sits in. `None` where a step cannot be formed, which has
  * been reported.
  */
-fn namedPaths(
-  var lowering: Lowering,
-  subject: PlacePath,
-  branch: PatternBranch,
-  at: Span,
-): List<(Span, Reference)>? {
+fn namedPaths(var lowering: Lowering, subject: PlacePath, branch: PatternBranch, at: Span): List<(Span, Reference)>? {
   var named: List<(Span, Reference)> = []
   for binding in branch.bindings {
     var steps = subject.reference.steps
@@ -515,7 +510,11 @@ fn lowerWhileVarBinding(
     }
   }
   if arm.branches.length() != 1 {
-    reportUnsupported lowering, "`while var` over alternatives, whose names are paths into different cases", pattern.span
+    reportUnsupported(
+      lowering,
+      "`while var` over alternatives, whose names are paths into different cases",
+      pattern.span,
+    )
     return
   }
   const branch = arm.branches[0]
@@ -1092,23 +1091,23 @@ fn restSlotOf(
   const amount = integerSlot lowering, builder, index, integer
   const rest = addTemporary builder, stageAnnotation
   const places: List<Reference?> = []
-  const _ = lowerDispatched(
-    lowering,
-    builder,
-    rest,
-    at,
-    skipped,
-    [container, amount],
-    places,
-    stageAnnotation,
-  )
+  const _ = lowerDispatched lowering, builder, rest, at, skipped, [container, amount], places, stageAnnotation
   if !lowering.isSupported {
     return None
   }
   var last = stage
   var taken = rest
   if after > 0 {
-    const (shortened, shortenedType) = match takenBefore(lowering, builder, container, containerType, rest, stage, index + after, at) {
+    const (shortened, shortenedType) = match takenBefore(
+      lowering,
+      builder,
+      container,
+      containerType,
+      rest,
+      stage,
+      index + after,
+      at,
+    ) {
       Some(found) => found
       None => {
         return None
@@ -1621,13 +1620,7 @@ fn reportFailure(
  * again at the head of every pass, so the loop needs no binding of its own for "the error of this link": the same
  * slot is written with the next one and the block that calls `cause()` is simply entered again.
  */
-fn lowerCauseChain(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  current: Slot,
-  failed: TypeId,
-  at: Span,
-) {
+fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current: Slot, failed: TypeId, at: Span) {
   const bound = match errorBoundOf(lowering) {
     Some(found) => found
     None => {

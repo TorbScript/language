@@ -81,8 +81,8 @@ public fn resolveName(
           Diagnostic.error("There is no `self` here", at)
             .withNote(
               "`self` exists in a method and in a receiver closure. A default is evaluated without one, so that the"
-                + " order of the fields is not observable"
-            )
+                + " order of the fields is not observable",
+            ),
         )
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
@@ -275,7 +275,7 @@ public fn symbolTarget(
   if checker.wellKnown.isVoid(symbol) {
     checker.reportHere(
       Diagnostic.error("`Void` is a type, not a value: its one value is written `void`", at)
-        .withNote("`void` is to `Void` what `true` and `false` are to `Bool`")
+        .withNote("`void` is to `Void` what `true` and `false` are to `Bool`"),
     )
     return Target Resolution.Deferred, checker.invalidType, name: text
   }
@@ -567,7 +567,7 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
   if isImplicitName(text) && !checker.closureFrames.isEmpty() {
     checker.reportHere(
       Diagnostic.error("The parameters of this closure need types: `\{ value: Int => ... \}`", at)
-        .withNote("`_` is the first parameter of the expected function type, and nothing here expects one")
+        .withNote("`_` is the first parameter of the expected function type, and nothing here expects one"),
     )
     return
   }
@@ -580,8 +580,8 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
           Diagnostic.error("A field default cannot read the field `{text}`", at)
             .withNote(
               "Every default is evaluated on its own, so the order of the fields is not observable. A value that is"
-                + " computed from another field is made by a `{staticKeyword} fn` factory"
-            )
+                + " computed from another field is made by a `{staticKeyword} fn` factory",
+            ),
         )
         return
       }
@@ -600,12 +600,10 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
   if const Some(annotation) = expected {
     if caseNamed(checker, annotation, text).isSome() {
       const owner = checker.describe annotation
-      checker.reportHere(
-        Diagnostic.error(
-          "`{text}` alone is a type, a function or a variable. A case is written `.{text}` or `{owner}.{text}`",
-          at,
-        )
-      )
+      checker.reportHere(Diagnostic.error(
+        "`{text}` alone is a type, a function or a variable. A case is written `.{text}` or `{owner}.{text}`",
+        at,
+      ))
       return
     }
   }
@@ -616,7 +614,7 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
     problem = problem.withNote hint
   } else if checker.receiverType.isSome() {
     problem = problem.withNote(
-      "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)"
+      "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)",
     )
   }
   checker.reportHere problem
@@ -655,7 +653,7 @@ public fn reportUnknownMember(
   if const .Parameter(_) = checker.types.form(receiver) {
     problem = problem.withNote(
       "What a generic parameter has comes from its bounds: add the trait that declares `{text}`"
-        + " (`<{shown}: Length>`)"
+        + " (`<{shown}: Length>`)",
     )
   }
   // `print (0..4).length()` is `print(0..4)` and then `.length()` on what it produced: a parenthesis right after the
@@ -664,18 +662,16 @@ public fn reportUnknownMember(
     problem = problem.withNote(
       "A call that produces nothing has the type `Void`. A `(` right after the name of a call is its argument list,"
         + " whatever whitespace stands in between, so `f (x).{text}()` reads as `f(x).{text}()`: write"
-        + " `f((x).{text}())`, or bind the value first"
+        + " `f((x).{text}())`, or bind the value first",
     )
   }
   // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
   // tokens a first command argument must not start with
   if caseNamed(checker, receiver, text).isSome() {
-    checker.reportHere(
-      problem.withNote(
-        "`{text}` is a case of `{shown}`. The first argument of a command may not start with `.`, so"
-          + " `setting .{text}` is the member `setting.{text}`: write `setting = .{text}`"
-      )
-    )
+    checker.reportHere(problem.withNote(
+      "`{text}` is a case of `{shown}`. The first argument of a command may not start with `.`, so"
+        + " `setting .{text}` is the member `setting.{text}`: write `setting = .{text}`",
+    ))
     return true
   }
   // An `extend` of a foreign type is named where it is used, so the message is the `use` line to write
@@ -684,7 +680,7 @@ public fn reportUnknownMember(
     const owner = typeNameOf(checker, receiver) ?? shown
     checker.reportHere(
       Diagnostic.error("`{path}` adds `{text}` to `{shown}`, and this file does not name it", at)
-        .withNote("Write `use {owner}.{text} from \"{path}\"` at the top of the file")
+        .withNote("Write `use {owner}.{text} from \"{path}\"` at the top of the file"),
     )
     return true
   }
@@ -693,7 +689,7 @@ public fn reportUnknownMember(
     const path = importPathOf checker, module
     checker.reportHere(
       Diagnostic.error("`{text}` comes from `{capability}`, which is not a name in this file", at)
-        .withNote("Write `use {capability} from \"{path}\"`: the members a trait puts on a foreign type need the trait")
+        .withNote("Write `use {capability} from \"{path}\"`: the members a trait puts on a foreign type need the trait"),
     )
     return true
   }
@@ -813,7 +809,8 @@ fn hasOpenPart(checker: Checker, of: TypeId, depth: Int): Bool {
     .Traits(bounds) => bounds.any({ hasOpenPart(checker, _, depth + 1) })
     .Tuple(fields) => fields.any({ hasOpenPart(checker, _.annotation, depth + 1) })
     .Function(form) => {
-      form.parameters.any({ hasOpenPart(checker, _.annotation, depth + 1) }) || hasOpenPart(checker, form.result, depth + 1)
+      form.parameters.any({ hasOpenPart(checker, _.annotation, depth + 1) })
+        || hasOpenPart(checker, form.result, depth + 1)
     }
     _ => false
   }

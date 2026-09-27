@@ -83,10 +83,7 @@ group "A value that is released twice, or used after it is gone" {
   test "a slot that is written while it still holds a value is a leak, and says so" {
     var program = IrProgram()
     const text = textType program
-    const signature = IrSignature(
-      [IrParameter("first", text), IrParameter("second", text)],
-      text,
-    )
+    const signature = IrSignature([IrParameter("first", text), IrParameter("second", text)], text)
     var builder = newFunction "t_overwritten", None, signature, "body"
     const kept = addTemporary builder, text
     emit builder, Instruction.Copy(kept, Slot(0))
@@ -135,7 +132,7 @@ group "A value that is never let go of" {
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier)
-        == ["t_oneSide b3: %1 owns a value on one path to this `return` and not on another"]
+        == ["t_oneSide b3: %1 owns a value on one path to this `return` and not on another"],
     )
   }
 }
@@ -152,7 +149,7 @@ group "A parameter the caller keeps the count of" {
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier)
-        == ["t_lent b0: %0 is a parameter the caller keeps the count of, so it is never released"]
+        == ["t_lent b0: %0 is a parameter the caller keeps the count of, so it is never released"],
     )
   }
 
@@ -167,7 +164,7 @@ group "A parameter the caller keeps the count of" {
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier)
-        == ["t_stolen b0: %0 is a parameter the caller keeps the count of, so it cannot be moved out of"]
+        == ["t_stolen b0: %0 is a parameter the caller keeps the count of, so it cannot be moved out of"],
     )
   }
 
@@ -181,8 +178,7 @@ group "A parameter the caller keeps the count of" {
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     assert(
-      problemsOf(program, identifier)
-        == ["t_number b0: `release` needs a value that is counted, and `Int64` is not"]
+      problemsOf(program, identifier) == ["t_number b0: `release` needs a value that is counted, and `Int64` is not"],
     )
   }
 }
@@ -199,9 +195,7 @@ group "A position that keeps a value says so" {
     emit builder, Instruction.Construct(built, pair, 0, [borrowed(Slot(0))])
     terminate builder, Terminator.Return(Argument(built, Ownership.Owned, true))
     const identifier = finishFunction program, builder
-    assert(
-      problemsOf(program, identifier) == ["t_field b0: `construct` keeps %0, so the operand has to be `owned`"]
-    )
+    assert(problemsOf(program, identifier) == ["t_field b0: `construct` keeps %0, so the operand has to be `owned`"])
   }
 
   test "an argument that disagrees with the callee's signature is reported either way round" {
@@ -221,7 +215,7 @@ group "A position that keeps a value says so" {
         == [
           "t_disagrees b0: `t_keeps` keeps argument 0, so %0 has to be `owned`",
           "t_disagrees b0: `t_borrows` borrows argument 0, so %0 cannot be `owned`",
-        ]
+        ],
     )
   }
 }

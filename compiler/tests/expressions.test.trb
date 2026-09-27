@@ -35,7 +35,7 @@ group "Literals" {
   test "a hexadecimal or binary literal is an integer, and a floating-point type does not take one" {
     assert(
       problems(inBody("  const mask: Float64 = 0xFF"))
-        == ["`0xFF` is written in another base, and only an integer type takes it: `Float64` is not one"]
+        == ["`0xFF` is written in another base, and only an integer type takes it: `Float64` is not one"],
     )
     assert(problems(inBody("  const flags: Float32 = 0b1010")).length() == 1)
     assert problems(inBody("  const byte: UInt8 = 0xFF\n  const wide: Float64 = 255")).isEmpty()
@@ -77,7 +77,9 @@ group "Literals" {
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("(\"on\")") == "\"off\" | \"on\"")
-    assert(problems(inBody("  const state: \"on\" | \"off\" = \"idle\"")) == ["Expected `\"off\" | \"on\"`, found `String`"])
+    assert(
+      problems(inBody("  const state: \"on\" | \"off\" = \"idle\"")) == ["Expected `\"off\" | \"on\"`, found `String`"],
+    )
   }
 
   test "an interpolated text is a `String`, and every part of it is looked at" {
@@ -103,12 +105,8 @@ group "Literals" {
 
   test "a label at a position that has another name is an error, so a swap cannot happen silently" {
     const source = inBody "  const bounds: (lowest: Int, highest: Int) = (highest: 1, lowest: 9)"
-    assert(
-      problems(source) == ["This position is `lowest`, not `highest`", "This position is `highest`, not `lowest`"]
-    )
-    assert(
-      notes(source) == ["A label is a name for a position of a tuple: the positions have to line up"]
-    )
+    assert(problems(source) == ["This position is `lowest`, not `highest`", "This position is `highest`, not `lowest`"])
+    assert(notes(source) == ["A label is a name for a position of a tuple: the positions have to line up"])
   }
 
   test "a list literal is a `List<Item>`, and the first item decides what `Item` is" {
@@ -155,7 +153,7 @@ group "Names" {
   test "a `const` that is defined in terms of itself" {
     assert(
       problems("const first = second\nconst second = first")
-        == ["The type of `first` cannot be inferred: its value is defined in terms of itself"]
+        == ["The type of `first` cannot be inferred: its value is defined in terms of itself"],
     )
   }
 
@@ -220,7 +218,7 @@ group "Members" {
         "A call that produces nothing has the type `Void`. A `(` right after the name of a call is its argument list, "
           + "whatever whitespace stands in between, so `f (x).round()` reads as `f(x).round()`: write "
           + "`f((x).round())`, or bind the value first",
-      ]
+      ],
     )
   }
 
@@ -249,7 +247,9 @@ group "Members" {
   }
 
   test "the positions and the labels of a tuple" {
-    const found = probe inBody("  const bounds = (lowest: 1, highest: 9)\n  const low = bounds.lowest\n  const first = bounds.0")
+    const found = probe(
+      inBody("  const bounds = (lowest: 1, highest: 9)\n  const low = bounds.lowest\n  const first = bounds.0"),
+    )
     assert(found.typeOf("bounds.lowest") == "Int64")
     assert(found.typeOf("bounds.0") == "Int64")
     assert(found.resolutionOf("bounds.0") == "tuple 0")
@@ -273,7 +273,7 @@ group "Members" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\nfn probe(): Shape \{\n  Empty\n\}"
     assert(
       problems(source)
-        == ["`Empty` alone is a type, a function or a variable. A case is written `.Empty` or `Shape.Empty`"]
+        == ["`Empty` alone is a type, a function or a variable. A case is written `.Empty` or `Shape.Empty`"],
     )
   }
 }
@@ -366,7 +366,7 @@ group "`if`, `match` and blocks" {
   test "the arms of an `if` are checked against what is expected of the whole" {
     assert(
       problems(inBody("  const value: Int = if true \{ 1 \} else \{ \"two\" \}"))
-        == ["Expected `Int64`, found `String`"]
+        == ["Expected `Int64`, found `String`"],
     )
   }
 
@@ -422,7 +422,7 @@ group "One root cause, one message" {
     assert(problems(source) == ["`print` is a function, and `print -0.0` subtracts from it"])
     assert(
       notes(source)
-        == ["The first argument of a command may not start with `-`, so this reads as a subtraction: write `print(-0.0)`"]
+        == ["The first argument of a command may not start with `-`, so this reads as a subtraction: write `print(-0.0)`"],
     )
   }
 
@@ -438,7 +438,9 @@ group "One root cause, one message" {
   }
 
   test "a keyword as the name of a function is the parser's message, and the checker adds none" {
-    assert(problems("fn if(value: Int): Int \{\n  value\n\}") == ["`if` is a keyword and cannot be used as a name here"])
+    assert(
+      problems("fn if(value: Int): Int \{\n  value\n\}") == ["`if` is a keyword and cannot be used as a name here"],
+    )
   }
 
   test "a field, a method and a case field may be named after a keyword, and are reached after a `.` and as a label" {
@@ -488,7 +490,7 @@ group "One root cause, one message" {
         == [
           "A default stands in for an argument the caller left out, and a constructor has no failure."
             + " A value that has to be checked first is made by a factory: a `static fn` that answers a `Result`",
-        ]
+        ],
     )
     // A closure in a default is a function of its own, and its `?` returns from it
     const closure = "fn parse(text: String): Int? \{\n  None\n\}\n\n"

@@ -304,7 +304,9 @@ group "the schema" {
   }
 
   test "sections in the wrong order are reported" {
-    const page = referencePage("Bindings").replace("## Syntax", "## Rules").replace("## Rules\n\n1. **A claim.**", "## Syntax\n\n1. **A claim.**")
+    const page = referencePage("Bindings")
+      .replace("## Syntax", "## Rules")
+      .replace("## Rules\n\n1. **A claim.**", "## Syntax\n\n1. **A claim.**")
     var files = goodTree()
     files.set "language/bindings.md", page
     const found = check files
@@ -376,7 +378,10 @@ group "the schema" {
 
   test "two pages cannot claim the same role in the skill" {
     var files = goodTree()
-    files.set "language/bindings.md", referencePage("Bindings").replace("status: stable", "status: stable\nskill: model")
+    files.set(
+      "language/bindings.md",
+      referencePage("Bindings").replace("status: stable", "status: stable\nskill: model"),
+    )
     files.set "language/other.md", referencePage("Other").replace("status: stable", "status: stable\nskill: model")
     const found = check files
     assert(found.any({ _.contains "already is the `model` of the skill" }))
@@ -582,7 +587,10 @@ group "the snippets" {
   test "a fragment is only lexed, so a signature is fine" {
     var files = goodTree()
     const signature = "fn map<Output>(self, transform: (value: Item) => Output): Iterate<Output>"
-    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", "```trb fragment\n{signature}\n```")
+    const page = referencePage("Bindings").replace(
+      "```trb\nconst answer = 42\nprint answer\n```",
+      "```trb fragment\n{signature}\n```",
+    )
     files.set "language/bindings.md", page
     assert check(files).isEmpty()
   }
@@ -611,7 +619,9 @@ group "the snippets" {
 
   test "a run block that says what it prints is fine" {
     var files = goodTree()
-    const page = referencePage("Bindings").replace("```trb\n", "```trb run\n").replace("print answer", "print answer // prints 42")
+    const page = referencePage("Bindings")
+      .replace("```trb\n", "```trb run\n")
+      .replace("print answer", "print answer // prints 42")
     files.set "language/bindings.md", page
     assert check(files).isEmpty()
   }
@@ -813,7 +823,10 @@ group "the skill" {
 
   test "a link of an inlined page is seen from the body, or keeps its text" {
     var files = skillTree()
-    files.set "guide/model.md", guidePage().replace("One paragraph.", "See [the tooling](../tooling/index.md) and [the root](../../README.md).")
+    files.set(
+      "guide/model.md",
+      guidePage().replace("One paragraph.", "See [the tooling](../tooling/index.md) and [the root](../../README.md)."),
+    )
     const documentation = documentationOf "docs", files
     const skill = buildSkill documentation
     const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
@@ -822,7 +835,10 @@ group "the skill" {
 
   test "a link inside code is left alone" {
     var files = skillTree()
-    const linking = referencePage("Linking").replace("It is not something else.", "Write `[text](nowhere.md)` for a link.")
+    const linking = referencePage("Linking").replace(
+      "It is not something else.",
+      "Write `[text](nowhere.md)` for a link.",
+    )
     files.set "language/linking.md", linking
     const documentation = documentationOf "docs", files
     const skill = buildSkill documentation
@@ -850,9 +866,15 @@ group "the skill" {
 /** A tree with one page per role of the skill. */
 fn skillTree(): Map<String, String> {
   var files = goodTree()
-  files.set "language/cheat-sheet.md", referencePage("Cheat sheet").replace("status: stable", "status: stable\nskill: cheat-sheet")
+  files.set(
+    "language/cheat-sheet.md",
+    referencePage("Cheat sheet").replace("status: stable", "status: stable\nskill: cheat-sheet"),
+  )
   files.set "explanation/index.md", folderIndex("Why")
-  files.set "explanation/mistakes.md", referencePage("Mistakes").replace("status: stable", "status: stable\nskill: mistakes")
+  files.set(
+    "explanation/mistakes.md",
+    referencePage("Mistakes").replace("status: stable", "status: stable\nskill: mistakes"),
+  )
   files.set "guide/index.md", folderIndex("The guide")
   files.set "guide/model.md", guidePage()
   files.set "tooling/index.md", folderIndex("The toolchain")

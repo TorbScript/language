@@ -107,12 +107,20 @@ const warm = match Celsius.tryFrom(Reading(21)) {
 failed = failed + expect(json.encode(warm), raw"""{"degrees":21}""")
 failed = failed + expect("{json.decode<Celsius>(raw"""{"degrees": 30}""").map({ _.degrees() })}", "Ok(30)")
 failed = failed + expect("{json.decode<Celsius>(raw"""{"degrees": -300}""")}", "Fail(-300 is below absolute zero)")
-failed = failed + expect("{structureOf<Celsius>()}", "Record(\"torbscript/conformance/encoding-describe/Reading\", [degrees: Integer])")
+failed = failed
+  + expect(
+    "{structureOf<Celsius>()}",
+    "Record(\"torbscript/conformance/encoding-describe/Reading\", [degrees: Integer])",
+  )
 
 // The naming option is the format's, in both directions
 const snake = Json naming: .SnakeCase
 failed = failed + expect(snake.encode(Setting("audit")), raw"""{"log_label":"audit","maximum_size":10}""")
-failed = failed + expect("{snake.decode<Setting>(raw"""{"log_label": "trace"}""")}", "Ok(Setting(logLabel: \"trace\", maximumSize: 10))")
+failed = failed
+  + expect(
+    "{snake.decode<Setting>(raw"""{"log_label": "trace"}""")}",
+    "Ok(Setting(logLabel: \"trace\", maximumSize: 10))",
+  )
 failed = failed + expect("{json.decode<Setting>(raw"""{"log_label": "trace"}""")}", "Fail(logLabel: a value is needed)")
 
 Process.exit failed

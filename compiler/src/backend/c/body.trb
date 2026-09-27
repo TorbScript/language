@@ -778,7 +778,12 @@ fn taskNewStatements(
  * more than one worker ([framePrivateOf]): `(torb_task_copies() ? <copy> : <test>) ? portable : pinned`. With one worker
  * nothing is copied, because no other worker could take the task.
  */
-fn startStatementOf(program: IrProgram, place: CExpression, members: List<CExpression>, types: List<IrTypeId>): CStatement {
+fn startStatementOf(
+  program: IrProgram,
+  place: CExpression,
+  members: List<CExpression>,
+  types: List<IrTypeId>,
+): CStatement {
   const pinned = CExpression.Name "torb_task_start"
   const portable = CExpression.Name "torb_task_start_portable"
   const crossing = frameCrossingOf program, members, types
@@ -1749,12 +1754,7 @@ fn isByAddressParameter(parameter: IrParameter?): Bool {
  * A place that is a `var` parameter of *this* frame already is that pointer, so nothing is taken of it - `&*p` only
  * spells `p` the long way, and the generated C is read by people.
  */
-fn referenceExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  argument: Argument,
-): CExpression {
+fn referenceExpression(var emission: Emission, program: IrProgram, body: Body, argument: Argument): CExpression {
   const place = match argument.place {
     Some(found) => found
     None => {
@@ -1917,7 +1917,10 @@ fn closureStatements(
     types.append shape.fields[index].annotation
   }
   // Captures that may all cross to another worker make the environment shared, so the closure may run on several
-  const sharing = CStatement.Evaluate CExpression.Call(CExpression.Name("torb_share"), [CExpression.Name("environment")])
+  const sharing = CStatement.Evaluate(CExpression.Call(
+    CExpression.Name("torb_share"),
+    [CExpression.Name("environment")],
+  ))
   match environmentCrossingOf(program, members, types) {
     .Always => inner.append sharing
     .Never => {}
@@ -1987,12 +1990,7 @@ fn framedClosureStatements(
  * can keep looking for further findings; `torb build` never reaches a C compiler with it, because a program with any
  * finding is refused first.
  */
-fn captureExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  capture: Capture,
-): CExpression {
+fn captureExpression(var emission: Emission, program: IrProgram, body: Body, capture: Capture): CExpression {
   match capture {
     .Value(slot) => slotExpression body, slot
     .Boxed(slot) => slotExpression body, slot
@@ -2195,12 +2193,7 @@ fn witnessCallStatements(
  * one `nested[i]` step per supertrait the lowering walked down (`narrowingPathOf`). The indices belong to the trait, so
  * this is the one place where a table of a type the value has erased can be named at all.
  */
-fn witnessExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  witness: WitnessSource,
-): CExpression {
+fn witnessExpression(var emission: Emission, program: IrProgram, body: Body, witness: WitnessSource): CExpression {
   var found = rootExpression emission, program, body, witness.root
   for step in witness.steps {
     const list = CExpression.PointerMember found, "nested"
@@ -2209,12 +2202,7 @@ fn witnessExpression(
   found
 }
 
-fn rootExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  root: WitnessRoot,
-): CExpression {
+fn rootExpression(var emission: Emission, program: IrProgram, body: Body, root: WitnessRoot): CExpression {
   match root {
     .Value(place, bound) => {
       const value = placeExpression emission, program, body, place
@@ -2320,12 +2308,7 @@ fn textConcatStatements(
     parts.append slotExpression(body, slot)
   }
   const count = parts.length()
-  const declaration = CStatement.Declaration(
-    "const torb_text",
-    "parts",
-    CExpression.Initializer(parts),
-    count,
-  )
+  const declaration = CStatement.Declaration "const torb_text", "parts", CExpression.Initializer(parts), count
   const concatenated = CExpression.Call(CExpression.Name("torb_text_concat"), [
     CExpression.Name("parts"),
     CExpression.Literal("{count}"),
@@ -2359,12 +2342,7 @@ fn mixedConcatStatements(
     parts.append textPartExpression(emission, program, body, slot)
   }
   const count = parts.length()
-  const declaration = CStatement.Declaration(
-    "const torb_text_part",
-    "parts",
-    CExpression.Initializer(parts),
-    count,
-  )
+  const declaration = CStatement.Declaration "const torb_text_part", "parts", CExpression.Initializer(parts), count
   const concatenated = CExpression.Call(CExpression.Name("torb_text_concat_parts"), [
     CExpression.Name("parts"),
     CExpression.Literal("{count}"),
@@ -2378,12 +2356,7 @@ fn mixedConcatStatements(
  * A designated initializer leaves every other member zeroed, which is what the runtime reads for the kinds that do
  * not use them - and it is the one form of C initializer that `-Wmissing-field-initializers` does not ask about.
  */
-fn textPartExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  slot: Slot,
-): CExpression {
+fn textPartExpression(var emission: Emission, program: IrProgram, body: Body, slot: Slot): CExpression {
   const value = slotExpression body, slot
   const kind = match textPartKindOf(program, typeOfSlot(body, slot)) {
     Some(found) => found
@@ -2426,10 +2399,7 @@ fn printSymbolOf(operation: IntrinsicOperation): String {
  */
 fn printPartsStatements(body: Body, symbol: String, arguments: List<Slot>): List<CStatement> {
   if arguments.isEmpty() {
-    const nothing = CExpression.Call(CExpression.Name(symbol), [
-      CExpression.Name("NULL"),
-      CExpression.Literal("0"),
-    ])
+    const nothing = CExpression.Call CExpression.Name(symbol), [CExpression.Name("NULL"), CExpression.Literal("0")]
     return [CStatement.Evaluate(nothing)]
   }
   var parts: List<CExpression> = []
@@ -2437,16 +2407,8 @@ fn printPartsStatements(body: Body, symbol: String, arguments: List<Slot>): List
     parts.append slotExpression(body, slot)
   }
   const count = parts.length()
-  const declaration = CStatement.Declaration(
-    "const torb_text",
-    "parts",
-    CExpression.Initializer(parts),
-    count,
-  )
-  const written = CExpression.Call(CExpression.Name(symbol), [
-    CExpression.Name("parts"),
-    CExpression.Literal("{count}"),
-  ])
+  const declaration = CStatement.Declaration "const torb_text", "parts", CExpression.Initializer(parts), count
+  const written = CExpression.Call CExpression.Name(symbol), [CExpression.Name("parts"), CExpression.Literal("{count}")]
   [CStatement.Block([declaration, CStatement.Evaluate(written)])]
 }
 
@@ -2551,11 +2513,7 @@ fn arithmeticExpression(
  * It is only reached for an operation the IR marked unchecked, and signed overflow is undefined behaviour in C - which
  * is exactly why the analysis that marks one has to be conservative by construction.
  */
-fn uncheckedExpression(
-  operation: IntrinsicOperation,
-  first: CExpression,
-  second: CExpression,
-): CExpression? {
+fn uncheckedExpression(operation: IntrinsicOperation, first: CExpression, second: CExpression): CExpression? {
   match operation {
     .Add => CExpression.Binary first, "+", second
     .Subtract => CExpression.Binary first, "-", second
@@ -2807,11 +2765,7 @@ fn inlineInitializerOf(shape: Layout, variant: Int, written: List<CExpression>):
  * the first group holds a struct of its own. Neither warning is raised for a designated initializer, and what is left
  * out is zero initialized - which is exactly what a case without fields means.
  */
-public fn variantInitializerParts(
-  shape: Layout,
-  variant: Int,
-  written: List<CExpression>,
-): List<CDesignatedField> {
+public fn variantInitializerParts(shape: Layout, variant: Int, written: List<CExpression>): List<CDesignatedField> {
   var parts: List<CDesignatedField> = []
   var index = 0
   for field in shape.commonFields() {
@@ -2915,13 +2869,7 @@ fn nichePayloadTypeOf(program: IrProgram, shape: Layout): IrTypeId {
 }
 
 /** The variant a value of a variant layout is: the tag member, or the null test of a niche. */
-fn tagStatements(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  target: Slot,
-  source: Slot,
-): List<CStatement> {
+fn tagStatements(var emission: Emission, program: IrProgram, body: Body, target: Slot, source: Slot): List<CStatement> {
   const place = slotExpression body, target
   const name = slotExpression body, source
   const annotation = typeOfSlot body, source
@@ -2938,11 +2886,7 @@ fn tagStatements(
     .Niche(payload, _) => {
       const test = nullTestOf program, shape, name
       const empty = if payload == 0 { 1 } else { 0 }
-      const question = CExpression.Conditional(
-        test,
-        CExpression.Literal("{payload}"),
-        CExpression.Literal("{empty}"),
-      )
+      const question = CExpression.Conditional test, CExpression.Literal("{payload}"), CExpression.Literal("{empty}")
       [CStatement.Assignment(place, CExpression.Cast(spelling, question))]
     }
     .Boxed => {
@@ -2996,12 +2940,7 @@ fn variantLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
  * A place as a C expression: the slot, then one step per field, variant field, tuple position or dereference. A `var`
  * parameter is a `T *`, so it is dereferenced where the path starts.
  */
-public fn placeExpression(
-  var emission: Emission,
-  program: IrProgram,
-  body: Body,
-  reference: Reference,
-): CExpression {
+public fn placeExpression(var emission: Emission, program: IrProgram, body: Body, reference: Reference): CExpression {
   var found = slotExpression body, reference.base
   var current = typeOfSlot body, reference.base
   for step in reference.steps {

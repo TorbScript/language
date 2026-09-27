@@ -419,7 +419,14 @@ public shared type Registry {
    * package, the archive passes every check of `./upload`, the version is new - and then the archive, the index entry
    * and the release row are written, and the index is mirrored.
    */
-  fn publish(caller: Caller, owner: String, name: String, version: String, archive: List<UInt8>, hash: String): Task<Result<Published, Refusal>> {
+  fn publish(
+    caller: Caller,
+    owner: String,
+    name: String,
+    version: String,
+    archive: List<UInt8>,
+    hash: String,
+  ): Task<Result<Published, Refusal>> {
     const package = packageOf(owner, name)?
     if const Fail(problem) = Version.tryFrom(version) {
       return Fail Refusal.of(400, "`{version}` is not a version: {problem}")
@@ -434,7 +441,9 @@ public shared type Registry {
     using holding = lock.acquire().await()
     const indexUri = uriOf "index/{package}.trb"
     const existing = textAt(indexUri).await()? ?? indexStart(package)
-    const index = readIndex(existing, package).mapError({ Refusal.of 500, "the index of {package} does not read: {_}" })?
+    const index = readIndex(existing, package).mapError(
+      { Refusal.of 500, "the index of {package} does not read: {_}" },
+    )?
     if index.release(upload.release.version).isSome() {
       recordRelease(package, version, hash, caller.actor()).await()?
       return Fail Refusal.of(409, "{package} {version} is published already, and a published version is never replaced")
@@ -453,7 +462,14 @@ public shared type Registry {
    * Withdraws `version` for new resolutions with `reason`, or - `undo` - returns it (RELEASE.md section 7.3): a line
    * appended to the index either way, never an edit of what is there.
    */
-  fn yank(caller: Caller, owner: String, name: String, version: String, reason: String, undo: Bool): Task<Result<Void, Refusal>> {
+  fn yank(
+    caller: Caller,
+    owner: String,
+    name: String,
+    version: String,
+    reason: String,
+    undo: Bool,
+  ): Task<Result<Void, Refusal>> {
     const package = packageOf(owner, name)?
     const parsed = match Version.tryFrom(version) {
       Ok(found) => found
@@ -473,7 +489,9 @@ public shared type Registry {
         return Fail Refusal.of(404, "there is no package {package}")
       }
     }
-    const index = readIndex(existing, package).mapError({ Refusal.of 500, "the index of {package} does not read: {_}" })?
+    const index = readIndex(existing, package).mapError(
+      { Refusal.of 500, "the index of {package} does not read: {_}" },
+    )?
     if index.release(parsed).isNone() {
       return Fail Refusal.of(404, "{package} has no release {version}")
     }
@@ -512,12 +530,21 @@ public shared type Registry {
    * member's, or the operator's. The package need not be published yet: configuring it reserves the name, so the first
    * release can already come from CI.
    */
-  fn setTrustedPublishing(caller: Caller, owner: String, name: String, settings: TrustedPublishing): Task<Result<TrustedPublishing, Refusal>> {
+  fn setTrustedPublishing(
+    caller: Caller,
+    owner: String,
+    name: String,
+    settings: TrustedPublishing,
+  ): Task<Result<TrustedPublishing, Refusal>> {
     const package = packageOf(owner, name)?
     mayManage(caller, owner).await()?
     for publisher in settings.publishers {
       const segments = publisher.repository.split("/").toList()
-      if segments.length() < 2 || segments.length() > 3 || segments.any({ _.isEmpty() }) || publisher.workflow.isEmpty() || publisher.workflow.contains("/") {
+      if segments.length() < 2
+        || segments.length() > 3
+        || segments.any({ _.isEmpty() })
+        || publisher.workflow.isEmpty()
+        || publisher.workflow.contains("/") {
         return Fail Refusal.of(400, "a trusted publisher is a repository - `owner/name` on GitHub, `<host>/owner/name` on a Forgejo - and a workflow file name such as `release.yml`")
       }
       const host = publisher.host()
@@ -532,7 +559,10 @@ public shared type Registry {
       }
     }
     ensurePackage(package, owner).await()?
-    var statements: List<String> = ["BEGIN IMMEDIATE;", "DELETE FROM trusted_publishers WHERE package = {sqlText(package)};"]
+    var statements: List<String> = [
+      "BEGIN IMMEDIATE;",
+      "DELETE FROM trusted_publishers WHERE package = {sqlText(package)};",
+    ]
     for publisher in settings.publishers {
       statements.append "INSERT OR IGNORE INTO trusted_publishers (package, repository, workflow, environment, ref) VALUES ({sqlText(package)}, {sqlText(publisher.repository)}, {sqlText(publisher.workflow)}, {sqlText(publisher.environment)}, {sqlText(publisher.ref)});"
     }
@@ -575,13 +605,24 @@ public shared type Registry {
     const claims = verifiedClaims(token, keys, issuer.issuer, config.audience, now).mapError({ Refusal.of 401, _ })?
     const publishers = publishersOf(checked).await()?
     if publishers.isEmpty() {
-      return Fail Refusal.of(403, "{checked} has no trusted publisher: its owners configure one at /api/1/packages/{checked}/trusted-publishers")
+      return Fail(Refusal.of(
+        403,
+        "{checked} has no trusted publisher: its owners configure one at /api/1/packages/{checked}/trusted-publishers",
+      ))
     }
     if !publishers.any({ publisherMatches claims, _, issuer }) {
       return Fail Refusal.of(403, "{describedJob(claims, issuer)} is not a trusted publisher of {checked}")
     }
     const account = publisherName claims, issuer
-    const issuedToken = issued(account, "trusted publishing", [owner], [checked], ["publish"], true, now + config.trustedTokenSeconds).await()?
+    const issuedToken = issued(
+      account,
+      "trusted publishing",
+      [owner],
+      [checked],
+      ["publish"],
+      true,
+      now + config.trustedTokenSeconds,
+    ).await()?
     logged(Caller.Anonymous, "exchange", checked, account).await()?
     Ok issuedToken
   }
@@ -614,7 +655,10 @@ public shared type Registry {
       return Ok Some(grant)
     }
     if action == "publish" && (packages.first().map({ _.trustedOnly == 1 }) ?? false) {
-      return Fail Refusal.of(403, "{package} is published only by its trusted publishers: its owners switched tokens off")
+      return Fail(Refusal.of(
+        403,
+        "{package} is published only by its trusted publishers: its owners switched tokens off",
+      ))
     }
     const roles = self.queried<RoleRow>(
       "SELECT role FROM members WHERE owner = {sqlText(owner)} AND account = {sqlText(grant.account)};",
@@ -670,7 +714,12 @@ public shared type Registry {
   }
 
   /** The release's row, where it is not there yet. */
-  private fn recordRelease(package: String, version: String, hash: String, publisher: String): Task<Result<Void, Refusal>> {
+  private fn recordRelease(
+    package: String,
+    version: String,
+    hash: String,
+    publisher: String,
+  ): Task<Result<Void, Refusal>> {
     const now = nowOf().await()?
     executed(
       "INSERT OR IGNORE INTO releases (package, version, hash, publisher, published) VALUES ({sqlText(package)}, {sqlText(version)}, {sqlText(hash)}, {sqlText(publisher)}, {now});",

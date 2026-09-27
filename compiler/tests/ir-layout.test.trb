@@ -83,10 +83,12 @@ group "Layouts" {
     }
     const big = recordLayout program, "T_main_Big", many
     finishProgram program
-    assert(shown(program, named) == "layout T_main_Named inline size 24 align 8 counted fields(name: String, age: Int64)")
+    assert(
+      shown(program, named) == "layout T_main_Named inline size 24 align 8 counted fields(name: String, age: Int64)",
+    )
     assert(
       shown(program, big)
-        == "layout T_main_Big boxed size 40 align 8 fields(field0: Int64, field1: Int64, field2: Int64, field3: Int64, field4: Int64)"
+        == "layout T_main_Big boxed size 40 align 8 fields(field0: Int64, field1: Int64, field2: Int64, field3: Int64, field4: Int64)",
     )
   }
 
@@ -103,7 +105,7 @@ group "Layouts" {
     finishProgram program
     assert(
       shown(program, pair)
-        == "layout T_main_Pair inline size 16 align 8 counted fields(first: Record(T_main_Big), second: Record(T_main_Big))"
+        == "layout T_main_Pair inline size 16 align 8 counted fields(first: Record(T_main_Big), second: Record(T_main_Big))",
     )
   }
 
@@ -118,15 +120,14 @@ group "Layouts" {
     finishProgram program
     assert(
       shown(program, ofText)
-        == "layout T_Option__String niche(1, 0) size 16 align 8 counted variants(None, Some(value: String))"
+        == "layout T_Option__String niche(1, 0) size 16 align 8 counted variants(None, Some(value: String))",
     )
     assert(
       shown(program, ofList)
-        == "layout T_Option__List_Int64 niche(1, 0) size 16 align 8 counted variants(None, Some(value: List(Int64)))"
+        == "layout T_Option__List_Int64 niche(1, 0) size 16 align 8 counted variants(None, Some(value: List(Int64)))",
     )
     assert(
-      shown(program, ofInteger)
-        == "layout T_Option__Int64 inline size 16 align 8 variants(None, Some(value: Int64))"
+      shown(program, ofInteger) == "layout T_Option__Int64 inline size 16 align 8 variants(None, Some(value: Int64))",
     )
   }
 
@@ -139,7 +140,7 @@ group "Layouts" {
     finishProgram program
     assert(
       shown(program, outer)
-        == "layout T_Option__T_Option__String inline size 24 align 8 counted variants(None, Some(value: Variant(T_Option__String)))"
+        == "layout T_Option__T_Option__String inline size 24 align 8 counted variants(None, Some(value: Variant(T_Option__String)))",
     )
   }
 
@@ -160,7 +161,7 @@ group "Layouts" {
     finishProgram program
     assert(
       shown(program, reserved.layout)
-        == "layout T_main_Node boxed recursive size 24 align 8 counted variants(Leaf(value: Int64), Branch(left: Variant(T_main_Node), right: Variant(T_main_Node)))"
+        == "layout T_main_Node boxed recursive size 24 align 8 counted variants(Leaf(value: Int64), Branch(left: Variant(T_main_Node), right: Variant(T_main_Node)))",
     )
     assert isManagedType(program, nodeType)
   }
@@ -172,7 +173,7 @@ group "Layouts" {
     const pair = tupleLayout program, "T_tuple__Int64_String", [int64, strings]
     finishProgram program
     assert(
-      shown(program, pair) == "layout T_tuple__Int64_String inline size 24 align 8 counted fields(0: Int64, 1: String)"
+      shown(program, pair) == "layout T_tuple__Int64_String inline size 24 align 8 counted fields(0: Int64, 1: String)",
     )
   }
 
@@ -224,7 +225,7 @@ group "Layouts" {
     finishProgram program
     assert(
       shown(program, reserved.layout)
-        == "layout T_main_Event inline size 32 align 8 counted common(name: String) variants(Started, Stopped(code: Int64))"
+        == "layout T_main_Event inline size 32 align 8 counted common(name: String) variants(Started, Stopped(code: Int64))",
     )
   }
 
@@ -249,9 +250,7 @@ group "Mangling" {
     var program = IrProgram()
     const int64 = program.internType IrType.Integer(64, true)
     const list = SymbolPath "std/prelude", "collections/list", ["ArrayList"], "append"
-    assert(
-      functionName(program, list, [int64]) == "t_std_x2f_prelude_collections_x2f_list_ArrayList_append__Int64"
-    )
+    assert(functionName(program, list, [int64]) == "t_std_x2f_prelude_collections_x2f_list_ArrayList_append__Int64")
     assert(functionName(program, SymbolPath("", "main", [], "translated"), []) == "t_main_translated")
     assert(layoutName(program, SymbolPath("", "main", [], "Point"), []) == "T_main_Point")
     assert(staticName(program, SymbolPath("", "main", [], "greeting"), []) == "s_main_greeting")
@@ -269,7 +268,7 @@ group "Mangling" {
     const inner = program.internType IrType.Variant(reserved.layout)
     assert(
       layoutName(program, option, [inner])
-        == "T_std_x2f_prelude_option_Option__T_std_x2f_prelude_option_Option__List_Int64"
+        == "T_std_x2f_prelude_option_Option__T_std_x2f_prelude_option_Option__List_Int64",
     )
   }
 
@@ -280,28 +279,27 @@ group "Mangling" {
     const strings = program.internType IrType.Text
     assert(tupleLayoutName(program, [int64, strings]) == "T_tuple__Int64_String")
     const plain = program.internSignature IrSignature([IrParameter("value", int64)], boolean)
-    const reference = program.internSignature(
-      IrSignature([IrParameter("counter", int64, true, Ownership.Borrowed)], boolean)
-    )
+    const reference = program.internSignature(IrSignature(
+      [IrParameter("counter", int64, true, Ownership.Borrowed)],
+      boolean,
+    ))
     assert(canonicalSignature(program, plain) == "Function_Int64_to_Bool")
     assert(canonicalSignature(program, reference) == "Function_ref_Int64_to_Bool")
     const show = program.internTrait IrTrait(SymbolId(3), SymbolPath("std/prelude", "convert", [], "Show"), [])
-    const iterable = program.internTrait(
-      IrTrait(SymbolId(4), SymbolPath("std/prelude", "iteration", [], "Iterate"), [int64])
-    )
+    const iterable = program.internTrait(IrTrait(
+      SymbolId(4),
+      SymbolPath("std/prelude", "iteration", [], "Iterate"),
+      [int64],
+    ))
     assert(canonicalTrait(program, show) == "std_x2f_prelude_convert_Show")
     assert(canonicalTrait(program, iterable) == "std_x2f_prelude_iteration_Iterate_Int64")
     const object = program.internType IrType.Object([show, iterable])
     assert(
-      canonicalType(program, object)
-        == "Object_std_x2f_prelude_convert_Show_std_x2f_prelude_iteration_Iterate_Int64"
+      canonicalType(program, object) == "Object_std_x2f_prelude_convert_Show_std_x2f_prelude_iteration_Iterate_Int64",
     )
     const target = program.internType IrType.Integer(32, true)
     assert(witnessTableName(program, show, target) == "w_std_x2f_prelude_convert_Show__Int32")
-    assert(
-      witnessTableName(program, iterable, target)
-        == "w_std_x2f_prelude_iteration_Iterate__Int32_Int64"
-    )
+    assert(witnessTableName(program, iterable, target) == "w_std_x2f_prelude_iteration_Iterate__Int32_Int64")
   }
 
   test "a const argument is part of the name, and so is its sign" {
@@ -431,9 +429,7 @@ group "Mangling" {
     const int64 = program.internType IrType.Integer(64, true)
     const boolean = program.internType IrType.Boolean
     const borrows = program.internSignature IrSignature([IrParameter("value", int64)], boolean)
-    const takes = program.internSignature(
-      IrSignature([IrParameter("value", int64, false, Ownership.Owned)], boolean)
-    )
+    const takes = program.internSignature IrSignature([IrParameter("value", int64, false, Ownership.Owned)], boolean)
     assert(borrows != takes)
     assert(canonicalSignature(program, takes) == "Function_owned_Int64_to_Bool")
     const show = program.internTrait IrTrait(SymbolId(3), SymbolPath("std/prelude", "convert", [], "Show"), [])

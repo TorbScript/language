@@ -33,7 +33,7 @@ group "Functions, slots and blocks" {
           %1 = constant s_literal__Int64_2
           %2 = intrinsic multiply.i64 %0, %1 at acme/app/src/main.trb:2:3
           return %2 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -60,7 +60,7 @@ group "Functions, slots and blocks" {
           %4 = copy %2
           %4 = intrinsic add.i64 %4, %1 at acme/app/src/main.trb:4:11
           return %4 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -78,7 +78,7 @@ group "Functions, slots and blocks" {
         b0: # acme/app/src/main.trb:1 body
           %1 = intrinsic add.i64 %0, %0 at acme/app/src/main.trb:2:19
           return
-        }"""
+        }""",
     )
   }
 
@@ -136,7 +136,7 @@ group "Control flow" {
           return %7 borrowed
         b5: # acme/app/src/main.trb:3 join
           return %2 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -160,7 +160,7 @@ group "Control flow" {
           jump b2
         b2: # acme/app/src/main.trb:2 join
           return %2 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -226,7 +226,7 @@ group "Control flow" {
         b6: # acme/app/src/main.trb:4 join
           %1 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:7:13
           jump b3
-        }"""
+        }""",
     )
   }
 
@@ -308,7 +308,7 @@ group "Values" {
         b2: # acme/app/src/main.trb:3 join
           %4 = constant s_literal__Int64_0
           return %4 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -337,7 +337,7 @@ group "Values" {
           %2 = read %0.y
           %3 = construct T_acme_x2f_app_main_Point (%1 borrowed, %2 borrowed)
           return %3 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -356,7 +356,7 @@ group "Values" {
           %0 = constant s_literal__String_no
           panic %0 borrowed at acme/app/src/main.trb:2:3
           unreachable
-        }"""
+        }""",
     )
   }
 }
@@ -392,7 +392,7 @@ group "The top level of a file" {
           %0 = constant s_literal__Int64_21
           %1 = call t_acme_x2f_app_main_twice(%0 borrowed) at acme/app/src/main.trb:5:11
           return
-        }"""
+        }""",
     )
   }
 
@@ -422,7 +422,7 @@ group "The top level of a file" {
           %0 = intrinsic add.i64.unchecked %0, %1 at acme/app/src/main.trb:5:11
           %2 = copy %0
           return
-        }"""
+        }""",
     )
     // Nothing of the entry file is static data with a name of its own any more
     assert(!textOf(source).contains("static s_acme_x2f_app_main_counter"))
@@ -509,7 +509,9 @@ group "The top level of a file" {
 
       counter = counter + 1
       """
-    assert(unsupportedIn(source) == ["a top-level `var` read from a function is not supported by the native back end yet"])
+    assert(
+      unsupportedIn(source) == ["a top-level `var` read from a function is not supported by the native back end yet"],
+    )
   }
 }
 
@@ -529,7 +531,7 @@ group "What the back end does not lower yet" {
           slot %0 parameter value: Int64
         b0: # not supported yet
           unreachable
-        }"""
+        }""",
     )
   }
 
@@ -542,24 +544,20 @@ group "What the back end does not lower yet" {
   test "a list literal says which construct it is" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
-        == ["`iterate`, which neither the source nor the natives manifest provides is not supported by the native back end yet"]
+        == ["`iterate`, which neither the source nor the natives manifest provides is not supported by the native back end yet"],
     )
     assert(unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}") == [])
     // A `?` at the top level of an entry file is lowered to `error: <the error through Show>` and exit code 1
     // (`lower-match.test.trb`, and `tests/conformance/top-level-error.trb`). In a *function* whose result is
     // neither an `Option` nor a `Result` the checker reports it, so no body of one reaches the back end at all
-    assert(
-      unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value") == []
-    )
+    assert(unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value") == [])
   }
 
   test "a place through a slice is a window the back end forms" {
     // A `var` parameter and a path through fields are 5.9a's, an index is 5.7's, a slice is a window and 5.9b's
     assert(
-      unsupportedIn(
-        "fn part(var items: ArrayList<Int>, var other: ArrayList<Int>) \{\n  items[0..1] = other\n\}"
-      )
-        == []
+      unsupportedIn("fn part(var items: ArrayList<Int>, var other: ArrayList<Int>) \{\n  items[0..1] = other\n\}")
+        == [],
     )
   }
 

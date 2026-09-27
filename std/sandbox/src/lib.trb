@@ -85,12 +85,7 @@ public type SandboxCapabilities {
    * service its grant does not show. The VM runs the tasks of a script on the thread of its sandbox, so a script never
    * uses more than one whatever the number says.
    */
-  var fn limits(
-    steps: Int = 1_000_000,
-    memory: Int = 64.megabytes(),
-    time: Duration = 2.seconds(),
-    workers: Int = 1,
-  ) {
+  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds(), workers: Int = 1) {
     stepLimit = steps
     memoryLimit = memory
     timeLimit = time.nanoseconds() / 1_000_000
@@ -221,7 +216,10 @@ public native type Sandbox {
         }
       }
       if !isGranted(granted.moduleNames, module) {
-        return Fail SandboxError(at, "The script may not import `{module}`: the caller grants it with `modules \"{module}\"`")
+        return Fail(SandboxError(
+          at,
+          "The script may not import `{module}`: the caller grants it with `modules \"{module}\"`",
+        ))
       }
     }
     Ok Script(body, loaded, granted, program)

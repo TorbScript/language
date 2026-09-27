@@ -123,7 +123,10 @@ fn declareLocal(var walk: Walk, scope: Scope, declaration: Declaration): Scope {
     .Function(function) => scope.adding function.name.text, walk.define(function.name, SymbolKind.Function)
     .Type(typeDeclaration) => scope.adding typeDeclaration.name.text, walk.define(typeDeclaration.name, SymbolKind.Type)
     .Alias(alias) => scope.adding alias.name.text, walk.define(alias.name, SymbolKind.Alias)
-    .Trait(traitDeclaration) => scope.adding traitDeclaration.name.text, walk.define(traitDeclaration.name, SymbolKind.Trait)
+    .Trait(traitDeclaration) => scope.adding(
+      traitDeclaration.name.text,
+      walk.define(traitDeclaration.name, SymbolKind.Trait),
+    )
     _ => scope
   }
 }
@@ -360,8 +363,8 @@ fn walkPath(var walk: Walk, scope: Scope, path: List<Name>) {
         walk.error(
           Diagnostic.error("{owner} has no member `{step.text}`", step.span)
             .withNote(
-              "A dotted name in a type position is a namespace import: `use * as http from \"acme/http\"`, then `http.Response`"
-            )
+              "A dotted name in a type position is a namespace import: `use * as http from \"acme/http\"`, then `http.Response`",
+            ),
         )
         return
       }
@@ -398,20 +401,20 @@ fn reportWrongKind(var walk: Walk, symbol: SymbolId, name: Name) {
     .Function => {
       walk.error(
         Diagnostic.error("`{name.text}` is a function, not a type", name.span)
-          .withNote("The type of a function is written out: `(value: Int) => String`")
+          .withNote("The type of a function is written out: `(value: Int) => String`"),
       )
     }
     .Namespace(_) => {
       walk.error(
         Diagnostic.error("`{name.text}` is a module, not a type", name.span)
-          .withNote("Name the type inside of it: `{name.text}.SomeType`")
+          .withNote("Name the type inside of it: `{name.text}.SomeType`"),
       )
     }
     .Case(owner) => {
       const owning = walk.symbols.at(owner).name
       walk.error(
         Diagnostic.error("`{name.text}` is a case of `{owning}`, not a type", name.span)
-          .withNote("There are no types for single cases: the type of `{owning}.{name.text}` is `{owning}`")
+          .withNote("There are no types for single cases: the type of `{owning}.{name.text}` is `{owning}`"),
       )
     }
     _ => {}
@@ -420,9 +423,7 @@ fn reportWrongKind(var walk: Walk, symbol: SymbolId, name: Name) {
 
 fn reportUnknown(var walk: Walk, scope: Scope, name: Name) {
   if name.text == "Self" {
-    walk.error(
-      Diagnostic.error("`Self` is only available inside of a type, a trait or an `extend`", name.span)
-    )
+    walk.error Diagnostic.error("`Self` is only available inside of a type, a trait or an `extend`", name.span)
     return
   }
   var problem = Diagnostic.error "Unknown type `{name.text}`", name.span

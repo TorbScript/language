@@ -123,9 +123,7 @@ group "Implicit parameters" {
     const source = "fn probe(): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
     assert(problems(source) == ["Cannot find `amount` here"])
-    assert(
-      notes(source) == ["The parameter of this closure is `_`; to name it, write `\{ amount => ... \}`"]
-    )
+    assert(notes(source) == ["The parameter of this closure is `_`; to name it, write `\{ amount => ... \}`"])
   }
 
   test "the note only fires when the name matches a parameter of the expected function type" {
@@ -215,7 +213,7 @@ group "`spawn` takes no `var` binding with it" {
         "A task gets copies, so there is nothing to race for - and a captured `var` binding is the one value the "
           + "language shares. Read it into a `const` before the closure (`const totalNow = total`), or pass the "
           + "changes through a `Channel`",
-      ]
+      ],
     )
   }
 
@@ -227,7 +225,7 @@ group "`spawn` takes no `var` binding with it" {
       problems(source) == [
         "`spawn` cannot take the `var` binding `total` with it",
         "`spawn` cannot take the `var` binding `total` with it",
-      ]
+      ],
     )
   }
 
@@ -246,7 +244,7 @@ group "`spawn` takes no `var` binding with it" {
       problems(source) == [
         "`probe` changes `total` and answers a `Task`, and `Int64` is a value",
         "`spawn` cannot take the `var` binding `total` with it",
-      ]
+      ],
     )
   }
 
@@ -267,7 +265,7 @@ group "`spawn` takes no `var` binding with it" {
       problems(source) == [
         "`spawn` cannot take the `var` binding `total` with it",
         "`spawn` cannot take the `var` binding `total` with it",
-      ]
+      ],
     )
   }
 
@@ -294,7 +292,7 @@ group "`spawn` takes no object with it" {
       notes(source) == [
         "A task gets copies, and an object is not copied. `Task` and `Channel` are what crosses between tasks: make "
           + "the object inside the closure, or send what it holds through a `Channel`",
-      ]
+      ],
     )
   }
 
@@ -312,8 +310,7 @@ group "`spawn` takes no object with it" {
   }
 
   test "an object that is made inside the closure never crosses" {
-    const source = "{counter}fn probe(): Task<Int> \{\n"
-      + "  spawn(\{ Counter.open().value() \}).await()\n\}"
+    const source = "{counter}fn probe(): Task<Int> \{\n" + "  spawn(\{ Counter.open().value() \}).await()\n\}"
     assert problems(source).isEmpty()
   }
 }
@@ -336,7 +333,7 @@ group "A trait value hides no object" {
       notes(source) == [
         "A value of an ordinary trait is a value, and `spawn` lets one cross into another task - the object would go "
           + "with it, hidden. Declare the trait a `shared trait`, or keep the value as what it is",
-      ]
+      ],
     )
   }
 
@@ -373,7 +370,7 @@ group "A `Channel` carries no object" {
       notes(source) == [
         "An item of a channel crosses from one task to another, and an object is never copied. Send what the object "
           + "holds instead, or hand over a `Task` or a `Channel` - the two that may cross",
-      ]
+      ],
     )
   }
 

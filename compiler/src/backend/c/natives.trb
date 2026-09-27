@@ -258,8 +258,14 @@ public const scriptHostSymbolPrefix = "torb_script_host_"
 /** The C prototype of each function of the script host, by name: the program's C writes them itself. */
 public fn scriptHostPrototypes(): Map<String, String> {
   var found: Map<String, String> = [:]
-  found.set scriptHostLoadFunction, "torb_text {scriptHostLoadFunction}(torb_text sources, torb_text path, torb_text written, torb_text receiver);"
-  found.set scriptHostRunFunction, "torb_text {scriptHostRunFunction}(torb_text program, torb_text input, torb_text grant);"
+  found.set(
+    scriptHostLoadFunction,
+    "torb_text {scriptHostLoadFunction}(torb_text sources, torb_text path, torb_text written, torb_text receiver);",
+  )
+  found.set(
+    scriptHostRunFunction,
+    "torb_text {scriptHostRunFunction}(torb_text program, torb_text input, torb_text grant);",
+  )
   found
 }
 
@@ -334,12 +340,7 @@ fn runtimeOf(name: String, function: String, prototype: String): NativeEntry {
  * sign into the three cases.
  */
 fn orderingRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
-  NativeEntry(
-    name: name,
-    target: NativeTarget.Runtime(function),
-    result: NativeResult.Ordering,
-    prototype: prototype,
-  )
+  NativeEntry name: name, target: NativeTarget.Runtime(function), result: NativeResult.Ordering, prototype: prototype
 }
 
 /**
@@ -348,12 +349,7 @@ fn orderingRuntimeOf(name: String, function: String, prototype: String): NativeE
  * it filled itself.
  */
 fn collectionRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
-  NativeEntry(
-    name: name,
-    target: NativeTarget.Runtime(function),
-    prototype: prototype,
-    coercedCollection: true,
-  )
+  NativeEntry name: name, target: NativeTarget.Runtime(function), prototype: prototype, coercedCollection: true
 }
 
 /** The same for a declaration that answers a `Result` whose payload is the collection (`File.list`). */
@@ -373,22 +369,12 @@ fn ownedRuntimeOf(name: String, function: String, prototype: String, owned: List
 
 /** A function of the runtime that answers `bool` and writes the payload of an `Option` through an out parameter. */
 fn optionalRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
-  NativeEntry(
-    name: name,
-    target: NativeTarget.Runtime(function),
-    result: NativeResult.Optional,
-    prototype: prototype,
-  )
+  NativeEntry name: name, target: NativeTarget.Runtime(function), result: NativeResult.Optional, prototype: prototype
 }
 
 /** The same for a declaration that answers a `Result`, whose failure the wrapper builds from the error's fields. */
 fn fallibleRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
-  NativeEntry(
-    name: name,
-    target: NativeTarget.Runtime(function),
-    result: NativeResult.Fallible,
-    prototype: prototype,
-  )
+  NativeEntry name: name, target: NativeTarget.Runtime(function), result: NativeResult.Fallible, prototype: prototype
 }
 
 /**
@@ -613,11 +599,7 @@ fn decimalEntries(var entries: List<NativeEntry>) {
 
 fn conversionEntries(var entries: List<NativeEntry>) {
   entries.append numericOf("Int64.from", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Signed(32))
-  entries.append(numericOf(
-    "Float64.from",
-    IntrinsicOperation.Convert(NumericKind.Floating(64)),
-    NumericKind.Signed(64),
-  ))
+  entries.append numericOf("Float64.from", IntrinsicOperation.Convert(NumericKind.Floating(64)), NumericKind.Signed(64))
   entries.append(numericOf(
     "Float64.fromFloat32",
     IntrinsicOperation.Convert(NumericKind.Floating(64)),
@@ -721,7 +703,11 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_char_try_from_i64",
     "bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);",
   ))
-  entries.append numericOf("Int64.fromChar", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Unsigned(32))
+  entries.append(numericOf(
+    "Int64.fromChar",
+    IntrinsicOperation.Convert(NumericKind.Signed(64)),
+    NumericKind.Unsigned(32),
+  ))
 
   entries.append intrinsicOf("String.equals", IntrinsicOperation.TextEqual)
   entries.append derivedOf("String.compare", DerivedKind.Compare)
@@ -821,11 +807,7 @@ fn textEntries(var entries: List<NativeEntry>) {
 }
 
 fn consoleEntries(var entries: List<NativeEntry>) {
-  entries.append(runtimeOf(
-    "print",
-    "torb_print_parts",
-    "void torb_print_parts(const torb_text *parts, size_t count);",
-  ))
+  entries.append runtimeOf("print", "torb_print_parts", "void torb_print_parts(const torb_text *parts, size_t count);")
   entries.append(runtimeOf(
     "printError",
     "torb_print_error_parts",
@@ -833,11 +815,7 @@ fn consoleEntries(var entries: List<NativeEntry>) {
   ))
   entries.append runtimeOf("panic", "torb_panic", "void torb_panic(torb_text message, torb_location at);")
   entries.append runtimeOf("isTerminal", "torb_is_terminal", "bool torb_is_terminal(void);")
-  entries.append(runtimeOf(
-    "printErrorRaw",
-    "torb_print_error_raw",
-    "void torb_print_error_raw(torb_text text);",
-  ))
+  entries.append runtimeOf("printErrorRaw", "torb_print_error_raw", "void torb_print_error_raw(torb_text text);")
   entries.append(runtimeOf(
     "installInterruptHandler",
     "torb_install_interrupt_handler",
@@ -1041,11 +1019,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);",
   ))
   entries.append runtimeOf("File.exists", "torb_file_exists", "bool torb_file_exists(torb_text path);")
-  entries.append(runtimeOf(
-    "File.isDirectory",
-    "torb_file_is_directory",
-    "bool torb_file_is_directory(torb_text path);",
-  ))
+  entries.append runtimeOf("File.isDirectory", "torb_file_is_directory", "bool torb_file_is_directory(torb_text path);")
   entries.append(fallibleCollectionOf(
     "File.list",
     "torb_file_list",
@@ -1059,7 +1033,11 @@ fn fileEntries(var entries: List<NativeEntry>) {
   // The tree around the contents: every one of them takes the path text of every system and converts it where it calls
   // the system (runtime/platform.c), so none of them is `availableOn` one system and the compiler's C stays the same
   // for every target
-  entries.append fallibleRuntimeOf("File.remove", "torb_file_remove", "bool torb_file_remove(torb_text path, torb_text *error);")
+  entries.append(fallibleRuntimeOf(
+    "File.remove",
+    "torb_file_remove",
+    "bool torb_file_remove(torb_text path, torb_text *error);",
+  ))
   entries.append(fallibleRuntimeOf(
     "File.rename",
     "torb_file_rename",
@@ -1265,18 +1243,10 @@ fn fileEntries(var entries: List<NativeEntry>) {
  * nanoseconds as an `int64_t`) and waiting.
  */
 fn timeEntries(var entries: List<NativeEntry>) {
-  entries.append(runtimeOf(
-    "monotonicNanoseconds",
-    "torb_clock_now",
-    "int64_t torb_clock_now(void);",
-  ))
+  entries.append runtimeOf("monotonicNanoseconds", "torb_clock_now", "int64_t torb_clock_now(void);")
   // Monotonic milliseconds from the first reading: the form a tool that measures its own work wants, and two numbers
   // (an `Instant` and a `Duration`) where one does
-  entries.append(runtimeOf(
-    "Clock.milliseconds",
-    "torb_clock_milliseconds",
-    "int64_t torb_clock_milliseconds(void);",
-  ))
+  entries.append runtimeOf("Clock.milliseconds", "torb_clock_milliseconds", "int64_t torb_clock_milliseconds(void);")
   entries.append runtimeOf("sleep", "torb_sleep", "torb_task *torb_sleep(double seconds);")
 }
 
@@ -1594,11 +1564,7 @@ fn tlsEntries(var entries: List<NativeEntry>) {
   entries.append tlsRuntimeOf("tlsNotifyClose", "torb_tls_notify_close", "void torb_tls_notify_close(int64_t session);")
   entries.append tlsRuntimeOf("tlsClose", "torb_tls_close", "void torb_tls_close(int64_t handle);")
   entries.append tlsRuntimeOf("tlsProtocol", "torb_tls_protocol", "torb_text torb_tls_protocol(int64_t session);")
-  entries.append(tlsRuntimeOf(
-    "tlsErrorText",
-    "torb_tls_error_text",
-    "torb_text torb_tls_error_text(int64_t failure);",
-  ))
+  entries.append tlsRuntimeOf("tlsErrorText", "torb_tls_error_text", "torb_text torb_tls_error_text(int64_t failure);")
 }
 
 fn networkEntries(var entries: List<NativeEntry>) {
@@ -1607,11 +1573,7 @@ fn networkEntries(var entries: List<NativeEntry>) {
     "torb_network_listen",
     "int64_t torb_network_listen(int64_t family, int64_t high, int64_t low, int64_t port, int64_t backlog);",
   ))
-  entries.append(runtimeOf(
-    "networkAccept",
-    "torb_network_accept",
-    "torb_task *torb_network_accept(int64_t listener);",
-  ))
+  entries.append runtimeOf("networkAccept", "torb_network_accept", "torb_task *torb_network_accept(int64_t listener);")
   entries.append(runtimeOf(
     "networkConnect",
     "torb_network_connect",
@@ -1632,22 +1594,14 @@ fn networkEntries(var entries: List<NativeEntry>) {
     "torb_network_send",
     "torb_task *torb_network_send(int64_t stream, torb_list bytes, int64_t from);",
   ))
-  entries.append(runtimeOf(
-    "networkShutdown",
-    "torb_network_shutdown",
-    "int64_t torb_network_shutdown(int64_t stream);",
-  ))
+  entries.append runtimeOf("networkShutdown", "torb_network_shutdown", "int64_t torb_network_shutdown(int64_t stream);")
   entries.append runtimeOf("networkClose", "torb_network_close", "void torb_network_close(int64_t handle);")
   entries.append(runtimeOf(
     "networkAddress",
     "torb_network_address",
     "int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts);",
   ))
-  entries.append(runtimeOf(
-    "networkResolve",
-    "torb_network_resolve",
-    "torb_task *torb_network_resolve(torb_text host);",
-  ))
+  entries.append runtimeOf("networkResolve", "torb_network_resolve", "torb_task *torb_network_resolve(torb_text host);")
   entries.append(runtimeOf(
     "networkTakeResolved",
     "torb_network_take_resolved",

@@ -53,7 +53,11 @@ public fn crossingOf(program: IrProgram, id: IrTypeId, place: CExpression, isTra
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     // A variant crosses where the fields of the case it is say so: the test switches on its tag
     const shape = program.layoutAt layout
-    return layoutCrossingOf shape, { CExpression.Member place, _ }, { annotation, reached => crossingOf program, annotation, reached, isTransfer }
+    return layoutCrossingOf(
+      shape,
+      { CExpression.Member place, _ },
+      { annotation, reached => crossingOf program, annotation, reached, isTransfer },
+    )
   }
   const transfer = CExpression.Literal(if isTransfer { "true" } else { "false" })
   match program.typeAt(inner) {
@@ -126,7 +130,12 @@ public fn environmentCrossingOf(program: IrProgram, members: List<CExpression>, 
   combinedCrossingOf program, members, types, isTransfer: false
 }
 
-fn combinedCrossingOf(program: IrProgram, members: List<CExpression>, types: List<IrTypeId>, isTransfer: Bool): Crossing {
+fn combinedCrossingOf(
+  program: IrProgram,
+  members: List<CExpression>,
+  types: List<IrTypeId>,
+  isTransfer: Bool,
+): Crossing {
   var combined = Crossing.Always
   for index in 0..members.length() {
     combined = bothOf combined, crossingOf(program, types[index], members[index], isTransfer)
@@ -154,7 +163,11 @@ public fn privateOf(program: IrProgram, id: IrTypeId, place: CExpression): Cross
       return Crossing.Never
     }
     const shape = program.layoutAt layout
-    return layoutCrossingOf shape, { CExpression.Member place, _ }, { annotation, reached => privateOf program, annotation, reached }
+    return layoutCrossingOf(
+      shape,
+      { CExpression.Member place, _ },
+      { annotation, reached => privateOf program, annotation, reached },
+    )
   }
   match program.typeAt(inner) {
     .Text => Crossing.When CExpression.Call(CExpression.Name("torb_text_privatize"), [CExpression.AddressOf(place)])
@@ -195,7 +208,10 @@ fn runtimePrivateOf(program: IrProgram, kind: RuntimeKind, arguments: List<IrTyp
     }
     .SetStorage => {
       match elementPrivateOf(program, arguments, 0) {
-        Some(item) => Crossing.When CExpression.Call(CExpression.Name("torb_map_privatize"), [address, item, noFunction])
+        Some(item) => Crossing.When(CExpression.Call(
+          CExpression.Name("torb_map_privatize"),
+          [address, item, noFunction],
+        ))
         None => Crossing.Never
       }
     }
@@ -273,7 +289,8 @@ fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>): Bool {
       match kind {
         .ListStorage => isCopyableElement program, arguments, 0, visiting
         .SetStorage => isCopyableElement program, arguments, 0, visiting
-        .MapStorage => isCopyableElement(program, arguments, 0, visiting) && isCopyableElement(program, arguments, 1, visiting)
+        .MapStorage => isCopyableElement(program, arguments, 0, visiting)
+          && isCopyableElement(program, arguments, 1, visiting)
         .TaskObject => !arguments.any({ containsCountedType program, _ })
         .ChannelObject => !arguments.any({ containsCountedType program, _ })
         _ => false
@@ -321,7 +338,10 @@ public fn environmentCopyOf(program: IrProgram, layout: LayoutId): Crossing {
   const value = CExpression.Name "value"
   var combined = Crossing.Always
   for field in shape.fields {
-    combined = bothOf combined, privateOf(program, field.annotation, CExpression.PointerMember(value, memberNameOf(field)))
+    combined = bothOf(
+      combined,
+      privateOf(program, field.annotation, CExpression.PointerMember(value, memberNameOf(field))),
+    )
   }
   combined
 }
@@ -341,7 +361,11 @@ public fn privateHelperOf(program: IrProgram, layout: LayoutId): Crossing {
   }
   const shape = program.layoutAt layout
   const value = CExpression.Name "value"
-  layoutCrossingOf shape, { CExpression.PointerMember value, _ }, { annotation, reached => privateOf program, annotation, reached }
+  layoutCrossingOf(
+    shape,
+    { CExpression.PointerMember value, _ },
+    { annotation, reached => privateOf program, annotation, reached },
+  )
 }
 
 /**

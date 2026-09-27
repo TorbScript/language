@@ -53,7 +53,7 @@ group "Only a `shared type` implements `Close`" {
         == [
           "A `Ticket` is copied on assignment, so two copies would give two closes of one resource, or one working on a"
             + " resource the other already closed. Write `shared type Ticket`",
-        ]
+        ],
     )
   }
 
@@ -122,7 +122,7 @@ group "Nothing calls `close()`" {
         == [
           "`close` runs automatically when the last reference to this value goes away, and cannot be called directly"
             + " @ close",
-        ]
+        ],
     )
     assert(notes(source) == ["To release a value early, let its scope end, or bind it with `using`"])
   }
@@ -155,7 +155,7 @@ group "Nothing calls `close()`" {
       """
     assert(
       problems(source)
-        == ["`close` runs automatically when the last reference to this value goes away, and cannot be called directly"]
+        == ["`close` runs automatically when the last reference to this value goes away, and cannot be called directly"],
     )
   }
 
@@ -196,7 +196,10 @@ group "`self` does not escape `close()`" {
   test "handed to a `var fn` that may keep it, stored in a case, bound to another name" {
     const appended = node + "  var fn close() \{\n    others.append self\n  \}\n\}\n"
     assert(located(appended) == ["{closing} @ self"])
-    assert(notes(appended) == ["`close` runs because the last reference went away, so nothing may hold the object afterwards"])
+    assert(
+      notes(appended)
+        == ["`close` runs because the last reference went away, so nothing may hold the object afterwards"],
+    )
     const stored = node + "  var fn close() \{\n    last = Some(self)\n  \}\n\}\n"
     assert(located(stored) == ["{closing} @ self"])
     const bound = node + "  var fn close() \{\n    const kept = self\n    kept.reset()\n  \}\n\}\n"
@@ -253,7 +256,7 @@ group "`using` binds a name that cannot escape its block" {
         == [
           "`using` releases `connection` at the end of the block that bound it, so nothing may hold it past that line."
             + " Bind it with `const` where it has to outlive the block",
-        ]
+        ],
     )
     const returned = connection + "fn probe(): Connection \{\n  using connection = Connection()\n  connection\n\}\n"
     assert(located(returned) == ["{kept} returned @ connection"])
@@ -268,7 +271,8 @@ group "`using` binds a name that cannot escape its block" {
     const listed = connection + "fn probe() \{\n  using connection = Connection()\n  const all = [connection]\n"
       + "  print all.length()\n\}\n"
     assert(located(listed) == ["{kept} stored in a collection @ connection"])
-    const wrapped = connection + "fn probe(): Connection? \{\n  using connection = Connection()\n  Some(connection)\n\}\n"
+    const wrapped = connection
+      + "fn probe(): Connection? \{\n  using connection = Connection()\n  Some(connection)\n\}\n"
     assert(located(wrapped) == ["{kept} handed to `Some`, which stores it @ connection"])
     const appended = connection + "fn probe(var pool: List<Connection>) \{\n  using connection = Connection()\n"
       + "  pool.append connection\n\}\n"
@@ -282,9 +286,7 @@ group "`using` binds a name that cannot escape its block" {
     const keeping = connection + "fn keep(action: () => Void): () => Void \{\n  action\n\}\n\n"
       + "fn probe() \{\n  using connection = Connection()\n  const later = keep \{ connection.send \"late\" \}\n"
       + "  later()\n\}\n"
-    assert(
-      located(keeping) == ["{kept} captured by a closure `keep` keeps @ \{ connection.send \"late\" \}"]
-    )
+    assert(located(keeping) == ["{kept} captured by a closure `keep` keeps @ \{ connection.send \"late\" \}"])
   }
 
   test "inside a closure and inside a block of a script it is the same binding" {
@@ -303,7 +305,7 @@ group "`using` binds a name that cannot escape its block" {
     const source = connection + "using connection = Connection()\nconnection.send \"hello\"\n"
     assert(
       located(source)
-        == ["`using` binds a name for the rest of a block, and the top level of a file is not one @ connection"]
+        == ["`using` binds a name for the rest of a block, and the top level of a file is not one @ connection"],
     )
   }
 

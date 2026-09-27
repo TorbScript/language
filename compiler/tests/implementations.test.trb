@@ -108,10 +108,7 @@ group "What an implementation has to provide" {
       + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}"
     assert(problems(source) == ["`Shape` requires `Named`, and `Square` has no `name`"])
     assert(
-      notes(source)
-        == [
-          "`Named` requires `fn name(): String`. A supertrait is a requirement on the implementing type",
-        ]
+      notes(source) == ["`Named` requires `fn name(): String`. A supertrait is a requirement on the implementing type"],
     )
   }
 
@@ -157,7 +154,7 @@ group "Coherence" {
         == [
           "An implementation belongs to the package of the type or to the package of the trait, so that no two"
             + " packages can write the same one",
-        ]
+        ],
     )
   }
 
@@ -188,7 +185,7 @@ group "Coherence" {
         == [
           "A `Square` would answer differently when it is seen as a `Shape`: what a call does may not depend on the"
             + " type it is made through. Implement `Describe` in one of the two places",
-        ]
+        ],
     )
   }
 
@@ -208,7 +205,7 @@ group "Coherence" {
     assert(problems(source) == ["`Amount` already implements `Loud` (in `app/src/main.trb`)"])
     assert(
       notes(source)
-        == ["Two implementations of one trait may not overlap: only different target types tell them apart"]
+        == ["Two implementations of one trait may not overlap: only different target types tell them apart"],
     )
   }
 
@@ -240,21 +237,22 @@ group "Coherence" {
     assert(
       problems(source)
         == ["`extend Float64 with From<List<Celsius>>`: neither `Float64` nor `From<List<Celsius>>` belongs to this"
-          + " package"]
+          + " package"],
     )
   }
 
   test "a package that owns none of the three is still refused, and the note names all three ways" {
     const source = "extend Float64 with From<Int8> \{\n  static fn from(value: Int8): Float64 \{\n    1.0\n  \}\n\}"
     assert(
-      problems(source) == ["`extend Float64 with From<Int8>`: neither `Float64` nor `From<Int8>` belongs to this package"]
+      problems(source)
+        == ["`extend Float64 with From<Int8>`: neither `Float64` nor `From<Int8>` belongs to this package"],
     )
     assert(
       notes(source)
         == [
           "An implementation belongs to the package of the type or to the package of the trait, so that no two"
             + " packages can write the same one, or to the package of a type named as an argument of the trait",
-        ]
+        ],
     )
   }
 
@@ -265,7 +263,7 @@ group "Coherence" {
         == [
           "An implementation belongs to the package of the type or to the package of the trait, so that no two"
             + " packages can write the same one",
-        ]
+        ],
     )
   }
 
@@ -278,7 +276,7 @@ group "Coherence" {
         == [
           "Write `extend Float64 with From<Celsius>`: every `From` gives the `Into` of the other direction through"
             + " the one implementation `Into` has, and coherence allows it wherever it allows this one",
-        ]
+        ],
     )
   }
 
@@ -331,14 +329,14 @@ group "A supertrait a trait promises for itself" {
     const source = mound "", ": Hash", ": Hash"
     assert(
       problems(source)
-        == ["`Mound` comes with `From` for every instantiation, and this implementation holds only for some"]
+        == ["`Mound` comes with `From` for every instantiation, and this implementation holds only for some"],
     )
     assert(
       notes(source) == [
         "A trait's own `with` list is what member lookup reads, so `From` resolves on every `Mound` while nothing"
           + " implements it for the rest: drop the bounds of this `extend`, or take `From` out of `trait Mound`'s"
           + " `with` list and ask for it at the member (`where Self: From<...>`)",
-      ]
+      ],
     )
   }
 
@@ -399,7 +397,7 @@ group "Delegation with `by`" {
         "  const sum = Seconds(1) + Seconds(2)\n"
           + "  const difference = Seconds(3) - Seconds(1)\n"
           + "  const longer = Seconds(1).max(Seconds(2))\n"
-          + "  const named = Seconds(1).name()"
+          + "  const named = Seconds(1).name()",
       )
     assert problems(source).isEmpty()
     const found = probe source
@@ -559,7 +557,7 @@ group "A capsule's `Encode` and `Decode`" {
           + " constructor and `Decode` comes from `Email`'s one conversion pair instead of from its fields",
         "`Email` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Email`, and `From<Email>` for"
           + " that `Source`",
-      ]
+      ],
     )
   }
 
@@ -578,7 +576,7 @@ group "A capsule's `Encode` and `Decode`" {
           + " constructor and `Decode` comes from `Image`'s one conversion pair instead of from its fields",
         "`Image` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Image`, and `From<Image>` for"
           + " that `Source`",
-      ]
+      ],
     )
   }
 
@@ -595,9 +593,7 @@ group "A capsule's `Encode` and `Decode`" {
       + "  static fn from(value: Slug): String \{\n    value.text()\n  \}\n\}\n\n"
       + reader + inBody("  print read<Slug>()")
     assert(problems(source) == ["`Slug` does not implement `Decode`"])
-    assert(
-      notes(source)[2] == "`Slug` converts both ways with `String` and `Title`. Exactly one type may"
-    )
+    assert(notes(source)[2] == "`Slug` converts both ways with `String` and `Title`. Exactly one type may")
   }
 
   /** The generated body reads the `Source` and nothing else, so a `Source` without the trait is no pair either. */
@@ -609,9 +605,7 @@ group "A capsule's `Encode` and `Decode`" {
       + "  static fn from(value: Weight): Float \{\n    0.0\n  \}\n\}\n\n"
       + reader + inBody("  print read<Weight>()")
     assert(problems(source) == ["`Weight` does not implement `Decode`"])
-    assert(
-      notes(source)[2] == "`Weight` pairs with `Float64` through `from`, and that type is not `Decode` itself"
-    )
+    assert(notes(source)[2] == "`Weight` pairs with `Float64` through `from`, and that type is not `Decode` itself")
   }
 
   /** The way out cannot break an invariant, so a capsule without a pair is still a value a message can show. */
@@ -659,7 +653,8 @@ group "A bound on `Never`" {
     assert problems(source).isEmpty()
     const found = probe source
     assert(
-      found.lastAdaptationsOf("value") == ["show through Result<Value, Failure>: Show [Int64: Signed, object Never: Show]"]
+      found.lastAdaptationsOf("value")
+        == ["show through Result<Value, Failure>: Show [Int64: Signed, object Never: Show]"],
     )
   }
 
@@ -708,10 +703,7 @@ group "The visibility of an `extend`" {
       "app/src/main.trb": "fn probe() \{\n  print \"a\".shout()\n\}",
     ]
     assert(problemsIn(files) == ["`shout` comes from `acme/app/one` and from `acme/app/two`"])
-    assert(
-      notesIn(files)
-        == ["A member is renamed where it is imported: `use ... as another from \"acme/app/two\"`"]
-    )
+    assert(notesIn(files) == ["A member is renamed where it is imported: `use ... as another from \"acme/app/two\"`"])
   }
 
   test "`as` renames a member of this package too, so a conflict has a way out" {
@@ -729,7 +721,7 @@ group "The visibility of an `extend`" {
     assert(problemsIn(files) == ["`slug` comes from `Slug`, which is not a name in this file"])
     assert(
       notesIn(files)
-        == ["Write `use Slug from \"other/library\"`: the members a trait puts on a foreign type need the trait"]
+        == ["Write `use Slug from \"other/library\"`: the members a trait puts on a foreign type need the trait"],
     )
     const named = withOtherPackage library, "use Slug from \"other/library\"\n\nfn probe() \{\n  print \"a\".slug()\n\}"
     assert problemsIn(named).isEmpty()
@@ -778,7 +770,7 @@ group "Member lookup through a blanket implementation" {
       notes(source) == [
         "An `extend` over every type is a blanket implementation, and a blanket implementation is allowed because its "
           + "package owns the trait: write `extend<...> World with SomeTrait \{ ... \}`",
-      ]
+      ],
     )
   }
 

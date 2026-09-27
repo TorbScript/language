@@ -578,12 +578,7 @@ fn isTrackedKind(kind: NumericKind?): Bool {
  * Nothing is narrowed where the bound cannot be written down exactly, and an arithmetic that would leave `Int64` there
  * simply leaves the fact as it was.
  */
-fn narrowedFacts(
-  universes: Universes,
-  facts: List<Interval>,
-  guard: Guard,
-  isTrue: Bool,
-): List<Interval> {
+fn narrowedFacts(universes: Universes, facts: List<Interval>, guard: Guard, isTrue: Bool): List<Interval> {
   const left = guard.left.value
   const right = guard.right.value
   if !isSlotTracked(universes, left) || !isSlotTracked(universes, right) {
@@ -665,12 +660,7 @@ fn isSlotTracked(universes: Universes, slot: Int): Bool {
  *
  * `widen` is empty for every block that heads no loop, so the whole function is then the plain join.
  */
-fn widened(
-  universes: Universes,
-  widen: List<Bool>,
-  before: List<Interval>,
-  proposed: List<Interval>,
-): List<Interval> {
+fn widened(universes: Universes, widen: List<Bool>, before: List<Interval>, proposed: List<Interval>): List<Interval> {
   var found: List<Interval> = []
   for index in 0..proposed.length() {
     const old = before[index]
@@ -843,12 +833,7 @@ fn integerOfStatic(program: IrProgram, value: StaticId): Int? {
  * The exact interval an arithmetic intrinsic produces, or `None` where the analysis has nothing to say - which is also
  * the answer that keeps the check, because the same question decides both.
  */
-fn resultInterval(
-  universes: Universes,
-  facts: List<Interval>,
-  intrinsic: Intrinsic,
-  arguments: List<Slot>,
-): Interval? {
+fn resultInterval(universes: Universes, facts: List<Interval>, intrinsic: Intrinsic, arguments: List<Slot>): Interval? {
   if !isTrackedKind(intrinsic.kind) {
     return None
   }
@@ -877,12 +862,7 @@ fn resultInterval(
 // --- Dropping the checks --------------------------------------------------------------------------------------------
 
 /** One function, walked once more with the settled facts: every operation that provably fits loses its check. */
-fn rewriteFunction(
-  var program: IrProgram,
-  index: Int,
-  universes: Universes,
-  entries: List<List<Interval>>,
-) {
+fn rewriteFunction(var program: IrProgram, index: Int, universes: Universes, entries: List<List<Interval>>) {
   const original = program.functions[index]
   for block in 0..original.blocks.length() {
     const instructions = original.blocks[block].instructions
@@ -995,12 +975,7 @@ fn isInsideArray(
  * Only the four operations that can overflow are asked: a division checks its divisor and not its width, and a
  * comparison, a conversion and a bit operation carry no check to drop.
  */
-fn fitsWithoutCheck(
-  universes: Universes,
-  facts: List<Interval>,
-  intrinsic: Intrinsic,
-  arguments: List<Slot>,
-): Bool {
+fn fitsWithoutCheck(universes: Universes, facts: List<Interval>, intrinsic: Intrinsic, arguments: List<Slot>): Bool {
   match intrinsic.operation {
     .Add | .Subtract | .Multiply | .Negate => {}
     _ => {

@@ -124,18 +124,7 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
   if traits.isEmpty() {
     const identifier = addOne(
       checker,
-      Implementation(
-        None,
-        target,
-        generics,
-        bounds,
-        module,
-        package,
-        members,
-        None,
-        ImplementationOrigin.Inherent,
-        at,
-      ),
+      Implementation(None, target, generics, bounds, module, package, members, None, ImplementationOrigin.Inherent, at),
     )
     checker.implementations.bySpan.set key, identifier.value
     return
@@ -467,12 +456,7 @@ public fn appliedArgumentsOf(checker: Checker, bound: TypeId): List<TypeId> {
   }
 }
 
-fn boundArgumentsOf(
-  var checker: Checker,
-  annotation: TypeId,
-  capability: SymbolId,
-  wanted: TypeId?,
-): List<TypeId>? {
+fn boundArgumentsOf(var checker: Checker, annotation: TypeId, capability: SymbolId, wanted: TypeId?): List<TypeId>? {
   const bounds = match checker.types.form(annotation) {
     .Traits(found) => found
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
@@ -960,12 +944,7 @@ fn boundsHold(var checker: Checker, implementation: Implementation, mapping: Map
  * The supertraits of everything the type implements. A supertrait is a requirement on the implementor, and a type that
  * meets it implements it - which is what makes `1 + 2` an `Int64` through `Signed`, `Numeric` and `Add<Self, Self>`.
  */
-fn throughSupertraits(
-  var checker: Checker,
-  annotation: TypeId,
-  capability: SymbolId,
-  wanted: TypeId?,
-): Resolved? {
+fn throughSupertraits(var checker: Checker, annotation: TypeId, capability: SymbolId, wanted: TypeId?): Resolved? {
   const head = headSymbolOf checker, annotation
   const candidates = checker.implementations.declaredFor head
   for index in candidates {
@@ -1256,13 +1235,7 @@ public fn writtenTraitsOf(var checker: Checker, annotation: TypeId, capability: 
  * not decide (`extend<Source, Target> Source with Into<Target>`) is **not** added: it would put `Into<Target>` with an
  * open `Target` on every type at all, and what that means is decided at a call and not by the type.
  */
-fn addBlanketTrait(
-  var checker: Checker,
-  var found: List<TypeId>,
-  index: Int,
-  annotation: TypeId,
-  declared: TypeId,
-) {
+fn addBlanketTrait(var checker: Checker, var found: List<TypeId>, index: Int, annotation: TypeId, declared: TypeId) {
   // Only for a **concrete** type. What a generic parameter has is what its bounds say and nothing else - a blanket
   // would give `Target` of `fn to<Target: From<Iterate<Item>>>` a second `From` (`From<Never>`, which every type has)
   // and turn `Target.from(self)` into an ambiguity that no call site can resolve
@@ -1669,7 +1642,7 @@ fn checkOneMemberImport(var checker: Checker, module: ModuleId, path: String, it
   checker.report(
     module,
     Diagnostic.error("`{entry.path}` adds no member `{entry.name}` to `{owner}`", at)
-      .withNote("A path in a `use` names a case of a type or a member an `extend` of that package adds to it")
+      .withNote("A path in a `use` names a case of a type or a member an `extend` of that package adds to it"),
   )
 }
 
@@ -1818,7 +1791,13 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
  * named a member that comes from there - of the type itself, or of the trait the `extend` is written on, which is how
  * `use Iterate.parallel from "std/parallel"` reaches a `List`.
  */
-fn isExtensionNamedHere(var checker: Checker, implementation: Implementation, owner: Int, here: Int, head: SymbolId?): Bool {
+fn isExtensionNamedHere(
+  var checker: Checker,
+  implementation: Implementation,
+  owner: Int,
+  here: Int,
+  head: SymbolId?,
+): Bool {
   if implementation.package == owner || implementation.package == here {
     return true
   }
@@ -1895,11 +1874,7 @@ public fn hiddenExtensionOf(var checker: Checker, annotation: TypeId, name: Stri
 }
 
 /** The substitution one implementation needs for this type: its own parameters, filled in from the match. */
-public fn mappingOfImplementation(
-  var checker: Checker,
-  index: Int,
-  annotation: TypeId,
-): Map<ParameterId, TypeId> {
+public fn mappingOfImplementation(var checker: Checker, index: Int, annotation: TypeId): Map<ParameterId, TypeId> {
   const implementation = checker.implementations.all[index]
   var mapping: Map<ParameterId, TypeId> = [:]
   const _ = matchTarget checker, implementation, annotation, mapping
@@ -1992,8 +1967,8 @@ fn reportHandWrittenInto(var checker: Checker, index: Int) {
     Diagnostic.error("Implement `From<{source}>` for `{target}` instead; `Into` comes from it", implementation.at)
       .withNote(
         "Write `extend {target} with From<{source}>`: every `From` gives the `Into` of the other direction through"
-          + " the one implementation `Into` has, and coherence allows it wherever it allows this one"
-      )
+          + " the one implementation `Into` has, and coherence allows it wherever it allows this one",
+      ),
   )
 }
 
@@ -2049,8 +2024,8 @@ fn checkTraitPromise(var checker: Checker, index: Int) {
       ).withNote(
         "A trait's own `with` list is what member lookup reads, so `{named}` resolves on every `{owner}` while nothing"
           + " implements it for the rest: drop the bounds of this `extend`, or take `{named}` out of"
-          + " `trait {owner}`'s `with` list and ask for it at the member (`where Self: {named}<...>`)"
-      )
+          + " `trait {owner}`'s `with` list and ask for it at the member (`where Self: {named}<...>`)",
+      ),
     )
   }
 }
@@ -2208,7 +2183,7 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   checker.report(
     right.module,
     Diagnostic.error("`{target}` already implements `{capability}` (in `{other}`)", right.at)
-      .withNote("Two implementations of one trait may not overlap: only different target types tell them apart")
+      .withNote("Two implementations of one trait may not overlap: only different target types tell them apart"),
   )
 }
 
@@ -2259,8 +2234,8 @@ fn reportTraitTargetOverlap(var checker: Checker, forTrait: Implementation, own:
       forTrait.at,
     ).withNote(
       "A `{typeName}` would answer differently when it is seen as a `{traitName}`: what a call does may not depend"
-        + " on the type it is made through. Implement `{capability}` in one of the two places"
-    )
+        + " on the type it is made through. Implement `{capability}` in one of the two places",
+    ),
   )
   true
 }
@@ -2298,7 +2273,7 @@ fn reportBlanketOverlap(var checker: Checker, blanket: Implementation, written: 
     }
     checker.report(
       written.module,
-      Diagnostic.error("`{capability}` comes from `{source}` for every type", written.at).withNote(note)
+      Diagnostic.error("`{capability}` comes from `{source}` for every type", written.at).withNote(note),
     )
     return true
   }
@@ -2578,8 +2553,8 @@ fn reportMissingRow(var checker: Checker, index: Int, bound: TypeId, name: Strin
     Diagnostic.error("`{target}` implements `{capability}`, and nothing provides its `{name}`", implementation.at)
       .withNote(
         "A native type meets a requirement with a body, or with the row `{owner}.{name}` in the manifest of natives"
-          + " (`compiler/src/backend/c/natives.trb`)"
-      )
+          + " (`compiler/src/backend/c/natives.trb`)",
+      ),
   )
 }
 
@@ -2869,7 +2844,7 @@ fn reportMismatch(
   checker.report(
     implementation.module,
     Diagnostic.error("`{target}.{name}` does not match `{capability}`", at)
-      .withNote("`{capability}` requires `{shown}`")
+      .withNote("`{capability}` requires `{shown}`"),
   )
 }
 
@@ -3018,21 +2993,28 @@ fn reportMissingMember(
   const target = checker.describe implementation.target
   const capability = checker.describe bound
   const isConstant = isConstantSymbol checker, member
-  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted, isConstant: isConstant
+  const shown = describeRequirement(
+    checker,
+    name,
+    required.takesSelf,
+    required.isVarSelf,
+    wanted,
+    isConstant: isConstant,
+  )
   // A supertrait is a requirement like any other, and the message says which trait asked for it
   if !sameType(checker.types, bound, declared) {
     const written = checker.describe declared
     checker.report(
       implementation.module,
       Diagnostic.error("`{written}` requires `{capability}`, and `{target}` has no `{name}`", implementation.at)
-        .withNote("`{capability}` requires `{shown}`. A supertrait is a requirement on the implementing type")
+        .withNote("`{capability}` requires `{shown}`. A supertrait is a requirement on the implementing type"),
     )
     return
   }
   checker.report(
     implementation.module,
     Diagnostic.error("`{target}` implements `{capability}` but has no `{name}`", implementation.at)
-      .withNote("`{capability}` requires `{shown}`")
+      .withNote("`{capability}` requires `{shown}`"),
   )
 }
 

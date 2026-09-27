@@ -45,12 +45,18 @@ group "self-name" {
   test "the own name of a type in a written type and in an expression" {
     const source = "type Point \{\n  x: Int\n\n  static fn origin(): Point \{\n    Point(0)\n  \}\n\}\n"
     assert(foundTexts(source, LintRule.SelfName) == ["Point", "Point"])
-    expectText fixedBy(source, LintRule.SelfName), "type Point \{\n  x: Int\n\n  static fn origin(): Self \{\n    Self(0)\n  \}\n\}\n"
+    expectText(
+      fixedBy(source, LintRule.SelfName),
+      "type Point \{\n  x: Int\n\n  static fn origin(): Self \{\n    Self(0)\n  \}\n\}\n",
+    )
   }
 
   test "a case and a static member reached through the own name" {
     const source = "type Shape \{\n  case Circle(radius: Float)\n\n  static unit = Shape.Circle(1.0)\n\}\n"
-    expectText fixedBy(source, LintRule.SelfName), "type Shape \{\n  case Circle(radius: Float)\n\n  static unit = Self.Circle(1.0)\n\}\n"
+    expectText(
+      fixedBy(source, LintRule.SelfName),
+      "type Shape \{\n  case Circle(radius: Float)\n\n  static unit = Self.Circle(1.0)\n\}\n",
+    )
   }
 
   test "a generic type: only with its own parameters, in their order" {
@@ -90,9 +96,19 @@ group "self-name" {
   }
 
   test "another type, a trait, and `Self` itself are not found" {
-    assert findingsOf("type Point \{\n  x: Int\n\n  fn other(): Line \{\n    Line(self)\n  \}\n\}\n", LintRule.SelfName).isEmpty()
+    assert(
+      findingsOf(
+        "type Point \{\n  x: Int\n\n  fn other(): Line \{\n    Line(self)\n  \}\n\}\n",
+        LintRule.SelfName,
+      ).isEmpty(),
+    )
     assert findingsOf("trait Area \{\n  fn larger(other: Area): Bool\n\}\n", LintRule.SelfName).isEmpty()
-    assert findingsOf("type Point \{\n  x: Int\n\n  fn copied(): Self \{\n    Self(x)\n  \}\n\}\n", LintRule.SelfName).isEmpty()
+    assert(
+      findingsOf(
+        "type Point \{\n  x: Int\n\n  fn copied(): Self \{\n    Self(x)\n  \}\n\}\n",
+        LintRule.SelfName,
+      ).isEmpty(),
+    )
   }
 }
 
@@ -109,7 +125,12 @@ group "question-field" {
   }
 
   test "a method named as a question is what the rule asks for" {
-    assert findingsOf("type Flags \{\n  visible: Bool\n\n  fn isVisible(): Bool \{\n    visible\n  \}\n\}\n", LintRule.QuestionField).isEmpty()
+    assert(
+      findingsOf(
+        "type Flags \{\n  visible: Bool\n\n  fn isVisible(): Bool \{\n    visible\n  \}\n\}\n",
+        LintRule.QuestionField,
+      ).isEmpty(),
+    )
   }
 }
 
@@ -228,7 +249,10 @@ group "labeled-literal" {
 
   test "the fix labels a literal that only labeled arguments follow" {
     const source = "fn list(entries: Int, hasCapacity: Bool): Int \{\n  entries\n\}\n\nprint list(3, false)\n"
-    expectText fixed(source, labeledFindings(source)), "fn list(entries: Int, hasCapacity: Bool): Int \{\n  entries\n\}\n\nprint list(3, hasCapacity: false)\n"
+    expectText(
+      fixed(source, labeledFindings(source)),
+      "fn list(entries: Int, hasCapacity: Bool): Int \{\n  entries\n\}\n\nprint list(3, hasCapacity: false)\n",
+    )
   }
 
   test "a single argument and a type parameter need no label" {

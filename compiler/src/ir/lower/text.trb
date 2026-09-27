@@ -90,12 +90,7 @@ public fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: 
  * The parts of a text that is built from slots rather than from an interpolation, in one concatenation: what the
  * message of a failed `assert` is put together with (`ir/lower/quote.trb`).
  */
-public fn concatenatedSlot(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  parts: List<Slot>,
-  at: Span,
-): Slot {
+public fn concatenatedSlot(var lowering: Lowering, var builder: FunctionBuilder, parts: List<Slot>, at: Span): Slot {
   const text = lowering.program.internType IrType.Text
   const target = addTemporary builder, text
   concatenate lowering, builder, target, parts, at
@@ -103,13 +98,7 @@ public fn concatenatedSlot(
 }
 
 /** One concatenation of every part, never a chain of two-part additions. */
-fn concatenate(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  target: Slot,
-  parts: List<Slot>,
-  at: Span,
-) {
+fn concatenate(var lowering: Lowering, var builder: FunctionBuilder, target: Slot, parts: List<Slot>, at: Span) {
   const location = locationOf lowering, at
   const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
   emit builder, Instruction.Intrinsic(target, intrinsic, parts, location)
@@ -169,13 +158,7 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
 }
 
 /** The same for a value that is already in a slot: what `print` and an interpolated part share. */
-public fn showSlot(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  value: Slot,
-  subject: TypeId,
-  at: Span,
-): Slot {
+public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Slot, subject: TypeId, at: Span): Slot {
   // A part before this one did not return: nothing is shown, and no `show` is instantiated for it
   if lowering.isDiverged {
     return abandonedSlot lowering, builder, None

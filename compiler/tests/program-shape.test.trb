@@ -41,15 +41,13 @@ group "Top-level code (gap 28)" {
 
       print value
       """)
-    assert(
-      problemsOf(files) == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"]
-    )
+    assert(problemsOf(files) == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"])
     assert(
       notesOf(files)
         == [
           "An imported module consists of declarations only, so a module has no initialization order and a cyclic"
             + " import is harmless",
-        ]
+        ],
     )
   }
 
@@ -61,7 +59,7 @@ group "Top-level code (gap 28)" {
       """)
     assert(
       problemsAt(files, ["app/src/main.trb"])
-        == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"]
+        == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"],
     )
   }
 
@@ -134,10 +132,7 @@ group "A `public fn` and a trait method never infer their result" {
       """
     assert(
       problems(source)
-        == [
-          "Expected `Int64`, found `Void`",
-          "A `public` function does not infer its result: declare it (`: Int64`)",
-        ]
+        == ["Expected `Int64`, found `Void`", "A `public` function does not infer its result: declare it (`: Int64`)"],
     )
   }
 
@@ -150,7 +145,7 @@ group "A `public fn` and a trait method never infer their result" {
     assert(problems(source) == ["A `public` function does not infer its result: declare it (`: Int64`)"])
     assert(
       notes(source)
-        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"]
+        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"],
     )
   }
 
@@ -210,7 +205,7 @@ group "A `public fn` and a trait method never infer their result" {
     assert(problems(source) == ["A trait method does not infer its result: declare it (`: Int64`)"])
     assert(
       notes(source)
-        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"]
+        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"],
     )
   }
 
@@ -252,7 +247,7 @@ group "An `extend` adds constants and functions (gap 39)" {
     assert(problems(source) == ["An `extend` cannot add a field"])
     assert(
       notes(source)
-        == ["Fields and cases belong to the declaration of the type: an `extend` adds constants and functions"]
+        == ["Fields and cases belong to the declaration of the type: an `extend` adds constants and functions"],
     )
   }
 
@@ -269,7 +264,7 @@ group "An `extend` adds constants and functions (gap 39)" {
     assert(problems(source) == ["An `extend` cannot add a case"])
     assert(
       notes(source)
-        == ["Fields and cases belong to the declaration of the type, so that a `match` over it is decidable"]
+        == ["Fields and cases belong to the declaration of the type, so that a `match` over it is decidable"],
     )
   }
 
@@ -310,7 +305,7 @@ group "What cannot be extended, and what has no default" {
         == [
           "A literal type is the same type wherever its members are written, so it has no declaration an `extend`"
             + " could belong to. For behavior, declare a type with cases",
-        ]
+        ],
     )
   }
 
@@ -324,7 +319,7 @@ group "What cannot be extended, and what has no default" {
         == [
           "The type arguments of a call come from the call: only a `type` and a `trait` fill a default in"
             + " (`trait Add<Other = Self>`)",
-        ]
+        ],
     )
   }
 
@@ -345,7 +340,7 @@ group "`native` belongs to the standard library (gap 22)" {
         == [
           "A `native` declaration is implemented by the compiler and its runtime. Everything else is written in"
             + " TorbScript, on top of `foreign` declarations",
-        ]
+        ],
     )
   }
 
@@ -378,10 +373,7 @@ group "`shared type` and `shared trait`" {
       }
       """
     assert(problems(source) == ["`Connection` is a `shared type`, so it can only implement a `shared trait`"])
-    assert(
-      notes(source)
-        == ["`Show` is not one: write `shared trait Show`, or make `Connection` an ordinary `type`"]
-    )
+    assert(notes(source) == ["`Show` is not one: write `shared trait Show`, or make `Connection` an ordinary `type`"])
   }
 
   test "a `shared trait` is what it may implement" {
@@ -453,15 +445,13 @@ group "`shared type` and `shared trait`" {
         var fn bump(): Task<Int>
       }
       """
-    assert(
-      problems(source) == ["`bump` changes `self` and answers a `Task`, and `Counter` is not a `shared trait`"]
-    )
+    assert(problems(source) == ["`bump` changes `self` and answers a `Task`, and `Counter` is not a `shared trait`"])
     assert(
       notes(source)
         == [
           "An ordinary trait can be implemented by a value, and a value cannot be changed by a task:"
             + " write `shared trait Counter`",
-        ]
+        ],
     )
   }
 
@@ -559,7 +549,7 @@ group "`isSame` compares identity (BACKEND gap 15)" {
     assert(problems(source) == ["`isSame` compares identity, and a `Point` is a value"])
     assert(
       notes(source)
-        == ["Use `==`: two values are the same when their content is. Only a `shared type` has an identity"]
+        == ["Use `==`: two values are the same when their content is. Only a `shared type` has an identity"],
     )
   }
 
@@ -587,9 +577,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
     assert(problems(source) == ["`private(var)` is only a modifier of a field"])
     assert(
       notes(source)
-        == [
-          "It says that the field is readable and its `var` is not. Write `private` to hide the declaration",
-        ]
+        == ["It says that the field is readable and its `var` is not. Write `private` to hide the declaration"],
     )
   }
 
@@ -610,10 +598,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
       """
     assert(problems(source) == ["`private(var)` already says `var`"])
     assert(
-      notes(source)
-        == [
-          "`private(var) balance: ...` is the whole spelling: the field is readable, its `var` is not",
-        ]
+      notes(source) == ["`private(var) balance: ...` is the whole spelling: the field is readable, its `var` is not"],
     )
   }
 }
@@ -632,7 +617,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
         == [
           "`self` exists in a method and in a receiver closure. A default is evaluated without one, so that the"
             + " order of the fields is not observable",
-        ]
+        ],
     )
   }
 
@@ -649,7 +634,7 @@ group "Defaults are evaluated without a receiver (gap 26)" {
         == [
           "Every default is evaluated on its own, so the order of the fields is not observable. A value that is"
             + " computed from another field is made by a `static fn` factory",
-        ]
+        ],
     )
   }
 
@@ -687,14 +672,14 @@ group "A field default is a constant" {
       """
     assert(
       problems(source)
-        == ["A field default is a constant: `List.of` is a call - compute it in a `static fn`, or start from `[]`"]
+        == ["A field default is a constant: `List.of` is a call - compute it in a `static fn`, or start from `[]`"],
     )
     assert(
       notes(source)
         == [
           "A constructor has no body: a default is a literal, a collection literal, a constructor or a case of"
             + " constants, a named constant, or an operator on those - so it can be built once and shared",
-        ]
+        ],
     )
   }
 
@@ -735,7 +720,7 @@ group "A field default is a constant" {
       """
     assert(
       problems(set)
-        == ["A field default is a constant: `TrieSet.from` is a call - compute it in a `static fn`, or start from `[]`"]
+        == ["A field default is a constant: `TrieSet.from` is a call - compute it in a `static fn`, or start from `[]`"],
     )
     const array = raw"""
       type Probe {
@@ -795,7 +780,7 @@ group "A field default is a constant" {
         == [
           "A field default is a constant, and this makes a `Connection`: every value needs an object of its own"
             + " - make it in a `static fn`",
-        ]
+        ],
     )
   }
 
@@ -820,9 +805,7 @@ group "The parameters and the top level of a body are one scope" {
     assert(problems(source) == ["`value` is already a parameter of this function"])
     assert(
       notes(source)
-        == [
-          "The parameters and the top level of the body are one scope, so nothing there can shadow a parameter",
-        ]
+        == ["The parameters and the top level of the body are one scope, so nothing there can shadow a parameter"],
     )
   }
 
@@ -872,7 +855,7 @@ group "One namespace of members" {
           "A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name",
           "That holds for a `private` field as well: making a field private or public must not change what a caller"
             + " writes, so one of the two needs another name",
-        ]
+        ],
     )
   }
 
@@ -943,9 +926,7 @@ group "A `static fn` is reached through the type" {
   test "an instance is not a way to it" {
     const source = "{rectangle}\nfn probe(rectangle: Rectangle): Int \{\n  rectangle.square(5).width\n\}"
     assert(problems(source) == ["`square` is `static`: call it as `Rectangle.square(...)`"])
-    assert(
-      notes(source) == ["A `static` member belongs to the type, and a value of it is not a way to the type"]
-    )
+    assert(notes(source) == ["A `static` member belongs to the type, and a value of it is not a way to the type"])
   }
 
   test "the type is" {
@@ -1009,7 +990,7 @@ group "Where `await()` is allowed" {
         == [
           "A function that waits says so in its result type, and this one produces `Int64`. `spawn \{ ... \}` starts"
             + " a task, and the top level of an entry file or a script may wait for one",
-        ]
+        ],
     )
   }
 
@@ -1037,7 +1018,7 @@ group "Where `await()` is allowed" {
           "The closure handed to `spawn \{ ... \}` is one, and so is one whose result is declared a `Task`. To wait"
             + " for many at once use `Task.all(tasks).await()`, and to go on when one finishes use"
             + " `task.map \{ ... \}`",
-        ]
+        ],
     )
   }
 
@@ -1096,9 +1077,7 @@ group "Where `await()` is allowed" {
         + "public const total = later(1).await()",
       "app/src/main.trb": "use total from \"./helper\"\n\nprint total",
     ]
-    assert(
-      problemsOf(files).contains("`await()` is only allowed in a function that returns a `Task`")
-    )
+    assert problemsOf(files).contains("`await()` is only allowed in a function that returns a `Task`")
   }
 }
 
@@ -1122,10 +1101,7 @@ group "`foreign` declares functions of a C library" {
       }
       """
     assert(problems(source) == ["A `foreign` function has no body"])
-    assert(
-      notes(source)
-        == ["The C library is its implementation. `foreign` declares the signature the ABI promises"]
-    )
+    assert(notes(source) == ["The C library is its implementation. `foreign` declares the signature the ABI promises"])
   }
 
   test "a declaration of a signature is all a block holds" {

@@ -927,12 +927,7 @@ fn arrayStorageMemberOf(
 }
 
 /** The generated body of `ArrayList.withCapacity` and friends: one per implementation per element type. */
-fn containerMemberOf(
-  var lowering: Lowering,
-  dispatched: Dispatched,
-  kind: RuntimeKind,
-  at: Span,
-): FunctionId? {
+fn containerMemberOf(var lowering: Lowering, dispatched: Dispatched, kind: RuntimeKind, at: Span): FunctionId? {
   const subject = dispatched.subject?
   const member = dispatched.member
   const bound = dispatched.capability
@@ -958,12 +953,7 @@ fn generatedMemberFor(var lowering: Lowering, dispatched: Dispatched, at: Span):
 }
 
 /** The generated body of a member the manifest marks `.Derived`: `Int64.compare`, `String.show`, `Range.hash`. */
-fn generatedMemberOf(
-  var lowering: Lowering,
-  dispatched: Dispatched,
-  derived: DerivedKind,
-  at: Span,
-): FunctionId? {
+fn generatedMemberOf(var lowering: Lowering, dispatched: Dispatched, derived: DerivedKind, at: Span): FunctionId? {
   const subject = match dispatched.subject {
     Some(found) => found
     None => {
@@ -1105,7 +1095,16 @@ public fn lowerArgumentSlots(
   // before the ordinary loop runs and in the place the first of those arguments stands: a variadic is written last, so
   // that is also where a reader sees them evaluated
   if variadic >= 0 {
-    const list = match lowerVariadicArgument(lowering, builder, expression, arguments, targets, signature, variadic, mapping) {
+    const list = match lowerVariadicArgument(
+      lowering,
+      builder,
+      expression,
+      arguments,
+      targets,
+      signature,
+      variadic,
+      mapping,
+    ) {
       Some(found) => found
       None => {
         return CallOperands([], [])
@@ -1263,7 +1262,9 @@ fn referenceArgumentAt(
    * because it reads the argument as a value; here it is a clean finding instead of the two internal errors of the
    * verifier ("its place is …") a body in `std/stream` would otherwise produce.
    */
-  if path.annotation != annotation && isSharedObjectType(lowering, path.annotation) && isObjectType(lowering, annotation) {
+  if path.annotation != annotation
+    && isSharedObjectType(lowering, path.annotation)
+    && isObjectType(lowering, annotation) {
     return sharedObjectAsTraitPlace lowering, builder, value, signature, position, mapping, path, annotation
   }
   if path.annotation != annotation {

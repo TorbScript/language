@@ -90,7 +90,10 @@ const counted = Counter(100).parallel(workers: 4).sum().await()
 
 // --- The stages are fused and the terminals agree with their sequential counterparts
 
-const stagesExpected = (1..2000).map({ _ * 3 }).filter({ _ % 2 == 0 }).filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { None } })
+const stagesExpected = (1..2000)
+  .map({ _ * 3 })
+  .filter({ _ % 2 == 0 })
+  .filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { None } })
 const stagesSpread = (1..2000).parallel(workers: 4).map({ _ * 3 }).filter({ _ % 2 == 0 })
 const stages = stagesSpread.filterMap({ if _ % 5 == 0 { Some(_ / 5) } else { None } }).toList().await()
 const firstLong = (1..10000).parallel(workers: 4).find({ collatz(_) > 200 }).await()
@@ -117,7 +120,12 @@ const bracketed = (1..=64).toList().parallel(chunk: 8).filter({ _ % 20 == 0 }).m
 const bracketedJoined = bracketed.collect(joining(separator: ", ", prefix: "[", suffix: "]")).await()
 const nothing: List<Int> = []
 const nothingCounted = nothing.parallel().collect(counting()).await()
-const nothingJoined = (1..=10).parallel().filter({ _ > 10 }).map({ "{_}" }).collect(joining(prefix: "<", suffix: ">")).await()
+const nothingJoined = (1..=10)
+  .parallel()
+  .filter({ _ > 10 })
+  .map({ "{_}" })
+  .collect(joining(prefix: "<", suffix: ">"))
+  .await()
 
 group "a range cuts itself" {
   test "map, filter and sum agree with the sequential pipeline" {

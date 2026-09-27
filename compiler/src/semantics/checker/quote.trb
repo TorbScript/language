@@ -233,7 +233,7 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
       state.isBroken = true
       checker.reportHere(
         Diagnostic.error("`match` cannot be quoted yet", at)
-          .withNote("Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out")
+          .withNote("Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out"),
       )
     }
     .Try(_) => reportNotOneExpression checker, state, "`?`", at
@@ -272,13 +272,7 @@ fn quoteArguments(var checker: Checker, var state: QuotationWalk, arguments: Lis
  * statement whatever it is written as. The callee is not walked - what it resolved to is the `method` and the `owner` of
  * the `Call` node, never a value of its own.
  */
-fn quoteCall(
-  var checker: Checker,
-  var state: QuotationWalk,
-  callee: Expression,
-  arguments: List<Argument>,
-  at: Span,
-) {
+fn quoteCall(var checker: Checker, var state: QuotationWalk, callee: Expression, arguments: List<Argument>, at: Span) {
   const module = checker.module
   if const Some(.PropertyWrite(_, _)) = checker.resolutionAt(module, at) {
     reportNotOneExpression checker, state, "A property command", at
@@ -370,7 +364,7 @@ fn quoteConditional(
     None => {
       checker.reportHere(
         Diagnostic.error("An `if` without an `else` has no value, so it cannot be quoted", at)
-          .withNote("A `Conditional` node has all three parts: write the `else`")
+          .withNote("A `Conditional` node has all three parts: write the `else`"),
       )
       state.isBroken = true
     }
@@ -546,7 +540,7 @@ fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: 
   state.isBroken = true
   checker.reportHere(
     Diagnostic.error("{what} cannot appear in a quotation: `{shown}` holds a single expression", at)
-      .withNote("A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`")
+      .withNote("A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`"),
   )
 }
 
@@ -557,7 +551,7 @@ fn reportHasNoNode(var checker: Checker, var state: QuotationWalk, what: String,
   state.isBroken = true
   checker.reportHere(
     Diagnostic.error("{what} has no node in an expression tree, so `{shown}` cannot hold it", at)
-      .withNote("`ExpressionNode` is part of the language standard: a new kind of node needs a new version of it")
+      .withNote("`ExpressionNode` is part of the language standard: a new kind of node needs a new version of it"),
   )
 }
 
@@ -585,6 +579,6 @@ fn reportNotEncodable(
     problem = problem.withNote "The type of `{owner}` quotes its value, so `{name}` has to be `Encode`"
   }
   checker.reportHere(
-    problem.withNote("A quotation hands the captured values on, so what cannot be `Encode` is compared in a `match`")
+    problem.withNote("A quotation hands the captured values on, so what cannot be `Encode` is compared in a `match`"),
   )
 }

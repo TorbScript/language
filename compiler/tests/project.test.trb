@@ -93,7 +93,7 @@ group "Manifest" {
     const manifest = manifestOf(
       "name \"acme/shop\"\nversion \"1.4.0\"\nprelude \"acme/teaching\"\n"
         + "dependencies \{\n  runtime \"acme/http:^1.2.3\"\n  development \"acme/mock-server:^3.4.5\"\n\}\n"
-        + "build \{\n  input \"src/api.trb\"\n  output \"build/api\"\n\}\ntest \{\n  input \"spec\"\n\}\n"
+        + "build \{\n  input \"src/api.trb\"\n  output \"build/api\"\n\}\ntest \{\n  input \"spec\"\n\}\n",
     )
     assert(manifest.name == "acme/shop")
     assert(manifest.version == "1.4.0")
@@ -121,7 +121,7 @@ group "Manifest" {
         const binary = name.substringAfter("/") ?? name
         authors "Someone"
         registry "acme", url: "https://x.test"
-        """
+        """,
     )
     assert(manifest.name == "acme/app")
   }
@@ -149,7 +149,9 @@ group "Manifest" {
   test "a setting the toolchain reads before it can run anything is refused where it is computed" {
     assert(problemsOf("name = \"acme/\{suffix\}\"") == ["`name` has to be a plain string"])
     assert(problemsOf("prelude = preludeName()") == ["`prelude` has to be a plain string"])
-    assert(problemsOf("dependencies \{\n  runtime \"acme/\{name\}\"\n\}") == ["`dependencies` has to be a plain string"])
+    assert(
+      problemsOf("dependencies \{\n  runtime \"acme/\{name\}\"\n\}") == ["`dependencies` has to be a plain string"],
+    )
     assert(problemsOf("build \{\n  input = entry\n\}") == ["`build \{ input \}` has to be a plain string"])
     // A setting that may be computed is no problem, and neither is anything else of a block that is not `input`
     assert problemsOf("name = \"acme/app\"\nversion = tag ?? \"0.0.0\"\ntest \{\n  coverageThreshold = threshold\n\}").isEmpty()
@@ -189,7 +191,7 @@ group "Workspaces" {
           "acme/api: packages/api/src/lib.trb",
           "acme/core: packages/core/src/lib.trb, packages/core/tests/core.test.trb",
           "acme/importer: tools/importer/src/main.trb",
-        ]
+        ],
     )
   }
 
@@ -226,13 +228,16 @@ group "Workspaces" {
   test "a pattern that matches nothing is a problem of the workspace" {
     const found = findWorkspace(
       SourceTree.of(["project.trb": "name \"acme/all\"\nworkspace \{ members \"packages/*\" \}"]),
-      "."
+      ".",
     )
     assert(found.problems == ["The workspace member pattern `packages/*` of . matches no project"])
   }
 
   test "a computed static setting of a manifest is a problem of the workspace, with its place" {
-    const found = findWorkspace SourceTree.of(["project.trb": "const suffix = \"shop\"\n\nname = \"acme/\{suffix\}\""]), "."
+    const found = findWorkspace(
+      SourceTree.of(["project.trb": "const suffix = \"shop\"\n\nname = \"acme/\{suffix\}\""]),
+      ".",
+    )
     const expected = [
       "`name` has to be a plain string\n --> project.trb:3:8\n  = The toolchain reads `name` before it can run anything, so it cannot be computed",
     ]

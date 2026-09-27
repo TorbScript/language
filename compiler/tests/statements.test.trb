@@ -48,16 +48,14 @@ group "Bindings" {
   test "a tuple pattern with the wrong number of positions" {
     assert(
       problems(inBody("  const (first, second, third) = (1, \"one\")"))
-        == ["This pattern has 3 positions, `(Int64, String)` has 2"]
+        == ["This pattern has 3 positions, `(Int64, String)` has 2"],
     )
   }
 
   test "a tuple pattern takes nothing but a tuple apart" {
     const source = "fn pair(): Result<(Int, Int), String> \{\n  Ok((3, 2))\n\}\n\n"
       + "fn probe() \{\n  const (first, second) = pair()\n  print first + second\n\}"
-    assert(
-      problems(source) == ["This pattern takes a tuple apart, and `Result<(Int64, Int64), String>` is not one"]
-    )
+    assert(problems(source) == ["This pattern takes a tuple apart, and `Result<(Int64, Int64), String>` is not one"])
   }
 
   test "a type with fields is destructured by its own name" {
@@ -102,7 +100,7 @@ group "Bindings" {
         == [
           "Bind the value and take it apart afterwards (`const shape = size()`, `const rows = shape.0`): a compile-time"
             + " constant is folded, and one that is exported is a name of the module",
-        ]
+        ],
     )
   }
 
@@ -145,7 +143,9 @@ group "Bindings" {
   test "an imported case is bare in a pattern, with fields and without" {
     const found = probe inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")
     assert(found.patternTypeOf("None") == "Option<Int64>")
-    assert problems(inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
+    assert(
+      problems(inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")).isEmpty(),
+    )
   }
 
   test "an aliased case works in an expression and in a pattern (`use Option.Some as Present`)" {
@@ -203,8 +203,7 @@ group "Bindings" {
     assert problems(inBody("  const text = match 1 \{\n    _found => \"one\"\n  \}")).isEmpty()
     // Even where nothing about the subject has cases, an uppercase name is not a binding
     assert(
-      problems(inBody("  const text = match 1 \{\n    Found => \"one\"\n  \}"))
-        == ["`Found` is not a case in scope"]
+      problems(inBody("  const text = match 1 \{\n    Found => \"one\"\n  \}")) == ["`Found` is not a case in scope"],
     )
   }
 }
@@ -216,15 +215,13 @@ group "Scopes" {
   }
 
   test "the same scope may not declare a name twice" {
-    assert(
-      problems(inBody("  const value = 1\n  const value = 2")) == ["`value` is already declared in this scope"]
-    )
+    assert(problems(inBody("  const value = 1\n  const value = 2")) == ["`value` is already declared in this scope"])
   }
 
   test "the parameters and the top level of the body are one scope (milestone 4.9)" {
     assert(
       problems("fn probe(value: Int) \{\n  const value = 2\n  print value\n\}")
-        == ["`value` is already a parameter of this function"]
+        == ["`value` is already a parameter of this function"],
     )
   }
 
@@ -235,7 +232,7 @@ group "Scopes" {
 
   test "the pattern of an `if const` binds for the body of the `if` only" {
     const source = inBody(
-      "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print found\n  \}\n  const value = found"
+      "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print found\n  \}\n  const value = found",
     )
     assert(problems(source) == ["Cannot find `found` here"])
   }
@@ -279,7 +276,7 @@ group "Loops" {
     assert(problems(source) == ["`break` is only allowed inside of a `for`, a `while` or a `loop`"])
     assert(
       notes(source)
-        == ["A closure is a function, not a block: `break` cannot leave one, and `do \{ \}` is not a loop either"]
+        == ["A closure is a function, not a block: `break` cannot leave one, and `do \{ \}` is not a loop either"],
     )
     assert(problems(inBody("  continue")) == ["`continue` is only allowed inside of a `for`, a `while` or a `loop`"])
     assert problems(inBody("  for index in 0..2 \{\n    break\n  \}")).isEmpty()
@@ -293,9 +290,7 @@ group "Returning" {
   }
 
   test "a body whose last statement is not an expression at all" {
-    assert(
-      problems("fn probe(): Float \{\n  const value = 1\n\}") == ["This function has to return a `Float64`"]
-    )
+    assert(problems("fn probe(): Float \{\n  const value = 1\n\}") == ["This function has to return a `Float64`"])
   }
 
   test "a body that ends in an expression of the wrong type is told about that expression" {
@@ -316,7 +311,7 @@ group "Returning" {
       problems("fn probe(): Int \{\n  while true \{\n    print \"forever\"\n  \}\n\}") == [
         "A loop that never ends is written `loop`",
         "This function has to return a `Int64`",
-      ]
+      ],
     )
     // `while false` says something else, and nothing is wrong with it
     assert problems("fn probe() \{\n  while false \{\n    print \"never\"\n  \}\n\}").isEmpty()
@@ -330,7 +325,10 @@ group "Returning" {
     // The block of a `loop` without a `break` is `Never`, and the `return` inside it does leave the function -
     // so what the function produces is nothing, not "it never returns"
     const body = "fn recover(var flag: Bool) \{\n  loop \{\n    if flag \{\n      return\n    \}\n    flag = true\n  \}\n\}\n\n"
-    assert(problems(body + "fn caller(var flag: Bool): Int \{\n  const nothing: Int = recover(flag)\n  1\n\}") == ["Expected `Int64`, found `Void`"])
+    assert(
+      problems(body + "fn caller(var flag: Bool): Int \{\n  const nothing: Int = recover(flag)\n  1\n\}")
+        == ["Expected `Int64`, found `Void`"],
+    )
     // As a statement it is fine, which is what an inferred `Never` allowed as well
     assert problems(body + "fn caller(var flag: Bool): Int \{\n  recover(flag)\n  1\n\}").isEmpty()
   }

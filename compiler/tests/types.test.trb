@@ -267,7 +267,7 @@ group "Forms of a type" {
         == [
           "Its default is `Self`, and there is no `Self` outside of a bound: write the argument out, or use the trait"
             + " in a `with` or a `where`",
-        ]
+        ],
     )
   }
 
@@ -369,7 +369,7 @@ group "Signatures" {
     const form = instantiate found.checker, identifier, [integer]
     assert(
       describeFunction(found.checker.types, found.checker.symbols, form)
-        == "(items: List<Int64>, fallback: Int64) => Int64"
+        == "(items: List<Int64>, fallback: Int64) => Int64",
     )
   }
 }
@@ -436,7 +436,7 @@ group "Diagnostics" {
         == [
           "`next: Node` holds another `Node`, and that one holds another. Write the step as `Node?`, put it in a"
             + " `List<Node>`, or give `Node` a case that holds no `Node`",
-        ]
+        ],
     )
   }
 
@@ -446,7 +446,7 @@ group "Diagnostics" {
         == [
           "`First` contains itself, so no value of it can ever be built",
           "`Second` contains itself, so no value of it can ever be built",
-        ]
+        ],
     )
     assert problems("type Link \{\n  value: Int\n  next: Link? = None\n\}").isEmpty()
     assert problems("type Tree \{\n  value: Int\n  children: List<Tree> = []\n\}").isEmpty()
@@ -462,14 +462,14 @@ group "Diagnostics" {
         == [
           "Every default is evaluated on its own, so the order of the fields is not observable. A value that is"
             + " computed from another field is made by a `static fn` factory",
-        ]
+        ],
     )
   }
 
   test "a type parameter is a type, not a type constructor" {
     assert(
       problems("type Holder<Item> \{\n  field: Item<Int>\n\}")
-        == ["`Item` is a type parameter and takes no type arguments"]
+        == ["`Item` is a type parameter and takes no type arguments"],
     )
   }
 
@@ -483,19 +483,17 @@ group "Diagnostics" {
     assert(problems("type Probe \{\n  field: lazy Int\n\}") == ["`lazy` is only the type of a parameter"])
     assert(
       notes("type Probe \{\n  field: lazy Int\n\}")
-        == [
-          "A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one",
-        ]
+        == ["A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one"],
     )
   }
 
   test "a value where a type belongs, and a type where a value belongs" {
     assert(
       problems("type Holder<const Size: Int> \{\n  field: Size\n\}")
-        == ["`Size` is a const parameter, and a type belongs here"]
+        == ["`Size` is a const parameter, and a type belongs here"],
     )
     assert(
-      problems("type Probe \{\n  field: Array<Int, String>\n\}") == ["`String` is a type, and a value belongs here"]
+      problems("type Probe \{\n  field: Array<Int, String>\n\}") == ["`String` is a type, and a value belongs here"],
     )
     assert(problems("const size = 8\n\ntype Probe \{\n  field: size\n\}") == ["`size` is a constant, not a type"])
   }
@@ -503,21 +501,22 @@ group "Diagnostics" {
   test "a const argument has to reduce to one literal" {
     assert(
       problems("const size = 4 + 4\n\ntype Probe \{\n  field: Array<Int, size>\n\}")
-        == ["The const argument `size` has to be a literal"]
+        == ["The const argument `size` has to be a literal"],
     )
     assert(
-      problems("type Probe \{\n  field: Array<Int, 1 | 2>\n\}") == ["A const argument is one value, not a literal type"]
+      problems("type Probe \{\n  field: Array<Int, 1 | 2>\n\}")
+        == ["A const argument is one value, not a literal type"],
     )
   }
 
   test "the members of a literal type are literals of one type" {
     assert(
       problems("type Probe \{\n  field: \"a\" | 1\n\}")
-        == ["The members of a literal type have to be literals of one type"]
+        == ["The members of a literal type have to be literals of one type"],
     )
     assert(
       problems("type Probe \{\n  field: -1.5\n\}")
-        == ["A literal type is built from `String`, `Int` and `Char` literals"]
+        == ["A literal type is built from `String`, `Int` and `Char` literals"],
     )
   }
 
@@ -526,7 +525,7 @@ group "Diagnostics" {
     assert(problems("type First = Second\ntype Second = First") == ["`First` is a cycle: it names itself"])
     assert(
       notes("type Handler = Handler")
-        == [raw"An alias is another name for a type that exists. For a type of its own, write `type Handler { ... }`"]
+        == [raw"An alias is another name for a type that exists. For a type of its own, write `type Handler { ... }`"],
     )
   }
 }
@@ -536,7 +535,8 @@ group "The whole repository" {
   fn repositoryRoot(): String? {
     var current = normalizePath File.absolutePath(".").expect("the working directory")
     while pathDepth(current) >= 1 {
-      if File.exists(joinPath(current, "compiler/project.trb")) && File.exists(joinPath(current, "std/prelude/project.trb")) {
+      if File.exists(joinPath(current, "compiler/project.trb"))
+        && File.exists(joinPath(current, "std/prelude/project.trb")) {
         return current
       }
       const parent = parentPath current

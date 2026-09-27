@@ -161,7 +161,7 @@ fn reportInterpolated(var checker: Checker, kind: CheckedKind, at: Span) {
   if kind.isResource() {
     checker.reportHere(
       Diagnostic.error("A `{name}` is a file the compiler resolves, so it cannot be interpolated", at)
-        .withNote("Write one literal per file, or read a path at run time with `File.readText(path)`")
+        .withNote("Write one literal per file, or read a path at run time with `File.readText(path)`"),
     )
     return
   }
@@ -172,7 +172,7 @@ fn reportInterpolated(var checker: Checker, kind: CheckedKind, at: Span) {
   }
   checker.reportHere(
     Diagnostic.error("A `{name}` literal is parsed where it is written, so it cannot be interpolated", at)
-      .withNote(fix)
+      .withNote(fix),
   )
 }
 
@@ -207,13 +207,13 @@ fn checkUri(var checker: Checker, text: String, at: Span) {
     Fail(.Relative(_)) => {
       checker.reportHere(
         Diagnostic.error("`{text}` is a relative reference, and a `Uri` has a scheme", at)
-          .withNote("A relative reference is a `UriReference`, and `reference.resolved(against: base)` makes a `Uri` of it")
+          .withNote("A relative reference is a `UriReference`, and `reference.resolved(against: base)` makes a `Uri` of it"),
       )
     }
     Fail(problem) => {
       checker.reportHere(
         Diagnostic.error("`{text}` is not a URI", at)
-          .withNote("A `Uri` literal is parsed where it is written: {problem.show()}")
+          .withNote("A `Uri` literal is parsed where it is written: {problem.show()}"),
       )
     }
   }
@@ -223,7 +223,7 @@ fn checkUriReference(var checker: Checker, text: String, at: Span) {
   if const Fail(problem) = UriReference.tryFrom(text) {
     checker.reportHere(
       Diagnostic.error("`{text}` is not a URI reference", at)
-        .withNote("A `UriReference` literal is parsed where it is written: {problem.show()}")
+        .withNote("A `UriReference` literal is parsed where it is written: {problem.show()}"),
     )
   }
 }
@@ -242,7 +242,7 @@ fn checkRegex(var checker: Checker, text: String, at: Span) {
     }
     checker.reportHere(
       Diagnostic.error("`{text}` is not a regular expression: {problem.message}", pointed)
-        .withNote("A `Regex` literal is compiled where it is written, and it is read verbatim: `\\d` and `\{2,4\}` are the pattern's")
+        .withNote("A `Regex` literal is compiled where it is written, and it is read verbatim: `\\d` and `\{2,4\}` are the pattern's"),
     )
   }
 }
@@ -276,7 +276,7 @@ fn checkTemplate(var checker: Checker, text: String, annotation: TypeId, at: Spa
     Fail(problem) => {
       checker.reportHere(
         Diagnostic.error("`{text}` is not a URI template", at)
-          .withNote("A `UriTemplate` literal is read where it is written, and verbatim: {reasonOf(problem)}")
+          .withNote("A `UriTemplate` literal is read where it is written, and verbatim: {reasonOf(problem)}"),
       )
       return
     }
@@ -331,14 +331,17 @@ fn checkVariables(
       Some(field) => {
         if !field.hasDefault && variable.isOptional {
           checker.reportHere(
-            Diagnostic.error("`{variable.name}` is a query variable of `{text}`, and `{owner}.{variable.name}` has no default", at)
-              .withNote("A request may leave a query variable out, so its field needs a default, or it is a path variable")
+            Diagnostic.error(
+              "`{variable.name}` is a query variable of `{text}`, and `{owner}.{variable.name}` has no default",
+              at,
+            )
+              .withNote("A request may leave a query variable out, so its field needs a default, or it is a path variable"),
           )
         }
         if field.hasDefault && !variable.isOptional {
           checker.reportHere(
             Diagnostic.error("`{owner}.{variable.name}` has a default, so it is a query variable of `{text}`", at)
-              .withNote("Write it `\{?{variable.name}\}`: a path variable is always there, and a default would never apply")
+              .withNote("Write it `\{?{variable.name}\}`: a path variable is always there, and a default would never apply"),
           )
         }
       }
@@ -347,7 +350,7 @@ fn checkVariables(
         const known = if names.isEmpty() { "none" } else { names }
         checker.reportHere(
           Diagnostic.error("`{variable.name}` of `{text}` is not a field of `{owner}`", at)
-            .withNote("The fields of `{owner}` are {known}")
+            .withNote("The fields of `{owner}` are {known}"),
         )
       }
     }
@@ -356,7 +359,7 @@ fn checkVariables(
     if !field.hasDefault && !variables.any({ _.name == field.name }) {
       checker.reportHere(
         Diagnostic.error("`{owner}.{field.name}` has no default, and `{text}` has no variable for it", at)
-          .withNote("Add `\{{field.name}\}` to the template, or give the field a default")
+          .withNote("Add `\{{field.name}\}` to the template, or give the field a default"),
       )
     }
   }
@@ -368,7 +371,12 @@ fn checkVariables(
  * `Route.Order` where a `TemplateCase<Value>` is expected: the case, not the function that constructs one. `None`
  * where the expression is no case of a type, which the ordinary path then reports.
  */
-public fn checkedCase(var checker: Checker, expression: Expression, annotation: TypeId, resolution: Resolution): TypeId? {
+public fn checkedCase(
+  var checker: Checker,
+  expression: Expression,
+  annotation: TypeId,
+  resolution: Resolution,
+): TypeId? {
   const (owner, variant) = match resolution {
     .CaseOf(found, symbol) => (found, symbol)
     _ => {
@@ -460,8 +468,8 @@ fn checkRoute(var checker: Checker, templateAt: Span, templateType: TypeId, case
       Diagnostic.error("`{text}` cannot be matched against a request, so it is no route", templateAt)
         .withNote(
           "A route has simple variables (`\{id\}`), path segments (`\{/id\}`, `\{/rest*\}` last) and query variables "
-            + "(`\{?page\}`), with a literal between two variables of the path"
-        )
+            + "(`\{?page\}`), with a literal between two variables of the path",
+        ),
     )
     return
   }
@@ -493,7 +501,7 @@ fn resourceNameOf(var checker: Checker, text: String, kind: CheckedKind, at: Spa
   if !package.directory.isEmpty() && !isInside(path, package.directory) {
     checker.reportHere(
       Diagnostic.error("`{text}` is outside of the package `{package.name}`", at)
-        .withNote("A `{name}` is a file of the package that writes it, below `{package.directory}`, and it is published with it")
+        .withNote("A `{name}` is a file of the package that writes it, below `{package.directory}`, and it is published with it"),
     )
     return None
   }

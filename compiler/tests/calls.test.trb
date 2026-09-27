@@ -51,9 +51,7 @@ group "Calling a function" {
   }
 
   test "a parameter that is filled twice" {
-    assert(
-      problems(inBody("  const port = connect(\"localhost\", 1, port: 2)")) == ["`port` already has an argument"]
-    )
+    assert(problems(inBody("  const port = connect(\"localhost\", 1, port: 2)")) == ["`port` already has an argument"])
   }
 
   test "too many and too few arguments" {
@@ -61,7 +59,7 @@ group "Calling a function" {
     // Two of the three parameters have a default, so what a surplus argument is too many for is the whole list
     assert(
       problems(inBody("  const port = connect(\"a\", 1, 2, 3)"))
-        == ["`connect` takes at most 3 arguments, 4 were given"]
+        == ["`connect` takes at most 3 arguments, 4 were given"],
     )
   }
 
@@ -71,9 +69,7 @@ group "Calling a function" {
    * empty instead.
    */
   test "a parameter behind one with a default that was filled positionally" {
-    assert(
-      problems(inBody("  const port = skipping(\"a\", 1)")) == ["`skipping` has no argument for `retries`"]
-    )
+    assert(problems(inBody("  const port = skipping(\"a\", 1)")) == ["`skipping` has no argument for `retries`"])
   }
 
   test "a variadic parameter collects the rest, and what it collects is recorded" {
@@ -90,7 +86,7 @@ group "Calling a function" {
   test "the items of a variadic parameter are checked against its item type" {
     assert(
       problems("{largest}fn probe() \{\n  const most = largest(1, \"two\")\n\}")
-        == ["Expected `Int64`, found `String`"]
+        == ["Expected `Int64`, found `String`"],
     )
   }
 
@@ -133,14 +129,14 @@ group "Calling a member" {
   test "a method that is not there" {
     assert(
       problems("{point}fn probe(place: Point): Point \{\n  place.movedBy(2)\n\}")
-        == ["`Point` has no member `movedBy`"]
+        == ["`Point` has no member `movedBy`"],
     )
   }
 
   test "an argument of a method is checked like any other" {
     assert(
       problems("{point}fn probe(place: Point): Point \{\n  place.moved(\"two\")\n\}")
-        == ["Expected `Int64`, found `String`"]
+        == ["Expected `Int64`, found `String`"],
     )
   }
 }
@@ -200,9 +196,7 @@ group "Constructors, cases and `copy`" {
   test "`copy` takes labeled arguments and nothing else" {
     const source = "{point}fn probe(place: Point): Point \{\n  place.copy(3)\n\}"
     assert(problems(source) == ["`copy` takes labeled arguments: `copy(x: ...)`"])
-    assert(
-      notes(source) == ["`copy` changes the fields it is given and keeps the rest, so every one of them is named"]
-    )
+    assert(notes(source) == ["`copy` changes the fields it is given and keeps the rest, so every one of them is named"])
   }
 
   /** Every mistake that leaves a field empty names the field, because the counts alone cannot say what is wrong. */
@@ -210,9 +204,7 @@ group "Constructors, cases and `copy`" {
     const config = "type Config \{\n  host: String\n  port: Int = 80\n  secure: Bool = false\n\}\n\n"
     const source = "{config}fn probe(): Config \{\n  Config()\n\}"
     assert(problems(source) == ["`Config` has no value for the field `host`"])
-    assert(
-      notes(source) == ["Required: `host`. With a default, and so optional: `port` and `secure`"]
-    )
+    assert(notes(source) == ["Required: `host`. With a default, and so optional: `port` and `secure`"])
   }
 
   test "a positional argument that filled a defaulted field, with the call that was meant" {
@@ -225,7 +217,7 @@ group "Constructors, cases and `copy`" {
           "A positional argument fills the next field in order, and `b` has a default: name the field to pass it over"
             + " (`Middle(..., c: ...)`)",
           "Required: `a` and `c`. With a default, and so optional: `b`",
-        ]
+        ],
     )
   }
 
@@ -243,7 +235,7 @@ group "Constructors, cases and `copy`" {
           "`nickname` is optional in `Person` and has no default, so it is still required: write `nickname: None`"
             + " here, or give the field one (`nickname: String? = None`)",
           "Every field is required here: `name` and `nickname`",
-        ]
+        ],
     )
   }
 

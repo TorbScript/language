@@ -410,12 +410,7 @@ public fn lowerForcedRead(
 }
 
 /** The `None` of the cell's `Option`, in a slot: a cell starts out with nothing in it. */
-fn emptyOptionSlot(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  optional: IrTypeId,
-  at: Span,
-): Slot? {
+fn emptyOptionSlot(var lowering: Lowering, var builder: FunctionBuilder, optional: IrTypeId, at: Span): Slot? {
   const layout = match layoutOfType(lowering.program, optional) {
     Some(found) => found
     None => {
@@ -674,7 +669,13 @@ fn valueMappingOf(
   const declared = signature.form.parameters
   for index in 0..declared.length() {
     if const Some(given) = form.parameters.get(index + offset) {
-      const _ = matchTypePattern lowering.checker, declared[index].annotation, given.annotation, signature.generics, mapping
+      const _ = matchTypePattern(
+        lowering.checker,
+        declared[index].annotation,
+        given.annotation,
+        signature.generics,
+        mapping,
+      )
     }
   }
   const _ = matchTypePattern lowering.checker, signature.form.result, form.result, signature.generics, mapping
@@ -723,12 +724,7 @@ public fn lowerConstructorValue(
   target
 }
 
-fn constructorFunctionOf(
-  var lowering: Lowering,
-  layout: LayoutId,
-  variant: Int,
-  shape: IrSignature,
-): FunctionId {
+fn constructorFunctionOf(var lowering: Lowering, layout: LayoutId, variant: Int, shape: IrSignature): FunctionId {
   const name = constructorFunctionName lowering.program.layoutAt(layout).name, variant
   if const Some(found) = lowering.generatedInstances.get(name) {
     return found
@@ -1270,12 +1266,7 @@ public fn lowerSpawnedClosure(
   target
 }
 
-fn lowerClosureBody(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  source: ClosureSource,
-  result: IrTypeId,
-) {
+fn lowerClosureBody(var lowering: Lowering, var builder: FunctionBuilder, source: ClosureSource, result: IrTypeId) {
   match source {
     .Written(closure) => lowerBody lowering, builder, closure.body, result
     .Thunk(value) => {

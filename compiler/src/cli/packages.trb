@@ -164,7 +164,9 @@ fn contextOf(options: PackageOptions): Result<Context, String> {
   if root.isEmpty() {
     return Fail "there is no project.trb at or above `{options.directory}`: `torb new` makes a project"
   }
-  const members = workspace.packages.filter({ !_.installed && !_.name.startsWith("std/") && !_.directory.isEmpty() }).toList()
+  const members = workspace.packages
+    .filter({ !_.installed && !_.name.startsWith("std/") && !_.directory.isEmpty() })
+    .toList()
   var target = members[0]
   for member in members {
     if isInside(directory, member.directory) && member.directory.byteLength() > target.directory.byteLength() {
@@ -382,7 +384,9 @@ fn resolved(
         return Fail "`source \"{source.package}\", {source.kind}:` is not resolved yet: only `path:` sources are"
       }
       const directory = joinPath member.directory, source.location
-      const text = File.readText(joinPath(directory, "project.trb")).mapError({ "the `path:` source of {source.package}: {_.show()}" })?
+      const text = File.readText(joinPath(directory, "project.trb")).mapError(
+        { "the `path:` source of {source.package}: {_.show()}" },
+      )?
       const manifest = readManifest parse(SourceText.of(text)).file
       if manifest.name != source.package {
         return Fail "the `path:` source `{source.location}` is the package `{manifest.name}`, not `{source.package}`"
@@ -447,7 +451,13 @@ fn resolved(
     const release = indexes.get(name).flatMap({ _.release version })
     if const Some(found) = release {
       const url = registryOf name, context.bindings
-      graph.append LockedPackage(name, version: version.show(), registry: url, hash: found.hash, capabilities: found.capabilities)
+      graph.append(LockedPackage(
+        name,
+        version: version.show(),
+        registry: url,
+        hash: found.hash,
+        capabilities: found.capabilities,
+      ))
     }
   }
   Ok Ok(Lock(language: rootPackage.manifest.language, graph: graph))

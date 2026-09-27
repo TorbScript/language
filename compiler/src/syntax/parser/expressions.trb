@@ -34,7 +34,9 @@ const exponentPower = 9
  * two brackets for the type parser.
  */
 fn infixOperatorAt(parser: Parser): (Int, InfixOperator, Int)? {
-  if parser.isAt(TokenKind.Greater) && parser.kindAt(1) == TokenKind.Greater && parser.span().end == parser.spanAt(1).start {
+  if parser.isAt(TokenKind.Greater)
+    && parser.kindAt(1) == TokenKind.Greater
+    && parser.span().end == parser.spanAt(1).start {
     return (shiftPower, InfixOperator.ShiftRight, 2)
   }
   const (power, operator) = infixOperator(parser.kind())?
@@ -199,7 +201,10 @@ fn checkArgumentOrder(var parser: Parser, arguments: List<Argument>) {
     if argument.label.isSome() {
       hasLabel = true
     } else if hasLabel {
-      parser.error "Positional arguments come first, labeled arguments follow them: `connect(host, timeout: 10)`", argument.value.span
+      parser.error(
+        "Positional arguments come first, labeled arguments follow them: `connect(host, timeout: 10)`",
+        argument.value.span,
+      )
       return
     }
   }
@@ -278,11 +283,17 @@ fn reportPrefixedBase(var parser: Parser, base: Expression, exponent: Expression
     }
     .Unary(.Not, inner) => {
       const written = parser.text inner.span
-      ("A `!` directly in front of the base of `**` is ambiguous", "Write `!({written} ** {power})` or `(!{written}) ** {power}`")
+      (
+        "A `!` directly in front of the base of `**` is ambiguous",
+        "Write `!({written} ** {power})` or `(!{written}) ** {power}`",
+      )
     }
     .Unary(.BitwiseNot, inner) => {
       const written = parser.text inner.span
-      ("A `~` directly in front of the base of `**` is ambiguous", "Write `~({written} ** {power})` or `(~{written}) ** {power}`")
+      (
+        "A `~` directly in front of the base of `**` is ambiguous",
+        "Write `~({written} ** {power})` or `(~{written}) ** {power}`",
+      )
     }
     _ => {
       return
@@ -342,7 +353,10 @@ fn parsePostfix(var parser: Parser): Expression {
       }
       .ParenOpen => {
         parser.bump()
-        const arguments = parser.withTrailingClosures(true, { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument })
+        const arguments = parser.withTrailingClosures(
+          true,
+          { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
+        )
         checkArgumentOrder parser, arguments
         ExpressionKind.Call expression, arguments, CallStyle.Parentheses
       }
@@ -370,7 +384,11 @@ fn parsePostfix(var parser: Parser): Expression {
       .BraceOpen if parser.allowsTrailingClosures && takesTrailingClosure(expression) => {
         const closure = Argument None, isSpread: false, value: parseClosure(parser)
         match expression.kind {
-          .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call callee, arguments.appended(closure), CallStyle.Parentheses
+          .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call(
+            callee,
+            arguments.appended(closure),
+            CallStyle.Parentheses,
+          )
           _ => ExpressionKind.Call expression, [closure], CallStyle.Parentheses
         }
       }
@@ -480,7 +498,10 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
     }
     .ParenOpen => {
       parser.bump()
-      const items = parser.withTrailingClosures(true, { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument })
+      const items = parser.withTrailingClosures(
+        true,
+        { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
+      )
       if items.length() == 1 && items[0].label.isNone() && !items[0].isSpread {
         items[0].value.kind
       } else {

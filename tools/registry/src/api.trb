@@ -136,7 +136,9 @@ fn routed(registry: Registry, request: Request): Task<Result<Response, Refusal>>
     ("POST", ["tokens"]) => {
       const body = decoded<TokenRequest>(request).await()?
       const account = if body.account.isEmpty() { None } else { Some body.account }
-      const token = registry.createToken(caller, body.name, account, body.owners, body.packages, body.actions, body.days).await()?
+      const token = registry
+        .createToken(caller, body.name, account, body.owners, body.packages, body.actions, body.days)
+        .await()?
       Ok json(201, tokenAnswer("a token for `{token.account}`: it is shown this once", token))
     }
     ("GET", ["tokens"]) => {
@@ -155,14 +157,20 @@ fn routed(registry: Registry, request: Request): Task<Result<Response, Refusal>>
       const hash = match request.headers.get("Torb-Tree-Hash") {
         Some(found) => found.trim()
         None => {
-          return Fail Refusal.of(400, "a publish sends the tree hash of the archive in `Torb-Tree-Hash`, which `torb publish` does")
+          return Fail(Refusal.of(
+            400,
+            "a publish sends the tree hash of the archive in `Torb-Tree-Hash`, which `torb publish` does",
+          ))
         }
       }
       var body = request.body
       const archive = match body.bytes(limit: archiveLimit).await() {
         Ok(found) => found
         Fail(_) => {
-          return Fail Refusal.of(413, "the archive has more than the {archiveLimit} bytes a package may have, or did not arrive whole")
+          return Fail(Refusal.of(
+            413,
+            "the archive has more than the {archiveLimit} bytes a package may have, or did not arrive whole",
+          ))
         }
       }
       const published = registry.publish(caller, owner, name, version, archive, hash).await()?

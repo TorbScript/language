@@ -219,7 +219,10 @@ public fn parseFunction(var parser: Parser, isMember: Bool = false): FunctionDec
   const name = if isMember { parser.nameOrKeyword() } else { parser.name() }
   const generics = parseGenericParameters parser
   parser.expect TokenKind.ParenOpen
-  const parameters = parser.withTrailingClosures(true, { parser => parser.commaSeparated TokenKind.ParenClose, parseParameter })
+  const parameters = parser.withTrailingClosures(
+    true,
+    { parser => parser.commaSeparated TokenKind.ParenClose, parseParameter },
+  )
   const returnType = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
   const whereClauses = parseWhereClauses parser
   const body = if parser.isAt(TokenKind.BraceOpen) { Some parseBlock(parser) } else { None }
@@ -483,7 +486,13 @@ fn parseExtend(var parser: Parser): DeclarationKind {
   const target = parseType parser
   const traits = parseTraitList parser
   const whereClauses = parseWhereClauses parser
-  DeclarationKind.Extend ExtendDeclaration(generics, target, traits, whereClauses, parseMembers(parser, hasReceiver: true))
+  DeclarationKind.Extend(ExtendDeclaration(
+    generics,
+    target,
+    traits,
+    whereClauses,
+    parseMembers(parser, hasReceiver: true),
+  ))
 }
 
 fn parseForeign(var parser: Parser): DeclarationKind {

@@ -246,9 +246,23 @@ group "matching a trusted publisher of a Forgejo" {
   }
 
   test "a ref, where one is named, exactly or by its prefix" {
-    assert publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v*"), forgejo)
-    assert publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v1.2.5"), forgejo)
-    assert(!publisherMatches(claims, TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/heads/main"), forgejo))
+    assert(publisherMatches(
+      claims,
+      TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v*"),
+      forgejo,
+    ))
+    assert(publisherMatches(
+      claims,
+      TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/tags/v1.2.5"),
+      forgejo,
+    ))
+    assert(
+      !publisherMatches(
+        claims,
+        TrustedPublisher("git.example.test/acme/http", "release.yml", ref: "refs/heads/main"),
+        forgejo,
+      ),
+    )
   }
 
   test "a GitHub token is never a publisher of a Forgejo" {
@@ -257,7 +271,10 @@ group "matching a trusted publisher of a Forgejo" {
   }
 
   test "the publisher's name says which forge" {
-    assert(publisherName(claims, forgejo) == "forgejo:git.example.test/acme/http/.forgejo/workflows/release.yml@refs/tags/v1.2.5")
+    assert(
+      publisherName(claims, forgejo)
+        == "forgejo:git.example.test/acme/http/.forgejo/workflows/release.yml@refs/tags/v1.2.5",
+    )
   }
 
   test "refMatches: any ref where none is named, a prefix where it ends in *" {

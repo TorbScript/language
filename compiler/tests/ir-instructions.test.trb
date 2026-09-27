@@ -84,12 +84,7 @@ group "A function that uses every instruction" {
     const closureType = program.internType IrType.Closure(closureShape)
     const at = program.internLocation Location("src/all.trb", 12, 5)
 
-    var doubleBuilder = newFunction(
-      "t_main_double",
-      None,
-      IrSignature([IrParameter("value", int64)], int64),
-      "body",
-    )
+    var doubleBuilder = newFunction "t_main_double", None, IrSignature([IrParameter("value", int64)], int64), "body"
     terminate doubleBuilder, Terminator.Return(owned(Slot(0)))
     const double = finishFunction program, doubleBuilder
     // A closure body takes its environment first, and the environment holds one field per capture (BACKEND 5.8)
@@ -109,20 +104,28 @@ group "A function that uses every instruction" {
     const inner = finishFunction program, innerBuilder
     const showTable = program.addWitnessTable WitnessTable("w_show__Int64", show, int64, [double], [])
     const element = program.addElement ElementDescriptor("d_Int64", int64, 0, 0, double)
-    const greeting = program.addStatic(
-      StaticValue("s_main_greeting", strings, StaticContents.Literal(LiteralValue.Text("hi")))
-    )
-    const number = program.addStatic(
-      StaticValue("s_main_number", int64, StaticContents.Literal(LiteralValue.Integer(7)))
-    )
+    const greeting = program.addStatic(StaticValue(
+      "s_main_greeting",
+      strings,
+      StaticContents.Literal(LiteralValue.Text("hi")),
+    ))
+    const number = program.addStatic(StaticValue(
+      "s_main_number",
+      int64,
+      StaticContents.Literal(LiteralValue.Integer(7)),
+    ))
     const ratio = program.addStatic StaticValue("s_main_ratio", float64, StaticContents.Floating(0.5))
     const nothing = program.addStatic StaticValue("s_main_nothing", voidType, StaticContents.VoidValue)
-    const origin = program.addStatic(
-      StaticValue("s_main_origin", pairType, StaticContents.Aggregate(pairLayout, 0, [number, greeting]))
-    )
-    const cells = program.addStatic(
-      StaticValue("s_main_cells", listOfInteger, StaticContents.Items(int64, [number, number]))
-    )
+    const origin = program.addStatic(StaticValue(
+      "s_main_origin",
+      pairType,
+      StaticContents.Aggregate(pairLayout, 0, [number, greeting]),
+    ))
+    const cells = program.addStatic(StaticValue(
+      "s_main_cells",
+      listOfInteger,
+      StaticContents.Items(int64, [number, number]),
+    ))
 
     const signature = IrSignature(
       [
@@ -181,14 +184,28 @@ group "A function that uses every instruction" {
     emit builder, Instruction.Tag(tagValue, circle)
     emit builder, Instruction.Read(items, itemsPlace)
     emit builder, Instruction.Write(itemsPlace, Argument(items, Ownership.Owned, true))
-    emit builder, Instruction.Read(element0, Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(int64, Slot(3), at)]))
+    emit(
+      builder,
+      Instruction.Read(element0, Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(int64, Slot(3), at)])),
+    )
     emit builder, Instruction.TakeOut(taken, Reference(Slot(1)), Slot(2), RuntimeKind.MapStorage)
     emit builder, Instruction.PutBack(Reference(Slot(1)), Slot(2), taken, RuntimeKind.MapStorage)
     emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
     emit builder, Instruction.TraitValue(asObject, owned(Slot(3)), [WitnessSource(WitnessRoot.Table(showTable))])
-    emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Value(Reference(asObject, []), 0)), 0, [borrowed(asObject)])
+    emit(
+      builder,
+      Instruction.CallWitness(
+        None,
+        WitnessSource(WitnessRoot.Value(Reference(asObject, []), 0)),
+        0,
+        [borrowed(asObject)],
+      ),
+    )
     emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Parameter(0), [1, 2]), 3, [])
-    emit builder, Instruction.Intrinsic(isEqual, Intrinsic(IntrinsicOperation.Equal, NumericKind.Signed(64)), [Slot(3), total], at)
+    emit(
+      builder,
+      Instruction.Intrinsic(isEqual, Intrinsic(IntrinsicOperation.Equal, NumericKind.Signed(64)), [Slot(3), total], at),
+    )
     emit builder, Instruction.Intrinsic(isNot, Intrinsic(IntrinsicOperation.BooleanNot, None), [isEqual], at)
     emit(
       builder,
@@ -199,12 +216,23 @@ group "A function that uses every instruction" {
         at,
       ),
     )
-    emit builder, Instruction.Intrinsic(joined, Intrinsic(IntrinsicOperation.TextConcat, None), [firstText, secondText], at)
-    emit builder, Instruction.Intrinsic(byteLength, Intrinsic(IntrinsicOperation.TextByteLength, None), [firstText], at)
-    emit builder, Instruction.Intrinsic(order, Intrinsic(IntrinsicOperation.TextCompare, None), [firstText, secondText], at)
     emit(
       builder,
-      Instruction.Intrinsic(shifted, Intrinsic(IntrinsicOperation.ShiftedLeft, NumericKind.Signed(64)), [Slot(3), total], at),
+      Instruction.Intrinsic(joined, Intrinsic(IntrinsicOperation.TextConcat, None), [firstText, secondText], at),
+    )
+    emit builder, Instruction.Intrinsic(byteLength, Intrinsic(IntrinsicOperation.TextByteLength, None), [firstText], at)
+    emit(
+      builder,
+      Instruction.Intrinsic(order, Intrinsic(IntrinsicOperation.TextCompare, None), [firstText, secondText], at),
+    )
+    emit(
+      builder,
+      Instruction.Intrinsic(
+        shifted,
+        Intrinsic(IntrinsicOperation.ShiftedLeft, NumericKind.Signed(64)),
+        [Slot(3), total],
+        at,
+      ),
     )
     emit builder, Instruction.Construct(pair, pairLayout, 0, [owned(Slot(3)), owned(firstText)])
     emit builder, Instruction.Read(fromTuple, Reference(pair, [PathStep.TupleField(pairLayout, 0)]))
@@ -218,11 +246,7 @@ group "A function that uses every instruction" {
     assert verifyFunction(program, program.functionAt(identifier)).isEmpty()
     assert verifyProgram(program).isEmpty()
     const printed = printFunction program, program.functionAt(identifier)
-    assert(
-      printed.startsWith(
-        "fn t_main_everything(var holder: Record(T_main_Holder) borrowed, table: Map(String, Int64) borrowed, text: String borrowed, value: Int64 borrowed, flag: Bool borrowed, witness 0: Show) -> Void \{"
-      )
-    )
+    assert printed.startsWith("fn t_main_everything(var holder: Record(T_main_Holder) borrowed, table: Map(String, Int64) borrowed, text: String borrowed, value: Int64 borrowed, flag: Bool borrowed, witness 0: Show) -> Void \{")
     assert printed.contains("\n  %5 = constant s_main_greeting\n")
     assert printed.contains("\n  %6 = copy %5\n")
     assert printed.contains("\n  %5 = move %6\n")
@@ -320,19 +344,34 @@ group "What an instruction reads and writes" {
     assert(usedSlots(Instruction.Call(first, FunctionId(0), [borrowed(second)], [witness])) == [second, third])
     assert(usedSlots(Instruction.CallClosure(None, first, [borrowed(second)])) == [first, second])
     assert(usedSlots(Instruction.CallWitness(None, witness, 0, [borrowed(second)])) == [third, second])
-    assert(usedSlots(Instruction.Intrinsic(None, Intrinsic(IntrinsicOperation.TextConcat, None), [first, second], LocationId(0))) == [first, second])
+    assert(
+      usedSlots(Instruction.Intrinsic(
+        None,
+        Intrinsic(IntrinsicOperation.TextConcat, None),
+        [first, second],
+        LocationId(0),
+      ))
+        == [first, second],
+    )
     assert(usedSlots(Instruction.Construct(first, LayoutId(0), 0, [owned(second)])) == [second])
     assert(usedSlots(Instruction.Read(third, place)) == [first, second])
     assert(usedSlots(Instruction.Write(place, owned(third))) == [first, second, third])
     assert(usedSlots(Instruction.Tag(first, second)) == [second])
     assert(
-      usedSlots(Instruction.Closure(first, FunctionId(0), [Capture.Value(second), Capture.Boxed(third), Capture.Place(place)], false))
-        == [second, third, first, second]
+      usedSlots(Instruction.Closure(
+        first,
+        FunctionId(0),
+        [Capture.Value(second), Capture.Boxed(third), Capture.Place(place)],
+        false,
+      ))
+        == [second, third, first, second],
     )
     assert(usedSlots(Instruction.BoxNew(first, owned(second))) == [second])
     assert(usedSlots(Instruction.TraitValue(first, owned(second), [witness])) == [second, third])
     assert(usedSlots(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == [second, third])
-    assert(usedSlots(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == [first, second, third])
+    assert(
+      usedSlots(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == [first, second, third],
+    )
     assert(usedSlots(Instruction.Panic(owned(first), LocationId(0))) == [first])
     assert(usedSlots(Instruction.Suspend(0, first, false)) == [first])
 
@@ -343,7 +382,10 @@ group "What an instruction reads and writes" {
     assert(definedSlot(Instruction.Call(None, FunctionId(0), [], [])) == None)
     assert(definedSlot(Instruction.CallClosure(first, second, [])) == first)
     assert(definedSlot(Instruction.CallWitness(first, witness, 0, [])) == first)
-    assert(definedSlot(Instruction.Intrinsic(first, Intrinsic(IntrinsicOperation.TextConcat, None), [], LocationId(0))) == first)
+    assert(
+      definedSlot(Instruction.Intrinsic(first, Intrinsic(IntrinsicOperation.TextConcat, None), [], LocationId(0)))
+        == first,
+    )
     assert(definedSlot(Instruction.Construct(first, LayoutId(0), 0, [])) == first)
     assert(definedSlot(Instruction.Read(first, place)) == first)
     assert(definedSlot(Instruction.Tag(first, second)) == first)
@@ -392,7 +434,7 @@ group "Names of intrinsics and of the runtime's types" {
     assert(describeIntrinsic(Intrinsic(IntrinsicOperation.Greater, signed)) == "greater.i64")
     assert(describeIntrinsic(Intrinsic(IntrinsicOperation.GreaterOrEqual, signed)) == "greaterOrEqual.i64")
     assert(
-      describeIntrinsic(Intrinsic(IntrinsicOperation.Convert(NumericKind.Floating(64)), signed)) == "convert.i64.f64"
+      describeIntrinsic(Intrinsic(IntrinsicOperation.Convert(NumericKind.Floating(64)), signed)) == "convert.i64.f64",
     )
     assert(describeIntrinsic(Intrinsic(IntrinsicOperation.BooleanNot, None)) == "booleanNot")
     assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextConcat, None)) == "textConcat")

@@ -410,13 +410,7 @@ fn fieldOrder(count: Int, isReversed: Bool): List<Int> {
  * The counted words of a value of this type at `offset`, appended in release order. An inline record is flattened into
  * its fields; an inline variant has a tag of its own, so it stays one `Nested` entry.
  */
-fn countedWordsOf(
-  var emitter: Emitter,
-  program: IrProgram,
-  id: IrTypeId,
-  offset: Int,
-  var into: List<CountedWord>,
-) {
+fn countedWordsOf(var emitter: Emitter, program: IrProgram, id: IrTypeId, offset: Int, var into: List<CountedWord>) {
   if !containsCountedType(program, id) {
     return
   }
@@ -435,7 +429,10 @@ fn countedWordsOf(
     }
     .Closure(_) => into.append CountedWord(offset + 1, CountedKind.Environment)
     .Object(_) => into.append CountedWord(offset, CountedKind.Payload)
-    .SharedObject(layout) => into.append CountedWord(offset, CountedKind.Block(blockShapeIndex(emitter, program, layout)))
+    .SharedObject(layout) => into.append(CountedWord(
+      offset,
+      CountedKind.Block(blockShapeIndex(emitter, program, layout)),
+    ))
     .Record(layout) => countedLayoutWords emitter, program, id, layout, offset, into
     .Tuple(layout) => countedLayoutWords emitter, program, id, layout, offset, into
     .Variant(layout) => countedLayoutWords emitter, program, id, layout, offset, into
@@ -974,13 +971,7 @@ fn emitTaskNew(
  * stays on its worker; a variant with a counted case is tested by the words of the case it is. Nothing is copied at the crossing: a frame that would need a
  * copy stays where it is, as it does in the C back end with one worker.
  */
-fn crossingTestsOf(
-  var emitter: Emitter,
-  program: IrProgram,
-  id: IrTypeId,
-  register: Int,
-  var tests: List<Int>,
-): Bool {
+fn crossingTestsOf(var emitter: Emitter, program: IrProgram, id: IrTypeId, register: Int, var tests: List<Int>): Bool {
   if !containsCountedType(program, id) {
     return true
   }
@@ -1415,7 +1406,9 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
           steps.append PlaceStep.Item(register, size, emitter.tables.widthOf(item), location)
         } else {
           // An unchecked step into a list is a proven read (`ir/bounds.trb`): nothing is made unique
-          steps.append(if checked { PlaceStep.Element register, location } else { PlaceStep.ListItem register, location })
+          steps.append(
+            if checked { PlaceStep.Element register, location } else { PlaceStep.ListItem register, location },
+          )
           // An element of a list is stored in its own width, as the runtime stores it
           narrow = narrowCodeOf program, item
         }
@@ -1576,7 +1569,15 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
         report emitter, "a call through a witness table that does not belong to a value"
       }
     }
-    .Intrinsic(target, intrinsic, arguments, at) => emitIntrinsic emitter, body, program, target, intrinsic, arguments, at
+    .Intrinsic(target, intrinsic, arguments, at) => emitIntrinsic(
+      emitter,
+      body,
+      program,
+      target,
+      intrinsic,
+      arguments,
+      at,
+    )
     .Construct(target, layout, variant, fields) => emitConstruct emitter, body, program, target, layout, variant, fields
     .Read(target, reference) => {
       if reference.steps.isEmpty() && !body.references[reference.base.value] {
@@ -1653,7 +1654,12 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
       const size = operand emitter, body, program, capacity
       const register = targetOf emitter, body, target
       const location = siteIndex emitter, body, program, at
-      emitKernel emitter, body, kernelNumberOf(KernelOperation.ChannelNew), [register, size, emitter.elementBase + item.value, location]
+      emitKernel(
+        emitter,
+        body,
+        kernelNumberOf(KernelOperation.ChannelNew),
+        [register, size, emitter.elementBase + item.value, location],
+      )
     }
   }
 }
@@ -2362,7 +2368,15 @@ fn emitConstruct(
         placed.append tag
         placed.append 1
       }
-      emitBlockNew emitter, body, register, blockShapeIndex(emitter, program, layout), recordBlockKind, words.width, placed
+      emitBlockNew(
+        emitter,
+        body,
+        register,
+        blockShapeIndex(emitter, program, layout),
+        recordBlockKind,
+        words.width,
+        placed,
+      )
     }
   }
 }

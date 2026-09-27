@@ -160,10 +160,7 @@ group "Instantiating a checker type" {
   test "a variadic parameter holds the list the call site builds" {
     var found = probe "type Probe \{\n  field: Int\n\}"
     const integer = found.at "Int"
-    const form = FunctionForm(
-      [ParameterForm("parts", ParameterMode.Variadic, integer, false)],
-      found.checker.voidType,
-    )
+    const form = FunctionForm([ParameterForm("parts", ParameterMode.Variadic, integer, false)], found.checker.voidType)
     const signature = instantiateSignature found.program, found.checker, found.instantiation, form
     assert(describeIrSignature(found.program, signature) == "(List(Int64)) -> Void")
   }
@@ -188,14 +185,8 @@ group "Instantiating a checker type" {
     assert(ofInteger == "Variant(T_std_x2f_prelude_types_Option__Int64)")
     const printed = printProgram found.program
     // `Some` is the first case of the prelude's `Option`, so the niche names variant 0 and its one field
-    assert(
-      printed.contains(
-        "layout T_std_x2f_prelude_types_Option__List_Int64 niche(0, 0) size 16 align 8 counted variants(Some(value: List(Int64)), None)"
-      )
-    )
-    assert(
-      printed.contains("layout T_std_x2f_prelude_types_Option__Int64 inline size 16 align 8 variants(Some(value: Int64), None)")
-    )
+    assert printed.contains("layout T_std_x2f_prelude_types_Option__List_Int64 niche(0, 0) size 16 align 8 counted variants(Some(value: List(Int64)), None)")
+    assert printed.contains("layout T_std_x2f_prelude_types_Option__Int64 inline size 16 align 8 variants(Some(value: Int64), None)")
   }
 
   test "a type of the program becomes a record with its fields, named after where it is written" {
@@ -205,13 +196,15 @@ group "Instantiating a checker type" {
     finishProgram found.program
     assert(built == "Record(T_acme_x2f_app_main_Point)")
     assert(
-      printProgram(found.program).contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)")
+      printProgram(
+        found.program,
+      ).contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)"),
     )
   }
 
   test "a generic type is one layout per instance, and the arguments are in its name" {
     var found = probe(
-      "type Probe \{\n  first: Holder<Int>\n  second: Holder<String>\n\}\n\ntype Holder<Item> \{\n  item: Item\n\}"
+      "type Probe \{\n  first: Holder<Int>\n  second: Holder<String>\n\}\n\ntype Holder<Item> \{\n  item: Item\n\}",
     )
     const ofInteger = found.show "Holder<Int>"
     const ofText = found.show "Holder<String>"
@@ -220,7 +213,9 @@ group "Instantiating a checker type" {
     assert(ofText == "Record(T_acme_x2f_app_main_Holder__String)")
     const printed = printProgram found.program
     assert printed.contains("layout T_acme_x2f_app_main_Holder__Int64 inline size 8 align 8 fields(item: Int64)")
-    assert printed.contains("layout T_acme_x2f_app_main_Holder__String inline size 16 align 8 counted fields(item: String)")
+    assert(
+      printed.contains("layout T_acme_x2f_app_main_Holder__String inline size 16 align 8 counted fields(item: String)"),
+    )
   }
 
   test "a substitution is what makes a generic declaration monomorphic" {
@@ -248,12 +243,14 @@ group "Instantiating a checker type" {
 
   test "a type that contains itself through its cases is boxed, and its nodes are counted" {
     var found = probe(
-      "type Probe \{\n  field: Tree\n\}\n\ntype Tree \{\n  case Leaf(value: Int)\n  case Branch(left: Tree, right: Tree)\n\}"
+      "type Probe \{\n  field: Tree\n\}\n\ntype Tree \{\n  case Leaf(value: Int)\n  case Branch(left: Tree, right: Tree)\n\}",
     )
     const built = found.show "Tree"
     finishProgram found.program
     assert(built == "Variant(T_acme_x2f_app_main_Tree)")
-    assert printProgram(found.program).contains("layout T_acme_x2f_app_main_Tree boxed recursive size 24 align 8 counted")
+    assert(
+      printProgram(found.program).contains("layout T_acme_x2f_app_main_Tree boxed recursive size 24 align 8 counted"),
+    )
   }
 
   test "a `shared type` is an object with a header, and everything that holds one can be in a cycle" {
@@ -263,11 +260,7 @@ group "Instantiating a checker type" {
     finishProgram found.program
     assert(built == "Record(T_acme_x2f_app_main_Holder)")
     const printed = printProgram found.program
-    assert(
-      printed.contains(
-        "layout T_acme_x2f_app_main_Holder inline size 8 align 8 counted shared fields(counter: Shared(T_acme_x2f_app_main_Counter))"
-      )
-    )
+    assert printed.contains("layout T_acme_x2f_app_main_Holder inline size 8 align 8 counted shared fields(counter: Shared(T_acme_x2f_app_main_Counter))")
     assert printed.contains("layout T_acme_x2f_app_main_Counter boxed size 8 align 8 fields(value: Int64)")
   }
 }

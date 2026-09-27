@@ -204,16 +204,14 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
   // Compiled: the program grows by this entry's part whatever happens when it runs
   const locationsBefore = session.machine.program.locations.length()
   appendProgram session.machine, lowered
-  session.locations.append(
-    EntryLocations(
-      locationsBefore,
-      lowered.locations.length(),
-      compiled.synthesis,
-      lineStartsOf(compiled.synthesis.text),
-      modulePathOf(compiled.checked),
-      label,
-    ),
-  )
+  session.locations.append(EntryLocations(
+    locationsBefore,
+    lowered.locations.length(),
+    compiled.synthesis,
+    lineStartsOf(compiled.synthesis.text),
+    modulePathOf(compiled.checked),
+    label,
+  ))
   const chunk = lowered.entries.first() ?? 0
   const entry = lowered.chunks[chunk]
   var registers: List<Int> = []
@@ -241,14 +239,7 @@ public fn evaluate(var session: Session, text: String, named: String? = None): O
   }
   const answered = callSandboxed session.machine, session.grant, budget, chunk, arguments
   // The declarations checked, so they are the session's from here on, whatever the statements did
-  keepDeclarations(
-    session,
-    current,
-    plan,
-    compiled.displaced,
-    compiled.generationDeclarations,
-    compiled.renamedBindings,
-  )
+  keepDeclarations session, current, plan, compiled.displaced, compiled.generationDeclarations, compiled.renamedBindings
   var outputs: List<SessionBinding> = []
   for index in 0..compiled.outputs.length() {
     const (name, isVar, typeText, imports) = compiled.outputs[index]
@@ -395,12 +386,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
     }
   }
   // The module that runs: the same statements, handing the new bindings out
-  var final = form.copy(
-    outputs: outputTexts(outputs),
-    shown: shown,
-    shownBindings: shownBindings,
-    imports: imports,
-  )
+  var final = form.copy outputs: outputTexts(outputs), shown: shown, shownBindings: shownBindings, imports: imports
   synthesis = synthesize session.sources, declarations, texts, current, plan, final
   checked = checkSession session, synthesis.text, true
   problems = problemsOf session, checked, synthesis

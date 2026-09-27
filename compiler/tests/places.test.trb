@@ -51,8 +51,7 @@ group "The root of a path" {
     const source = "{counter}fn probe() \{\n  const fixed = Counter()\n  fixed.count = 1\n\}"
     assert(problems(source) == ["`fixed` is a `const`. Only a `var` binding can be changed"])
     assert(
-      notes(source)
-        == ["`const` is deep: through it nothing is assigned, no field is written and no verb is called"]
+      notes(source) == ["`const` is deep: through it nothing is assigned, no field is written and no verb is called"],
     )
     const found = probe source
     assert(!found.hasPlaceAt("fixed.count"))
@@ -65,9 +64,7 @@ group "The root of a path" {
   }
 
   test "a `const` parameter is a `const`, and `var self` is a place" {
-    assert(
-      problems("{counter}fn probe(kept: Counter) \{\n  kept.increment()\n\}") == ["`increment` needs a `var`"]
-    )
+    assert(problems("{counter}fn probe(kept: Counter) \{\n  kept.increment()\n\}") == ["`increment` needs a `var`"])
     assert problems("{counter}fn probe(var kept: Counter) \{\n  kept.increment()\n\}").isEmpty()
   }
 
@@ -94,9 +91,7 @@ group "Fields" {
   test "`private(var)` hands everybody else a const path" {
     const files = outsideAccount "fn probe(var target: Account) \{\n  target.balance = 10\n\}"
     assert(problemsOf(files) == ["`balance` can only be written by `Account`"])
-    assert(
-      notesOf(files) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
-    )
+    assert(notesOf(files) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"])
   }
 
   test "const is deep, so a verb on a `private(var)` collection is an error too" {
@@ -143,12 +138,10 @@ group "Indexes and windows" {
   test "a type that is only `Indexed` has no `var` path through `a[key]`" {
     const source = "type Frozen with Indexed<Int, Int> \{\n  fn at(key: Int): Int \{\n    0\n  \}\n\}\n\n"
       + "fn probe(var frozen: Frozen) \{\n  frozen[0] = 1\n\}"
-    assert(
-      problems(source) == ["`Frozen` does not implement `MutableIndexed`, so `a[key]` is no `var` path"]
-    )
+    assert(problems(source) == ["`Frozen` does not implement `MutableIndexed`, so `a[key]` is no `var` path"])
     assert(
       notes(source)
-        == ["A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait"]
+        == ["A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait"],
     )
   }
 
@@ -165,17 +158,14 @@ group "Temporaries" {
     const source = "{counter}fn probe() \{\n  Counter().increment()\n\}"
     assert(
       problems(source)
-        == ["This is a temporary, and `increment` changes its receiver: the change would be thrown away"]
+        == ["This is a temporary, and `increment` changes its receiver: the change would be thrown away"],
     )
     assert(notes(source) == ["Bind it first (`var cursor = iterate()`), then the path leads somewhere"])
   }
 
   test "assigning into a temporary is the same mistake" {
-    const source = "{counter}fn make(): Counter \{\n  Counter()\n\}\n\n"
-      + "fn probe() \{\n  make().count = 1\n\}"
-    assert(
-      problems(source) == ["This is a temporary, and an assignment writes it: the change would be thrown away"]
-    )
+    const source = "{counter}fn make(): Counter \{\n  Counter()\n\}\n\n" + "fn probe() \{\n  make().count = 1\n\}"
+    assert(problems(source) == ["This is a temporary, and an assignment writes it: the change would be thrown away"])
   }
 
   test "a temporary is a valid argument for a `var` parameter (gap 2)" {
@@ -192,9 +182,7 @@ group "Temporaries" {
       + "fn bump(var target: Inner) \{\n  target.value = 1\n\}\n\n"
       + "fn make(): Outer \{\n  Outer()\n\}\n\n"
       + "fn probe() \{\n  bump(make().inner)\n\}"
-    assert(
-      problems(source) == ["This is a temporary, and `bump` changes `target`: the change would be thrown away"]
-    )
+    assert(problems(source) == ["This is a temporary, and `bump` changes `target`: the change would be thrown away"])
   }
 
   test "a temporary with an identity is a `var` path: nothing is thrown away where there is no copy (gap 52)" {
@@ -219,9 +207,7 @@ group "Temporaries" {
     const source = "{counter}fn bump(var target: Counter) \{\n  target.increment()\n\}\n\n"
       + "fn probe(kept: Counter) \{\n  bump(kept)\n\}"
     assert(problems(source) == ["`bump` changes `target`, and `kept` is a `const`"])
-    assert(
-      notes(source) == ["A `var` parameter works on the caller's value, so its argument has to be a `var` path"]
-    )
+    assert(notes(source) == ["A `var` parameter works on the caller's value, so its argument has to be a `var` path"])
   }
 }
 
@@ -307,7 +293,7 @@ group "An object changes through any path it is reached through" {
     assert(problems(assigned) == ["`self` is the object itself, and a method of a shared type cannot replace it"])
     assert(
       notes(assigned)
-        == ["Everybody who holds the object holds this one: change its fields, or make a new one and return it"]
+        == ["Everybody who holds the object holds this one: change its fields, or make a new one and return it"],
     )
     const handed = "shared type Connection \{\n  url: String\n\n  var fn reconnect() \{\n    replace(self)\n  \}\n\}\n\n"
       + "fn replace(var connection: Connection) \{\n  connection = Connection(\"tcp://y\")\n\}"
@@ -335,7 +321,7 @@ group "Closures that may outlive their call (BACKEND gap 14)" {
         == [
           "A reference is second-class: only a closure written straight as the argument of a call that just calls it "
             + "may hold one",
-        ]
+        ],
     )
     const found = probe source
     assert(found.closureKindOf("\{ target.increment() \}") == "escaping")

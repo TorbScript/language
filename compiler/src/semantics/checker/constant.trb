@@ -59,8 +59,8 @@ public fn checkConstantInitializer(var checker: Checker, module: ModuleId, value
         .withNote(
           "A module has no initialization order: literals, the operators of the number types and of `Bool`,"
             + " interpolation, tuple, list and map literals, constructor calls of such, and other compile-time"
-            + " constants. `Point(0, 0)` is one, `Point.origin()` is a call and is not"
-        )
+            + " constants. `Point(0, 0)` is one, `Point.origin()` is a call and is not",
+        ),
     )
   }
 }
@@ -94,7 +94,7 @@ public fn checkFieldDefaultConstant(var checker: Checker, module: ModuleId, valu
               + " it in a `static fn`",
             made.span,
           )
-            .withNote("A constant is built once and shared, and an object has an identity, so it is never shared")
+            .withNote("A constant is built once and shared, and an object has an identity, so it is never shared"),
         )
       }
       return
@@ -125,8 +125,8 @@ public fn checkFieldDefaultConstant(var checker: Checker, module: ModuleId, valu
     Diagnostic.error(message, at)
       .withNote(
         "A constructor has no body: a default is a literal, a collection literal, a constructor or a case of"
-          + " constants, a named constant, or an operator on those - so it can be built once and shared"
-      )
+          + " constants, a named constant, or an operator on those - so it can be built once and shared",
+      ),
   )
 }
 
@@ -274,12 +274,7 @@ fn isValue(result: ConstantResult): Bool {
  * of the tables, which is why this runs after the body of a module was walked: whether `Point(0, 0)` is a constructor
  * call or a function call is a question only the resolution answers.
  */
-public fn evaluateConstant(
-  var checker: Checker,
-  module: ModuleId,
-  expression: Expression,
-  depth: Int,
-): ConstantResult {
+public fn evaluateConstant(var checker: Checker, module: ModuleId, expression: Expression, depth: Int): ConstantResult {
   if depth > constantDepthLimit {
     return ConstantResult.NotConstant expression.span
   }
@@ -336,12 +331,7 @@ fn floatConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
  * Interpolation is not a function call, so a text of compile-time parts is one. A plain literal keeps its
  * value, because that is the only text anything else could read; an interpolated one is an aggregate like any other.
  */
-fn textConstant(
-  var checker: Checker,
-  module: ModuleId,
-  segments: List<TextSegment>,
-  depth: Int,
-): ConstantResult {
+fn textConstant(var checker: Checker, module: ModuleId, segments: List<TextSegment>, depth: Int): ConstantResult {
   var text = ""
   var isPlain = true
   for segment in segments {
@@ -364,12 +354,7 @@ fn textConstant(
   ConstantResult.Value ConstantValue.Composite
 }
 
-fn argumentsConstant(
-  var checker: Checker,
-  module: ModuleId,
-  arguments: List<Argument>,
-  depth: Int,
-): ConstantResult {
+fn argumentsConstant(var checker: Checker, module: ModuleId, arguments: List<Argument>, depth: Int): ConstantResult {
   for argument in arguments {
     const found = evaluateConstant(checker, module, argument.value, depth + 1)
     if !isValue(found) {
@@ -617,7 +602,7 @@ fn bitsConstant(
     checker.report(
       module,
       Diagnostic.error("This shifts by {right}, which is not between 0 and {width - 1}", at)
-        .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
+        .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile"),
     )
     return ConstantResult.Broken
   }
@@ -706,7 +691,14 @@ fn binaryConstant(
     }
   }
   match operator {
-    .Add | .Subtract | .Multiply | .Divide | .Remainder | .Power => arithmeticConstant checker, module, operator, a, b, at
+    .Add | .Subtract | .Multiply | .Divide | .Remainder | .Power => arithmeticConstant(
+      checker,
+      module,
+      operator,
+      a,
+      b,
+      at,
+    )
     .BitwiseAnd | .BitwiseOr | .BitwiseExclusiveOr | .ShiftLeft | .ShiftRight => {
       bitsConstant checker, module, operator, a, b, at
     }
@@ -1037,7 +1029,7 @@ public fn requireCertainArithmetic(
         checker.report(
           module,
           Diagnostic.error("`{spelling}` by zero panics wherever it runs, and this divisor is zero", at)
-            .withNote("`dividedChecked` and `remainderChecked` answer an `Option` for a divisor that may be zero")
+            .withNote("`dividedChecked` and `remainderChecked` answer an `Option` for a divisor that may be zero"),
         )
       }
       return
@@ -1057,7 +1049,7 @@ public fn requireCertainArithmetic(
     checker.report(
       module,
       Diagnostic.error("This does not fit into an `{name}`, so it panics wherever it runs", at)
-        .withNote("Both operands are known here. `addedChecked` and its siblings answer an `Option` instead")
+        .withNote("Both operands are known here. `addedChecked` and its siblings answer an `Option` instead"),
     )
   }
 }
@@ -1066,7 +1058,7 @@ fn reportOverflow(var checker: Checker, module: ModuleId, at: Span): ConstantRes
   checker.report(
     module,
     Diagnostic.error("This does not fit into an `Int64`", at)
-      .withNote("A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is caught here")
+      .withNote("A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is caught here"),
   )
   ConstantResult.Broken
 }
@@ -1075,7 +1067,7 @@ fn reportNegativeExponent(var checker: Checker, module: ModuleId, at: Span): Con
   checker.report(
     module,
     Diagnostic.error("This raises an integer to a negative power, which is not a whole number", at)
-      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
+      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile"),
   )
   ConstantResult.Broken
 }
@@ -1084,7 +1076,7 @@ fn reportDivisionByZero(var checker: Checker, module: ModuleId, at: Span): Const
   checker.report(
     module,
     Diagnostic.error("This divides by zero", at)
-      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
+      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile"),
   )
   ConstantResult.Broken
 }

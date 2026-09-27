@@ -15,8 +15,7 @@ fn inBody(body: String): String {
 
 group "Unification variables" {
   test "a generic call solves its parameter from the argument, and records what it was instantiated with" {
-    const source = "fn identity<Value>(value: Value): Value \{\n  value\n\}\n\n"
-      + inBody("  const found = identity(3)")
+    const source = "fn identity<Value>(value: Value): Value \{\n  value\n\}\n\n" + inBody("  const found = identity(3)")
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("identity(3)") == "Int64")
@@ -34,8 +33,7 @@ group "Unification variables" {
     const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n" + inBody("  const found = make()")
     assert(problems(source) == ["Cannot infer `Value` of `make`"])
     assert(
-      notes(source)
-        == ["Annotate the closure parameter or the result, or write the type argument: `make<Value>(...)`"]
+      notes(source) == ["Annotate the closure parameter or the result, or write the type argument: `make<Value>(...)`"],
     )
   }
 
@@ -68,21 +66,19 @@ group "Unification variables" {
     assert(problems(source) == ["Cannot infer `Output` of `convert`"])
     assert(
       notes(source)
-        == ["Annotate the closure parameter or the result, or write the type argument: `convert<Int64, Output>(...)`"]
+        == ["Annotate the closure parameter or the result, or write the type argument: `convert<Int64, Output>(...)`"],
     )
   }
 
   test "the expected type of the binding decides what a call produces" {
-    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
-      + inBody("  const found: Int = make()")
+    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n" + inBody("  const found: Int = make()")
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeArgumentsOf("make()") == ["Int64"])
   }
 
   test "an explicit type argument fills the parameters from the left" {
-    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
-      + inBody("  const found = make<String>()")
+    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n" + inBody("  const found = make<String>()")
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("make<String>()") == "String")
@@ -90,17 +86,14 @@ group "Unification variables" {
   }
 
   test "more type arguments than the callee has parameters is an error" {
-    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
-      + inBody("  const found = make<String, Int>()")
+    const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n" + inBody("  const found = make<String, Int>()")
     assert(problems(source) == ["`make` takes 1 type argument, 2 were given"])
   }
 
   test "a variable never leaves its statement: what one line cannot decide, the next one may not" {
     const source = inBody "  var items = []\n  items.append(1)\n  print items.length()"
     assert(problems(source) == ["Cannot infer the type of this collection"])
-    assert(
-      notes(source) == ["An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)"]
-    )
+    assert(notes(source) == ["An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)"])
   }
 
   /**
@@ -116,7 +109,7 @@ group "Unification variables" {
       + "  const _taken = take(clicked)\n  const _renamed = first(before[1])"
     assert(
       problems(declarations + inBody(statements))
-        == ["Cannot infer `Message` of `make`", "Cannot infer `Message` of `first`"]
+        == ["Cannot infer `Message` of `make`", "Cannot infer `Message` of `first`"],
     )
   }
 }
@@ -132,8 +125,7 @@ group "Literals through a variable" {
   }
 
   test "a literal that arrives at a known numeric type adapts to it, and records what it became" {
-    const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n"
-      + inBody("  const small: Int8 = take(1)")
+    const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n" + inBody("  const small: Int8 = take(1)")
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.adaptationsOf("1") == ["literal Int8"])
@@ -141,8 +133,7 @@ group "Literals through a variable" {
   }
 
   test "a decimal literal is a `Float64` where nothing else says so" {
-    const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n"
-      + inBody("  const found = take(1.5)")
+    const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n" + inBody("  const found = take(1.5)")
     const probed = probe source
     assert(probed.typeArgumentsOf("take(1.5)") == ["Float64"])
   }
@@ -322,7 +313,7 @@ group "What the expected type reaches" {
         == [
           "Write it out: `ConfigError.Missing(...)`. The `?` only decides the failure type once the argument has been"
             + " read",
-        ]
+        ],
     )
   }
 }
@@ -366,7 +357,7 @@ group "A parameter only a bound mentions" {
     assert(problems(source) == ["Cannot infer `Message` of `render`"])
     assert(
       notes(source)
-        == ["Annotate the closure parameter or the result, or write the type argument: `render<Both, Message>(...)`"]
+        == ["Annotate the closure parameter or the result, or write the type argument: `render<Both, Message>(...)`"],
     )
   }
 

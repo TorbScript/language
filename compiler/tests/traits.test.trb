@@ -158,7 +158,7 @@ group "A trait with a parameter, implemented more than once" {
       notes(source) == [
         "It exists for Option<Int64>, Option<String>: write the type that is expected of this call, or name it with a "
           + "type argument",
-      ]
+      ],
     )
   }
 
@@ -254,21 +254,19 @@ group "An operator whose trait is implemented more than once" {
         "A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name",
         "`Sketch` comes with `Draw` more than once, and one body per instantiation is one `extend` per instantiation: "
           + "`extend Sketch with Draw<...> \{ fn draw(...) \}`",
-      ]
+      ],
     )
   }
 
   test "one body cannot be the implementation of two instantiations, and the message names the first" {
     const source = "type Twice with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice> \{\n"
       + "  fn at(key: Int): Int \{\n    key\n  \}\n\}\n"
-    assert(
-      problems(source) == ["`Twice` comes with `Indexed` more than once, and `at` is the body of the first one"]
-    )
+    assert(problems(source) == ["`Twice` comes with `Indexed` more than once, and `at` is the body of the first one"])
     assert(
       notes(source) == [
         "A type has one namespace of members, so one body per instantiation is one `extend` per instantiation: "
           + "`extend Twice with Indexed<...> \{ fn at(...) \}`",
-      ]
+      ],
     )
   }
 
@@ -279,7 +277,7 @@ group "An operator whose trait is implemented more than once" {
       problems(source) == [
         "A `with` list separates entries with commas, not `&`: write `with Indexed<Int, Int>, Indexed<Bounds<Int>, Twice>`",
         "`Twice` comes with `Indexed` more than once, and `at` is the body of the first one",
-      ]
+      ],
     )
   }
 
@@ -467,7 +465,7 @@ group "Operators through their traits" {
         == [
           "How many items there are is known here, so an index that is written out is checked instead of panicking."
             + " `get(4)` answers an `Option` instead",
-        ]
+        ],
     )
     assert problems("fn probe(values: Array<Float, 4>): Float \{\n  values[3]\n\}").isEmpty()
     assert problems("fn probe(values: Array<Float, 4>, at: Int): Float \{\n  values[at]\n\}").isEmpty()
@@ -487,9 +485,12 @@ group "Operators through their traits" {
   }
 
   test "a slice of a collection literal whose ends are written out is checked as well" {
-    assert(problems(inBody("  print([1, 2, 3][1..5])")) == ["The range reaches outside this literal, which has 3 items"])
     assert(
-      problems(inBody("  print([1, 2, 3][2..1])")) == ["The range starts after it ends, so this slice panics wherever it runs"]
+      problems(inBody("  print([1, 2, 3][1..5])")) == ["The range reaches outside this literal, which has 3 items"],
+    )
+    assert(
+      problems(inBody("  print([1, 2, 3][2..1])"))
+        == ["The range starts after it ends, so this slice panics wherever it runs"],
     )
     assert problems(inBody("  print([1, 2, 3][1..3])")).isEmpty()
     assert problems(inBody("  print([1, 2, 3][0..=2])")).isEmpty()
@@ -509,7 +510,7 @@ group "Operators through their traits" {
     assert(problems("fn probe(value: Int): Int \{\n  value / 0\n\}") == byZero)
     assert(
       problems("fn probe(value: Int): Int \{\n  value % 0\n\}")
-        == ["`%` by zero panics wherever it runs, and this divisor is zero"]
+        == ["`%` by zero panics wherever it runs, and this divisor is zero"],
     )
     assert(problems(inBody("  print(9223372036854775807 + 1)")) == ["This does not fit into an `Int64`"])
     assert problems("fn probe(value: Int): Int \{\n  value / 2\n\}").isEmpty()
@@ -526,8 +527,7 @@ group "Operators through their traits" {
   }
 
   test "an order is a decision, so no `type` gets a derived `Compare`" {
-    const source = "type Amount \{\n  value: Int\n\}\n\n"
-      + "fn probe(a: Amount, b: Amount): Bool \{\n  a < b\n\}"
+    const source = "type Amount \{\n  value: Int\n\}\n\n" + "fn probe(a: Amount, b: Amount): Bool \{\n  a < b\n\}"
     assert(problems(source) == ["`Amount` does not implement `Compare`, so `a < b` has no meaning for it"])
   }
 
@@ -677,7 +677,7 @@ group "Interpolation and iteration" {
   test "`for` walks everything that implements `Iterate`, through an `extend` as well" {
     const source = inBody(
       "  const texts: List<String> = [\"a\"]\n  for part in texts \{\n    print (part)\n  \}\n"
-        + "  for index in 0..2 \{\n    print (index)\n  \}"
+        + "  for index in 0..2 \{\n    print (index)\n  \}",
     )
     assert problems(source).isEmpty()
     const found = probe source
@@ -697,9 +697,7 @@ group "Interpolation and iteration" {
     const source = "type Holder \{\n  item: Equals\n\}\n\n"
       + "fn probe(holder: Holder): String \{\n  \"\{holder\}\"\n\}"
     assert(problems(source) == ["`Holder` does not implement `Show`, so it cannot be interpolated"])
-    assert(
-      notes(source) == ["`with Show` on the declaration derives it for a type all of whose fields are `Show`"]
-    )
+    assert(notes(source) == ["`with Show` on the declaration derives it for a type all of whose fields are `Show`"])
   }
 }
 
@@ -721,8 +719,7 @@ group "Coercion to a trait type" {
   }
 
   test "a trait value coerces to fewer bounds and to a supertrait" {
-    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
-      + "fn narrow(value: Shape & Show): Shape \{\n  value\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n" + "fn narrow(value: Shape & Show): Shape \{\n  value\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -734,8 +731,7 @@ group "Coercion to a trait type" {
   }
 
   test "`Never` fits everywhere" {
-    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
-      + "fn broken(): Shape \{\n  panic \"none\"\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n" + "fn broken(): Shape \{\n  panic \"none\"\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -797,14 +793,14 @@ group "A bound a trait-typed value witnesses" {
     // table the trait-typed value brings, so the whole tree is usable even though its root is a static implementation
     assert(
       probe(witnessSource).witnessesOf("render(failed)")
-        == ["Result<Value, Failure>: Show [Int64: Signed, object Problem: Show]"]
+        == ["Result<Value, Failure>: Show [Int64: Signed, object Problem: Show]"],
     )
   }
 
   test "an `&` intersection witnesses the bound its parts cover" {
     assert(
       probe(witnessSource).witnessesOf("render(pair)")
-        == ["Result<Value, Failure>: Show [Int64: Signed, object Show & Hash: Show]"]
+        == ["Result<Value, Failure>: Show [Int64: Signed, object Show & Hash: Show]"],
     )
   }
 
@@ -870,7 +866,8 @@ group "A constant a trait requires" {
     const source = "type Point \{\n  x: Int\n\n  static zero: Point\n\}"
     assert(problems(source) == ["A constant of the type needs a value"])
     assert(
-      notes(source) == ["Only a trait requires a constant without one, and every implementation of the trait provides it"]
+      notes(source)
+        == ["Only a trait requires a constant without one, and every implementation of the trait provides it"],
     )
   }
 }

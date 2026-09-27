@@ -185,14 +185,18 @@ const (veterans, others) = employees.collect(partitioningBy { _.age >= 40 })
 
 // Grouping takes a downstream collector per group
 const byDepartment = employees.collect(groupingBy { _.department })            // Map<String, List<Employee>>
-const salaryByDepartment = employees.collect(groupingBy { employee: Employee => employee.department }.then(summing { _.salary }))
+const salaryByDepartment = employees.collect(
+  groupingBy { employee: Employee => employee.department }.then(summing { _.salary }),
+)
 const topEarners = employees.collect(groupingBy { employee: Employee => employee.department }.then(maxBy { _.salary }))
 const teams = employees.collect(groupingBy { employee: Employee => employee.department }.then(into<Set<Employee>>()))
 
 print salaryByDepartment                 // ["Engineering": 250, "Operations": 90, "Research": 140]
 
 // An accumulator is a value: name it, pass it around, collect with it twice - each run fills its own copy
-const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(averaging { Float.from _.salary })
+const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(
+  averaging { Float.from _.salary },
+)
 print employees.collect(salaryStatistics)
 print(employees.filter { _.age < 50 }.collect(salaryStatistics))
 

@@ -150,11 +150,16 @@ group "The calls that become commands" {
 
   test "a default of a parameter is not command position but a field is" {
     unchanged "fn f(limit: Int = maximum(1)) \{\}"
-    assert(defaultCanon("type Config \{\n  limit: Int = maximum(1)\n\}") == "type Config \{\n  limit: Int = maximum 1\n\}")
+    assert(
+      defaultCanon("type Config \{\n  limit: Int = maximum(1)\n\}") == "type Config \{\n  limit: Int = maximum 1\n\}",
+    )
   }
 
   test "the body of a match arm and of a closure are command positions" {
-    assert(defaultCanon("fn f() \{\n  match x \{\n    .A => Ok(x)\n  \}\n\}") == "fn f() \{\n  match x \{\n    .A => Ok x\n  \}\n\}")
+    assert(
+      defaultCanon("fn f() \{\n  match x \{\n    .A => Ok(x)\n  \}\n\}")
+        == "fn f() \{\n  match x \{\n    .A => Ok x\n  \}\n\}",
+    )
     assert(defaultCanon("const f = \{ x =>\n  Ok(x)\n\}") == "const f = \{ x =>\n  Ok x\n\}")
     unchanged "fn f() \{\n  match x \{\n    a if ready(a) => 0\n  \}\n\}"
   }
@@ -164,7 +169,10 @@ group "The calls that become commands" {
     unchanged "type Fold \{\n  step: (Int) => Int\n  var fn add() \{\n    state = self.step(1)\n  \}\n\}"
     unchanged "type Config \{\n  port: Int\n  var fn fill() \{\n    port 8080\n  \}\n\}"
     unchanged "type Config \{\n  port: Int\n  var fn fill() \{\n    port port + 1\n  \}\n\}"
-    assert(defaultCanon("type Config \{\n  port: Int\n  var fn fill() \{\n    log(port)\n  \}\n\}") == "type Config \{\n  port: Int\n  var fn fill() \{\n    log port\n  \}\n\}")
+    assert(
+      defaultCanon("type Config \{\n  port: Int\n  var fn fill() \{\n    log(port)\n  \}\n\}")
+        == "type Config \{\n  port: Int\n  var fn fill() \{\n    log port\n  \}\n\}",
+    )
     assert(defaultCanon("type Config \{\n  port: Int\n\}\nport(8080)") == "type Config \{\n  port: Int\n\}\nport 8080")
   }
 
@@ -212,21 +220,33 @@ group "The commands that get parentheses" {
   }
 
   test "a command keeps its trailing closure outside of the parentheses" {
-    assert(defaultCanon("fn f() \{\n  retry 3 + 1 \{\n    stop()\n  \}\n\}") == "fn f() \{\n  retry(3 + 1) \{\n    stop()\n  \}\n\}")
+    assert(
+      defaultCanon("fn f() \{\n  retry 3 + 1 \{\n    stop()\n  \}\n\}")
+        == "fn f() \{\n  retry(3 + 1) \{\n    stop()\n  \}\n\}",
+    )
   }
 
   test "a command in a default of a case field gets parentheses" {
-    assert(defaultCanon("type Shape \{\n  case Circle(radius: Float = scaled 1.0)\n\}") == "type Shape \{\n  case Circle(radius: Float = scaled(1.0))\n\}")
+    assert(
+      defaultCanon("type Shape \{\n  case Circle(radius: Float = scaled 1.0)\n\}")
+        == "type Shape \{\n  case Circle(radius: Float = scaled(1.0))\n\}",
+    )
   }
 }
 
 group "Multi-line strings" {
   test "a flush left string is indented" {
-    assert(defaultCanon("fn f() \{\n  const source = \"\"\"\nfn main() \\\{\n  print \"x\"\n\\\}\n\"\"\"\n\}") == "fn f() \{\n  const source = \"\"\"\n    fn main() \\\{\n      print \"x\"\n    \\\}\n    \"\"\"\n\}")
+    assert(
+      defaultCanon("fn f() \{\n  const source = \"\"\"\nfn main() \\\{\n  print \"x\"\n\\\}\n\"\"\"\n\}")
+        == "fn f() \{\n  const source = \"\"\"\n    fn main() \\\{\n      print \"x\"\n    \\\}\n    \"\"\"\n\}",
+    )
   }
 
   test "an over-indented string is brought back" {
-    assert(defaultCanon("const text = \"\"\"\n        first\n          nested\n        \"\"\"") == "const text = \"\"\"\n  first\n    nested\n  \"\"\"")
+    assert(
+      defaultCanon("const text = \"\"\"\n        first\n          nested\n        \"\"\"")
+        == "const text = \"\"\"\n  first\n    nested\n  \"\"\"",
+    )
   }
 
   test "a string that is already in the form is left alone" {
@@ -235,13 +255,18 @@ group "Multi-line strings" {
   }
 
   test "a blank line inside a string becomes empty" {
-    assert(defaultCanon("const text = \"\"\"\n  first\n   \t \n  last\n  \"\"\"") == "const text = \"\"\"\n  first\n\n  last\n  \"\"\"")
+    assert(
+      defaultCanon("const text = \"\"\"\n  first\n   \t \n  last\n  \"\"\"")
+        == "const text = \"\"\"\n  first\n\n  last\n  \"\"\"",
+    )
   }
 
   test "a raw string and an interpolated one are indented too" {
     assert(defaultCanon("const text = raw\"\"\"\nfirst\\n\n\"\"\"") == "const text = raw\"\"\"\n  first\\n\n  \"\"\"")
     assert(defaultCanon("const text = \"\"\"\na\{1\}\nb\n\"\"\"") == "const text = \"\"\"\n  a\{1\}\n  b\n  \"\"\"")
-    assert(defaultCanon("const text = \"\"\"\n\\\{literal\}\n\"\"\"") == "const text = \"\"\"\n  \\\{literal\}\n  \"\"\"")
+    assert(
+      defaultCanon("const text = \"\"\"\n\\\{literal\}\n\"\"\"") == "const text = \"\"\"\n  \\\{literal\}\n  \"\"\"",
+    )
   }
 
   test "a one-line string is left alone" {
@@ -250,8 +275,13 @@ group "Multi-line strings" {
   }
 
   test "content on the line of the opening quotes moves to the next line" {
-    assert(defaultCanon("const text = \"\"\"first\nsecond\n\"\"\"") == "const text = \"\"\"\n  first\n  second\n  \"\"\"")
-    assert(defaultCanon("const text = raw\"\"\"  first\n    nested\n  last\"\"\"") == "const text = raw\"\"\"\n  first\n    nested\n  last\"\"\"")
+    assert(
+      defaultCanon("const text = \"\"\"first\nsecond\n\"\"\"") == "const text = \"\"\"\n  first\n  second\n  \"\"\"",
+    )
+    assert(
+      defaultCanon("const text = raw\"\"\"  first\n    nested\n  last\"\"\"")
+        == "const text = raw\"\"\"\n  first\n    nested\n  last\"\"\"",
+    )
   }
 
   test "a line indented less than the reference is a lexer error, so that file never reaches the rule at all" {
@@ -291,37 +321,37 @@ group "The rule that is not part of the default run: imported-case-patterns" {
     const rules = [Rule.ImportedCasePatterns]
     assert(
       applied("use Option.None from \"std/core\"\nfn f() \{\n  match x \{\n    .None => 0\n    _ => 1\n  \}\n\}", rules)
-        == "use Option.None from \"std/core\"\nfn f() \{\n  match x \{\n    None => 0\n    _ => 1\n  \}\n\}"
+        == "use Option.None from \"std/core\"\nfn f() \{\n  match x \{\n    None => 0\n    _ => 1\n  \}\n\}",
     )
     // Without `from` the path is resolved in the file's own scope, and a case out of it counts the same way
     assert(
       applied("use Shape.Empty\nfn f() \{\n  match x \{\n    .Empty => 0\n    _ => 1\n  \}\n\}", rules)
-        == "use Shape.Empty\nfn f() \{\n  match x \{\n    Empty => 0\n    _ => 1\n  \}\n\}"
+        == "use Shape.Empty\nfn f() \{\n  match x \{\n    Empty => 0\n    _ => 1\n  \}\n\}",
     )
     // A single name is a whole export and not a case, so it shadows instead of importing one
     assert(
       applied("use Empty from \"./shape\"\nfn f() \{\n  match x \{\n    .Empty => 0\n    _ => 1\n  \}\n\}", rules)
-        == "use Empty from \"./shape\"\nfn f() \{\n  match x \{\n    .Empty => 0\n    _ => 1\n  \}\n\}"
+        == "use Empty from \"./shape\"\nfn f() \{\n  match x \{\n    .Empty => 0\n    _ => 1\n  \}\n\}",
     )
     // The prelude's own is imported everywhere
     assert(
       applied("fn f() \{\n  match x \{\n    .None => 0\n    _ => 1\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    None => 0\n    _ => 1\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    None => 0\n    _ => 1\n  \}\n\}",
     )
     // A case with a payload is written the way the parser reads it already
     assert(
       applied("fn f() \{\n  match x \{\n    .Some(value) => value\n    _ => 0\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    .Some(value) => value\n    _ => 0\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    .Some(value) => value\n    _ => 0\n  \}\n\}",
     )
     // A case that is not imported keeps its dot
     assert(
       applied("fn f() \{\n  match x \{\n    .Dot => 0\n    _ => 1\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    .Dot => 0\n    _ => 1\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    .Dot => 0\n    _ => 1\n  \}\n\}",
     )
     // A file that declares a name of the prelude shadows it
     assert(
       applied("type None \{\}\nfn f() \{\n  match x \{\n    .None => 0\n    _ => 1\n  \}\n\}", rules)
-        == "type None \{\}\nfn f() \{\n  match x \{\n    .None => 0\n    _ => 1\n  \}\n\}"
+        == "type None \{\}\nfn f() \{\n  match x \{\n    .None => 0\n    _ => 1\n  \}\n\}",
     )
   }
 }
@@ -335,17 +365,17 @@ group "The rule that is not part of the default run: unused-bindings" {
     const rules = [Rule.UnusedBindings]
     assert(
       applied("fn f() \{\n  match x \{\n    Some(value) => true\n    _ => false\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    Some(_) => true\n    _ => false\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    Some(_) => true\n    _ => false\n  \}\n\}",
     )
     // A bare name binds and matches everything, which is the arm the rule is really about
     assert(
       applied("fn f() \{\n  match x \{\n    1 => 0\n    limit => 2\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    1 => 0\n    _ => 2\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    1 => 0\n    _ => 2\n  \}\n\}",
     )
     // Every position of a tuple, a list and a case, as deep as they go
     assert(
       applied("fn f() \{\n  match x \{\n    (a, [b, Some(c)]) => 0\n    _ => 1\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    (_, [_, Some(_)]) => 0\n    _ => 1\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    (_, [_, Some(_)]) => 0\n    _ => 1\n  \}\n\}",
     )
   }
 
@@ -365,7 +395,7 @@ group "The rule that is not part of the default run: unused-bindings" {
     // A longer name that only contains the binding's name is not a use of it
     assert(
       applied("fn f() \{\n  match x \{\n    Some(value) => values\n    _ => 0\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    Some(_) => values\n    _ => 0\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    Some(_) => values\n    _ => 0\n  \}\n\}",
     )
   }
 
@@ -374,11 +404,11 @@ group "The rule that is not part of the default run: unused-bindings" {
     // The language requires every alternative to bind the same names, so all of them have to change or none
     assert(
       applied("fn f() \{\n  match x \{\n    Some(value) | Ok(value) => true\n    _ => false\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    Some(_) | Ok(_) => true\n    _ => false\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    Some(_) | Ok(_) => true\n    _ => false\n  \}\n\}",
     )
     assert(
       applied("fn f() \{\n  match x \{\n    Some(value) | Ok(value) => value\n    _ => 0\n  \}\n\}", rules)
-        == "fn f() \{\n  match x \{\n    Some(value) | Ok(value) => value\n    _ => 0\n  \}\n\}"
+        == "fn f() \{\n  match x \{\n    Some(value) | Ok(value) => value\n    _ => 0\n  \}\n\}",
     )
   }
 
@@ -386,24 +416,27 @@ group "The rule that is not part of the default run: unused-bindings" {
     const rules = [Rule.UnusedBindings]
     assert(
       applied("fn f() \{\n  if const Some(user) = lookup() \{\n    stop()\n  \}\n\}", rules)
-        == "fn f() \{\n  if const Some(_) = lookup() \{\n    stop()\n  \}\n\}"
+        == "fn f() \{\n  if const Some(_) = lookup() \{\n    stop()\n  \}\n\}",
     )
     assert(
       applied("fn f() \{\n  if var Some(user) = lookup() \{\n    user.stop()\n  \}\n\}", rules)
-        == "fn f() \{\n  if var Some(user) = lookup() \{\n    user.stop()\n  \}\n\}"
+        == "fn f() \{\n  if var Some(user) = lookup() \{\n    user.stop()\n  \}\n\}",
     )
     // The `else` is outside the binding's scope, so a name that only stands there is no use of it
     assert(
-      applied("fn f() \{\n  const x = if const Some(user) = lookup() \{\n    1\n  \} else \{\n    user\n  \}\n\}", rules)
-        == "fn f() \{\n  const x = if const Some(_) = lookup() \{\n    1\n  \} else \{\n    user\n  \}\n\}"
+      applied(
+        "fn f() \{\n  const x = if const Some(user) = lookup() \{\n    1\n  \} else \{\n    user\n  \}\n\}",
+        rules,
+      )
+        == "fn f() \{\n  const x = if const Some(_) = lookup() \{\n    1\n  \} else \{\n    user\n  \}\n\}",
     )
     assert(
       applied("fn f() \{\n  while const Some(item) = next() \{\n    count()\n  \}\n\}", rules)
-        == "fn f() \{\n  while const Some(_) = next() \{\n    count()\n  \}\n\}"
+        == "fn f() \{\n  while const Some(_) = next() \{\n    count()\n  \}\n\}",
     )
     assert(
       applied("fn f() \{\n  while const Some(item) = next() \{\n    count(item)\n  \}\n\}", rules)
-        == "fn f() \{\n  while const Some(item) = next() \{\n    count(item)\n  \}\n\}"
+        == "fn f() \{\n  while const Some(item) = next() \{\n    count(item)\n  \}\n\}",
     )
   }
 
@@ -423,17 +456,17 @@ group "`while true` becomes `loop`" {
     const rules = [Rule.Loops]
     assert(
       applied("fn f() \{\n  while true \{\n    step()\n  \}\n\}", rules)
-        == "fn f() \{\n  loop \{\n    step()\n  \}\n\}"
+        == "fn f() \{\n  loop \{\n    step()\n  \}\n\}",
     )
     // The body is rewritten too, however deep it sits
     assert(
       applied("fn f() \{\n  loop \{\n    while true \{\n      step()\n    \}\n  \}\n\}", rules)
-        == "fn f() \{\n  loop \{\n    loop \{\n      step()\n    \}\n  \}\n\}"
+        == "fn f() \{\n  loop \{\n    loop \{\n      step()\n    \}\n  \}\n\}",
     )
     // Everything from the `{` on stays byte-identical, comments and line endings included
     assert(
       applied("fn f() \{\n  while true \{ // forever\n    step()\n  \}\n\}\n", rules)
-        == "fn f() \{\n  loop \{ // forever\n    step()\n  \}\n\}\n"
+        == "fn f() \{\n  loop \{ // forever\n    step()\n  \}\n\}\n",
     )
   }
 
@@ -469,7 +502,10 @@ group "The safety net" {
   }
 
   test "line endings and everything around an edit stay as they are" {
-    assert(defaultCanon("// a comment\r\nconst role = Role(name)\r\n\r\n// and another\r\n") == "// a comment\r\nconst role = Role name\r\n\r\n// and another\r\n")
+    assert(
+      defaultCanon("// a comment\r\nconst role = Role(name)\r\n\r\n// and another\r\n")
+        == "// a comment\r\nconst role = Role name\r\n\r\n// and another\r\n",
+    )
   }
 
   test "the canon of the examples of the decision is what the decision says" {

@@ -70,10 +70,7 @@ group "A field is written only with `=`" {
   }
 
   test "the fix quotes the value exactly as it was written, whatever its type" {
-    assert(
-      problems(inServe("    port \"9000\""))
-        == ["`port` is a field: write `port = \"9000\"`"]
-    )
+    assert(problems(inServe("    port \"9000\"")) == ["`port` is a field: write `port = \"9000\"`"])
   }
 
   test "`onStart \{ ... \}` is an error: the fix is `onStart = \{ ... \}`" {
@@ -86,17 +83,11 @@ group "A field is written only with `=`" {
   }
 
   test "a field with more than one argument still names the whole write" {
-    assert(
-      problems(inServe("    port 1, 2"))
-        == ["`port` is a field: write `port = 1, 2`"]
-    )
+    assert(problems(inServe("    port 1, 2")) == ["`port` is a field: write `port = 1, 2`"])
   }
 
   test "a field that holds a function is written the same way as any other" {
-    assert(
-      problems(inServe("    onStart 1, 2"))
-        == ["`onStart` is a field: write `onStart = 1, 2`"]
-    )
+    assert(problems(inServe("    onStart 1, 2")) == ["`onStart` is a field: write `onStart = 1, 2`"])
   }
 
   test "a field that is not a `var` is still the removed-write error, not a mutability one" {
@@ -142,10 +133,7 @@ group "Property commands: the block that is left" {
   }
 
   test "a closure that does not fit the field's configuration is reported against it" {
-    assert(
-      problems(inServe("    limits \{ a, b => a \}"))
-        == ["This closure takes 1 parameter, 2 were written"]
-    )
+    assert(problems(inServe("    limits \{ a, b => a \}")) == ["This closure takes 1 parameter, 2 were written"])
   }
 }
 
@@ -173,30 +161,27 @@ group "What a property command is not" {
 
   test "a block on a field that has no configuration" {
     assert(
-      problems(inServe("    port \{ \}"))
-        == ["`port` is a `Int64`, which has no configuration a block could fill"]
+      problems(inServe("    port \{ \}")) == ["`port` is a `Int64`, which has no configuration a block could fill"],
     )
     assert(
       notes(inServe("    port \{ \}"))
-        == ["A block on a field applies a receiver closure to its value. Write `port = value` to set it"]
+        == ["A block on a field applies a receiver closure to its value. Write `port = value` to set it"],
     )
   }
 
   test "a type with cases is chosen, not configured" {
     assert(
-      problems(inServe("    level \{ \}"))
-        == ["`level` is a `Level`, which has no configuration a block could fill"]
+      problems(inServe("    level \{ \}")) == ["`level` is a `Level`, which has no configuration a block could fill"],
     )
   }
 
   test "a property command still needs a `var` path: a `const` record field cannot be configured" {
     assert(
-      problems(inServe("    limits2 \{ maxConnections = 500 \}"))
-        == ["`limits2` never changes after construction"]
+      problems(inServe("    limits2 \{ maxConnections = 500 \}")) == ["`limits2` never changes after construction"],
     )
     assert(
       notes(inServe("    limits2 \{ maxConnections = 500 \}"))
-        == ["`limits2 \{ ... \}` configures the field in place, and only a `var` field can be configured"]
+        == ["`limits2 \{ ... \}` configures the field in place, and only a `var` field can be configured"],
     )
   }
 
@@ -252,7 +237,9 @@ group "A property command is a place that is written" {
   }
 
   test "a `private(var)` field is written by `=` of its own type and by nobody else" {
-    assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
+    assert(
+      problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty(),
+    )
     // `private` reaches as far as the file that declares it, so "outside" is a second file
     const outside = [
       "app/src/account.trb": account,
@@ -260,7 +247,7 @@ group "A property command is a place that is written" {
     ]
     assert(problemsOf(outside) == ["`balance` can only be written by `Account`"])
     assert(
-      notesOf(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
+      notesOf(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"],
     )
   }
 
@@ -279,7 +266,7 @@ group "The first argument of a command" {
         == [
           "`Debug` is a case of `Level`. The first argument of a command may not start with `.`, so"
             + " `setting .Debug` is the member `setting.Debug`: write `setting = .Debug`",
-        ]
+        ],
     )
   }
 
@@ -300,7 +287,7 @@ group "The first argument of a command" {
         == [
           "The first argument of a command may not start with `.`, whatever whitespace stands before it: write"
             + " `tags(.Debug)`",
-        ]
+        ],
     )
   }
 
@@ -312,7 +299,7 @@ group "The first argument of a command" {
         == [
           "The first argument of a command may not start with `-`, so this reads as a subtraction: write"
             + " `items.append(-amount)`",
-        ]
+        ],
     )
     const indexed = "fn probe(var items: List<List<Int>>) \{\n  items.append [1]\n\}"
     assert(problems(indexed) == ["`items.append` is a function, and `[...]` right after it indexes it"])

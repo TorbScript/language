@@ -184,7 +184,13 @@ public fn issuerOf(token: String): Result<String, String> {
  * - What is wrong with it, in words a CI log can show: not three segments, an algorithm other than `RS256`, no key of
  *   the set with its `kid`, a signature that does not verify, another issuer or audience, expired or not yet valid.
  */
-public fn verifiedClaims(token: String, keys: JsonWebKeySet, issuer: String, audience: String, now: Int): Result<IdentityClaims, String> {
+public fn verifiedClaims(
+  token: String,
+  keys: JsonWebKeySet,
+  issuer: String,
+  audience: String,
+  now: Int,
+): Result<IdentityClaims, String> {
   const parts = token.trim().split(".").toList()
   if parts.length() != 3 {
     return Fail "the token is not a JSON Web Token: it has {parts.length()} segments, and one has 3"
@@ -213,7 +219,9 @@ public fn verifiedClaims(token: String, keys: JsonWebKeySet, issuer: String, aud
     return Fail "the token's signature does not verify"
   }
   const claimsText = textOfSegment(parts[1], "claims")?
-  const claims = json.decode<IdentityClaims>(claimsText).mapError({ "the token's claims are not what a CI system issues: {_}" })?
+  const claims = json.decode<IdentityClaims>(claimsText).mapError(
+    { "the token's claims are not what a CI system issues: {_}" },
+  )?
   if claims.iss != issuer {
     return Fail "the token was issued by `{claims.iss}`, not by `{issuer}`"
   }
@@ -297,7 +305,9 @@ public fn keySetUrlOf(issuer: TrustedIssuer): Task<Result<String, String>> {
   }
   const url = issuer.discovery()
   const text = fetched(url, "the discovery document of {issuer.issuer}").await()?
-  const discovery = json.decode<Discovery>(text).mapError({ "the discovery document at {url} is not what an issuer publishes: {_}" })?
+  const discovery = json.decode<Discovery>(text).mapError(
+    { "the discovery document at {url} is not what an issuer publishes: {_}" },
+  )?
   if discovery.issuer != issuer.issuer {
     return Fail "the discovery document at {url} is of `{discovery.issuer}`, not of `{issuer.issuer}`"
   }

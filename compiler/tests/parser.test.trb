@@ -487,7 +487,7 @@ group "Cases" {
     assert(
       messages("use Some, None from Option")
         == ["`from` takes a module in quotes, not the type `Option`: a case is imported by its path,"
-          + " `use Option.Some from \"...\"`"]
+          + " `use Option.Some from \"...\"`"],
     )
     // A namespace import of a type never existed, so nothing is offered for it
     assert(messages("use * as maybe from Option") == ["`from` takes a module in quotes, not the type `Option`"])
@@ -588,11 +588,11 @@ group "Cases" {
   test "a `...` that is not last, and one that is written twice" {
     assert(
       messages("const found = match config \{ Config(..., host) => host \}")
-        == ["A `...` comes last in a pattern: it stands for every field behind it"]
+        == ["A `...` comes last in a pattern: it stands for every field behind it"],
     )
     assert(
       messages("const found = match config \{ Config(host, ..., ...) => host \}")
-        == ["A pattern can only have one `...`"]
+        == ["A pattern can only have one `...`"],
     )
   }
 }
@@ -702,54 +702,57 @@ group "Trait lists" {
   test "a group without `by` is an error" {
     assert(
       messages("type Seconds with (Show, Add) \{\n  value: Int\n\}")
-        == ["A group without `by` is an error: write the traits without parentheses"]
+        == ["A group without `by` is an error: write the traits without parentheses"],
     )
   }
 
   test "a parenthesised group in a `trait`'s supertraits is the same error - there is no `by` to bind to" {
     assert(
       messages("trait Numeric with (Show, Add) \{\n\}")
-        == ["A group without `by` is an error: write the traits without parentheses"]
+        == ["A group without `by` is an error: write the traits without parentheses"],
     )
   }
 
   test "a parenthesised group in an `extend` is the same error - there is no field to delegate to" {
     assert(
       messages("extend Meters with (Show, Add) \{\n\}")
-        == ["A group without `by` is an error: write the traits without parentheses"]
+        == ["A group without `by` is an error: write the traits without parentheses"],
     )
   }
 
   test "`&` in a `with` list is an error: write commas" {
     assert(
       messages("type Seconds with Show & Add \{\n  value: Int\n\}")
-        == ["A `with` list separates entries with commas, not `&`: write `with Show, Add`"]
+        == ["A `with` list separates entries with commas, not `&`: write `with Show, Add`"],
     )
   }
 
   test "`&` in front of `by` is an error: group with parentheses instead" {
     assert(
       messages("type Seconds with Show & Add by value \{\n  value: Int\n\}")
-        == ["Traits delegated to the same field are grouped with parentheses, not `&`: write `(Show, Add) by value`"]
+        == ["Traits delegated to the same field are grouped with parentheses, not `&`: write `(Show, Add) by value`"],
     )
   }
 
   test "`&` between plain traits of a `trait`'s supertraits is an error" {
     assert(
       messages("trait Numeric with Show & Add \{\n\}")
-        == ["A `with` list separates entries with commas, not `&`: write `with Show, Add`"]
+        == ["A `with` list separates entries with commas, not `&`: write `with Show, Add`"],
     )
   }
 
   test "`extend` has no field of its own to delegate to: a stray `by` is rejected" {
     assert(
       messages("extend Meters with Add by value \{\n  fn add(other: Self): Self \{\n    self\n  \}\n\}")
-        == ["`by` delegates to a field: only a `type` has fields to name"]
+        == ["`by` delegates to a field: only a `type` has fields to name"],
     )
   }
 
   test "a `trait`'s supertraits have no field either" {
-    assert(messages("trait Numeric with Add by value \{\n\}") == ["`by` delegates to a field: only a `type` has fields to name"])
+    assert(
+      messages("trait Numeric with Add by value \{\n\}")
+        == ["`by` delegates to a field: only a `type` has fields to name"],
+    )
   }
 }
 
@@ -841,7 +844,10 @@ group "The members of a type" {
   }
 
   test "an expression where a type argument goes is one message" {
-    assert(messages("var buffer: Array<Float, size + 1> = x") == ["A type argument is a type or the name of a constant, never an expression"])
+    assert(
+      messages("var buffer: Array<Float, size + 1> = x")
+        == ["A type argument is a type or the name of a constant, never an expression"],
+    )
     assert(messages("fn probe(value: Compare + Show) \{\}") == ["Traits are combined with `&`: `Compare & Show`"])
   }
 

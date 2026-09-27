@@ -34,7 +34,7 @@ group "an element the runtime takes by address" {
         b0: # std/prelude/src/types.trb:273 native wrapper
           call t_std_x2f_prelude_types_List_append__List_Int64_Int64(&%0 borrowed, %1 borrowed) at std/prelude/src/types.trb:273:10
           return
-        }"""
+        }""",
     )
   }
 
@@ -45,11 +45,7 @@ group "an element the runtime takes by address" {
       }
       """
     const shown = textOf source
-    assert(
-      shown.contains(
-        "  call n_std_x2f_prelude_types_List_append__List_Int64_Int64(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:2:3"
-      )
-    )
+    assert shown.contains("  call n_std_x2f_prelude_types_List_append__List_Int64_Int64(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:2:3")
   }
 
   test "the runtime function itself takes the addressed parameter by address" {
@@ -59,11 +55,7 @@ group "an element the runtime takes by address" {
       }
       """
     const shown = textOf source
-    assert(
-      shown.contains(
-        "runtime fn t_std_x2f_prelude_types_List_append__List_Int64_Int64(var self: List(Int64) borrowed, byAddress value: Int64 borrowed) -> Void = torb_list_add"
-      )
-    )
+    assert shown.contains("runtime fn t_std_x2f_prelude_types_List_append__List_Int64_Int64(var self: List(Int64) borrowed, byAddress value: Int64 borrowed) -> Void = torb_list_add")
   }
 }
 
@@ -96,7 +88,7 @@ group "`bool` plus an out parameter" {
           jump b3
         b3: # std/prelude/src/types.trb:139 done
           return %4 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -110,11 +102,7 @@ group "`bool` plus an out parameter" {
       }
       """
     const shown = textOf source
-    assert(
-      shown.contains(
-        "runtime fn t_std_x2f_prelude_types_String_byteOffsetOf(self: String borrowed, part: String borrowed, out out: Int64 borrowed) -> Bool = torb_text_index_of"
-      )
-    )
+    assert shown.contains("runtime fn t_std_x2f_prelude_types_String_byteOffsetOf(self: String borrowed, part: String borrowed, out out: Int64 borrowed) -> Bool = torb_text_index_of")
   }
 
   test "the out parameter owns what the runtime wrote, and the extended verifier agrees" {
@@ -192,20 +180,18 @@ group "`bool` plus two out parameters" {
           jump b3
         b3: # std/prelude/src/types.trb:384 done
           return %5 borrowed
-        }"""
+        }""",
     )
   }
 
   /** The runtime function takes one out parameter per half, and the `var cursor` is an ordinary reference beside them. */
   test "the runtime function carries both out parameters, named apart" {
     const shown = textOf cursor
-    assert(
-      shown.contains(
-        "runtime fn t_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(self: Map(String, Int64) borrowed,"
-          + " var cursor: Int64 borrowed, out out: String borrowed, out out1: Int64 borrowed) -> Bool"
-          + " = torb_map_entry_after"
-      )
-    )
+    assert(shown.contains(
+      "runtime fn t_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(self: Map(String, Int64) borrowed,"
+        + " var cursor: Int64 borrowed, out out: String borrowed, out out1: Int64 borrowed) -> Bool"
+        + " = torb_map_entry_after",
+    ))
   }
 
   /**
@@ -241,7 +227,9 @@ group "the C of a wrapper" {
       """
     const shown = functionOf source, "n_std_x2f_prelude_types_String_byteOffsetOf"
     assert shown.contains("  s3 = torb_text_index_of(s0_self, s1_part, &s2);")
-    assert shown.contains("  s4 = (T_std_x2f_prelude_types_Option__Int64)\{ .tag = 0, .payload = \{ .v0 = \{ s2 \} \} \};")
+    assert(
+      shown.contains("  s4 = (T_std_x2f_prelude_types_Option__Int64)\{ .tag = 0, .payload = \{ .v0 = \{ s2 \} \} \};"),
+    )
   }
 }
 
@@ -263,7 +251,9 @@ group "a native type with two implementations of one trait" {
       """
     assert(unsupportedIn(source) == [])
     const root = irOf source, "t_acme_x2f_app_main_root"
-    assert root.contains("%2 = call t_std_x2f_prelude_types_Power_power__Float64_Float64_Float64(%0 borrowed, %1 borrowed)")
+    assert(
+      root.contains("%2 = call t_std_x2f_prelude_types_Power_power__Float64_Float64_Float64(%0 borrowed, %1 borrowed)"),
+    )
     const cube = irOf source, "t_acme_x2f_app_main_cube"
     const written = "t_std_x2f_prelude_types_Float64_Power_x3c_Int64_x2c__x20_Float64_x3e__power"
     assert cube.contains("%2 = call {written}(%0 borrowed, %1 borrowed)")

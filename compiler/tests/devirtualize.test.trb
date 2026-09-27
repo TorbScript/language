@@ -54,7 +54,7 @@ group "what loses its box" {
           %0 = copy %2
           %3 = call t_acme_x2f_app_main_Small_size(%0 borrowed) at acme/app/src/main.trb:15:3
           return %3 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -86,7 +86,7 @@ group "what loses its box" {
           %0 = call t_acme_x2f_app_main_made() at acme/app/src/main.trb:18:10
           %1 = call t_acme_x2f_app_main_sizeOf(%0 borrowed) at acme/app/src/main.trb:18:3
           return %1 borrowed
-        }"""
+        }""",
     )
     assert(
       irOf(source, "t_acme_x2f_app_main_sizeOf") == raw"""
@@ -96,7 +96,7 @@ group "what loses its box" {
         b0: # acme/app/src/main.trb:21 body
           %1 = call t_acme_x2f_app_main_Small_size(%0 borrowed) at acme/app/src/main.trb:22:3
           return %1 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -146,7 +146,7 @@ group "what loses its box" {
           call t_acme_x2f_app_main_Tally_bump(&%0 borrowed) at acme/app/src/main.trb:21:3
           %4 = call t_acme_x2f_app_main_Tally_value(%0 borrowed) at acme/app/src/main.trb:22:3
           return %4 borrowed
-        }"""
+        }""",
     )
   }
 }
@@ -186,7 +186,7 @@ group "what keeps its box" {
           %5 = callWitness value %4 bound 0 member 0()
           release %4
           return %5 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -218,7 +218,7 @@ group "what keeps its box" {
         b0: # acme/app/src/main.trb:19 body
           %1 = callWitness value %0 bound 0 member 0()
           return %1 borrowed
-        }"""
+        }""",
     )
   }
 
@@ -248,12 +248,9 @@ group "what keeps its box" {
       }
       """)
     const text = textOf source
-    assert(
-      text.contains(
-        "fn t_acme_x2f_app_main_Wrapper_inner(self: Record(T_acme_x2f_app_main_Wrapper) borrowed)"
-          + " -> Object(Sized)"
-      )
-    )
+    assert(text.contains(
+      "fn t_acme_x2f_app_main_Wrapper_inner(self: Record(T_acme_x2f_app_main_Wrapper) borrowed)" + " -> Object(Sized)",
+    ))
   }
 }
 
@@ -311,14 +308,14 @@ group "a copy of a frozen member" {
     assert(
       irOf(iterated, "t_acme_x2f_app_main_total").contains(
         raw"""
-          slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)"""
-      )
+          slot %2 local iterator: Record(T_acme_x2f_app_main_Counting)""",
+      ),
     )
     assert(
       irOf(iterated, "t_acme_x2f_app_main_total").contains(
         raw"""
-          %2 = call t_acme_x2f_app_main_Three_iterate_x24_direct(%0 borrowed)"""
-      )
+          %2 = call t_acme_x2f_app_main_Three_iterate_x24_direct(%0 borrowed)""",
+      ),
     )
     // No `makeUnique` in the head of the loop, and no dispatch in it either: the cursor is a record of this frame
     assert(!irOf(iterated, "t_acme_x2f_app_main_total").contains("makeUnique"))
@@ -328,18 +325,14 @@ group "a copy of a frozen member" {
   /** The original stays exactly as the table's thunk calls it, which is what makes the copy safe rather than clever. */
   test "the member the table names keeps the box it promised" {
     const text = textOf iterated
-    assert(
-      text.contains(
-        "fn t_acme_x2f_app_main_Three_iterate(self: Record(T_acme_x2f_app_main_Three) borrowed)"
-          + " -> Object(Iterator<Int64>)"
-      )
-    )
-    assert(
-      text.contains(
-        "fn t_acme_x2f_app_main_Three_iterate_x24_direct(self: Record(T_acme_x2f_app_main_Three) borrowed)"
-          + " -> Record(T_acme_x2f_app_main_Counting)"
-      )
-    )
+    assert(text.contains(
+      "fn t_acme_x2f_app_main_Three_iterate(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+        + " -> Object(Iterator<Int64>)",
+    ))
+    assert(text.contains(
+      "fn t_acme_x2f_app_main_Three_iterate_x24_direct(self: Record(T_acme_x2f_app_main_Three) borrowed)"
+        + " -> Record(T_acme_x2f_app_main_Counting)",
+    ))
   }
 
   /** A dispatch that really is one is untouched: the box, the table and the `makeUnique` per turn are all still there. */

@@ -122,7 +122,10 @@ fn emitScriptHostPrototypes(var emission: Emission, program: IrProgram) {
     return
   }
   declared.sort({ _ })
-  write emission, CDeclaration.Comment("The script host this binary links in, which loads receiver scripts (SCRIPTS.md slice 8).")
+  write(
+    emission,
+    CDeclaration.Comment("The script host this binary links in, which loads receiver scripts (SCRIPTS.md slice 8)."),
+  )
   for symbol in declared {
     write emission, CDeclaration.Fixed(prototypes.get(symbol) ?? "")
   }
@@ -280,12 +283,7 @@ fn emitHeader(var emission: Emission) {
 // --- Trait-typed values -----------------------------------------------------------------------------------------------
 
 /** The struct of every trait-typed value the program uses, sorted by name so that the file is a function of the set. */
-fn emitObjectTypes(
-  var emission: Emission,
-  program: IrProgram,
-  functions: List<IrFunction>,
-  layouts: List<Bool>,
-) {
+fn emitObjectTypes(var emission: Emission, program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>) {
   const found = objectTypesOf program, functions, layouts
   if found.isEmpty() {
     return
@@ -334,12 +332,7 @@ fn objectTypesOf(program: IrProgram, functions: List<IrFunction>, layouts: List<
   order
 }
 
-fn collectObjectType(
-  program: IrProgram,
-  var names: List<String>,
-  var byName: Map<String, Int>,
-  id: IrTypeId,
-) {
+fn collectObjectType(program: IrProgram, var names: List<String>, var byName: Map<String, Int>, id: IrTypeId) {
   if !program.hasType(id) {
     return
   }
@@ -579,13 +572,7 @@ fn isVarSelfMember(program: IrProgram, table: WitnessTable, index: Int): Bool {
   }
 }
 
-fn emitThunk(
-  var emission: Emission,
-  program: IrProgram,
-  table: WitnessTable,
-  index: Int,
-  names: Map<String, String>,
-) {
+fn emitThunk(var emission: Emission, program: IrProgram, table: WitnessTable, index: Int, names: Map<String, String>) {
   const head = match thunkHeadOf(emission, program, table, index, names) {
     Some(found) => found
     None => {
@@ -671,12 +658,7 @@ fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CSta
  * ordinary local, so it is retained in place and handed on. `ArrayList.append` is the one that needs it - the buffer
  * keeps the value - and without it `list.append(text)` through a table released the text twice.
  */
-fn retainedArgumentOf(
-  program: IrProgram,
-  function: IrFunction,
-  position: Int,
-  argument: CExpression,
-): CStatement? {
+fn retainedArgumentOf(program: IrProgram, function: IrFunction, position: Int, argument: CExpression): CStatement? {
   const parameter = function.signature.parameters[position]
   if parameter.isReference || parameter.ownership != Ownership.Owned {
     return None
@@ -702,12 +684,7 @@ fn isVoidResultOf(program: IrProgram, id: IrTypeId): Bool {
   resultTypeOf(program, id) == "void"
 }
 
-fn emitWitnessTable(
-  var emission: Emission,
-  program: IrProgram,
-  table: WitnessTable,
-  names: Map<String, String>,
-) {
+fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTable, names: Map<String, String>) {
   var members: List<CExpression> = []
   for index in 0..table.members.length() {
     const name = thunkNameOf program, table, index, names
@@ -1339,7 +1316,10 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
     return
   }
   const closing = closingOf program
-  write emission, CDeclaration.Comment("Retaining and dropping the counted values inside a layout (docs/BACKEND.md 2.1).")
+  write(
+    emission,
+    CDeclaration.Comment("Retaining and dropping the counted values inside a layout (docs/BACKEND.md 2.1)."),
+  )
   for index in demand.retained {
     write emission, CDeclaration.Prototype(helperHeadOf("R_", program.layouts[index].name))
   }
@@ -1545,13 +1525,7 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
  * its fields in reverse declaration order (docs/design/DESTRUCTORS.md 2a and 8). Every other layout is released
  * exactly as before, field by field in declaration order.
  */
-fn emitDropHelper(
-  var emission: Emission,
-  program: IrProgram,
-  layout: Layout,
-  closer: FunctionId?,
-  isReversed: Bool,
-) {
+fn emitDropHelper(var emission: Emission, program: IrProgram, layout: Layout, closer: FunctionId?, isReversed: Bool) {
   if closer.isNone() && !isReversed {
     emitHelper emission, program, layout, "D_", false
     return
@@ -1979,7 +1953,10 @@ fn emitStaticData(var emission: Emission, program: IrProgram, functions: List<Ir
     }
   }
   if !storages.isEmpty() {
-    write emission, CDeclaration.Comment("The storage of every string literal: immortal, so a write through one always copies.")
+    write(
+      emission,
+      CDeclaration.Comment("The storage of every string literal: immortal, so a write through one always copies."),
+    )
     for id in all {
       emitTextStorage emission, program, id
     }
@@ -2106,14 +2083,8 @@ fn emitTextStorage(var emission: Emission, program: IrProgram, id: StaticId) {
   if bytes.isEmpty() {
     bytes.append CExpression.Literal("0x00")
   }
-  const header = CExpression.Call(CExpression.Name("TORB_IMMORTAL_HEADER"), [
-    CExpression.Name("TORB_BLOCK_BYTES"),
-  ])
-  const initializer = CExpression.Initializer([
-    header,
-    CExpression.Literal("{count}"),
-    CExpression.Initializer(bytes),
-  ])
+  const header = CExpression.Call CExpression.Name("TORB_IMMORTAL_HEADER"), [CExpression.Name("TORB_BLOCK_BYTES")]
+  const initializer = CExpression.Initializer([header, CExpression.Literal("{count}"), CExpression.Initializer(bytes)])
   // The type is a whole anonymous struct, so this one declaration is the only line the emitter breaks
   const annotation = "static struct \{ torb_header header; uint32_t capacity; uint8_t data[{count}]; \}"
   // Only the constants over it name the storage, and they are data too: it stays `static` in a split program
@@ -2369,12 +2340,7 @@ fn callsProgramCode(program: IrProgram, function: IrFunction): Bool {
  * result mode is `finishProgram`'s decision and not this function's, so an accessor that reads it wrongly would be a
  * silent miscompilation the day a layout changes.
  */
-fn emitConstantCell(
-  var emission: Emission,
-  program: IrProgram,
-  function: IrFunction,
-  initializer: FunctionId,
-) {
+fn emitConstantCell(var emission: Emission, program: IrProgram, function: IrFunction, initializer: FunctionId) {
   if !program.hasFunction(initializer) {
     reportUnsupported emission, "a constant whose initializer is not in the program"
     return
@@ -2410,7 +2376,10 @@ fn emitConstantCell(
   var statements: List<CStatement> = []
   statements.append CStatement.If(CExpression.Unary("!", isReady), locked)
   if isByPointer {
-    statements.append CStatement.Assignment(CExpression.Dereference(CExpression.Name(resultPointerName)), CExpression.Name(cell))
+    statements.append(CStatement.Assignment(
+      CExpression.Dereference(CExpression.Name(resultPointerName)),
+      CExpression.Name(cell),
+    ))
   } else {
     statements.append CStatement.Return(CExpression.Name(cell))
   }
@@ -2512,7 +2481,7 @@ fn emitConstantCellStorage(var emission: Emission, program: IrProgram, functions
     if const .ConstantCell(_) = function.kind {
       if !written {
         write(emission, CDeclaration.Comment(
-          "The value of every module constant that is no static data: built once, immortal, never freed."
+          "The value of every module constant that is no static data: built once, immortal, never freed.",
         ))
         written = true
       }
@@ -2525,7 +2494,7 @@ fn emitConstantCellStorage(var emission: Emission, program: IrProgram, functions
   const cells = entryCellsOf functions
   if !cells.isEmpty() {
     write(emission, CDeclaration.Comment(
-      "The one value of every top-level const of an entry file a function reads, with a count of its own, and its flag."
+      "The one value of every top-level const of an entry file a function reads, with a count of its own, and its flag.",
     ))
   }
   for (cell, held) in cells {

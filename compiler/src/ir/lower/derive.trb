@@ -137,12 +137,7 @@ fn resetForGenerated(var lowering: Lowering, module: ModuleId) {
   lowering.endedTemporaries = Set.of()
 }
 
-fn lowerGeneratedBody(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  request: GeneratedRequest,
-  at: Span,
-) {
+fn lowerGeneratedBody(var lowering: Lowering, var builder: FunctionBuilder, request: GeneratedRequest, at: Span) {
   match request.kind {
     .Operation(intrinsic) => operationBody lowering, builder, intrinsic, at
     .RuntimeCall(symbol) => runtimeCallBody lowering, builder, request, symbol, at
@@ -631,7 +626,13 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   if const .Signed(width) = kind {
     const smallest = addTemporary builder, annotation
     const bound = if width >= 64 { Int.minimum } else { 0 - (1 << (width - 1)) }
-    emit builder, Instruction.Constant(smallest, internStatic(lowering, StaticContents.Literal(LiteralValue.Integer(bound)), annotation))
+    emit(
+      builder,
+      Instruction.Constant(
+        smallest,
+        internStatic(lowering, StaticContents.Literal(LiteralValue.Integer(bound)), annotation),
+      ),
+    )
     const isSmallest = addTemporary builder, boolean
     const equal = Intrinsic IntrinsicOperation.Equal, kind
     emit builder, Instruction.Intrinsic(isSmallest, equal, [Slot(0), smallest], location)
@@ -642,7 +643,10 @@ fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
     const textType = lowering.program.internType IrType.Text
     const message = addTemporary builder, textType
     const words = "arithmetic overflow in `absolute`: {bound} has no positive counterpart"
-    emit builder, Instruction.Constant(message, internStatic(lowering, StaticContents.Literal(LiteralValue.Text(words)), textType))
+    emit(
+      builder,
+      Instruction.Constant(message, internStatic(lowering, StaticContents.Literal(LiteralValue.Text(words)), textType)),
+    )
     emit builder, Instruction.Panic(borrowed(message), location)
     terminate builder, Terminator.Unreachable
     switchTo builder, fits
@@ -697,12 +701,7 @@ type DerivedField {
  * Every field of one group, in layout order. The layout is built from the type signature in exactly this order
  * (`buildNominalLayout`), so the two lists line up position by position and no inverse of the type memo is needed.
  */
-fn derivedFieldsOf(
-  var lowering: Lowering,
-  subject: TypeId,
-  layout: LayoutId,
-  variant: Int,
-): List<DerivedField>? {
+fn derivedFieldsOf(var lowering: Lowering, subject: TypeId, layout: LayoutId, variant: Int): List<DerivedField>? {
   const subjects = fieldTypesOf(lowering, subject)?
   const shape = lowering.program.layoutAt layout
   var found: List<DerivedField> = []
@@ -840,12 +839,7 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
 }
 
 /** The two tags, compared: a value of another case is never equal, whatever the fields say. Answers the tag of `self`. */
-fn sameTagBlock(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  failed: BlockId,
-  at: Span,
-): Slot {
+fn sameTagBlock(var lowering: Lowering, var builder: FunctionBuilder, failed: BlockId, at: Span): Slot {
   const location = locationOf lowering, at
   const integer = lowering.program.internType IrType.Integer(64, true)
   const left = addTemporary builder, integer
@@ -1019,13 +1013,7 @@ fn hashFields(
 }
 
 /** One field's hash: the field type's own `hash`, whatever shape that member has. */
-fn fieldHash(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  field: DerivedField,
-  value: Slot,
-  at: Span,
-): Slot {
+fn fieldHash(var lowering: Lowering, var builder: FunctionBuilder, field: DerivedField, value: Slot, at: Span): Slot {
   const integer = lowering.program.internType IrType.Integer(64, true)
   const target = addTemporary builder, integer
   const location = locationOf lowering, at
@@ -1286,13 +1274,7 @@ fn emitOrdering(
   false
 }
 
-fn answerOrdering(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  layout: LayoutId,
-  name: String,
-  at: Span,
-) {
+fn answerOrdering(var lowering: Lowering, var builder: FunctionBuilder, layout: LayoutId, name: String, at: Span) {
   const variant = orderingVariantOf lowering, layout, name, at
   if variant < 0 {
     return
@@ -1367,13 +1349,7 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
 }
 
 /** A variant layout: one `TextConcat` per case, chosen by the tag. */
-fn showVariantBody(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  subject: TypeId,
-  layout: LayoutId,
-  at: Span,
-) {
+fn showVariantBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, layout: LayoutId, at: Span) {
   const location = locationOf lowering, at
   const integer = lowering.program.internType IrType.Integer(64, true)
   const tag = addTemporary builder, integer
@@ -1448,13 +1424,7 @@ fn addShownFields(
   parts.append textSlot(lowering, builder, ")")
 }
 
-fn fieldShown(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  field: DerivedField,
-  value: Slot,
-  at: Span,
-): Slot {
+fn fieldShown(var lowering: Lowering, var builder: FunctionBuilder, field: DerivedField, value: Slot, at: Span): Slot {
   const text = lowering.program.internType IrType.Text
   const target = addTemporary builder, text
   const location = locationOf lowering, at

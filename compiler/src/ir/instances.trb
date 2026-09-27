@@ -35,11 +35,7 @@ public fn instanceOfSymbol(var lowering: Lowering, symbol: SymbolId): FunctionId
  * is a type of the *caller's* instance, substituted - because the name of an instance is a function of its arguments
  * and a generic parameter has no name in the back end.
  */
-public fn instanceFor(
-  var lowering: Lowering,
-  symbol: SymbolId,
-  mapping: Map<ParameterId, TypeId>,
-): FunctionId? {
+public fn instanceFor(var lowering: Lowering, symbol: SymbolId, mapping: Map<ParameterId, TypeId>): FunctionId? {
   const plain = match instanceArgumentsOf(lowering, symbol, mapping) {
     Some(found) => found
     None => {
@@ -84,11 +80,7 @@ public fn instanceFor(
  * The limit is deliberately generous: the deepest type argument the repository really instantiates nests four
  * (`Map<String, List<Diagnostic>>` inside a generic function), so nothing legitimate comes near it.
  */
-fn boundedArguments(
-  var lowering: Lowering,
-  symbol: SymbolId,
-  mapping: Map<ParameterId, TypeId>,
-): Bool {
+fn boundedArguments(var lowering: Lowering, symbol: SymbolId, mapping: Map<ParameterId, TypeId>): Bool {
   const limit = 10
   for (_, given) in mapping {
     if nestingDepthOf(lowering, given, 0) <= limit {
@@ -334,11 +326,7 @@ public fn instanceArgumentsOf(
  * it allows, `Value.tryFrom` compares with them, and the base does neither. So an instance whose arguments mention a
  * literal type anywhere, `List<"draft" | "sent">` too, is an instance of its own, with a name of its own.
  */
-fn literalArgumentsOf(
-  var lowering: Lowering,
-  symbol: SymbolId,
-  mapping: Map<ParameterId, TypeId>,
-): List<IrTypeId> {
+fn literalArgumentsOf(var lowering: Lowering, symbol: SymbolId, mapping: Map<ParameterId, TypeId>): List<IrTypeId> {
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
   var parameters: List<ParameterId> = []
@@ -412,11 +400,7 @@ fn selfParameterOf(var lowering: Lowering, signature: Signature): ParameterId? {
   None
 }
 
-fn closedArgument(
-  var lowering: Lowering,
-  mapping: Map<ParameterId, TypeId>,
-  parameter: ParameterId,
-): IrTypeId? {
+fn closedArgument(var lowering: Lowering, mapping: Map<ParameterId, TypeId>, parameter: ParameterId): IrTypeId? {
   const given = mapping.get(parameter)?
   if !isClosedType(lowering, given) {
     return None
@@ -538,11 +522,7 @@ public fn irSignatureUnder(
 }
 
 /** `lazy Value` is a one-shot memo cell and a variadic parameter holds the list the call site builds (BACKEND 1.6). */
-fn parameterTypeOf(
-  var lowering: Lowering,
-  parameter: ParameterForm,
-  mapping: Map<ParameterId, TypeId>,
-): IrTypeId {
+fn parameterTypeOf(var lowering: Lowering, parameter: ParameterForm, mapping: Map<ParameterId, TypeId>): IrTypeId {
   const applied = substitute lowering.checker.types, parameter.annotation, mapping
   const annotation = irTypeOfClosed lowering, applied
   match parameter.mode {

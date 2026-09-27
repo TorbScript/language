@@ -582,7 +582,12 @@ public fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
  * beside the runtime, because mbedTLS is a library of somebody else's that takes longer to compile than all of the rest
  * of a program; where that directory cannot be written, they are compiled beside the program instead.
  */
-public fn tlsArgumentsOf(runtime: String, command: String, microsoft: Bool, binary: String): Result<List<String>, IoError> {
+public fn tlsArgumentsOf(
+  runtime: String,
+  command: String,
+  microsoft: Bool,
+  binary: String,
+): Result<List<String>, IoError> {
   const parts = tlsPartsOf(runtime, command, microsoft, binary)?
   var arguments: List<String> = []
   arguments.appendAll parts.flags
@@ -871,7 +876,15 @@ fn compileInParallel(
     return Ok None
   }
   const cache = objectCacheOf runtime, binary
-  var flags = ["-std=c11", profile.optimization(), "-g0", "-Wall", "-Wextra", "-Werror", "-I{joinPath(runtime, "include")}"]
+  var flags = [
+    "-std=c11",
+    profile.optimization(),
+    "-g0",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-I{joinPath(runtime, "include")}",
+  ]
   for macro in profile.macros() {
     flags.append "-D{macro}"
   }
@@ -964,7 +977,8 @@ fn compileInParallel(
 fn isGnuCompiler(compiler: CCompiler): Bool {
   const name = pathName compiler.command
   const isNamed = name.endsWith("gcc") || name.endsWith("gcc.exe")
-  isNamed || (compiler.version.contains("gcc") || compiler.version.contains("GCC")) && !compiler.version.contains("clang")
+  isNamed
+    || (compiler.version.contains("gcc") || compiler.version.contains("GCC")) && !compiler.version.contains("clang")
 }
 
 /**

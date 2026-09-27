@@ -49,7 +49,10 @@ fn handle(config: Config, request: Request): Task<Result<Response, HttpError>> {
   match config.webhookSecret {
     None => void
     Some(secret) => {
-      const claimed = claimedSignature request.headers.get("X-Forgejo-Signature"), request.headers.get("X-Hub-Signature-256")
+      const claimed = claimedSignature(
+        request.headers.get("X-Forgejo-Signature"),
+        request.headers.get("X-Hub-Signature-256"),
+      )
       const computed = match hmacSha256(secret, body).await() {
         Fail(message) => { return Ok Response.text(message, status: Status.internalServerError) }
         Ok(hex) => hex

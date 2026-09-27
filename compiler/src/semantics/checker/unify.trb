@@ -176,7 +176,11 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
 }
 
 /** [substitute] over a list of types, such as the generic arguments of a `Nominal`. */
-public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: Map<ParameterId, TypeId>): List<TypeId> {
+public fn substituteAll(
+  var types: TypeTable,
+  arguments: List<TypeId>,
+  mapping: Map<ParameterId, TypeId>,
+): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
     replaced.append substitute(types, argument, mapping)
@@ -185,7 +189,11 @@ public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: 
 }
 
 /** [substitute] over every parameter type and the result of a [FunctionForm]. */
-public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: Map<ParameterId, TypeId>): FunctionForm {
+public fn substituteFunction(
+  var types: TypeTable,
+  form: FunctionForm,
+  mapping: Map<ParameterId, TypeId>,
+): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
     parameters.append parameter.copy(annotation: substitute(types, parameter.annotation, mapping))
@@ -297,7 +305,7 @@ fn reportUnsolved(var checker: Checker, state: VariableState) {
   if owner.isEmpty() {
     checker.reportHere(
       Diagnostic.error("Cannot infer the type of this collection", at)
-        .withNote("An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)")
+        .withNote("An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)"),
     )
     return
   }
@@ -308,15 +316,15 @@ fn reportUnsolved(var checker: Checker, state: VariableState) {
       Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
         .withNote(
           "`{name}` is a `const` parameter and is never inferred from an argument: write it in the type that is "
-            + "expected of this value"
-        )
+            + "expected of this value",
+        ),
     )
     return
   }
   const written = typeArgumentsNote checker, state
   checker.reportHere(
     Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
-      .withNote("Annotate the closure parameter or the result, or write the type argument: `{owner}<{written}>(...)`")
+      .withNote("Annotate the closure parameter or the result, or write the type argument: `{owner}<{written}>(...)`"),
   )
 }
 

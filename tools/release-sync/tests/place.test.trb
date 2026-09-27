@@ -24,7 +24,10 @@ fn downloaded(name: String): String {
   directory
 }
 
-const assets = [ReleaseAsset("torb.tar.gz", "https://example.test/a"), ReleaseAsset("SHA256SUMS", "https://example.test/b")]
+const assets = [
+  ReleaseAsset("torb.tar.gz", "https://example.test/a"),
+  ReleaseAsset("SHA256SUMS", "https://example.test/b"),
+]
 const nightly = place(ReleaseInfo("nightly-20260926", assets), downloaded("nightly"), root).await()
 const stable = place(ReleaseInfo("v0.3.0", assets), downloaded("stable"), root).await()
 const versions = File.readText "{root}/download/versions.txt"
@@ -33,7 +36,10 @@ const versions = File.readText "{root}/download/versions.txt"
 const checked = downloaded "checked"
 const archiveHash = Sha256.of("archive of checked".bytes().toList()).hex()
 File.writeText("{checked}/SHA256SUMS", "{archiveHash}  torb.tar.gz\n").expect("the right sums")
-const archiveOnly = [ReleaseAsset("torb.tar.gz", "https://example.test/a"), ReleaseAsset("SHA256SUMS", "https://example.test/b")]
+const archiveOnly = [
+  ReleaseAsset("torb.tar.gz", "https://example.test/a"),
+  ReleaseAsset("SHA256SUMS", "https://example.test/b"),
+]
 const matching = verifyHashes(ReleaseInfo("v0.3.1", archiveOnly), checked).await()
 File.writeText("{checked}/torb.tar.gz", "another archive").expect("a changed archive")
 const differing = verifyHashes(ReleaseInfo("v0.3.1", archiveOnly), checked).await()

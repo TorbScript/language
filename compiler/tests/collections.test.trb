@@ -59,7 +59,7 @@ group "A list literal that fills an `Array`" {
     assert(problems(source) == ["`Array<Int64, 4>` has 4 items, and this literal has 3"])
     assert(
       notes(source)
-        == ["The size of an `Array` is part of its type, so the number of items is counted where it is written"]
+        == ["The size of an `Array` is part of its type, so the number of items is counted where it is written"],
     )
   }
 
@@ -82,15 +82,10 @@ group "A list literal that fills an `Array`" {
 
   test "a spread of anything else says why it cannot be counted" {
     const source = inBody "  const rest: List<Int> = [1, 2]\n  const whole: Array<Int, 3> = [...rest, 3]"
-    assert(
-      problems(source)
-        == ["`List<Int64>` does not say how many items it has, so `...` cannot fill an `Array`"]
-    )
+    assert(problems(source) == ["`List<Int64>` does not say how many items it has, so `...` cannot fill an `Array`"])
     assert(
       notes(source)
-        == [
-          "The size of an `Array` is part of its type: only an `Array` of a known size can be spread into one",
-        ]
+        == ["The size of an `Array` is part of its type: only an `Array` of a known size can be spread into one"],
     )
   }
 
@@ -118,7 +113,7 @@ group "A list literal that is built through `From<Iterate<Item>>`" {
     assert(found.typeOf("[\"a\", \"b\"]") == "Set<String>")
     assert(
       found.collectionOf("[\"a\", \"b\"]")
-        == "from Set<String> of String through Set<Item>: From<Iterate<Item>> [String: Hash]"
+        == "from Set<String> of String through Set<Item>: From<Iterate<Item>> [String: Hash]",
     )
   }
 
@@ -138,7 +133,7 @@ group "A list literal that is built through `From<Iterate<Item>>`" {
     const found = probe source
     assert(
       found.collectionOf("[\"a\"]")
-        == "from Set<String> of String through Set<Item>: From<Iterate<Item>> [String: Hash]"
+        == "from Set<String> of String through Set<Item>: From<Iterate<Item>> [String: Hash]",
     )
   }
 
@@ -153,39 +148,29 @@ group "A list literal that is built through `From<Iterate<Item>>`" {
       + inBody("  const counted: Tally = [1, 2, 3]")
     assert problems(source).isEmpty()
     const found = probe source
-    assert(
-      found.collectionOf("[1, 2, 3]") == "from Tally of Int64 through Tally: From<Iterate<Int64>>"
-    )
+    assert(found.collectionOf("[1, 2, 3]") == "from Tally of Int64 through Tally: From<Iterate<Int64>>")
   }
 }
 
 group "A literal against a type it cannot become" {
   test "a type that is not `From<Iterate<Item>>` is an error instead of a silent acceptance" {
     const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n" + inBody("  const origin: Point = [1, 2]")
-    assert(
-      problems(source) == ["A list literal cannot become a `Point`: `Point` is not `From<Iterate<Item>>`"]
-    )
-    assert(
-      notes(source) == ["A collection target is `From<Iterate<...>>`, the same one `.to<Target>()` asks for"]
-    )
+    assert(problems(source) == ["A list literal cannot become a `Point`: `Point` is not `From<Iterate<Item>>`"])
+    assert(notes(source) == ["A collection target is `From<Iterate<...>>`, the same one `.to<Target>()` asks for"])
     const found = probe source
     assert(!found.hasCollectionAt("[1, 2]"))
   }
 
   test "a map literal names the entries the target would have to take" {
-    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
-      + inBody("  const origin: Point = [\"x\": 1]")
-    assert(
-      problems(source)
-        == ["A map literal cannot become a `Point`: `Point` is not `From<Iterate<(Key, Value)>>`"]
-    )
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n" + inBody("  const origin: Point = [\"x\": 1]")
+    assert(problems(source) == ["A map literal cannot become a `Point`: `Point` is not `From<Iterate<(Key, Value)>>`"])
   }
 
   test "a map literal into a target that takes single items is refused as well" {
     const source = inBody "  const names: Set<String> = [\"a\": 1]"
     assert(
       problems(source)
-        == ["A map literal cannot become a `Set<String>`: `Set<String>` is not `From<Iterate<(Key, Value)>>`"]
+        == ["A map literal cannot become a `Set<String>`: `Set<String>` is not `From<Iterate<(Key, Value)>>`"],
     )
   }
 
@@ -194,10 +179,7 @@ group "A literal against a type it cannot become" {
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.collectionOf("[1, 2]") == "default")
-    assert(
-      problems(inBody("  const ordered: Compare = [1, 2]"))
-        == ["`List<Int64>` does not implement `Compare`"]
-    )
+    assert(problems(inBody("  const ordered: Compare = [1, 2]")) == ["`List<Int64>` does not implement `Compare`"])
   }
 }
 
@@ -224,7 +206,7 @@ group "`Array.filled` and `Array.generated`" {
         == [
           "`Size` is a `const` parameter and is never inferred from an argument: write it in the type that is "
             + "expected of this value",
-        ]
+        ],
     )
   }
 
@@ -232,8 +214,7 @@ group "`Array.filled` and `Array.generated`" {
     const source = "fn empty<Item>(): List<Item> \{\n  []\n\}\n\n" + inBody("  const nothing = empty()")
     assert(problems(source) == ["Cannot infer `Item` of `empty`"])
     assert(
-      notes(source)
-        == ["Annotate the closure parameter or the result, or write the type argument: `empty<Item>(...)`"]
+      notes(source) == ["Annotate the closure parameter or the result, or write the type argument: `empty<Item>(...)`"],
     )
   }
 }

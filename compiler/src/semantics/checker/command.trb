@@ -141,7 +141,12 @@ fn writeField(
  * `count 1` where `count` is a local, `x 15` where `x` is a top-level `var` or `const`: a value that is not a
  * function was called. `None` where the target does hold a function, which is an ordinary call.
  */
-fn reportNotAFunction(var checker: Checker, target: Target, arguments: List<Argument>, expression: Expression): TypeId? {
+fn reportNotAFunction(
+  var checker: Checker,
+  target: Target,
+  arguments: List<Argument>,
+  expression: Expression,
+): TypeId? {
   const annotation = resolveType checker, target.annotation
   if checker.absorbs(annotation) || functionFormOf(checker, annotation).isSome() {
     return None
@@ -174,7 +179,7 @@ fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expre
     const shown = checker.describe annotation
     checker.reportHere(
       Diagnostic.error("`{name}` is a `{shown}`, which has no configuration a block could fill", expression.span)
-        .withNote("A block on a field applies a receiver closure to its value. Write `{name} = value` to set it")
+        .withNote("A block on a field applies a receiver closure to its value. Write `{name} = value` to set it"),
     )
     return None
   }
@@ -241,9 +246,7 @@ fn argumentsSpan(arguments: List<Argument>): Span {
 /** `port 8080`, `onStart { ... }`: a field is written only with `=`. Reconstructs the fix from the source. */
 fn reportFieldWrite(var checker: Checker, name: String, arguments: List<Argument>, expression: Expression) {
   const value = writtenText checker, argumentsSpan(arguments)
-  checker.reportHere(
-    Diagnostic.error("`{name}` is a field: write `{name} = {value}`", expression.span)
-  )
+  checker.reportHere Diagnostic.error("`{name}` is a field: write `{name} = {value}`", expression.span)
 }
 
 /** `config.port(8080)`: parentheses call, and a field that holds no function has nothing to call. */
@@ -252,28 +255,27 @@ fn reportParenthesizedWrite(var checker: Checker, name: String, arguments: List<
   if arguments.isEmpty() {
     checker.reportHere(
       Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
-        .withNote("A field is read without them: `{name}`")
+        .withNote("A field is read without them: `{name}`"),
     )
     return
   }
   const value = writtenText checker, argumentsSpan(arguments)
   checker.reportHere(
     Diagnostic.error("`{name}` is a field, and parentheses call a function", expression.span)
-      .withNote("A field is written with `=`: `{name} = {value}`")
+      .withNote("A field is written with `=`: `{name} = {value}`"),
   )
 }
 
 fn reportNotCallable(var checker: Checker, name: String, holdsFunction: Bool, expression: Expression) {
   if holdsFunction {
-    checker.reportHere(
-      Diagnostic.error(
-        "`{name}` holds a function: `{name} = \{ ... \}` assigns it, `{name}()` calls it",
-        expression.span,
-      )
-    )
+    checker.reportHere(Diagnostic.error(
+      "`{name}` holds a function: `{name} = \{ ... \}` assigns it, `{name}()` calls it",
+      expression.span,
+    ))
     return
   }
-  checker.reportHere(
-    Diagnostic.error("`{name}` is a field: write `{name} = value`. Only a function can be called", expression.span)
-  )
+  checker.reportHere(Diagnostic.error(
+    "`{name}` is a field: write `{name} = value`. Only a function can be called",
+    expression.span,
+  ))
 }

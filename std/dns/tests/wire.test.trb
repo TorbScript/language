@@ -129,7 +129,8 @@ group "captured responses" {
       ],
     )
     assert(message.answers.map({ _.data }).toList() == [expected])
-    assert(expected.show() == "1 . alpn=\"h3,h2\" ipv4hint=104.16.132.229,104.16.133.229 ipv6hint=2606:4700::6810:84e5,2606:4700::6810:85e5")
+    assert(expected.show()
+      == "1 . alpn=\"h3,h2\" ipv4hint=104.16.132.229,104.16.133.229 ipv6hint=2606:4700::6810:84e5,2606:4700::6810:85e5")
   }
 
   test "www.github.com A: the chain through a CNAME is followed" {
@@ -179,7 +180,9 @@ group "captured responses" {
 
   test "example.com TXT: two records of one string each" {
     const message = messageOf exampleText()
-    assert(message.answers.map({ _.data.show() }).toList() == ["\"_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9\"", "\"v=spf1 -all\""])
+    assert(
+      message.answers.map({ _.data.show() }).toList() == ["\"_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9\"", "\"v=spf1 -all\""],
+    )
   }
 
   test "every captured response encodes back to its own bytes" {
@@ -266,7 +269,10 @@ group "round trips" {
     assert(RecordData.Srv(1, 2, 5060, target).show() == "1 2 5060 target.example.test.")
     assert(RecordData.Txt([bytesOfText("a \"b\""), [7]]).show() == "\"a \\\"b\\\"\" \"\\007\"")
     assert(RecordData.Unknown(RecordType.of(99), [10, 0, 0, 1]).show() == "\\# 4 0a000001")
-    assert(RecordData.Svcb(1, target, [ServiceParameter.EncryptedClientHello([1, 2, 3, 4])]).show() == "1 target.example.test. ech=AQIDBA==")
+    assert(
+      RecordData.Svcb(1, target, [ServiceParameter.EncryptedClientHello([1, 2, 3, 4])]).show()
+        == "1 target.example.test. ech=AQIDBA==",
+    )
     assert(RecordType.of(99).show() == "TYPE99")
     assert(RecordType.Other(28) == RecordType.Aaaa)
   }
@@ -372,7 +378,9 @@ group "records that do not fit their type" {
     trailing[7] = 1
     trailing.appendAll([0, 0, 1, 0, 1])
     trailing.appendAll([0, 0, 15, 0, 1, 0, 0, 0, 60, 0, 4, 0, 10, 0, 1])
-    assert(refusalOf(trailing) == DnsError.InvalidRecord(RecordType.Mx, 28, "the data is 4 bytes long and ends after 3"))
+    assert(
+      refusalOf(trailing) == DnsError.InvalidRecord(RecordType.Mx, 28, "the data is 4 bytes long and ends after 3"),
+    )
   }
 
   test "a name in the data that runs past the data is refused" {
@@ -420,7 +428,9 @@ group "EDNS0" {
     assert(refusalOf(bytes) == DnsError.InvalidMessage(34, "a second OPT record (RFC 6891 section 6.1.1)"))
     var answered: Bytes = [0, 1, 129, 128, 0, 0, 0, 1, 0, 0, 0, 0]
     answered.appendAll([0, 0, 41, 4, 208, 0, 0, 0, 0, 0, 0])
-    assert(refusalOf(answered) == DnsError.InvalidMessage(23, "an OPT record belongs to the additional section (RFC 6891)"))
+    assert(
+      refusalOf(answered) == DnsError.InvalidMessage(23, "an OPT record belongs to the additional section (RFC 6891)"),
+    )
   }
 }
 
@@ -448,7 +458,11 @@ group "the encoder's refusals" {
   test "a response code above 15 needs an EDNS0 record, and the identifier has 16 bits" {
     assert Message(responseCode: ResponseCode.BadCookie).encoded().isError()
     assert Message(identifier: 65536).encoded().isError()
-    assert Message(answers: [Record(nameOf("a.test"), timeToLive: -1, data: RecordData.A(version4("192.0.2.1")))]).encoded().isError()
+    assert(
+      Message(
+        answers: [Record(nameOf("a.test"), timeToLive: -1, data: RecordData.A(version4("192.0.2.1")))],
+      ).encoded().isError(),
+    )
   }
 }
 
@@ -463,7 +477,13 @@ group "queries and responses" {
   }
 
   test "a query without recursion, with the DO bit, and an identifier taken modulo 65536" {
-    const message = messageOf query(nameOf("example.com"), RecordType.Https, 65536 + 5, recursionDesired: false, dnssecOk: true)
+    const message = messageOf(query(
+      nameOf("example.com"),
+      RecordType.Https,
+      65536 + 5,
+      recursionDesired: false,
+      dnssecOk: true,
+    ))
     assert(message.identifier == 5)
     assert(!message.recursionDesired)
     assert(message.edns == Edns(payloadSize: 1232, dnssecOk: true))
@@ -482,7 +502,10 @@ group "queries and responses" {
 
   test "a response with another identifier, another question, or a query is refused" {
     const other = query nameOf("example.com"), RecordType.A, 4661
-    assert(readResponse(exampleAddress(), other) == Fail(DnsError.UnexpectedResponse("the identifier is 4660, and the query's is 4661")))
+    assert(
+      readResponse(exampleAddress(), other)
+        == Fail(DnsError.UnexpectedResponse("the identifier is 4660, and the query's is 4661")),
+    )
     const otherName = query nameOf("example.org"), RecordType.A, 4660
     assert readResponse(exampleAddress(), otherName).isError()
     const otherType = query nameOf("example.com"), RecordType.Aaaa, 4660

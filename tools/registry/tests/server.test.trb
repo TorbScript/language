@@ -53,7 +53,12 @@ type Archive {
 }
 
 /** The archive of a package with one module, whose lock carries the settings `torb publish` writes. */
-fn archiveOf(package: String, version: String, description: String = "A package of the test", code: String = "public fn answer(): Int \{\n  42\n\}\n"): Archive {
+fn archiveOf(
+  package: String,
+  version: String,
+  description: String = "A package of the test",
+  code: String = "public fn answer(): Int \{\n  42\n\}\n",
+): Archive {
   const manifest = Manifest name: package, version: version, description: description, license: "MIT"
   const lock = Lock settings: [LockedSettings(package, manifest)]
   var entries = [
@@ -76,7 +81,14 @@ fn uriOf(text: String): Uri {
 }
 
 /** One request to the registry at `base`, with `token` as the bearer where it is not empty. */
-fn call(base: String, method: Method, path: String, token: String = "", body: Body = Body.empty(), hash: String = ""): Task<Step> {
+fn call(
+  base: String,
+  method: Method,
+  path: String,
+  token: String = "",
+  body: Body = Body.empty(),
+  hash: String = "",
+): Task<Step> {
   var headers = Headers()
   if !token.isEmpty() {
     headers.set "Authorization", "Bearer {token}"
@@ -158,11 +170,28 @@ const adaAccount = call(base, Method.Post, "/api/1/accounts", administrator, Bod
 const ada = tokenOf adaAccount
 const bobAccount = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"bob\"\}")).await()
 const bob = tokenOf bobAccount
-const hyphenated = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"acme-corp\"\}")).await()
-const confusing = call(base, Method.Post, "/api/1/accounts", administrator, Body.from("\{\"name\":\"acmec0rp\"\}")).await()
+const hyphenated = call(
+  base,
+  Method.Post,
+  "/api/1/accounts",
+  administrator,
+  Body.from("\{\"name\":\"acme-corp\"\}"),
+).await()
+const confusing = call(
+  base,
+  Method.Post,
+  "/api/1/accounts",
+  administrator,
+  Body.from("\{\"name\":\"acmec0rp\"\}"),
+).await()
 const reserved = call(base, Method.Post, "/api/1/owners", ada, Body.from("\{\"name\":\"torbscript\"\}")).await()
 const organisation = call(base, Method.Post, "/api/1/owners", ada, Body.from("\{\"name\":\"acme\"\}")).await()
-const badToken = call(base, Method.Get, "/api/1/tokens", "torb_0000000000000000000000000000000000000000000000000000000000000000").await()
+const badToken = call(
+  base,
+  Method.Get,
+  "/api/1/tokens",
+  "torb_0000000000000000000000000000000000000000000000000000000000000000",
+).await()
 
 // --- publishing -----------------------------------------------------------------------------------------------------
 
@@ -172,34 +201,110 @@ const indexAfterFirst = File.readText("{root}/storage/index/acme/json.trb").ok()
 const archiveWritten = File.exists "{root}/storage/archives/acme/json/1.0.0.tar.gz"
 const againPublish = publishing(base, ada, "acme/json", "1.0.0", json100).await()
 const anonymousPublish = publishing(base, "", "acme/json", "1.0.1", archiveOf("acme/json", "1.0.1")).await()
-const wrongHash = publishing(base, ada, "acme/json", "1.0.1", Archive(archiveOf("acme/json", "1.0.1").bytes, json100.hash)).await()
+const wrongHash = publishing(
+  base,
+  ada,
+  "acme/json",
+  "1.0.1",
+  Archive(archiveOf("acme/json", "1.0.1").bytes, json100.hash),
+).await()
 const wrongVersion = publishing(base, ada, "acme/json", "1.0.2", archiveOf("acme/json", "1.0.1")).await()
-const noDescription = publishing(base, ada, "acme/json", "1.0.3", archiveOf("acme/json", "1.0.3", description: "")).await()
+const noDescription = publishing(
+  base,
+  ada,
+  "acme/json",
+  "1.0.3",
+  archiveOf("acme/json", "1.0.3", description: ""),
+).await()
 const strangerPublish = publishing(base, bob, "acme/json", "1.1.0", archiveOf("acme/json", "1.1.0")).await()
-const addBob = call(base, Method.Put, "/api/1/owners/acme/members/bob", ada, Body.from("\{\"role\":\"publisher\"\}")).await()
-const bobAddsHimself = call(base, Method.Put, "/api/1/owners/acme/members/bob", bob, Body.from("\{\"role\":\"owner\"\}")).await()
-const memberPublish = publishing(base, bob, "acme/json", "1.1.0", archiveOf("acme/json", "1.1.0", code: "use File from \"std/fs\"\n\npublic fn exists(): Bool \{\n  File.exists(\"x\")\n\}\n")).await()
+const addBob = call(
+  base,
+  Method.Put,
+  "/api/1/owners/acme/members/bob",
+  ada,
+  Body.from("\{\"role\":\"publisher\"\}"),
+).await()
+const bobAddsHimself = call(
+  base,
+  Method.Put,
+  "/api/1/owners/acme/members/bob",
+  bob,
+  Body.from("\{\"role\":\"owner\"\}"),
+).await()
+const memberPublish = publishing(
+  base,
+  bob,
+  "acme/json",
+  "1.1.0",
+  archiveOf(
+    "acme/json",
+    "1.1.0",
+    code: "use File from \"std/fs\"\n\npublic fn exists(): Bool \{\n  File.exists(\"x\")\n\}\n",
+  ),
+).await()
 const confusingPackage = publishing(base, ada, "acme/js0n", "1.0.0", archiveOf("acme/js0n", "1.0.0")).await()
 const ownerView = call(base, Method.Get, "/api/1/owners/acme").await()
 const lastOwner = call(base, Method.Delete, "/api/1/owners/acme/members/ada", ada).await()
 
 // --- yanking --------------------------------------------------------------------------------------------------------
 
-const yankWithoutReason = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\}")).await()
-const yank = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\"reason\":\"answers 41\"\}")).await()
-const yankAgain = call(base, Method.Post, "/api/1/packages/acme/json/1.0.0/yank", ada, Body.from("\{\"reason\":\"twice\"\}")).await()
-const yankMissing = call(base, Method.Post, "/api/1/packages/acme/json/9.9.9/yank", ada, Body.from("\{\"reason\":\"x\"\}")).await()
+const yankWithoutReason = call(
+  base,
+  Method.Post,
+  "/api/1/packages/acme/json/1.0.0/yank",
+  ada,
+  Body.from("\{\}"),
+).await()
+const yank = call(
+  base,
+  Method.Post,
+  "/api/1/packages/acme/json/1.0.0/yank",
+  ada,
+  Body.from("\{\"reason\":\"answers 41\"\}"),
+).await()
+const yankAgain = call(
+  base,
+  Method.Post,
+  "/api/1/packages/acme/json/1.0.0/yank",
+  ada,
+  Body.from("\{\"reason\":\"twice\"\}"),
+).await()
+const yankMissing = call(
+  base,
+  Method.Post,
+  "/api/1/packages/acme/json/9.9.9/yank",
+  ada,
+  Body.from("\{\"reason\":\"x\"\}"),
+).await()
 const indexAfterYank = File.readText("{root}/storage/index/acme/json.trb").ok() ?? ""
 const unyank = call(base, Method.Delete, "/api/1/packages/acme/json/1.0.0/yank", ada).await()
 const indexAfterUnyank = File.readText("{root}/storage/index/acme/json.trb").ok() ?? ""
 
 // --- tokens ---------------------------------------------------------------------------------------------------------
 
-const scopedAnswer = call(base, Method.Post, "/api/1/tokens", ada, Body.from("\{\"name\":\"ci\",\"packages\":[\"acme/json\"],\"actions\":[\"publish\"],\"days\":30\}")).await()
+const scopedAnswer = call(
+  base,
+  Method.Post,
+  "/api/1/tokens",
+  ada,
+  Body.from("\{\"name\":\"ci\",\"packages\":[\"acme/json\"],\"actions\":[\"publish\"],\"days\":30\}"),
+).await()
 const scoped = tokenOf scopedAnswer
-const scopedYank = call(base, Method.Post, "/api/1/packages/acme/json/1.1.0/yank", scoped, Body.from("\{\"reason\":\"x\"\}")).await()
+const scopedYank = call(
+  base,
+  Method.Post,
+  "/api/1/packages/acme/json/1.1.0/yank",
+  scoped,
+  Body.from("\{\"reason\":\"x\"\}"),
+).await()
 const scopedTokens = call(base, Method.Post, "/api/1/tokens", scoped, Body.from("\{\"name\":\"more\"\}")).await()
-const widening = call(base, Method.Post, "/api/1/tokens", bob, Body.from("\{\"name\":\"x\",\"actions\":[\"publish\",\"launch\"]\}")).await()
+const widening = call(
+  base,
+  Method.Post,
+  "/api/1/tokens",
+  bob,
+  Body.from("\{\"name\":\"x\",\"actions\":[\"publish\",\"launch\"]\}"),
+).await()
 const listing = call(base, Method.Get, "/api/1/tokens", ada).await()
 const scopedId = Json().decode<TokenField>(scopedAnswer.body).map({ _.id }).ok() ?? ""
 const revoke = call(base, Method.Delete, "/api/1/tokens/{scopedId}", ada).await()
@@ -207,9 +312,21 @@ const afterRevoke = publishing(base, scoped, "acme/json", "1.2.0", archiveOf("ac
 
 // --- trusted publishing ---------------------------------------------------------------------------------------------
 
-const trustedByBob = call(base, Method.Put, "/api/1/packages/acme/http/trusted-publishers", bob, Body.from("\{\"publishers\":[]\}")).await()
+const trustedByBob = call(
+  base,
+  Method.Put,
+  "/api/1/packages/acme/http/trusted-publishers",
+  bob,
+  Body.from("\{\"publishers\":[]\}"),
+).await()
 const trustedSettings = "\{\"publishers\":[\{\"repository\":\"acme/http\",\"workflow\":\"release.yml\",\"environment\":\"release\"\}],\"required\":true\}"
-const trusted = call(base, Method.Put, "/api/1/packages/acme/http/trusted-publishers", ada, Body.from(trustedSettings)).await()
+const trusted = call(
+  base,
+  Method.Put,
+  "/api/1/packages/acme/http/trusted-publishers",
+  ada,
+  Body.from(trustedSettings),
+).await()
 const trustedView = call(base, Method.Get, "/api/1/packages/acme/http/trusted-publishers").await()
 const exchangeBody = "\{\"token\":\"{lastingToken}\",\"package\":\"acme/http\"\}"
 const exchanged = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from(exchangeBody)).await()
@@ -217,17 +334,55 @@ const shortLived = tokenOf exchanged
 const trustedPublish = publishing(base, shortLived, "acme/http", "1.2.5", archiveOf("acme/http", "1.2.5")).await()
 const trustedElsewhere = publishing(base, shortLived, "acme/json", "1.3.0", archiveOf("acme/json", "1.3.0")).await()
 const tokenPublish = publishing(base, ada, "acme/http", "1.2.6", archiveOf("acme/http", "1.2.6")).await()
-const untrustedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"{lastingToken}\",\"package\":\"acme/json\"\}")).await()
-const forgedExchange = call(base, Method.Post, "/api/1/trusted-publishing/github", body: Body.from("\{\"token\":\"a.b.c\",\"package\":\"acme/http\"\}")).await()
+const untrustedExchange = call(
+  base,
+  Method.Post,
+  "/api/1/trusted-publishing/github",
+  body: Body.from("\{\"token\":\"{lastingToken}\",\"package\":\"acme/json\"\}"),
+).await()
+const forgedExchange = call(
+  base,
+  Method.Post,
+  "/api/1/trusted-publishing/github",
+  body: Body.from("\{\"token\":\"a.b.c\",\"package\":\"acme/http\"\}"),
+).await()
 
 // A Forgejo's Actions: its key set found through its discovery document, and the neutral path of the exchange
 const forgejoSettings = "\{\"publishers\":[\{\"repository\":\"git.example.test/acme/http\",\"workflow\":\"release.yml\",\"ref\":\"refs/tags/v*\"\}]\}"
-const forgejoTrusted = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from(forgejoSettings)).await()
+const forgejoTrusted = call(
+  base,
+  Method.Put,
+  "/api/1/packages/acme/forged/trusted-publishers",
+  ada,
+  Body.from(forgejoSettings),
+).await()
 const forgejoWithEnvironment = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from("\{\"publishers\":[\{\"repository\":\"git.example.test/acme/http\",\"workflow\":\"release.yml\",\"environment\":\"release\"\}]\}")).await()
-const unknownForge = call(base, Method.Put, "/api/1/packages/acme/forged/trusted-publishers", ada, Body.from("\{\"publishers\":[\{\"repository\":\"git.elsewhere.test/acme/http\",\"workflow\":\"release.yml\"\}]\}")).await()
-const forgejoExchanged = call(base, Method.Post, "/api/1/trusted-publishing", body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/forged\"\}")).await()
-const forgejoPublish = publishing(base, tokenOf(forgejoExchanged), "acme/forged", "1.2.5", archiveOf("acme/forged", "1.2.5")).await()
-const forgejoForGithubPackage = call(base, Method.Post, "/api/1/trusted-publishing", body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/http\"\}")).await()
+const unknownForge = call(
+  base,
+  Method.Put,
+  "/api/1/packages/acme/forged/trusted-publishers",
+  ada,
+  Body.from("\{\"publishers\":[\{\"repository\":\"git.elsewhere.test/acme/http\",\"workflow\":\"release.yml\"\}]\}"),
+).await()
+const forgejoExchanged = call(
+  base,
+  Method.Post,
+  "/api/1/trusted-publishing",
+  body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/forged\"\}"),
+).await()
+const forgejoPublish = publishing(
+  base,
+  tokenOf(forgejoExchanged),
+  "acme/forged",
+  "1.2.5",
+  archiveOf("acme/forged", "1.2.5"),
+).await()
+const forgejoForGithubPackage = call(
+  base,
+  Method.Post,
+  "/api/1/trusted-publishing",
+  body: Body.from("\{\"token\":\"{forgejoToken}\",\"package\":\"acme/http\"\}"),
+).await()
 
 serving.cancel()
 keyServing.cancel()

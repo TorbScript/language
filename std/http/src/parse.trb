@@ -88,7 +88,9 @@ public fn statusLineOf(line: String): Result<StatusLine, HttpError> {
   const version = versionOf(line.sliceBytes(0, firstSpace))?
   const rest = line.sliceBytes(firstSpace + 1, line.byteLength())
   const code = rest.sliceBytes(0, if rest.byteLength() < 3 { rest.byteLength() } else { 3 })
-  if code.byteLength() != 3 || code.chars().any({ !_.isDigit() }) || (rest.byteLength() > 3 && !rest.startsWith("{code} ")) {
+  if code.byteLength() != 3
+    || code.chars().any({ !_.isDigit() })
+    || (rest.byteLength() > 3 && !rest.startsWith("{code} ")) {
     return Fail HttpError.malformed("a status is three digits")
   }
   const status = Status.of(Int.tryFrom(code).ok() ?? 0)?
@@ -185,7 +187,9 @@ public fn requestFraming(headers: Headers, version: String): Result<Framing, Htt
     }
     const tokens = tokensOf headers, "Transfer-Encoding"
     if tokens != ["chunked"] {
-      return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
+      return Fail(
+        HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built"),
+      )
     }
     return Framing.Chunked
   }
@@ -208,7 +212,9 @@ public fn responseFraming(headers: Headers, status: Status, method: Method): Res
   if !codings.isEmpty() {
     const tokens = tokensOf headers, "Transfer-Encoding"
     if tokens.isEmpty() || tokens[tokens.length() - 1] != "chunked" || tokens.length() > 1 {
-      return Fail HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built")
+      return Fail(
+        HttpError.unsupported("the transfer coding `{codings.joined(separator: ", ")}`: only `chunked` is built"),
+      )
     }
     return Framing.Chunked
   }

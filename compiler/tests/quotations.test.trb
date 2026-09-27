@@ -179,9 +179,7 @@ group "What is not quotable" {
     assert(problems(source) == [
       "A `const` cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
-    assert(notes(source) == [
-      "A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`",
-    ])
+    assert(notes(source) == ["A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`"])
   }
 
   test "a `var`, an assignment and a second statement" {
@@ -191,11 +189,11 @@ group "What is not quotable" {
     ])
     const assignment = "fn probe() \{\n  var counter = 0\n  const found = select \{ counter = 1\n    _.age >= counter \}\n\}\n{provider}"
     assert(problems(assignment).contains(
-      "An assignment cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression"
+      "An assignment cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ))
     const twice = inBody "  const found = select \{ _.age >= 1\n    _.age >= 2 \}"
     assert(problems(twice).contains(
-      "A second statement cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression"
+      "A second statement cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ))
   }
 
@@ -216,9 +214,7 @@ group "What is not quotable" {
 
   test "the early return `?`" {
     const source = "fn probe(): Bool? \{\n  const flag: Bool? = Some(true)\n  assert(flag?)\n  None\n\}\n{provider}"
-    assert(problems(source) == [
-      "`?` cannot appear in a quotation: `Expression<Bool>` holds a single expression",
-    ])
+    assert(problems(source) == ["`?` cannot appear in a quotation: `Expression<Bool>` holds a single expression"])
   }
 
   test "`match`, which would double the set of nodes" {
@@ -237,15 +233,13 @@ group "What is not quotable" {
   test "a pattern in an `if` binds a name, which a `Conditional` node cannot" {
     const source = inBody "  const held: Bool? = None\n  const found = quoted(if const Some(flag) = held \{ flag \} else \{ false \})"
     assert(problems(source).contains(
-      "A pattern in an `if` cannot appear in a quotation: `Expression<Bool>` holds a single expression"
+      "A pattern in an `if` cannot appear in a quotation: `Expression<Bool>` holds a single expression",
     ))
   }
 
   test "a spread and a parameter that destructures have no node in an expression tree" {
     const spread = inBody "  const sizes = [1]\n  assert(count(...sizes) == 1)\n\}\n\nfn count(...values: Int): Int \{\n  1"
-    assert(problems(spread) == [
-      "A spread has no node in an expression tree, so `Expression<Bool>` cannot hold it",
-    ])
+    assert(problems(spread) == ["A spread has no node in an expression tree, so `Expression<Bool>` cannot hold it"])
     assert(notes(spread) == [
       "`ExpressionNode` is part of the language standard: a new kind of node needs a new version of it",
     ])

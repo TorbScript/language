@@ -105,7 +105,7 @@ group "The text format" {
           "  %7 = construct T_main_Point (%4 owned, %6 owned)",
           "  return %7 owned",
           "\}",
-        ])
+        ]),
     )
   }
 
@@ -141,7 +141,7 @@ group "The text format" {
           "b2: # after",
           "  return",
           "\}",
-        ])
+        ]),
     )
   }
 
@@ -159,7 +159,11 @@ group "The text format" {
     const shapeType = program.internType IrType.Variant(shape)
     const holder = recordLayout program, "T_main_Holder", [FieldLayout("items", listOfInteger)]
     const holderType = program.internType IrType.Record(holder)
-    const greeting = program.addStatic StaticValue("s_main_greeting", strings, StaticContents.Literal(LiteralValue.Text("hi")))
+    const greeting = program.addStatic(StaticValue(
+      "s_main_greeting",
+      strings,
+      StaticContents.Literal(LiteralValue.Text("hi")),
+    ))
     const at = program.internLocation Location("src/all.trb", 7, 2)
     const shown = newFunction "t_main_show", None, IrSignature([IrParameter("value", strings)], voidType), "body"
     const printer = finishFunction program, shown
@@ -192,7 +196,10 @@ group "The text format" {
     emit builder, Instruction.Tag(tag, circle)
     emit builder, Instruction.Read(items, Reference(Slot(1), [PathStep.Field(holder, 0)]))
     emit builder, Instruction.Write(Reference(Slot(1), [PathStep.Field(holder, 0)]), owned(items))
-    emit builder, Instruction.Read(count, Reference(Slot(1), [PathStep.Field(holder, 0), PathStep.Element(int64, index, at)]))
+    emit(
+      builder,
+      Instruction.Read(count, Reference(Slot(1), [PathStep.Field(holder, 0), PathStep.Element(int64, index, at)])),
+    )
     emit builder, Instruction.BoxNew(boxed, owned(count))
     emit builder, Instruction.BoxNew(cell, owned(count))
     emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
@@ -229,7 +236,7 @@ group "The text format" {
           "  putBack %0[%3] = %4 Map",
           "  panic %2 owned at src/all.trb:7:2",
           "  unreachable",
-        ])
+        ]),
     )
   }
 
@@ -263,7 +270,7 @@ group "The text format" {
           "  callClosure %1(%0 borrowed)",
           "  return",
           "\}",
-        ])
+        ]),
     )
   }
 
@@ -318,7 +325,7 @@ group "The text format" {
     assert printed.contains("\n  call t_main_describe(%0 borrowed) witnesses(table w_show__Int64)\n")
     assert(
       printFunction(program, program.functionAt(callee))
-        .startsWith("fn t_main_describe(value: Int64 borrowed, witness 0: Show) -> Void \{")
+        .startsWith("fn t_main_describe(value: Int64 borrowed, witness 0: Show) -> Void \{"),
     )
   }
 
@@ -365,7 +372,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_broken b2: %1 is used before it is defined on every path"]
+        == ["t_main_broken b2: %1 is used before it is defined on every path"],
     )
   }
 
@@ -391,7 +398,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_dead b2: nothing reaches this block, and it is not an `unreachable` marker"]
+        == ["t_main_dead b2: nothing reaches this block, and it is not an `unreachable` marker"],
     )
   }
 
@@ -407,7 +414,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_pick b0: the switch has 2 values and 1 targets"]
+        == ["t_main_pick b0: the switch has 2 values and 1 targets"],
     )
   }
 
@@ -421,7 +428,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_answer b0: the function returns `Int64` and `return` carries `Bool`"]
+        == ["t_main_answer b0: the function returns `Int64` and `return` carries `Bool`"],
     )
   }
 
@@ -434,7 +441,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_empty b0: the function returns `Int64`, so `return` needs a value"]
+        == ["t_main_empty b0: the function returns `Int64`, so `return` needs a value"],
     )
   }
 
@@ -455,7 +462,7 @@ group "The verifier" {
           "t_main_count b0: `retain` needs a value that is counted, and `Int64` is not",
           "t_main_count b0: `release` needs a value that is counted, and `Int64` is not",
           "t_main_count b0: `makeUnique` needs a place that is counted, and `Int64` is not",
-        ]
+        ],
     )
   }
 
@@ -479,7 +486,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_caller b0: `t_main_takesTwo` takes 2 arguments and 1 were given"]
+        == ["t_main_caller b0: `t_main_takesTwo` takes 2 arguments and 1 were given"],
     )
   }
 
@@ -500,7 +507,7 @@ group "The verifier" {
         == [
           "t_main_build b0: `T_main_Shape` is built from 1 fields and 0 were given",
           "t_main_build b0: `T_main_Shape` has no variant 4",
-        ]
+        ],
     )
   }
 
@@ -531,7 +538,7 @@ group "The verifier" {
           "t_main_compare b0: `less` compares `Int64` with `Bool`",
           "t_main_compare b0: the result of `less` is a `Bool`, and %2 is `Int64`",
           "t_main_compare b0: the function returns `Bool` and `return` carries `Int64`",
-        ]
+        ],
     )
   }
 
@@ -553,7 +560,7 @@ group "The verifier" {
           "t_main_add b0: `add.i64` works on `Int64`, and %0 is `Int32`",
           "t_main_add b0: `add.i64` works on `Int64`, and %0 is `Int32`",
           "t_main_add b0: the result of `add.i64` is `Int32` and %1 is `Int64`",
-        ]
+        ],
     )
   }
 
@@ -570,7 +577,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_reach b0: `Record(T_main_Point)` has no field 3"]
+        == ["t_main_reach b0: `Record(T_main_Point)` has no field 3"],
     )
   }
 
@@ -586,7 +593,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_wrong: parameter 0 is `Bool` and its slot is `Int64`"]
+        == ["t_main_wrong: parameter 0 is `Bool` and its slot is `Int64`"],
     )
   }
 
@@ -607,7 +614,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_impossible: slot %1 holds a const argument, which is not a value"]
+        == ["t_main_impossible: slot %1 holds a const argument, which is not a value"],
     )
   }
 
@@ -624,7 +631,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_join b0: `textConcat.i64` has only one form, so it names no numeric type"]
+        == ["t_main_join b0: `textConcat.i64` has only one form, so it names no numeric type"],
     )
   }
 
@@ -657,7 +664,7 @@ group "The verifier" {
       reported
         == "t_main_join b0: `textConcat` joins a string or a value the runtime shows,"
         + " and %2 is `Closure(() -> Int64)`;"
-        + " t_main_join b0: `printParts` joins strings, and %1 is `Int64`"
+        + " t_main_join b0: `printParts` joins strings, and %1 is `Int64`",
     )
   }
 
@@ -674,7 +681,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_write b0: `printParts` produces no value, and a slot was given for one"]
+        == ["t_main_write b0: `printParts` produces no value, and a slot was given for one"],
     )
   }
 
@@ -697,7 +704,7 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_take b0: the container is `List(Int64)` and not the one the step names"]
+        == ["t_main_take b0: the container is `List(Int64)` and not the one the step names"],
     )
   }
 
@@ -724,7 +731,7 @@ group "The verifier" {
           "t_main_mix b0: `add.f64` works on `Float64`, and %0 is `Int64`",
           "t_main_mix b0: `multiply.u8` takes 2 operands and 1 were given",
           "t_main_mix b0: `multiply.u8` works on `UInt8`, and %0 is `Int64`",
-        ]
+        ],
     )
   }
 
@@ -739,8 +746,7 @@ group "The verifier" {
     const identifier = finishFunction program, builder
     finishProgram program
     assert(
-      verifyFunction(program, program.functionAt(identifier))
-        == ["t_main_wait b0: only the body of a task suspends"]
+      verifyFunction(program, program.functionAt(identifier)) == ["t_main_wait b0: only the body of a task suspends"],
     )
   }
 }

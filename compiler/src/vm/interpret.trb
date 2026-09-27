@@ -260,7 +260,13 @@ public fn runProgram(
   registers.loader = loader
   // `tasks { workers, blocking }` of the program's manifest, before a worker of the pool is asked for
   if pool.workers != 0 || pool.blocking != 0 {
-    const _ = kernelCall registers.words, kernelScratch(), 0, KernelOperation.PoolDefaults, [pool.workers, pool.blocking]
+    const _ = kernelCall(
+      registers.words,
+      kernelScratch(),
+      0,
+      KernelOperation.PoolDefaults,
+      [pool.workers, pool.blocking],
+    )
   }
   const workers = workersFor registers, program
   const ended = run registers.words, kernelScratch(), registers, registers.image, program, arguments, executable
@@ -528,7 +534,13 @@ public fn registerReferenceOf(loaded: LoadedProgram, index: Int): Int {
  * index plus one, `0` for a value nothing in is counted), and runs the destructors that release queues, inside a
  * sandbox of `grant` so that a destructor that panics stops and the host goes on. The words are zero afterwards.
  */
-public fn releaseSandboxed(var loaded: LoadedProgram, grant: String, register: Int, width: Int, shape: Int): Result<Void, Stop> {
+public fn releaseSandboxed(
+  var loaded: LoadedProgram,
+  grant: String,
+  register: Int,
+  width: Int,
+  shape: Int,
+): Result<Void, Stop> {
   const registers = loaded.registers
   if shape > 0 {
     Machine.install { answer registers, _ }
@@ -624,7 +636,13 @@ public fn callSandboxed(
  * The stop the kernel recorded, or the limit the interpreter hit, with the frames the budget collected. `scratch` is
  * the first of the words above everything in use, which the kernel writes the stop into.
  */
-fn stopAt(var words: ArrayList<Int>, var kernel: ArrayList<Int>, budget: Budget, registers: Registers, scratch: Int): Stop {
+fn stopAt(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  budget: Budget,
+  registers: Registers,
+  scratch: Int,
+): Stop {
   if !budget.reason.isEmpty() {
     return Stop(0, budget.reason, 0 - 1, budget.frames)
   }

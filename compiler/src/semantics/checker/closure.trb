@@ -95,12 +95,7 @@ type ClosureParameters {
  * The parameters of the closure: the ones it wrote down, with their annotations where it has them and the types of the
  * expected function type otherwise. Without an expected type every parameter needs an annotation (design 2.7).
  */
-fn parameterFormsOf(
-  var checker: Checker,
-  closure: Closure,
-  form: FunctionForm?,
-  at: Span,
-): ClosureParameters {
+fn parameterFormsOf(var checker: Checker, closure: Closure, form: FunctionForm?, at: Span): ClosureParameters {
   const wanted = match form {
     Some(found) => found.parameters
     None => []
@@ -315,9 +310,7 @@ fn declareReceiver(
   const isVar = isVarMode form.mode
   // A closure that wrote fewer parameters than the expected type has said so already, and its receiver stays implicit
   if !hasParameters || index >= closure.parameters.length() {
-    const binding = checker.declareBinding(
-      LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
-    )
+    const binding = checker.declareBinding LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
     checker.setReceiver binding
     checker.recordReceiver at, ReceiverClosure(binding, form.annotation, isVar, true)
     return
@@ -475,6 +468,6 @@ fn reportParameterMismatch(var checker: Checker, given: TypeId, wanted: TypeId, 
 fn reportMissingParameterTypes(var checker: Checker, at: Span) {
   checker.reportHere(
     Diagnostic.error("The parameters of this closure need types: `\{ value: Int => ... \}`", at)
-      .withNote("Nothing here says what the closure is called with, so the annotation is the answer")
+      .withNote("Nothing here says what the closure is called with, so the annotation is the answer"),
   )
 }

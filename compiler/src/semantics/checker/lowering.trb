@@ -45,7 +45,12 @@ fn requireChannelItem(var checker: Checker, built: TypeId, reference: TypeRefere
  * `of` is what the bound is asked of, which is what fills in the defaults of the trait's own parameters: `with Add`
  * on `Meters` means `Add<Meters, Meters>`.
  */
-public fn traitsFromReference(var checker: Checker, reference: TypeReference, of: TypeId, scope: TypeScope): List<TypeId> {
+public fn traitsFromReference(
+  var checker: Checker,
+  reference: TypeReference,
+  of: TypeId,
+  scope: TypeScope,
+): List<TypeId> {
   const built = typeFromReference checker, reference, scope.forBound(of)
   match checker.types.form(built) {
     .Traits(bounds) => bounds
@@ -56,7 +61,7 @@ public fn traitsFromReference(var checker: Checker, reference: TypeReference, of
       checker.report(
         scope.module,
         Diagnostic.error("`{shown}` is a type, not a trait", reference.span)
-          .withNote("`with` and a bound ask for a capability a type comes with, and only a trait is one")
+          .withNote("`with` and a bound ask for a capability a type comes with, and only a trait is one"),
       )
       []
     }
@@ -99,7 +104,7 @@ fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): 
       checker.report(
         scope.module,
         Diagnostic.error("`lazy` is only the type of a parameter", reference.span)
-          .withNote("A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one")
+          .withNote("A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one"),
       )
       typeFromReference checker, inner, scope.forType()
     }
@@ -167,10 +172,7 @@ fn withoutArguments(var checker: Checker, built: TypeId, arguments: List<TypeRef
   }
   if !arguments.isEmpty() && built != checker.invalidType {
     const shown = checker.describe built
-    checker.report(
-      scope.module,
-      Diagnostic.error("`{shown}` takes no type arguments", arguments[0].span)
-    )
+    checker.report scope.module, Diagnostic.error("`{shown}` takes no type arguments", arguments[0].span)
   }
   built
 }
@@ -321,8 +323,8 @@ fn reportMissingSelf(var checker: Checker, declaration: ParameterDeclaration, at
     Diagnostic.error("`{owner}` needs its {position} type argument here", at)
       .withNote(
         "Its default is `Self`, and there is no `Self` outside of a bound:"
-          + " write the argument out, or use the trait in a `with` or a `where`"
-      )
+          + " write the argument out, or use the trait in a `with` or a `where`",
+      ),
   )
 }
 
@@ -357,9 +359,7 @@ fn parameterType(
   const identifier = match checker.types.parameterOf(symbol) {
     Some(found) => found
     // A parameter of a declaration whose signature nobody has asked for yet: it is still that parameter
-    None => checker.types.declareParameter(
-      ParameterDeclaration(name, symbol, None, false, 0, None, scope.module)
-    )
+    None => checker.types.declareParameter ParameterDeclaration(name, symbol, None, false, 0, None, scope.module)
   }
   const built = checker.types.intern TypeForm.Parameter(identifier)
   for argument in arguments {
@@ -369,7 +369,7 @@ fn parameterType(
     checker.report(
       scope.module,
       Diagnostic.error("`{name}` is a type parameter and takes no type arguments", reference.span)
-        .withNote("There are no higher-kinded types: a parameter stands for a type, not for a type constructor")
+        .withNote("There are no higher-kinded types: a parameter stands for a type, not for a type constructor"),
     )
   }
   built
@@ -382,7 +382,7 @@ fn constantArgument(var checker: Checker, symbol: SymbolId, reference: TypeRefer
     checker.report(
       scope.module,
       Diagnostic.error("`{name}` is a constant, not a type", reference.span)
-        .withNote("A constant is a value. Only a `const` parameter of a type takes one: `Array<Float, {name}>`")
+        .withNote("A constant is a value. Only a `const` parameter of a type takes one: `Array<Float, {name}>`"),
     )
     return checker.invalidType
   }
@@ -395,7 +395,7 @@ fn constantArgument(var checker: Checker, symbol: SymbolId, reference: TypeRefer
       checker.report(
         scope.module,
         Diagnostic.error("The const argument `{name}` has to be a literal", reference.span)
-          .withNote("There is no arithmetic in types: a const argument is a literal, a `const` that is one, or another const parameter")
+          .withNote("There is no arithmetic in types: a const argument is a literal, a `const` that is one, or another const parameter"),
       )
       checker.invalidType
     }
@@ -432,7 +432,7 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
       None => {
         checker.report(
           scope.module,
-          Diagnostic.error("A literal type is built from `String`, `Int` and `Char` literals", value.span)
+          Diagnostic.error("A literal type is built from `String`, `Int` and `Char` literals", value.span),
         )
       }
     }
@@ -453,7 +453,7 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
       checker.report(
         scope.module,
         Diagnostic.error("The members of a literal type have to be literals of one type", reference.span)
-          .withNote("`{first}` and `{second}` are two types, and there are no unions of types")
+          .withNote("`{first}` and `{second}` are two types, and there are no unions of types"),
       )
       continue
     }
@@ -624,7 +624,7 @@ fn intersectionType(
         checker.report(
           scope.module,
           Diagnostic.error("`{shown}` is a type, not a trait", member.span)
-            .withNote("Only traits can be combined with `&`: two types have no values in common")
+            .withNote("Only traits can be combined with `&`: two types have no values in common"),
         )
       }
     }
@@ -672,7 +672,7 @@ fn checkValueOrType(var checker: Checker, built: TypeId, reference: TypeReferenc
     checker.report(
       scope.module,
       Diagnostic.error("`{named}` is a const parameter, and a type belongs here", reference.span)
-        .withNote("A const parameter is a value inside of its declaration (`0..Size`), not a type")
+        .withNote("A const parameter is a value inside of its declaration (`0..Size`), not a type"),
     )
     return checker.invalidType
   }
@@ -683,7 +683,7 @@ fn checkValueOrType(var checker: Checker, built: TypeId, reference: TypeReferenc
   checker.report(
     scope.module,
     Diagnostic.error("`{shown}` is a type, and a value belongs here", reference.span)
-      .withNote("There is no arithmetic in types: a const argument is a literal, a `const` that is one, or another const parameter")
+      .withNote("There is no arithmetic in types: a const argument is a literal, a `const` that is one, or another const parameter"),
   )
   checker.invalidType
 }

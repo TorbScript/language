@@ -40,11 +40,7 @@ group "Lexer" {
 
   test "interpolation may contain strings" {
     const tokens = kinds "\"a: \{map[\"a\"]\} \\\{literal\}\""
-    const expected = [
-      TextPart.Literal("a: "),
-      TextPart.Expression(Span(5, 13)),
-      TextPart.Literal(" \{literal\}"),
-    ]
+    const expected = [TextPart.Literal("a: "), TextPart.Expression(Span(5, 13)), TextPart.Literal(" \{literal\}")]
     assert(tokens[0] == TokenKind.TextLiteral(expected))
   }
 
@@ -83,10 +79,15 @@ group "Lexer" {
   }
 
   test "the bit operators are tokens, and `>>` is two `>` for the parser to join" {
-    assert(kinds("a & b | c ^ d") == [.Identifier, .Ampersand, .Identifier, .Pipe, .Identifier, .Caret, .Identifier, .EndOfFile])
+    assert(
+      kinds("a & b | c ^ d")
+        == [.Identifier, .Ampersand, .Identifier, .Pipe, .Identifier, .Caret, .Identifier, .EndOfFile],
+    )
     assert(kinds("~a << 2") == [.Tilde, .Identifier, .LessLess, .IntegerLiteral, .EndOfFile])
     assert(kinds("a >> 2") == [.Identifier, .Greater, .Greater, .IntegerLiteral, .EndOfFile])
-    assert(kinds("List<List<Int>>") == [.Identifier, .Less, .Identifier, .Less, .Identifier, .Greater, .Greater, .EndOfFile])
+    assert(
+      kinds("List<List<Int>>") == [.Identifier, .Less, .Identifier, .Less, .Identifier, .Greater, .Greater, .EndOfFile],
+    )
     // A line that ends with a binary one of them goes on
     assert(kinds("a |\nb") == [.Identifier, .Pipe, .Identifier, .EndOfFile])
     assert(kinds("a\n^ b") == [.Identifier, .Caret, .Identifier, .EndOfFile])
@@ -129,7 +130,9 @@ group "Lexer" {
     const lexed = lex SourceText.of("größe")
     assert(lexed.tokens.map({ _.kind }).toList() == [.Identifier, .EndOfFile])
     assert(lexed.diagnostics[0].span == Span(0, 7))
-    assert(lexed.diagnostics[0].notes == ["Text is not: a string, a character literal and a comment may contain anything"])
+    assert(
+      lexed.diagnostics[0].notes == ["Text is not: a string, a character literal and a comment may contain anything"],
+    )
     // Text, characters and comments stay full Unicode
     assert(messages("\"Grüße 👋\" // Übrigens") == [])
     assert(messages("'ß'") == [])
@@ -161,7 +164,9 @@ group "Multi-line strings" {
   test "a line indented less than the reference is a lexer error, and the string still lexes unchanged" {
     const source = "\"\"\"\n  first\nsecond\n  \"\"\""
     const lexed = lex SourceText.of(source)
-    assert(lexed.diagnostics.map({ _.message }).toList() == ["This line is indented less than the first line of the string"])
+    assert(
+      lexed.diagnostics.map({ _.message }).toList() == ["This line is indented less than the first line of the string"],
+    )
     assert(lexed.tokens[0].kind == TokenKind.TextLiteral([TextPart.Literal("first\nsecond\n")]))
   }
 

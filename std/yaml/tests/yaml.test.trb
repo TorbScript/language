@@ -178,7 +178,9 @@ group "decoding into a type" {
   }
 
   test "a failure names the line and the field chain" {
-    assert(failureOf("name: web\nports:\n  - 80\n  - http\n") == "line 4: ports[1]: a whole number is needed, not `http`")
+    assert(
+      failureOf("name: web\nports:\n  - 80\n  - http\n") == "line 4: ports[1]: a whole number is needed, not `http`",
+    )
     assert(failureOf("replicas: 2\n") == "line 1: name: a value is needed")
     assert failureOf("name: [a\n").startsWith("line 2, column 1: ")
   }
@@ -235,7 +237,10 @@ group "encoding" {
 
   test "an empty list is [] and a case without fields is its name" {
     assert(Yaml().encode(Drawing([])) == "shapes: []\n")
-    assert(Yaml().encode(Drawing([Shape.Empty, Shape.Circle(1.5)])) == "shapes:\n  - Empty\n  - Circle:\n      radius: 1.5\n")
+    assert(
+      Yaml().encode(Drawing([Shape.Empty, Shape.Circle(1.5)]))
+        == "shapes:\n  - Empty\n  - Circle:\n      radius: 1.5\n",
+    )
   }
 
   test "a type YamlTag names is written with its tag" {
@@ -260,7 +265,13 @@ group "the tree" {
     const tagged = document.root.at("b") ?? YamlNode.empty()
     assert(tagged.tag == "tag:yaml.org,2002:int" && tagged.anchor == "n" && tagged.line == 2)
     const flow = document.root.at("c") ?? YamlNode.empty()
-    assert(flow.content == .Sequence([YamlNode.scalar("1").copy(line: 3, column: 5), YamlNode.scalar("2").copy(line: 3, column: 8)], CollectionStyle.Flow))
+    assert(
+      flow.content
+        == .Sequence(
+          [YamlNode.scalar("1").copy(line: 3, column: 5), YamlNode.scalar("2").copy(line: 3, column: 8)],
+          CollectionStyle.Flow,
+        ),
+    )
   }
 
   test "comments are kept and written back where they were" {
