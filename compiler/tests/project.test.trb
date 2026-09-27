@@ -270,6 +270,15 @@ group "Workspaces" {
     assert(packages == [": script.trb"])
   }
 
+  test "a directory that belongs to no project has its loose files as a package, and each project below it" {
+    const files = [
+      "notes.trb": "",
+      "hello/project.trb": "name = \"acme/hello\"",
+      "hello/src/main.trb": "",
+    ]
+    assert(packagesOf(files, ".") == [": notes.trb", "acme/hello: hello/src/main.trb"])
+  }
+
   test "a file named on its own is a module of the project around it" {
     const packages = packagesOf workspace, "elsewhere/script.trb"
     assert(packages[0] == "acme/all: elsewhere/script.trb")

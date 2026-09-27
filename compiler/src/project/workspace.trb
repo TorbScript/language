@@ -79,8 +79,27 @@ public fn findWorkspace(tree: SourceTree, path: String): Workspace {
     const found = withNamedFile members, tree, project, target
     return withStandardLibrary tree, manifests, found
   }
-  const files = if tree.exists(target) { [target] } else { tree.below directory }
-  withStandardLibrary tree, manifests, Workspace([Package("", directory, Manifest(), files)])
+  if tree.exists(target) {
+    return withStandardLibrary tree, manifests, Workspace([Package("", directory, Manifest(), [target])])
+  }
+  // A directory that belongs to no project: its loose files are one package, and every project below it is there with
+  // its own workspace - `torb run` beside a project finds the project, and its manifest is never a loose file
+  const loose = tree.below(directory).filter({ file => !manifests.any({ isInside file, _ }) }).toList()
+  var packages = [Package("", directory, Manifest(), loose)]
+  var problems: List<String> = []
+  for project in manifests {
+    if !isInside(project, directory) || packages.any({ _.directory == project }) {
+      continue
+    }
+    const found = findWorkspace tree, project
+    problems.appendAll found.problems
+    for package in found.packages {
+      if !packages.any({ _.directory == package.directory }) {
+        packages.append package
+      }
+    }
+  }
+  withStandardLibrary tree, manifests, Workspace(packages, problems)
 }
 
 /**
