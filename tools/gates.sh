@@ -12,7 +12,8 @@
 # `manifest --check` over every `project.trb`, `test --native compiler/tests`, `test` of the std/example packages in
 # both back ends (one that waits for a back-end gap is named in docs/RUST-EXIT.md section 2.4 and skipped here), the
 # programs of `tests/language/` against their `.expected` in both back ends, the sessions of `tests/repl/` piped into
-# `torb repl` (`tools/repl.sh`), the package manager against a `file:` registry (`tools/packages.sh`), the four docs
+# `torb repl` (`tools/repl.sh`), the package manager against a `file:` registry (`tools/packages.sh`), `lock --check`
+# over every `project.lock.trb`, the four docs
 # gates, `doc --check --no-run std` (the links of std's doc comments and its examples, type checked), and
 # `format --check` over the repository. Every binary that is only built to be run once is built with `--profile dev`,
 # which `torb test --native` and `torb run --native` do.
@@ -168,6 +169,18 @@ embedded_programs() {
   [ "$failures" -eq 0 ]
 }
 
+# `torb lock --check` for the project of every `project.lock.trb` git knows: the file is what the toolchain writes.
+lock_files() {
+  torb=$1
+  failures=0
+  for lock in $(git ls-files '*project.lock.trb'); do
+    if ! "$torb" lock --check --project "$(dirname "$lock")"; then
+      failures=$((failures + 1))
+    fi
+  done
+  [ "$failures" -eq 0 ]
+}
+
 tier=${1-}
 case "$tier" in
   a | A) tier=a ;;
@@ -232,6 +245,9 @@ if [ "$tier" = "a" ]; then
   # docs/design/RELEASE.md section 7.13: publish, add, build, update, remove and install against a `file:` registry, the
   # whole transcript against tests/packages/transcript.expected
   gate "tests/packages against transcript.expected (the package manager)" sh tools/packages.sh
+
+  # docs/design/PROJECT.md section 8: every project.lock.trb of the repository is byte for byte what `torb lock` writes
+  gate "lock --check (every project.lock.trb)" lock_files "$torb"
 
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs
