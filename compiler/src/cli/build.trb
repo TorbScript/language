@@ -25,7 +25,7 @@ use normalizePath, parentPath, joinPath, pathName, isInside from "../project/pat
 use SourceTree from "../project/source-tree"
 use Manifest, ProfileSettings from "../project/manifest"
 use Package from "../project/workspace"
-use PackageProgram, programsOf from "../project/programs"
+use PackageProgram, programsOf, libraryEntry from "../project/programs"
 use programOfEntry from "../semantics/graph"
 use readSourceTree, absolutePaths from "../project/read"
 use findRuntime, threadArguments from "../project/toolchain"
@@ -582,8 +582,8 @@ public type ChosenProgram {
 public type ProgramChoice {
   case Chosen(programs: List<ChosenProgram>)
   /**
-   * Every package below the paths is a library: checked, and there is nothing to build, which is no error. `what` says
-   * which: `std/text is a library`.
+   * No package below the paths has a program: checked, and there is nothing to build, which is no error. `what` says
+   * which: `std/text is a library`, `acme/tour has no program`.
    */
   case Libraries(what: String)
   case Refused(message: String)
@@ -650,10 +650,16 @@ public fn chosenPrograms(
     if package.name.isEmpty() {
       continue
     }
+    // A package without a program is a library where it has `src/lib.trb`, and a directory of scripts where it has not
+    const said = if tree.exists(joinPath(package.directory, libraryEntry)) {
+      "{package.name} is a library"
+    } else {
+      "{package.name} has no program"
+    }
     if isBelow {
-      below.append package.name
+      below.append said
     } else if package.directory.byteLength() > aroundDepth {
-      around = package.name
+      around = said
       aroundDepth = package.directory.byteLength()
     }
   }
@@ -675,11 +681,11 @@ public fn chosenPrograms(
   }
   if every.isEmpty() {
     if const [only] = libraries {
-      return ProgramChoice.Libraries "{only} is a library"
+      return ProgramChoice.Libraries only
     }
     if !libraries.isEmpty() {
       const shown = options.paths.joined separator: ", "
-      return ProgramChoice.Libraries "every package below {shown} is a library"
+      return ProgramChoice.Libraries "no package below {shown} has a program"
     }
     // A directory of scripts that belongs to no package: the one file there is, as a file named directly would be
     if const [only] = checked.requested {
