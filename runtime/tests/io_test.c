@@ -96,6 +96,18 @@ static torb_list received_bytes(int64_t stream, size_t expected) {
   return into;
 }
 
+/*
+ * The first test of the file, so nothing opened a socket before it: a name resolved before any socket once called
+ * Winsock's resolver before the core had loaded Winsock. `.invalid` never exists (RFC 6761), network or not.
+ */
+TORB_TEST(test_io_resolving_before_any_socket) {
+  torb_text host = torb_text_from_cstring("torbscript.invalid");
+  TORB_CHECK_INTEGER(kind_of(answer_of(torb_network_resolve(host))), 8);
+  torb_text_release(host);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
 TORB_TEST(test_io_echo_over_loopback) {
   int64_t server = 0;
   int64_t client = 0;
@@ -534,6 +546,7 @@ TORB_TEST(test_io_randomness_differs) {
 }
 
 void torb_register_io_tests(void) {
+  TORB_ADD(test_io_resolving_before_any_socket);
   TORB_ADD(test_io_echo_over_loopback);
   TORB_ADD(test_io_shutdown_is_the_end_of_the_stream);
   TORB_ADD(test_io_a_closed_handle_is_a_failure);

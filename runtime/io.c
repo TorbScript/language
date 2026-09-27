@@ -860,8 +860,17 @@ int64_t torb_network_address(int64_t handle, bool peer, torb_list *parts) {
 torb_task *torb_network_resolve(torb_text host) {
   torb_io_operation *operation;
   const uint8_t *bytes = host.length == 0u ? NULL : host.storage->data + host.offset;
+  int64_t failure;
   if (host.length == 0u || memchr(bytes, 0, host.length) != NULL) {
     return torb_io_answered(torb_io_failed(TORB_IO_HOST_NOT_FOUND, 0u));
+  }
+  /*
+   * The resolver of Windows is Winsock's, which the start of the core loads: a name resolved before any socket was
+   * opened called a function that was not loaded yet
+   */
+  failure = torb_io_ensure_running();
+  if (failure != 0) {
+    return torb_io_answered(failure);
   }
   operation = torb_io_operation_new(TORB_IO_RESOLVE, NULL);
   operation->host = (char *)torb_io_allocate((size_t)host.length + 1u);

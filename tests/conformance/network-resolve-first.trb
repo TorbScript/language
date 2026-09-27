@@ -1,0 +1,13 @@
+use resolve from "std/network"
+
+/**
+ * A name resolved before the program opened any socket: on Windows the resolver is Winsock's, which the IO core loads
+ * when it starts, and a resolution that came first once called it before it was loaded and crashed. `.invalid` is a
+ * name that never exists (RFC 6761 section 6.4), so the answer is the same on every machine, with a network or without:
+ * the system's resolver says so, at once or after asking its name server.
+ */
+
+match resolve("torbscript.invalid").await() {
+  Ok(addresses) => print "resolved to {addresses.length()} addresses"
+  Fail(problem) => print "not found: {problem.isHostNotFound()}"
+}

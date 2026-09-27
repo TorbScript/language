@@ -174,7 +174,9 @@ asking the system, as RFC 6761 section 6.3 allows, so the tests never depend on 
 These threads are section 7's blocking pool as the IO interface uses it - C only, no heap, a result written into the
 operation - and not `offload`'s pool, which runs TorbScript and has heaps. An asynchronous resolver (`GetAddrInfoExW`
 with an overlapped, `getaddrinfo_a`, a DNS client of our own) is a speed change behind the same native and waits for a
-reason.
+reason. **A resolution starts the IO core like a socket does**: on Windows the resolver is Winsock's `GetAddrInfoW`,
+which the core's start loads, and a program that resolved a name before it opened any socket once called it unloaded
+and crashed (`tests/conformance/network-resolve-first.trb`, and the first test of `runtime/tests/io_test.c`).
 
 **`lookup(name, type)` is that DNS client, beside `resolve` and not under it** ([DNS.md](DNS.md) section 7, "Lookups,
 as built"): the records of any type over UDP, TCP where a response was truncated, and TLS in `std/tls`, asked of the
