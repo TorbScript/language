@@ -1,0 +1,56 @@
+/**
+ * The answer of a stream that cannot fail, shown: `Result<String?, Never>`. The reading end of a `Channel` and every
+ * `Source<String, Never>` answer it from `next()`, and `print` and an interpolation show it as `Ok(Some(...))` and
+ * `Ok(None)`. The `Fail` arm of its `Show` holds a `Never`, is never reached and takes no value from anywhere - a
+ * `print` of it was reported to stop both back ends with an internal error about a slot used before it is defined, so
+ * this pins that the program builds and shows the same in both.
+ */
+use Channel from "std/task"
+use Source from "std/stream"
+
+/** A source of the program's own that cannot fail. */
+shared type Countdown with Source<String, Never> {
+  var left: Int
+
+  var fn next(): Task<Result<String?, Never>> {
+    if left == 0 {
+      return Ok None
+    }
+    left = left - 1
+    Ok Some("{left} left")
+  }
+
+  var fn close() {}
+}
+
+/** Shows every answer of a trait-typed source, the last `Ok(None)` included, through the table the value carries. */
+fn shownAll(var source: Source<String, Never>): Task<Int> {
+  var count = 0
+  loop {
+    const next = source.next().await()
+    print next
+    match next {
+      Ok(Some(_)) => {
+        count = count + 1
+      }
+      Ok(None) | Fail(_) => {
+        return count
+      }
+    }
+  }
+}
+
+const channel = Channel<String>(capacity: 2)
+var writing = channel.sink()
+writing.add("first").await()?
+writing.end().await()?
+var events = channel.source()
+print events.next().await()
+print "then {events.next().await()}"
+print Some(events.next().await())
+
+var countdown = Countdown 2
+print countdown.next().await()
+const counted = shownAll(Countdown(2)).await()
+const listed = shownAll(Source.from(["a", "b"])).await()
+print(counted + listed)
