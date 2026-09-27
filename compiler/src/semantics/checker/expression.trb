@@ -3487,10 +3487,12 @@ fn isCall(expression: Expression): Bool {
 
 /** Whether a type names a generic type with its arguments: `Option<Int>`, `Box<Item>`. */
 fn hasTypeArguments(checker: Checker, owner: TypeId): Bool {
-  if const .Nominal(_, arguments) = checker.types.form(owner) {
-    return !arguments.isEmpty()
+  match checker.types.form(owner) {
+    .Nominal(_, arguments) => !arguments.isEmpty()
+    // `Set.of()`: a trait named as the owner of a static member is a trait type
+    .Traits(bounds) => bounds.any({ hasTypeArguments(checker, _) })
+    _ => false
   }
-  false
 }
 
 /** Whether a value has the type it has on its own, whatever is expected of it: what removing a written case needs. */
