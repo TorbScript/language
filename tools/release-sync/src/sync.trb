@@ -1,20 +1,21 @@
 /**
  * The one thing this program does: given a release (from the webhook or the periodic check), download its assets
- * with the read-only token, verify `SHA256SUMS` and its cosign signature, and place the result under
- * `<root>/download/<version>/`, updating `versions.txt` and `latest` (docs/design/RELEASE.md section 7.11).
+ * (with the read-only token, where there is one), verify `SHA256SUMS` and its cosign signature, and place the result
+ * under `<root>/download/<version>/`, updating `versions.txt` and `latest` (docs/design/RELEASE.md section 7.11).
  *
  * Downloading shells out to `curl`; hashing is `std/digest` over the file's chunks, and moving, linking and rewriting
  * the list of versions is `std/fs` - `rename` for a move, a symbolic link renamed over `latest`, and
  * `writeTextAtomically` for `versions.txt`, so the web server in front never reads half a list. The signature is checked
- * by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, or whose signature
- * does not verify, is refused and nothing is placed.**
+ * by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, no public key to check
+ * it against, or a signature that does not verify, is refused and nothing is placed.**
  */
 
 use File, IoError from "std/fs"
 use Sha256 from "std/digest"
 use Process from "std/process"
-use ReleaseInfo, ReleaseAsset from "./github"
-use expectedHash from "./verify"
+use Config from "./config"
+use ReleaseInfo, ReleaseAsset, ReleaseSource from "./forge"
+use expectedHash, isSignature from "./verify"
 
 /** `v0.2.0` -> `0.2.0`; a nightly's tag (`nightly-20260925`) has no `v` and is already the version. */
 public fn versionOf(tag: String): String {
@@ -34,7 +35,10 @@ public fn channelOf(version: String): String {
   }
 }
 
-/** The identity `cosign verify-blob` checks the certificate against - release.yml's or nightly.yml's, by the tag's shape. */
+/**
+ * The identity `cosign verify-blob` checks a keyless certificate of GitHub against - release.yml's or nightly.yml's,
+ * by the tag's shape. Only for releases made on GitHub; the forge's are signed with the project's key.
+ */
 public fn certificateIdentity(repository: String, tag: String): String {
   if tag.startsWith("v") {
     "https://github.com/{repository}/.github/workflows/release.yml@refs/tags/{tag}"
@@ -57,30 +61,31 @@ fn run(program: String, arguments: List<String>): Task<Result<Void, String>> {
   }
 }
 
-/** `curl`, with the token and `Accept: application/octet-stream` (releasing.md: how a private repository's asset is read). */
-fn downloadAsset(asset: ReleaseAsset, token: String?, destination: String): Task<Result<Void, String>> {
-  var arguments: List<String> = ["-fsSL", "-H", "Accept: application/octet-stream"]
-  match token {
-    Some(value) => {
-      arguments.append "-H"
-      arguments.append "Authorization: Bearer {value}"
-    }
-    None => void
+/** `curl` of one asset, from where and with the headers its forge answers it (`Forge.downloadUrl`, `downloadHeaders`). */
+fn downloadAsset(asset: ReleaseAsset, source: ReleaseSource, destination: String): Task<Result<Void, String>> {
+  const url = source.forge.downloadUrl asset
+  if url.isEmpty() {
+    return Fail "the forge named no download URL for {asset.name}"
+  }
+  var arguments: List<String> = ["-fsSL", "--retry", "3"]
+  for header in source.forge.downloadHeaders(source.token) {
+    arguments.append "-H"
+    arguments.append header
   }
   arguments.append "-o"
   arguments.append destination
-  arguments.append asset.url
+  arguments.append url
   run("curl", arguments).await()
 }
 
 /** Every asset of `release` downloaded into `directory`, under its own name. */
-public fn downloadRelease(release: ReleaseInfo, token: String?, directory: String): Task<Result<Void, String>> {
+public fn downloadRelease(release: ReleaseInfo, source: ReleaseSource, directory: String): Task<Result<Void, String>> {
   match File.createDirectory(directory) {
     Fail(error) => { return Fail error.show() }
     Ok(_) => void
   }
   for asset in release.assets {
-    match downloadAsset(asset, token, "{directory}/{asset.name}").await() {
+    match downloadAsset(asset, source, "{directory}/{asset.name}").await() {
       Fail(message) => { return Fail message }
       Ok(_) => void
     }
@@ -115,7 +120,7 @@ public fn verifyHashes(release: ReleaseInfo, directory: String): Task<Result<Voi
     Fail(error) => { return Fail "no SHA256SUMS: {error.show()}" }
   }
   for asset in release.assets {
-    if asset.name == "SHA256SUMS" || asset.name.endsWith(".sigstore.json") {
+    if isSignature(asset.name) {
       continue
     }
     const expected = match expectedHash(sums, asset.name) {
@@ -134,18 +139,38 @@ public fn verifyHashes(release: ReleaseInfo, directory: String): Task<Result<Voi
 }
 
 /**
- * `cosign verify-blob` of `SHA256SUMS` against `SHA256SUMS.sigstore.json`, with the identity the release's own
- * workflow signs with. `cosign` missing from the machine is answered the same as a signature that does not verify:
- * `Fail`, and nothing is placed - a release this program cannot check the signature of is not published as if it had.
+ * `cosign verify-blob` of `SHA256SUMS`: against `SHA256SUMS.sig` and the project's public key where the configuration
+ * names one (every release of the forge - docs/design/RELEASE.md, "Signing"), and against GitHub's keyless bundle
+ * `SHA256SUMS.sigstore.json` and the identity of the workflow that made the release where it names none (a release
+ * made on GitHub). The key's signature is not in a transparency log - the forge's identity is not one Sigstore's
+ * certificate authority knows - so the log is not asked for. `cosign` missing from the machine, or the key file
+ * missing, is answered the same as a signature that does not verify: `Fail`, and nothing is placed - a release this
+ * program cannot check the signature of is not published as if it had.
  */
-public fn verifySignature(directory: String, repository: String, tag: String): Task<Result<Void, String>> {
-  run("cosign", [
-    "verify-blob",
-    "--bundle", "{directory}/SHA256SUMS.sigstore.json",
-    "--certificate-identity", certificateIdentity(repository, tag),
-    "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
-    "{directory}/SHA256SUMS",
-  ]).await()
+public fn verifySignature(directory: String, config: Config, tag: String): Task<Result<Void, String>> {
+  match config.cosignKey {
+    Some(key) => {
+      if !File.exists(key) {
+        return Fail "the public key {key} is not there (RELEASE_SYNC_COSIGN_KEY): no release is placed without checking its signature"
+      }
+      run("cosign", [
+        "verify-blob",
+        "--key", key,
+        "--signature", "{directory}/SHA256SUMS.sig",
+        "--insecure-ignore-tlog=true",
+        "{directory}/SHA256SUMS",
+      ]).await()
+    }
+    None => {
+      run("cosign", [
+        "verify-blob",
+        "--bundle", "{directory}/SHA256SUMS.sigstore.json",
+        "--certificate-identity", certificateIdentity(config.repository, tag),
+        "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+        "{directory}/SHA256SUMS",
+      ]).await()
+    }
+  }
 }
 
 /**
@@ -211,10 +236,18 @@ fn updateVersionsList(path: String, version: String, channel: String): Result<Vo
   File.writeTextAtomically path, "{rebuilt}\n"
 }
 
-/** The whole thing, for one release: download, verify, place - `Fail` at the first step that does not check out. */
-public fn syncRelease(release: ReleaseInfo, repository: String, token: String?, root: String): Task<Result<Void, String>> {
-  const scratch = "{root}/tmp-{versionOf(release.tagName)}"
-  match downloadRelease(release, token, scratch).await() {
+/**
+ * The whole thing, for one release: download, verify, place - `Fail` at the first step that does not check out. The
+ * download goes to `config.scratch` (the container's own `/tmp`), never below `<root>`, which the site serves: nothing
+ * unverified is ever reachable from outside.
+ */
+public fn syncRelease(release: ReleaseInfo, config: Config): Task<Result<Void, String>> {
+  const scratch = "{config.scratch}/release-sync-{versionOf(release.tagName)}"
+  match run("rm", ["-rf", scratch]).await() {
+    Fail(message) => { return Fail message }
+    Ok(_) => void
+  }
+  match downloadRelease(release, config.source(), scratch).await() {
     Fail(message) => { return Fail message }
     Ok(_) => void
   }
@@ -222,9 +255,11 @@ public fn syncRelease(release: ReleaseInfo, repository: String, token: String?, 
     Fail(message) => { return Fail message }
     Ok(_) => void
   }
-  match verifySignature(scratch, repository, release.tagName).await() {
+  match verifySignature(scratch, config, release.tagName).await() {
     Fail(message) => { return Fail message }
     Ok(_) => void
   }
-  place(release, scratch, root).await()
+  const placed = place(release, scratch, config.root).await()
+  const _ = run("rm", ["-rf", scratch]).await()
+  placed
 }

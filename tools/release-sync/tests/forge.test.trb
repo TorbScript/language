@@ -1,0 +1,104 @@
+/**
+ * Tests for `src/forge.trb` and the pure parts of `src/sync.trb`: the release JSON of both forges read the same, the
+ * webhook's payload, the addresses and headers each forge is asked with, and the names a tag gives its version and
+ * channel. The JSON is cut from real answers - Forgejo's from code.forgejo.org, GitHub's from its REST API.
+ */
+
+use test, group from "std/test"
+use Forge, ReleaseAsset, parseRelease, parseReleaseEvent from "../src/forge"
+use versionOf, channelOf, certificateIdentity from "../src/sync"
+
+const forgejoRelease = raw"""
+  {"id":1075119,"tag_name":"v13.2.0","target_commitish":"","name":"v13.2.0","body":"a release\n","url":"https://code.forgejo.org/api/v1/repos/forgejo/runner/releases/1075119","html_url":"https://code.forgejo.org/forgejo/runner/releases/tag/v13.2.0","draft":false,"prerelease":false,"created_at":"2026-09-18T21:27:02Z","published_at":"2026-09-18T21:27:02Z","author":{"id":16,"login":"release-team"},"assets":[{"id":37501,"name":"forgejo-runner-13.2.0-linux-amd64.xz","size":8641234,"download_count":12,"created_at":"2026-09-18T21:27:03Z","uuid":"1f0e8a2c-4d6b-4f1e-9a3c-5b7d9e1f3a5c","browser_download_url":"https://code.forgejo.org/forgejo/runner/releases/download/v13.2.0/forgejo-runner-13.2.0-linux-amd64.xz","type":"attachment"},{"id":37502,"name":"SHA256SUMS","size":230,"download_count":3,"created_at":"2026-09-18T21:27:04Z","uuid":"2a1f9b3d-5e7c-4a2f-8b4d-6c8e0f2a4b6d","browser_download_url":"https://code.forgejo.org/forgejo/runner/releases/download/v13.2.0/SHA256SUMS","type":"attachment"}]}
+  """
+
+const githubRelease = raw"""
+  {"url":"https://api.github.com/repos/TorbScript/language/releases/1","assets_url":"https://api.github.com/repos/TorbScript/language/releases/1/assets","id":1,"author":{"login":"torben","id":2,"url":"https://api.github.com/users/torben"},"tag_name":"seeds","name":"Seeds","draft":false,"prerelease":true,"assets":[{"url":"https://api.github.com/repos/TorbScript/language/releases/assets/7","id":7,"name":"seeds.txt","uploader":{"login":"torben","url":"https://api.github.com/users/torben"},"content_type":"text/plain","size":120,"browser_download_url":"https://github.com/TorbScript/language/releases/download/seeds/seeds.txt"}]}
+  """
+
+const forgejoWebhook = raw"""
+  {"action":"published","release":{"id":12,"tag_name":"nightly-20260927","name":"Nightly 2026-09-27","draft":false,"prerelease":true,"assets":[]},"repository":{"id":1,"full_name":"torbscript/language"},"sender":{"id":1,"login":"torben"}}
+  """
+
+group "a release of either forge" {
+  test "Forgejo's: the tag, and every asset with its download URL" {
+    match parseRelease(forgejoRelease) {
+      Ok(release) => {
+        assert(release.tagName == "v13.2.0")
+        assert(release.assets.length() == 2)
+        assert(release.assets[1].name == "SHA256SUMS")
+        assert(release.assets[1].browserDownloadUrl == "https://code.forgejo.org/forgejo/runner/releases/download/v13.2.0/SHA256SUMS")
+        assert(Forge.Forgejo.downloadUrl(release.assets[1]) == release.assets[1].browserDownloadUrl)
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+
+  test "GitHub's: the asset's API URL is where its bytes are read" {
+    match parseRelease(githubRelease) {
+      Ok(release) => {
+        assert(release.tagName == "seeds")
+        assert(release.assets.length() == 1)
+        assert(Forge.GitHub.downloadUrl(release.assets[0]) == "https://api.github.com/repos/TorbScript/language/releases/assets/7")
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+
+  test "the webhook of the forge names the action and the tag" {
+    match parseReleaseEvent(forgejoWebhook) {
+      Ok(event) => {
+        assert(event.action == "published")
+        assert(event.release.tagName == "nightly-20260927")
+      }
+      Fail(problem) => assert(problem == "")
+    }
+  }
+}
+
+group "the forge's addresses and headers" {
+  test "RELEASE_SYNC_FORGE names one of the two" {
+    assert(Forge.named("forgejo") == Some(Forge.Forgejo))
+    assert(Forge.named(" GitHub ") == Some(Forge.GitHub))
+    assert(Forge.named("gitlab") == None)
+  }
+
+  test "the releases of a repository" {
+    assert(Forge.Forgejo.releasesUrl("https://git.torb.dev/", "torbscript/language") == "https://git.torb.dev/api/v1/repos/torbscript/language/releases")
+    assert(Forge.GitHub.releasesUrl("https://api.github.com", "TorbScript/language") == "https://api.github.com/repos/TorbScript/language/releases")
+  }
+
+  test "the defaults are the language's repository on each" {
+    assert(Forge.Forgejo.defaultUrl() == "https://git.torb.dev")
+    assert(Forge.Forgejo.defaultRepository() == "torbscript/language")
+    assert(Forge.Forgejo.defaultCosignKey() == Some("/etc/release-sync/cosign.pub"))
+    assert(Forge.GitHub.defaultCosignKey() == None)
+  }
+
+  test "a download carries the token the way each forge reads it" {
+    assert Forge.Forgejo.downloadHeaders(None).isEmpty()
+    assert(Forge.Forgejo.downloadHeaders(Some("secret")) == ["Authorization: token secret"])
+    assert(Forge.GitHub.downloadHeaders(Some("secret")) == ["Accept: application/octet-stream", "Authorization: Bearer secret"])
+  }
+
+  test "an asset without the URL its forge reads is one to refuse" {
+    const bare = ReleaseAsset "SHA256SUMS"
+    assert Forge.Forgejo.downloadUrl(bare).isEmpty()
+  }
+}
+
+group "a tag's version and channel" {
+  test "a stable tag drops its v, a nightly's is its version" {
+    assert(versionOf("v0.2.0") == "0.2.0")
+    assert(versionOf("nightly-20260927") == "nightly-20260927")
+  }
+
+  test "the channel follows the version" {
+    assert(channelOf("0.2.0") == "stable")
+    assert(channelOf("nightly-20260927") == "nightly")
+  }
+
+  test "a release made on GitHub was signed by its workflow" {
+    assert(certificateIdentity("TorbScript/language", "v0.2.0") == "https://github.com/TorbScript/language/.github/workflows/release.yml@refs/tags/v0.2.0")
+  }
+}

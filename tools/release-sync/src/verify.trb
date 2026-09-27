@@ -1,12 +1,16 @@
 /**
  * Everything `release-sync` decides without touching the network or the disk: whether a webhook's payload is one to
- * act on, whether its signature matches, and reading a hash out of `SHA256SUMS`. Kept apart from `sync.trb` (which
- * downloads, shells out and writes files) so it can be tested as what it is - pure functions of a `String`.
+ * act on, which signature a request claims and whether it matches, which assets are signatures, and reading a hash out
+ * of `SHA256SUMS`. Kept apart from `sync.trb` (which downloads, shells out and writes files) so it can be tested as
+ * what it is - pure functions of a `String`.
  */
 
-use ReleaseEvent from "./github"
+use ReleaseEvent from "./forge"
 
-/** GitHub sends one action per release event; only "published" is what a download and a signature exist for. */
+/**
+ * Both forges send one action per release event; only "published" is what a download and a signature exist for. The
+ * forge sends it once a release stops being a draft, which the workflows do after its last asset is uploaded.
+ */
 public fn shouldSync(event: ReleaseEvent): Bool {
   event.action == "published"
 }
@@ -21,14 +25,52 @@ public fn signatureOf(header: String): String? {
 }
 
 /**
- * Whether `computed` (the hex HMAC-SHA256 this program calculated over the request body) is the one `header` names -
- * case-insensitively, since hex case is not part of what either side means.
+ * The HMAC-SHA256 a webhook request claims, as hex: Forgejo's `X-Forgejo-Signature` is the bare hex, GitHub's
+ * `X-Hub-Signature-256` the hex after `sha256=` - and Forgejo sends that one too. The first that is there is taken;
+ * `None` when neither is, or when the one there is not 64 hexadecimal digits.
  */
+public fn claimedSignature(forgejoHeader: String?, hubHeader: String?): String? {
+  const claimed = match forgejoHeader {
+    Some(hex) => Some hex.trim()
+    None => hubHeader.flatMap({ signatureOf _.trim() })
+  }
+  claimed.filter({ isDigest _ })
+}
+
+/** Whether `text` is a SHA-256 in hex: 64 digits, either case. */
+public fn isDigest(text: String): Bool {
+  text.byteLength() == 64 && text.toLowerCase().chars().all({ "0123456789abcdef".contains(_.show()) })
+}
+
+/**
+ * Whether `computed` (the hex HMAC-SHA256 this program calculated over the request body) is `claimed` -
+ * case-insensitively, since hex case is not part of what either side means, and without stopping at the first digit
+ * that differs, so the time an answer takes says nothing about how much of a forged signature was right.
+ */
+public fn sameDigest(computed: String, claimed: String): Bool {
+  const left = computed.toLowerCase().bytes().toList()
+  const right = claimed.toLowerCase().bytes().toList()
+  if left.length() != right.length() {
+    return false
+  }
+  var difference = 0
+  for index in 0..left.length() {
+    difference = difference | (Int.from(left[index]) ^ Int.from(right[index]))
+  }
+  difference == 0
+}
+
+/** Whether `computed` is what the GitHub-shaped `header` (`sha256=<hex>`) names. */
 public fn signatureMatches(computed: String, header: String): Bool {
   match signatureOf(header) {
     None => false
-    Some(claimed) => claimed.toLowerCase() == computed.toLowerCase()
+    Some(claimed) => sameDigest computed, claimed
   }
+}
+
+/** Whether an asset is the signature of `SHA256SUMS` or `SHA256SUMS` itself - the files that are not listed in it. */
+public fn isSignature(name: String): Bool {
+  name == "SHA256SUMS" || name == "SHA256SUMS.sig" || name.endsWith(".sigstore.json")
 }
 
 /** The SHA-256 of `file` inside `sums` (the text of `SHA256SUMS`), a leading `*` (a hash taken in binary mode) stripped. */

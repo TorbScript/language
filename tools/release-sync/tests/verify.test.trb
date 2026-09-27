@@ -4,8 +4,8 @@
  */
 
 use test, group from "std/test"
-use ReleaseEvent, ReleaseInfo from "../src/github"
-use shouldSync, signatureOf, signatureMatches, expectedHash, namesEveryArchive from "../src/verify"
+use ReleaseEvent, ReleaseInfo from "../src/forge"
+use shouldSync, signatureOf, signatureMatches, claimedSignature, isDigest, sameDigest, isSignature, expectedHash, namesEveryArchive from "../src/verify"
 
 group "which webhook events to act on" {
   test "a published release is synced" {
@@ -40,6 +40,55 @@ group "the webhook signature" {
 
   test "signatureMatches refuses a header of the wrong shape" {
     assert(!signatureMatches("abc123", "abc123"))
+  }
+}
+
+group "the signature a request claims" {
+  const digest = "5f3a0c9e1b2d4f6a8c0e1a3b5d7f9e2c4a6b8d0f1e3c5a7b9d2f4e6a8c0b1d3e"
+
+  test "Forgejo's X-Forgejo-Signature is the bare hex" {
+    assert(claimedSignature(Some(digest), hubHeader: None) == Some(digest))
+  }
+
+  test "GitHub's X-Hub-Signature-256 is the hex after sha256=" {
+    assert(claimedSignature(forgejoHeader: None, hubHeader: Some("sha256={digest}")) == Some(digest))
+  }
+
+  test "Forgejo sends both, and its own header is the one read" {
+    const other = "0000000000000000000000000000000000000000000000000000000000000000"
+    assert(claimedSignature(Some(digest), Some("sha256={other}")) == Some(digest))
+  }
+
+  test "no header, or one that is not a SHA-256 in hex, claims nothing" {
+    assert(claimedSignature(forgejoHeader: None, hubHeader: None) == None)
+    assert(claimedSignature(Some("abc123"), hubHeader: None) == None)
+    assert(claimedSignature(forgejoHeader: None, hubHeader: Some("sha1={digest}")) == None)
+    assert(claimedSignature(Some("{digest.sliceBytes(0, 63)}g"), hubHeader: None) == None)
+  }
+
+  test "a digest is 64 hexadecimal digits of either case" {
+    assert isDigest(digest)
+    assert isDigest(digest.toUpperCase())
+    assert(!isDigest(digest.sliceBytes(0, 62)))
+  }
+
+  test "sameDigest ignores case and refuses another digest or another length" {
+    assert sameDigest(digest, digest.toUpperCase())
+    assert(!sameDigest(digest, "{digest.sliceBytes(0, 63)}0"))
+    assert(!sameDigest(digest, digest.sliceBytes(0, 62)))
+  }
+}
+
+group "which assets are not listed in SHA256SUMS" {
+  test "the sums and both kinds of signature" {
+    assert isSignature("SHA256SUMS")
+    assert isSignature("SHA256SUMS.sig")
+    assert isSignature("SHA256SUMS.sigstore.json")
+  }
+
+  test "every archive is" {
+    assert(!isSignature("torb-0.4.0-linux-x64.tar.gz"))
+    assert(!isSignature("torb-seed-1ae963fa1234.tar.gz.sha256"))
   }
 }
 

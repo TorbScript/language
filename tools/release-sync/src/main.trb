@@ -1,8 +1,8 @@
 /**
- * `release-sync`: pulls GitHub releases onto the machine that serves `torb.dev/download` and `packages.torb.dev`
- * (docs/design/RELEASE.md section 7.11, "the root server pulls, CI never pushes"). Listens for GitHub's "release
- * published" webhook, and besides it polls for whatever the webhook missed. `tools/deploy/compose.example.yml`
- * runs this behind Traefik.
+ * `release-sync`: pulls the releases of the forge (git.torb.dev; GitHub by configuration) onto the machine that serves
+ * `torb.dev/download` and `packages.torb.dev` (docs/design/RELEASE.md section 7.11, "the root server pulls, CI never
+ * pushes"). Listens for the forge's "release published" webhook, and besides it polls for whatever the webhook missed.
+ * `tools/deploy/compose.example.yml` runs this behind Traefik.
  */
 
 use SocketAddress from "std/network"
@@ -12,7 +12,7 @@ use spawn from "std/task"
 use File from "std/fs"
 use Config from "./config"
 use handler from "./webhook"
-use fetchLatestRelease, ReleaseInfo from "./github"
+use ReleaseInfo from "./forge"
 use syncRelease, versionOf from "./sync"
 
 /** Whether `<root>/download/<version>/` already exists - the periodic check's "nothing to do" answer. */
@@ -24,12 +24,12 @@ fn isPlaced(root: String, release: ReleaseInfo): Bool {
 fn poll(config: Config): Task<Void> {
   loop {
     sleep(Float64.from(config.pollSeconds)).await()
-    match fetchLatestRelease(config.repository, config.token).await() {
-      Fail(message) => printError "release-sync: the periodic check could not reach GitHub: {message}"
+    match config.source().latestRelease().await() {
+      Fail(message) => printError "release-sync: the periodic check could not reach the forge: {message}"
       Ok(release) => {
         if !isPlaced(config.root, release) {
           print "release-sync: the periodic check found {release.tagName}, not yet placed - syncing"
-          match syncRelease(release, config.repository, config.token, config.root).await() {
+          match syncRelease(release, config).await() {
             Fail(message) => printError "release-sync: syncing {release.tagName} failed: {message}"
             Ok(_) => print "release-sync: synced {release.tagName}"
           }
@@ -40,7 +40,7 @@ fn poll(config: Config): Task<Void> {
 }
 
 const config = Config.fromEnvironment()
-print "release-sync: listening on {config.listenAddress}, watching {config.repository}, polling every {config.pollSeconds}s"
+print "release-sync: listening on {config.listenAddress}, watching {config.repository} on {config.url}, polling every {config.pollSeconds}s"
 const address = SocketAddress.tryFrom(config.listenAddress)?
 var server = Server.listen(address, handler(config))?
 const polling = spawn { poll(config).await() }

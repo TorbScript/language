@@ -1,15 +1,18 @@
 /**
- * The one HTTP endpoint this program answers: GitHub's "release published" webhook, POSTed to `/webhook` and signed
- * with `X-Hub-Signature-256` (docs/design/RELEASE.md section 7.11). The payload names a tag; what is actually synced
- * is `github.fetchRelease` of that tag, never the webhook's own asset list, which nothing here signs or trusts.
+ * The one HTTP endpoint this program answers: the forge's "release published" webhook, POSTed to `/webhook` and
+ * signed with the HMAC-SHA256 of its body - `X-Forgejo-Signature` (the bare hex) from Forgejo, `X-Hub-Signature-256`
+ * (`sha256=<hex>`) from GitHub (docs/design/RELEASE.md section 7.11). The payload names a tag; what is actually synced
+ * is the release of that tag as the forge's API answers it, never the webhook's own asset list, which nothing here
+ * signs or trusts.
  */
 
 use Request, Response, Status, Handler, HttpError from "std/http"
 use Process from "std/process"
 use Config from "./config"
-use parseReleaseEvent, fetchRelease from "./github"
-use shouldSync, signatureMatches from "./verify"
+use parseReleaseEvent from "./forge"
+use shouldSync, claimedSignature, sameDigest from "./verify"
 use syncRelease from "./sync"
+use spawn from "std/task"
 
 /** `openssl dgst -sha256 -hmac <secret>` over `body`, fed through standard input - the hex digest, lower case. */
 fn hmacSha256(secret: String, body: String): Task<Result<String, String>> {
@@ -46,12 +49,12 @@ fn handle(config: Config, request: Request): Task<Result<Response, HttpError>> {
   match config.webhookSecret {
     None => void
     Some(secret) => {
-      const header = request.headers.get("X-Hub-Signature-256") ?? ""
+      const claimed = claimedSignature request.headers.get("X-Forgejo-Signature"), request.headers.get("X-Hub-Signature-256")
       const computed = match hmacSha256(secret, body).await() {
         Fail(message) => { return Ok Response.text(message, status: Status.internalServerError) }
         Ok(hex) => hex
       }
-      if !signatureMatches(computed, header) {
+      if !(claimed.map({ sameDigest computed, _ }) ?? false) {
         return Ok Response.text("bad signature", status: Status.unauthorized)
       }
     }
@@ -64,14 +67,24 @@ fn handle(config: Config, request: Request): Task<Result<Response, HttpError>> {
     return Ok Response.text("ignored: action \"{event.action}\"")
   }
   const tag = event.release.tagName
-  // The webhook's own payload names the assets too, but they are never trusted: fetching the release again is what
-  // `github.fetchRelease` is for, and it is the same call the periodic check makes
-  const release = match fetchRelease(config.repository, tag, config.token).await() {
-    Fail(message) => { return Ok Response.text(message, status: Status.internalServerError) }
-    Ok(found) => found
-  }
-  match syncRelease(release, config.repository, config.token, config.root).await() {
-    Fail(message) => Ok Response.text("sync of {tag} failed: {message}", status: Status.internalServerError)
-    Ok(_) => Ok Response.text("synced {tag}")
+  // The answer goes out at once: the forge gives a delivery seconds, and downloading a release takes longer. What
+  // happened is in the log, and a sync that failed is tried again by the periodic check where it is a stable release
+  const _ = spawn { syncTag(config, tag).await() }
+  Ok Response.text("syncing {tag}", status: Status.accepted)
+}
+
+/**
+ * The release of `tag` as the forge's API answers it, downloaded, verified and placed. The webhook's own payload names
+ * the assets too, but they are never trusted: this is the same call the periodic check makes.
+ */
+fn syncTag(config: Config, tag: String): Task<Void> {
+  match config.source().release(tag).await() {
+    Fail(message) => printError "release-sync: {tag} could not be read from the forge: {message}"
+    Ok(release) => {
+      match syncRelease(release, config).await() {
+        Fail(message) => printError "release-sync: syncing {tag} failed: {message}"
+        Ok(_) => print "release-sync: synced {tag}"
+      }
+    }
   }
 }

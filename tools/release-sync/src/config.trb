@@ -1,35 +1,69 @@
 /**
- * What `release-sync` needs, read once from the environment (docs/design/RELEASE.md section 7.11): which repository
- * to pull from, the read-only token, the webhook secret, where `<root>/download/` is, and how often to poll besides
- * the webhook. No file and no command-line flag - a `compose.yml` (`tools/deploy/`) passes all of it as
- * environment variables, which is where a secret belongs and a checked-in file does not.
+ * What `release-sync` needs, read once from the environment (docs/design/RELEASE.md section 7.11): which forge and
+ * repository to pull from, an optional read-only token, the webhook secret, the public half of the signing key, where
+ * `<root>/download/` is, and how often to poll besides the webhook. No file and no command-line flag - a `compose.yml`
+ * (`tools/deploy/`) passes all of it as environment variables, which is where a secret belongs and a checked-in file
+ * does not.
  */
 
 use Environment from "std/os"
+use Forge, ReleaseSource from "./forge"
 
 public type Config {
-  /** `owner/name` on GitHub, e.g. `TorbScript/language`. */
+  /** Where the releases are published: the forge at git.torb.dev, or GitHub, which mirrors it. */
+  forge: Forge
+  /** The forge's address - `https://git.torb.dev` - or, for GitHub, its API's: `https://api.github.com`. */
+  url: String
+  /** `owner/name` on the forge: `torbscript/language`. */
   repository: String
-  /** A token with read-only access to the repository's releases - never write access, this program never publishes. */
+  /**
+   * A token that reads the repository's releases - needed only while the repository is private, never with write
+   * access: this program never publishes.
+   */
   token: String?
-  /** The secret GitHub's "release published" webhook is configured with; a request without a matching signature is refused. */
+  /** The secret the forge's "release published" webhook is configured with; a request without a matching signature is refused. */
   webhookSecret: String?
+  /**
+   * The public half of the project's cosign key (`tools/deploy/cosign.pub`), which `SHA256SUMS.sig` of every release
+   * is checked against. `None` - only for GitHub - checks GitHub's keyless signature `SHA256SUMS.sigstore.json` against
+   * the identity of the workflow that made the release instead.
+   */
+  cosignKey: String?
   /** `<root>/download/<version>/` is written, and `<root>/download/versions.txt` and `.../latest` updated. */
   root: String
   /** What `Server.listen` binds - `host:port`, e.g. `0.0.0.0:8088` behind Traefik. */
   listenAddress: String
   /** How often the periodic check looks for a release the webhook may have missed, in seconds. */
   pollSeconds: Int
+  /**
+   * Where a release is downloaded and verified before it is placed: the container's own `/tmp`, never below `root`,
+   * which the site serves - nothing unverified is ever reachable from outside.
+   */
+  scratch: String = "/tmp"
 
-  /** Every value from the environment, with the defaults the deployment does not have to set. */
-  static fn fromEnvironment(): Config {
-    Config(
-      repository: Environment.get("RELEASE_SYNC_REPOSITORY") ?? "TorbScript/language",
-      token: Environment.get("RELEASE_SYNC_TOKEN"),
-      webhookSecret: Environment.get("RELEASE_SYNC_WEBHOOK_SECRET"),
+  /** The repository and the token, as the forge's API is asked with them. */
+  fn source(): ReleaseSource {
+    ReleaseSource forge, url, repository, token
+  }
+
+  /** Every value from the environment, with the defaults of the forge it names where the deployment sets none. */
+  static fn fromEnvironment(): Self {
+    const forge = Forge.named(Environment.get("RELEASE_SYNC_FORGE") ?? "forgejo") ?? Forge.Forgejo
+    const key = match Environment.get("RELEASE_SYNC_COSIGN_KEY").filter({ !_.trim().isEmpty() }) {
+      Some(path) => Some path
+      None => forge.defaultCosignKey()
+    }
+    Self(
+      forge: forge,
+      url: Environment.get("RELEASE_SYNC_URL").filter({ !_.trim().isEmpty() }) ?? forge.defaultUrl(),
+      repository: Environment.get("RELEASE_SYNC_REPOSITORY").filter({ !_.trim().isEmpty() }) ?? forge.defaultRepository(),
+      token: Environment.get("RELEASE_SYNC_TOKEN").filter({ !_.trim().isEmpty() }),
+      webhookSecret: Environment.get("RELEASE_SYNC_WEBHOOK_SECRET").filter({ !_.trim().isEmpty() }),
+      cosignKey: key,
       root: Environment.get("RELEASE_SYNC_ROOT") ?? "/srv/torb",
       listenAddress: Environment.get("RELEASE_SYNC_LISTEN") ?? "0.0.0.0:8088",
       pollSeconds: Environment.get("RELEASE_SYNC_POLL_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 300,
+      scratch: Environment.get("RELEASE_SYNC_SCRATCH").filter({ !_.trim().isEmpty() }) ?? "/tmp",
     )
   }
 }

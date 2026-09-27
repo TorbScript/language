@@ -1,0 +1,191 @@
+/**
+ * The calls this program makes to the forge: the release of a tag, and the newest stable release, each with its
+ * assets - through the forge's REST API, with the read-only token where there is one. The forge is Forgejo at
+ * git.torb.dev (docs/design/RELEASE.md, "The forge"); GitHub, which mirrors it, answers the same two questions with
+ * nearly the same JSON, and the differences are the members of [Forge]. What the webhook sends is not trusted for its
+ * asset list; this call is always made instead, once a webhook or the periodic check names a tag to look at.
+ */
+
+use Uri from "std/uri"
+use get as httpGet from "std/http"
+use Headers from "std/http"
+use Json from "std/json"
+use Naming from "std/encoding"
+
+/** Where the releases are published. */
+public type Forge {
+  /** Forgejo - git.torb.dev, the project's own forge. Gitea answers the same. */
+  case Forgejo
+  /** GitHub, which mirrors the forge. */
+  case GitHub
+
+  /** `forgejo` or `github`, as `RELEASE_SYNC_FORGE` spells it; `None` for any other name. */
+  static fn named(name: String): Self? {
+    match name.trim().toLowerCase() {
+      "forgejo" => Some Self.Forgejo
+      "github" => Some Self.GitHub
+      _ => None
+    }
+  }
+
+  /** The address the API is below: the forge itself for Forgejo, `api.github.com` for GitHub. */
+  fn defaultUrl(): String {
+    match self {
+      .Forgejo => "https://git.torb.dev"
+      .GitHub => "https://api.github.com"
+    }
+  }
+
+  /** The repository of the language on this forge. */
+  fn defaultRepository(): String {
+    match self {
+      .Forgejo => "torbscript/language"
+      .GitHub => "TorbScript/language"
+    }
+  }
+
+  /**
+   * Where the public half of the project's cosign key is mounted: the forge's releases are signed with that key.
+   * GitHub's were signed keyless, with the identity of the workflow, so it has none.
+   */
+  fn defaultCosignKey(): String? {
+    match self {
+      .Forgejo => Some "/etc/release-sync/cosign.pub"
+      .GitHub => None
+    }
+  }
+
+  /** The API's address of the repository's releases. */
+  fn releasesUrl(url: String, repository: String): String {
+    const base = url.withoutSuffix("/") ?? url
+    match self {
+      .Forgejo => "{base}/api/v1/repos/{repository}/releases"
+      .GitHub => "{base}/repos/{repository}/releases"
+    }
+  }
+
+  /**
+   * Where an asset's bytes are read: the download URL on Forgejo, which a token opens for a private repository too,
+   * and the asset's API URL on GitHub, whose download URL answers a private repository's reader with a login page.
+   */
+  fn downloadUrl(asset: ReleaseAsset): String {
+    match self {
+      .Forgejo => asset.browserDownloadUrl
+      .GitHub => asset.url
+    }
+  }
+
+  /** The headers `curl` downloads an asset with. */
+  fn downloadHeaders(token: String?): List<String> {
+    var headers: List<String> = []
+    match self {
+      .Forgejo => void
+      .GitHub => headers.append "Accept: application/octet-stream"
+    }
+    match token {
+      Some(value) => headers.append "Authorization: {authorizationOf(value)}"
+      None => void
+    }
+    headers
+  }
+
+  /** The value of the `Authorization` header that carries `token`. */
+  fn authorizationOf(token: String): String {
+    match self {
+      .Forgejo => "token {token}"
+      .GitHub => "Bearer {token}"
+    }
+  }
+
+  /** The `Accept` header of an API call. */
+  fn accept(): String {
+    match self {
+      .Forgejo => "application/json"
+      .GitHub => "application/vnd.github+json"
+    }
+  }
+}
+
+/**
+ * One asset of a release: its name, its API URL (GitHub answers its bytes there with `Accept:
+ * application/octet-stream`) and its download URL (what Forgejo is read from).
+ */
+public type ReleaseAsset {
+  name: String
+  url: String = ""
+  browserDownloadUrl: String = ""
+}
+
+/** A release, as much of the forge's answer as this program reads. */
+public type ReleaseInfo {
+  tagName: String
+  assets: List<ReleaseAsset> = []
+}
+
+/** What the forge's "release published" webhook posts: the action, and the same release shape as the API. */
+public type ReleaseEvent {
+  action: String
+  release: ReleaseInfo
+}
+
+/** One repository on one forge, and the token that reads its releases. */
+public type ReleaseSource {
+  forge: Forge
+  url: String
+  repository: String
+  token: String?
+
+  /** `GET .../releases/tags/<tag>`. */
+  fn release(tag: String): Task<Result<ReleaseInfo, String>> {
+    fetchReleaseAt("{forge.releasesUrl(url, repository)}/tags/{tag}", forge, token).await()
+  }
+
+  /** `GET .../releases/latest`: the newest release that is neither a draft nor a prerelease. */
+  fn latestRelease(): Task<Result<ReleaseInfo, String>> {
+    fetchReleaseAt("{forge.releasesUrl(url, repository)}/latest", forge, token).await()
+  }
+}
+
+const json = Json naming: Naming.SnakeCase
+
+/** The body the forge's "release published" webhook posts, decoded - `action` and `release.tag_name` are all this reads. */
+public fn parseReleaseEvent(text: String): Result<ReleaseEvent, String> {
+  json.decode<ReleaseEvent>(text).mapError({ _.show() })
+}
+
+/** A release as the API answers it. */
+public fn parseRelease(text: String): Result<ReleaseInfo, String> {
+  json.decode<ReleaseInfo>(text).mapError({ _.show() })
+}
+
+fn fetchReleaseAt(url: String, forge: Forge, token: String?): Task<Result<ReleaseInfo, String>> {
+  match Uri.tryFrom(url) {
+    Fail(error) => Fail error.show()
+    Ok(uri) => {
+      match httpGet(uri, headers: apiHeaders(forge, token)).await() {
+        Fail(error) => Fail error.show()
+        Ok(response) => {
+          if !response.status.isSuccess() {
+            Fail "{url}: {response.status.show()}"
+          } else {
+            match response.body.text().await() {
+              Fail(error) => Fail error.show()
+              Ok(text) => parseRelease text
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn apiHeaders(forge: Forge, token: String?): Headers {
+  var headers = Headers()
+  headers.set "Accept", forge.accept()
+  headers.set "User-Agent", "torbscript-release-sync"
+  match token {
+    Some(value) => headers.set "Authorization", forge.authorizationOf(value)
+    None => void
+  }
+  headers
+}
