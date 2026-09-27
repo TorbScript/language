@@ -37,31 +37,41 @@ public type SignedEncoding with Show, Equals, Hash {
  * ahead. [ByteReader.limited] answers a reader over the next bytes only, for a record whose length comes first.
  */
 public type ByteReader {
-  /** The bytes this reader reads: for a limited reader, only the bytes it was limited to. */
+  /**
+   * The bytes the reader was made from. A limited reader holds the same ones and reads a window of them, so limiting
+   * copies nothing.
+   */
   input: Bytes
   /** The byte order of every read of a number that does not name one. */
   order: ByteOrder = ByteOrder.BigEndian
-  /** Where `input` starts in the bytes of the outermost reader, which every offset is counted from. */
-  private base: Int = 0
+  /** The first byte of `input` this reader reads: 0, or where a limited reader's window starts. */
+  private windowStart: Int = 0
+  /** The first byte this reader may not read, where that is before the end of `input`. */
+  private windowEnd: Int = Int.maximum
   /** The next byte to read, counted from the start of `input`. */
   private var cursor: Int = 0
 
+  /** The end of what this reader may read: the end of its window, or of `input`. */
+  private fn limit(): Int {
+    if windowEnd < input.length() { windowEnd } else { input.length() }
+  }
+
   /** The next byte to read, counted from the start of this reader's bytes: 0 for a reader that has read nothing. */
   fn position(): Int {
-    cursor
+    cursor - windowStart
   }
 
   /**
-   * The next byte to read, counted from the start of the bytes of the outermost reader - the offset a [ReadError]
-   * names. It is [ByteReader.position] for a reader that is not limited.
+   * The next byte to read, counted from the start of `input` - the offset a [ReadError] names. It is
+   * [ByteReader.position] for a reader that is not limited.
    */
   fn offset(): Int {
-    base + cursor
+    cursor
   }
 
   /** How many bytes are left to read. */
   fn remaining(): Int {
-    input.length() - cursor
+    limit() - cursor
   }
 
   /**
@@ -72,10 +82,11 @@ public type ByteReader {
    * - [ReadError.OutOfRange] for a position below zero or past the end.
    */
   var fn seek(position: Int): Result<Void, ReadError> {
-    if position < 0 || position > input.length() {
-      return Fail ReadError.OutOfRange(base + cursor, position, input.length())
+    const length = limit() - windowStart
+    if position < 0 || position > length {
+      return Fail ReadError.OutOfRange(cursor, position, length)
     }
-    cursor = position
+    cursor = windowStart + position
     Ok void
   }
 
@@ -95,20 +106,20 @@ public type ByteReader {
   /** Nothing where `count` bytes are left, and otherwise the failure that names `expected`. */
   private fn ensure(count: Int, expected: String): Result<Void, ReadError> {
     if count < 0 {
-      return Fail ReadError.OutOfRange(base + cursor, cursor + count, input.length())
+      return Fail ReadError.OutOfRange(cursor, cursor - windowStart + count, limit() - windowStart)
     }
-    const available = input.length() - cursor
+    const available = limit() - cursor
     if count > available {
-      return Fail ReadError.Truncated(base + cursor, expected, count, available)
+      return Fail ReadError.Truncated(cursor, expected, count, available)
     }
     Ok void
   }
 
   /** The next `width` bytes, at most 4, as a number without a sign in `order`. */
   private var fn unsigned(width: Int, order: ByteOrder, expected: String): Result<Int, ReadError> {
-    const available = input.length() - cursor
+    const available = limit() - cursor
     if width > available {
-      return Fail ReadError.Truncated(base + cursor, expected, width, available)
+      return Fail ReadError.Truncated(cursor, expected, width, available)
     }
     var value = 0
     if order == ByteOrder.BigEndian {
@@ -128,9 +139,9 @@ public type ByteReader {
 
   /** The next 8 bytes in `order` as the `Int` with their 64 bits. */
   private var fn pattern64(order: ByteOrder, expected: String): Result<Int, ReadError> {
-    const available = input.length() - cursor
+    const available = limit() - cursor
     if available < 8 {
-      return Fail ReadError.Truncated(base + cursor, expected, 8, available)
+      return Fail ReadError.Truncated(cursor, expected, 8, available)
     }
     const first = unsigned(4, order, expected)?
     const second = unsigned(4, order, expected)?
@@ -142,8 +153,8 @@ public type ByteReader {
 
   /** The next byte. */
   var fn uint8(): Result<UInt8, ReadError> {
-    if cursor >= input.length() {
-      return Fail ReadError.Truncated(base + cursor, "a UInt8", 1, 0)
+    if cursor >= limit() {
+      return Fail ReadError.Truncated(cursor, "a UInt8", 1, 0)
     }
     const value = input[cursor]
     cursor = cursor + 1
@@ -153,9 +164,9 @@ public type ByteReader {
   /** The next two bytes as a `UInt16`, in `order` or the reader's. */
   var fn uint16(order: ByteOrder? = None): Result<UInt16, ReadError> {
     // The widths every format reads most are written out, without the loop of `unsigned`
-    const available = input.length() - cursor
+    const available = limit() - cursor
     if available < 2 {
-      return Fail ReadError.Truncated(base + cursor, "a UInt16", 2, available)
+      return Fail ReadError.Truncated(cursor, "a UInt16", 2, available)
     }
     const first = Int.from input[cursor]
     const second = Int.from input[cursor + 1]
@@ -166,9 +177,9 @@ public type ByteReader {
 
   /** The next four bytes as a `UInt32`, in `order` or the reader's. */
   var fn uint32(order: ByteOrder? = None): Result<UInt32, ReadError> {
-    const available = input.length() - cursor
+    const available = limit() - cursor
     if available < 4 {
-      return Fail ReadError.Truncated(base + cursor, "a UInt32", 4, available)
+      return Fail ReadError.Truncated(cursor, "a UInt32", 4, available)
     }
     const first = Int.from input[cursor]
     const second = Int.from input[cursor + 1]
@@ -236,21 +247,21 @@ public type ByteReader {
     var value = 0
     var shift = 0
     loop {
-      if cursor >= input.length() {
+      if cursor >= limit() {
         const read = cursor - start
         cursor = start
-        return Fail ReadError.Truncated(base + start, "a variable-length UInt64", read + 1, read)
+        return Fail ReadError.Truncated(start, "a variable-length UInt64", read + 1, read)
       }
       const byte = Int.from input[cursor]
       cursor = cursor + 1
       if shift == 63 {
         if byte & 0x80 != 0 {
           cursor = start
-          return Fail ReadError.Overlong(base + start, "a variable-length UInt64")
+          return Fail ReadError.Overlong(start, "a variable-length UInt64")
         }
         if byte > 1 {
           cursor = start
-          return Fail ReadError.Overflow(base + start, "a variable-length UInt64")
+          return Fail ReadError.Overflow(start, "a variable-length UInt64")
         }
         return Ok unsignedOf(value | (byte << 63))
       }
@@ -277,23 +288,23 @@ public type ByteReader {
     var value = 0
     var shift = 0
     loop {
-      if cursor >= input.length() {
+      if cursor >= limit() {
         const read = cursor - start
         cursor = start
-        return Fail ReadError.Truncated(base + start, "a variable-length Int64", read + 1, read)
+        return Fail ReadError.Truncated(start, "a variable-length Int64", read + 1, read)
       }
       const byte = Int.from input[cursor]
       cursor = cursor + 1
       if shift == 63 {
         if byte & 0x80 != 0 {
           cursor = start
-          return Fail ReadError.Overlong(base + start, "a variable-length Int64")
+          return Fail ReadError.Overlong(start, "a variable-length Int64")
         }
         // The tenth byte holds bit 63 alone: zigzag's highest bit, or the sign repeated through all seven bits
         const fits = if encoding == SignedEncoding.Zigzag { byte <= 1 } else { byte == 0 || byte == 0x7F }
         if !fits {
           cursor = start
-          return Fail ReadError.Overflow(base + start, "a variable-length Int64")
+          return Fail ReadError.Overflow(start, "a variable-length Int64")
         }
         value = value | ((byte & 1) << 63)
         break
@@ -316,8 +327,9 @@ public type ByteReader {
   }
 
   /**
-   * The next `count` bytes. In a native binary a range of a list shares the list's storage, so this copies nothing -
-   * and it keeps the whole of `input` alive for as long as the answer is.
+   * The next `count` bytes, as a range of `input` (docs/design/BINARY.md section 4 says what a range of a list costs:
+   * today it is a copy of the `count` bytes). A format that only looks at the bytes reads them with a
+   * [ByteReader.limited] reader instead, which copies nothing.
    *
    * # Errors
    *
@@ -332,8 +344,8 @@ public type ByteReader {
 
   /**
    * A reader over the next `count` bytes only, in this reader's order, and this reader moved past them: for a record
-   * whose length comes first. The limited reader counts its positions from 0, and its offsets from where the outermost
-   * reader starts.
+   * whose length comes first. It holds the same `input` and reads a window of it, so nothing is copied; it counts its
+   * positions from 0 and its offsets, like every reader, from the start of `input`.
    *
    * # Errors
    *
@@ -341,7 +353,7 @@ public type ByteReader {
    */
   var fn limited(count: Int): Result<Self, ReadError> {
     ensure(count, "a limited reader")?
-    const inner = Self(input[cursor..(cursor + count)], order, base + cursor, 0)
+    const inner = Self(input, order, cursor, cursor + count, cursor)
     cursor = cursor + count
     Ok inner
   }
@@ -361,7 +373,7 @@ public type ByteReader {
         cursor = cursor + count
         Ok text
       }
-      Fail(problem) => Fail ReadError.InvalidText(base + cursor + problem.offset)
+      Fail(problem) => Fail ReadError.InvalidText(cursor + problem.offset)
     }
   }
 
@@ -375,18 +387,19 @@ public type ByteReader {
    */
   var fn terminatedText(): Result<String, ReadError> {
     var end = cursor
-    while end < input.length() && input[end] != 0 {
+    const last = limit()
+    while end < last && input[end] != 0 {
       end = end + 1
     }
-    if end >= input.length() {
-      return Fail ReadError.Unterminated(base + cursor, input.length() - cursor)
+    if end >= last {
+      return Fail ReadError.Unterminated(cursor, last - cursor)
     }
     match textOf(input[cursor..end]) {
       Ok(text) => {
         cursor = end + 1
         Ok text
       }
-      Fail(problem) => Fail ReadError.InvalidText(base + cursor + problem.offset)
+      Fail(problem) => Fail ReadError.InvalidText(cursor + problem.offset)
     }
   }
 }
