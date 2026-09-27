@@ -1,6 +1,6 @@
 ---
 title: Fields
-summary: A field is const unless marked var, and private or private(var) decide who may read it and who may write it, independently of each other.
+summary: A field is const unless marked var, and private or protected var decide who may read it and who may write it, independently of each other.
 kind: reference
 status: stable
 order: 20
@@ -8,6 +8,8 @@ keywords:
   - field
   - var
   - private
+  - protected
+  - write-protected
   - visibility
   - promise
 source:
@@ -16,7 +18,7 @@ source:
 ---
 
 A field is a named piece of storage declared inside a `type`. Two modifiers decide what happens to it from outside the
-type: `var` decides whether it can be written at all, and `private`/`private(var)` decide who may write it, or read it.
+type: `var` decides whether it can be written at all, and `private`/`protected` decide who may write it, or read it.
 
 ## Example
 
@@ -24,7 +26,7 @@ type: `var` decides whether it can be written at all, and `private`/`private(var
 type Server {
   host: String
   var port: Int = 8080
-  private(var) connections: Int = 0
+  protected var connections: Int = 0
   private var log: List<String> = []
 
   var fn record(message: String) {
@@ -41,7 +43,8 @@ print "{server.host}:{server.port} has {server.connections} connections"
 ## Syntax
 
 ```text
-<field> ::= [private | private(var)] [var] <name>: <Type> [= <default>]
+<field> ::= [private] [var] <name>: <Type> [= <default>]
+          | protected var <name>: <Type> [= <default>]
 ```
 
 ## Rules
@@ -66,16 +69,18 @@ print "{server.host}:{server.port} has {server.connections} connections"
    |-------|:-----------------:|:------------------:|
    | `host: String` | yes | no, it is `const` |
    | `var port: Int` | yes | yes |
-   | `private(var) connections: Int` | yes | no |
+   | `protected var connections: Int` | yes | no |
    | `private var log: List<String>` | no | no |
 
-3. **`private(var)` hands outsiders a `const` path to a `var` field.** The field is public, its mutability is not:
-   `server.connections` reads the count, and because `const` is deep a copy taken out of it cannot be written back
-   either.
+3. **`protected var` is write-protected: everybody reads the field, and only the file that declares its type writes
+   it.** That is what `protected` means here. TorbScript has no inheritance, so there is no subclass the word could open
+   a field to. Outside the file, `server.connections` reads the count, and because `const` is deep a copy taken out of
+   it cannot be written back either. Inside the file - the body of the type, an `extend` of it there, and the functions
+   of that file - it is an ordinary `var` field. It is not `private`, so the constructor and `copy` still take it.
 
    ```trb
    type Server {
-     private(var) connections: Int = 0
+     protected var connections: Int = 0
 
      var fn accepted() {
        connections = connections + 1
@@ -91,18 +96,23 @@ print "{server.host}:{server.port} has {server.connections} connections"
    var workspace = Workspace()
    workspace.memberPatterns = ["packages/*"]
    print workspace.memberPatterns
-   // error: `memberPatterns` can only be written by `Workspace`
+   // error: `memberPatterns` is write-protected: only the file that declares `Workspace` writes it
    ```
 
-4. **`private(var)` is the whole spelling: it already contains the `var`.** Writing `var` again on the same field is an
-   error, because one of the two modifiers would be saying the same thing twice.
+4. **`protected` goes with `var`, on a field, and nowhere else.** A field without `var` is written by nobody already, so
+   `protected` in front of it has nothing to protect and is an error - one spelling per meaning. On a method, a case, a
+   `static` member or a top-level declaration it is refused the same way, and a member has one visibility, so
+   `private protected` is an error too.
 
    ```trb error
    type Server {
-     private(var) var connections: Int = 0
+     protected connections: Int = 0
    }
-   // error: `private(var)` already says `var`
+   // error: `protected` needs `var`: a const field is write-protected already
    ```
+
+   `private(var) connections: Int` is the spelling `protected var` replaces. It still compiles and means the same, and
+   `torb lint --fix --rule protected-field` rewrites it.
 
 5. **`private` reaches as far as the file that declares it.** A `private` member is visible in the body of its type,
    in an `extend` of that type in the same file, and in the functions of that file - and nowhere else. Reading it from
@@ -135,7 +145,8 @@ print "{server.host}:{server.port} has {server.connections} connections"
    `type`; outside the type it is `event.type` and `Event(type: "click")`, inside it is `self.type`, because a bare
    keyword is always the keyword. The derived `Encode` and `Decode` use the field's name as the key, so a JSON document
    with a `"type"` needs no renamed field. The same holds for a method and for the field of a case. See
-   [Lexical structure](../syntax/lexical-structure.md), rule 6.
+   [Lexical structure](../syntax/lexical-structure.md), rule 6. `protected` is not reserved at all: it is a word only
+   in front of a member, and a name everywhere else, bare or after a `.` (`protected: Bool`, `self.protected`).
 
    ```trb check
    type Event {
@@ -158,11 +169,11 @@ print "{server.host}:{server.port} has {server.connections} connections"
 
 **A field is not a shorthand for a getter and a setter.** There is no way to attach logic to reading or writing a
 field: a field is storage, and a method is what computes something. Wanting validation on write is a sign that the
-member should have been a method from the start, not a reason to reach for `private(var)`.
+member should have been a method from the start, not a reason to reach for `protected var`.
 
 ```trb
 type Account {
-  private(var) balance: Int = 0
+  protected var balance: Int = 0
 
   var fn deposit(amount: Int) {
     balance = balance + amount
@@ -178,8 +189,11 @@ use Workspace from "std/project"
 var workspace = Workspace()
 workspace.memberPatterns = ["packages/*"]
 print workspace.memberPatterns
-// error: `memberPatterns` can only be written by `Workspace`
+// error: `memberPatterns` is write-protected: only the file that declares `Workspace` writes it
 ```
+
+**`protected` is not the `protected` of Java, C#, Kotlin, TypeScript or C++.** There it opens a member to
+subclasses. TorbScript has no inheritance, so the word means only this: write-protected.
 
 ## Related
 

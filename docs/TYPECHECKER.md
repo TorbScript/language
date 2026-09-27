@@ -743,8 +743,8 @@ and const is deep: `config.routes.add(...)` is an error while `config.routes` re
 
 What needs a mutable place: assignment, a `var fn` method, a property command, a `var` argument, and `if var` /
 `while var` (gap 3). A `const` root gets "`q` is a `const`. Only a `var` binding can be changed"; a non-`var` field
-gets "`id` never changes after construction"; a `private(var)` field gets "`balance` can only be written by
-`Account`".
+gets "`id` never changes after construction"; a `protected var` field gets "`balance` is write-protected: only the
+file that declares `Account` writes it".
 
 **Temporaries.** A `var` _path_ through a temporary is an error, because the change is lost:
 `iterate().next()`, `f().field = 1`, `samples.toList().sort { _ }`. A temporary as the _argument_ of a `var`
@@ -926,7 +926,7 @@ The catalogue (the ~40 that matter):
 | Literal subset | ``` `Status` and `"online" \| "offline"` are different types: a subset is not assignable ``` |
 | `const` written | ``` `q` is a `const`. Only a `var` binding can be changed ``` |
 | Verb on a const path | ``` `add` needs a `var`. Did you mean `added`? ``` |
-| Non-`var` field / `private(var)` / `private` | ``` `id` never changes after construction ``` / ``` `balance` can only be written by `Account` ``` / ``` `history` is private to `Account` ``` |
+| Non-`var` field / `protected var` / `private` | ``` `id` never changes after construction ``` / ``` `balance` is write-protected: only the file that declares `Account` writes it ``` / ``` `history` is private to `Account` ``` |
 | `var` path through a temporary | ``` `iterate()` is a temporary, and `next` changes its receiver: bind it first (`var cursor = iterate()`) ``` |
 | Exclusivity | ``` `root` is being changed by `div` right now ``` / ``` `items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)` ``` - _While a `var` access runs, the same path cannot be reached a second time_ |
 | Dead change | ``` This change has no effect: `first` is never read again. Did you mean `counters[0].increment()`? ``` |

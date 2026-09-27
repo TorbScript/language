@@ -202,7 +202,7 @@ use Workspace from "std/project"
 var workspace = Workspace()
 workspace.memberPatterns = ["packages/*"]
 print workspace.memberPatterns
-// error: `memberPatterns` can only be written by `Workspace`
+// error: `memberPatterns` is write-protected: only the file that declares `Workspace` writes it
 ```
 
 **A constructor is not a place for logic.** Validation, parsing and conversion are static factory functions, because a

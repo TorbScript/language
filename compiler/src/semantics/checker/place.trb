@@ -50,7 +50,8 @@ type MutationProblem {
   case ConstantRoot(name: String)
   case TemporaryRoot
   case ConstantField(field: SymbolId)
-  case PrivateField(owner: TypeId, field: SymbolId)
+  /** A `protected var` field, written outside the file that declares its type. */
+  case ProtectedField(owner: TypeId, field: SymbolId)
   case NotIndexable(base: TypeId)
   case NotSliceable(base: TypeId)
   /** `self = ...` in a method of a shared type, or `self` handed to a `var` parameter there. */
@@ -244,7 +245,7 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mu
  *
  * **A step out of a shared object starts the path afresh.** An object has one identity and no copy, so whether it
  * changes is not a question of the path it was reached through: `const connection = ...` and `pool[0]` reach the same
- * object as a `var` does (CONCEPT, "Identity"). What comes after the object - a `var` field of it, a `private(var)` -
+ * object as a `var` does (CONCEPT, "Identity"). What comes after the object - a `var` field of it, a `protected var` -
  * is still asked about.
  */
 fn problemOf(var checker: Checker, place: Place): MutationProblem {
@@ -427,8 +428,8 @@ fn problemOfStep(var checker: Checker, step: PlaceStep): MutationProblem {
 }
 
 /**
- * A field step. The field has to be declared `var`, and `private(var)` hands out a const path to everybody outside the
- * package that declares the type - const is deep, so `config.routes.append(...)` is an error while `config.routes` reads.
+ * A field step. The field has to be declared `var`, and `protected var` hands out a const path to everybody outside the
+ * file that declares the type - const is deep, so `config.routes.append(...)` is an error while `config.routes` reads.
  */
 fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): MutationProblem {
   const signature = match fieldSignatureOf(checker, owner, field) {
@@ -452,9 +453,9 @@ fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): Mutatio
   if isInside {
     return MutationProblem.Writable
   }
-  // `private(var)` is public to read and private to write, so this is the one visibility a place decides about
-  if const .PrivateVar = signature.visibility {
-    return MutationProblem.PrivateField owner, field
+  // `protected var` is public to read and private to write, so this is the one visibility a place decides about
+  if const .Protected = signature.visibility {
+    return MutationProblem.ProtectedField owner, field
   }
   MutationProblem.Writable
 }
@@ -517,7 +518,7 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
       }
       checker.reportHere Diagnostic.error("`{name}` never changes after construction", at).withNote(note)
     }
-    .PrivateField(owner, field) => reportPrivateField checker, owner, field, at
+    .ProtectedField(owner, field) => reportProtectedField checker, owner, field, at
     .NotIndexable(base) => reportMissingTrait checker, base, "MutableIndexed", "a[key]", at
     .NotSliceable(base) => reportMissingTrait checker, base, "MutableSlice", "a[from..to]", at
     .DeclarationFromFunction(name) => {
@@ -585,13 +586,13 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
   )
 }
 
-/** `private(var)`: the field reads from everywhere and is written by its own type alone. */
-fn reportPrivateField(var checker: Checker, owner: TypeId, field: SymbolId, at: Span) {
+/** `protected var`: the field reads from everywhere and is written by the file of its type alone. */
+fn reportProtectedField(var checker: Checker, owner: TypeId, field: SymbolId, at: Span) {
   const name = checker.symbolAt(field).name
   const shown = checker.describe owner
   checker.reportHere(
-    Diagnostic.error("`{name}` can only be written by `{shown}`", at)
-      .withNote("`private(var)` hands out a read-only path: the field is public, its mutability is not"),
+    Diagnostic.error("`{name}` is write-protected: only the file that declares `{shown}` writes it", at)
+      .withNote("A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it")
   )
 }
 
@@ -643,7 +644,7 @@ public fn noteAssignment(var checker: Checker, place: Place) {
 
 /**
  * `database { ... }`: a trailing block on a record field configures it in place, which asks the same question an
- * assignment does - is the path to the field one a change may go through, `private(var)` and a `const` root included.
+ * assignment does - is the path to the field one a change may go through, `protected var` and a `const` root included.
  * The change itself is noted by [noteAssignment] once the value has been read, exactly as for `=`.
  */
 public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: String): Place {
@@ -1084,8 +1085,9 @@ public fn leavesClosure(checker: Checker): Bool {
 }
 
 /**
- * A field that may be written at all. `private(var) balance: Int` *is* a `var` - the modifier carries it, and
- * `signature.isVar` says so - so the visibility only decides *who* may write it, never whether anybody may.
+ * A field that may be written at all. `protected var balance: Int` *is* a `var`, and so is `private(var) balance: Int`,
+ * whose modifier carries it - `signature.isVar` says so - so the visibility only decides *who* may write it, never
+ * whether anybody may.
  */
 fn isVarField(signature: FieldSignature): Bool {
   signature.isVar

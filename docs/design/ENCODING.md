@@ -137,8 +137,8 @@ follows a `.` with its key.
 ## 3. Derivation
 
 **The parameter list.** The constructor's parameters, from outside, are the fields a caller can pass: everything except
-a `private` field. `private(var)` is publicly readable and publicly constructible — the `private` is on the `var`, not on
-the field — so a `private(var)` field **is** part of all three forms.
+a `private` field. `protected var` is publicly readable and publicly constructible — what is protected is the writing,
+not the field — so a `protected var` field **is** part of all three forms.
 
 **The condition.** All three are derived when both hold:
 
@@ -150,7 +150,7 @@ the field — so a `private(var)` field **is** part of all three forms.
 | `type` whose every `private` field has a default, and whose passable parameters all carry the trait | all three | the constructor is usable, over its parameters |
 | `type` with a `private` field without a default (`Email`) — a **capsule** | through its conversion pair, section 3a | the constructor is not usable from outside, so the fields are not the parameter list |
 | `type` with a `private` field **with** a default (a cache) | all three, **without that field** | it is not a parameter from outside. No annotation said so |
-| `type` with a `private(var)` field | all three, **with** that field | publicly readable, publicly constructible |
+| `type` with a `protected var` field | all three, **with** that field | publicly readable, publicly constructible |
 | a passable parameter whose type lacks the trait | none, and the error at the call site names the chain | |
 | `type` with cases | all three, as a `variant` over the cases, each case over its own fields | a case is a constructor too |
 | a generic `type` (`Page<Item>`) | conditional: `Page<Order>` has what `Order` has | one implementation, monomorphized per instantiation |

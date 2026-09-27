@@ -1,6 +1,6 @@
 ---
 title: Why there are no properties
-summary: A field is storage and a method computes, so the parentheses tell a reader which one they are looking at, and private(var) replaces the getter-and-setter pair without hiding either fact.
+summary: A field is storage and a method computes, so the parentheses tell a reader which one they are looking at, and protected var replaces the getter-and-setter pair without hiding either fact.
 kind: explanation
 status: stable
 order: 80
@@ -8,7 +8,8 @@ keywords:
   - getter
   - setter
   - property
-  - private(var)
+  - protected var
+  - write-protected
 source:
   - CONCEPT.md#decision-log
   - CONCEPT.md#visibility-and-encapsulation
@@ -26,7 +27,7 @@ storage, or a method, which computes - and the `()` tells a reader which:
 ```trb check
 type Account {
   owner: String
-  private(var) balance: Int = 0
+  protected var balance: Int = 0
 
   var fn deposit(amount: Int) {
     balance = balance + amount
@@ -38,8 +39,9 @@ print "{account.owner}: {account.balance}"
 ```
 
 - `point.x` never costs anything; `list.length()` might, and the parentheses say so.
-- `private(var)` replaces the getter-and-setter pair: it hands out a read-only, `const` path to the field while
-  keeping the write to the type itself, with no method written for either direction.
+- `protected var` replaces the getter-and-setter pair: the field is write-protected, so it hands out a read-only,
+  `const` path to everybody and keeps the write to the file that declares the type, with no method written for either
+  direction.
 - There are no validating setters: a setter cannot return a `Result`, so validation lives in a factory
   (`Email.tryFrom`) or in a method that can fail (`account.withdraw(amount)`).
 
@@ -51,7 +53,7 @@ read past and a call at every use site that looks like it might do something a p
 [Members are public by default](../language/modules-and-packages/visibility.md), which is what made hiding a field
 behind an accessor pointless in the first place: reading a field can never break an invariant, because nothing else
 can be aliased through it (see [Why values instead of references](why-values-instead-of-references.md)) - only
-writing it can, and that is exactly what `private(var)` marks.
+writing it can, and that is exactly what `protected var` marks.
 
 **Because a field is more than a value - it is a position in the constructor, in patterns, in `copy`, and in the
 generated `Encode`/`Decode` - so turning one into a property would cover only reading and leave the rest inconsistent.**
@@ -65,9 +67,10 @@ reject a bad port has nowhere to put the failure: it cannot throw, and `Void` ha
 belongs in a method that names its own failure -`account.withdraw(amount): Result<Void, InsufficientFunds>` - or in a
 parsing factory that never constructs the invalid value at all.
 
-**Because `private(var)` says exactly what it means and needs no new keyword.** Swift's `private(set)` reads as "the
-setter is private," which is a second word (`set`) for something the language already has a word for - the `var`
-itself. `private(var)` reads as "the `var` is private": the field stays public, only its mutability does not.
+**Because `protected var` says exactly what it means.** The field is a `var`, written where every other `var` field
+writes it, and `protected` says who may use that `var`: it is write-protected, readable by everybody and written only by
+the file of its type. The word has no second meaning to compete with, because TorbScript has no inheritance: in Java,
+C#, Kotlin, TypeScript and C++ `protected` opens a member to subclasses, and here there is no subclass to open it to.
 
 ### What was rejected
 
@@ -77,9 +80,12 @@ itself. `private(var)` reads as "the `var` is private": the field stays public, 
   because a reader could no longer tell from `.area` alone whether it costs anything, which is the one thing `()`
   exists to say.
 - **`private(set)`**, Swift's spelling. Rejected as an extra keyword (`set`) for a fact the existing `var` already
-  states; `private(var)` needed no addition to the grammar.
-- **A `guarded` keyword** tried during design for the read-everyone/write-only-the-type case. Rejected because it is
-  one more word to learn for something `private` and `var` already say together.
+  states.
+- **`private(var)`**, the spelling `protected var` replaces. It was the one modifier with parentheses, and it carried
+  the field's `var` inside them, so a writable field did not say `var` where the others do. It still compiles and means
+  the same, and `torb lint --fix --rule protected-field` rewrites it.
+- **A `guarded` keyword** tried during design for the read-everyone/write-only-the-type case. Rejected because it named
+  neither half of the rule, where `protected var` keeps the `var` and names what is protected.
 
 ## Consequences
 
@@ -100,9 +106,9 @@ const box = Rectangle width: 2.0, height: 3.0
 print "{box.width} {box.area()}"
 ```
 
-**Writing a field from outside its type is rejected the same way whether the field is `private` or `private(var)`.**
+**Writing a field from outside its type is rejected the same way whether the field is `private` or `protected var`.**
 
-"Outside its type" is outside the file that declares it, because that is how far `private` reaches:
+"Outside its type" is outside the file that declares it, because that is how far `private` and `protected` reach:
 
 ```trb error
 use Workspace from "std/project"
@@ -110,7 +116,7 @@ use Workspace from "std/project"
 var workspace = Workspace()
 workspace.memberPatterns = ["packages/*"]
 print workspace.memberPatterns
-// error: `memberPatterns` can only be written by `Workspace`
+// error: `memberPatterns` is write-protected: only the file that declares `Workspace` writes it
 ```
 
 **What might become computed later is a method from the start.** A field that a library might want to validate,
@@ -119,7 +125,7 @@ happen as a breaking change to existing callers who already wrote `.x()`.
 
 ## Related
 
-- [Fields](../language/types/fields.md) - `var`, `private`, `private(var)`, and the table of four.
+- [Fields](../language/types/fields.md) - `var`, `private`, `protected var`, and the table of four.
 - [Visibility](../language/modules-and-packages/visibility.md) - members public by default, and what that assumes.
 - [Methods and `static fn`s](../language/types/methods.md) - the two words a member says about itself.
 - [Why a method is a constant](why-one-member-namespace.md) - the one namespace a field and a method share.

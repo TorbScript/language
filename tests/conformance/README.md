@@ -105,7 +105,8 @@ the VM's own: an answer that differs between the two back ends is a bug of one o
 a program there has an `.expected` file and no native run, and the scripts beside it, which have none, are no programs
 of their own. `sandbox-crossing.trb` loads its scripts in both back ends - a native binary through the script host it
 links (slice 8) - and its scripts are in `crossing/`, which no run lists; its native build is the one that compiles the
-script host of the checkout once, into `build/script-host/`, which every later run reuses. The leak gate applies to a VM run as it does natively, and so do `.environment` and `.workers`; the two
+script host of the checkout once, into `build/script-host/`, which every later run reuses. A directory named after a
+program (`protected-field/`) holds the modules only that program imports, which no run lists either. The leak gate applies to a VM run as it does natively, and so do `.environment` and `.workers`; the two
 checks of the C do not. There is no list of what the VM runs: it runs everything (docs/design/VM.md section 8).
 
 ## The programs
@@ -215,6 +216,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `keyword-members.trb` | A field, a method, a `var fn`, a `static fn` and a case field named after a reserved word: declared in the type body, reached after a `.`, as a label and in a pattern, `self.type` inside the type, and derived JSON that uses the name as the key |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
+| `protected-field.trb` | A `protected var` field of a type declared in `protected-field/server.trb` is read from the program's file and written only by that file - its `var fn` and a function of it - while the constructor and `copy` still take it from outside; a field named `protected` is an ordinary name. The refused write is a checker error, so it is pinned in `compiler/tests/visibility.test.trb` and not here |
 
 **Paths** - `std/path`'s `Path`: a capsule over a root and a list of components, never a string, and nothing about a disk.
 

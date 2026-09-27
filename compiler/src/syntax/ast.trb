@@ -27,13 +27,34 @@ public type Visibility {
   case Default
   case Public
   case Private
-  /** `private(var)`: everybody reads, only the type writes. */
+  /**
+   * `protected var connections: Int`: write-protected. Everybody reads the field, and only the file that declares its
+   * type writes it. `protected` is a word of its own only here, in front of a member: anywhere else it is a name.
+   */
+  case Protected
+  /**
+   * `private(var) connections: Int`, the spelling `protected var` replaces. It means what [Visibility.Protected]
+   * means, and the tree keeps it apart so that `torb lint --fix --rule protected-field` can rewrite it.
+   */
   case PrivateVar
+
+  /** The modifier as it is written, for a message about it: `protected`, `private(var)`. */
+  fn written(): String {
+    match self {
+      .Default => ""
+      .Public => "public"
+      .Private => "private"
+      .Protected => "protected"
+      .PrivateVar => "private(var)"
+    }
+  }
 }
 
 /** The modifiers a declaration or a member can carry, besides its kind: `public`, `native`, `shared`. */
 public type Modifiers {
   visibility: Visibility = Visibility.Default
+  /** Where the visibility is written, `private(var)` from its first character to its last; `None` for the default */
+  visibilitySpan: Span? = None
   isNative: Bool = false
   isShared: Bool = false
 }

@@ -1,0 +1,26 @@
+use Process from "std/process"
+use Server, reset from "./protected-field/server"
+
+/**
+ * A `protected var` field is read from another file and written only in the file that declares its type (docs,
+ * `language/types/fields.md`, rule 3). `Server` is declared in `protected-field/server.trb`, so this file is outside
+ * it: it reads `connections` directly, and the field changes only through `accept`, a `var fn` of the type, and through
+ * `reset`, a function of that file. The constructor and `copy` still take the field from here, because it is not
+ * `private`. A field named `protected` is an ordinary name: the word is a modifier only in front of `var`.
+ *
+ * `server.connections = 5` in this file is refused by the checker, which `compiler/tests/visibility.test.trb` pins: a
+ * program that does not compile has no run to compare.
+ */
+var server = Server host: "localhost"
+server.accept()
+server.accept()
+print "{server.host} has {server.connections} connections"
+reset server
+print "after reset: {server.connections}"
+const restored = server.copy connections: 7
+print "copied: {restored.connections}"
+const opened = Server host: "backup", connections: 3
+print "opened: {opened.connections}"
+print "protected: {server.protected}"
+const code = if server.connections == 0 && restored.connections == 7 && opened.connections == 3 { 0 } else { 1 }
+Process.exit code

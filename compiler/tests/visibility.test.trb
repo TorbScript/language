@@ -2,9 +2,9 @@
  * Visibility. Members are public unless marked `private`, because a value *is* its data and reading a field cannot
  * break anything; what needs protection is mutation and invariants, and both have a modifier.
  *
- * `private` reaches exactly as far as the type does: the body of the declaration and every `extend` of it in the
- * package that declares it - an `extend` without a trait *is* part of the type - and nowhere else. `private(var)`
- * reads as "the `var` is private": everybody reads the field, only its type writes it.
+ * `private` reaches exactly as far as the file that declares it: the body of the declaration, every `extend` of it in
+ * that file - an `extend` without a trait *is* part of the type - and the functions of that file. `protected var` reads
+ * as "write-protected": everybody reads the field, only the file of its type writes it.
  *
  * `Account` lives in a module of its own in most of these, so that `main.trb` is outside of it in every sense.
  */
@@ -15,7 +15,7 @@ use problems, notes, problemsOf, notesOf from "./harness"
 const account = raw"""
   public type Account {
     owner: String
-    private(var) balance: Int = 0
+    protected var balance: Int = 0
     private var history: String = ""
 
     var fn deposit(amount: Int): Void {
@@ -229,7 +229,7 @@ group "A `private` member" {
   }
 }
 
-group "`private(var)`" {
+group "`protected var`" {
   test "is readable from everywhere" {
     const files = withAccount(raw"""
       fn probe(account: Account): Int {
@@ -239,17 +239,20 @@ group "`private(var)`" {
     assert problemsOf(files).isEmpty()
   }
 
-  test "is written only by its own type" {
+  test "is written only in the file that declares its type" {
     const files = withAccount(raw"""
       fn probe(var account: Account): Void {
         account.balance = 1000
       }
       """)
-    assert(problemsOf(files) == ["`balance` can only be written by `Account`"])
-    assert(notesOf(files) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"])
+    assert(problemsOf(files) == ["`balance` is write-protected: only the file that declares `Account` writes it"])
+    assert(
+      notesOf(files)
+        == ["A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it"]
+    )
   }
 
-  test "is written by its own type without a `var` keyword: the modifier *is* the `var`" {
+  test "is written by a method of its type" {
     const files = withAccount(raw"""
       fn probe(var account: Account): Void {
         account.deposit(5)
@@ -258,12 +261,110 @@ group "`private(var)`" {
     assert problemsOf(files).isEmpty()
   }
 
+  test "is written by an `extend` and by a function of the file that declares the type" {
+    const source = raw"""
+      type Account {
+        protected var balance: Int = 0
+      }
+
+      extend Account {
+        var fn raise() {
+          balance = balance + 1
+        }
+      }
+
+      fn reset(var account: Account) {
+        account.balance = 0
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "is not written by an `extend` in another file" {
+    const files = withAccount(raw"""
+      extend Account {
+        var fn raise() {
+          balance = balance + 1
+        }
+      }
+      """)
+    assert(problemsOf(files) == ["`balance` is write-protected: only the file that declares `Account` writes it"])
+  }
+
+  test "is passed to the constructor and to `copy` from another file, like every field that is not `private`" {
+    const files = withAccount(raw"""
+      fn probe(): Account {
+        const opened = Account(owner: "Ada", balance: 10)
+        opened.copy(balance: 20)
+      }
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+
+  test "`private(var)`, the spelling it replaces, means the same" {
+    const files = outside(
+      "Wallet",
+      raw"""
+        public type Wallet {
+          private(var) coins: Int = 0
+
+          var fn add() {
+            coins = coins + 1
+          }
+        }
+        """,
+      raw"""
+        fn probe(var wallet: Wallet): Int {
+          wallet.add()
+          wallet.coins = 3
+          wallet.coins
+        }
+        """,
+    )
+    assert(problemsOf(files) == ["`coins` is write-protected: only the file that declares `Wallet` writes it"])
+  }
+
+  test "`protected` is a word only in front of a member: everywhere else it is a name" {
+    const source = raw"""
+      type Guard {
+        protected: Bool
+        var level: Int = 0
+
+        fn locked(): Bool {
+          self.protected && protected
+        }
+      }
+
+      type Vault {
+        protected var protected: Int = 0
+
+        var fn seal() {
+          protected = protected + 1
+        }
+      }
+
+      type Lock {
+        fn protected(): Int {
+          1
+        }
+      }
+
+      fn probe(): Bool {
+        const protected = Guard(protected: true)
+        var vault = Vault()
+        vault.seal()
+        protected.locked() && protected.protected && vault.protected > Lock().protected()
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
   test "a field written inside a receiver closure is refused from outside, too" {
     const files = outside(
       "Options",
       raw"""
         public type Options {
-          private(var) port: Int = 80
+          protected var port: Int = 80
         }
         """,
       raw"""
@@ -280,7 +381,7 @@ group "`private(var)`" {
         }
         """,
     )
-    assert(problemsOf(files) == ["`port` can only be written by `Options`"])
+    assert(problemsOf(files) == ["`port` is write-protected: only the file that declares `Options` writes it"])
   }
 }
 
@@ -495,10 +596,10 @@ group "What `public` promises about its types" {
     assert problems(source).isEmpty()
   }
 
-  test "a `private(var)` field is part of it, because everybody reads it" {
+  test "a `protected var` field is part of it, because everybody reads it" {
     const source = raw"""
       public type Report {
-        private(var) helper: Helper = Helper(0)
+        protected var helper: Helper = Helper(0)
       }
 
       type Helper {

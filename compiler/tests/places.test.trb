@@ -16,8 +16,8 @@ const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
   + "  var fn increment() \{\n    count = count + step\n  \}\n\n"
   + "  fn incremented(): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
 
-const account = "public type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
-  + "  private(var) audits: List<String> = []\n\n"
+const account = "public type Account \{\n  protected var balance: Int = 0\n  private var history: List<String> = []\n"
+  + "  protected var audits: List<String> = []\n\n"
   + "  var fn deposit(amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
 
 /**
@@ -83,20 +83,28 @@ group "Fields" {
     assert(notes(source) == ["A field is `const` unless it is declared `var`, and a value is its data"])
   }
 
-  test "`private(var)` is written by the type itself and by an `extend` of it in the same file" {
+  test "`protected var` is written by the type itself and by an `extend` of it in the same file" {
     const source = "{account}extend Account \{\n  var fn raise() \{\n    balance = balance + 1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
-  test "`private(var)` hands everybody else a const path" {
-    const files = outsideAccount "fn probe(var target: Account) \{\n  target.balance = 10\n\}"
-    assert(problemsOf(files) == ["`balance` can only be written by `Account`"])
-    assert(notesOf(files) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"])
+  test "`protected var` is written by a function of the same file, through any `var` path" {
+    const source = "{account}fn probe(var target: Account) \{\n  target.balance = 10\n  target.audits.append(\"audit\")\n\}"
+    assert problems(source).isEmpty()
   }
 
-  test "const is deep, so a verb on a `private(var)` collection is an error too" {
+  test "`protected var` hands everybody else a const path" {
+    const files = outsideAccount "fn probe(var target: Account) \{\n  target.balance = 10\n\}"
+    assert(problemsOf(files) == ["`balance` is write-protected: only the file that declares `Account` writes it"])
+    assert(
+      notesOf(files)
+        == ["A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it"]
+    )
+  }
+
+  test "const is deep, so a verb on a `protected var` collection is an error too" {
     const files = outsideAccount "fn probe(var target: Account) \{\n  target.audits.append(\"audit\")\n\}"
-    assert(problemsOf(files) == ["`audits` can only be written by `Account`"])
+    assert(problemsOf(files) == ["`audits` is write-protected: only the file that declares `Account` writes it"])
   }
 
   /** A field nothing outside may even name is 4.9's message, and one root cause gets one message. */
@@ -248,7 +256,7 @@ group "`if var` binds into the subject (gap 3)" {
 }
 
 group "An object changes through any path it is reached through" {
-  const connection = "shared type Connection \{\n  url: String\n  private(var) sent: Int = 0\n\n"
+  const connection = "shared type Connection \{\n  url: String\n  protected var sent: Int = 0\n\n"
     + "  var fn send() \{\n    sent = sent + 1\n  \}\n\}\n\n"
   const holder = "type Holder \{\n  var held: Connection\n\}\n\n{connection}"
 
@@ -264,7 +272,7 @@ group "An object changes through any path it is reached through" {
     assert problems(source).isEmpty()
   }
 
-  test "what comes after the object is still asked about: a `const` field and a `private(var)` one" {
+  test "what comes after the object is still asked about: a `const` field and a `protected var` one" {
     const constant = "{connection}fn probe(view: Connection) \{\n  view.url = \"tcp://y\"\n\}"
     assert(problems(constant) == ["`url` never changes after construction"])
     const through = "{holder}fn probe(holder: Holder) \{\n  holder.held.send()\n  print holder.held.sent\n\}"

@@ -365,13 +365,56 @@ group "redundant-wrap" {
   }
 }
 
+group "protected-field" {
+  test "`private(var)` on a field is spelled `protected var`, and `protected var` is left alone" {
+    const source = "type Account \{\n  private(var) balance: Int = 0\n  protected var audits: Int = 0\n\}\n"
+    assert(foundTexts(source, LintRule.ProtectedField) == ["private(var)"])
+    expectText(
+      fixedBy(source, LintRule.ProtectedField),
+      "type Account \{\n  protected var balance: Int = 0\n  protected var audits: Int = 0\n\}\n",
+    )
+  }
+
+  test "in an `extend`, in a type declared inside a body, and with a doc comment in front" {
+    const source = [
+      "fn probe(): Int \{",
+      "  type Local \{",
+      "    /** How many */",
+      "    private(var) count: Int = 0",
+      "  \}",
+      "  Local().count",
+      "\}",
+      "",
+      "extend Probe \{",
+      "  private(var) ticks: Int = 0",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    assert(foundTexts(source, LintRule.ProtectedField) == ["private(var)", "private(var)"])
+    const fixedText = fixedBy source, LintRule.ProtectedField
+    assert fixedText.contains("    /** How many */\n    protected var count: Int = 0\n")
+    assert fixedText.contains("\n  protected var ticks: Int = 0\n")
+    assert(!fixedText.contains("private(var)"))
+  }
+
+  test "`private(var) var` says `var` twice, which the checker refuses, so it gets no fix" {
+    const source = "type Account \{\n  private(var) var balance: Int = 0\n\}\n"
+    assert(!findingsOf(source, LintRule.ProtectedField)[0].hasFix())
+  }
+
+  test "`private(var)` on a method is the checker's error, and there is no field to spell" {
+    assert findingsOf("type Account \{\n  private(var) fn total(): Int \{\n    1\n  \}\n\}\n", LintRule.ProtectedField).isEmpty()
+  }
+}
+
 group "The command line" {
   test "every rule runs unless --rule picks some, and --skip leaves one out" {
     const every = lintOptionsOf([]).expect("options")
-    assert(every.rules.length() == 5)
+    assert(every.rules.length() == 6)
     assert(every.paths == ["."])
     assert(lintOptionsOf(["--rule", "self-name", "std"]).expect("options").rules == [LintRule.SelfName])
-    assert(lintOptionsOf(["--skip", "question-field"]).expect("options").rules.length() == 4)
+    assert(lintOptionsOf(["--skip", "question-field"]).expect("options").rules.length() == 5)
+    assert(lintOptionsOf(["--rule", "protected-field"]).expect("options").rules == [LintRule.ProtectedField])
     assert lintOptionsOf(["--fix"]).expect("options").fix
     assert lintOptionsOf(["--rule", "no-such-rule"]).isNone()
     assert lintOptionsOf(["--frobnicate"]).isNone()

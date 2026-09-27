@@ -125,7 +125,8 @@ containing logic. See [Construction](language/types/construction.md).
 ### Contextual keyword
 
 A word that reads as an ordinary name after a `.` or as an argument label, and as a keyword everywhere else - today
-only `from`, `as` and `by`, because nothing can be declared with any other keyword's spelling. See
+only `from`, `as` and `by`, because nothing can be declared with any other keyword's spelling. `protected` is one the
+other way round: a word only in front of a member of a type, and a name everywhere else. See
 [Lexical structure](language/syntax/lexical-structure.md).
 
 ### Copy trap
@@ -215,8 +216,8 @@ type's own package attached it, and otherwise the file that uses it names it. Se
 
 ### Field
 
-A named piece of storage declared inside a `type`, `const` unless marked `var` and public unless marked `private` or
-`private(var)`. See [Fields](language/types/fields.md).
+A named piece of storage declared inside a `type`, `const` unless marked `var`, public unless marked `private`, and
+[write-protected](#write-protected) when marked `protected var`. See [Fields](language/types/fields.md).
 
 ### Foreign function
 
@@ -552,6 +553,13 @@ a changed copy. See [Verbs and participles](language/types/verbs-and-participles
 The pattern `_`, which matches anything and binds nothing. The same underscore in an expression is the implicit
 closure parameter instead; the two positions never overlap. See
 [Pattern forms](language/pattern-matching/pattern-forms.md).
+
+### Write-protected
+
+What `protected var` makes a field: everybody reads it, and only the file that declares its type writes it - the body
+of the type, an `extend` of it there, and the functions of that file. It is the one meaning of `protected`, because
+TorbScript has no inheritance and so no subclass the word could open a member to. See
+[Fields](language/types/fields.md).
 
 ### Witness table
 

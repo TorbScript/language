@@ -816,6 +816,57 @@ group "The members of a type" {
     assert(noteMessages(written)[0] == "Members are public by default: drop `public`, or write `private` to hide one")
   }
 
+  test "`protected var` is the visibility `Protected`, written where the word stands, and the field keeps its `var`" {
+    const member = membersOf("  protected var count: Int = 0")[0]
+    assert(member.modifiers.visibility == Visibility.Protected)
+    const at = member.modifiers.visibilitySpan ?? panic("Expected the span of `protected`")
+    assert("type Probe \{\n  protected var count: Int = 0\n\}".sliceBytes(at.start, at.end) == "protected")
+    match member.kind {
+      .Field(field) => assert(field.name.text == "count" && field.isVar)
+      other => panic "Expected a field, found {other}"
+    }
+  }
+
+  test "`private(var)`, the spelling `protected var` replaces, is one modifier of its own case" {
+    const member = membersOf("  private(var) count: Int = 0")[0]
+    assert(member.modifiers.visibility == Visibility.PrivateVar)
+    const at = member.modifiers.visibilitySpan ?? panic("Expected the span of `private(var)`")
+    assert("type Probe \{\n  private(var) count: Int = 0\n\}".sliceBytes(at.start, at.end) == "private(var)")
+  }
+
+  test "`protected` in front of a `:` is the name of a field, and after a `.` or `var` a name as well" {
+    match membersOf("  protected: Bool")[0].kind {
+      .Field(field) => assert(field.name.text == "protected" && !field.isVar)
+      other => panic "Expected a field, found {other}"
+    }
+    const named = membersOf("  var protected: Int = 0")[0]
+    assert(named.modifiers.visibility == Visibility.Default)
+    assert messages("protected = protected + 1\nprint guard.protected").isEmpty()
+  }
+
+  test "a declaration has one visibility" {
+    const both = "type Probe \{\n  private protected var count: Int = 0\n\}"
+    assert(messages(both) == ["`private` and `protected` do not combine: a declaration has one visibility"])
+    assert(noteMessages(both) == ["`private` hides the field, `protected var` only its writing: keep the one that is meant"])
+    const reversed = "type Probe \{\n  protected private var count: Int = 0\n\}"
+    assert(messages(reversed) == ["`protected` and `private` do not combine: a declaration has one visibility"])
+    const twice = "type Probe \{\n  protected protected var count: Int = 0\n\}"
+    assert(messages(twice) == ["`protected` is written twice"])
+  }
+
+  test "`protected` in front of a declaration a statement starts is refused, and the declaration read without it" {
+    const written = "protected fn probe(): Int \{\n  1\n\}"
+    assert(messages(written) == ["`protected` is only a modifier of a field"])
+    match parse(SourceText.of(written)).file.statements[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Function(function) => assert(function.name.text == "probe")
+        other => panic "Expected a function, found {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    assert(messages("fn outer() \{\n  protected var count = 0\n\}") == ["`protected` is only a modifier of a field"])
+  }
+
   test "`Int??` is an optional of an optional: the lexer's `??` is two `?` in a type" {
     match statements("fn probe(value: Int??) \{\}")[0].kind {
       .Declare(declaration) => match declaration.kind {

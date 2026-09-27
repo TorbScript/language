@@ -567,39 +567,84 @@ group "`isSame` compares identity (BACKEND gap 15)" {
   }
 }
 
-group "`private(var)` is a modifier of a field (gap 30)" {
+group "`protected` is a modifier of a `var` field (gap 30)" {
   test "not of a top-level declaration" {
+    const source = raw"""
+      protected fn probe(): Int {
+        1
+      }
+      """
+    assert(problems(source) == ["`protected` is only a modifier of a field"])
+    assert(
+      notes(source)
+        == [
+          "It says that everybody reads a field and only the file of its type writes it. Write `private` to hide the declaration",
+        ]
+    )
+  }
+
+  test "not of a constant, a method or a case of a type" {
+    const source = raw"""
+      type Counter {
+        protected static start: Int = 0
+
+        protected fn probe(): Int {
+          1
+        }
+
+        protected var fn reset() {
+        }
+      }
+
+      type Shape {
+        protected case Circle
+      }
+      """
+    const refused = "`protected` is only a modifier of a field"
+    assert(problems(source) == [refused, refused, refused, refused])
+  }
+
+  test "and a field without `var` has nothing to protect: nobody writes it already" {
+    const source = raw"""
+      type Account {
+        protected balance: Int = 0
+      }
+      """
+    assert(problems(source) == ["`protected` needs `var`: a const field is write-protected already"])
+    assert(
+      notes(source)
+        == [
+          "Write `protected var balance: ...` for a field only its own file writes, or `balance: ...` for one nobody writes",
+        ]
+    )
+  }
+
+  test "`private(var)`, the spelling it replaces, is refused in the same places" {
     const source = raw"""
       private(var) fn probe(): Int {
         1
       }
-      """
-    assert(problems(source) == ["`private(var)` is only a modifier of a field"])
-    assert(
-      notes(source)
-        == ["It says that the field is readable and its `var` is not. Write `private` to hide the declaration"],
-    )
-  }
 
-  test "not of a constant of a type" {
-    const source = raw"""
       type Counter {
         private(var) static start: Int = 0
+
+        private(var) fn count(): Int {
+          1
+        }
       }
       """
-    assert(problems(source) == ["`private(var)` is only a modifier of a field"])
+    const refused = "`private(var)` is only a modifier of a field"
+    assert(problems(source) == [refused, refused, refused])
   }
 
-  test "and it already says `var`, so a second one is a mistake" {
+  test "and `private(var)` already says `var`, so a second one is a mistake" {
     const source = raw"""
       type Account {
         private(var) var balance: Int = 0
       }
       """
     assert(problems(source) == ["`private(var)` already says `var`"])
-    assert(
-      notes(source) == ["`private(var) balance: ...` is the whole spelling: the field is readable, its `var` is not"],
-    )
+    assert(notes(source) == ["Write `protected var balance: ...`: everybody reads the field, and only its own file writes it"])
   }
 }
 

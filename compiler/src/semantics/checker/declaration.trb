@@ -6,7 +6,7 @@
  *
  * 1. **Visibility** ([requireVisibleMember], [isInsideDeclaration]). `private` reaches exactly as far as the file that
  *    declares it - the body of the type, an `extend` of it in that file, and the functions of that file - and
- *    `private(var)` hands out a read-only path instead of hiding the field. Whether the *path* that leads to a member
+ *    `protected var` hands out a read-only path instead of hiding the field. Whether the *path* that leads to a member
  *    may be written is a different question (`place.trb`'s mutability rules); whether this code may name the member at
  *    all is this one.
  * 2. **Program shape** ([checkShape]). A `public` function declares its result type, top-level code lives in entry
@@ -22,7 +22,7 @@ use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
 use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
-use ForeignDeclaration, TypeReference, TraitClause from "../../syntax/ast"
+use ForeignDeclaration, TypeReference, TraitClause, Field from "../../syntax/ast"
 use joinPath from "../../project/path"
 use libraryEntry from "../../project/programs"
 use ModuleId from "../module"
@@ -664,16 +664,27 @@ public fn requireSingleName(var checker: Checker, module: ModuleId, binding: Bin
   )
 }
 
-/** `private(var)` is a modifier of a field and of nothing else: on a member that has no `var` it has nothing to say. */
+/**
+ * `protected` is a modifier of a field and of nothing else: a method, a case and a constant have no `var` to protect.
+ * The same holds for `private(var)`, the spelling it replaces.
+ */
 fn requireFieldOnlyModifiers(var checker: Checker, module: ModuleId, modifiers: Modifiers, at: Span) {
-  if modifiers.visibility != Visibility.PrivateVar {
+  if !isWriteProtected(modifiers.visibility) {
     return
   }
   checker.report(
     module,
-    Diagnostic.error("`private(var)` is only a modifier of a field", at)
-      .withNote("It says that the field is readable and its `var` is not. Write `private` to hide the declaration"),
+    Diagnostic.error("`{modifiers.visibility.written()}` is only a modifier of a field", modifiers.visibilitySpan ?? at)
+      .withNote(
+        "It says that everybody reads a field and only the file of its type writes it. Write `private` to hide the"
+          + " declaration"
+      )
   )
+}
+
+/** `protected`, or `private(var)`, the spelling it replaces: the two mean the same. */
+fn isWriteProtected(visibility: Visibility): Bool {
+  visibility == Visibility.Protected || visibility == Visibility.PrivateVar
 }
 
 /**
@@ -988,27 +999,43 @@ fn memberNameOf(member: Member): Name {
 }
 
 /**
- * One member of a `type`, a `trait` or an `extend`. A field is where `private(var)` belongs and nowhere else, and the
- * result type of a trait method is mandatory.
+ * One member of a `type`, a `trait` or an `extend`. A `var` field is where `protected` belongs and nowhere else, and
+ * the result type of a trait method is mandatory.
  */
 fn checkMemberShape(var checker: Checker, module: ModuleId, member: Member, isTraitMember: Bool, ownerIsNative: Bool) {
   requireStandardLibrary checker, module, member.modifiers, member.span
   match member.kind {
-    // `private(var) balance: Int = 0` is the whole spelling: the modifier *is* the `var`, and it is private
-    .Field(field) => {
-      if member.modifiers.visibility == Visibility.PrivateVar && field.isVar {
-        checker.report(
-          module,
-          Diagnostic.error("`private(var)` already says `var`", field.name.span)
-            .withNote("`private(var) {field.name.text}: ...` is the whole spelling: the field is readable, its `var` is not"),
-        )
-      }
-    }
+    .Field(field) => checkFieldModifiers checker, module, member.modifiers, field
     .Function(function) => {
+      requireFieldOnlyModifiers checker, module, member.modifiers, member.span
       checkFunctionShape checker, module, member.modifiers, function, isTraitMember, ownerIsNative
     }
     .Constant(_) => requireFieldOnlyModifiers checker, module, member.modifiers, member.span
     .Case(_) => requireFieldOnlyModifiers checker, module, member.modifiers, member.span
+  }
+}
+
+/**
+ * `protected var connections: Int = 0` is the whole spelling. Without the `var` the word protects nothing, because a
+ * const field is written by nobody already; `private(var)`, the spelling it replaces, carries its `var` inside and
+ * takes no second one.
+ */
+fn checkFieldModifiers(var checker: Checker, module: ModuleId, modifiers: Modifiers, field: Field) {
+  const name = field.name.text
+  const at = modifiers.visibilitySpan ?? field.name.span
+  if modifiers.visibility == Visibility.Protected && !field.isVar {
+    checker.report(
+      module,
+      Diagnostic.error("`protected` needs `var`: a const field is write-protected already", at)
+        .withNote("Write `protected var {name}: ...` for a field only its own file writes, or `{name}: ...` for one nobody writes")
+    )
+  }
+  if modifiers.visibility == Visibility.PrivateVar && field.isVar {
+    checker.report(
+      module,
+      Diagnostic.error("`private(var)` already says `var`", field.name.span)
+        .withNote("Write `protected var {name}: ...`: everybody reads the field, and only its own file writes it")
+    )
   }
 }
 

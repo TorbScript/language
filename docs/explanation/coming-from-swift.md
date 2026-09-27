@@ -42,6 +42,7 @@ enum cases never need an import, and its protocols can grow an associated type t
 | `a ?? b` on an `Optional` | `a ?? b` through the trait `OrElse` | an operator is a trait, so a `Result` and a type of your own have it too |
 | `protocol Hashable` | `trait Hash` | a single-method trait is named after its method |
 | `willSet` / `didSet` | nothing to write | a change is already visible at the one place it happens: the verb |
+| `fileprivate(set) var sent = 0` | `protected var sent: Int = 0` | write-protected: everybody reads the field, only the file of its type writes it |
 | `associatedtype Item` inside a protocol | `trait Container<Item> { }` | a type parameter on the trait, never an associated type |
 | `weak var` / `unowned let` | nothing to write, and no collector either | a tree holds handles, a stored callback takes its owner as a receiver, and a leaked cycle is reported by type |
 | `if case .some(let x) = opt` | `if const Some(x) = opt` | pattern position is spelled with `const`/`var`, not `case` |
@@ -62,7 +63,7 @@ never copies it - two bindings name the same object, exactly like two Swift refe
 ```trb
 shared type Connection {
   url: String
-  private(var) sent: Int = 0
+  protected var sent: Int = 0
 
   var fn send(message: String) {
     sent = sent + 1
@@ -240,8 +241,9 @@ lists what carries over would be an advertisement.
   are no annotations: a renamed or skipped field means writing `encode`/`decode` by hand for that type. See
   [Encode and Decode](../language/reflection/encode-and-decode.md).
 - **Five access levels.** `private`, `fileprivate`, `internal`, `public` and `open` become two: unmarked, which is
-  public, and `private`, which reaches every file of the same package through `extend` - there is nothing between
-  file-private and open, and nothing above public.
+  public, and `private`, which reaches the file that declares it - its type, an `extend` of it there and the functions
+  of that file. `protected var` is Swift's `fileprivate(set) var`: everybody reads the field, and only that file writes
+  it. There is nothing between file-private and open, and nothing above public.
 - **`while true` as the endless loop.** The word for it is `loop { ... }`, and `while true` is the error "A loop that
   never ends is written `loop`". Its type is `Never` while no `break` targets it - so a function whose body is one needs
   no other result - and `Void` once one does; a `break` carries no value, and `continue` reads as it does in a `while`.

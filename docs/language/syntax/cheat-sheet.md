@@ -71,7 +71,7 @@ extend Name with Trait { ... }               an implementation written afterward
 extend Name { ... }                          members added to a type
 public fn name() { ... }                     exported from its file
 private var field: Int = 0                   invisible outside its type
-private(var) field: Int = 0                  read by everyone, written by the type only
+protected var field: Int = 0                 write-protected: read by everyone, written by its own file only
 use Name from "std/core"                     an import
 use Type.Case from "./module"                a case, by its path
 use Type.member from "acme/text"             a member another package's `extend` adds

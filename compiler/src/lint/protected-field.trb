@@ -1,0 +1,65 @@
+/**
+ * The rule `protected-field`: a field that everybody reads and only the file of its type writes is spelled
+ * `protected var connections: Int`, and `private(var) connections: Int`, the spelling it replaces, is rewritten to it.
+ * The two mean the same, so the fix is certain: `torb lint --fix --rule protected-field` is the migration.
+ *
+ * It looks at every field of a `type`, a `trait` and an `extend`, at the top level of a file and inside a body. A
+ * `private(var)` field that also writes `var` is an error of the checker and gets no fix, because the one it would get
+ * says `var` twice.
+ */
+
+use SourceFile, Declaration, Member, MemberKind, Visibility from "../syntax/ast"
+use Finding, LintRule, TextEdit from "./finding"
+use nodesOfFile, nodesOfMembers from "./nodes"
+
+public fn protectedFieldFindings(file: SourceFile): List<Finding> {
+  var findings: List<Finding> = []
+  for declaration in nodesOfFile(file).declarations {
+    findingsOfDeclaration findings, declaration
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+fn findingsOfDeclaration(var findings: List<Finding>, declaration: Declaration) {
+  const members = match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    _ => {
+      return
+    }
+  }
+  for member in members {
+    findingOfMember findings, member
+  }
+  for nested in nodesOfMembers(members).declarations {
+    findingsOfDeclaration findings, nested
+  }
+}
+
+fn findingOfMember(var findings: List<Finding>, member: Member) {
+  if member.modifiers.visibility != Visibility.PrivateVar {
+    return
+  }
+  const field = match member.kind {
+    .Field(found) => found
+    // `private(var)` on anything else is the checker's error, and there is no field to spell
+    _ => {
+      return
+    }
+  }
+  const at = match member.modifiers.visibilitySpan {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const fix = if field.isVar { [] } else { [TextEdit(at.start, at.end, "protected var")] }
+  findings.append(Finding(
+    LintRule.ProtectedField,
+    "`private(var)` is spelled `protected var`: everybody reads `{field.name.text}`, and only the file of its type writes it",
+    at,
+    fix,
+  ))
+}

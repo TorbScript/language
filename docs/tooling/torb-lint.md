@@ -1,6 +1,6 @@
 ---
 title: torb lint
-summary: torb lint reports the rules of style the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a Some or Ok the value adds itself - each with its id and, where it is certain, a fix.
+summary: torb lint reports the style rules the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a redundant Some or Ok, private(var) - each with its id and, where certain, a fix.
 kind: tooling
 status: stable
 order: 130
@@ -12,6 +12,7 @@ keywords:
   - unread-binding
   - labeled-literal
   - redundant-wrap
+  - protected-field
 source:
   - compiler/src/lint/command.trb
   - compiler/src/lint/finding.trb
@@ -33,6 +34,7 @@ Rules (every one runs unless --rule picks some):
   unread-binding   A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)
   labeled-literal  `true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)
   redundant-wrap   No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)
+  protected-field  A field only its own file writes is `protected var`, not `private(var)` (fix)
 
   --fix         Write every fix a rule is certain of, then lint again and report what is left
   --rule <id>   Run this rule (repeatable); without it every rule runs
@@ -123,6 +125,26 @@ fn half(value: Int): Result<Int, String> {
 }
 
 print half(8)
+```
+
+**`protected-field`**: a field that everybody reads and only the file of its type writes is spelled
+`protected var connections: Int`, and `private(var) connections: Int`, the spelling it replaces, is found and rewritten
+to it ([Fields](../language/types/fields.md), rule 3). The two mean the same, so the fix is certain, and
+`torb lint --fix --rule protected-field` is the whole migration of a project. A `private(var)` field that writes `var`
+as well is the checker's error and gets no fix.
+
+```trb check
+type Server {
+  protected var connections: Int = 0
+
+  var fn accepted() {
+    connections = connections + 1
+  }
+}
+
+var server = Server()
+server.accepted()
+print server.connections
 ```
 
 ### `--fix`

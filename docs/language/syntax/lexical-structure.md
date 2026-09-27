@@ -70,11 +70,13 @@ print "moved {move(from: 3, to: 10)}, total {total}"
 4. **A doc comment belongs to the declaration written directly after it.** Everything that can be declared can have
    one - a function, a field, a parameter, a case. See [Doc comments](doc-comments.md).
 
-5. **A fixed list of words is reserved, and three words never are.** `const`, `var`, `fn`, `type`, `trait`, `extend`,
+5. **A fixed list of words is reserved, and four words never are.** `const`, `var`, `fn`, `type`, `trait`, `extend`,
    `foreign`, `case`, `use`, `public`, `private`, `native`, `shared`, `lazy`, `if`, `else`, `match`, `for`, `in`,
    `while`, `break`, `continue`, `return`, `true`, `false`, `void`, `self`, `Self`, `with` and `where` are reserved.
-   `from`, `as` and `by` are contextual: the lexer reads them as ordinary names everywhere, which is what
-   `use Name from "./module"` and `type Seconds with Compare by value` rely on.
+   `from`, `as`, `by` and `protected` are contextual: the lexer reads them as ordinary names everywhere, which is what
+   `use Name from "./module"`, `type Seconds with Compare by value` and `protected var count: Int` rely on.
+   `protected` is a word only in front of a member of a type, so a field named `protected` is reached bare as well as
+   after a `.` ([Fields](../types/fields.md), rule 3).
 
    `raw` is contextual too, but at the lexer rather than the parser: it starts a raw string (`raw"text"`,
    `raw"""text"""`) only directly in front of `"`, and is an ordinary name everywhere else - `const raw = 1` and

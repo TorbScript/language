@@ -75,7 +75,8 @@ print zero()
    which of a type's members another file may name - so what is private is visible in the file that declares it, in
    an `extend` of that type written there, and in the free functions of that file. A file can `use` a type without
    being able to name its private fields either way, so hiding a field is never undone by making the file itself
-   `public`.
+   `public`. `protected var` has the same reach for writing alone: everybody reads the field, and only its own file
+   writes it.
 
    ```trb check
    type Server {
@@ -127,6 +128,6 @@ public const origin: Meters = Meters(0.0)
 ## Related
 
 - [use](use.md) - what a `public` declaration can be reached with from another file.
-- [Fields](../types/fields.md) - `private` and `private(var)` on a member, the other half of visibility.
+- [Fields](../types/fields.md) - `private` and `protected var` on a member, the other half of visibility.
 - [Packages](packages.md) - `src/lib.trb`, the surface a whole package exports.
 

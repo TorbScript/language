@@ -42,6 +42,7 @@ has in the first place.
 | `@DslMarker` | nothing to write | only the innermost receiver is ever implicit |
 | `interface Shape { fun area(): Double }` | `trait Shape { fn area(): Float }` | one word, `trait`; a default method works the same way |
 | a `fun` in a class that writes to a `var` field | `var fn` | mutation is on the declaration, so a reader sees it without the body |
+| `var count = 0` with `private set` | `protected var count: Int = 0` | write-protected: read everywhere, written only in the file of its type - `protected` never means "visible to subclasses", there is no inheritance |
 | `companion object { fun of() }` | `static fn of()` | one word instead of a nested object, and it is reached as `Type.of()` |
 | `Comparable<T>` | `Compare` | a single-method trait is named after its method |
 | `object Registry { }` | a `shared type` plus one instance you hold | identity is written down, not a keyword that hides an allocation |

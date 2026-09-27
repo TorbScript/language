@@ -221,7 +221,7 @@ group "What a property command is not" {
  * go through, the place is recorded for the lowering, and the change counts for the dead-change rule.
  */
 group "A property command is a place that is written" {
-  const account = "\npublic type Account \{\n  private(var) balance: Int = 0\n\n"
+  const account = "\npublic type Account \{\n  protected var balance: Int = 0\n\n"
     + "  var fn deposit(amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n"
 
   test "the place the command writes is recorded under the span of the field" {
@@ -236,18 +236,17 @@ group "A property command is a place that is written" {
     assert(problems(source) == ["`made` is a `const`. Only a `var` binding can be changed"])
   }
 
-  test "a `private(var)` field is written by `=` of its own type and by nobody else" {
-    assert(
-      problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty(),
-    )
+  test "a `protected var` field is written by `=` in the file of its type and by nobody else" {
+    assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
     // `private` reaches as far as the file that declares it, so "outside" is a second file
     const outside = [
       "app/src/account.trb": account,
       "app/src/main.trb": "use Account from \"./account\"\n\nfn probe(var held: Account) \{\n  held.balance = 10\n\}",
     ]
-    assert(problemsOf(outside) == ["`balance` can only be written by `Account`"])
+    assert(problemsOf(outside) == ["`balance` is write-protected: only the file that declares `Account` writes it"])
     assert(
-      notesOf(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"],
+      notesOf(outside)
+        == ["A `protected var` field is read everywhere and written in its own file alone: a `var fn` of the type changes it"]
     )
   }
 

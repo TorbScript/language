@@ -25,7 +25,7 @@
    `(self: Receiver) => Value` resolves names against `Receiver`. An expression passed to `lazy Value` is not
    evaluated at the call site. This one principle powers DSLs, custom control structures and query providers,
    without macros or annotations.
-2. **Mutation is always visible.** `var` bindings, `var` fields (`private(var)`: only the type itself), `var` parameters,
+2. **Mutation is always visible.** `var` bindings, `var` fields (`protected var`: only the file of the type), `var` parameters,
    `var fn` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
    exactly where it is written and nowhere else.
 3. **One way to construct, many ways to create.** Constructors only initialize fields and never contain logic.
@@ -1023,7 +1023,7 @@ p = p.copy(y: 30)              // `copy` is generated for every `type`
 ```trb
 shared type Connection {
   url: String
-  private(var) sent: Int = 0
+  protected var sent: Int = 0
 
   var fn send(message: String) {
     sent = sent + 1
@@ -1259,7 +1259,7 @@ member, `const` on a field and `const` after `static` are refused, one spelling 
 type Account {
   owner: String                          // Public, const
   var nickname: String = ""              // Public, writable by everyone who has a `var` path to the account
-  private(var) balance: Int = 0           // Everybody reads, only Account writes
+  protected var balance: Int = 0         // Everybody reads, only the file of Account writes
   private var history: List<String> = []                     // Invisible from outside
 
   var fn deposit(amount: Int) {
@@ -1269,22 +1269,28 @@ type Account {
 }
 
 account.balance                          // 100
-account.balance = 1_000_000              // Compile error: only Account can write `balance`
+account.balance = 1_000_000              // Compile error in another file: `balance` is write-protected
 ```
 
 | Field                | Read from outside | Write from outside |
 |----------------------|:-----------------:|:------------------:|
 | `x: Value`               |        yes        |  - (const)         |
 | `var x: Value`           |        yes        |  yes               |
-| `private(var) x: Value`  |        yes        |  no                |
+| `protected var x: Value` |        yes        |  no                |
 | `private x: Value` / `private var x: Value` | no |  no                |
 
-- `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands outsiders a _const path_ to the field, and const is deep: with `private(var) routes: List<Route>`,
-  `config.routes` can be read and iterated from outside, but `config.routes.append(...)` is a compile error. What
-  somebody takes out of it is a copy anyway. No defensive copies by hand, no accessor methods.
-- `private(var)` is a modifier of a field and of nothing else. On a member that has no `var` it has nothing to say
-  and is an error. It also already *is* the `var`, so `private(var) var balance: Int` is an error: one of the two says
-  it twice.
+- `protected var` reads as "write-protected": everybody reads the field, and only the file that declares its type
+  writes it - the body of the type, an `extend` of it there, and the functions of that file. There is no inheritance,
+  so `protected` never means "visible to subclasses" as it does in Java, C#, Kotlin, TypeScript or C++. It hands
+  outsiders a _const path_ to the field, and const is deep: with `protected var routes: List<Route>`, `config.routes`
+  can be read and iterated from outside, but `config.routes.append(...)` is a compile error. What somebody takes out of
+  it is a copy anyway. No defensive copies by hand, no accessor methods.
+- `protected` is a modifier of a `var` field and of nothing else. On a field without `var` it protects nothing, because
+  nobody writes a const field anyway, and on a method, a case, a constant or a top-level declaration there is no `var`
+  at all: both are errors. A member has one visibility, so `private protected` is an error too. `protected` is a word
+  only in front of a member: a field may be named `protected`, and outside a type body it is an ordinary name.
+- `private(var) x`, the spelling `protected var x` replaces, still compiles and means the same; `torb lint --fix --rule
+  protected-field` rewrites it.
 - **`private` reaches as far as the file that declares it.** A private member is visible in the body of its type, in
   an `extend` of that type written in the same file, and in the free functions of that file - and nowhere else. One
   rule, and the same reach a `private` top-level declaration has: what is private is what its file can see. The
@@ -1870,7 +1876,7 @@ buffer.append(4)                                        // In place. `numbers` i
 const more = numbers.appended(4).removed(2)             // Participles work everywhere
 
 type Inventory {
-  private(var) items: Map<String, Int> = [:]
+  protected var items: Map<String, Int> = [:]
 }
 
 fn lookup(table: Map<String, Int>): Int { ... }         // Any map. Read-only, and nobody changes it meanwhile.
@@ -2581,6 +2587,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   only as its exact `Value`; the payload of a written `Some(...)`/`Ok(...)` never wraps, so nesting stays written; no
   inference variable is solved by the wrap; `None`, `Fail` and `Task` are unchanged. One spelling per meaning: the lint
   rule `redundant-wrap` finds a written `Some`/`Ok` the coercion would add, and fixes it.
+- **A field everybody reads and only its own file writes is `protected var`** (2026-09-27, owner; replaces
+  `private(var)`; docs/language/types/fields.md rules 3-4). `protected` reads as "write-protected": the language has no
+  inheritance, so the meaning it has in Java, C# or Kotlin never applies. The field says `var` where every other
+  writable field does, instead of inside a parenthesized modifier; `protected` without `var`, on anything but a field,
+  or next to `private` is an error. It is a contextual word, a modifier only in front of a member, so `protected: Bool`
+  and `self.protected` stay names. The semantics are unchanged: the constructor and `copy` take the field from
+  outside, and only the file of the type writes it. The lint rule `protected-field` rewrites the old spelling.
 - **A reserved word may name a field, a method, a case field or a label** (2026-09-27, owner;
   docs/language/syntax/lexical-structure.md rule 6). Where it can only be a name - declared inside a type body, after
   a `.`, as a label - a keyword is one: `type: String`, `event.type`, `Event(type: "click")`. A bare keyword stays the
@@ -2946,17 +2959,17 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Members are public by default, `private` is explicit - one rule for fields and methods (was: fields private,
   methods public; 142 of 160 fields in the examples had to say `public`). Immutability made private-by-default
   pointless for reading. Top-level declarations stay opt-in (`public`).
-- `private(var) x` (read for everyone, write for the type only) instead of getters/setters. Not `private(set)` as in
-  Swift (there is no `set` in this language, the thing that is private is the `var`), and not an own keyword
-  (`guarded` was tried: one more word to learn for something the existing two words already say). It removed
-  every "private field plus accessor method of nearly the same name" pair from the examples.
+- `protected var x` (read for everyone, written only in the file of the type) instead of getters/setters, first
+  spelled `private(var) x`. Not `private(set)` as in Swift (there is no `set` in this language, the thing that is
+  protected is the `var`), and not `guarded` (tried: it named neither half of the rule). It removed every "private
+  field plus accessor method of nearly the same name" pair from the examples.
 - **`private` reaches one file, not one package.** An `extend Path` in another file of `std/path` could otherwise
   write `Self(rootValue: ..., componentValues: ...)` and walk around the parser that is the only way into the
   capsule. The package stays the unit of coherence; it is not the unit of privacy. It is also *one* rule instead of
   two: a `private` member and a `private` top-level declaration now reach exactly as far as each other, so a free
   function of the declaring file sees the private member as well - the border "only the type body and an `extend`"
   is gone. Measured over the repository when the rule went on: one place, an `extend Column<Node>` of
-  `examples/ecs-probe-2` that wrote a `private(var)` field of another file, and it goes through the public members
+  `examples/ecs-probe-2` that wrote a write-protected field of another file, and it goes through the public members
   now.
 - No properties, no computed getters, no validating setters (a setter cannot return a `Result`)
 - Fields are `const` by default

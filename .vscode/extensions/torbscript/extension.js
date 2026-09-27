@@ -3,7 +3,8 @@
 //
 // This keyword list must stay in sync with `compiler/src/syntax/token.trb`'s `TokenKind` (the lexer's source of
 // truth) plus its three contextual words (`from`, `as`, `by` - ordinary identifiers to the
-// lexer, keywords only in the positions this list's caller already restricts them to).
+// lexer, keywords only in the positions this list's caller already restricts them to). `protected` is a word only in
+// front of `var` (`protected var count: Int`) and a name everywhere else, so `highlightCode` asks for the `var`.
 
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'break', 'continue', 'return',
@@ -89,7 +90,7 @@ function highlightCode(code) {
       html += span('hljs-string', text);
     } else if (number) {
       html += span('hljs-number', text);
-    } else if (KEYWORDS.has(word)) {
+    } else if (KEYWORDS.has(word) || (word === 'protected' && /^\s+var\b/.test(code.slice(last)))) {
       html += span('hljs-keyword', text);
     } else if (LITERALS.has(word)) {
       html += span('hljs-literal', text);

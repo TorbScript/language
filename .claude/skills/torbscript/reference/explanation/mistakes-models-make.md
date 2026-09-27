@@ -619,6 +619,7 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 | `abs`, `sqrt`, `Expr` | `absolute`, `squareRoot`, `Expression` | names are written out |
 | a `for` loop that mutates the element | `items[index].field = value` | the loop variable is a `const` copy |
 | a getter like `getName()` | the field `name`, or a method `name()` | there are no properties and no `get` prefix |
+| `protected fn helper()` for a subclass | `private fn helper()` | there is no inheritance: `protected var` is a write-protected field, and on anything else `protected` is an error |
 | `fn area(self)`, `fn grow(&mut self)` | `fn area()`, `var fn grow()` | a method does not list its receiver |
 | `fn of(): Self` inside a type body | `static fn of(): Self` | without `static` it is a method |
 | `const origin = Point(0, 0)` in a type body | `static origin = Point(0, 0)` | `const` in a type body is a field |

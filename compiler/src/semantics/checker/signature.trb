@@ -1121,7 +1121,12 @@ fn fieldSignature(
   scope: TypeScope,
 ): FieldSignature {
   const annotation = typeFromReference checker, field.annotation, scope.forType()
-  // `private(var) balance: Int = 0` *is* the `var`: the field is writable, and only its type may write it
+  // `private(var) balance: Int = 0` *is* the `var`, and it means `protected var balance: Int = 0`: the field is
+  // writable, and only the file of its type may write it. The signature knows one spelling, `Protected`
+  const visibility = match member.modifiers.visibility {
+    .PrivateVar => Visibility.Protected
+    other => other
+  }
   const isPrivateVar = member.modifiers.visibility == Visibility.PrivateVar
   FieldSignature(
     symbol,
@@ -1129,11 +1134,11 @@ fn fieldSignature(
     annotation,
     field.isVar || isPrivateVar,
     field.default.isSome(),
-    member.modifiers.visibility,
+    visibility,
   )
 }
 
-/** `private` hides a member, `private(var)` only its `var`: everything else a type has, it has in the open. */
+/** `private` hides a member, `protected` only its writing: everything else a type has, it has in the open. */
 fn defineMember(var checker: Checker, module: ModuleId, name: Name, kind: SymbolKind, member: Member): SymbolId {
   const isPublic = member.modifiers.visibility != Visibility.Private
   checker.symbols.add Symbol(name.text, kind, isPublic, module, name.span)

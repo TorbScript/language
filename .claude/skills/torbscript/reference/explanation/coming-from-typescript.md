@@ -35,6 +35,7 @@ computed from another type - none of which exists here.
 | `x?.y` | `x?.y` | looks the same; here it is `Option.map`/`flatMap`, not a check bolted onto every type |
 | `x ?? y` | `x ?? y` | the same spelling; here it is the trait `OrElse`, and the right side has the wrapped `Value`'s type |
 | `readonly x: number` | `x: Int` (no `var`) | a field is already `const` unless marked `var`; there is no separate modifier |
+| `private _count` behind `get count()` | `protected var count: Int = 0` | write-protected: read everywhere, written only in the file of its type - `protected` never means "visible to subclasses", there is no inheritance |
 | `Readonly<T>` | `const` on the binding | `readonly` freezes reassignment of one field; `const` freezes everything reachable through the binding |
 | `T extends U ? A : B` | not expressible | generics are declarative; a type parameter is never computed from another type |
 | `{ [K in keyof T]: ... }` | not expressible | types are not values, so nothing iterates over a type's keys |

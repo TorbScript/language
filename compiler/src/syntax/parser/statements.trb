@@ -9,7 +9,7 @@ use Span from "../source"
 use TokenKind, Keyword from "../token"
 use Statement, StatementKind, Binding, Block, Condition, Expression, ExpressionKind from "../ast"
 use Parser from "./parser"
-use parseDeclaration from "./declarations"
+use parseDeclaration, isAtProtectedDeclaration from "./declarations"
 use parseType from "./types"
 use parsePattern from "./patterns"
 use parseExpression, parseCommandExpression from "./expressions"
@@ -65,6 +65,14 @@ fn parseStatement(var parser: Parser): Statement {
       const invalid = Expression ExpressionKind.Invalid, start
       return Statement StatementKind.Evaluate(invalid), start.to(parser.previousSpan())
     }
+  }
+  // `protected fn probe()`: the word write-protects a field of a type, and in front of anything else it is refused and
+  // the declaration after it read as if it were not there
+  if isAtProtectedDeclaration(parser) {
+    const note = "It says that everybody reads a field and only the file of its type writes it."
+      + " Write `private` to hide the declaration"
+    parser.errorWithNote "`protected` is only a modifier of a field", note, parser.span()
+    parser.bump()
   }
   const kind = match parser.kind() {
     .Reserved(.Public | .Private | .Native | .Shared | .Fn | .Type | .Trait | .Extend | .Use | .Foreign) => {
