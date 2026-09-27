@@ -1,5 +1,5 @@
-# ghcr.io/torbscript/release-sync: pulls GitHub releases onto the server behind torb.dev/download (tools/release-sync,
-# docs/design/RELEASE.md section 7.11), built from a release - never from a checkout. The build context is a directory
+# cr.torb.dev/torbscript/release-sync: pulls the forge's releases onto the server behind torb.dev/download
+# (tools/release-sync, docs/design/RELEASE.md section 7.11), built from a release - never from a checkout. The build context is a directory
 # with the release's assets:
 #
 #   torb-<version>-linux-x64.tar.gz     the toolchain the build stage compiles with (linux-arm64 for an arm64 image)
@@ -11,7 +11,9 @@
 #
 # The runtime stage has exactly the tools the program shells out to: curl for downloads, openssl for the webhook's HMAC,
 # and cosign for the signature - a release release-sync cannot verify is refused, so cosign is not optional here. It
-# hashes, moves and links files itself (std/digest, std/fs); coreutils is here for checking cosign's own download.
+# hashes, moves and links files itself (std/digest, std/fs); coreutils is here for checking cosign's own download. The
+# public key it verifies with is mounted at /etc/release-sync/cosign.pub (tools/deploy/compose.example.yml), never baked
+# in: replacing a key is a restart, not a new image.
 
 FROM debian:bookworm-slim AS build
 ARG VERSION

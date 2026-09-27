@@ -1,18 +1,22 @@
 # torb.dev and packages.torb.dev on one root server (docs/design/RELEASE.md section 7.11), from the images the release
-# workflow pushes to GHCR, behind the Traefik that already runs on the machine: nothing here opens a port or asks for a
-# certificate - the containers join Traefik's network and say with labels which host and path is theirs.
+# workflow pushes to cr.torb.dev - the forge's own container registry - behind the Traefik that already runs on the
+# machine: nothing here opens a port or asks for a certificate - the containers join Traefik's network and say with
+# labels which host and path is theirs. The services can join the stack that runs the forge (compose.torb.yml) as they
+# are, or run as a stack of their own beside it.
 #
 #   torb.dev, www.torb.dev          -> site          install.sh, install.ps1, /docs/..., /download/... (release-sync's)
-#   torb.dev/webhook                -> release-sync  GitHub's "release published" webhook
+#   torb.dev/webhook                -> release-sync  the forge's "release published" webhook
 #   packages.torb.dev               -> site          /index, /archives, /docs - the registry's files (behind a CDN)
 #   packages.torb.dev/api           -> registry      publish, yank, owners, tokens, trusted publishing
 #
-# Once: copy this file to `compose.yml` and `.env.example` to `.env` beside it (never commit `.env`), fill in `.env`,
-# `docker login ghcr.io` while the repository is private, then `docker compose up -d`. An update is
+# Once: copy this file to `compose.yml`, `.env.example` to `.env` (never commit `.env`) and the public key of the
+# project's signing key to `cosign.pub` beside it (tools/deploy/cosign.pub), fill in `.env`, then
+# `docker compose up -d`. The images are public: no `docker login`. An update is
 # `docker compose pull && docker compose up -d`. docs/contributing/releasing.md, "The root server", has every step.
 #
 # Writers and readers of /srv/torb (`TORB_DATA`): release-sync is the only writer of download/, the registry the only
-# writer of registry/, database/ and index-mirror/; the site only reads. CI never pushes to this machine - it pulls.
+# writer of registry/, database/ and index-mirror/; the site only reads. CI never pushes to this machine - it pulls -
+# and no runner of the forge ever mounts any of these directories.
 
 name: torb
 
@@ -22,7 +26,7 @@ x-traefik: &traefik
 
 services:
   site:
-    image: ghcr.io/torbscript/site:${TORB_VERSION:-latest}
+    image: cr.torb.dev/torbscript/site:${TORB_VERSION:-latest}
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -46,17 +50,23 @@ services:
       traefik.http.routers.torb-packages.service: torb-site
 
   release-sync:
-    image: ghcr.io/torbscript/release-sync:${TORB_VERSION:-latest}
+    image: cr.torb.dev/torbscript/release-sync:${TORB_VERSION:-latest}
     restart: unless-stopped
     environment:
-      RELEASE_SYNC_REPOSITORY: ${RELEASE_SYNC_REPOSITORY:-TorbScript/language}
-      RELEASE_SYNC_TOKEN: ${RELEASE_SYNC_TOKEN}
+      # The forge the releases are pulled from: Forgejo at git.torb.dev, a public repository, so no token is needed
+      RELEASE_SYNC_FORGE: ${RELEASE_SYNC_FORGE:-forgejo}
+      RELEASE_SYNC_URL: ${RELEASE_SYNC_URL:-https://git.torb.dev}
+      RELEASE_SYNC_REPOSITORY: ${RELEASE_SYNC_REPOSITORY:-torbscript/language}
+      RELEASE_SYNC_TOKEN: ${RELEASE_SYNC_TOKEN:-}
       RELEASE_SYNC_WEBHOOK_SECRET: ${RELEASE_SYNC_WEBHOOK_SECRET}
+      # SHA256SUMS.sig of every release is checked against this key; without it nothing is placed
+      RELEASE_SYNC_COSIGN_KEY: /etc/release-sync/cosign.pub
       RELEASE_SYNC_ROOT: /srv/torb
       RELEASE_SYNC_LISTEN: 0.0.0.0:8088
       RELEASE_SYNC_POLL_SECONDS: "300"
     volumes:
       - ${TORB_DATA:-/srv/torb}/download:/srv/torb/download
+      - ./cosign.pub:/etc/release-sync/cosign.pub:ro
     networks:
       - traefik
     labels:
@@ -69,13 +79,15 @@ services:
       traefik.http.routers.torb-release-sync.service: torb-release-sync
 
   registry:
-    image: ghcr.io/torbscript/registry:${TORB_VERSION:-latest}
+    image: cr.torb.dev/torbscript/registry:${TORB_VERSION:-latest}
     restart: unless-stopped
     environment:
       REGISTRY_LISTEN: 0.0.0.0:8089
       REGISTRY_STORAGE: file:///srv/torb/registry
       REGISTRY_DATABASE: /srv/torb/database/registry.db
       REGISTRY_AUDIENCE: packages.torb.dev
+      # Whose CI may publish without a token: GitHub Actions always, and the Actions of these Forgejo instances
+      REGISTRY_FORGEJO_ISSUERS: ${REGISTRY_FORGEJO_ISSUERS:-https://git.torb.dev/api/actions}
       # Set it to create the first accounts, then remove it again (docs/contributing/releasing.md)
       REGISTRY_ADMINISTRATOR_TOKEN: ${REGISTRY_ADMINISTRATOR_TOKEN:-}
       # A clone of the public index repository; empty switches the mirror off
