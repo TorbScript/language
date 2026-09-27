@@ -144,7 +144,9 @@ jobs:
           PLATFORMS: ${{ steps.plan.outputs.platforms }}
         run: |
           docker buildx version
-          docker buildx create --name torb --driver docker-container --use
+          # The runner's Docker outlives a job, and so does a builder made in it: the next image job reuses it and its cache
+          docker buildx inspect torb >/dev/null 2>&1 || docker buildx create --name torb --driver docker-container
+          docker buildx use torb
           set -- --file "tools/deploy/Dockerfile.$IMAGE" --platform "$PLATFORMS" --build-arg "VERSION=$VERSION" --provenance=false
           while IFS= read -r label; do
             set -- "$@" --label "$label"
