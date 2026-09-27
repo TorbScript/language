@@ -16,6 +16,7 @@
  *     print hasher.finished().hex()
  */
 
+use ByteWriter from "std/binary"
 use Bytes from "std/stream"
 
 /** What a hash function answers: its bytes, most significant first, shown as lowercase hexadecimal. */
@@ -86,28 +87,28 @@ public type Sha256 {
   /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
   fn finished(): Digest {
     var last = self
-    const bits = length * 8
-    var padding: List<UInt8> = [0x80]
-    // The length goes into the last eight bytes of a block, so the padding ends 56 bytes into one
+    var padding = ByteWriter()
+    padding.uint8 0x80
+    // The length in bits goes into the last eight bytes of a block, so the padding ends 56 bytes into one
     while (pending.length() + padding.length()) % 64 != 56 {
-      padding.append 0
+      padding.uint8 0
     }
-    for shift in [56, 48, 40, 32, 24, 16, 8, 0] {
-      padding.append byteOf(bits >> shift)
-    }
-    last.add padding
-    var bytes: List<UInt8> = []
+    padding.uint64(UInt64.tryFrom(length * 8).ok() ?? 0)
+    last.add padding.bytes()
+    // Every word is below 2^32, so every one is a `UInt32`, written big endian
+    var digest = ByteWriter()
     for word in last.state {
-      for shift in [24, 16, 8, 0] {
-        bytes.append byteOf(word >> shift)
-      }
+      digest.uint32(UInt32.tryFrom(word).ok() ?? 0)
     }
-    Digest bytes
+    Digest digest.bytes()
   }
 
   /** One 64-byte block of `bytes`, starting at `offset`, folded into the state. */
   private var fn compress(bytes: Bytes, offset: Int) {
     var schedule: Array<Int, 64> = Array.filled 0
+    // The sixteen words are read straight from the list, whose 64 bytes `add` checked once: a `ByteReader` read per
+    // word checks the bounds again and answers a `Result` sixteen times a block, which made SHA-256 a sixth slower
+    // (docs/design/BINARY.md section 7)
     for index in 0..16 {
       const at = offset + index * 4
       const high = (Int.from(bytes[at]) << 24) | (Int.from(bytes[at + 1]) << 16)
@@ -158,11 +159,6 @@ public type Sha256 {
 /** A 32-bit word rotated right by `count` bits. */
 fn rotated(word: Int, count: Int): Int {
   ((word >> count) | (word << (32 - count))) & wordMask
-}
-
-/** The lowest eight bits of `value`. */
-fn byteOf(value: Int): UInt8 {
-  UInt8.tryFrom(value & 255).ok() ?? 0
 }
 
 const wordMask = 0xFFFFFFFF
