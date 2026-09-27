@@ -1154,7 +1154,7 @@ the one thing value semantics otherwise hides.
 - **Peak memory.** The suite counts allocations and bytes asked for, which is exact and portable; peak resident set is
   not obtainable from a POSIX shell on Windows and is left out rather than guessed.
 - **The build time of the compiler itself.** [BACKEND 6.3](BACKEND.md) measures where the C comes from; section 8
-  measures what compiling it costs.
+  measures what compiling it costs, and section 9 what the front end costs before the C exists.
 - **Threads and tasks.** Milestone 7.3 and 7.7.
 
 ---
@@ -1191,3 +1191,103 @@ What did not change: `program.c` is the same bytes as before, a program with les
 the conformance suite and every example - is still one unit, and the front end (checking, lowering, emitting) is the
 same 180 to 250 seconds of the compiler's own build it was. That part is now most of a bootstrap, and it is the next
 lever: a faster C compile cannot make a bootstrap more than twice as fast.
+
+---
+
+## 9. The front end of a build
+
+Section 8 left the front end - reading, checking, lowering and emitting the C - as most of a bootstrap, and it is all
+of a small build: a conformance program took twelve seconds before its C compile started. This section measures where
+that time went and records what took it away. `torb build --timings` prints the wall time of every step, the passes of
+the checker first, and a sampling profiler over the release binary said which functions the time went to: every few
+milliseconds it suspended the process, walked its stack with the unwind tables of the binary and counted every function
+on it.
+
+Measured on the machine of section 8 while it was fully loaded - five processes of another checkout spinning since the
+day before, two gate runs, a landing and other agents' builds beside it - with the two binaries run alternately, one
+right after the other. A number is good to about twenty percent; a ratio between two neighbouring runs is better.
+
+### 9.1 What the time was spent on
+
+| Where | Share | Fixed by |
+|-------|-------|----------|
+| Whether a value may hold a `Close` object (`mayHoldClose`) | two thirds of the compiler's own build | a `false` is kept for every type its walk entered |
+| A write through `checker.tables[module]` | a third of the checker, 37% of a small build | the three tables of a module are an `ArrayList` |
+| `torb build` checking every body of its program first | 7 of the 12 s of a small build | the bodies of other packages are checked when the lowering reaches them |
+| The lexer reading a text at every character | half of lexing, a quarter of a small build | the first character is compared first |
+| `closeHelperDemand` of the C emitter | 5% of the compiler's own build | two counts per round |
+
+**Whether a value may hold a `Close` object** is asked for every temporary the lowering ends (`endTemporaries`) and
+every binding it declares (`declareScoped`, `ir/lower/scope.trb`). The walk over a type's fields remembered every
+`true`, and a `false` only where it had not come back to a type it was still answering - and in a recursive family of
+types, the syntax tree of the compiler, it always had. So every temporary of a type of that family walked the whole
+family again, with a linear `contains` on the path: 66% of the samples of `torb build ./compiler`, and its lowering
+took about 240 seconds. A `false` at the top of a walk is final for every type the walk entered - each of them reached
+only types that answered `false`, or the top would have answered `true` - so all of them keep it now, and the lowering
+takes 30.
+
+**A write through a trait-typed list in a field copied what the element held.** `checker.tables` was a `List<Tables>`,
+and `tables[module.value].expressionTypes.set(at, id)` through the trait is the round trip of finding 3 - `Indexed.at`,
+the change, `MutableIndexed.set` - which the element step cannot take away from a field, because the devirtualization
+poisons what is stored in one. The element had a second owner while it changed, so `torb_make_unique` copied the record,
+and the map inside it, now held twice, was copied and rehashed by `torb_map_prepare`: the whole expression table of the
+module, once for every expression the checker typed. `tables`, `typePositions` and `diagnostics` of the checker are an
+`ArrayList` now, which the element step writes in place. The same shape is anywhere a field is a `List` of records or
+of collections and one element is written through it; the checker's was the one that cost.
+
+**`torb build` checked every body of its program before it lowered anything.** `check` with `checksEveryBody` checked
+every module of every package the program touches, and the program of a conformance program is its whole package: each
+of the 237 programs checked all 250 files of `tests/conformance/` and every module of `std` any of them imports.
+`torb run` has checked on demand since [docs/design/VM.md](design/VM.md) section 8 - the bodies of what was named, and
+every other module the first time the lowering enters it (`enterModule`) - and `torb build` does the same now, with the
+fallback `torb run` has: a program the lowering refuses is checked whole and lowered again, so what it is told does not
+change. The bodies of a small build went from 7 seconds to 5 milliseconds.
+
+**The lexer started an iterator per character.** `textStartsAt` compares a text through `text.chars()`, a boxed
+iterator, and the lexer asked it for each of the 38 entries of the punctuation table at every punctuation character, for
+every character of every block comment - every doc comment of `std/` and of the compiler - and for every character of
+every string literal. Each entry of the table carries its first character now, and the comment and the string compare
+the star and the quote first; the parse of a small build went from 3.8 to 1.9 seconds, and the compiler's own from 11 to
+6.
+
+**`closeHelperDemand`** copied both flag lists and compared them whole for every field of every layout, which is
+quadratic in the layouts. A mark only turns a flag on, so a round changed something exactly when more flags are on after
+it: two counts per round, the same fixpoint in the same rounds.
+
+**What did not change is the C.** The compiler's own C for `windows-x64` and for `linux-x64` (70 MB each, and different
+from each other because an arm of `std` for Windows reaches one more instance), a conformance program's and
+`tools/release-sync`'s are the same bytes from the binary before these changes and from the one after, and a build
+reports what `torb check` of the same paths reports.
+
+### 9.2 Before and after
+
+| What | before (478f467b) | after |
+|------|-------------------|-------|
+| A small program, `torb build --emit-c tests/conformance/adts.trb` | 11.1 to 13.5 s: parsing 3.3 to 3.8, bodies 6.7 to 7.5 | 2.9 to 3.2 s: parsing 1.9, bodies 0.005 |
+| `torb check tests/conformance/adts.trb` | 4.1 to 4.6 s | 2.7 to 3.1 s |
+| A tool, `torb build --emit-c tools/release-sync` | 9.9 to 11.8 s | 6.1 to 8.2 s |
+| `torb check tools/release-sync` | 3.6 to 3.9 s | 2.3 to 2.7 s |
+| The compiler's own front end, `torb build --emit-c ./compiler` | 340 s: checking 48, lowering 248, ownership 7, verifying 12, emitting the C 24, writing it 2 | 88 s: checking 20, lowering 30, ownership 7, verifying 11, emitting the C 17, writing it 2 |
+| `torb check compiler` | 43 s: parsing 11, bodies 28 | 21 s: parsing 6, bodies 13 |
+| `sh tools/conformance.sh`, 4 jobs, both runs at the same time | 4102 s | 3427 s |
+
+The suite gained least, because the front end is now the smaller part of a program's turn: its C compile, its run and
+the leak check are the rest, and the two runs shared a machine that was loaded twice over - the run after finished
+eleven minutes earlier, and the run before had the machine more to itself for those minutes. A bootstrap builds the
+compiler twice, so it saves the difference of the last row but two twice once the seed is one of these binaries; until
+then its first step is the seed's, as slow as before.
+
+### 9.3 What is next
+
+**The parse.** A small build is four fifths parsing now: the whole workspace of the program, 2.7 MB for a
+conformance program (the 250 files of its package and all of `std`), at about a megabyte per second - one `Char` and
+one offset per character of `SourceText`, every token appended to a list that is copied once more without its
+insignificant line breaks, the text of every interpolation lexed a second time. A lexer over the bytes of the text, or
+the parsed `std` kept across runs, is the next lever of every small build and of the conformance suite.
+
+**The compiler's own build** is five steps of one size now - the lowering with the bodies of `std` it checks on the way,
+emitting the C, the checker's bodies, verifying, ownership - and the profile already names a first finding in three of
+them: the verifier's definedness is a `List<Bool>` per block, compared whole per round (a quarter of verifying); a
+dispatched call builds the members of its witness table again (`tableMembersOf`, a fifth of the lowering); and
+`settleEscapes` walks every escape check of the program again after each module the lowering checks on demand, which is
+quadratic in the modules it enters. The C compile of section 8 is the larger half of a bootstrap again.

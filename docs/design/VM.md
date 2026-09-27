@@ -411,8 +411,9 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
     the program is checked and it is lowered again, so the refusal is the one a native build gives.
   - **The loader of scripts parses the program's files at the first script it loads**, and not before the run.
 
-  What is left is parsing the packages the prelude reaches (about 0.15 s) and starting the process. `torb build` and
-  `torb check` keep reading, parsing and checking the whole program as before.
+  What is left is parsing the packages the prelude reaches (about 0.15 s) and starting the process. `torb check` keeps
+  reading, parsing and checking the whole program as before. `torb build` checks on demand as well since the round of
+  [docs/PERFORMANCE.md](../PERFORMANCE.md) section 9, with the same fallback, and still parses its whole workspace.
 
 ## 9. Slices
 

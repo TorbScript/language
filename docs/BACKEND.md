@@ -1537,7 +1537,9 @@ portable C can express, the code won and this is the list. Everything else is as
 - **`torb build` and `torb ir` ask the checker for every body, not only for the requested modules.** A lowering may reach
   the body of any module - a default member of a trait of `std/prelude`, a generic function of another package - and a
   body whose tables were never filled cannot be lowered at all. `check` gained `checksEveryBody`; what is *reported*
-  stays what was asked for, because the file list is filtered by the request and not by this.
+  stays what was asked for, because the file list is filtered by the request and not by this. (Superseded for
+  `torb build` by [docs/PERFORMANCE.md](PERFORMANCE.md) section 9: it checks the bodies of what was named, and the
+  lowering checks a module the first time it enters it, as `torb run` does. `torb ir` still asks for every body.)
 - **`matchTypePattern` and `memberOfImplementation` are now public in the checker.** The substitution of an instance is
   the owner of a member matched against the type it was reached on, and which member an implementation provides under a
   name is what `checkRequirements` already decides - asking the checker twice would have been a second place to be wrong.

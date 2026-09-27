@@ -121,13 +121,15 @@ where the time of a build goes before anybody guesses:
 
 ```console
 $ torb build --timings --emit-c tests/conformance/adts.trb --output build/adts
-  lexing, parsing and the module graph: 2310 ms
-  bodies: 180 ms
-checking: 2790 ms
-lowering: 420 ms
+  finding the workspace: 63 ms
+  lexing, parsing and the module graph: 1738 ms
+  name resolution: 130 ms
+  bodies: 3 ms
+checking: 2082 ms
+lowering: 48 ms
 ownership: 3 ms
-verifying: 3 ms
-emitting the C: 160 ms
+verifying: 2 ms
+emitting the C: 88 ms
 writing the C: 2 ms
 wrote build/program.c
 ```
