@@ -120,34 +120,52 @@ fn nameAt(bytes: Bytes, start: Int, part: String): Result<(DomainName, Int), Dns
   Ok((name, end))
 }
 
-/** The fixed part of a record: its owner, type, class and time to live, and a reader over its data. */
+/** The fixed part of a record: its owner, type, class and time to live, and how many bytes of data follow. */
 type Entry {
   name: DomainName
   typeCode: Int
   classCode: Int
   timeToLive: Int
-  data: ByteReader
+  length: Int
 }
 
-/** The next record's fixed part, and the reader moved past its data. */
+/** The next record's fixed part, and the reader moved to its data. */
 fn entryOf(var reader: ByteReader, message: Bytes): Result<Entry, DnsError> {
   const name = nameOf(reader, message, "the owner of a record", sections)?
   const typeCode = Int.from(reader.uint16().inside("the type of a record", sections)?)
   const classCode = Int.from(reader.uint16().inside("the class of a record", sections)?)
   const timeToLive = Int.from(reader.uint32().inside("the time to live of a record", sections)?)
   const length = Int.from(reader.uint16().inside("the data length of a record", sections)?)
-  const data = reader.limited(length).inside("the data of a {RecordType.of(typeCode)} record", sections)?
-  Ok Entry(name, typeCode, classCode, timeToLive, data)
+  Ok Entry(name, typeCode, classCode, timeToLive, length)
 }
 
-/** The record of an entry of the answer or the authority section, where an OPT record is refused. */
-fn recordOf(message: Bytes, entry: Entry): Result<Record, DnsError> {
-  const recordType = RecordType.of entry.typeCode
-  if recordType == RecordType.Opt {
-    return Fail DnsError.InvalidMessage(entry.data.offset(), "an OPT record belongs to the additional section (RFC 6891)")
+/** A reader over the data of `entry`, and `reader` moved past it. */
+fn dataReaderOf(var reader: ByteReader, entry: Entry): Result<ByteReader, DnsError> {
+  // The part is named only where the data is cut short, so that no record pays for the text of its failure
+  match reader.limited(entry.length) {
+    Ok(data) => Ok data
+    Fail(problem) => Fail DnsError.Truncated(problem.offset(), "the data of a {RecordType.of(entry.typeCode)} record")
   }
-  const data = dataOf(message, recordType, entry.data)?
-  Ok Record(entry.name, RecordClass.of(entry.classCode), entry.timeToLive, data)
+}
+
+/**
+ * The record of an entry of the answer or the authority section, where an OPT record is refused, and `reader` moved
+ * past its data.
+ */
+fn recordOf(var reader: ByteReader, message: Bytes, entry: Entry): Result<Record, DnsError> {
+  // The data has a reader of its own that nothing else holds, so reading it changes it in place instead of copying it
+  var data = dataReaderOf(reader, entry)?
+  const recordType = RecordType.of entry.typeCode
+  const start = data.offset()
+  if recordType == RecordType.Opt {
+    return Fail DnsError.InvalidMessage(start, "an OPT record belongs to the additional section (RFC 6891)")
+  }
+  const decoded = dataOf(message, recordType, data)?
+  if data.remaining() > 0 {
+    const reason = "the data is {entry.length} bytes long and ends after {data.position()}"
+    return Fail DnsError.InvalidRecord(recordType, start, reason)
+  }
+  Ok Record(entry.name, RecordClass.of(entry.classCode), entry.timeToLive, decoded)
 }
 
 /** Reads a whole message. */
@@ -169,12 +187,12 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
   var answers: List<Record> = []
   for _ in 0..answerCount {
     const entry = entryOf(reader, bytes)?
-    answers.append(recordOf(bytes, entry)?)
+    answers.append(recordOf(reader, bytes, entry)?)
   }
   var authority: List<Record> = []
   for _ in 0..authorityCount {
     const entry = entryOf(reader, bytes)?
-    authority.append(recordOf(bytes, entry)?)
+    authority.append(recordOf(reader, bytes, entry)?)
   }
   var additional: List<Record> = []
   var edns: Edns? = None
@@ -182,10 +200,11 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
   for _ in 0..additionalCount {
     const entry = entryOf(reader, bytes)?
     if entry.typeCode != 41 {
-      additional.append(recordOf(bytes, entry)?)
+      additional.append(recordOf(reader, bytes, entry)?)
       continue
     }
-    const start = entry.data.offset()
+    const data = dataReaderOf(reader, entry)?
+    const start = data.offset()
     if edns.isSome() {
       return Fail DnsError.InvalidMessage(start, "a second OPT record (RFC 6891 section 6.1.1)")
     }
@@ -197,7 +216,7 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
       payloadSize: entry.classCode,
       version: entry.timeToLive >> 16 & 255,
       dnssecOk: entry.timeToLive >> 15 & 1 == 1,
-      options: optionsOf(entry)?,
+      options: optionsOf(data)?,
     ))
   }
   if reader.remaining() > 0 {
@@ -224,8 +243,8 @@ public fn decodedMessage(bytes: Bytes): Result<Message, DnsError> {
 }
 
 /** The options of an OPT record: a code, a length and that many bytes, until the data ends. */
-fn optionsOf(entry: Entry): Result<List<EdnsOption>, DnsError> {
-  var reader = entry.data
+fn optionsOf(data: ByteReader): Result<List<EdnsOption>, DnsError> {
+  var reader = data
   const scope = Scope Some(RecordType.Opt), reader.offset()
   var options: List<EdnsOption> = []
   while reader.remaining() > 0 {
@@ -237,8 +256,7 @@ fn optionsOf(entry: Entry): Result<List<EdnsOption>, DnsError> {
 }
 
 /** The data of a record of `recordType`, which `reader` holds and nothing else. */
-fn dataOf(message: Bytes, recordType: RecordType, data: ByteReader): Result<RecordData, DnsError> {
-  var reader = data
+fn dataOf(message: Bytes, recordType: RecordType, var reader: ByteReader): Result<RecordData, DnsError> {
   const start = reader.offset()
   const length = reader.remaining()
   const scope = Scope Some(recordType), start
@@ -315,10 +333,6 @@ fn dataOf(message: Bytes, recordType: RecordType, data: ByteReader): Result<Reco
       RecordData.Https priority, target, parameters
     }
     _ => RecordData.Unknown(recordType, reader.bytes(length).inside("the data", scope)?)
-  }
-  if reader.remaining() > 0 {
-    const reason = "the data is {length} bytes long and ends after {reader.position()}"
-    return Fail DnsError.InvalidRecord(recordType, start, reason)
   }
   Ok decoded
 }
