@@ -63,10 +63,20 @@ false positive of the checker is a bug of the checker.
 ```text
 sh tools/gates.sh a    # every round
 sh tools/gates.sh b    # a round that touches the IR, a back end or runtime/ - once, not again on main
+sh tools/gates.sh ab   # both, side by side on one gate slot (what a landing runs)
 ```
 
-One line per gate, with its time; the first red gate stops the run there and shows its output, so nothing after it
-runs.
+One line per gate, with its time. **The gates run side by side**: once the binary exists none of them depends on
+another, so tier A runs in four lanes (the compiler's suite - one test binary, on one processor for most of its time;
+the checks, the packages and the lock files; the REPL sessions and `format --check`; the docs) and tier B in two (the
+conformance suite natively and then in the VM, each at full width; the runtime's tests, then the embedded programs). A
+lane runs its gates one after another; a gate prints its line when it ends, a red one says so at once, and the output
+of every red gate follows when all lanes have ended - a run reports every red gate, not only the first. The bootstrap,
+and tier B's fixpoint when it is not skipped, run before the lanes, because they replace the binary the lanes run.
+`$TORB_GATE_JOBS` is how many processes a run keeps busy (default: one per processor and per 768 MiB of memory); the
+conformance suites get all of it, the REPL sessions a quarter, and `ab` keeps four for tier A's lanes first.
+`TORB_GATES_PARALLEL=0` runs the gates one after another in the old order, where the first red gate stops the run, and
+a machine with fewer than four processors or less than 8 GiB of memory does that by itself.
 
 **Tier A is `sh tools/gates.sh a`**: it bootstraps `build/release/torb` with `sh tools/bootstrap.sh` if that is missing
 or older than a file it is built from (`compiler/src`, `std/`, the runtime's `.c`/`.h`, the manifests - never anything

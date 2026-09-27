@@ -12,6 +12,8 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   `build/release/torb(.exe)`. A worktree has no `seed/`: `TORB_SEED=<main checkout>/seed/torb.exe sh tools/bootstrap.sh`.
 - `sh tools/gates.sh a` - every round; it bootstraps only when `compiler/src`, `std/` or `runtime/` changed.
   `sh tools/gates.sh b` - additionally when the round touches `compiler/src/ir`, `compiler/src/backend`, or `runtime/`.
+  `sh tools/gates.sh ab` - both tiers side by side on one slot. Gates run in lanes and every red one is reported;
+  `TORB_GATE_JOBS` caps the processes (default: per processor and 768 MiB), `TORB_GATES_PARALLEL=0` is the old order.
 - `torb test --native compiler/tests` runs the compiler's suite (the VM is too slow for it). `torb test --native` and
   `torb run --native` build the `dev` profile (`-O1`), `torb build` builds `release` (`-O2`); `--profile` or
   `--release` says otherwise.
