@@ -26,8 +26,8 @@ fn firstLine(path: String): Result<String, IoError> {
   const text = File.readText(path)?
   const lines = text.lines()
   match lines.first() {
-    Some(line) => Ok line
-    None => Ok ""
+    Some(line) => line
+    None => ""
   }
 }
 
@@ -45,7 +45,9 @@ print firstLine("project.trb")
 
 1. **`?` unwraps the success case and returns the failure case from the surrounding function.** On a `Result`,
    `Ok(value)?` is `value` and `Fail(error)?` returns `Fail(error)`. On an `Option`, `Some(value)?` is `value` and
-   `None?` returns `None`.
+   `None?` returns `None`. The way back is not written either: the value a body ends in becomes the `Ok` or the `Some`
+   of its result on its own ([Conversions](../types/conversions.md), rule 8), so `?` and the wrap are the two halves
+   of the same body - `firstLine` above answers `line`, not `Ok line`.
 
 2. **The value `?` is applied to has to be an `Option` or a `Result`.** Nothing else has a success and a failure case
    for `?` to tell apart.
@@ -53,7 +55,7 @@ print firstLine("project.trb")
    ```trb error
    fn parse(text: String): Result<Int, String> {
      const n = text.byteLength()?
-     Ok n
+     n
    }
    print parse("3")
    // error: `?` needs an `Option` or a `Result`, and `Int64` is not one
@@ -143,7 +145,7 @@ print firstLine("project.trb")
    ```trb error
    fn findFirst(numbers: List<Int>): Result<Int, String> {
      const found = numbers.find({ _ > 0 })?
-     Ok found
+     found
    }
    print findFirst([1, 2])
    // error: `?` on an `Option` in a function that returns `Result<Int64, String>`
@@ -162,19 +164,19 @@ print firstLine("project.trb")
    ```trb check
    fn parse(text: String): Result<Int, String> {
      match Int.tryFrom(text) {
-       Ok(number) => Ok number
+       Ok(number) => number
        Fail(_) => Fail "not a number: {text}"
      }
    }
 
-   const doubled: (String) => Result<Int, String> = { text => Ok(parse(text)? * 2) }
+   const doubled: (String) => Result<Int, String> = { text => parse(text)? * 2 }
    print doubled("21")
    ```
 
    ```trb error
    fn parse(text: String): Result<Int, String> {
      match Int.tryFrom(text) {
-       Ok(number) => Ok number
+       Ok(number) => number
        Fail(_) => Fail "not a number: {text}"
      }
    }

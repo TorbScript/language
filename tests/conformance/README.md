@@ -244,6 +244,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | Program | What it pins |
 |---------|--------------|
 | `errors.trb` | `Option` and `Result` through `?`, `??` and the patterns over them |
+| `wrap-coercion.trb` | A value where an `Option` or a `Result` of its type is expected becomes `Some(value)` or `Ok(value)` - a body and `return`, an annotated binding of every literal kind, an argument, a field and its default, a position of a tuple, a collection element, a closure's declared result, a generic body, a trait coercion first; an `Int?` into the `Ok` of a `Result<Int?, _>`, a `Result<Void, _>` ending in a call, and the inner `Some` of an `Int??` written |
 | `top-level-error.trb` | A top-level `?` that fails: `error: <the error through Show>` and exit code **1** - not a panic |
 | `error-chain.trb` | A top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`, until `cause()` answers `None` |
 

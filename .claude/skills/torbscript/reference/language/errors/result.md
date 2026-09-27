@@ -29,8 +29,8 @@ fn firstLine(path: String): Result<String, IoError> {
   const text = File.readText(path)?
   const lines = text.lines()
   match lines.first() {
-    Some(line) => Ok line
-    None => Ok ""
+    Some(line) => line
+    None => ""
   }
 }
 
@@ -41,7 +41,8 @@ print firstLine("project.trb")
 
 ```text
 Result<Value, Failure>          the type
-Ok(value)      Ok value         the success case
+value                           the success, where a Result is expected: it becomes Ok(value)
+Ok(value)      Ok value         the success case, written out
 Fail(error)    Fail problem     the failure case
 <expression>?                   unwrap an Ok, or return the Fail from the surrounding function
 <expression> ?? <fallback>      the value, or the fallback (the fallback is lazy)
@@ -73,14 +74,33 @@ Fail(error)    Fail problem     the failure case
      if text.isEmpty() {
        return Fail AppError.Startup("nothing to do")
      }
-     Ok text.byteLength()
+     text.byteLength()
    }
 
    print start("hello")
    ```
 
-4. **A call in command position writes its argument without parentheses**, which is why `Ok value` and
-   `return Fail problem` are the canonical forms, and `Ok Some(x)` has parentheses on the inner call only.
+4. **The success is the value itself.** A value of exactly `Value` where a `Result<Value, Failure>` is expected - the
+   end of a body, a `return`, an argument, a binding with an annotation - becomes `Ok(value)` on its own, the fifth
+   coercion of [Conversions](../types/conversions.md). `Ok` is written only where that does not happen: where the
+   `Value` is not decided yet, and in the payload of a nested `Ok`. A value that is an `Option` or a `Result` itself
+   wraps into the `Ok` only where it is exactly the `Value` (`Result<Int?, Failure>` from an `Int?`). The failure is
+   always written: `return Fail problem`.
+
+   ```trb
+   fn percent(value: Int): Result<Int, String> {
+     if value < 0 || value > 100 {
+       return Fail "{value} is not a percentage"
+     }
+     value
+   }
+
+   print percent(42)
+   print percent(142)
+   ```
+
+   A call in command position writes its argument without parentheses, which is why `return Fail problem` is the
+   canonical form, and `Ok Some(x)` has parentheses on the inner call only.
 
 5. **`??` is `OrElse.orElse`, and `Option` and `Result` both come with that trait.** The right side is `lazy`, so it is
    evaluated only when it is needed, and it is checked against the `Value` rather than against the whole `Result`.
@@ -129,7 +149,7 @@ fn checked(value: Int): Result<Int, String> {
   if value < 0 {
     return Fail "negative"
   }
-  Ok value
+  value
 }
 
 print checked(1)
@@ -140,7 +160,7 @@ fn checked(value: Int): Result<Int, String> {
   if value < 0 {
     return Err("negative")
   }
-  Ok value
+  value
 }
 // error: Cannot find `Err` here
 ```

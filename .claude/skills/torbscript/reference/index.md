@@ -235,7 +235,7 @@ that answers the question. A page marked (planned) describes a feature that does
 ## language/types
 
 - `language/types/construction.md` - **Construction** (reference): Every type has exactly one constructor, generated from its fields in declaration order, and it never contains logic - validation and parsing are static factory functions instead.
-- `language/types/conversions.md` - **Conversions** (reference): From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly four coercions that apply only where a type is expected.
+- `language/types/conversions.md` - **Conversions** (reference): From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly five coercions that apply only where a type is expected.
 - `language/types/copy-and-equality.md` - **Copy and equality** (reference): Assigning, passing or capturing a value copies it, and Equals, Hash and copy are generated for a type without being written, each only if every field supports it.
 - `language/types/data-or-capsule.md` - **Data or capsule** (reference): A type is data, whose constructor is the way in, or a capsule, whose constructor a private field without a default closes - and then a factory, accessors and one conversion pair take its place.
 - `language/types/declaring-a-type.md` - **Declaring a type** (reference): One keyword declares every data type. Fields are const unless marked var, members are public unless marked private, and Equals, Hash, Show and copy are generated.
@@ -261,7 +261,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/values-and-types/index.md` - **Values and types** (index): Bindings, the built-in types, and the type forms that are about values rather than about behaviour.
 - `language/values-and-types/integers.md` - **Integers** (reference): Eight sized integer types with fixed ranges on every platform, an unannotated literal is always Int64, and overflow is a compile error when it is written and a panic when it happens at runtime.
 - `language/values-and-types/literal-types.md` - **Literal types** (reference): `"tcp" | "udp"` is a type made only of specific values of one base type; only literals combine with `|`, because there are no unions of types.
-- `language/values-and-types/option.md` - **Option** (reference): Absence is a value, Some(value) or None, and there is no null and no implicit Some - a value has to be wrapped and unwrapped on purpose.
+- `language/values-and-types/option.md` - **Option** (reference): Absence is a value, Some(value) or None, and there is no null: a value wraps itself into Some where an Option is expected, and an Option is only ever unwrapped on purpose.
 - `language/values-and-types/ranges.md` - **Ranges** (reference): The ends a range has are its type - Range, RangeFrom or RangeTo - so nothing is optional and nothing panics; what accepts every form takes the Bounds trait.
 - `language/values-and-types/strings.md` - **Strings** (reference): A String has no length() and no text[i], because "length" and "the i-th character" each have three different answers and two of them are slow.
 - `language/values-and-types/tuples.md` - **Tuples** (reference): A tuple is positional and accessed by .0, .1; a label makes a position easier to read but is not part of the type, so a labelled and an unlabelled tuple of the same shape are the same type.

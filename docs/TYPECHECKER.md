@@ -396,7 +396,7 @@ A closure is read from the expected function type:
 
 ### 2.5 Coercion, and what is not subtyping
 
-The checker has exactly four directed conversions, applied only in a check position (never to solve a variable):
+The checker has exactly five directed conversions, applied only in a check position (never to solve a variable):
 
 | From                              | To                          | Records                        |
 |-----------------------------------|-----------------------------|--------------------------------|
@@ -404,6 +404,14 @@ The checker has exactly four directed conversions, applied only in a check posit
 | `Traits(a)`                       | `Traits(b)` with `b ⊆ a` through supertraits | `ToTraitValue` |
 | `Never`                           | anything                    | nothing                        |
 | A literal                         | a literal type that contains it | `Adaptation.Literal`       |
+| Exactly `Value` (after a trait coercion) | `Option<Value>`, `Result<Value, Failure>` | `Adaptation.Wrap` |
+
+The wrap (`wrapsInto` in `checker/expression.trb`) is tried after the trait coercion and before a mismatch is reported.
+It needs both sides free of open variables; a value that is an `Option` or a `Result` itself wraps only into a `Result`
+whose `Value` it is exactly; the argument of a written `Some(...)` or `Ok(...)` never wraps (`Checker.exactValueAt`).
+A literal, a closure and a short case (`.Circle(1.0)`) are checked against the `Value` where one of the two is
+expected (`literalExpectationOf`, the fallback in `implicitMemberTarget`), because the value they become is what wraps.
+The lowering builds the case after every other adaptation of the span (`lowerWrappedValue` in `ir/lower/expression.trb`).
 
 Everything else is exact type equality. In particular there is **no variance**: `List<Square>` is not a `List<Shape>`,
 `(Int) => Int` is not a `(Int) => Never`, and a literal type is not assignable to another literal type or to its base

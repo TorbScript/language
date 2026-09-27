@@ -285,7 +285,7 @@ means something else.
 |------|-------|---------|--------|
 | `explanation/why-values-instead-of-references.md` | Why values instead of references | done | done |
 | `explanation/mistakes-models-make.md` | What a model trained on other languages gets wrong | done | done |
-| `explanation/why-no-null.md` | Why there is no null | `Option`, and the absence of an implicit `Some` | Decision Log |
+| `explanation/why-no-null.md` | Why there is no null | `Option`, the wrap into `Some`, and the absence of an implicit unwrap | Decision Log |
 | `explanation/why-no-exceptions.md` | Why there are no exceptions | `Result`, `?`, and what a panic is for | Decision Log |
 | `explanation/why-cases-are-never-bare.md` | Why a case is never bare | The import rule, and the trap it closes | Decision Log |
 | `explanation/why-commands.md` | Why a call is written as a command | The canon, and what it buys | `CONCEPT.md#formatter-canon` |

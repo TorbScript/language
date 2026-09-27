@@ -357,6 +357,13 @@ public type Adaptation {
   case ImplicitParameter(index: Int)
   /** A value that became a trait-typed value: `const shapes: List<Shape> = [Square(2.0)]`. */
   case ToTraitValue(bounds: List<TypeId>, witnesses: List<Witness>)
+  /**
+   * A value where an `Option` or a `Result` of its type is expected: `const port: Int? = 80` is `Some(80)`, and the
+   * result of `fn parse(...): Result<Int, Problem>` that answers `count` answers `Ok(count)`. `annotation` is the
+   * `Option<Value>` or the `Result<Value, Failure>` the value becomes, and it applies after every other adaptation at
+   * the span - a `Square` where a `Shape?` is expected is boxed first and wrapped then.
+   */
+  case Wrap(annotation: TypeId)
   /** `?` and `into()`: the error or the value is converted through `From.from`. */
   case Convert(witness: Witness, method: SymbolId)
   /** One interpolated part of a text literal, rendered through `Show.show`. */
@@ -1023,6 +1030,11 @@ public type Checker {
   /** The parameter the name that is being checked fills, while one argument that is a bare name is checked. */
   var nameSite: ArgumentSite? = None
   var nameSiteAt: Span = Span 0, 0
+  /**
+   * The argument of a written `Some(...)` or `Ok(...)` while it is checked: its value is exactly the payload and does not
+   * wrap itself (`wrapsInto`), which keeps the inner `Some` of an `Option<Option<Int>>` written.
+   */
+  var exactValueAt: Span? = None
   /**
    * Which parameter of which declared function a binding is, by `BindingId.value`, as `(symbol, position)`. Only the
    * function-typed ones: those are what a closure argument may arrive as, and what the body may keep.

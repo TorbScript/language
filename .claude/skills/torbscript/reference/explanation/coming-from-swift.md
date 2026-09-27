@@ -31,8 +31,8 @@ enum cases never need an import, and its protocols can grow an associated type t
 | `mutating func increment()` | `var fn increment()` | the same idea, one word earlier: `var fn` is Swift's `mutating func` |
 | `enum Shape { case circle(Double) }` | `type Shape { case Circle(radius: Float) }` | one keyword for structs and enums; a case is `UpperCamelCase` |
 | `case .circle(let radius):` | `.Circle(radius) =>` | the leading dot is the same habit; `match` replaces `switch` |
-| `Optional<Value>` / `Value?` | `Option<Value>` / `Value?` | the sugar looks the same; wrapping a value into it is never implicit |
-| `let x: Int? = 5` | `const x: Int? = Some(5)` | there is no implicit `Some` |
+| `Optional<Value>` / `Value?` | `Option<Value>` / `Value?` | the sugar looks the same; unwrapping it is never implicit |
+| `let x: Int? = 5` | `const x: Int? = 5` | a value wraps itself into `Some` where an `Option` is expected, as in Swift |
 | `guard let x = opt else { return }` | `const x = opt?` | `?` is the early return itself, not a statement that needs one |
 | `.success(value)` / `.failure(error)` | `Ok(value)` / `Fail(error)` | `Error` is the name of the trait, so the case is `Fail` |
 | `protocol Shape { func area() -> Double }` | `trait Shape { fn area(): Float }` | one word, `trait`, replaces `protocol` |

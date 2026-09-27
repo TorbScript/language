@@ -23,7 +23,7 @@ right line first and the wrong one after it.
 
 Read this list before writing TorbScript, and check your work against it afterwards. Twenty mistakes cover nearly
 everything: the call form, a bare case, `Err` instead of `Fail`, semicolons, `let`, taking a copy out of a collection,
-string length, `^` for a power, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
+string length, `^` for a power, casts, an implicit unwrap, a trait name ending in `-able`, a `match` with a `default`, a
 `MAX_SIZE` constant, a name that is not ASCII, an arm binding nothing reads, a `use` without names, `while true`, an
 extension member the file never names, an overload, and `Type.parse(text)`.
 
@@ -233,22 +233,9 @@ Conversions go through `From` and `Into`: `Float.from(someInt)`, `value.into()` 
 `Int32.tryFrom(value)` where the conversion can fail. A *literal* does adapt to the expected type
 (`const ratio: Float = 1`), which is a different rule.
 
-### 10. There is no implicit `Some` and no implicit unwrap
+### 10. A value wraps itself, and an `Option` never unwraps itself
 
 ```trb
-fn find(values: List<Int>, wanted: Int): Int? {
-  for value in values {
-    if value == wanted {
-      return Some value
-    }
-  }
-  None
-}
-
-print find([1, 2], 2)
-```
-
-```trb error
 fn find(values: List<Int>, wanted: Int): Int? {
   for value in values {
     if value == wanted {
@@ -257,11 +244,26 @@ fn find(values: List<Int>, wanted: Int): Int? {
   }
   None
 }
-// error: Expected `Option<Int64>`, found `Int64`
+
+fn first(values: List<Int>): Int {
+  values.first() ?? 0
+}
+
+print find([1, 2], 2)
+print first([])
 ```
 
-A value never wraps itself into an `Option`. `None` is the one value in the language that takes its type from what is
-expected of it.
+```trb error
+fn first(values: List<Int>): Int {
+  values.first()
+}
+// error: Expected `Int64`, found `Option<Int64>`
+```
+
+A value where an `Option` or a `Result` of its type is expected becomes `Some(value)` or `Ok(value)` on its own, so
+`return value` is right and `return Some value` is the spelling `torb lint` reports as `redundant-wrap`. The other
+direction never happens: an `Option` is taken apart with `??`, `?`, `match` or `if const`, never by standing where its
+`Value` is expected. `None` and `Fail` are always written.
 
 ### 11. A single-method trait is named after its method
 

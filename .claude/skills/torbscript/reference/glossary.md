@@ -317,8 +317,8 @@ parameter or its result, or that is `static`, cannot be. See [Object safety](lan
 
 ### Option
 
-A value that may be absent, `Some(value)` or `None`; `Value?` is sugar for `Option<Value>`. There is no `null` and no
-implicit `Some`: a value never wraps itself into one. See [Option](language/values-and-types/option.md).
+A value that may be absent, `Some(value)` or `None`; `Value?` is sugar for `Option<Value>`. There is no `null`; a value
+where an `Option` of its type is expected wraps itself into `Some`. See [Option](language/values-and-types/option.md).
 
 ### OrElse
 

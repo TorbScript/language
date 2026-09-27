@@ -25,8 +25,8 @@ type instead of a keyword.
 two cases are `Some(value)` and `None`.
 
 - There is no `null`, no `nil`, no `undefined`, and no type that is secretly two types at once.
-- A value never wraps itself into an `Option`: a function that answers `Int?` and returns an `Int` is a compile
-  error, not an implicit `Some`.
+- A value wraps itself into an `Option` where one is expected: a function that answers `Int?` returns an `Int` and
+  it becomes `Some`. The way back is never implicit.
 - Unwrapping is written, not assumed: `match`, `?.`, `??`, the postfix `?`, or `expect` for the case where absence is
   a bug.
 
@@ -65,8 +65,10 @@ system has to know absence exists.
 - **A nullable annotation on every type** (`Value?` as a modifier of `Value` itself, as in Kotlin and TypeScript).
   Rejected because it needs its own subtyping and its own coercions everywhere a type is written, where `Option<Value>`
   needs none: it is a type parameter like any other.
-- **An implicit `Some`.** A function that returns `Int?` and writes `return value` looks correct and is wrong; making
-  the wrap explicit turns the mistake into a diagnostic instead of a silent widening.
+- **An explicit `Some` everywhere.** Until 2026-09-27 a function that returned `Int?` had to write `return Some(value)`;
+  `return value` was a diagnostic. The type already says that the value is the success, so the written `Some` said it
+  twice, and the language now wraps it (CONCEPT, "Conversions"). What stays refused is the wrap that could hide a
+  mistake: an `Option` never wraps into another one, and nothing unwraps on its own.
 
 ## Consequences
 
@@ -84,18 +86,18 @@ fn nickname(user: (name: String, nick: String?)): String {
 print nickname((name: "Ada", nick: None))
 ```
 
-A value never returns itself where an `Option` is expected:
+A value wraps itself where an `Option` is expected, but an `Option` never stands where its value is expected:
 
 ```trb error
-fn find(values: List<Int>, wanted: Int): Int? {
+fn find(values: List<Int>, wanted: Int): Int {
   for value in values {
     if value == wanted {
       return value
     }
   }
-  None
+  values.first()
 }
-// error: Expected `Option<Int64>`, found `Int64`
+// error: Expected `Int64`, found `Option<Int64>`
 ```
 
 **`expect` is where "this should never be absent" is written down.** It takes the message a panic would show, so a

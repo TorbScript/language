@@ -89,17 +89,24 @@ public fn isNested(expression: Expression): Bool {
 fn evaluateExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
   const annotation = expected.annotationOf()
   match expression.kind {
-    .IntegerLiteral(text) => integerLiteralType checker, text, false, annotation, expression.span
-    .FloatLiteral(_) => floatLiteralType checker, annotation, expression.span
+    // A literal adapts to the `Value` of an expected `Option` or `Result`, which it then wraps into: `const port: Int8? = 80`
+    .IntegerLiteral(text) => {
+      integerLiteralType checker, text, false, literalExpectationOf(checker, annotation), expression.span
+    }
+    .FloatLiteral(_) => floatLiteralType checker, literalExpectationOf(checker, annotation), expression.span
     .BoolLiteral(value) => {
-      adaptedLiteral checker, LiteralValue.Boolean(value), checker.booleanType(), annotation, expression.span
+      const wanted = literalExpectationOf checker, annotation
+      adaptedLiteral checker, LiteralValue.Boolean(value), checker.booleanType(), wanted, expression.span
     }
     // `void` has one value and therefore no literal type to adapt to: it is always `Void`
     .VoidLiteral => checker.voidType
     .CharLiteral(value) => {
-      adaptedLiteral checker, LiteralValue.Character(value), checker.charType(), annotation, expression.span
+      const wanted = literalExpectationOf checker, annotation
+      adaptedLiteral checker, LiteralValue.Character(value), checker.charType(), wanted, expression.span
     }
-    .TextLiteral(segments) => textLiteralType checker, segments, annotation, expression.span
+    .TextLiteral(segments) => {
+      textLiteralType checker, segments, literalExpectationOf(checker, annotation), expression.span
+    }
     .Name(_) | .Member(_, _, _) => {
       const target = resolveTarget checker, expression, annotation
       // `Route.Order` where a `TemplateCase<Route>` is expected: the case, named where it is written
@@ -125,12 +132,18 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
       fallibleConversionType checker, expression, callee, arguments, style, expected
     .Call(callee, arguments, style) => checkCall checker, expression, callee, arguments, style, expected
     .Index(target, index) => indexType checker, target, index, expression.span
-    .TupleLiteral(items) => tupleLiteralType checker, items, annotation
-    .ListLiteral(items) => listLiteralType checker, items, annotation, expression.span
-    .MapLiteral(entries) => mapLiteralType checker, entries, annotation, expression.span
+    .TupleLiteral(items) => tupleLiteralType checker, items, literalExpectationOf(checker, annotation)
+    .ListLiteral(items) => {
+      listLiteralType checker, items, literalExpectationOf(checker, annotation), expression.span
+    }
+    .MapLiteral(entries) => {
+      mapLiteralType checker, entries, literalExpectationOf(checker, annotation), expression.span
+    }
     .RangeLiteral(start, end, _) => rangeLiteralType checker, start, end
     // `-300` is one literal, not a negation of `300`: only then can the range of the type it adapts to be checked
-    .Unary(.Negate, operand) if isNumberLiteral(operand) => negatedLiteral checker, operand, annotation, expression.span
+    .Unary(.Negate, operand) if isNumberLiteral(operand) => {
+      negatedLiteral checker, operand, literalExpectationOf(checker, annotation), expression.span
+    }
     .Unary(operator, operand) => unaryType checker, operator, operand, expression.span, annotation
     .Binary(operator, left, right) => binaryType checker, operator, left, right, expression.span, annotation
     .If(condition, then, otherwise) => ifType checker, condition, then, otherwise, expected
@@ -142,7 +155,7 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
       checker.resolved expression.span, target.resolution
       valueOfTarget checker, target, expression.span
     }
-    .Closure(closure) => checkClosure checker, closure, expression.span, annotation
+    .Closure(closure) => checkClosure checker, closure, expression.span, literalExpectationOf(checker, annotation)
     .Try(inner) => tryType checker, inner, expression.span, expected
     .Invalid => checker.invalidType
   }
@@ -447,6 +460,12 @@ fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?, a
   match lookupStaticMember(checker, annotation, text) {
     Some(candidate) => targetOfCandidate checker, candidate, text
     None => {
+      // `const shape: Shape? = .Circle(1.0)`: the case of the value that wraps into the expected `Option` or `Result`
+      if const Some(payload) = wrappedPayloadOf(checker, annotation) {
+        if const Some(candidate) = lookupStaticMember(checker, payload, text) {
+          return targetOfCandidate checker, candidate, text
+        }
+      }
       const owner = checker.describe annotation
       if isFullyKnown(checker, annotation) {
         checker.reportHere Diagnostic.error("`{owner}` has no case `{text}`", at)
@@ -1354,9 +1373,15 @@ fn tupleLiteralType(var checker: Checker, items: List<Argument>, expected: TypeI
     } else {
       Expectation.None
     }
-    const annotation = checkExpression checker, item.value, inner
+    var annotation = checkExpression checker, item.value, inner
     if index < wanted.length() {
       checkLabel checker, label, wanted[index].label, item.value.span
+      // A value that wrapped into the expected `Option` or `Result` is that type at its position of the tuple
+      for adaptation in checker.adaptationsHere(item.value.span) {
+        if const .Wrap(wrapped) = adaptation {
+          annotation = wrapped
+        }
+      }
     }
     fields.append TupleField(label, annotation)
   }
@@ -3294,6 +3319,9 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   if const .Traits(bounds) = checker.types.form(wanted) {
     return coerceToTraits checker, given, bounds, at
   }
+  if wrapsInto(checker, given, wanted, at) {
+    return true
+  }
   const isTraitForParameter = traitForParameter checker, given, wanted
   if !isTraitForParameter && (isUndecided(checker, given) || isUndecided(checker, wanted)) {
     if !conflictsWhereDecided(checker, given, wanted) {
@@ -3344,6 +3372,71 @@ fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
     }
   }
   None
+}
+
+/**
+ * The fifth coercion (CONCEPT, "Conversions"): a value where an `Option<Value>` or a `Result<Value, Failure>` is
+ * expected becomes `Some(value)` or `Ok(value)`, recorded as `Adaptation.Wrap` for the lowering to build.
+ *
+ * Only a value of exactly `Value` wraps, after the coercion to a trait type (a `Square` where a `Shape?` is expected).
+ * A value that already is an `Option` or a `Result` never wraps into an `Option` - there is no silent `Some(Some(x))` -
+ * and into a `Result` only where it is exactly its `Value` (`Result<Int?, Problem>` from an `Int?`). And like every
+ * coercion it never solves a variable: where either side still has one, the mismatch is reported as it was.
+ */
+fn wrapsInto(var checker: Checker, given: TypeId, wanted: TypeId, at: Span): Bool {
+  const payload = match wrappedPayloadOf(checker, wanted) {
+    Some(found) => resolveType checker, found
+    None => {
+      return false
+    }
+  }
+  if hasVariable(checker, given) || hasVariable(checker, payload) || checker.absorbs(payload) {
+    return false
+  }
+  if checker.exactValueAt == Some(at) {
+    return false
+  }
+  if valueOfOptionOrResult(checker, given).isSome() {
+    if optionValueOf(checker, wanted).isSome() || !sameType(checker.types, given, payload) {
+      return false
+    }
+    checker.adapted at, Adaptation.Wrap(wanted)
+    return true
+  }
+  if !sameType(checker.types, given, payload) {
+    const bounds = match checker.types.form(payload) {
+      .Traits(found) => found
+      _ => {
+        return false
+      }
+    }
+    if !fitsType(checker, given, payload) || !coerceToTraits(checker, given, bounds, at) {
+      return false
+    }
+  }
+  checker.adapted at, Adaptation.Wrap(wanted)
+  true
+}
+
+/**
+ * The `Value` of an `Option<Value>` or a `Result<Value, Failure>` whose `Value` is decided: what a literal, a closure or
+ * a short case adapts to where one of the two is expected (`const port: Int8? = 80`, `const shape: Shape? = .Circle(1.0)`),
+ * because the value they become is the one that wraps.
+ */
+public fn wrappedPayloadOf(var checker: Checker, annotation: TypeId): TypeId? {
+  const wanted = resolveType checker, annotation
+  const payload = valueOfOptionOrResult(checker, wanted)?
+  const settled = resolveType checker, payload
+  if hasVariable(checker, settled) || checker.absorbs(settled) {
+    return None
+  }
+  Some settled
+}
+
+/** What a literal adapts to: the expected type itself, or the `Value` of the `Option` or `Result` it will wrap into. */
+fn literalExpectationOf(var checker: Checker, annotation: TypeId?): TypeId? {
+  const wanted = annotation?
+  Some(wrappedPayloadOf(checker, wanted) ?? wanted)
 }
 
 /**

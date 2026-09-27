@@ -290,7 +290,7 @@ type Percent {
     if value < 0 || value > 100 {
       return Fail "{value} is not between 0 and 100"
     }
-    Ok Self(value)
+    Self value
   }
 
   fn percent(): Int {
@@ -366,7 +366,7 @@ fn port(text: String): Result<Int, String> {
   if number < 1 || number > 65535 {
     return Fail "{number} is not a port"
   }
-  Ok number
+  number
 }
 
 print port("8080")             // prints Ok(8080)
@@ -376,6 +376,31 @@ print(port("http") ?? 80)      // prints 80
 Why: a failure in the signature cannot be forgotten, and one `?` is all the ceremony handing it on costs. See
 [Result](../language/errors/result.md), [The question mark operator](../language/errors/question-mark.md) and
 [panic](../language/errors/panic.md).
+
+## The success is the value {#wrapping}
+
+**A body that answers an `Option` or a `Result` ends in its value, never in `Some(value)` or `Ok(value)`: a value where
+one of the two is expected wraps itself. `None` and `Fail` are written; `Some` and `Ok` only where the value is an
+`Option` inside an `Option`, or where its type is not decided yet.** `torb lint --rule redundant-wrap` finds the rest,
+and `--fix` removes them.
+
+```trb run
+fn find(names: List<String>, wanted: String): Int? {
+  for index in 0..names.length() {
+    if names[index] == wanted {
+      return index
+    }
+  }
+  None
+}
+
+const fallback: Int? = 0
+print find(["ada", "alan"], "alan")    // prints Some(1)
+print fallback                         // prints Some(0)
+```
+
+Why: one spelling per meaning - the type already says that the value is the success, so the `Some` said it twice. See
+[Conversions](../language/types/conversions.md), rule 8.
 
 ## A type with cases is taken apart with `match` {#match}
 

@@ -358,6 +358,28 @@ public fn instantiateTarget(
   Instantiation instantiated, solved, bounds
 }
 
+/** Whether a call is the `Some` of `Option` or the `Ok` of `Result`: the case a value wraps into (the fifth coercion). */
+fn isWrappingCase(checker: Checker, resolution: Resolution): Bool {
+  const symbol = match resolution {
+    .Callable(found, _, _) => found
+    .CaseOf(_, found) => found
+    _ => {
+      return false
+    }
+  }
+  if const Some(option) = checker.wellKnown.option {
+    if checker.symbolAt(option).cases.contains(symbol) && checker.symbolAt(symbol).name == "Some" {
+      return true
+    }
+  }
+  if const Some(result) = checker.wellKnown.result {
+    if checker.symbolAt(result).cases.contains(symbol) && checker.symbolAt(symbol).name == "Ok" {
+      return true
+    }
+  }
+  false
+}
+
 /**
  * The result of the callee against the type that is expected of the whole call, silently: whatever the two have in
  * common solves a variable. Where the value will have to *coerce* (a concrete type into a trait type) the arguments of
@@ -867,7 +889,14 @@ fn checkArgumentPass(
       checker.nameSite = Some site
       checker.nameSiteAt = at
     }
+    // `Some(value)` and `Ok(value)` are the wrap written out: their payload is exactly the value and never wraps itself,
+    // so the inner `Some` of an `Option<Option<Int>>` stays written (`Some(Some(1))`)
+    const exact = checker.exactValueAt
+    if isWrappingCase(checker, resolution) {
+      checker.exactValueAt = Some at
+    }
     const given = checkExpression checker, argument.value, inner
+    checker.exactValueAt = exact
     checker.nameSite = None
     // `print found.start` shows the method where its answer was meant, exactly as `"{found.start}"` would
     if isShowParameter(checker, annotation) {

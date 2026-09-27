@@ -136,7 +136,8 @@ stay checked is a trait type (`Show & Encode`) instead of a hole in the type sys
 [std/json](../standard-library/json.md).
 
 Absence works the same way: there is no `null`, no `undefined`, and therefore no third state a value can silently
-fall into. `Option<Value>` is the one representation, and nothing wraps into it without saying so:
+fall into. `Option<Value>` is the one representation: a value wraps into it where one is expected, and nothing ever
+unwraps without saying so:
 
 ```trb check
 type User {
@@ -155,7 +156,8 @@ print "{managerName} {name}"
 
 ```trb error
 const found: Int? = 3
-// error: Expected `Option<Int64>`, found `Int64`
+const plain: Int = found
+// error: Expected `Int64`, found `Option<Int64>`
 ```
 
 `?.` reads exactly like TypeScript's optional chaining, but it produces an ordinary `Option` and nothing short-circuits

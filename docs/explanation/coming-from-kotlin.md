@@ -72,12 +72,13 @@ const name = findUser(1)?.name ?? "anonymous"
 print "{managerName} {name}"
 ```
 
-Because wrapping is never implicit, a plain value is not accepted where an `Option` is expected, even where Kotlin's
-subtyping would let a non-null `String` stand in for `String?` without a second thought:
+A plain value is accepted where an `Option` is expected, as a non-null `String` stands in for `String?` in Kotlin -
+not through subtyping but through a coercion that wraps it into `Some`. The other direction is never implicit:
 
 ```trb error
 const found: Int? = 3
-// error: Expected `Option<Int64>`, found `Int64`
+const plain: Int = found
+// error: Expected `Int64`, found `Option<Int64>`
 ```
 
 There is also no `!!`. A `?.` chain that reaches the end of an `Option` produces `None`, not a thrown
@@ -231,7 +232,7 @@ These are things Kotlin has that TorbScript deliberately does not, and what repl
 
 - [Where are my overloads](where-are-my-overloads.md) - one signature per call, and the two forms that replace an overload set.
 - [Optional chaining](../language/errors/option-chaining.md) - `?.` and `??` in full.
-- [Option](../language/values-and-types/option.md) - `Some`/`None`, and why nothing wraps into it implicitly.
+- [Option](../language/values-and-types/option.md) - `Some`/`None`, the wrap into `Some`, and why nothing unwraps implicitly.
 - [Receiver closures](../language/configuration/receiver-closures.md) - the one-implicit-receiver rule in full.
 - [extend](../language/traits/extend.md) - what an extension function becomes, and where its members are named.
 - [Copy and equality](../language/types/copy-and-equality.md) - what is generated for every `type`.

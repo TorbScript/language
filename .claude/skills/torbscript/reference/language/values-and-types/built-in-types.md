@@ -68,8 +68,8 @@ Array<Item, const Size: Int>                  a fixed-size array; the size is pa
 3. **A tuple's label is not part of its type.** `(lowest: Int, highest: Int)` and `(Int, Int)` are one type, and
    either may be used where the other is expected. See [Tuples](tuples.md).
 
-4. **`Value?` is `Option<Value>`, the one way absence is written.** There is no `null`, no `nil` and no implicit
-   `Some`. See [Option](option.md).
+4. **`Value?` is `Option<Value>`, the one way absence is written.** There is no `null` and no `nil`; a value where an
+   `Option` of its type is expected becomes `Some(value)` on its own. See [Option](option.md).
 
 5. **`Void` has exactly one value, the keyword literal `void`; `Never` has none and converts to every type.** See
    [Void and Never](void-and-never.md).

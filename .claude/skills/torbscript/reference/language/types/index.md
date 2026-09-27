@@ -29,7 +29,7 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Mutation and var paths](var-paths.md)** - A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or a var fn receiver is a reference that cannot outlive the call it belongs to.
 - **[Exclusivity](exclusivity.md)** - Two var accesses of the same call may never target the same path, so swap(a, a) and two indices the checker cannot tell apart are both compile errors, and items.swapAt is the one access that is allowed instead.
 - **[Shared types](shared-types.md)** - A shared type has an identity instead of a value, so assigning it never copies, a change of the object needs no var path, isSame compares which object rather than which content, and Equals, Hash and copy are not generated for it.
-- **[Conversions](conversions.md)** - From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly four coercions that apply only where a type is expected.
+- **[Conversions](conversions.md)** - From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly five coercions that apply only where a type is expected.
 - **[Property commands](property-commands.md)** - A field is written only with `=`, everywhere; the one command call left is a trailing block on a field whose value is a record, which configures that value in place rather than replacing it - no hand-written setters.
 
 <!-- torb:index:end -->

@@ -1193,17 +1193,48 @@ because a type named as an argument of the trait counts as owning the implementa
 be: a blanket `extend<Value> Value with From<Value>` would overlap with every other implementation of `From`. It is what
 lets `fn sum(): Item where Item: Add & From<Int>` be called with a list of `Int`.
 
-The language has exactly **four coercions**, and all of them only apply where a type is expected - never to decide what
+The language has exactly **five coercions**, and all of them only apply where a type is expected - never to decide what
 an expression means on its own, and never to solve an inference variable:
 
 - a value where a trait type is expected (`Square` into a `Shape`),
 - a trait value where fewer bounds or a supertrait are expected (`Show & Hash` into a `Show`),
 - `Never` where anything is expected,
-- a literal where a literal type is expected (`"online"` into a `Status`).
+- a literal where a literal type is expected (`"online"` into a `Status`),
+- a value where an `Option<Value>` or a `Result<Value, Failure>` is expected, which becomes `Some(value)` or
+  `Ok(value)`.
 
-**There is no implicit `Some`.** A value never wraps itself into an `Option`: `fn find(...): Item?` has to write
-`Some(item)`, and `const x: Int? = 1` is an error. `None` is the one value of the language that takes its type from what
-is expected of it. There is no variance either: a `List<Square>` is not a `List<Shape>`.
+**A value wraps itself into `Some` and `Ok`.** Everywhere a type is expected - the result of a body and `return`, a
+binding with an annotation, an argument, a field, a collection element whose type is known, a closure whose declared
+result is one of the two - a value of exactly `Value` becomes the success of the `Option` or the `Result`:
+
+```trb
+fn find(items: List<Int>, wanted: Int): Int? {
+  for item in items {
+    if item == wanted {
+      return item
+    }
+  }
+  None
+}
+
+fn halved(value: Int): Result<Int, String> {
+  if value % 2 != 0 {
+    return Fail "odd"
+  }
+  value / 2
+}
+
+const fallback: Int? = 8080
+```
+
+Only a value of exactly `Value` wraps, after the coercion to a trait type (a `Square` where a `Shape?` is expected). A
+value that already is an `Option` or a `Result` never wraps into an `Option` - there is no silent `Some(Some(x))`, and
+the inner `Some` of an `Int??` stays written, because the payload of a written `Some(...)` or `Ok(...)` never wraps
+itself. Into a `Result` it wraps only where it is exactly the `Value`: an `Int?` becomes the `Ok` of a
+`Result<Int?, Failure>`. The wrap never solves an inference variable: where `Value` is not decided yet, the value is
+checked as it is and a mismatch is an error. `None` and `Fail(...)` stay written - `None` is the one value that takes its
+type from what is expected of it. A `Task` does not wrap: its body produces the value. There is no variance either: a
+`List<Square>` is not a `List<Shape>`.
 
 ### Visibility and Encapsulation
 
@@ -1579,9 +1610,9 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   what `|` is to literals.
 - A trait can be used as a type (`fn draw(shape: Shape)`). Whether this is dispatched statically or dynamically is
   up to the implementation and not observable.
-- **A trait type is the one place where the language has subtyping,** and it has exactly four coercions: a value to
-  a trait it implements, a trait value to fewer bounds or to a supertrait, `Never` to anything, and a literal to a
-  literal type. They apply only where a type is expected and never solve an inference variable. **There is no
+- **A trait type is the one place where the language has subtyping,** and it has four of the five coercions: a value
+  to a trait it implements, a trait value to fewer bounds or to a supertrait, `Never` to anything, and a literal to a
+  literal type (the fifth wraps a value into `Some` or `Ok`, see [Conversions](#conversions)). They apply only where a type is expected and never solve an inference variable. **There is no
   variance:** `List<Square>` is not a `List<Shape>`, the list is built as one
   (`const shapes: List<Shape> = [Square(2.0), Circle(1.0)]`).
 - **A generic member can be called on a trait-typed value.** Every trait-typed value carries a witness table per
@@ -2527,6 +2558,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **A value wraps itself into `Some` and `Ok` where one is expected** (2026-09-27, owner; reverses "There is no implicit
+  `Some`"; docs/language/types/conversions.md rule 8). The fifth coercion: a value of exactly `Value` where an
+  `Option<Value>` or a `Result<Value, Failure>` is expected becomes `Some(value)` or `Ok(value)`, in every position that
+  expects a type. `fn find(...): Item?` answers `item`, `const port: Int? = 8080` is legal, a `Result` body ends in its
+  value. Guards: a value that already is an `Option` or a `Result` never wraps into an `Option` and wraps into a `Result`
+  only as its exact `Value`; the payload of a written `Some(...)`/`Ok(...)` never wraps, so nesting stays written; no
+  inference variable is solved by the wrap; `None`, `Fail` and `Task` are unchanged. One spelling per meaning: the lint
+  rule `redundant-wrap` finds a written `Some`/`Ok` the coercion would add, and fixes it.
 - **A string literal adapts to a closed list of checked types, and a template or a pattern is read verbatim**
   (2026-09-25; docs/design/URI.md section 9, docs/language/values-and-types/checked-literals.md). Where a `Path`, a
   `Uri`, a `UriReference`, a `UriTemplate`, a `Regex` or a resource type of `std/resource` is expected, a string literal
@@ -2949,7 +2988,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   resolution decidable and the error messages readable.
 - Generic members on a trait-typed value work through witness tables, one per bound, and object safety is checked
   per call, not per type. So `List<Show & Hash>` stays a type and only the calls that have no meaning are rejected.
-- Coercion to a trait type is the only subtyping in the language: four coercions, never solving an inference
+- Coercion to a trait type is the only subtyping in the language: four of the five coercions, never solving an inference
   variable, and no variance (`List<Square>` is not a `List<Shape>`). Written down because it is where inference and
   error messages would otherwise become unpredictable.
 - Labels in patterns are kept in the tree and checked; fields still match by position. A label that is not checked

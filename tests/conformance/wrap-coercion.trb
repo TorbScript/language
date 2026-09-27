@@ -1,0 +1,190 @@
+/**
+ * A value where an `Option<Value>` or a `Result<Value, Failure>` is expected becomes `Some(value)` or `Ok(value)`: the
+ * fifth coercion (CONCEPT, "Conversions"), in every position that says a type. The lowering builds the case, so both
+ * back ends print the same, and a program that wrapped a value twice or not at all prints something else.
+ */
+trait Shape {
+  fn area(): Float
+}
+
+type Square with Shape {
+  side: Float
+
+  fn area(): Float {
+    side * side
+  }
+}
+
+type Problem {
+  case Negative(value: Int)
+  case Missing(key: String)
+}
+
+type Tree {
+  case Leaf
+  case Node(value: Int)
+}
+
+type Settings {
+  port: Int? = None
+  name: String? = "default"
+  var retries: Int? = 3
+}
+
+/** The result of a body and of a `return`. */
+fn find(items: List<Int>, wanted: Int): Int? {
+  for item in items {
+    if item == wanted {
+      return item
+    }
+  }
+  None
+}
+
+fn halved(value: Int): Result<Int, Problem> {
+  if value < 0 {
+    return Fail(.Negative(value))
+  }
+  value / 2
+}
+
+/** `?` inside a body whose success is wrapped. */
+fn quartered(value: Int): Result<Int, Problem> {
+  const half = halved(value)?
+  halved(half)?
+}
+
+/** A generic body: `Item` is exactly the payload. */
+fn firstOf<Item>(items: List<Item>): Item? {
+  if items.isEmpty() {
+    return None
+  }
+  items[0]
+}
+
+/** The coercion to a trait type first, the wrap then. */
+fn someShape(side: Float): Shape? {
+  if side <= 0.0 {
+    None
+  } else {
+    Square side
+  }
+}
+
+/** An `Option` is exactly the `Value` of this `Result`, so it wraps into the `Ok`. */
+fn lookup(table: Map<String, Int>, key: String): Result<Int?, Problem> {
+  table.get key
+}
+
+/** The inner `Some` of a nested `Option` stays written. */
+fn nested(value: Int): Int?? {
+  if value < 0 {
+    return None
+  }
+  Some Some(value)
+}
+
+fn describe(value: Int?): String {
+  match value {
+    Some(found) => "some {found}"
+    None => "none"
+  }
+}
+
+fn classify(value: Int): Result<String, Problem> {
+  match value {
+    0 => "zero"
+    1 => "one"
+    _ => Fail(.Missing("{value}"))
+  }
+}
+
+fn validated(value: Int): Result<Void, Problem> {
+  if value < 0 {
+    return Fail(.Negative(value))
+  }
+  print "validated {value}"
+}
+
+// Bindings with an annotation, literals of every kind
+const small: Int8? = 10
+const port: Int? = 8080
+const nothing: Int? = None
+const negative: Int? = -5
+const ratio: Float? = 0.5
+const text: String? = "hello"
+const flag: Bool? = true
+const letter: Char? = 'x'
+const numbers: List<Int>? = [1, 2, 3]
+const pair: (Int, String)? = (1, "one")
+const tree: Tree? = .Node(3)
+const shape: Shape? = Square 2.0
+const branch: Int? = if port.isSome() { 1 } else { None }
+const success: Result<Int, Problem> = 7
+
+// A position of a tuple whose type is known
+const labelled: (text: String, number: Int?) = (text: "one", number: 1)
+
+// Collection elements whose element type is known
+const holes: List<Int?> = [1, None, 3]
+const scores: Map<String, Int?> = ["ada": 36, "alan": None]
+
+// A closure whose declared result is an `Option`
+const next: (Int) => Int? = { value => value + 1 }
+const positive: (Int) => Int? = { value =>
+  if value > 0 {
+    return value
+  }
+  None
+}
+
+const empty: List<Int> = []
+
+// Fields and their defaults
+var settings = Settings port: 80
+settings.retries = 5
+
+print small
+print port
+print nothing
+print negative
+print ratio
+print text
+print flag
+print letter
+print numbers
+print pair
+print tree
+print shape?.area()
+print branch
+print success
+print labelled
+print holes
+print scores
+print next(1)
+print positive(2)
+print positive(-2)
+print settings.port
+print settings.name
+print settings.retries
+print find([1, 2, 3], 2)
+print find([1, 2, 3], 9)
+print halved(8)
+print halved(-1)
+print quartered(16)
+print quartered(-4)
+print firstOf(["a", "b"])
+print firstOf(empty)
+print someShape(3.0)?.area()
+print someShape(0.0)?.area()
+print lookup(["a": 1], "a")
+print lookup(["a": 1], "b")
+print nested(4)
+print nested(-4)
+print describe(7)
+print classify(1)
+print classify(5)
+print validated(2)
+print validated(-2)
+print(port == 8080)
+print(nothing == 8080)

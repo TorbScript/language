@@ -1,6 +1,6 @@
 ---
 title: Conversions
-summary: From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly four coercions that apply only where a type is expected.
+summary: From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly five coercions that apply only where a type is expected.
 kind: reference
 status: stable
 order: 110
@@ -18,8 +18,9 @@ source:
 ---
 
 A conversion between two types is a trait implementation, never a hidden rule of the language. `From` is the one to
-write, or `TryFrom` where it can fail; `Into`, `TryInto`, the four coercions and `Every type has From<Self>` all follow
-from them without another line of code.
+write, or `TryFrom` where it can fail; `Into`, `TryInto`, the trait coercions and `Every type has From<Self>` all follow
+from them without another line of code, and the fifth coercion wraps a value into the `Some` or the `Ok` that
+is expected of it.
 
 ## Example
 
@@ -160,13 +161,14 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    hand - it would overlap with every other `From` - which is what lets a function ask for `Item: From<Int>` and still
    accept an `Item` itself.
 
-6. **The language has exactly four coercions, and every one of them applies only where a type is expected.** None of
+6. **The language has exactly five coercions, and every one of them applies only where a type is expected.** None of
    them decides what a bare expression means and none of them solves an inference variable on its own:
 
    - a value where a trait it implements is expected,
    - a trait value where fewer bounds or a supertrait is expected,
    - `Never` where anything is expected,
-   - a literal where a literal type that contains it is expected.
+   - a literal where a literal type that contains it is expected,
+   - a value where an `Option` or a `Result` of its type is expected (rule 8).
 
 7. **`Into<Target>` is also a type, and `into()` on such a value is an ordinary call.** A parameter declared
    `Into<Path>` takes anything that converts into a `Path`, and `into` is the trait's one required member - the
@@ -185,13 +187,46 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    print open(Path("notes"))
    ```
 
-8. **There is no implicit `Some`.** A value never wraps itself into an `Option` on its own; `Some(item)` has to be
-   written out.
+8. **A value wraps itself into `Some` and `Ok` where one is expected.** A value of exactly `Value` where an
+   `Option<Value>` or a `Result<Value, Failure>` is expected becomes `Some(value)` or `Ok(value)` - the result of a
+   body and `return`, a binding with an annotation, an argument, a field, a collection element, the result of a closure
+   that declares one. The coercion to a trait type applies first, so a `Square` where a `Shape?` is expected is boxed
+   and wrapped. `None` and `Fail(...)` stay written.
+
+   ```trb
+   fn find(items: List<Int>, wanted: Int): Int? {
+     for item in items {
+       if item == wanted {
+         return item
+       }
+     }
+     None
+   }
+
+   fn halved(value: Int): Result<Int, String> {
+     if value % 2 != 0 {
+       return Fail "{value} is odd"
+     }
+     value / 2
+   }
+
+   const port: Int? = 8080
+   const holes: List<Int?> = [1, None, 3]
+   print "{find([1, 2, 3], 2)} {halved(8)} {port} {holes}"
+   ```
+
+   A value that already is an `Option` or a `Result` never wraps into an `Option`, so nothing becomes `Some(Some(x))`
+   silently, and the payload of a written `Some(...)` or `Ok(...)` never wraps itself: the inner `Some` of a nested
+   `Option` stays written. Into a `Result` a value wraps only where it is exactly the `Value` - an `Int?` becomes the
+   `Ok` of a `Result<Int?, Failure>`.
 
    ```trb error
-   const bad: Int? = 1
+   const nested: Int?? = Some(1)
    // error: Expected `Option<Int64>`, found `Int64`
    ```
+
+   The wrap never solves an inference variable: where the `Value` is still open - an argument of
+   `fn wrapped<Item>(value: Item?)` - the value is checked as it is, and `Some` is written.
 
 ## What this is not
 

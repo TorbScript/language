@@ -26,7 +26,7 @@ type User {
 }
 
 fn findUser(id: Int): User? {
-  if id == 1 { Some User("Ada") } else { None }
+  if id == 1 { User "Ada" } else { None }
 }
 
 const managerName: String? = findUser(2)?.manager?.name
@@ -58,7 +58,7 @@ trait OrElse<Value> { fn orElse(fallback: lazy Value): Value }
 
    ```trb error
    fn parse(text: String): Result<Int, String> {
-     Ok text.byteLength()
+     text.byteLength()
    }
 
    const length = parse("hi")?.isOk()
@@ -91,6 +91,12 @@ trait OrElse<Value> { fn orElse(fallback: lazy Value): Value }
 6. **The right side of `??` is checked against the `Value`, not against the whole `Option` or `Result`.** `Int.tryFrom(text)
    ?? 0` needs a plain `Int` on the right, not a `Some(0)` or an `Ok(0)`. The `Value` is the argument of the receiver's
    `OrElse<Value>`.
+
+   Where an `Option` is expected of the whole, the answer of `??` wraps into it like any other value, and so does a
+   plain value that stands beside a `None` - `if id == 1 { User("Ada") } else { None }` is a `User?` without a
+   written `Some`, because a value where an `Option` of its type is expected becomes `Some(value)`
+   ([Conversions](../types/conversions.md), rule 8). A `?.` chain answers an `Option` already, and an `Option` never
+   wraps into another one.
 
 7. **`?.` is a trait for nobody, and that is deliberate.** An operator is a trait exactly when it is a method call, and
    `?.` is two: `map` when the member answers a plain value, `flatMap` when it answers an `Option`. A trait that covered
@@ -130,8 +136,9 @@ print managerNameOf(User("Ada"))
 // error: Expected `String`, found `Option<String>`
 ```
 
-The second version tries to hand a `String?` to a function that promises a plain `String`; there is no implicit
-"or crash" the way `!` in Swift or Kotlin would provide. Write `?? "default"`, or change the result type to `String?`.
+The second version tries to hand a `String?` to a function that promises a plain `String`; a value wraps into an
+`Option` where one is expected, but nothing ever unwraps one on its own - there is no implicit "or crash" the way `!` in
+Swift or Kotlin would provide. Write `?? "default"`, or change the result type to `String?`.
 
 **`??` is not the same as `||` on a `Bool`, and it is not a truthiness check.** The left side has to be an `Option` or
 a `Result`; a `Bool`, an empty `String` or a zero `Int` is never "falsy" here, so `??` never silently activates for a

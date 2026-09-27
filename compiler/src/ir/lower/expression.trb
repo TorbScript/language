@@ -33,6 +33,7 @@ use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed, substituted, enterModule from "./context"
+use irTypeOf from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue, lowerConversionCall from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
@@ -70,6 +71,21 @@ public fn lowerExpression(
   if !canReplayAdaptations(lowering, expression) {
     return abandonedSlot lowering, builder, destination
   }
+  // `Adaptation.Wrap`: the value, boxed first where it also became a trait-typed value, goes into a `Some` or an `Ok`
+  if const Some(wrapped) = wrapOf(lowering, expression) {
+    return lowerWrappedValue lowering, builder, destination, expression, annotation, wrapped
+  }
+  lowerAdaptedValue lowering, builder, expression, destination, annotation
+}
+
+/** The value of an expression with the coercion to a trait-typed value applied, where the checker recorded one. */
+fn lowerAdaptedValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  destination: Slot?,
+  annotation: IrTypeId,
+): Slot {
   // `Adaptation.ToTraitValue`: the value is computed first and then boxed with one witness pointer per bound
   const bounds = traitValueBoundsOf lowering, expression
   if !bounds.isEmpty() {
@@ -79,6 +95,55 @@ public fn lowerExpression(
     return lowerCoercedValue lowering, builder, destination, expression, annotation, bounds
   }
   lowerInnerExpression lowering, builder, expression, destination, annotation
+}
+
+/** The `Option` or the `Result` `Adaptation.Wrap` recorded at an expression, if it recorded one. */
+fn wrapOf(var lowering: Lowering, expression: Expression): TypeId? {
+  for adaptation in lowering.checker.adaptationsAt(lowering.module, expression.span) {
+    if const .Wrap(wrapped) = adaptation {
+      return Some wrapped
+    }
+  }
+  None
+}
+
+/**
+ * A value where an `Option` or a `Result` of its type was expected (the fifth coercion): the value is computed into a
+ * slot of its own type and becomes the payload of the `Some` or the `Ok` of the expected type, which is what the slot
+ * the caller named holds.
+ */
+fn lowerWrappedValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  annotation: IrTypeId,
+  wrapped: TypeId,
+): Slot {
+  // A `Void` call defines no slot unless it is named one, and `void` is what the `Ok` of a `Result<Void, _>` holds
+  const payload = valueDestinationOf lowering, builder, expression
+  const inner = lowerAdaptedValue lowering, builder, expression, payload, annotation
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const outer = irTypeOf lowering, wrapped
+  const layout = match variantLayoutOfType(lowering, outer) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a value wrapped into a type without cases", expression.span
+    }
+  }
+  var variant = variantNamed lowering, layout, "Some"
+  if variant < 0 {
+    variant = variantNamed lowering, layout, "Ok"
+  }
+  if variant < 0 {
+    const what = "a value wrapped into a type without `Some` or `Ok`"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const target = valueSlot lowering, builder, destination, outer
+  emit builder, Instruction.Construct(target, layout, variant, [borrowed(inner)])
+  target
 }
 
 /**

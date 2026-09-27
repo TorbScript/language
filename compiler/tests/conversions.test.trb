@@ -405,16 +405,106 @@ group "`into()`, `tryInto()` and their traits" {
     assert(found.typeOf("cool().into()") == "Celsius")
     assert(found.adaptationsOf("cool().into()") == ["convert from through Celsius: From<Fahrenheit>"])
   }
+}
 
-  /** There is no implicit `Some`: wrapping a value into an `Option` is written, the four coercions do not include it. */
-  test "a value does not wrap itself into an `Option`" {
-    const source = "fn probe() \{\n  const maybe: Int? = 1\n\}"
-    assert(problems(source) == ["Expected `Option<Int64>`, found `Int64`"])
+/**
+ * The fifth coercion (CONCEPT, "Conversions"): a value of exactly `Value` where an `Option<Value>` or a
+ * `Result<Value, Failure>` is expected becomes `Some(value)` or `Ok(value)`, recorded as a `wrap` the lowering builds.
+ */
+group "the wrap into `Some` and `Ok`" {
+  const shapes = "trait Shape \{\n  fn area(): Float\n\}\n\n"
+    + "type Square with Shape \{\n  side: Float\n\n  fn area(): Float \{\n    side * side\n  \}\n\}\n\n"
+
+  test "a literal adapts to the `Value` and wraps into the `Option`" {
+    const source = "fn probe() \{\n  const maybe: Int8? = 1\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("1") == "Int8")
+    assert(found.adaptationsOf("1") == ["literal Int8", "wrap into Option<Int8>"])
   }
 
-  test "`Some` is what wraps it, and `None` takes its type from what is expected" {
+  test "the result of a body and of a `return` wrap into the declared result" {
+    const source = "fn probe(item: Int, isAbsent: Bool): Int? \{\n  if isAbsent \{\n    return None\n  \}\n"
+      + "  return item\n\}\n\nfn halved(value: Int): Result<Int, String> \{\n  value / 2\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.lastAdaptationsOf("item") == ["wrap into Option<Int64>"])
+    assert(found.adaptationsOf("value / 2") == ["wrap into Result<Int64, String>"])
+    assert(found.adaptationsOf("value / 2") == ["wrap into Result<Int64, String>"])
+  }
+
+  test "a value becomes the trait-typed value first, and is wrapped then" {
+    const source = shapes + "fn probe(): Shape? \{\n  Square(2.0)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.adaptationsOf("Square(2.0)") == ["trait value Shape", "wrap into Option<Shape>"])
+  }
+
+  test "a short case names the case of the value that wraps" {
+    const source = "type Tree \{\n  case Leaf\n  case Node(value: Int)\n\}\n\n"
+      + "fn probe(): Tree? \{\n  .Node(1)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf(".Node(1)") == "Tree")
+    assert(found.adaptationsOf(".Node(1)") == ["wrap into Option<Tree>"])
+  }
+
+  test "an argument, an element and the result of a closure wrap as well" {
+    const source = "fn describe(value: Int?): Int \{\n  value ?? 0\n\}\n\n"
+      + "fn probe() \{\n  const shown = describe(7)\n  const holes: List<Int?> = [8, None]\n"
+      + "  const next: (Int) => Int? = \{ value => value + 9 \}\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.adaptationsOf("7") == ["literal Int64", "wrap into Option<Int64>"])
+    assert(found.adaptationsOf("8") == ["literal Int64", "wrap into Option<Int64>"])
+    assert(found.adaptationsOf("value + 9") == ["wrap into Option<Int64>"])
+  }
+
+  test "a position of a tuple wraps, and the tuple has the expected type" {
+    const source = "fn probe(number: Int) \{\n  const pair: (String, Int?) = (\"a\", number)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("(\"a\", number)") == "(String, Option<Int64>)")
+  }
+
+  test "an `Option` is exactly the `Value` of a `Result`, and wraps into its `Ok`" {
+    const source = "fn probe(found: Int?): Result<Int?, String> \{\n  found\n\}"
+    assert problems(source).isEmpty()
+    const probed = probe source
+    assert(probed.lastAdaptationsOf("found") == ["wrap into Result<Option<Int64>, String>"])
+  }
+
+  test "an `Option` never wraps into another `Option`" {
+    const source = "fn probe(value: Int?): Int?? \{\n  value\n\}"
+    assert(problems(source) == ["Expected `Option<Option<Int64>>`, found `Option<Int64>`"])
+  }
+
+  test "a value does not wrap twice" {
+    const source = "fn probe() \{\n  const nested: Int?? = 1\n\}"
+    assert(problems(source) == ["Expected `Option<Option<Int64>>`, found `Int64`"])
+  }
+
+  test "the payload of a written `Some` never wraps itself, so the inner `Some` of a nested `Option` stays written" {
+    assert(problems("fn probe() \{\n  const nested: Int?? = Some(1)\n\}") == ["Expected `Option<Int64>`, found `Int64`"])
+    assert problems("fn probe() \{\n  const nested: Int?? = Some(Some(1))\n\}").isEmpty()
+  }
+
+  test "a `Result` of another failure is not the `Value`, and does not wrap" {
+    const source = "fn other(): Result<Int, String> \{\n  Fail \"x\"\n\}\n\n"
+      + "fn probe(): Result<Int, Int> \{\n  other()\n\}"
+    assert(problems(source) == ["Expected `Result<Int64, Int64>`, found `Result<Int64, String>`"])
+  }
+
+  test "the wrap never solves an inference variable" {
+    const source = "fn wrapped<Item>(value: Item?): Item? \{\n  value\n\}\n\nfn probe() \{\n  const kept = wrapped(5)\n\}"
+    assert(problems(source) == ["Cannot infer `Item` of `wrapped`"])
+  }
+
+  test "`None` takes its type from what is expected, and `Some` still says what it said" {
     const source = "fn probe() \{\n  const maybe: Int? = Some(1)\n  const empty: Int? = None\n\}"
     assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.adaptationsOf("Some(1)") == [])
   }
 }
 
