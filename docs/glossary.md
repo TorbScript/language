@@ -11,9 +11,10 @@ source:
   - CONCEPT.md
 ---
 
-One term, one entry, at most two sentences and one link. This page is normative for terminology: where two words could
-mean the same thing, the word with an entry here is the one to use. A term whose explanation wants to become an article
-gets a page instead, and keeps a one-line entry here that links it.
+One term, one entry, at most two sentences and one link. The first sentence says what the word means in plain words, so
+a reader who meets it for the first time can go on reading. This page is normative for terminology: where two words
+could mean the same thing, the word with an entry here is the one to use. A term whose explanation wants to become an
+article gets a page instead, and keeps a one-line entry here that links it.
 
 ## Terms
 
@@ -71,7 +72,8 @@ invariants hold - still a value, copied on assignment, never an identity like a 
 
 ### Case
 
-A variant of a `type`, declared with `case`. Never called a variant or an enum case. See
+One of the kinds a value of a type can be, declared with `case`: a `Weather` is `Sunny` or `Rainy`, and a case can
+carry values of its own. Never called a variant or an enum case. See
 [Cases and match](language/pattern-matching/cases-and-match.md).
 
 ### Cause chain
@@ -110,6 +112,11 @@ after `=>`, or as the default of a field. See [Command calls](language/syntax/co
 
 The five places a [command call](#command-call) is allowed. Nothing inside parentheses, brackets, an operator or an
 argument list is command position.
+
+### Compiler
+
+The program that reads a program, checks it and turns it into something a computer runs; in TorbScript it is part of
+`torb`, and it finds most mistakes before a single line runs. See [The torb command](tooling/the-torb-command.md).
 
 ### Const parameter
 
@@ -197,6 +204,12 @@ are, and an entry file is never importable. See [Top-level code](language/module
 The trait every failure can carry (`with Show`) so it fits into `Result<Value, Error>` for the layers that only need
 to report it, not match on it. See [The Error trait](language/errors/the-error-trait.md).
 
+### Exception
+
+In other languages, a failure that jumps out of the running code to wherever something catches it, invisible in the
+code in between. TorbScript has none: a failure is a [Result](#result), an ordinary value. See
+[Why no exceptions](explanation/why-no-exceptions.md).
+
 ### Exclusivity
 
 The rule that while a `var` access to a path is running, the same path cannot be accessed another way. The access of a
@@ -234,6 +247,12 @@ never sees a type of its own. See [std/encoding](standard-library/encoding.md).
 
 The block between the two `---` lines at the top of a documentation page, in a written subset of YAML. See
 [The front matter](contributing/front-matter.md).
+
+### Function
+
+A named piece of a program that takes values and can give one back, declared with `fn`: `fn double(number: Int): Int`.
+A function that belongs to a type is a [method](#method). See
+[Declaring a function](language/functions/declaring-a-function.md).
 
 ### Guard
 
@@ -313,6 +332,11 @@ everything else. See [Naming](language/syntax/naming.md).
 A declaration implemented by the compiler and its runtime instead of by TorbScript code, such as `Array`, `String`
 or a collection's storage. Only `std/` may declare one; see [Foreign functions](language/extensibility/foreign-functions.md)
 for the same idea applied to a C library instead of the runtime.
+
+### Null
+
+In other languages, a value for "nothing" that fits in every type and ends a program that forgets to check for it.
+TorbScript has none: a value that might be missing is an [Option](#option), which the checker makes a program handle.
 
 ### Object safety
 
@@ -527,22 +551,38 @@ A value whose static type is a trait, such as a `Shape` or an `Iterate<Int>`: it
 dispatched through a [witness table](#witness-table). Never called a trait object or an existential. See
 [Trait types](language/traits/trait-types.md).
 
+### Type
+
+The kind of a value - `Int` for a whole number, `String` for text, or a type declared with `type` - which decides
+what can be done with it. See [Built-in types](language/values-and-types/built-in-types.md).
+
 ### Type parameter
 
 A name standing for a type, filled in at each use of a `fn`, `type`, `trait` or `extend`, written out like a type
 (`Item`, `Value`) rather than a single letter. See [Type parameters](language/generics/type-parameters.md).
 
+### Value
+
+A piece of information a program works with: a number, a text, a list, a value of a type of its own. Every type is a
+value type, so a value is copied where it is given a second name, see [value semantics](#value-semantics).
+
 ### Value semantics
 
-The rule that assigning, passing or capturing a value always copies it, so two bindings never share one mutable
-thing and a change is visible only through the path that made it. The one exception is a [shared type](#shared-type).
-See [Why values instead of references](explanation/why-values-instead-of-references.md).
+Every value behaves like a number: giving it a second name, passing it to a function or storing it makes a copy, so a
+change happens only where it is written. A list or a text shares its storage until one side changes it, so the copy
+costs nothing before that; see [Why values instead of references](explanation/why-values-instead-of-references.md).
+The one exception is a [shared type](#shared-type).
 
 ### Var path
 
 A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or a `var fn` receiver, then
 `var` fields, indices and ranges all the way. Without one, nothing changes. See
 [Mutation and var paths](language/types/var-paths.md).
+
+### Variable
+
+Not a word of this documentation: a name for a value is a [binding](#binding), and `var` makes one whose value can
+change.
 
 ### Variadic parameter
 

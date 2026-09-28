@@ -1,24 +1,26 @@
 ---
 title: TorbScript
-summary: The documentation of TorbScript, a functional-first language with value semantics that runs interpreted and compiles to native binaries.
+summary: The reference of TorbScript - every rule of the language, every package of its standard library, every command of its tools - and the way to the course and the guide.
 kind: index
 status: stable
 ---
 
-TorbScript is a functional-first, multi-paradigm scripting language with value semantics. Every type is a value and the
-binding decides whether it can be changed; there is no `null` and there are no exceptions; the same program runs
-interpreted and compiles to a native executable. Its command is `torb` and its files end in `.trb`.
+TorbScript is a programming language for scripts, tools and servers. Its command is `torb` and its files end in
+`.trb`. The documentation has three levels, and each has one door:
 
-Start with [The language in sixty seconds](guide/the-language-in-sixty-seconds.md) if you have never seen it, or with
-[the language reference](language/index.md) if you are looking a construct up.
+- **[Start](start/index.md)** - learn to program from zero, in short lessons you do in the browser.
+- **[Guide](guide/index.md)** - for people who program already: a quick tour, and what is different here.
+- **Reference** - this page and the sections below: every rule of the language, every package of the standard library,
+  every command of the tools, and why the language is the way it is.
 
-Every page carries a `summary` in its front matter, so this index and the index of every folder are enough to find the
-one page that answers a question. Every page is written to be understandable on its own.
+Every page opens with a one-sentence summary, and this index and the index of every folder list those sentences, so
+they are enough to find the one page that answers a question. Every page is written to be understandable on its own.
 
 <!-- torb:index:begin -->
 
 ## Sections
 
+- **[Learn to program](start/index.md)** - A course for people who have never written a program, in thirteen short lessons you do in the browser, each with one idea and one small exercise.
 - **[Learn TorbScript](guide/index.md)** - A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
 - **[The language reference](language/index.md)** - One page per construct of TorbScript, grouped by area, with the exact rules and the mistakes each construct invites.
 - **[The standard library](standard-library/index.md)** - One page per package of std, what each contains, and which of them are in scope everywhere without an import.

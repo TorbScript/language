@@ -1,98 +1,61 @@
 ---
 title: TorbScript
-summary: A single-language ecosystem - one functional-first language with value semantics for scripts, configuration, servers and tools, interpreted while you write it and native when it ships.
+summary: A programming language for scripts, tools and servers. It finds mistakes before your program runs, starts at once while you write, and builds a fast program when you ship.
 kind: site
 status: stable
 order: 10
 source:
-  - docs/guide/the-language-in-sixty-seconds.md
+  - docs/start/index.md
+  - docs/start/lists.md
+  - docs/start/when-things-go-wrong.md
   - docs/tooling/torb-run.md
-  - docs/tooling/project-trb.md
-  - docs/tooling/the-torb-command.md
+  - docs/tooling/torb-build.md
 ---
 
-## Values, not references
+## Where do you want to start?
 
-Every type is a value, and the binding decides whether it changes. Assigning, passing and capturing a value is a copy,
-so two names never share one thing, and a change happens exactly where it is written.
+- [New to programming?](../start/index.md) Learn from zero in thirteen short lessons, with code you run right in the page.
+- [Already code?](../guide/index.md) A quick tour for people who know another language, and what is different here.
+- [Go deep](../index.md) Every rule of the language, every package of the standard library, every command of the tools.
 
-A list or a string shares its storage until one side writes to it, so the copy costs nothing until then. See
-[why values instead of references](../explanation/why-values-instead-of-references.md).
+## Change only what you mean to change
+
+Giving a list a second name makes a copy. Changing the copy leaves the original alone, so a value never changes behind
+your back - only where you change it. See [value semantics](../glossary.md#value-semantics).
 
 ```trb run
-const fixed = [1, 2]
-var buffer = fixed
-buffer.append 3
-print "{fixed} {buffer}"
+const original = [1, 2]
+var copy = original
+copy.append 3
+print "{original} {copy}"
 // prints [1, 2] [1, 2, 3]
 ```
 
-## No null and no exceptions
+## Mistakes show up before the program runs
 
-Absence is an `Option` and failure is a `Result`. The postfix `?` returns a failure to the caller, and a `match` covers
-every case or the program does not compile.
-
-```trb
-use File from "std/fs"
-
-fn firstLine(path: String): Result<String, Error> {
-  const text = File.readText(path)?
-  const lines = text.lines()
-  match lines.first() {
-    Some(line) => line
-    None => ""
-  }
-}
-```
-
-## Interpreted while you work, native when you ship
-
-`torb run` checks a program and runs it at once in the VM inside `torb`, with no C compiler. `torb build` compiles the
-same program through C into a native binary. The conformance suite holds every program to the same output, exit code
-and panics both ways.
+When something can be missing or can fail, its type says so, and the [compiler](../glossary.md#compiler) makes you
+handle it before the program runs. A failure is an answer like any other: there is no [null](../glossary.md#null) and
+no [exception](../glossary.md#exception) to forget.
 
 ```trb run
-const name = "World"
-print "Hello, {name}!"
-// prints Hello, World!
+match Int.tryFrom("forty-two") {
+  Ok(number) => print number
+  Fail(_) => print "That is not a number."
+}
+// prints That is not a number.
 ```
+
+## Instant while you write, fast when you ship
+
+`torb run` starts a program at once. `torb build` turns the same program into a program file of its own: fast, and
+runnable without TorbScript. The same one tool also tests, formats and publishes. See
+[the torb command](../tooling/the-torb-command.md).
 
 ```console
 $ torb run hello.trb
 Hello, World!
-$ torb run --native hello.trb
+$ torb build hello.trb --output hello
+wrote hello
+$ ./hello
 Hello, World!
-```
-
-## One language for the code and its configuration
-
-The manifest of a package is TorbScript as well: `project.trb` is checked against the type `Project` of the standard
-library, so a setting is a field and a section is a block, with the checker and the editor of every other file. See
-[project.trb](../tooling/project-trb.md).
-
-```trb fragment
-name = "acme/shop"
-version = "1.0.0"
-
-dependencies {
-  runtime "acme/http:^1.2.3"
-  development "acme/mock-server:^3.4.5"
-}
-
-program "migrate", entry: "tools/migrate.trb"
-```
-
-## One toolchain
-
-`torb` is a single binary: the compiler, the VM, the test runner, the formatter, the language server and the package
-manager. One installation and one manifest are the whole setup of a project. See
-[the torb command](../tooling/the-torb-command.md).
-
-```text
-torb run       Run a program in the VM, or natively
-torb test      Run the tests below a path
-torb build     Compile a program into a native binary
-torb format    Write the layout of the language
-torb lsp       The language server, for an editor
-torb publish   Check a package and publish it
 ```
