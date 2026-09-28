@@ -1,0 +1,364 @@
+/**
+ * Tests for the template machinery behind `torb new` and `torb init` (compiler/src/cli/template.trb): the shared
+ * flags, `sanitizedOwner`, reading a `template.trb`, applying its drops and substitutions, and the whole
+ * `attemptScaffold` - from a local directory, and from a `.tar.gz` (`file://` and a bare path), each built with
+ * `std/archive` the way `compiler/tests/upgrade.test.trb` builds one for `torb upgrade`.
+ *
+ * Not here: a real download, and the interactive prompts of a real terminal - `answersFor` is exercised directly with
+ * `interactive: false` and with the flags of `ScaffoldChoices`, which is what `TORB_INIT_INTERACTIVE` and scripted
+ * standard input are a seam for rather than a pseudo-terminal (docs/tooling/torb-new.md, "Writing a template").
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use TarEntry, TarKind, tarred from "std/archive"
+use gzipped from "std/compression"
+use parentPath from "../src/project/path"
+use ScaffoldChoices, ScaffoldParse, ScaffoldAnswers from "../src/cli/template"
+use scaffoldChoicesOf, ciValues, licenseValues from "../src/cli/template"
+use sanitizedOwner from "../src/cli/template"
+use TemplateManifest, TemplateReplacement, TemplateDrop from "../src/cli/template"
+use readTemplateManifest, templateManifestOf, appliedEntries from "../src/cli/template"
+use TemplateLocation, templateLocationOf from "../src/cli/template"
+use conflictingPaths, attemptScaffold from "../src/cli/template"
+
+/** A new, empty directory in the system's directory for temporary files, for one test, which removes it again. */
+fn scratch(): String {
+  File.createTemporaryDirectory(prefix: "torb-template-test-").expect("a temporary directory")
+}
+
+/** Writes every `(path, text)` below `root`, creating the directories above it. */
+fn populate(root: String, files: List<(String, String)>) {
+  for (path, text) in files {
+    File.createDirectory(parentPath("{root}/{path}")).expect("the directory of {path}")
+    File.writeText("{root}/{path}", text).expect(path)
+  }
+}
+
+/** The answers `torb new`/`torb init` would use for `template`, with every other question at a plain default. */
+fn answers(template: String, ci: String = "github", license: String = "mit"): ScaffoldAnswers {
+  ScaffoldAnswers "package", template, "hello", "acme", ci, license, false
+}
+
+group "sanitizedOwner" {
+  test "lowercases and turns spaces into one dash" {
+    assert(sanitizedOwner("Ada Lovelace") == "ada-lovelace")
+  }
+
+  test "collapses runs of what is not a letter, a digit or a dash, and trims the ends" {
+    assert(sanitizedOwner("  Torben  Koehn!! ") == "torben-koehn")
+  }
+
+  test "keeps digits and dashes" {
+    assert(sanitizedOwner("torb-2000") == "torb-2000")
+  }
+
+  test "your-name for nothing usable" {
+    assert(sanitizedOwner("") == "your-name")
+    assert(sanitizedOwner("!!!") == "your-name")
+  }
+}
+
+group "scaffoldChoicesOf" {
+  test "reads every flag" {
+    const arguments = [
+      "--template", "app", "--name", "acme-cli", "--owner", "acme", "--ci", "both", "--license", "apache-2.0",
+      "--no-git", "--yes", "--offline",
+    ]
+    const parsed = scaffoldChoicesOf(arguments).expect("the flags parsed")
+    assert(parsed.choices.template == Some("app"))
+    assert(parsed.choices.name == Some("acme-cli"))
+    assert(parsed.choices.owner == Some("acme"))
+    assert(parsed.choices.ci == Some("both"))
+    assert(parsed.choices.license == Some("apache-2.0"))
+    assert(parsed.choices.git == Some(false))
+    assert parsed.choices.yes
+    assert parsed.choices.offline
+    assert parsed.rest.isEmpty()
+  }
+
+  test "--git without --no-git" {
+    const parsed = scaffoldChoicesOf(["--git"]).expect("parsed")
+    assert(parsed.choices.git == Some(true))
+  }
+
+  test "a path is left in rest, in order, flags and all" {
+    const parsed = scaffoldChoicesOf(["hello", "--yes"]).expect("parsed")
+    assert(parsed.rest == ["hello"])
+    assert parsed.choices.yes
+  }
+
+  test "an unknown value of --ci fails, naming the ones it takes" {
+    match scaffoldChoicesOf(["--ci", "gitlab"]) {
+      Ok(_) => panic "accepted gitlab"
+      Fail(message) => assert(message == "`--ci` takes {ciValues.joined(separator: ", ")}, not `gitlab`")
+    }
+  }
+
+  test "an unknown value of --license fails" {
+    match scaffoldChoicesOf(["--license", "gpl"]) {
+      Ok(_) => panic "accepted gpl"
+      Fail(message) => assert(message == "`--license` takes {licenseValues.joined(separator: ", ")}, not `gpl`")
+    }
+  }
+
+  test "--template at the end with nothing after it fails" {
+    match scaffoldChoicesOf(["--template"]) {
+      Ok(_) => panic "accepted a --template with no value"
+      Fail(message) => assert(message == "`--template` needs a value")
+    }
+  }
+}
+
+group "reading template.trb" {
+  const text = """
+    title = "Package"
+    description = "a library to publish"
+    name = "hello"
+
+    replace \{
+      file "project.trb" \{
+        text "torb/hello", becomes: "owner/name"
+      \}
+      file "README.md" \{
+        text "torb/hello", becomes: "owner/name"
+      \}
+    \}
+
+    drop \{
+      path ".github", unless: "ci", isAnyOf: "github,both"
+      path ".forgejo", unless: "ci", isAnyOf: "forgejo,both"
+      path "LICENSE", unless: "license", isAnyOf: "mit"
+    \}
+    """
+
+  test "the top-level fields" {
+    const manifest = readTemplateManifest text
+    assert(manifest.title == "Package")
+    assert(manifest.description == "a library to publish")
+    assert(manifest.name == "hello")
+  }
+
+  test "one replacement per text line, file by file" {
+    const manifest = readTemplateManifest text
+    assert(manifest.replacements.length() == 2)
+    assert(manifest.replacements[0] == TemplateReplacement("project.trb", "torb/hello", "owner/name"))
+    assert(manifest.replacements[1] == TemplateReplacement("README.md", "torb/hello", "owner/name"))
+  }
+
+  test "one drop per path line, its kept-for values split on a comma" {
+    const manifest = readTemplateManifest text
+    assert(manifest.drops.length() == 3)
+    assert(manifest.drops[0] == TemplateDrop(".github", "ci", ["github", "both"]))
+    assert(manifest.drops[2] == TemplateDrop("LICENSE", "license", ["mit"]))
+  }
+
+  test "ignores a line it does not know, the way project.trb's own reader does" {
+    const manifest = readTemplateManifest "something \"else\"\ntitle = \"Package\"\n"
+    assert(manifest.title == "Package")
+  }
+
+  test "no template.trb: an empty manifest, which applies no drop and no substitution" {
+    const manifest = TemplateManifest()
+    assert manifest.replacements.isEmpty()
+    assert manifest.drops.isEmpty()
+  }
+}
+
+/** The template entries "applying drops and substitutions" below runs its checks against, fresh for every test. */
+fn sampleEntries(): List<TarEntry> {
+  [
+    TarEntry("project.trb", "name = \"torb/hello\"\n".bytes()),
+    TarEntry.directory(".git"),
+    TarEntry(".git/HEAD", "ref: refs/heads/main\n".bytes()),
+    TarEntry.directory(".github"),
+    TarEntry(".github/workflows/ci.yml", "on: push\n".bytes()),
+    TarEntry("LICENSE", "MIT\n".bytes()),
+  ]
+}
+
+group "applying drops and substitutions" {
+  const manifest = readTemplateManifest("""
+    replace \{
+      file "project.trb" \{
+        text "torb/hello", becomes: "owner/name"
+      \}
+    \}
+
+    drop \{
+      path ".github", unless: "ci", isAnyOf: "github,both"
+      path "LICENSE", unless: "license", isAnyOf: "mit"
+    \}
+    """)
+
+  test "substitutes owner/name into the file it names, and nowhere else" {
+    const applied = appliedEntries sampleEntries(), manifest, answers("dir")
+    const project = applied.find({ _.path == "project.trb" }) ?? panic("project.trb missing")
+    assert(project.bytes == "name = \"acme/hello\"\n".bytes())
+  }
+
+  test "drops .git always" {
+    const applied = appliedEntries sampleEntries(), manifest, answers("dir")
+    assert(!applied.any({ _.path == ".git" || _.path.startsWith(".git/") }))
+  }
+
+  test "drops .github unless ci is github or both" {
+    const kept = appliedEntries sampleEntries(), manifest, answers("dir", ci: "github")
+    assert(kept.any({ _.path == ".github/workflows/ci.yml" }))
+    const dropped = appliedEntries sampleEntries(), manifest, answers("dir", ci: "forgejo")
+    assert(!dropped.any({ _.path.startsWith ".github" }))
+  }
+
+  test "drops LICENSE unless license is one of the values kept for it" {
+    const kept = appliedEntries sampleEntries(), manifest, answers("dir", license: "mit")
+    assert(kept.any({ _.path == "LICENSE" }))
+    const dropped = appliedEntries sampleEntries(), manifest, answers("dir", license: "none")
+    assert(!dropped.any({ _.path == "LICENSE" }))
+  }
+
+  test "a file that is not valid UTF-8 is copied unchanged" {
+    const binary = TarEntry "image.png", [UInt8.tryFrom(0x89).ok() ?? 0, 80, 78, 71]
+    const applied = appliedEntries([binary], manifest, answers("dir"))
+    assert(applied[0].bytes == binary.bytes)
+  }
+}
+
+group "templateLocationOf" {
+  test "a URL is used as it is" {
+    assert(templateLocationOf("https://example.test/a.tar.gz", "https://git.torb.dev") ==
+      TemplateLocation.Url("https://example.test/a.tar.gz"))
+  }
+
+  test "file:// names a local path" {
+    assert(templateLocationOf("file:///tmp/mine", "https://git.torb.dev") == TemplateLocation.Path("/tmp/mine"))
+  }
+
+  test "github:owner/repo goes to codeload, never to the base" {
+    assert(templateLocationOf("github:acme/widget", "https://git.torb.dev") ==
+      TemplateLocation.Repository("codeload.github.com", "acme", "widget", true))
+  }
+
+  test "package and app are torb/package-template and torb/app-template of the base" {
+    assert(templateLocationOf("package", "https://git.torb.dev") ==
+      TemplateLocation.Repository("https://git.torb.dev", "torb", "package-template", false))
+    assert(templateLocationOf("app", "https://mirror.test") ==
+      TemplateLocation.Repository("https://mirror.test", "torb", "app-template", false))
+  }
+
+  test "owner/repo at a base that is a local path is a directory, not a repository" {
+    assert(templateLocationOf("acme/widget", "/srv/templates") == TemplateLocation.Path("/srv/templates/acme/widget"))
+    assert(
+      templateLocationOf("package", "/srv/templates") == TemplateLocation.Path("/srv/templates/torb/package-template"),
+    )
+  }
+
+  test "anything else is a local path as it was written" {
+    assert(templateLocationOf("./my-template", "https://git.torb.dev") == TemplateLocation.Path("./my-template"))
+  }
+}
+
+group "attemptScaffold from a local directory" {
+  test "reads template.trb, applies it, and writes the result" {
+    const source = scratch()
+    populate(source, [
+      ("template.trb", """
+        replace \{
+          file "project.trb" \{
+            text "torb/hello", becomes: "owner/name"
+          \}
+        \}
+
+        drop \{
+          path ".github", unless: "ci", isAnyOf: "github,both"
+        \}
+        """),
+      ("project.trb", "name = \"torb/hello\"\nversion = \"0.1.0\"\n"),
+      ("src/lib.trb", "public fn greeting(): String \{ \"hi\" \}\n"),
+      (".github/workflows/ci.yml", "on: push\n"),
+    ])
+    const target = "{scratch()}/out"
+    attemptScaffold(target, answers(source, ci: "forgejo"), false).expect("scaffolded")
+    assert(File.readText("{target}/project.trb") == "name = \"acme/hello\"\nversion = \"0.1.0\"\n")
+    assert File.exists("{target}/src/lib.trb")
+    assert(!File.exists("{target}/.github"))
+    assert(!File.exists("{target}/template.trb"))
+    File.removeDirectory(source).expect("removed")
+    File.removeDirectory(target).expect("removed")
+  }
+
+  test "refuses where a file it would write already exists, and writes nothing" {
+    const source = scratch()
+    populate source, [("project.trb", "name = \"x\"\n")]
+    const target = scratch()
+    populate target, [("project.trb", "already here")]
+    match attemptScaffold(target, answers(source), false) {
+      Ok(_) => panic "overwrote project.trb"
+      Fail(message) => assert message.contains("project.trb")
+    }
+    assert(File.readText("{target}/project.trb") == "already here")
+    File.removeDirectory(source).expect("removed")
+    File.removeDirectory(target).expect("removed")
+  }
+
+  test "a directory that does not exist fails, naming it" {
+    match attemptScaffold("{scratch()}/out", answers("{scratch()}/does-not-exist"), false) {
+      Ok(_) => panic "scaffolded from nothing"
+      Fail(message) => assert message.contains("does not exist")
+    }
+  }
+}
+
+group "attemptScaffold from an archive" {
+  test "the archive's own top directory is stripped, file:// and a bare path alike" {
+    const archiveEntries = [
+      TarEntry.directory("mine-main"),
+      TarEntry("mine-main/project.trb", "name = \"torb/hello\"\n".bytes()),
+      TarEntry(
+        "mine-main/template.trb",
+        "replace \{\n  file \"project.trb\" \{\n    text \"torb/hello\", becomes: \"owner/name\"\n  \}\n\}\n".bytes(),
+      ),
+    ]
+    const archive = tarred(archiveEntries).expect("an archive")
+    const directory = scratch()
+    File.writeBytes("{directory}/mine.tar.gz", gzipped(archive)).expect("the archive written")
+
+    const asPath = "{directory}/out-path"
+    attemptScaffold(asPath, answers("{directory}/mine.tar.gz"), false).expect("scaffolded from a bare path")
+    assert(File.readText("{asPath}/project.trb") == "name = \"acme/hello\"\n")
+
+    const asUrl = "{directory}/out-url"
+    attemptScaffold(asUrl, answers("file://{directory}/mine.tar.gz"), false).expect("scaffolded from file://")
+    assert(File.readText("{asUrl}/project.trb") == "name = \"acme/hello\"\n")
+
+    File.removeDirectory(directory).expect("removed")
+  }
+
+  test "an archive that is no archive fails and says so" {
+    const directory = scratch()
+    File.writeText("{directory}/bad.tar.gz", "not gzip").expect("the file")
+    match attemptScaffold("{directory}/out", answers("{directory}/bad.tar.gz"), false) {
+      Ok(_) => panic "scaffolded from what is no archive"
+      Fail(message) => assert message.contains("is not gzip")
+    }
+    File.removeDirectory(directory).expect("removed")
+  }
+}
+
+group "--offline" {
+  test "refuses a template of a repository at once, without reaching for curl or wget" {
+    match attemptScaffold("{scratch()}/out", answers("acme/widget"), true) {
+      Ok(_) => panic "reached the network"
+      Fail(message) => assert message.contains("--offline")
+    }
+  }
+
+  test "a local directory or archive still reads - nothing of it is the network" {
+    const source = scratch()
+    populate source, [("project.trb", "name = \"x\"\n")]
+    const target = "{scratch()}/out"
+    attemptScaffold(target, answers(source), true).expect("a local path reads offline")
+    assert File.exists("{target}/project.trb")
+    File.removeDirectory(source).expect("removed")
+    File.removeDirectory(target).expect("removed")
+  }
+}
