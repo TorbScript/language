@@ -118,7 +118,7 @@ case_of filter-group --report json --filter "Arithmetic" --filter "Größe > zä
 case_of shard --report json --shard 2/2
 
 # The mistakes of the command line: what each writes and its exit code, refused before anything is built. The path
-# comes first, so that an option at the end has nothing behind it to take for its value
+# comes first, so that an option at the end has nothing behind it to take for its value. `--help` lists the flags
 : >"$scratch/arguments.out"
 while IFS= read -r line; do
   [ -n "$line" ] || continue
@@ -137,7 +137,15 @@ done <<'EOF'
 --report json --native --shards 2
 --filter
 --report
+--frobnicate
 EOF
+status=0
+"$torb" test --help >"$scratch/arguments.err" 2>&1 || status=$?
+{
+  printf '$ torb test --help\n'
+  cat "$scratch/arguments.err"
+  printf 'exit %s\n' "$status"
+} >>"$scratch/arguments.out"
 if [ "$update" -eq 1 ]; then
   cp "$scratch/arguments.out" "$expectations/arguments.expected"
   say "tests/test-report: written"

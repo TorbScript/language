@@ -27,7 +27,7 @@ use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
-use TestOptions, TestShard, TestReport, testShardNamed, runTests, defaultTestPath from "./cli/test"
+use TestOptions, TestShard, TestReport, testShardNamed, runTests, defaultTestPath, testUsage from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
@@ -632,6 +632,11 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     if argument.startsWith("--jobs=") {
       continue
     }
+    // Not a path: a flag this command does not know, which would otherwise be looked for as a file that does not exist
+    if argument.startsWith("--") {
+      printError "error: unknown flag {argument}, see `torb test --help`"
+      return None
+    }
     paths.append argument
   }
   if wantsShard {
@@ -839,6 +844,7 @@ match Process.arguments() {
       Process.exit code
     }
   }
+  ["test", "--help"] | ["test", "help"] => print testUsage()
   ["test", ...more] => {
     const options = match testOptionsOf(more) {
       Some(found) => found
