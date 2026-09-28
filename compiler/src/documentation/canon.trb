@@ -19,7 +19,7 @@
  * `debugger.stop(event)` calls it, and `debugger.stop event` is an error the checker reports, because a command on a
  * field writes it. Inside the type the tree sees the field; anywhere else only the checker does. So a block the checker
  * checks is asked the rule `calls` with what the checker resolved ([CanonScope.CallsOnly], [noFieldCallsOf]), the way
- * `torb format` asks it, and one nothing checks with what the tree shows.
+ * `torb format` asks it (`format/typed.trb`), and one nothing checks with what the tree shows.
  *
  * [canonProblems] is the entry point, called once per snippet with its already-parsed tree.
  */
@@ -30,8 +30,9 @@ use lex from "../syntax/lexer"
 use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
 use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
 use Pattern, PatternKind, TextSegment from "../syntax/ast"
-use Checker, Resolution from "../semantics/checker/context"
+use Checker from "../semantics/checker/context"
 use ModuleId from "../semantics/module"
+use isNoField from "../format/typed"
 
 /** One place in a snippet where the canon says something else. `line` and `column` are inside the block. */
 public type CanonProblem {
@@ -120,7 +121,8 @@ fn isFieldCall(site: CallSite, scope: CanonScope): Bool {
 /**
  * The start of every call of a checked module whose callee the checker resolved to something that is no field: a
  * method, a function, a case, a local or a constant that holds a closure. A field is not one, and neither is a callee
- * without a resolution - a name after an error. What [CanonScope.CallsOnly] holds.
+ * without a resolution - a name after an error - which is the question `torb format` asks ([isNoField]). What
+ * [CanonScope.CallsOnly] holds.
  */
 public fn noFieldCallsOf(checker: Checker, module: ModuleId, file: SourceFile): Set<Int> {
   var walk = Walk([], [])
@@ -134,13 +136,6 @@ public fn noFieldCallsOf(checker: Checker, module: ModuleId, file: SourceFile): 
     }
   }
   found
-}
-
-fn isNoField(resolution: Resolution?): Bool {
-  match resolution {
-    None | Some(.Field(_, _)) | Some(.PropertyWrite(_, _)) | Some(.Deferred) => false
-    Some(_) => true
-  }
 }
 
 /**
