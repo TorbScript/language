@@ -262,11 +262,7 @@ fn parses(source: String): Bool {
 
 /** `torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...`. Returns the exit code. */
 public fn runLint(options: LintOptions): Result<Int, IoError> {
-  var files: List<String> = []
-  for path in options.paths {
-    collectFormatFiles(files, path)?
-  }
-  files.sort({ _ })
+  const files = filesOf(options.paths)?
   if options.fix {
     const typedBefore = typedFactsOf(options.paths, options.rules, fixing: true)?
     var changed = 0
@@ -331,6 +327,28 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
   }
   printError "{counted(total, "finding")} in {filesWithFindings} of {counted(files.length(), "file")} ({counts.joined(separator: ", ")})"
   1
+}
+
+/**
+ * Every file the paths reach, once and sorted. Two paths that overlap (`. tests/conformance`) reach some files twice,
+ * and a fix applied to a file a second time would apply the offsets of the first reading to the fixed text.
+ */
+fn filesOf(paths: List<String>): Result<List<String>, IoError> {
+  var collected: List<String> = []
+  for path in paths {
+    collectFormatFiles(collected, path)?
+  }
+  var seen: Set<String> = Set.of()
+  var files: List<String> = []
+  for file in collected {
+    const absolute = normalizePath(File.absolutePath(file)?)
+    if !seen.contains(absolute) {
+      seen.insert absolute
+      files.append file
+    }
+  }
+  files.sort({ _ })
+  files
 }
 
 /** A finding as the diagnostic `torb check` would print, with its rule and its fix as notes. */
