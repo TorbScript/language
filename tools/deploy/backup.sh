@@ -20,7 +20,9 @@ if ! restic cat config >/dev/null 2>&1; then
   restic init
 fi
 
-restic backup --tag torb --exclude '*.part' \
+# The hidden entries of download/ are release-sync's work in progress (.incoming/, a version set aside, the next
+# latest), never a published file
+restic backup --tag torb --exclude '*.part' --exclude '/srv/torb/download/.*' \
   /srv/torb/registry /srv/torb/download /srv/torb/index-mirror
 
 restic forget --tag torb --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune

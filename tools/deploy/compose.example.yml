@@ -63,7 +63,10 @@ services:
       RELEASE_SYNC_COSIGN_KEY: /etc/release-sync/cosign.pub
       RELEASE_SYNC_ROOT: /srv/torb
       RELEASE_SYNC_LISTEN: 0.0.0.0:8088
-      RELEASE_SYNC_POLL_SECONDS: "300"
+      RELEASE_SYNC_POLL_SECONDS: ${RELEASE_SYNC_POLL_SECONDS:-300}
+      # Where a release is downloaded and verified: empty for /srv/torb/download/.incoming, inside the one mount below,
+      # because a verified release is placed by renaming its directory, which no system does across file systems
+      RELEASE_SYNC_SCRATCH: ${RELEASE_SYNC_SCRATCH:-}
     volumes:
       - ${TORB_DATA:-/srv/torb}/download:/srv/torb/download
       - ./cosign.pub:/etc/release-sync/cosign.pub:ro
@@ -72,8 +75,10 @@ services:
     labels:
       <<: *traefik
       traefik.http.services.torb-release-sync.loadbalancer.server.port: "8088"
-      # Longer than the site's rule, so Traefik gives it the higher priority
+      # Traefik ranks routers by the length of their rule unless a priority is set, and this rule (36 characters) is
+      # shorter than the site's (40): without the explicit priority, /webhook would go to nginx
       traefik.http.routers.torb-release-sync.rule: Host(`torb.dev`) && Path(`/webhook`)
+      traefik.http.routers.torb-release-sync.priority: "100"
       traefik.http.routers.torb-release-sync.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.torb-release-sync.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
       traefik.http.routers.torb-release-sync.service: torb-release-sync
@@ -106,7 +111,10 @@ services:
     labels:
       <<: *traefik
       traefik.http.services.torb-registry.loadbalancer.server.port: "8089"
+      # An explicit priority above the site's routers, as for /webhook: ranked by length alone, /api would go to nginx
+      # as soon as the site's packages.torb.dev rule grew longer than this one
       traefik.http.routers.torb-registry.rule: Host(`packages.torb.dev`) && PathPrefix(`/api`)
+      traefik.http.routers.torb-registry.priority: "100"
       traefik.http.routers.torb-registry.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.torb-registry.tls.certresolver: ${TRAEFIK_CERTRESOLVER:-letsencrypt}
       traefik.http.routers.torb-registry.service: torb-registry
