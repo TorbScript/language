@@ -115,8 +115,8 @@ all passes: 41069 ms
 ### `--every-target`
 
 After the check, lowers every program and test of the paths - every entry file, script and test file - once per
-target of the toolchain's list (`windows`, `linux`, `macos` and `freebsd`, each on `x64` and `arm64`) and stops before C,
-so no C compiler is needed. The checker already checked every arm of every `match OperatingSystem.current` on this
+target of the toolchain's list (`windows`, `linux`, `macos` and `freebsd`, each on `x64` and `arm64`, and `browser` on
+`wasm64`) and stops before C, so no C compiler is needed. The checker already checked every arm of every `match OperatingSystem.current` on this
 machine; what only a target's lowering sees is which arm that target keeps, and what the arm reaches. A native that
 exists on some systems only, reached on another, is the error it finds, printed under the target that has it
 ([Compile-time branches](../language/execution/compile-time-branches.md)).
@@ -127,7 +127,7 @@ $ torb check --every-target tools/probe.trb
 linux-x64:
 error: `Windows.tickCount` exists only on Windows, and this program is built for Linux
 ...
-6 problems on 6 targets of 8: linux-x64, linux-arm64, macos-x64, macos-arm64, freebsd-x64, freebsd-arm64
+7 problems on 7 targets of 9: linux-x64, linux-arm64, macos-x64, macos-arm64, freebsd-x64, freebsd-arm64, browser-wasm64
 ```
 
 ### A false positive is a bug in the checker

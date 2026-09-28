@@ -223,6 +223,7 @@ public type OperatingSystem with Show, Equals, Hash {
   case Linux
   case MacOs
   case FreeBsd
+  case Browser
 
   static current: OperatingSystem
   fn isPosix(): Bool
@@ -231,6 +232,7 @@ public type OperatingSystem with Show, Equals, Hash {
 public type Architecture with Show, Equals, Hash {
   case X64
   case Arm64
+  case Wasm64
 
   static current: Architecture
 }
@@ -249,7 +251,7 @@ use OperatingSystem from "std/core"
 fn separator(): String {
   match OperatingSystem.current {
     .Windows => ";"
-    .Linux | .MacOs | .FreeBsd => ":"
+    .Linux | .MacOs | .FreeBsd | .Browser => ":"
   }
 }
 
@@ -258,7 +260,9 @@ print(OperatingSystem.Linux.isPosix() && separator().byteLength() == 1)
 ```
 
 `show()` answers the name as the vendor writes it (`macOS`, `FreeBSD`), and `isPosix()` is the question for a branch
-that should include an operating system added later.
+that should include an operating system added later. `Browser` on `Wasm64` is the target of the playground, whose
+`torb` runs as WebAssembly in a web page ([the playground](../tooling/the-playground.md)); `isPosix()` is `false`
+there.
 
 ### Predicate, Action and Transform
 

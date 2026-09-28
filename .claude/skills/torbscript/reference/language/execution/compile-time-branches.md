@@ -30,7 +30,7 @@ use OperatingSystem from "std/core"
 fn searchPathSeparator(): String {
   match OperatingSystem.current {
     .Windows => ";"
-    .Linux | .MacOs | .FreeBsd => ":"
+    .Linux | .MacOs | .FreeBsd | .Browser => ":"
   }
 }
 
@@ -89,6 +89,7 @@ if const <pattern> = <compile-time constant> { ... } else { ... }
      match OperatingSystem.current {
        .Windows => windowsName()
        .Linux | .MacOs | .FreeBsd => "posix"
+       .Browser => "browser"
      }
    }
    print systemName()
@@ -110,7 +111,7 @@ if const <pattern> = <compile-time constant> { ... } else { ... }
      }
    }
    print systemName()
-   // error: `match` does not handle `.MacOs` and `.FreeBsd`
+   // error: `match` does not handle `.MacOs`, `.FreeBsd` and `.Browser`
    ```
 
 5. **An `if` whose condition is a compile-time constant `Bool`, and an `if const` whose subject is a compile-time

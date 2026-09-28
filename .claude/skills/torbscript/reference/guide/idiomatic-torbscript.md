@@ -641,7 +641,7 @@ compiler checks every arm on every machine and builds only the one the target ta
 fn searchPathSeparator(): String {
   match OperatingSystem.current {
     .Windows => ";"
-    .Linux | .MacOs | .FreeBsd => ":"
+    .Linux | .MacOs | .FreeBsd | .Browser => ":"
   }
 }
 ```

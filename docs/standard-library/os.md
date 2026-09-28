@@ -127,7 +127,8 @@ public type System {
 | `machineArchitecture` | `IsWow64Process2` | `uname` | `uname`, `sysctl.proc_translated` | `uname` |
 
 `hostName` never asks DNS. `uptime` includes the time the machine was asleep on every system. `pageSize` is a number
-of bytes and never fails. `machineArchitecture` is the machine and not always `Architecture.current`: an x86-64
+of bytes and never fails. In the browser, where the playground runs a program, `version`, `hostName` and `uptime` are
+`Unsupported`, `pageSize` is WebAssembly's 65536, and `machineArchitecture` is `.Wasm64`. `machineArchitecture` is the machine and not always `Architecture.current`: an x86-64
 program emulated on Arm64 Windows, or translated by Rosetta on a Mac, runs on `.Arm64`.
 
 ### SystemVersion
@@ -178,7 +179,8 @@ name to it: one join, the same on every system.
 | `temporary` | `$TMPDIR`, else `/tmp` | `GetTempPath2W` | `$TMPDIR`, else the user's own |
 
 An XDG variable that holds a relative path is ignored, as the XDG specification requires. `temporary()` always
-answers, because every system has a temporary directory and `/tmp` is the last resort.
+answers, because every system has a temporary directory and `/tmp` is the last resort. In the browser, whose file
+system is in memory and belongs to no user, every directory but `temporary()` (`/tmp`) is `Unsupported`.
 
 ### OsError
 
@@ -202,7 +204,8 @@ instead of answering it (see [std/task](task.md)).
 ## The per-system modules
 
 Each directory of `std/os/src/` holds what one system, or one standard several share, has: `windows/`, `linux/`,
-`macos/` and `freebsd/`, and `posix/`, `bsd/` (the `sysctl` interface of macOS and FreeBSD) and `xdg/`. Their
+`macos/`, `freebsd/` and `browser/` (which has no natives), and `posix/`, `bsd/` (the `sysctl` interface of macOS and
+FreeBSD) and `xdg/`. Their
 `native.trb` modules are the raw natives of `runtime/os/`, and a program that needs one imports it directly
 (`use Windows from "std/os/windows/native"`) and reaches it from the arm of its system; `torb check --every-target`
 reports a native that is reached on a system it does not exist on. They are not the documented surface of the package.

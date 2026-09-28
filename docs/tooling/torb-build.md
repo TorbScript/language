@@ -137,7 +137,8 @@ C cut apart so that the units compile in parallel. `program.c` alone builds the 
 What `OperatingSystem.current`, `Architecture.current` and `ByteOrder.current` answer in the program, and so which
 arm of a `match` on them is compiled ([Compile-time branches](../language/execution/compile-time-branches.md)): one
 of `windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`, `macos-x64`, `macos-arm64`, `freebsd-x64`,
-`freebsd-arm64`. Without it, a build is for the machine `torb` runs on. A target that is not this machine needs
+`freebsd-arm64`, and `browser-wasm64`, the WebAssembly of the playground, which `playground/build.sh` compiles with
+emscripten. Without it, a build is for the machine `torb` runs on. A target that is not this machine needs
 `--emit-c`, because the C compiler `build` finds compiles for this machine; the C it writes builds on the target.
 
 ### `--embed-vm`

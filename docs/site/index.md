@@ -27,5 +27,6 @@ and the release notes, which will have `docs/releases/`.
 
 - **[TorbScript](home.md)** - A programming language for scripts, tools and servers. It finds mistakes before your program runs, starts at once while you write, and builds a fast program when you ship.
 - **[Install TorbScript](install.md)** - One command installs the toolchain for the current user on Linux, macOS, FreeBSD and Windows, checked against the release's hashes, and torb upgrade keeps it current.
+- **[Playground](play.md)** - Write TorbScript and run it in your browser - the whole toolchain as WebAssembly checks, compiles and runs the program on your machine, with no server and no account, and the address is the link to share it.
 
 <!-- torb:index:end -->

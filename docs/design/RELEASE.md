@@ -456,9 +456,9 @@ link to the forge, `search-index.json` (the term index above), and one styleshee
 coloured by the lexer and the resolver at generation time; every internal link of the output is checked. The Markdown
 is `std/markdown`'s tree with a renderer of the site's own (anchors, callouts, the rewritten links), not its HTML step.
 `site/` pages have the kind `site` and stay out of the skill and the bundle. The site image runs it from the release's
-source (`tools/deploy/Dockerfile.site`), and nginx serves it with clean URLs. Not built yet: `/learn`, `/download`,
-`/play`, `/releases/<version>`, and a version's link to the same page in the newest one - the version switcher reads a
-`docs/versions.json` that nothing writes yet.
+source (`tools/deploy/Dockerfile.site`), and nginx serves it with clean URLs. `/play` is `site/play.md` with the
+playground (below). Not built yet: `/learn`, `/download`, `/releases/<version>`, and a version's link to the same page
+in the newest one - the version switcher reads a `docs/versions.json` that nothing writes yet.
 
 ### The playground
 
@@ -478,6 +478,90 @@ no server.**
 - **Sharing is the URL**: the source compressed into the fragment (`/play#code=...`), which never reaches a server.
 - **Measured before it is built**: the time `torb check` takes for a ten-line program with the prelude, natively, is the
   number the slice records first; if the prelude's check dominates, the playground ships the checked prelude as data.
+
+### The playground, as built (2026-09-28)
+
+`playground/` holds it: `build.sh` builds the toolchain, `playground.js`, `playground-worker.js` and `playground.css`
+are the page's side, and `smoke-test.mjs` runs the result under node. The user's page is
+[docs/tooling/the-playground.md](../tooling/the-playground.md); `/play` is `docs/site/play.md`.
+
+**Measured first, natively** (Windows x64, the `torb.exe` of `dafd3138`), a ten-line program with the prelude:
+`torb check` takes 600 to 680 ms, of which 440 to 510 ms is lexing and parsing, because a loose file's check reads the
+whole standard library; `torb run --timings` - what the playground runs - checks in 228 ms (144 ms of it parsing the
+modules the program reaches), lowers in 102 ms and reaches the first instruction after 379 ms. The prelude's check is
+about half of that and does not dominate the way the decision feared, so the playground ships **no checked prelude**:
+in the browser a warm hello world prints after 0.3 s, and a snapshot of the checker would be a format of its own to
+keep in step with the compiler. It is the first lever if the start ever needs to be faster.
+
+**The target is `browser-wasm64`.** `OperatingSystem` gained `Browser` and `Architecture` gained `Wasm64` (fact 18: a
+breaking change of `std/core`, made before 1.0 as decided above), `torb build --target browser-wasm64 --emit-c` emits
+C for it, and `torb check --every-target` lowers for it as its ninth target, as `tools/agree.sh` emits for it.
+`std/os` answers in the browser from `std/os/src/browser/`, with no natives: the system questions are `Unsupported`,
+`pageSize` is 65536, `machineArchitecture` is `.Wasm64`, `Directories.temporary()` is `/tmp`.
+
+- **`Browser`, not `Wasi` or `Emscripten`**: the case names the system a program talks to, and the rule of the JS back
+  end (`docs/design/JAVASCRIPT-AND-PHP.md`) is the browser's column; .NET names the same target `browser-wasm`
+  (`OperatingSystem.IsBrowser()`), Go `js/wasm`. A later JavaScript back end for the browser has the same system.
+- **`Wasm64`, 64-bit pointers**: the VM keeps a value in 64-bit words laid out as the runtime's own structs (VM.md
+  section 2) - a `String` is two words that *are* a `torb_text` - which holds only where a pointer is a word. The C is
+  compiled for wasm64 and lowered to wasm32 by binaryen (`-sMEMORY64=2`), so it runs on every engine, memory64 or not,
+  and it is faster than real memory64, whose bounds are checked on every access: `fibonacci(25)` in the VM took 250 ms
+  lowered and 350 ms with memory64 under node 24.
+- **The compiler's C for the target is the host's C** everywhere but `hostTarget()`, whose one `match
+  OperatingSystem.current` answers `browser-wasm64` in the browser without starting `uname`; the machines' C stays the
+  same for every machine, and the fixpoint is untouched.
+
+**The toolchain is emscripten 6.0.10**, pinned in `playground/build.sh` and run from the image `emscripten/emsdk:6.0.10`
+where no `emcc` of that version is installed. Over wasi-sdk it has, in one toolchain, what the runtime needs: `setjmp`
+over WebAssembly exception handling (`-sSUPPORT_LONGJMP=wasm`, the legacy instructions every engine since 2021 runs),
+the pthread stubs of a pool of one worker, the clock, randomness, an in-memory file system with `std/` embedded at
+`/torb/std`, and the lowered wasm64. wasi-sdk would have needed a JavaScript host with a file system written by hand,
+and it has no wasm64. `runtime/` needed three things: `os/browser.c`, the poller of the IO core that never opens;
+`torb_platform_stack_low` from emscripten's stack; one processor. `TORB_HOSTS_MACHINE` is set as for every `torb`.
+
+**The capability rule is enforced where the VM runs a program** (`compiler/src/project/capability.trb`,
+`reportMissingCapabilities` in `compiler/src/vm/run.trb`): for the browser, an import of `std/process`, `std/network`,
+`std/dns`, `std/http` or `std/tls` in a file of the program is an error at the import, after the check and before the
+lowering; `std/fs` is emscripten's MEMFS, empty but for `std/`, with `/torb/work` as the working directory; the
+environment is empty and standard input at its end. Not in the lowering, because the compiler itself imports
+`std/process` and is built for the target; its natives link there and fail at run time, which no program of the
+playground can reach.
+
+**Size and speed**, measured on the build of 2026-09-28:
+
+| | |
+|---|---|
+| `torb.wasm` | 12.41 MB raw, 3.76 MB gzip -9 (what nginx sends, `torb.wasm.gz` beside it), 2.62 MB brotli -11 |
+| `torb.js` | 97 KB, 26 KB gzipped |
+| hello world, headless Chrome, local server | first output 0.58 to 0.65 s cold (fetch, compile, instantiate, check, lower, run), 0.30 to 0.34 s warm, 0.50 to 0.56 s on a second visit from the browser's cache |
+| the same over 50 Mbit/s | 1.55 s cold |
+| WebKit (Safari's engine), local | 1.44 s cold, 0.82 s warm, for a twelve-line program |
+| node 24 (`smoke-test.mjs`) | 0.88 s cold, 0.45 s warm |
+| the VM | about 4.5 times slower than natively (`fibonacci(25)`: 244 ms, 54 ms); the compiler's own work about 1.5 to 2 times |
+
+**The page's side is hand-written and small**, and takes one pattern from each of the playgrounds it was measured
+against, and nothing more: a textarea over a coloured copy of itself (the Gleam tour's editor), in the token classes of
+the site so the colours are the site's; Run and Ctrl or Cmd+Enter (the Rust Playground); the output under the editor,
+the checker's lines marked in it with the message beside the line (the Go Playground); Reset and Show solution for an
+exercise, with a line that says whether it is solved (the Svelte tutorial); and the source in the address, deflated
+with the browser's `CompressionStream` and base64url behind `#code=` (the TypeScript playground's `#code/`), written as
+the reader types, so the address is the share button. A worker runs the toolchain, a fresh instance per run from the
+module the page compiled once, so Run can become Stop and a program that never ends never freezes the page; output
+beyond a megabyte stops the run. `TorbPlayground.mount` follows the contract of runnable blocks in
+[torb docs site](../tooling/torb-docs-site.md); a mount inside an element with `data-playground-page` is the page
+`/play` - the editor fills it and the address carries the source.
+
+**The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the six files into
+`assets/` where they were built; no page names them, so a site without them is still whole. `tools/deploy/nginx.conf`
+sends `torb.wasm.gz` with `gzip_static`. The site image builds the playground itself, in the pinned emscripten image,
+from the release's source and with the release's `torb` - the same inputs give the same wasm, and nothing but the
+release is downloaded for it. CI's `playground` job (`.forgejo/workflows/gates.yml`) builds it in that image from the
+compiler of the run and runs `smoke-test.mjs`.
+
+**Not built**: brotli (the stock nginx has no module for it; 30% smaller), a checked prelude (above), keeping the
+compiled module between visits in IndexedDB (browsers no longer store a `WebAssembly.Module` there; the HTTP cache and
+the engine's own code cache do it), and a highlighter that knows what the resolver knows - the editor colours by the
+lexer, and a name the site would underline as mutable is not underlined while it is typed.
 
 ### Hosting
 
@@ -1297,14 +1381,14 @@ on first use, and `seeds.txt` is replaced by deleting the asset and uploading th
 | `bootstrap and conformance (windows-x64)` | a runner labelled `windows-x64`, gcc of MSYS2 UCRT64 | bootstrap with the fixpoint, `torb check .`, the conformance suite, the runtime's tests, the C of every target | once the runner exists and `TORB_RUNNERS` names it; until then on the GitHub mirror after the push |
 | `... (linux-arm64)` | a runner labelled `linux-arm64`, gcc | the same | as windows-x64 |
 | `... (macos-arm64)` | a runner labelled `macos-arm64`, clang | the same | as windows-x64 |
-| `every host emits the same C` | `ubuntu-latest` | `tools/agree.sh`: linux-x64 emits the compiler's C for all eight targets (`torb build --emit-c --target`), `--target linux-x64` has to be the bootstrap's C, and every other runner of the run has to emit the same C for every target | always |
+| `every host emits the same C` | `ubuntu-latest` | `tools/agree.sh`: linux-x64 emits the compiler's C for all nine targets (`torb build --emit-c --target`), `--target linux-x64` has to be the bootstrap's C, and every other runner of the run has to emit the same C for every target | always |
 | `the VS Code extension (editors/vscode)` | `ubuntu-latest`, the pinned Node.js | `tools/package-extension.sh`: the `.vsix` packed with `@vscode/vsce`, its version checked against `project.trb` - a manifest the stores would refuse fails here, not in a release | always |
 
 **Why tier A and tier B run on one target only.** Nearly every gate tests the compiler, and the compiler is the same C on
 every machine - which the `agree` job proves on every run, and which is the strongest cross-platform statement the
 repository can make cheaply. On the forge's one runner it is proven differently than on GitHub's four: the C a host
 emits for a target is a function of the target, so the check compares what several *hosts* emit for every one of the
-eight targets, and with a single host it shows that every target lowers and that `--target` of the host itself
+nine targets (the eight machines and `browser-wasm64`, the playground's), and with a single host it shows that every target lowers and that `--target` of the host itself
 reproduces the bootstrap's C. The lists of the other runners, of the GitHub mirror's machines and of the maintainer's
 own (`sh tools/agree.sh emit build/release/torb build/hosts/mine.txt`) are compared the same way; measured on
 2026-09-27, the eight emissions take four to five minutes each on the maintainer's machine, and the C differs only

@@ -35,11 +35,12 @@ Reference - and is written in English and in every language below `docs/translat
 ## Synopsis
 
 ```text
-torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]
+torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--check]
 
   --output <dir>   Where the site goes
   --version <v>    The version the documentation is of, and its directory below docs/ (default: latest)
   --brand <dir>    Where the fonts, the icons and the logo are (default: <root>/../brand)
+  --playground <dir>  The playground playground/build.sh built (default: <root>/../build/playground)
   --check          Build the site and check its links, and write nothing
 ```
 
@@ -57,6 +58,7 @@ torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]
 | `404.html` | The page for a path that is not there | |
 | `assets/site.css`, `assets/site.js` | The one stylesheet and the one script | the compiler |
 | `assets/fonts/` | Chivo and Geist Mono as `.woff2`, with their licence | `brand/fonts/` |
+| `assets/playground.js`, `playground-worker.js`, `playground.css`, `torb.js`, `torb.wasm`, `torb.wasm.gz` | [The playground](the-playground.md), only where it was built | `--playground` |
 | `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `mask-icon.svg`, `icons/`, `manifest.webmanifest`, `social-card.png` | The icons, the web manifest with a maskable icon, and the preview card | `brand/` |
 
 Every link between two pages is relative, so the output can be served from any directory. The page for a missing
