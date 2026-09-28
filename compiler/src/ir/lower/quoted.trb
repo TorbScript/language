@@ -395,14 +395,14 @@ fn callNode(
       if const Some(receiver) = base {
         if const Some(.TypeOf(_)) = lowering.checker.resolutionAt(module, receiver.span) {
           const owner = typeReferenceAt(lowering, builder, tree, receiver.span)?
-          return callOf lowering, builder, tree, None, owner, method, values, at
+          return callOf lowering, builder, tree, target: None, owner: owner, method: method, arguments: values, at: at
         }
         const target = nodeOf(lowering, builder, tree, receiver)?
         const owner = typeReferenceAt(lowering, builder, tree, receiver.span)?
         return callOf lowering, builder, tree, target, owner, method, values, at
       }
       const owner = namedReference(lowering, builder, tree, "", [])?
-      callOf lowering, builder, tree, None, owner, method, values, at
+      callOf lowering, builder, tree, target: None, owner: owner, method: method, arguments: values, at: at
     }
     _ => {
       reportUnsupported lowering, "a quoted call of something that is not a function", at
@@ -539,11 +539,23 @@ fn literalNode(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeB
     encodedCase(lowering, builder, tree, "Int", [integerSlot(lowering, builder, number, integer)], at)?
   } else if const Some(number) = floatOf(value) {
     const floating = lowering.program.internType IrType.Floating(64)
-    const slot = constantSlot lowering, builder, None, StaticContents.Floating(number), floating
+    const slot = constantSlot(
+      lowering,
+      builder,
+      destination: None,
+      contents: StaticContents.Floating(number),
+      annotation: floating,
+    )
     encodedCase(lowering, builder, tree, "Float", [slot], at)?
   } else if const Some(truth) = booleanOf(value) {
     const boolean = lowering.program.internType IrType.Boolean
-    const slot = constantSlot lowering, builder, None, StaticContents.Literal(LiteralValue.Boolean(truth)), boolean
+    const slot = constantSlot(
+      lowering,
+      builder,
+      destination: None,
+      contents: StaticContents.Literal(LiteralValue.Boolean(truth)),
+      annotation: boolean,
+    )
     encodedCase(lowering, builder, tree, "Bool", [slot], at)?
   } else if const Some(text) = textOf(value) {
     encodedCase(lowering, builder, tree, "String", [textSlot(lowering, builder, text)], at)?

@@ -123,7 +123,17 @@ public fn lowerMatch(
   }
   firstSlots.append builder.slotCount()
   const graph = decisionTreeOf plan
-  const walk = Walk plan, graph, guards, scrutinee, armBlocks, None, [], expression.span, location
+  const walk = Walk(
+    plan,
+    graph,
+    guards,
+    scrutinee,
+    armBlocks,
+    failBlock: None,
+    blocks: [],
+    at: expression.span,
+    location: location,
+  )
   emitWalk lowering, builder, walk
   var reaches = false
   for index in 0..arms.length() {
@@ -897,7 +907,16 @@ fn emitLengthTest(
   const boolean = booleanTypeOf lowering
   const kind = NumericKind.Signed 64
   const slots = [counted, wanted]
-  const condition = intrinsicSlot lowering, builder, None, operation, kind, slots, boolean, walk.at
+  const condition = intrinsicSlot(
+    lowering,
+    builder,
+    destination: None,
+    operation: operation,
+    kind: kind,
+    operands: slots,
+    annotation: boolean,
+    at: walk.at,
+  )
   finishBlock lowering, builder, Terminator.Branch(condition, then, otherwise)
 }
 
@@ -1063,7 +1082,16 @@ fn itemFromEndOf(
   const back = integerSlot(lowering, builder, index + 1, integer)
   const kind = NumericKind.Signed 64
   const operation = IntrinsicOperation.Subtract
-  const position = intrinsicSlot lowering, builder, None, operation, kind, [counted, back], integer, at
+  const position = intrinsicSlot(
+    lowering,
+    builder,
+    destination: None,
+    operation: operation,
+    kind: kind,
+    operands: [counted, back],
+    annotation: integer,
+    at: at,
+  )
   itemSlotOf lowering, builder, container, containerType, position, destination, at
 }
 
@@ -1173,7 +1201,16 @@ fn takenBefore(
   const besides = integerSlot lowering, builder, covered, integer
   const kind = NumericKind.Signed 64
   const operation = IntrinsicOperation.Subtract
-  const amount = intrinsicSlot lowering, builder, None, operation, kind, [counted, besides], integer, at
+  const amount = intrinsicSlot(
+    lowering,
+    builder,
+    destination: None,
+    operation: operation,
+    kind: kind,
+    operands: [counted, besides],
+    annotation: integer,
+    at: at,
+  )
   const bound = boundDeclaring(lowering, stageType, "take", at)?
   const dispatched = dispatchedOn(lowering, stageType, bound, "take", at)?
   const shortenedType = resultTypeOf lowering, dispatched
@@ -1244,14 +1281,38 @@ fn literalComparison(
   }
   const annotation = builder.typeOfSlot value
   const boolean = booleanTypeOf lowering
-  const other = constantSlot lowering, builder, None, StaticContents.Literal(found), annotation
+  const other = constantSlot(
+    lowering,
+    builder,
+    destination: None,
+    contents: StaticContents.Literal(found),
+    annotation: annotation,
+  )
   if const Some(kind) = numericKindOf(lowering.program, annotation) {
     const slots = [value, other]
-    return intrinsicSlot lowering, builder, None, operation, kind, slots, boolean, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination: None,
+      operation: operation,
+      kind: kind,
+      operands: slots,
+      annotation: boolean,
+      at: at,
+    )
   }
   if isPlainEquality(lowering, annotation) {
     if const .Equal = operation {
-      return intrinsicSlot lowering, builder, None, operation, None, [value, other], boolean, at
+      return intrinsicSlot(
+        lowering,
+        builder,
+        destination: None,
+        operation: operation,
+        kind: None,
+        operands: [value, other],
+        annotation: boolean,
+        at: at,
+      )
     }
     reportUnsupported lowering, "a range of values that have no order", at
     return None
@@ -1259,14 +1320,38 @@ fn literalComparison(
   if isTextType(lowering, annotation) {
     if const .Equal = operation {
       const equals = IntrinsicOperation.TextEqual
-      return intrinsicSlot lowering, builder, None, equals, None, [value, other], boolean, at
+      return intrinsicSlot(
+        lowering,
+        builder,
+        destination: None,
+        operation: equals,
+        kind: None,
+        operands: [value, other],
+        annotation: boolean,
+        at: at,
+      )
     }
     const integer = lowering.program.internType IrType.Integer(64, signed: true)
     const order = addTemporary builder, integer
-    emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [value, other], at
-    const zero = constantSlot lowering, builder, None, StaticContents.Literal(LiteralValue.Integer(0)), integer
+    emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, kind: None, operands: [value, other], at: at
+    const zero = constantSlot(
+      lowering,
+      builder,
+      destination: None,
+      contents: StaticContents.Literal(LiteralValue.Integer(0)),
+      annotation: integer,
+    )
     const kind = NumericKind.Signed 64
-    return intrinsicSlot lowering, builder, None, operation, kind, [order, zero], boolean, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination: None,
+      operation: operation,
+      kind: kind,
+      operands: [order, zero],
+      annotation: boolean,
+      at: at,
+    )
   }
   reportUnsupported lowering, "a pattern that compares a value the back end cannot compare yet", at
   None
@@ -1309,7 +1394,7 @@ fn readPath(
     // An item of a list is a *call* and no step: `at(index)`, `skip(index).toList()` (see "List patterns" above)
     if isItemStep(step) {
       const before = path[0..index]
-      match itemStepOf(lowering, builder, plan, before, current, step, None, at) {
+      match itemStepOf(lowering, builder, plan, before, current, step, destination: None, at: at) {
         Some(found) => {
           current = found
           continue
@@ -1594,7 +1679,13 @@ fn reportFailure(
   const shape = lowering.program.layoutAt subjectLayout
   const fields = shape.fieldsOfVariant failure
   var parts: List<Slot> = []
-  parts.append constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("error: ")), text)
+  parts.append(constantSlot(
+    lowering,
+    builder,
+    destination: None,
+    contents: StaticContents.Literal(LiteralValue.Text("error: ")),
+    annotation: text,
+  ))
   var chain: (Slot, TypeId)? = None
   // A `None` carries nothing, so the line is the prefix alone: `x?` on an `Option` says that there was no value
   if const Some(field) = fields.first() {
@@ -1613,8 +1704,25 @@ fn reportFailure(
     }
   }
   // One part and not two: `printError` joins its parts with a space, and `error: ` already ends in one
-  const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
-  emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
+  const line = intrinsicSlot(
+    lowering,
+    builder,
+    destination: None,
+    operation: IntrinsicOperation.TextConcat,
+    kind: None,
+    operands: parts,
+    annotation: text,
+    at: at,
+  )
+  emitIntrinsic(
+    lowering,
+    builder,
+    target: None,
+    operation: IntrinsicOperation.PrintErrorParts,
+    kind: None,
+    operands: [line],
+    at: at,
+  )
   if const Some((current, failed)) = chain {
     lowerCauseChain lowering, builder, current, failed, at
     if !lowering.supported {
@@ -1623,7 +1731,15 @@ fn reportFailure(
   }
   const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const code = integerSlot lowering, builder, 1, integer
-  emitIntrinsic lowering, builder, None, IntrinsicOperation.ExitWithCode, None, [code], at
+  emitIntrinsic(
+    lowering,
+    builder,
+    target: None,
+    operation: IntrinsicOperation.ExitWithCode,
+    kind: None,
+    operands: [code],
+    at: at,
+  )
   finishBlock lowering, builder, Terminator.Unreachable
 }
 
@@ -1685,14 +1801,37 @@ fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current
   continueIn lowering, builder, inner
   emit builder, Instruction.Read(current, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
   var parts: List<Slot> = []
-  parts.append constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("  caused by: ")), text)
+  parts.append(constantSlot(
+    lowering,
+    builder,
+    destination: None,
+    contents: StaticContents.Literal(LiteralValue.Text("  caused by: ")),
+    annotation: text,
+  ))
   const shown = showSlot lowering, builder, current, failed, at
   if !lowering.supported {
     return
   }
   parts.append shown
-  const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
-  emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
+  const line = intrinsicSlot(
+    lowering,
+    builder,
+    destination: None,
+    operation: IntrinsicOperation.TextConcat,
+    kind: None,
+    operands: parts,
+    annotation: text,
+    at: at,
+  )
+  emitIntrinsic(
+    lowering,
+    builder,
+    target: None,
+    operation: IntrinsicOperation.PrintErrorParts,
+    kind: None,
+    operands: [line],
+    at: at,
+  )
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, done
 }
@@ -1806,10 +1945,27 @@ fn convertedError(
         const target = substituted lowering, written
         const applied = substituted lowering, bound
         const dispatched = dispatchedOn(lowering, target, applied, "from", at)?
-        return lowerDispatched lowering, builder, None, at, dispatched, [error], [None], wanted
+        return lowerDispatched(
+          lowering,
+          builder,
+          destination: None,
+          at: at,
+          dispatched: dispatched,
+          written: [error],
+          places: [None],
+          annotation: wanted,
+        )
       }
       if const Some(function) = instanceOfSymbol(lowering, method) {
-        return emitCall lowering, builder, None, function, [error], wanted, at
+        return emitCall(
+          lowering,
+          builder,
+          destination: None,
+          function: function,
+          operands: [error],
+          annotation: wanted,
+          at: at,
+        )
       }
     }
   }

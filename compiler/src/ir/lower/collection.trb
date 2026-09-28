@@ -213,7 +213,7 @@ fn filledList(
   at: Span,
 ): (Slot, TypeId)? {
   const container = implementationOf(lowering, "ArrayList", [item], at)?
-  const element = elementFor(lowering, item, false, at)?
+  const element = elementFor(lowering, item, needsKeyOperations: false, at: at)?
   const storage = addTemporary builder, irTypeOfClosed(lowering, container)
   emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
   const adder = memberOfType(lowering, container, bound, "append", at)?
@@ -274,7 +274,16 @@ fn lowerBuiltList(
     }
   }
   const boxed = irTypeOfClosed lowering, source
-  const argument = coerced lowering, builder, None, storage, [iterateBound], container, boxed, at
+  const argument = coerced(
+    lowering,
+    builder,
+    destination: None,
+    storage: storage,
+    bounds: [iterateBound],
+    container: container,
+    annotation: boxed,
+    at: at,
+  )
   if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
@@ -308,14 +317,23 @@ public fn listOfValues(
     }
   }
   const container = implementationOf(lowering, "ArrayList", [item], at)?
-  const element = elementFor(lowering, item, false, at)?
+  const element = elementFor(lowering, item, needsKeyOperations: false, at: at)?
   const storage = addTemporary builder, irTypeOfClosed(lowering, container)
   emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
   const adder = memberOfType(lowering, container, bound, "append", at)?
   for value in values {
     addInto lowering, builder, adder, storage, [value], at
   }
-  const target = coerced lowering, builder, None, storage, [bound], container, annotation, at
+  const target = coerced(
+    lowering,
+    builder,
+    destination: None,
+    storage: storage,
+    bounds: [bound],
+    container: container,
+    annotation: annotation,
+    at: at,
+  )
   if !lowering.supported {
     return None
   }
@@ -568,13 +586,13 @@ public fn lowerMapLiteral(
     }
   }
   // A key of the hash table is compared and hashed through its descriptor, so this one carries both members
-  const keyElement = match elementFor(lowering, key, true, at) {
+  const keyElement = match elementFor(lowering, key, needsKeyOperations: true, at: at) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
     }
   }
-  const valueElement = match elementFor(lowering, value, false, at) {
+  const valueElement = match elementFor(lowering, value, needsKeyOperations: false, at: at) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
@@ -718,7 +736,7 @@ fn addInto(
     given.append borrowed(value)
   }
   const location = locationOf lowering, at
-  emit builder, Instruction.Call(None, member, given, [], location)
+  emit builder, Instruction.Call(target: None, callee: member, arguments: given, witnesses: [], at: location)
 }
 
 /**

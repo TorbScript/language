@@ -55,8 +55,7 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   standard library and the compiler, and `torb rename` for a field renamed at every use the checker resolves
   ([tooling/torb-rename.md](tooling/torb-rename.md)). **Left:** a place in the manifest to choose rules (only
   `--rule`/`--skip` today), the rules named and not built (a closure that only passes its parameter on, a case the
-  expected type names, a `deprecated` field) and the findings of `labeled-literal` that need a call reordered
-  ([tooling/torb-lint.md](tooling/torb-lint.md)).
+  expected type names, a `deprecated` field) ([tooling/torb-lint.md](tooling/torb-lint.md)).
 - **The language server is the compiler** - **the first round is built (2026-09-28)**: `torb lsp` over standard
   input and output, the diagnostics of `check` with their ranges, hover, go to definition, completion, semantic tokens
   from the highlighter sharpened by the checker, and the lint fixes as quick fixes; a keystroke redoes the front of the

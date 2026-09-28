@@ -77,17 +77,25 @@ fn literalCellOf(var lowering: Lowering, written: TypeId, text: String, at: Span
   const literal = instanceFor(lowering, member, mapping)?
   const accessorName = mangledName "t", ["literal", "{lowering.constantCells.length()}"], ""
   const initializerName = mangledName "t", ["constant"], accessorName
-  var inner = newFunction initializerName, member, IrSignature([], produced), "constant"
+  var inner = newFunction initializerName, IrSignature([], produced), "constant", origin: member
   const saved = savedFrame lowering
   enterBody lowering, initializerName
   const location = locationOf lowering, at
   setBlockLocation inner, BlockId(0), location
   const argument = textSlot lowering, inner, text
-  const value = emitCall lowering, inner, None, literal, [argument], produced, at
+  const value = emitCall(
+    lowering,
+    inner,
+    destination: None,
+    function: literal,
+    operands: [argument],
+    annotation: produced,
+    at: at,
+  )
   finishBlock lowering, inner, Terminator.Return(borrowed(value))
   restoreFrame lowering, saved
   const initializer = finishFunction lowering.program, inner
-  var accessor = newFunction accessorName, member, IrSignature([], produced), "constant"
+  var accessor = newFunction accessorName, IrSignature([], produced), "constant", origin: member
   const empty = accessor.function
   accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
   const added = finishFunction lowering.program, accessor

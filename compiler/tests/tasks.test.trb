@@ -81,13 +81,13 @@ group "The verifier of the task instructions" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const voidType = program.internType IrType.VoidType
     const task = taskOf program, int64
-    var resume = newFunction "t_resume__t_main_run", None, IrSignature([IrParameter("value", int64)], int64), "task"
+    var resume = newFunction "t_resume__t_main_run", IrSignature([IrParameter("value", int64)], int64), "task"
     setFunctionKind resume, FunctionKind.TaskResume
     terminate resume, Terminator.Return(borrowed(Slot(0)))
     const started = finishFunction program, resume
-    var builder = newFunction "t_main_run", None, IrSignature([], voidType), "body"
+    var builder = newFunction "t_main_run", IrSignature([], voidType), "body"
     const made = addTemporary builder, task
-    emit builder, Instruction.TaskNew(made, started, None, [])
+    emit builder, Instruction.TaskNew(made, started, result: None, arguments: [])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -102,7 +102,7 @@ group "The verifier of the task instructions" {
   test "only the body of a task stops as cancelled" {
     var program = IrProgram()
     const voidType = program.internType IrType.VoidType
-    var builder = newFunction "t_main_stop", None, IrSignature([], voidType), "body"
+    var builder = newFunction "t_main_stop", IrSignature([], voidType), "body"
     terminate builder, Terminator.Stop
     const identifier = finishFunction program, builder
     finishProgram program
@@ -120,7 +120,7 @@ group "The state machine of a resume function" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const task = taskOf program, int64
     const location = program.internLocation Location("tasks.trb", 1, 1)
-    var builder = newFunction "t_main_wait", None, IrSignature([IrParameter("awaited", task)], int64), "task"
+    var builder = newFunction "t_main_wait", IrSignature([IrParameter("awaited", task)], int64), "task"
     setFunctionKind builder, FunctionKind.TaskResume
     const before = addLocal builder, int64, "before"
     const after = addLocal builder, int64, "after"
@@ -142,7 +142,7 @@ group "The state machine of a resume function" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const boolean = program.internType IrType.Boolean
     const location = program.internLocation Location("tasks.trb", 1, 1)
-    var builder = newFunction "t_main_spin", None, IrSignature([], int64), "task"
+    var builder = newFunction "t_main_spin", IrSignature([], int64), "task"
     setFunctionKind builder, FunctionKind.TaskResume
     const count = addLocal builder, int64, "count"
     const going = addLocal builder, boolean, "going"

@@ -61,7 +61,7 @@ public fn instanceFor(var lowering: Lowering, symbol: SymbolId, mapping: Map<Par
   }
   const built = irSignatureUnder lowering, signature, mapping
   const name = nameOfInstance lowering, symbol, arguments
-  var builder = newFunction name, symbol, built, "not supported yet"
+  var builder = newFunction name, built, "not supported yet", origin: symbol
   const added = finishFunction lowering.program, builder
   lowering.program.instances.set key, added
   lowering.instanceMappings.set key, mapping
@@ -245,7 +245,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   // tell them apart
   for index in 0..shape.outs.length() {
     const name = if index == 0 { "out" } else { "out{index}" }
-    parameters.append IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, byAddress: false)
+    parameters.append IrParameter(name, shape.outs[index], byReference: true, ownership: Ownership.Borrowed, out: true)
   }
   const boolean = lowering.program.internType IrType.Boolean
   IrSignature parameters, boolean

@@ -1169,7 +1169,19 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
   code.append cell
   code.append built
   code.append headWord(Opcode.Return, 0, width, 0)
-  Chunk(function.name, [], width, false, width, 0 - 1, [], code, [], [], [0])
+  Chunk(
+    function.name,
+    [],
+    width,
+    takesEnvironment: false,
+    frameWords: width,
+    location: 0 - 1,
+    slots: [],
+    code: code,
+    places: [],
+    witnesses: [],
+    blockStarts: [0],
+  )
 }
 
 /**
@@ -1236,7 +1248,19 @@ fn entryCellChunk(
   }
   const result = if const .Read = access { width } else { 0 }
   const frameWords = if width < 1 { 1 } else { width }
-  Chunk(function.name, parameters, result, false, frameWords, 0 - 1, [], code, [], [], [0])
+  Chunk(
+    function.name,
+    parameters,
+    result,
+    takesEnvironment: false,
+    frameWords: frameWords,
+    location: 0 - 1,
+    slots: [],
+    code: code,
+    places: [],
+    witnesses: [],
+    blockStarts: [0],
+  )
 }
 
 /**
@@ -1279,7 +1303,19 @@ fn entryCellReleaseChunk(var emitter: Emitter, program: IrProgram): Chunk {
     }
   }
   code.append headWord(Opcode.Return, 0, 0, 0)
-  Chunk("entry cells release", [], 0, false, widest, 0 - 1, [], code, [], [], [0])
+  Chunk(
+    "entry cells release",
+    [],
+    0,
+    takesEnvironment: false,
+    frameWords: widest,
+    location: 0 - 1,
+    slots: [],
+    code: code,
+    places: [],
+    witnesses: [],
+    blockStarts: [0],
+  )
 }
 
 fn isReferenceRole(function: IrFunction, role: SlotRole): Bool {
@@ -1537,7 +1573,7 @@ fn argumentRegister(var emitter: Emitter, var body: Body, program: IrProgram, ar
     if body.places[index].narrow != 0 {
       const value = allocateScratch body, 1
       emitHead emitter, body, Opcode.Load, value, index, 0
-      body.places.append Place(value, false, [], 1)
+      body.places.append Place(value, throughReference: false, steps: [], width: 1)
       emitHead(emitter, body, Opcode.Reference, register, body.places.length() - 1, 0)
       body.pendingPlaceStores.append((index, value))
       return register
@@ -2531,7 +2567,7 @@ fn emitTag(var emitter: Emitter, var body: Body, program: IrProgram, target: Slo
       if words.tag != 0 {
         steps.append PlaceStep.Offset(words.tag)
       }
-      body.places.append Place(from, false, steps, 1)
+      body.places.append Place(from, throughReference: false, steps: steps, width: 1)
       emitHead(emitter, body, Opcode.Load, register, body.places.length() - 1, 0)
     }
   }

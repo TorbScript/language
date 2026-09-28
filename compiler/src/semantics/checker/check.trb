@@ -146,7 +146,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   }
   const statements = checker.program.graph.at(module).file.statements
   const voidType = checker.voidType
-  const saved = checker.enterBody module, voidType, true, own: None
+  const saved = checker.enterBody module, voidType, isInferred: true, own: None
   // The statements of a file are the one body a top-level `var` lives in, and the dead-change rule needs to know it
   // apart from the bodies of the functions that read the same declaration
   checker.topLevel = true
@@ -379,7 +379,7 @@ fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDecla
     Some(found) => found
     // A target that did not build a type produced no implementation; its members still have type positions
     None => {
-      const generics = declareParameters checker, scope.module, None, extension.generics
+      const generics = declareParameters checker, scope.module, owner: None, declared: extension.generics
       const target = typeFromReference checker, extension.target, scope.forType()
       const inner = scope.copy selfType: target
       const _ = boundsOf checker, generics, extension.generics, extension.whereClauses, inner

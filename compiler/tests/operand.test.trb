@@ -71,7 +71,7 @@ group "Every operand position of every instruction" {
     const holder = recordLayout program, "T_Holder", [FieldLayout("items", items)]
     const holderType = program.internType IrType.Record(holder)
     const signature = IrSignature([IrParameter("holder", holderType), IrParameter("index", int64)], voidType)
-    var builder = newFunction "t_places", None, signature, "body"
+    var builder = newFunction "t_places", signature, "body"
     const list = addTemporary builder, items
     const item = addTemporary builder, text
     const cell = addTemporary builder, box
@@ -119,7 +119,7 @@ group "Every operand position of every instruction" {
       [IrParameter("table", mapping, byReference: true), IrParameter("key", text)],
       voidType,
     )
-    var builder = newFunction "t_container", None, signature, "body"
+    var builder = newFunction "t_container", signature, "body"
     const taken = addTemporary builder, text
     const made = addTemporary builder, choiceType
     const tag = addTemporary builder, int64
@@ -164,20 +164,27 @@ group "Every operand position of every instruction" {
     const environmentType = program.internType IrType.Record(reserved.layout)
     var innerBuilder = newFunction(
       "t_inner",
-      None,
       IrSignature([IrParameter("environment", environmentType), IrParameter("value", text)], voidType),
       "body",
     )
     terminate innerBuilder, Terminator.Return(None)
     const inner = finishFunction program, innerBuilder
     const signature = IrSignature([IrParameter("text", text)], voidType)
-    var builder = newFunction "t_indirect", None, signature, "body"
+    var builder = newFunction "t_indirect", signature, "body"
     const made = addTemporary builder, closureType
     const shownValue = addTemporary builder, objectType
     emit builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], escaping: false)
-    emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(0))])
+    emit builder, Instruction.CallClosure(target: None, callee: made, arguments: [borrowed(Slot(0))])
     emit builder, Instruction.TraitValue(shownValue, borrowed(Slot(0)), [WitnessSource(WitnessRoot.Table(table))])
-    emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Table(table)), 0, [borrowed(shownValue)])
+    emit(
+      builder,
+      Instruction.CallWitness(
+        target: None,
+        witness: WitnessSource(WitnessRoot.Table(table)),
+        member: 0,
+        arguments: [borrowed(shownValue)],
+      ),
+    )
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     assert(

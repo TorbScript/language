@@ -78,7 +78,16 @@ public fn dispatchedMember(
       const mapping = mappingOfCall lowering, symbol, typeArguments, subject
       const empty: List<TypeId> = []
       const owner = ownerNameOf lowering, symbol
-      Dispatched symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject
+      Dispatched(
+        symbol,
+        mapping,
+        lowering.checker.invalidType,
+        owner,
+        implementation: None,
+        dynamic: false,
+        bounds: empty,
+        subject: subject,
+      )
     }
     .Implementation(implementation, _) => {
       staticDispatch lowering, symbol, typeArguments, implementation, subject, at
@@ -296,7 +305,7 @@ fn memberOfImplementationDispatch(
   addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
   const owner = ownerOfImplementation lowering, found.target, target, member
-  Dispatched member, mapping, bound, owner, implementation, false, empty, target
+  Dispatched member, mapping, bound, owner, implementation, dynamic: false, bounds: empty, subject: target
 }
 
 /**
@@ -397,7 +406,16 @@ fn dynamicDispatch(
   if !isDynamic && typeArguments.isEmpty() && isSelfAnswerSlot(lowering, member) {
     for one in bounds {
       if traitMemberNamed(lowering, one, name) == member {
-        return Dispatched member, mapping, bound, "", None, true, bounds, target
+        return Dispatched(
+          member,
+          mapping,
+          bound,
+          "",
+          implementation: None,
+          dynamic: true,
+          bounds: bounds,
+          subject: target,
+        )
       }
     }
   }
@@ -423,7 +441,17 @@ fn dynamicDispatch(
           own.append applied
         }
         if isClosed {
-          return Dispatched member, mapping, bound, "", None, true, bounds, target, own
+          return Dispatched(
+            member,
+            mapping,
+            bound,
+            "",
+            implementation: None,
+            dynamic: true,
+            bounds: bounds,
+            subject: target,
+            ownArguments: own,
+          )
         }
       }
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
@@ -431,7 +459,7 @@ fn dynamicDispatch(
       return None
     }
   }
-  Dispatched member, mapping, bound, "", None, isDynamic, bounds, target
+  Dispatched member, mapping, bound, "", implementation: None, dynamic: isDynamic, bounds: bounds, subject: target
 }
 
 /**

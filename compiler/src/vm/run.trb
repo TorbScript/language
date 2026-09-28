@@ -54,7 +54,7 @@ public fn runInMachine(
   clock.lap "reading the files"
   const requested = absolutePaths([path])?
   // The bodies of the entry: the lowering checks those of every module it reaches when it gets there
-  const checked = check tree, requested, withTimings, false, [], onlyReached: true
+  const checked = check tree, requested, withTimings, onlyReached: true
   for timing in checked.checker.timings {
     clock.note "  {timing.pass}", timing.milliseconds
   }
@@ -81,7 +81,16 @@ public fn runInMachine(
     }
   }
   const executable = checked.program.graph.at(module).path
-  runModules checked, tree, [module], arguments, false, executable, requested, clock
+  runModules(
+    checked,
+    tree,
+    [module],
+    arguments,
+    isTestRun: false,
+    executable: executable,
+    requested: requested,
+    clock: clock,
+  )
 }
 
 /**
@@ -127,7 +136,7 @@ public shared type RunClock {
 public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const requested = absolutePaths(paths)?
-  const checked = check tree, requested, false, false, [], onlyReached: true
+  const checked = check tree, requested, onlyReached: true
   if reportChecked(checked) > 0 {
     return refusedCode
   }
@@ -138,7 +147,16 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
       return refusedCode
     }
   }
-  runModules checked, tree, modules, [], true, "", requested, RunClock(enabled: false, last: 0)
+  runModules(
+    checked,
+    tree,
+    modules,
+    [],
+    isTestRun: true,
+    executable: "",
+    requested: requested,
+    clock: RunClock(enabled: false, last: 0),
+  )
 }
 
 /**
@@ -163,7 +181,7 @@ public type PreparedRun {
 public fn prepareRun(path: String, program: String, isTestRun: Bool, debugging: Bool): Result<PreparedRun?, IoError> {
   const tree = readSourceTree([path])?
   const requested = absolutePaths([path])?
-  const checked = check tree, requested, false, false, [], onlyReached: true
+  const checked = check tree, requested, onlyReached: true
   if reportChecked(checked) > 0 {
     return Ok None
   }
@@ -299,12 +317,28 @@ public fn machineLoweringOf(
   var checker = checked.checker
   checker.checksOnDemand = onDemand
   const paths = pathsOfModules checked
-  var lowering = lowerWorkspace checker, paths, modules, false, hostTarget(), forMachine: true, debugging: debugging
+  var lowering = lowerWorkspace(
+    checker,
+    paths,
+    modules,
+    seedsEverything: false,
+    target: hostTarget(),
+    forMachine: true,
+    debugging: debugging,
+  )
   if onDemand && !isLowered(lowering) {
     // A refusal is about the program as a native build sees it: every body of the program checked, and lowered again
     var every = checked.checker
     checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
-    lowering = lowerWorkspace every, paths, modules, false, hostTarget(), forMachine: true, debugging: debugging
+    lowering = lowerWorkspace(
+      every,
+      paths,
+      modules,
+      seedsEverything: false,
+      target: hostTarget(),
+      forMachine: true,
+      debugging: debugging,
+    )
   }
   clock.lap "lowering"
   insertOwnership lowering.program
@@ -420,7 +454,7 @@ fn loadAtRunTime(
   const script = RuntimeScript absolute, declaring, name
   const parsed = known.parsedTree()
   const around = parsed.withFile absolute, text
-  const checked = check around, requested, false, false, [script], onlyReached: true
+  const checked = check around, requested, scripts: [script], onlyReached: true
   const shown = around.display absolute
   for file in checked.files {
     if file.path == shown && !file.diagnostics.isEmpty() {

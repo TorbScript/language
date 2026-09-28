@@ -156,7 +156,7 @@ public fn resumeSignatureOf(var lowering: Lowering, signature: IrSignature, valu
       reportUnsupported lowering, "a `var` parameter of a value type in a function that answers a `Task`", at
       return None
     }
-    parameters.append IrParameter(parameter.name, parameter.annotation, false, Ownership.Borrowed)
+    parameters.append IrParameter(parameter.name, parameter.annotation, ownership: Ownership.Borrowed)
   }
   IrSignature parameters, value
 }
@@ -360,11 +360,11 @@ fn spawnedRunnerOf(var lowering: Lowering, closureType: IrTypeId, value: IrTypeI
   if const Some(found) = lowering.generatedInstances.get(name) {
     return found
   }
-  const parameters = [IrParameter("body", closureType, false, Ownership.Borrowed)]
-  var runner = newFunction name, None, IrSignature(parameters, value), "spawned"
+  const parameters = [IrParameter("body", closureType, ownership: Ownership.Borrowed)]
+  var runner = newFunction name, IrSignature(parameters, value), "spawned"
   setFunctionKind runner, FunctionKind.TaskResume
   if isVoidType(lowering, value) {
-    emit runner, Instruction.CallClosure(None, Slot(0), [])
+    emit runner, Instruction.CallClosure(target: None, callee: Slot(0), arguments: [])
     terminate runner, Terminator.Return(None)
   } else {
     const answer = addTemporary runner, value

@@ -105,8 +105,13 @@ way to write a binding that is only there to be closed at the end of its block.
 **`labeled-literal`**: `true`, `false` or `None` passed to a parameter that is declared as `Bool` or as an optional
 carries the parameter's label (`hasCapacity: false`), except in a call with a single argument and where the parameter's
 type is a type parameter - there the literal is the data, not an option. It needs the checker, so a run with it checks
-the projects of the paths first, and a file the checker has a problem with gets no finding of it. The fix writes the label only where every argument behind the literal is labeled already or is a trailing closure;
-anywhere else the call has to be reordered, which is a person's choice.
+the projects of the paths first, and a file the checker has a problem with gets no finding of it. The fix writes the
+label, and because labeled arguments follow the positional ones it labels every positional argument behind the literal
+as well, with the parameter the checker matched it to - all but the closure that trails the call:
+`list(3, false, name)` becomes `list(3, hasCapacity: false, name: name)`. Nothing moves, so which argument fills which
+parameter and the order they are evaluated in stay the same. A spread, a variadic parameter or an argument the checker
+did not match leaves the finding without a fix. Declaring the option last, with a default, is the other way out and a
+person's choice: a call that passes the default then leaves it out.
 
 ```trb check
 fn listEntries(entries: Int, kind: String, hasCapacity: Bool = true): Int {

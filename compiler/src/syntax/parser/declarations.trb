@@ -273,8 +273,8 @@ public fn parseFunction(var parser: Parser, isMember: Bool = false): FunctionDec
   const generics = parseGenericParameters parser
   parser.expect TokenKind.ParenOpen
   const parameters = parser.withTrailingClosures(
-    true,
-    { parser => parser.commaSeparated TokenKind.ParenClose, parseParameter },
+    allowed: true,
+    parseInner: { parser => parser.commaSeparated TokenKind.ParenClose, parseParameter },
   )
   const returnType = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
   const whereClauses = parseWhereClauses parser
@@ -405,7 +405,7 @@ fn parseWithListEntry(var parser: Parser): List<TypeReference> {
     items.append parseSingleType(parser)
   }
   if sawTypo {
-    reportAmpersandTypo parser, items, None, start.to(parser.previousSpan())
+    reportAmpersandTypo parser, items, delegate: None, at: start.to(parser.previousSpan())
   }
   items
 }
@@ -635,7 +635,16 @@ fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDecl
   if !hasReceiver {
     return function
   }
-  var parameters = [Parameter(None, Name("self", function.name.span), isVar, false, None, default: None)]
+  var parameters = [
+    Parameter(
+      doc: None,
+      name: Name("self", function.name.span),
+      var: isVar,
+      variadic: false,
+      type: None,
+      default: None,
+    ),
+  ]
   parameters.appendAll function.parameters
   function.copy parameters: parameters
 }
@@ -663,7 +672,7 @@ fn parseStaticMember(var parser: Parser): MemberKind {
   }
   // `static zero: Self` without a value is what a trait requires of its implementations. Whether the member stands in a
   // trait is the checker's question: the parser only knows it has a name and a type and no `=`
-  MemberKind.Constant parseBindingBody(parser, None, isVar: false, valueOptional: true)
+  MemberKind.Constant parseBindingBody(parser, doc: None, isVar: false, valueOptional: true)
 }
 
 /**
@@ -683,11 +692,11 @@ fn parseConstantMember(var parser: Parser): MemberKind {
     parser.errorWithNote "`{name.text}` is neither a field nor a constant of the type", note, at
     const annotation = TypeReference TypeKind.Invalid, name.span
     const default = if parser.eat(TokenKind.Equal) {
-      Some parser.withTrailingClosures(true, parseCommandExpression)
+      Some parser.withTrailingClosures(allowed: true, parseInner: parseCommandExpression)
     } else {
       None
     }
-    return MemberKind.Field Field(None, name, false, annotation, default)
+    return MemberKind.Field Field(doc: None, name: name, var: false, type: annotation, default: default)
   }
   MemberKind.Field parseField(parser, isVar: false)
 }
@@ -699,7 +708,7 @@ fn parseField(var parser: Parser, isVar: Bool): Field {
   parser.expect TokenKind.Colon
   const annotation = parseType parser
   const default = if parser.eat(TokenKind.Equal) {
-    Some parser.withTrailingClosures(true, parseCommandExpression)
+    Some parser.withTrailingClosures(allowed: true, parseInner: parseCommandExpression)
   } else {
     None
   }

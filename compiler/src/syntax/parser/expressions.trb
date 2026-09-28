@@ -149,7 +149,7 @@ fn parseCommandPath(var parser: Parser): Expression? {
 fn parseIndexSegment(var parser: Parser, path: Expression, start: Span): Expression? {
   const beforeIndex = parser
   parser.bump()
-  const index = parser.withTrailingClosures true, parseExpression
+  const index = parser.withTrailingClosures allowed: true, parseInner: parseExpression
   if !parser.isAt(TokenKind.BracketClose) {
     parser = beforeIndex
     return None
@@ -175,7 +175,7 @@ fn startsCommandArgument(parser: Parser): Bool {
 }
 
 fn parseCommandCall(var parser: Parser, start: Span, callee: Expression): Expression {
-  var arguments = parser.withTrailingClosures(false, { parser =>
+  var arguments = parser.withTrailingClosures(allowed: false, parseInner: { parser =>
     var first = [parseArgument(parser)]
     while parser.eat(TokenKind.Comma) {
       first.append parseArgument(parser)
@@ -361,15 +361,15 @@ fn parsePostfix(var parser: Parser): Expression {
       .ParenOpen => {
         parser.bump()
         const arguments = parser.withTrailingClosures(
-          true,
-          { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
+          allowed: true,
+          parseInner: { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
         )
         checkArgumentOrder parser, arguments
         ExpressionKind.Call expression, arguments, CallStyle.Parentheses
       }
       .BracketOpen => {
         parser.bump()
-        const index = parser.withTrailingClosures true, parseExpression
+        const index = parser.withTrailingClosures allowed: true, parseInner: parseExpression
         if parser.isAt(TokenKind.Comma) {
           parser.errorHere "`name [...]` is always indexing. To pass a list to a command call, use parentheses: `print([1, 2])`"
           parser.recoverToLineEnd()
@@ -506,8 +506,8 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
     .ParenOpen => {
       parser.bump()
       const items = parser.withTrailingClosures(
-        true,
-        { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
+        allowed: true,
+        parseInner: { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
       )
       if items.length() == 1 && items[0].label.isNone() && !items[0].spread {
         items[0].value.kind
@@ -515,7 +515,7 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
         ExpressionKind.TupleLiteral items
       }
     }
-    .BracketOpen => parser.withTrailingClosures true, parseListOrMap
+    .BracketOpen => parser.withTrailingClosures allowed: true, parseInner: parseListOrMap
     .BraceOpen => {
       return parseClosure parser
     }
@@ -545,7 +545,7 @@ fn parseListOrMap(var parser: Parser): ExpressionKind {
     if !isSpread && parser.eat(TokenKind.Colon) {
       entries.append((value, parseExpression(parser)))
     }
-    Argument None, isSpread, value
+    Argument label: None, spread: isSpread, value: value
   })
   if entries.isEmpty() {
     return ExpressionKind.ListLiteral items
@@ -643,7 +643,7 @@ fn parseMatch(var parser: Parser): ExpressionKind {
       break
     }
     const before = parser.position
-    arms.append parser.withTrailingClosures(true, parseMatchArm)
+    arms.append parser.withTrailingClosures(allowed: true, parseInner: parseMatchArm)
     parser.eat TokenKind.Comma
     if !parser.isAtEndOfStatement() {
       const found = parser.kind().describe()

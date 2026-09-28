@@ -43,8 +43,8 @@ fn problemsOf(var program: IrProgram, identifier: FunctionId): List<String> {
 fn calleeTaking(var program: IrProgram, name: String, ownership: Ownership): FunctionId {
   const text = textType program
   const voidType = program.internType IrType.VoidType
-  const signature = IrSignature([IrParameter("value", text, false, ownership)], voidType)
-  var builder = newFunction name, None, signature, "body"
+  const signature = IrSignature([IrParameter("value", text, ownership: ownership)], voidType)
+  var builder = newFunction name, signature, "body"
   emit builder, Instruction.Release(Slot(0))
   terminate builder, Terminator.Return(None)
   finishFunction program, builder
@@ -55,8 +55,8 @@ group "A value that is released twice, or used after it is gone" {
     var program = IrProgram()
     const text = textType program
     const voidType = program.internType IrType.VoidType
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
-    var builder = newFunction "t_double", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], voidType)
+    var builder = newFunction "t_double", signature, "body"
     emit builder, Instruction.Release(Slot(0))
     emit builder, Instruction.Release(Slot(0))
     terminate builder, Terminator.Return(None)
@@ -69,11 +69,19 @@ group "A value that is released twice, or used after it is gone" {
     const text = textType program
     const int64 = program.internType IrType.Integer(64, signed: true)
     const callee = calleeTaking program, "t_keep", Ownership.Owned
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], int64)
-    var builder = newFunction "t_afterMove", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], int64)
+    var builder = newFunction "t_afterMove", signature, "body"
     const length = addTemporary builder, int64
     const at = someLocation program
-    emit builder, Instruction.Call(None, callee, [Argument(Slot(0), Ownership.Owned, last: true)], [])
+    emit(
+      builder,
+      Instruction.Call(
+        target: None,
+        callee: callee,
+        arguments: [Argument(Slot(0), Ownership.Owned, last: true)],
+        witnesses: [],
+      ),
+    )
     emit builder, Instruction.Intrinsic(length, byteLength(), [Slot(0)], at)
     terminate builder, Terminator.Return(borrowed(length))
     const identifier = finishFunction program, builder
@@ -84,7 +92,7 @@ group "A value that is released twice, or used after it is gone" {
     var program = IrProgram()
     const text = textType program
     const signature = IrSignature([IrParameter("first", text), IrParameter("second", text)], text)
-    var builder = newFunction "t_overwritten", None, signature, "body"
+    var builder = newFunction "t_overwritten", signature, "body"
     const kept = addTemporary builder, text
     emit builder, Instruction.Copy(kept, Slot(0))
     emit builder, Instruction.Copy(kept, Slot(1))
@@ -99,8 +107,8 @@ group "A value that is never let go of" {
     var program = IrProgram()
     const text = textType program
     const voidType = program.internType IrType.VoidType
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
-    var builder = newFunction "t_leak", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], voidType)
+    var builder = newFunction "t_leak", signature, "body"
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     assert(problemsOf(program, identifier) == ["t_leak b0: %0 still owns a value where the function returns"])
@@ -116,10 +124,10 @@ group "A value that is never let go of" {
     const boolean = program.internType IrType.Boolean
     const voidType = program.internType IrType.VoidType
     const signature = IrSignature(
-      [IrParameter("flag", boolean), IrParameter("text", text, false, Ownership.Owned)],
+      [IrParameter("flag", boolean), IrParameter("text", text, ownership: Ownership.Owned)],
       voidType,
     )
-    var builder = newFunction "t_oneSide", None, signature, "body"
+    var builder = newFunction "t_oneSide", signature, "body"
     const then = addBlock builder, "then", at: None
     const otherwise = addBlock builder, "else", at: None
     const join = addBlock builder, "join", at: None
@@ -143,7 +151,7 @@ group "A parameter the caller keeps the count of" {
     const text = textType program
     const voidType = program.internType IrType.VoidType
     const signature = IrSignature([IrParameter("text", text)], voidType)
-    var builder = newFunction "t_lent", None, signature, "body"
+    var builder = newFunction "t_lent", signature, "body"
     emit builder, Instruction.Release(Slot(0))
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
@@ -157,7 +165,7 @@ group "A parameter the caller keeps the count of" {
     var program = IrProgram()
     const text = textType program
     const signature = IrSignature([IrParameter("text", text)], text)
-    var builder = newFunction "t_stolen", None, signature, "body"
+    var builder = newFunction "t_stolen", signature, "body"
     const taken = addTemporary builder, text
     emit builder, Instruction.Move(taken, Slot(0))
     terminate builder, Terminator.Return(Argument(taken, Ownership.Owned, last: true))
@@ -173,7 +181,7 @@ group "A parameter the caller keeps the count of" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const voidType = program.internType IrType.VoidType
     const signature = IrSignature([IrParameter("value", int64)], voidType)
-    var builder = newFunction "t_number", None, signature, "body"
+    var builder = newFunction "t_number", signature, "body"
     emit builder, Instruction.Release(Slot(0))
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
@@ -189,8 +197,8 @@ group "A position that keeps a value says so" {
     const text = textType program
     const pair = recordLayout program, "T_Pair", [FieldLayout("name", text)]
     const pairType = program.internType IrType.Record(pair)
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], pairType)
-    var builder = newFunction "t_field", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], pairType)
+    var builder = newFunction "t_field", signature, "body"
     const built = addTemporary builder, pairType
     emit builder, Instruction.Construct(built, pair, 0, [borrowed(Slot(0))])
     terminate builder, Terminator.Return(Argument(built, Ownership.Owned, last: true))
@@ -204,10 +212,18 @@ group "A position that keeps a value says so" {
     const voidType = program.internType IrType.VoidType
     const keeps = calleeTaking program, "t_keeps", Ownership.Owned
     const borrows = calleeTaking program, "t_borrows", Ownership.Borrowed
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
-    var builder = newFunction "t_disagrees", None, signature, "body"
-    emit builder, Instruction.Call(None, keeps, [borrowed(Slot(0))], [])
-    emit builder, Instruction.Call(None, borrows, [Argument(Slot(0), Ownership.Owned, last: true)], [])
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], voidType)
+    var builder = newFunction "t_disagrees", signature, "body"
+    emit builder, Instruction.Call(target: None, callee: keeps, arguments: [borrowed(Slot(0))], witnesses: [])
+    emit(
+      builder,
+      Instruction.Call(
+        target: None,
+        callee: borrows,
+        arguments: [Argument(Slot(0), Ownership.Owned, last: true)],
+        witnesses: [],
+      ),
+    )
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     assert(

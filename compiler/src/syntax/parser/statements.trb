@@ -47,7 +47,10 @@ public fn parseBlock(var parser: Parser): Block {
 
 /** The rest of a block whose `{` is consumed already. `start` is the span of that `{`. */
 public fn parseBlockAfterBrace(var parser: Parser, start: Span): Block {
-  const statements = parser.withTrailingClosures(true, { parser => parseStatementsUntil parser, TokenKind.BraceClose })
+  const statements = parser.withTrailingClosures(
+    allowed: true,
+    parseInner: { parser => parseStatementsUntil parser, TokenKind.BraceClose },
+  )
   parser.expect TokenKind.BraceClose
   Block statements, start.to(parser.previousSpan())
 }
@@ -144,7 +147,7 @@ fn parseUsingBinding(var parser: Parser): Binding {
   const doc = parser.takeDoc()
   parser.bump()
   const binding = parseBindingBody parser, doc, isVar: false
-  Binding binding.doc, false, binding.pattern, binding.type, binding.value, scoped: true
+  Binding binding.doc, var: false, pattern: binding.pattern, type: binding.type, value: binding.value, scoped: true
 }
 
 /**
@@ -191,5 +194,5 @@ public fn parseCondition(var parser: Parser): Condition {
 
 /** An expression in front of a `{` that belongs to the statement. */
 public fn parseHeadExpression(var parser: Parser): Expression {
-  parser.withTrailingClosures false, parseExpression
+  parser.withTrailingClosures allowed: false, parseInner: parseExpression
 }

@@ -659,13 +659,31 @@ fn relativeComponents(target: Components, base: Components): Components {
   var candidates: List<Components> = []
   if target.scheme == base.scheme && target.authority == base.authority {
     if target.path == base.path {
-      candidates.append Components(None, None, "", target.query, target.fragment)
+      candidates.append(Components(
+        scheme: None,
+        authority: None,
+        path: "",
+        query: target.query,
+        fragment: target.fragment,
+      ))
     }
     if const Some(path) = relativePath(target.path, base.path) {
-      candidates.append Components(None, None, path, target.query, target.fragment)
+      candidates.append(Components(
+        scheme: None,
+        authority: None,
+        path: path,
+        query: target.query,
+        fragment: target.fragment,
+      ))
     }
     if target.path.startsWith("/") && !target.path.startsWith("//") {
-      candidates.append Components(None, None, target.path, target.query, target.fragment)
+      candidates.append(Components(
+        scheme: None,
+        authority: None,
+        path: target.path,
+        query: target.query,
+        fragment: target.fragment,
+      ))
     }
   }
   if target.scheme == base.scheme && target.authority.isSome() {
@@ -779,7 +797,7 @@ fn joinedComponents(components: Components, relative: String): Components {
       "{path}/{tail}"
     }
   }
-  Components components.scheme, components.authority, path, None, fragment: None
+  Components components.scheme, components.authority, path, query: None, fragment: None
 }
 
 /** The port a scheme defaults to, for the five schemes IANA fixes one for. */
@@ -865,7 +883,7 @@ extend Path with TryFrom<UriReference, UriError> {
     if value.authority().isSome() {
       return Fail UriError.NotAFile(value.show(), "a network-path reference has no scheme to say it is a file")
     }
-    pathOf value.show(), None, value.path(), value.query().isSome(), absolute: false
+    pathOf value.show(), host: None, path: value.path(), hasQuery: value.query().isSome(), absolute: false
   }
 }
 

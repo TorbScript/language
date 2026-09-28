@@ -610,7 +610,7 @@ fn checkTopLevelDeclaration(var checker: Checker, module: ModuleId, declaration:
   requireStandardLibrary checker, module, declaration.modifiers, declaration.span
   match declaration.kind {
     .Function(function) => {
-      checkFunctionShape checker, module, declaration.modifiers, function, false, ownerIsNative: false
+      checkFunctionShape checker, module, declaration.modifiers, function, isTraitMember: false, ownerIsNative: false
       if isPublic {
         checkExposedFunction checker, module, function
       }
@@ -790,7 +790,7 @@ fn checkTypeShape(
 ) {
   const isNative = declaration.modifiers.native
   for member in typeDeclaration.members {
-    checkMemberShape checker, module, member, false, isNative
+    checkMemberShape checker, module, member, isTraitMember: false, ownerIsNative: isNative
   }
   requireOneNamespace(
     checker,
@@ -817,7 +817,7 @@ fn checkTraitShape(
 ) {
   const isNative = declaration.modifiers.native
   for member in traitDeclaration.members {
-    checkMemberShape checker, module, member, true, isNative
+    checkMemberShape checker, module, member, isTraitMember: true, ownerIsNative: isNative
   }
   requireOneNamespace checker, module, traitDeclaration.members, traitDeclaration.name.text, repeated: None
   if isPublic {
@@ -1114,7 +1114,7 @@ fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDec
             .withNote("Fields and cases belong to the declaration of the type, so that a `match` over it is decidable"),
         )
       }
-      _ => checkMemberShape checker, module, member, false, isNative
+      _ => checkMemberShape checker, module, member, isTraitMember: false, ownerIsNative: isNative
     }
   }
 }

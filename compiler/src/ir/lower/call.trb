@@ -723,7 +723,16 @@ fn lowerWitnessCall(
   const given = borrowedArguments rest
   const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.CallWitness(None, found.source, found.member, given, location)
+    emit(
+      builder,
+      Instruction.CallWitness(
+        target: None,
+        witness: found.source,
+        member: found.member,
+        arguments: given,
+        at: location,
+      ),
+    )
     if isNeverType(lowering, annotation) {
       finishBlock lowering, builder, Terminator.Unreachable
       return abandonedSlot lowering, builder, destination
@@ -1012,7 +1021,7 @@ public fn emitCall(
   // Where the call is written: a runtime function that can panic takes it, and a panic message is observable
   const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.Call(None, function, given, [], location)
+    emit builder, Instruction.Call(target: None, callee: function, arguments: given, witnesses: [], at: location)
     if isNeverType(lowering, annotation) {
       finishBlock lowering, builder, Terminator.Unreachable
       return abandonedSlot lowering, builder, destination
@@ -1029,7 +1038,7 @@ public fn emitCall(
   // `x = f(x)` where `f` takes `x` by `var`: the result may not land in the base of a place the call writes through, or
   // it would overwrite - and therefore leak - what the callee has just put there
   if collidesWithPlace(destination, places) {
-    const inner = valueSlot lowering, builder, None, annotation
+    const inner = valueSlot lowering, builder, destination: None, annotation: annotation
     emit builder, Instruction.Call(inner, function, given, [], location)
     if const Some(slot) = destination {
       writtenResult builder, slot, inner
@@ -1201,7 +1210,16 @@ fn lowerVariadicArgument(
     }
   }
   const annotation = irTypeOfClosed lowering, lowering.checker.types.intern(TypeForm.Traits([bound]))
-  const slot = lowerItemList lowering, builder, None, collected, item, [bound], annotation, at
+  const slot = lowerItemList(
+    lowering,
+    builder,
+    destination: None,
+    items: collected,
+    item: item,
+    bounds: [bound],
+    annotation: annotation,
+    at: at,
+  )
   if !lowering.supported {
     return None
   }
@@ -1749,7 +1767,7 @@ fn readFieldOf(var lowering: Lowering, var builder: FunctionBuilder, base: Slot,
   }
   const shape = lowering.program.layoutAt layout
   const annotation = shape.fields[index].annotation
-  const target = valueSlot lowering, builder, None, annotation
+  const target = valueSlot lowering, builder, destination: None, annotation: annotation
   emit builder, Instruction.Read(target, Reference(base, [PathStep.Field(layout, index)]))
   target
 }

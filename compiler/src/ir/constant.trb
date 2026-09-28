@@ -61,8 +61,14 @@ public const smallestInteger = -9223372036854775807 - 1
 public fn evaluateConstant(var lowering: Lowering, expression: Expression): ConstantValue? {
   const annotation = typeAtSpan(lowering, expression.span)?
   match expression.kind {
-    .IntegerLiteral(text) => integerConstant lowering, text, false, annotation, expression.span
-    .FloatLiteral(text) => floatConstant lowering, text, false, annotation, expression.span
+    .IntegerLiteral(text) => integerConstant(
+      lowering,
+      text,
+      isNegative: false,
+      annotation: annotation,
+      at: expression.span,
+    )
+    .FloatLiteral(text) => floatConstant lowering, text, isNegative: false, annotation: annotation, at: expression.span
     .BoolLiteral(value) => ConstantValue StaticContents.Literal(LiteralValue.Boolean(value)), annotation
     .VoidLiteral => ConstantValue StaticContents.VoidValue, annotation
     .CharLiteral(value) => ConstantValue StaticContents.Literal(LiteralValue.Character(value)), annotation
@@ -112,10 +118,10 @@ fn unaryConstant(
 ): ConstantValue? {
   if const .Negate = operator {
     if const .IntegerLiteral(text) = operand.kind {
-      return integerConstant lowering, text, true, annotation, at
+      return integerConstant lowering, text, isNegative: true, annotation: annotation, at: at
     }
     if const .FloatLiteral(text) = operand.kind {
-      return floatConstant lowering, text, true, annotation, at
+      return floatConstant lowering, text, isNegative: true, annotation: annotation, at: at
     }
     const inner = evaluateConstant(lowering, operand)?
     return negatedConstant lowering, inner, annotation, at

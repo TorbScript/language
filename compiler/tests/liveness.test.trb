@@ -82,14 +82,14 @@ group "Which slots a frame counts" {
     const smallType = program.internType IrType.Record(small)
     const signature = IrSignature(
       [
-        IrParameter("owned", text, false, Ownership.Owned),
-        IrParameter("lent", text, false, Ownership.Borrowed),
-        IrParameter("place", text, true, Ownership.Borrowed),
-        IrParameter("count", int64, false, Ownership.Borrowed),
+        IrParameter("owned", text, ownership: Ownership.Owned),
+        IrParameter("lent", text, ownership: Ownership.Borrowed),
+        IrParameter("place", text, byReference: true, ownership: Ownership.Borrowed),
+        IrParameter("count", int64, ownership: Ownership.Borrowed),
       ],
       text,
     )
-    var builder = newFunction "t_counts", None, signature, "body"
+    var builder = newFunction "t_counts", signature, "body"
     const local = addLocal builder, text, "local"
     const record = addLocal builder, smallType, "record"
     const number = addTemporary builder, int64
@@ -105,7 +105,7 @@ group "Which slots a frame counts" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const boolean = program.internType IrType.Boolean
     const signature = IrSignature([IrParameter("first", int64), IrParameter("second", boolean)], int64)
-    var builder = newFunction "t_plain", None, signature, "body"
+    var builder = newFunction "t_plain", signature, "body"
     const _ = addTemporary builder, int64
     finishProgram program
     const counted = countedSlotsOf program, builder.function
@@ -125,7 +125,7 @@ group "The order the blocks are walked in" {
     const boolean = program.internType IrType.Boolean
     const voidType = program.internType IrType.VoidType
     const signature = IrSignature([IrParameter("flag", boolean)], voidType)
-    var builder = newFunction "t_diamond", None, signature, "body"
+    var builder = newFunction "t_diamond", signature, "body"
     const then = addBlock builder, "then", at: None
     const otherwise = addBlock builder, "else", at: None
     const join = addBlock builder, "join", at: None
@@ -139,7 +139,7 @@ group "The order the blocks are walked in" {
   test "a block nothing reaches is in no order at all, so nothing is rewritten in it" {
     var program = IrProgram()
     const voidType = program.internType IrType.VoidType
-    var builder = newFunction "t_dead", None, IrSignature([], voidType), "body"
+    var builder = newFunction "t_dead", IrSignature([], voidType), "body"
     const lost = addBlock builder, "lost", at: None
     terminate builder, Terminator.Return(None)
     terminateBlock builder, lost, Terminator.Unreachable
@@ -151,8 +151,8 @@ group "What is live where" {
   test "a straight line: a value is live from where it is made to its last use" {
     var program = IrProgram()
     const text = textType program
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], text)
-    var builder = newFunction "t_straight", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], text)
+    var builder = newFunction "t_straight", signature, "body"
     const local = addLocal builder, text, "copied"
     emit builder, Instruction.Copy(local, Slot(0))
     terminate builder, Terminator.Return(borrowed(local))
@@ -178,12 +178,12 @@ group "What is live where" {
     const signature = IrSignature(
       [
         IrParameter("flag", boolean),
-        IrParameter("first", text, false, Ownership.Owned),
-        IrParameter("second", text, false, Ownership.Owned),
+        IrParameter("first", text, ownership: Ownership.Owned),
+        IrParameter("second", text, ownership: Ownership.Owned),
       ],
       text,
     )
-    var builder = newFunction "t_branch", None, signature, "body"
+    var builder = newFunction "t_branch", signature, "body"
     const then = addBlock builder, "then", at: None
     const otherwise = addBlock builder, "else", at: None
     terminate builder, Terminator.Branch(Slot(0), then, otherwise)
@@ -209,8 +209,8 @@ group "What is live where" {
     const text = textType program
     const int64 = program.internType IrType.Integer(64, signed: true)
     const boolean = program.internType IrType.Boolean
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], int64)
-    var builder = newFunction "t_loop", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Owned)], int64)
+    var builder = newFunction "t_loop", signature, "body"
     const total = addLocal builder, int64, "total"
     const condition = addTemporary builder, boolean
     const length = addTemporary builder, int64
@@ -240,8 +240,8 @@ group "What is live where" {
   test "a value that is defined before it is used in the same block is not live above it" {
     var program = IrProgram()
     const text = textType program
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Borrowed)], text)
-    var builder = newFunction "t_made", None, signature, "body"
+    const signature = IrSignature([IrParameter("text", text, ownership: Ownership.Borrowed)], text)
+    var builder = newFunction "t_made", signature, "body"
     const made = addTemporary builder, text
     emit builder, Instruction.Copy(made, Slot(0))
     terminate builder, Terminator.Return(borrowed(made))

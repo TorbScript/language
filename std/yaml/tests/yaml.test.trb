@@ -73,7 +73,7 @@ fn failureOf(text: String): String {
 group "decoding into a type" {
   test "a field reads its scalar as its own type" {
     const service = decodedService "name: web\nreplicas: 3\nports: [80, 443]\nlabels:\n  tier: front\n"
-    assert(service == Service("web", 3, [80, 443], true, ["tier": "front"], owner: None))
+    assert(service == Service("web", 3, [80, 443], enabled: true, labels: ["tier": "front"], owner: None))
   }
 
   test "no is the text `no` in a String field and an error in a Bool field" {
@@ -114,7 +114,7 @@ group "decoding into a type" {
 
   test "an absent field takes its default, and null is None" {
     const service = decodedService "name: api\nowner: ~\n"
-    assert(service == Service("api", 1, [], true, [:], owner: None))
+    assert(service == Service("api", 1, [], enabled: true, labels: [:], owner: None))
     assert(decodedService("name: api\nowner: ada\n").map({ _.owner }) == Some(Some("ada")))
   }
 
@@ -138,7 +138,7 @@ group "decoding into a type" {
         name: web
       """
     const services = Yaml().decode<Map<String, Service>>(text).ok() ?? [:]
-    assert(services.get("service") == Service("web", 2, [], false, [:], owner: None))
+    assert(services.get("service") == Service("web", 2, [], enabled: false, labels: [:], owner: None))
   }
 
   test "a list of mappings merges in order" {
@@ -211,7 +211,7 @@ group "decoding into a type" {
 
 group "encoding" {
   test "a record is a block mapping in declaration order" {
-    const text = Yaml().encode(Service("web", 2, [80], true, ["tier": "front"], owner: None))
+    const text = Yaml().encode(Service("web", 2, [80], enabled: true, labels: ["tier": "front"], owner: None))
     assert(text == "name: web\nreplicas: 2\nports:\n  - 80\nenabled: true\nlabels:\n  tier: front\nowner: null\n")
   }
 
@@ -231,7 +231,14 @@ group "encoding" {
   }
 
   test "what is written reads back as the same value" {
-    const service = Service "a: b", 0, [1, 2], false, ["no": "yes", "multi": "one\ntwo"], "#owner"
+    const service = Service(
+      "a: b",
+      0,
+      [1, 2],
+      enabled: false,
+      labels: ["no": "yes", "multi": "one\ntwo"],
+      owner: "#owner",
+    )
     assert(Yaml().decode<Service>(Yaml().encode(service)).ok() == service)
   }
 

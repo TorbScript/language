@@ -166,7 +166,14 @@ public type CheckedSource {
 public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
   if read.broken {
     const note = "This file does not parse, so its comments are not judged. `torb parse` says what is wrong"
-    return CheckedSource([DocumentationProblem(read.path, 1, note)], false, 0, 0, [], 0)
+    return CheckedSource(
+      [DocumentationProblem(read.path, 1, note)],
+      hasModuleComment: false,
+      required: 0,
+      documented: 0,
+      examples: [],
+      history: 0,
+    )
   }
   var problems: List<DocumentationProblem> = []
   const module = moduleStart read
@@ -499,21 +506,21 @@ fn addDeclaration(declaration: Declaration, tree: Tree, var items: List<SourceIt
     }
     .Type(declared) => {
       items.append SourceItem("type", declared.name.text, span, doc, isNeeded)
-      addMembers declared.members, tree, isPublic, true, items
+      addMembers declared.members, tree, isPublic, isAsked: true, items: items
     }
     .Trait(declared) => {
       items.append SourceItem("trait", declared.name.text, span, doc, isNeeded)
-      addMembers declared.members, tree, isPublic, true, items
+      addMembers declared.members, tree, isPublic, isAsked: true, items: items
     }
     .Extend(extension) => {
       const name = typeNameOf extension.target
       items.append SourceItem("extend", name, span, doc, requiresExtension(tree))
       // The members of an `extend ... with Trait` implement the trait, and the trait is where they are documented
-      addMembers extension.members, tree, true, extension.traits.isEmpty(), items
+      addMembers extension.members, tree, isOwnerPublic: true, isAsked: extension.traits.isEmpty(), items: items
     }
     .Foreign(library) => {
       items.append SourceItem("foreign", library.library, span, doc, isNeeded)
-      addMembers library.members, tree, isPublic, true, items
+      addMembers library.members, tree, isPublic, isAsked: true, items: items
     }
   }
 }

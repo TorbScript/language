@@ -103,7 +103,7 @@ group "The module of an entry" {
     const entry = "fn double(value: Int): Int \{\n  value * 2\n}\ndouble total"
     const plan = planEntry entry
     const sources = [EntrySource("<repl>", entry)]
-    const parameters = [ParameterText("total", false, "Int")]
+    const parameters = [ParameterText("total", var: false, typeText: "Int")]
     const form = Form outputs: [], shown: Shown.Printed("Int")
     const synthesis = synthesize sources, [], parameters, 0, plan, form
     assert synthesis.text.contains("fn replEntry(total: Int): Void \{")
@@ -212,18 +212,27 @@ group "The type of a redeclared binding" {
 
 group "Ctrl+C" {
   test "idle, it gives a fresh prompt once and leaves the second time in a row" {
-    assert(actionFor(ReadEvent.Interrupted, true, 0) == ReaderAction.Continue(resetIdle: false, discardPending: false))
-    assert(actionFor(ReadEvent.Interrupted, true, 1) == ReaderAction.Leave)
+    assert(
+      actionFor(ReadEvent.Interrupted, pendingIsEmpty: true, idleInterrupts: 0)
+        == ReaderAction.Continue(resetIdle: false, discardPending: false),
+    )
+    assert(actionFor(ReadEvent.Interrupted, pendingIsEmpty: true, idleInterrupts: 1) == ReaderAction.Leave)
   }
 
   test "while an entry is open, it discards it and does not count toward leaving" {
-    assert(actionFor(ReadEvent.Interrupted, false, 0) == ReaderAction.Continue(resetIdle: true, discardPending: true))
-    assert(actionFor(ReadEvent.Interrupted, false, 5) == ReaderAction.Continue(resetIdle: true, discardPending: true))
+    assert(
+      actionFor(ReadEvent.Interrupted, pendingIsEmpty: false, idleInterrupts: 0)
+        == ReaderAction.Continue(resetIdle: true, discardPending: true),
+    )
+    assert(
+      actionFor(ReadEvent.Interrupted, pendingIsEmpty: false, idleInterrupts: 5)
+        == ReaderAction.Continue(resetIdle: true, discardPending: true),
+    )
   }
 
   test "a line goes to the entry reader; the end of the input always leaves" {
-    assert(actionFor(ReadEvent.Line("1 + 2"), true, 0) == ReaderAction.Read("1 + 2"))
-    assert(actionFor(ReadEvent.EndOfInput, true, 0) == ReaderAction.Leave)
-    assert(actionFor(ReadEvent.EndOfInput, false, 3) == ReaderAction.Leave)
+    assert(actionFor(ReadEvent.Line("1 + 2"), pendingIsEmpty: true, idleInterrupts: 0) == ReaderAction.Read("1 + 2"))
+    assert(actionFor(ReadEvent.EndOfInput, pendingIsEmpty: true, idleInterrupts: 0) == ReaderAction.Leave)
+    assert(actionFor(ReadEvent.EndOfInput, pendingIsEmpty: false, idleInterrupts: 3) == ReaderAction.Leave)
   }
 }

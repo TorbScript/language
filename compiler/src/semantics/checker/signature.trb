@@ -115,7 +115,15 @@ public fn selfTypeOf(var checker: Checker, symbol: SymbolId): TypeId {
   const module = checker.symbolAt(symbol).module ?? ModuleId(0)
   var built = checker.invalidType
   if const .Trait = checker.symbolAt(symbol).kind {
-    const parameter = checker.types.declareParameter ParameterDeclaration("Self", None, symbol, false, -1, None, module)
+    const parameter = checker.types.declareParameter(ParameterDeclaration(
+      "Self",
+      symbol: None,
+      owner: symbol,
+      const: false,
+      index: -1,
+      default: None,
+      module: module,
+    ))
     built = checker.types.intern TypeForm.Parameter(parameter)
     // The one bound of `Self` is the trait itself, which is what makes a member lookup on it find the trait's members
     var arguments: List<TypeId> = []
@@ -362,7 +370,7 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
           } else {
             ResultRule.Ordinary
           }
-          functionSignature checker, symbol, site.module, function, None, rule
+          functionSignature checker, symbol, site.module, function, owner: None, rule: rule
         }
         .Constant(binding) => constantSignature checker, symbol, site.module, binding, owner: None
         // A `type`, a `trait` and an alias are not values: `typeSignatureOf` answers for them
@@ -384,8 +392,8 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
             FunctionForm([], annotation),
             [],
             owner,
-            false,
-            false,
+            takesSelf: false,
+            takesVarSelf: false,
             hasBody: false,
           )
         }
@@ -409,7 +417,16 @@ fn destructuredSignature(var checker: Checker, symbol: SymbolId, module: ModuleI
   checkDestructuredBinding checker, module, binding
   const at = checker.symbolAt(symbol).span
   const annotation = checker.patternType(module, at) ?? checker.invalidType
-  Signature symbol, [], FunctionForm([], annotation), [], None, false, false, hasBody: true
+  Signature(
+    symbol,
+    [],
+    FunctionForm([], annotation),
+    [],
+    owner: None,
+    takesSelf: false,
+    takesVarSelf: false,
+    hasBody: true,
+  )
 }
 
 /**
@@ -455,7 +472,16 @@ public fn isTraitConstant(var checker: Checker, symbol: SymbolId): Bool {
 }
 
 fn brokenSignatureOf(checker: Checker, symbol: SymbolId): Signature {
-  Signature symbol, [], FunctionForm([], checker.invalidType), [], None, false, false, hasBody: false
+  Signature(
+    symbol,
+    [],
+    FunctionForm([], checker.invalidType),
+    [],
+    owner: None,
+    takesSelf: false,
+    takesVarSelf: false,
+    hasBody: false,
+  )
 }
 
 /** Without an annotation the type of a `const` is the type of its initializer, which is checked here and once. */
@@ -488,8 +514,8 @@ fn constantSignature(
       FunctionForm([], annotation),
       [],
       owner,
-      false,
-      false,
+      takesSelf: false,
+      takesVarSelf: false,
       hasBody: false,
     )
   }
@@ -511,7 +537,16 @@ fn constantSignature(
       checkInitializer checker, module, binding.value, owner, annotation: None, awaitsTasks: awaits, generics: generics
     }
   }
-  Signature symbol, generics, FunctionForm([], annotation), [], owner, false, false, hasBody: true
+  Signature(
+    symbol,
+    generics,
+    FunctionForm([], annotation),
+    [],
+    owner,
+    takesSelf: false,
+    takesVarSelf: false,
+    hasBody: true,
+  )
 }
 
 fn functionSignature(
@@ -611,8 +646,8 @@ fn inferredSignature(
     takesSelf,
     isVarSelf,
     voidType,
-    true,
-    rule,
+    isInferred: true,
+    rule: rule,
     declared: symbol,
   )
   const namedItself = checker.inferringResults.get(symbol) ?? false
@@ -739,7 +774,16 @@ fn caseSignature(
     parameters.append ParameterForm(field.name.text, ParameterMode.Value, annotation, field.default.isSome())
   }
   const result = owner ?? checker.invalidType
-  Signature symbol, generics, FunctionForm(parameters, result), [], owner, false, false, hasBody: false
+  Signature(
+    symbol,
+    generics,
+    FunctionForm(parameters, result),
+    [],
+    owner,
+    takesSelf: false,
+    takesVarSelf: false,
+    hasBody: false,
+  )
 }
 
 fn parameterForm(var checker: Checker, parameter: Parameter, scope: TypeScope): ParameterForm {
@@ -869,7 +913,7 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
   const declaration = match site.kind {
     .Declared(found) => found
     _ => {
-      return TypeSignature symbol, generics, own, [], [], [], [], [:], false, shared: false
+      return TypeSignature symbol, generics, own, [], [], [], [], [:], native: false, shared: false
     }
   }
   match declaration.kind {
@@ -917,7 +961,7 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         declaration.modifiers.shared,
       )
     }
-    _ => TypeSignature symbol, generics, own, [], [], [], [], [:], false, shared: false
+    _ => TypeSignature symbol, generics, own, [], [], [], [], [:], native: false, shared: false
   }
 }
 
@@ -1221,7 +1265,10 @@ fn declareSite(var checker: Checker, module: ModuleId, declaration: Declaration)
       for member in library.members {
         if const .Function(function) = member.kind {
           if const Some(symbol) = checker.resolvedName(module, function.name.span) {
-            checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Owned(None, [], member))
+            checker.addSite(
+              symbol,
+              DeclarationSite(module, DeclarationSiteKind.Owned(owner: None, generics: [], member: member)),
+            )
           }
         }
       }

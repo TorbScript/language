@@ -280,7 +280,7 @@ group "Mangling" {
     assert(tupleLayoutName(program, [int64, strings]) == "T_tuple__Int64_String")
     const plain = program.internSignature IrSignature([IrParameter("value", int64)], boolean)
     const reference = program.internSignature(IrSignature(
-      [IrParameter("counter", int64, true, Ownership.Borrowed)],
+      [IrParameter("counter", int64, byReference: true, ownership: Ownership.Borrowed)],
       boolean,
     ))
     assert(canonicalSignature(program, plain) == "Function_Int64_to_Bool")
@@ -429,7 +429,10 @@ group "Mangling" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const boolean = program.internType IrType.Boolean
     const borrows = program.internSignature IrSignature([IrParameter("value", int64)], boolean)
-    const takes = program.internSignature IrSignature([IrParameter("value", int64, false, Ownership.Owned)], boolean)
+    const takes = program.internSignature(IrSignature(
+      [IrParameter("value", int64, ownership: Ownership.Owned)],
+      boolean,
+    ))
     assert(borrows != takes)
     assert(canonicalSignature(program, takes) == "Function_owned_Int64_to_Bool")
     const show = program.internTrait IrTrait(SymbolId(3), SymbolPath("std/prelude", "convert", [], "Show"), [])

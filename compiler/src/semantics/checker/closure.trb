@@ -235,7 +235,8 @@ fn checkClosureBody(
       if index == receiver {
         continue
       }
-      const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
+      const form = parameters.get(index)
+        ?? ParameterForm(name: None, mode: ParameterMode.Value, type: checker.deferredType)
       const isVar = isVarMode form.mode
       const own = closure.parameters[index].pattern
       checkPattern checker, own, form.type, isVar
@@ -438,7 +439,7 @@ fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String
     const annotation = checker.closureFrames[frame].types[index]
     const span = checker.closureFrames[frame].at
     // The name stays out of the scope chain: an implicit parameter is reached through the frame and nowhere else
-    identifier = checker.declareBinding LocalBinding("_", annotation, false, span)
+    identifier = checker.declareBinding LocalBinding("_", annotation, var: false, at: span)
     var used = checker.closureFrames[frame].used
     used.set index, identifier.value
     const updated = checker.closureFrames[frame].copy(used: used)

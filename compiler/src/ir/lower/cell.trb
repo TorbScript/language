@@ -101,7 +101,7 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
     lowering,
     mangledName("t", ["cellWrite"], accessor),
     symbol,
-    IrSignature([IrParameter("value", held, false, Ownership.Owned)], voidType),
+    IrSignature([IrParameter("value", held, ownership: Ownership.Owned)], voidType),
     cell,
     .Write,
   )
@@ -109,7 +109,7 @@ fn madeEntryCell(var lowering: Lowering, symbol: SymbolId): EntryCellAccesses? {
     lowering,
     mangledName("t", ["cellMark"], accessor),
     symbol,
-    IrSignature([IrParameter("value", boolean, false, Ownership.Owned)], voidType),
+    IrSignature([IrParameter("value", boolean, ownership: Ownership.Owned)], voidType),
     flag,
     .Write,
   )
@@ -124,7 +124,7 @@ fn cellAccess(
   cell: String,
   access: CellAccess,
 ): FunctionId {
-  var builder = newFunction name, symbol, signature, "cell"
+  var builder = newFunction name, signature, "cell", origin: symbol
   setFunctionKind builder, FunctionKind.EntryCell(cell, access)
   const empty = builder.function
   builder.function = empty.copy blocks: []
@@ -179,7 +179,7 @@ public fn writeEntryCell(var lowering: Lowering, var builder: FunctionBuilder, s
     return
   }
   const none: List<WitnessSource> = []
-  emit builder, Instruction.Call(None, accesses.write, [borrowed(slot)], none)
+  emit builder, Instruction.Call(target: None, callee: accesses.write, arguments: [borrowed(slot)], witnesses: none)
 }
 
 /**
@@ -269,7 +269,7 @@ public fn settleEntryCells(var lowering: Lowering) {
             function.slots.append SlotDeclaration(boolean, SlotRole.Temporary, "")
             const isTrue = internStatic lowering, StaticContents.Literal(LiteralValue.Boolean(true)), boolean
             kept.append Instruction.Constant(isSet, isTrue)
-            kept.append Instruction.Call(None, mark, [borrowed(isSet)], none)
+            kept.append Instruction.Call(target: None, callee: mark, arguments: [borrowed(isSet)], witnesses: none)
             isChanged = true
             continue
           }

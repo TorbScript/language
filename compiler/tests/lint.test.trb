@@ -497,8 +497,44 @@ group "labeled-literal" {
     ].joined(separator: "\n")
     assert(labeledTexts(source) == ["false", "None"])
     const findings = labeledFindings source
-    assert(!findings[0].hasFix())
+    assert findings[0].hasFix()
     assert findings[1].hasFix()
+  }
+
+  test "the fix labels every positional argument behind the literal, with the parameter the checker matched" {
+    const declaration = "fn make(name: String, origin: Int?, size: Int, label: String): Int \{\n  size\n\}\n\n"
+    const source = declaration + "print make(\"a\", None, 2, \"b\")\n"
+    expectText(
+      fixed(source, labeledFindings(source)),
+      declaration + "print make(\"a\", origin: None, size: 2, label: \"b\")\n",
+    )
+  }
+
+  test "two literals of one call share one fix, and the labels are written once" {
+    const declaration = "fn list(entries: Int, hasCapacity: Bool, limit: Int?, name: String): Int \{\n  entries\n\}\n\n"
+    const source = declaration + "print list(3, false, None, \"x\")\n"
+    const findings = labeledFindings source
+    assert(findings.length() == 2)
+    assert(findings[0].fix == findings[1].fix)
+    expectText(fixed(source, findings), declaration + "print list(3, hasCapacity: false, limit: None, name: \"x\")\n")
+  }
+
+  test "a closure that trails the call keeps its place, and one inside the parentheses is labeled" {
+    const declaration = "fn run(quiet: Bool, body: () => Int): Int \{\n  body()\n\}\n\n"
+    const trailing = declaration + "const total = run(true) \{ 1 \}\nprint total\n"
+    expectText(
+      fixed(trailing, labeledFindings(trailing)),
+      declaration + "const total = run(quiet: true) \{ 1 \}\nprint total\n",
+    )
+    const inside = declaration + "print run(true, \{ 1 \})\n"
+    expectText(fixed(inside, labeledFindings(inside)), declaration + "print run(quiet: true, body: \{ 1 \})\n")
+  }
+
+  test "a variadic parameter behind the literal leaves the call without a fix" {
+    const source = "fn join(quiet: Bool, ...parts: String): Int \{\n  0\n\}\n\nprint join(true, \"a\", \"b\")\n"
+    const findings = labeledFindings source
+    assert(findings.length() == 1)
+    assert(!findings[0].hasFix())
   }
 
   test "the fix labels a literal that only labeled arguments follow" {

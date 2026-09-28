@@ -84,7 +84,7 @@ public fn generatedFunctionOf(
   if const Some(found) = lowering.generatedInstances.get(name) {
     return found
   }
-  var builder = newFunction name, member, built, "generated"
+  var builder = newFunction name, built, "generated", origin: member
   const added = finishFunction lowering.program, builder
   lowering.generatedInstances.set name, added
   lowering.pendingGenerated.append GeneratedRequest(added, kind, member, subject, bound, mapping)
@@ -106,7 +106,7 @@ public fn lowerGenerated(var lowering: Lowering, request: GeneratedRequest) {
   }
   const at = lowering.checker.symbolAt(member).span
   resetForGenerated lowering, module
-  var builder = newFunction name, member, signature, "generated"
+  var builder = newFunction name, signature, "generated", origin: member
   const location = locationOf lowering, at
   setBlockLocation builder, BlockId(0), location
   lowerGeneratedBody lowering, builder, request, at
@@ -530,7 +530,7 @@ fn operationBody(var lowering: Lowering, var builder: FunctionBuilder, intrinsic
   const result = builder.function.signature.result
   const location = locationOf lowering, at
   if isVoidLike(lowering, result) {
-    emit builder, Instruction.Intrinsic(None, intrinsic, operands, location)
+    emit builder, Instruction.Intrinsic(target: None, intrinsic: intrinsic, arguments: operands, at: location)
     terminate builder, Terminator.Return(None)
     return
   }
@@ -575,7 +575,7 @@ fn runtimeCallBody(
   const location = locationOf lowering, at
   const empty: List<WitnessSource> = []
   if isVoidLike(lowering, result) {
-    emit builder, Instruction.Call(None, called, given, empty, location)
+    emit builder, Instruction.Call(target: None, callee: called, arguments: given, witnesses: empty, at: location)
     terminate builder, Terminator.Return(None)
     return
   }

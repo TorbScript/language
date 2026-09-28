@@ -169,7 +169,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   // The bodies of what was named, and the lowering checks those of every other module the first time it enters it:
   // a conformance program checks its own bodies and the modules of `std` it reaches, not every body of every package
   // its workspace holds (docs/design/VM.md section 8, as `torb run` does)
-  const checked = check tree, requested, options.withTimings, checksEveryBody: false
+  const checked = check tree, requested, options.withTimings
   if options.withTimings {
     for timing in checked.checker.timings {
       printError "  {timing.pass}: {timing.milliseconds} ms"
@@ -270,20 +270,28 @@ fn buildProgram(
   var checker = checked.checker
   checker.checksOnDemand = true
   // Only what the entry files reach: nothing unreachable is emitted
-  var lowering = lowerWorkspace checker, paths, modules, false, target
+  var lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target
   if !isLowered(lowering) {
     // A refusal is about the program as a whole: every body of it checked, and lowered again, so what is reported is
     // what it always was
     checker = checked.checker
     checkBodiesOf checker, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
-    lowering = lowerWorkspace checker, paths, modules, false, target
+    lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target
   }
   // A program that loads receiver scripts carries its files for the script host it links (docs/design/SCRIPTS.md slice
   // 8): only such a program is lowered a second time, with the text
   if lowering.asksScriptSources {
     const hosted = hostedStandardLibraryOf(findCompilerSources(options.paths) ?? "")
     const (sources, root) = programSourcesOf tree, requested, checked, hosted
-    lowering = lowerWorkspace checker, paths, modules, false, target, false, sources, root
+    lowering = lowerWorkspace(
+      checker,
+      paths,
+      modules,
+      seedsEverything: false,
+      target: target,
+      scriptSources: sources,
+      scriptRoot: root,
+    )
   }
   noteTiming options, "lowering", clock.taken()
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
@@ -836,7 +844,7 @@ fn findCompiler(): CCompiler? {
   }
   for candidate in ["clang", "gcc", "cc"] {
     if const Some(version) = versionOf(candidate) {
-      return CCompiler candidate, false, version
+      return CCompiler candidate, microsoft: false, version: version
     }
   }
   if canRun("cl", []) {

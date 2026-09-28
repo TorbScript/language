@@ -71,7 +71,7 @@ public fn checkBlock(var checker: Checker, block: Block, expected: Expectation):
   checker.closeScope()
   // A block that ends in `return` or `panic` produces no value at all, and `Never` fits wherever one is wanted
   if diverges && annotation == checker.voidType {
-    return BlockResult checker.neverType, true, endsWithValue
+    return BlockResult checker.neverType, diverges: true, endsWithValue: endsWithValue
   }
   BlockResult annotation, diverges, endsWithValue
 }
@@ -684,7 +684,7 @@ public fn checkInitializer(
   generics: List<ParameterId> = [],
 ): TypeId {
   const voidType = checker.voidType
-  const saved = checker.enterBody module, voidType, true, owner
+  const saved = checker.enterBody module, voidType, isInferred: true, own: owner
   // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in it and it may change a
   // top-level `var`; a field default and a parameter default are evaluated wherever the value is built and are not
   checker.awaitsTasks = awaitsTasks
@@ -728,7 +728,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   }
   checker.checkedDestructured.set key, true
   const voidType = checker.voidType
-  const saved = checker.enterBody module, voidType, true, own: None
+  const saved = checker.enterBody module, voidType, isInferred: true, own: None
   checker.awaitsTasks = allowsTopLevelCode checker, module
   checker.writesDeclarations = checker.awaitsTasks
   checker.openScope()

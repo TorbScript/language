@@ -142,7 +142,7 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
   const source = match lowering.checker.expressionType(lowering.module, at) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, None, "a shown value without a type", at
+      return unsupportedSlot lowering, builder, destination: None, what: "a shown value without a type", at: at
     }
   }
   const subject = substituted lowering, source
@@ -171,7 +171,13 @@ public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: 
   const bound = match showBoundOf(lowering) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, None, "`Show`, which the prelude does not declare", at
+      return unsupportedSlot(
+        lowering,
+        builder,
+        destination: None,
+        what: "`Show`, which the prelude does not declare",
+        at: at,
+      )
     }
   }
   const text = lowering.program.internType IrType.Text
@@ -182,7 +188,13 @@ public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: 
     const member = match traitMemberNamed(lowering, bound, "show") {
       Some(found) => found
       None => {
-        return unsupportedSlot lowering, builder, None, "`Show.show`, which the prelude does not declare", at
+        return unsupportedSlot(
+          lowering,
+          builder,
+          destination: None,
+          what: "`Show.show`, which the prelude does not declare",
+          at: at,
+        )
       }
     }
     // A member that is in none of the value's own tables is not a dead end: a trait the value does not carry may be
@@ -324,7 +336,7 @@ public fn lowerPrint(
   }
   const location = locationOf lowering, expression.span
   const intrinsic = Intrinsic operation, kind: None
-  emit builder, Instruction.Intrinsic(None, intrinsic, parts, location)
+  emit builder, Instruction.Intrinsic(target: None, intrinsic: intrinsic, arguments: parts, at: location)
   match destination {
     Some(_) => voidSlot lowering, builder, destination
     None => abandonedSlot lowering, builder, destination

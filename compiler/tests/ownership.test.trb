@@ -175,14 +175,29 @@ group "The summary: which parameters take the count" {
     const voidType = program.internType IrType.VoidType
     const list = program.internType IrType.Runtime(RuntimeKind.ListStorage, [text])
     const added = IrSignature([IrParameter("self", list, byReference: true), IrParameter("value", text)], voidType)
-    var runtime = IrFunction "t_list_add", None, added, [], [], FunctionKind.Runtime("torb_list_add")
+    var runtime = IrFunction(
+      "t_list_add",
+      origin: None,
+      signature: added,
+      slots: [],
+      blocks: [],
+      kind: FunctionKind.Runtime("torb_list_add"),
+    )
     runtime.slots.append SlotDeclaration(list, SlotRole.Parameter(0), "self")
     runtime.slots.append SlotDeclaration(text, SlotRole.Parameter(1), "value")
     const callee = program.addFunction runtime
     const signature = IrSignature([IrParameter("items", list, byReference: true), IrParameter("value", text)], voidType)
-    var builder = newFunction "t_use", None, signature, "body"
+    var builder = newFunction "t_use", signature, "body"
     // The receiver of `torb_list_add` is a `var self`, so its argument is the place and not a value
-    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0))), borrowed(Slot(1))], [])
+    emit(
+      builder,
+      Instruction.Call(
+        target: None,
+        callee: callee,
+        arguments: [referenced(Reference(Slot(0))), borrowed(Slot(1))],
+        witnesses: [],
+      ),
+    )
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     const owned = ownedProgram program
@@ -644,7 +659,7 @@ group "Real code" {
     const tree = readSourceTree([root]).expect("the sources of the repository")
     const first = joinPath root, "compiler/src/syntax/source.trb"
     const second = joinPath root, "compiler/src/syntax/diagnostic.trb"
-    const checked = check tree, [first, second], false, checksEveryBody: true
+    const checked = check tree, [first, second], checksEveryBody: true
     var reported: List<String> = []
     for file in checked.files {
       for diagnostic in file.diagnostics {

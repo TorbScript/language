@@ -286,8 +286,8 @@ public fn evaluateConstant(var checker: Checker, module: ModuleId, expression: E
     return ConstantResult.NotConstant expression.span
   }
   match expression.kind {
-    .IntegerLiteral(text) => integerConstant text, false, expression.span
-    .FloatLiteral(text) => floatConstant text, false, expression.span
+    .IntegerLiteral(text) => integerConstant text, isNegative: false, at: expression.span
+    .FloatLiteral(text) => floatConstant text, isNegative: false, at: expression.span
     .BoolLiteral(value) => ConstantResult.Value ConstantValue.Boolean(value)
     .VoidLiteral => ConstantResult.Value ConstantValue.Composite
     .CharLiteral(value) => ConstantResult.Value ConstantValue.Character(value)
@@ -535,10 +535,10 @@ fn unaryConstant(
   // `-9223372036854775808` only exists as a literal with its sign: the positive half does not fit any integer type
   if const .Negate = operator {
     if const .IntegerLiteral(text) = operand.kind {
-      return integerConstant text, true, operand.span
+      return integerConstant text, isNegative: true, at: operand.span
     }
     if const .FloatLiteral(text) = operand.kind {
-      return floatConstant text, true, operand.span
+      return floatConstant text, isNegative: true, at: operand.span
     }
   }
   const inner = evaluateConstant(checker, module, operand, depth + 1)

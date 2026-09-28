@@ -79,7 +79,7 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
       return
     }
   }
-  var builder = newFunction name, symbol, signature, "body"
+  var builder = newFunction name, signature, "body", origin: symbol
   setBlockLocation builder, BlockId(0), location
   // A parameter of type `Never` has no value to arrive with, so nothing ever runs this body: `described<Never>` is
   // called only from code that is unreachable itself. The body would ask for what `Never` does not have - a `Show`
@@ -140,7 +140,7 @@ fn lowerTaskInstance(
       return
     }
   }
-  var resume = newFunction resumeFunctionName(name), symbol, resumeSignature, "task"
+  var resume = newFunction resumeFunctionName(name), resumeSignature, "task", origin: symbol
   setFunctionKind resume, FunctionKind.TaskResume
   setBlockLocation resume, BlockId(0), location
   declareParameterSlots lowering, symbol, declaration
@@ -152,7 +152,7 @@ fn lowerTaskInstance(
     return
   }
   const started = finishFunction lowering.program, resume
-  var constructor = newFunction name, symbol, signature, "task"
+  var constructor = newFunction name, signature, "task", origin: symbol
   setBlockLocation constructor, BlockId(0), location
   buildTaskConstructor lowering, constructor, signature, started, value
   lowering.program.functions.set identifier.value, constructor.function
@@ -308,7 +308,7 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   lowering.capturedVariables = capturedVariablesIn lowering, statements
   // An entry file may wait at the top level: where it does, its code becomes the resume function of the main task
   lowering.suspendable = true
-  var builder = newFunction name, None, signature, "entry"
+  var builder = newFunction name, signature, "entry"
   for statement in statements {
     if isEntryStatement(statement) {
       const location = locationOf lowering, statement.span
@@ -334,7 +334,7 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   }
   if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
-    var stub = newFunction name, None, signature, "not supported yet"
+    var stub = newFunction name, signature, "not supported yet"
     return finishFunction lowering.program, stub
   }
   lowering.lowered = lowering.lowered + 1
@@ -440,7 +440,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   lowering.substitution = [:]
   lowering.supported = true
   lowering.capturedVariables = capturedVariablesIn lowering, statements
-  var builder = newFunction name, None, signature, "script"
+  var builder = newFunction name, signature, "script"
   for statement in statements {
     if isEntryStatement(statement) {
       const location = locationOf lowering, statement.span
@@ -479,7 +479,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   lowering.diverged = savedDivergence
   if !isSupported {
     lowering.stubbed = lowering.stubbed + 1
-    var stub = newFunction name, None, signature, "not supported yet"
+    var stub = newFunction name, signature, "not supported yet"
     const stubbed = finishFunction lowering.program, stub
     lowering.scriptFunctions.set module.value, stubbed
     return stubbed

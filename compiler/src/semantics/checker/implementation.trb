@@ -112,7 +112,7 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
  * them twice would give the same source two sets of symbols, so `check.trb` reads them back out of the index.
  */
 fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extension: ExtendDeclaration) {
-  const generics = declareParameters checker, module, None, extension.generics
+  const generics = declareParameters checker, module, owner: None, declared: extension.generics
   const scope = TypeScope module
   const target = typeFromReference checker, extension.target, scope.forType()
   const inner = scope.copy selfType: target
@@ -124,7 +124,18 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
   if traits.isEmpty() {
     const identifier = addOne(
       checker,
-      Implementation(None, target, generics, bounds, module, package, members, None, ImplementationOrigin.Inherent, at),
+      Implementation(
+        capability: None,
+        target: target,
+        generics: generics,
+        bounds: bounds,
+        module: module,
+        package: package,
+        members: members,
+        delegate: None,
+        origin: ImplementationOrigin.Inherent,
+        at: at,
+      ),
     )
     checker.implementations.bySpan.set key, identifier.value
     return
@@ -141,9 +152,9 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
         module,
         package,
         members,
-        None,
-        ImplementationOrigin.Declared,
-        at,
+        delegate: None,
+        origin: ImplementationOrigin.Declared,
+        at: at,
       ),
     )
     if first < 0 {
@@ -1483,9 +1494,9 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
     module,
     package,
     [:],
-    None,
-    ImplementationOrigin.Derived,
-    at,
+    delegate: None,
+    origin: ImplementationOrigin.Derived,
+    at: at,
   )
   const identifier = addOne checker, generated
   checker.derivedIndex.set key, identifier.value

@@ -334,7 +334,15 @@ public fn lowerLazyArgument(
     }
   }
   const source = ClosureSource.Thunk value
-  const thunk = closureValueOf lowering, builder, None, value.span, source, thunkSignature, thunkType
+  const thunk = closureValueOf(
+    lowering,
+    builder,
+    destination: None,
+    at: value.span,
+    source: source,
+    signature: thunkSignature,
+    annotation: thunkType,
+  )
   if !lowering.supported {
     return None
   }
@@ -577,9 +585,9 @@ fn lowerBoundMethodValue(
   const closureName = closureFunctionName lowering.owner, index
   const environment = environmentLayoutOf lowering.program, closureName, [FieldLayout("receiver", held, symbol: None)]
   const environmentType = lowering.program.internType IrType.Record(environment)
-  var parameters = [IrParameter("environment", environmentType, false, Ownership.Borrowed)]
+  var parameters = [IrParameter("environment", environmentType, ownership: Ownership.Borrowed)]
   parameters.appendAll shape.parameters
-  var inner = newFunction closureName, None, IrSignature(parameters, shape.result), "closure"
+  var inner = newFunction closureName, IrSignature(parameters, shape.result), "closure"
   const location = locationOf lowering, expression.span
   setBlockLocation inner, BlockId(0), location
   const bound = addTemporary inner, held
@@ -589,7 +597,7 @@ fn lowerBoundMethodValue(
     arguments.append borrowed(Slot(position))
   }
   if isVoidType(lowering, shape.result) {
-    emit inner, Instruction.Call(None, method, arguments, [], location)
+    emit inner, Instruction.Call(target: None, callee: method, arguments: arguments, witnesses: [], at: location)
     terminate inner, Terminator.Return(None)
   } else {
     const answer = addTemporary inner, shape.result
@@ -724,7 +732,7 @@ fn constructorFunctionOf(var lowering: Lowering, layout: LayoutId, variant: Int,
   if const Some(found) = lowering.generatedInstances.get(name) {
     return found
   }
-  var inner = newFunction name, None, shape, "constructor"
+  var inner = newFunction name, shape, "constructor"
   const result = addTemporary inner, shape.result
   var fields: List<IrArgument> = []
   for index in 0..shape.parameters.length() {
@@ -968,7 +976,7 @@ public fn emitClosureCall(
 ): Slot {
   const given = borrowedArguments slots, places
   if !producesValue(lowering, annotation) {
-    emit builder, Instruction.CallClosure(None, holder, given, at)
+    emit builder, Instruction.CallClosure(target: None, callee: holder, arguments: given, at: at)
     match destination {
       Some(_) => {
         return voidSlot lowering, builder, destination
@@ -1135,7 +1143,7 @@ fn loweredClosureBody(
   var parameters: List<IrParameter> = []
   if const Some(layout) = environment {
     const annotation = lowering.program.internType IrType.Record(layout)
-    parameters.append IrParameter("environment", annotation, false, Ownership.Borrowed)
+    parameters.append IrParameter("environment", annotation, ownership: Ownership.Borrowed)
   }
   parameters.appendAll shape.parameters
   const built = IrSignature parameters, shape.result
@@ -1160,7 +1168,7 @@ fn loweredClosureBody(
         match resumeSignatureOf(lowering, built, value, at) {
           Some(found) => found
           None => {
-            var stub = newFunction name, None, built, "not supported yet"
+            var stub = newFunction name, built, "not supported yet"
             return finishFunction lowering.program, stub
           }
         }
@@ -1170,7 +1178,7 @@ fn loweredClosureBody(
   }
   const bodyName = if isTaskClosure { resumeFunctionName name } else { name }
   const label = if isSpawned || isTaskClosure { "task" } else { "closure" }
-  var inner = newFunction bodyName, None, bodySignature, label
+  var inner = newFunction bodyName, bodySignature, label
   if isSpawned || isTaskClosure {
     setFunctionKind inner, FunctionKind.TaskResume
   }
@@ -1189,14 +1197,14 @@ fn loweredClosureBody(
   restoreFrame lowering, saved
   if !isSupported {
     lowering.supported = false
-    var stub = newFunction name, None, built, "not supported yet"
+    var stub = newFunction name, built, "not supported yet"
     return finishFunction lowering.program, stub
   }
   const body = finishFunction lowering.program, inner
   if !isTaskClosure {
     return body
   }
-  var constructor = newFunction name, None, built, "task"
+  var constructor = newFunction name, built, "task"
   setBlockLocation constructor, BlockId(0), location
   buildTaskConstructor lowering, constructor, built, body, bodySignature.result
   finishFunction lowering.program, constructor

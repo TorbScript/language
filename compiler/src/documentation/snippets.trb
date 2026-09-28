@@ -124,23 +124,23 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
   const languages = knownLanguages.joined separator: ", "
   if block.language.isEmpty() {
     const note = "A fenced block names its language. One of: {languages}"
-    return CollectedSnippet None, [DocumentationProblem(shown, block.line, note)]
+    return CollectedSnippet snippet: None, problems: [DocumentationProblem(shown, block.line, note)]
   }
   if !knownLanguages.contains(block.language) {
     const note = "`{block.language}` is not a language of this documentation. One of: {languages}"
-    return CollectedSnippet None, [DocumentationProblem(shown, block.line, note)]
+    return CollectedSnippet snippet: None, problems: [DocumentationProblem(shown, block.line, note)]
   }
   if block.language != "trb" {
     if !block.marker.isEmpty() {
       const note = "Only a `trb` block takes a marker. `{block.info}` has one"
       problems.append DocumentationProblem(shown, block.line, note)
     }
-    return CollectedSnippet None, problems
+    return CollectedSnippet snippet: None, problems: problems
   }
   if !block.marker.isEmpty() && !knownMarkers.contains(block.marker) {
     const markers = knownMarkers.joined separator: ", "
     const note = "`{block.marker}` is not a marker. One of: {markers}"
-    return CollectedSnippet None, [DocumentationProblem(shown, block.line, note)]
+    return CollectedSnippet snippet: None, problems: [DocumentationProblem(shown, block.line, note)]
   }
   const kind = match block.marker {
     "" => SnippetKind.Program
@@ -408,7 +408,7 @@ public fn typeCheckSnippets(
     return TypedSnippets([], wanted, checked: None)
   }
   const tree = snippetWorkspace standardLibrary, wanted
-  const checked = check tree, ["snippets"], false, checksEveryBody
+  const checked = check tree, ["snippets"], checksEveryBody: checksEveryBody
   var problems: List<DocumentationProblem> = []
   for problem in checked.problems {
     problems.append DocumentationProblem("<the snippet workspace>", 0, problem)

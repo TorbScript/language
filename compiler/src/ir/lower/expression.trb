@@ -365,7 +365,13 @@ public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuild
   const annotation = match typeAtSpan(lowering, expression.span) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, None, "an expression without a type", expression.span
+      return unsupportedSlot(
+        lowering,
+        builder,
+        destination: None,
+        what: "an expression without a type",
+        at: expression.span,
+      )
     }
   }
   if !canReplayAdaptations(lowering, expression) {
@@ -427,7 +433,7 @@ fn lowerCoercedValue(
   annotation: IrTypeId,
   bounds: List<TypeId>,
 ): Slot {
-  const inner = lowerInnerExpression lowering, builder, expression, None, annotation
+  const inner = lowerInnerExpression lowering, builder, expression, destination: None, annotation: annotation
   if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
@@ -646,7 +652,7 @@ public fn constantSlot(
 /** An integer of a known type as static data: the step of a `for`, the zero a text comparison is compared against. */
 public fn integerSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Int, annotation: IrTypeId): Slot {
   const contents = StaticContents.Literal LiteralValue.Integer(value)
-  constantSlot lowering, builder, None, contents, annotation
+  constantSlot lowering, builder, destination: None, contents: contents, annotation: annotation
 }
 
 /**
@@ -865,7 +871,14 @@ fn lowerImmortalConstant(
   // A constant a `by` implementation forwards: the field type's constant, constructed into each delegating type
   const reached = reachedConstantOf lowering, symbol, owner
   if !reached.wrapping.isEmpty() {
-    var current = lowerConstantReference lowering, builder, None, reached.symbol, at, reached.owner
+    var current = lowerConstantReference(
+      lowering,
+      builder,
+      destination: None,
+      symbol: reached.symbol,
+      at: at,
+      owner: reached.owner,
+    )
     for index in 0..reached.wrapping.length() {
       const wrapper = irTypeOfClosed lowering, reached.wrapping[index]
       const layout = match layoutOfType(lowering.program, wrapper) {
@@ -958,7 +971,7 @@ fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writt
     }
   }
   const produced = lowering.program.functionAt(initializer).signature.result
-  var accessor = newFunction accessorName, symbol, IrSignature([], produced), "constant"
+  var accessor = newFunction accessorName, IrSignature([], produced), "constant", origin: symbol
   const empty = accessor.function
   accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
   const added = finishFunction lowering.program, accessor
@@ -977,7 +990,7 @@ fn constantAccessorOf(var lowering: Lowering, written: SymbolId, at: Span, writt
 fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant): FunctionId? {
   const symbol = constant.symbol
   const value = constant.binding.value
-  var inner = newFunction constant.name, symbol, IrSignature([], constant.declared), "constant"
+  var inner = newFunction constant.name, IrSignature([], constant.declared), "constant", origin: symbol
   const saved = savedFrame lowering
   enterBody lowering, constant.name
   enterModule lowering, constant.module
@@ -1281,7 +1294,13 @@ fn lowerRangeLiteral(
   }
   if hasFlag {
     const contents = StaticContents.Literal LiteralValue.Boolean(isInclusive)
-    arguments.append constantSlot(lowering, builder, None, contents, fields[written.length()].annotation)
+    arguments.append(constantSlot(
+      lowering,
+      builder,
+      destination: None,
+      contents: contents,
+      annotation: fields[written.length()].annotation,
+    ))
   }
   const target = valueSlot lowering, builder, destination, annotation
   lowerConstruct lowering, builder, target, layout, 0, arguments
@@ -1302,7 +1321,16 @@ fn lowerUnary(
   const slot = lowerValue lowering, builder, operand
   if const .Not = operator {
     const at = expression.span
-    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [slot], annotation, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination,
+      IntrinsicOperation.BooleanNot,
+      kind: None,
+      operands: [slot],
+      annotation: annotation,
+      at: at,
+    )
   }
   const inner = builder.typeOfSlot slot
   if const Some(kind) = numericKindOf(lowering.program, inner) {
@@ -1413,7 +1441,16 @@ fn lowerComparison(
     return intrinsicSlot lowering, builder, destination, operation, kind, [first, second], annotation, at
   }
   if isEqualityOperation(operation) && isPlainEquality(lowering, operands) {
-    return intrinsicSlot lowering, builder, destination, operation, None, [first, second], annotation, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination,
+      operation,
+      kind: None,
+      operands: [first, second],
+      annotation: annotation,
+      at: at,
+    )
   }
   if isTextType(lowering, operands) {
     return lowerTextComparison lowering, builder, destination, operation, first, second, annotation, at
@@ -1428,12 +1465,30 @@ fn lowerComparison(
    * and derived members and none of them wrote a `!=`.
    */
   if const .NotEqual = operation {
-    const equal = lowerOperator lowering, builder, None, at, [first, second], annotation, operand, "equals"
+    const equal = lowerOperator(
+      lowering,
+      builder,
+      destination: None,
+      at: at,
+      operands: [first, second],
+      annotation: annotation,
+      operand: operand,
+      memberName: "equals",
+    )
     if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
     const negate = IntrinsicOperation.BooleanNot
-    return intrinsicSlot lowering, builder, destination, negate, None, [equal], annotation, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination,
+      negate,
+      kind: None,
+      operands: [equal],
+      annotation: annotation,
+      at: at,
+    )
   }
   lowerOperator lowering, builder, destination, at, [first, second], annotation, operand, "equals"
 }
@@ -1461,7 +1516,16 @@ fn lowerOrderComparison(
     }
   }
   const operands = [first, second]
-  const order = lowerOperator lowering, builder, None, at, operands, ordering, operand, "compare"
+  const order = lowerOperator(
+    lowering,
+    builder,
+    destination: None,
+    at: at,
+    operands: operands,
+    annotation: ordering,
+    operand: operand,
+    memberName: "compare",
+  )
   if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
@@ -1571,16 +1635,43 @@ fn lowerTextComparison(
 ): Slot {
   if const .Equal = operation {
     const equals = IntrinsicOperation.TextEqual
-    return intrinsicSlot lowering, builder, destination, equals, None, [first, second], annotation, at
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination,
+      equals,
+      kind: None,
+      operands: [first, second],
+      annotation: annotation,
+      at: at,
+    )
   }
   if const .NotEqual = operation {
     const equals = IntrinsicOperation.TextEqual
-    const equal = intrinsicSlot lowering, builder, None, equals, None, [first, second], annotation, at
-    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [equal], annotation, at
+    const equal = intrinsicSlot(
+      lowering,
+      builder,
+      destination: None,
+      operation: equals,
+      kind: None,
+      operands: [first, second],
+      annotation: annotation,
+      at: at,
+    )
+    return intrinsicSlot(
+      lowering,
+      builder,
+      destination,
+      IntrinsicOperation.BooleanNot,
+      kind: None,
+      operands: [equal],
+      annotation: annotation,
+      at: at,
+    )
   }
   const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const order = addTemporary builder, integer
-  emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [first, second], at
+  emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, kind: None, operands: [first, second], at: at
   const zero = integerSlot lowering, builder, 0, integer
   const kind = NumericKind.Signed 64
   intrinsicSlot lowering, builder, destination, operation, kind, [order, zero], annotation, at
@@ -1613,7 +1704,16 @@ fn lowerArithmetic(
   if isTextType(lowering, operands) {
     if const .Add = operator {
       const concat = IntrinsicOperation.TextConcat
-      return intrinsicSlot lowering, builder, destination, concat, None, [first, second], annotation, at
+      return intrinsicSlot(
+        lowering,
+        builder,
+        destination,
+        concat,
+        kind: None,
+        operands: [first, second],
+        annotation: annotation,
+        at: at,
+      )
     }
   }
   lowerOperator lowering, builder, destination, at, [first, second], annotation, operand

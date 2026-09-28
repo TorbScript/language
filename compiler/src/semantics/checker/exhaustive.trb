@@ -138,7 +138,7 @@ public fn checkExhaustive(
 ): MatchPlan {
   // Nothing is said about a subject the checker could not type, and nothing about a pattern that was already reported
   if checker.absorbs(subject) {
-    const plan = MatchPlan subject, plans, true, []
+    const plan = MatchPlan subject, plans, exhaustive: true, witnesses: []
     checker.recordMatch at, plan
     return plan
   }
@@ -280,10 +280,10 @@ public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject:
 fn onePatternPlan(var checker: Checker, pattern: Pattern, subject: TypeId): MatchPlan {
   const arm = MatchArmPlan pattern.span, branchesOf(checker, pattern, subject, []), hasGuard: false
   if checker.absorbs(subject) {
-    return MatchPlan subject, [arm], false, []
+    return MatchPlan subject, [arm], exhaustive: false, witnesses: []
   }
   if alwaysMatches(pattern) {
-    return MatchPlan subject, [arm], true, []
+    return MatchPlan subject, [arm], exhaustive: true, witnesses: []
   }
   const witnesses = irrefutableWitnesses checker, pattern, subject, 3
   MatchPlan subject, [arm], witnesses.isEmpty(), witnesses

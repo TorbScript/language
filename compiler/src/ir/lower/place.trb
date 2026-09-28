@@ -582,13 +582,29 @@ fn takenElement(
   const subject = substituted lowering, kind.container
   const readerName = if kind.takesWindow { "slice" } else { "at" }
   const setterName = if kind.takesWindow { "replace" } else { "set" }
-  const reader = match takingMemberOf(lowering, subject, false, kind.takesWindow, readerName, what, at) {
+  const reader = match takingMemberOf(
+    lowering,
+    subject,
+    isMutable: false,
+    isWindow: kind.takesWindow,
+    name: readerName,
+    what: what,
+    at: at,
+  ) {
     Some(found) => found
     None => {
       return None
     }
   }
-  const setter = match takingMemberOf(lowering, subject, true, kind.takesWindow, setterName, what, at) {
+  const setter = match takingMemberOf(
+    lowering,
+    subject,
+    isMutable: true,
+    isWindow: kind.takesWindow,
+    name: setterName,
+    what: what,
+    at: at,
+  ) {
     Some(found) => found
     None => {
       return None
@@ -705,7 +721,16 @@ public fn putBackElements(var lowering: Lowering, var builder: FunctionBuilder, 
     // One entry per operand, because that is how a call says which of its positions takes a place and which a value
     const places: List<Reference?> = [entry.container, None, None]
     const operands = [entry.container.base, entry.key, entry.element]
-    const _ = lowerDispatched lowering, builder, None, entry.at, entry.setter, operands, places, voidType
+    const _ = lowerDispatched(
+      lowering,
+      builder,
+      destination: None,
+      at: entry.at,
+      dispatched: entry.setter,
+      written: operands,
+      places: places,
+      annotation: voidType,
+    )
     if !lowering.supported {
       return
     }
@@ -906,7 +931,7 @@ fn lowerIndexAssignment(
     }
   }
   const subject = substituted lowering, container
-  const setter = match indexedMemberOf(lowering, subject, true, "set", what, at) {
+  const setter = match indexedMemberOf(lowering, subject, isMutable: true, name: "set", what: what, at: at) {
     Some(found) => found
     None => {
       return
@@ -925,7 +950,16 @@ fn lowerIndexAssignment(
   const places: List<Reference?> = [path.reference, None, None]
   const operands = [path.reference.base, key, written]
   const voidType = voidTypeOf lowering
-  const _ = lowerDispatched lowering, builder, None, at, setter, operands, places, voidType
+  const _ = lowerDispatched(
+    lowering,
+    builder,
+    destination: None,
+    at: at,
+    dispatched: setter,
+    written: operands,
+    places: places,
+    annotation: voidType,
+  )
   putBackElements lowering, builder, path.taken
 }
 
@@ -969,7 +1003,16 @@ public fn lowerPropertyWrite(
   }
   const voidType = voidTypeOf lowering
   const site = Some locationOf(lowering, callee.span)
-  emitClosureCall lowering, builder, None, holder, [path.reference.base], [path.reference], voidType, site
+  emitClosureCall(
+    lowering,
+    builder,
+    destination: None,
+    holder: holder,
+    slots: [path.reference.base],
+    places: [path.reference],
+    annotation: voidType,
+    at: site,
+  )
   match destination {
     Some(_) => voidSlot lowering, builder, destination
     None => abandonedSlot lowering, builder, destination

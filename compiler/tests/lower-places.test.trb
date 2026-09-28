@@ -513,11 +513,11 @@ group "What the verifier demands of a place" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, byReference: true)], voidType)
-    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    var calleeBuilder = newFunction "t_main_grow", grow, ""
     terminate calleeBuilder, Terminator.Return(None)
     const callee = finishFunction program, calleeBuilder
-    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body"
-    emit builder, Instruction.Call(None, callee, [borrowed(Slot(0))], [])
+    var builder = newFunction "t_main_caller", IrSignature([IrParameter("value", int64)], voidType), "body"
+    emit builder, Instruction.Call(target: None, callee: callee, arguments: [borrowed(Slot(0))], witnesses: [])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -533,11 +533,14 @@ group "What the verifier demands of a place" {
     const boolean = program.internType IrType.Boolean
     const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, byReference: true)], voidType)
-    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    var calleeBuilder = newFunction "t_main_grow", grow, ""
     terminate calleeBuilder, Terminator.Return(None)
     const callee = finishFunction program, calleeBuilder
-    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("flag", boolean)], voidType), "body"
-    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], [])
+    var builder = newFunction "t_main_caller", IrSignature([IrParameter("flag", boolean)], voidType), "body"
+    emit(
+      builder,
+      Instruction.Call(target: None, callee: callee, arguments: [referenced(Reference(Slot(0)))], witnesses: []),
+    )
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -552,12 +555,12 @@ group "What the verifier demands of a place" {
     const strings = program.internType IrType.Text
     const voidType = program.internType IrType.VoidType
     const rename = IrSignature([IrParameter("name", strings, byReference: true)], voidType)
-    var calleeBuilder = newFunction "t_main_rename", None, rename, ""
+    var calleeBuilder = newFunction "t_main_rename", rename, ""
     terminate calleeBuilder, Terminator.Return(None)
     const callee = finishFunction program, calleeBuilder
-    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("name", strings)], voidType), "body"
-    const given = Argument Slot(0), Ownership.Owned, true, Reference(Slot(0))
-    emit builder, Instruction.Call(None, callee, [given], [])
+    var builder = newFunction "t_main_caller", IrSignature([IrParameter("name", strings)], voidType), "body"
+    const given = Argument Slot(0), Ownership.Owned, last: true, place: Reference(Slot(0))
+    emit builder, Instruction.Call(target: None, callee: callee, arguments: [given], witnesses: [])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -573,11 +576,14 @@ group "What the verifier demands of a place" {
     var program = IrProgram()
     const int64 = program.internType IrType.Integer(64, signed: true)
     const voidType = program.internType IrType.VoidType
-    var calleeBuilder = newFunction "t_main_note", None, IrSignature([IrParameter("value", int64)], voidType), ""
+    var calleeBuilder = newFunction "t_main_note", IrSignature([IrParameter("value", int64)], voidType), ""
     terminate calleeBuilder, Terminator.Return(None)
     const callee = finishFunction program, calleeBuilder
-    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body"
-    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], [])
+    var builder = newFunction "t_main_caller", IrSignature([IrParameter("value", int64)], voidType), "body"
+    emit(
+      builder,
+      Instruction.Call(target: None, callee: callee, arguments: [referenced(Reference(Slot(0)))], witnesses: []),
+    )
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -592,13 +598,13 @@ group "What the verifier demands of a place" {
     const int64 = program.internType IrType.Integer(64, signed: true)
     const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, byReference: true)], voidType)
-    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    var calleeBuilder = newFunction "t_main_grow", grow, ""
     terminate calleeBuilder, Terminator.Return(None)
     const callee = finishFunction program, calleeBuilder
     const signature = IrSignature([IrParameter("first", int64), IrParameter("second", int64)], voidType)
-    var builder = newFunction "t_main_caller", None, signature, "body"
-    const given = Argument Slot(1), Ownership.Borrowed, false, Reference(Slot(0))
-    emit builder, Instruction.Call(None, callee, [given], [])
+    var builder = newFunction "t_main_caller", signature, "body"
+    const given = Argument Slot(1), Ownership.Borrowed, last: false, place: Reference(Slot(0))
+    emit builder, Instruction.Call(target: None, callee: callee, arguments: [given], witnesses: [])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program

@@ -106,7 +106,13 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
   match expression.kind {
     // A literal adapts to the `Value` of an expected `Option` or `Result`, which it then wraps into: `const port: Int8? = 80`
     .IntegerLiteral(text) => {
-      integerLiteralType checker, text, false, literalExpectationOf(checker, annotation), expression.span
+      integerLiteralType(
+        checker,
+        text,
+        isNegative: false,
+        expected: literalExpectationOf(checker, annotation),
+        at: expression.span,
+      )
     }
     .FloatLiteral(_) => floatLiteralType checker, literalExpectationOf(checker, annotation), expression.span
     .BoolLiteral(value) => {
@@ -262,7 +268,7 @@ fn memberTarget(
   if const .Namespace(target) = owner.resolution {
     match checker.program.scopes[target.value].exported.get(text) {
       Some(symbol) => {
-        return symbolTarget checker, symbol, text, at, None, explicit
+        return symbolTarget checker, symbol, text, at, expected: None, explicit: explicit
       }
       None => {
         checker.reportHere Diagnostic.error("`{text}` is not exported by the module `{owner.name}`", at)
@@ -979,7 +985,7 @@ fn isNumberLiteral(operand: Expression): Bool {
 
 fn negatedLiteral(var checker: Checker, operand: Expression, expected: TypeId?, at: Span): TypeId {
   const found = match operand.kind {
-    .IntegerLiteral(text) => integerLiteralType checker, text, true, expected, at
+    .IntegerLiteral(text) => integerLiteralType checker, text, isNegative: true, expected: expected, at: at
     _ => floatLiteralType checker, expected, at
   }
   checker.typed operand.span, found

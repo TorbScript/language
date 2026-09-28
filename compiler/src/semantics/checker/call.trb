@@ -499,7 +499,7 @@ fn chooseOverload(
     reportNoOverload checker, target, given, at
     // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
     const broken = checker.invalidType
-    return target.copy form: FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken)
+    return target.copy form: FunctionForm([ParameterForm(name: None, mode: ParameterMode.Value, type: broken)], broken)
   }
   if fitting.length() == 1 {
     return targetOfCandidate checker, fitting[0], target.name
@@ -773,7 +773,7 @@ fn placeTrailingClosure(
 ) {
   const last = parameters.length() - 1
   if last < 0 {
-    reportArity(checker, target, parameters, [], trailing + 1, true, at)
+    reportArity(checker, target, parameters, [], trailing + 1, hasSurplus: true, at: at)
     return
   }
   if filled[last] {
@@ -847,8 +847,28 @@ fn checkArguments(
   noteArgumentClosures checker, arguments
   // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it
   // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model of exclusivity)
-  checkArgumentPass checker, form, arguments, plan, false, resolution, callee, isDiscarded, call
-  checkArgumentPass checker, form, arguments, plan, true, resolution, callee, isDiscarded, call
+  checkArgumentPass(
+    checker,
+    form,
+    arguments,
+    plan,
+    isClosurePass: false,
+    resolution: resolution,
+    callee: callee,
+    isDiscarded: isDiscarded,
+    call: call,
+  )
+  checkArgumentPass(
+    checker,
+    form,
+    arguments,
+    plan,
+    isClosurePass: true,
+    resolution: resolution,
+    callee: callee,
+    isDiscarded: isDiscarded,
+    call: call,
+  )
 }
 
 fn checkArgumentPass(

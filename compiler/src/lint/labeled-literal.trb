@@ -8,23 +8,30 @@
  * `list.append(None)`) - such a parameter is neither `Bool` nor an optional, so it is never found.
  *
  * This is the one rule that needs the checker: which declaration a call reaches, and which parameter an argument
- * fills, are the checker's tables. The fix writes the label in front of the literal, and only where every argument
- * behind it is labeled already or is a trailing closure - labeled arguments follow the positional ones, so anywhere
- * else the call has to be reordered, which is a person's choice.
+ * fills, are the checker's tables. The fix writes the label in front of the literal - and, because labeled arguments
+ * follow the positional ones, in front of every positional argument behind it but the closure that trails the call,
+ * each with the name of the parameter the checker matched it to: `list(3, false, name)` becomes
+ * `list(3, hasCapacity: false, name: name)`. That keeps which argument fills which parameter and the order they are
+ * evaluated in, so it is certain wherever the checker matched every one of them. A spread, a variadic parameter or an
+ * argument the checker did not match leaves the finding without a fix. Declaring the option last, with a default, is
+ * the other way out and a person's choice: `newFunction(name, signature, label, origin: SymbolId? = None)` is called
+ * without its option where it is `None`.
  */
 
 use Span from "../syntax/source"
 use SourceFile, Expression, ExpressionKind, Argument from "../syntax/ast"
 use Checker, Resolution from "../semantics/checker/context"
-use TypeId, TypeForm, TypeSignature, SignatureState from "../semantics/checker/type"
+use TypeId, TypeForm, TypeSignature, SignatureState, ParameterMode from "../semantics/checker/type"
 use ModuleId from "../semantics/module"
+use trailingClosureAt from "../semantics/checker/call"
 use Finding, LintRule, TextEdit from "./finding"
 use everyNodeOf from "./nodes"
 
-/** One parameter a call can fill: the label it has, and the type it is declared with. */
+/** One parameter a call can fill: the label it has, the type it is declared with, and whether it collects the rest. */
 type Target {
   name: String
   type: TypeId
+  variadic: Bool = false
 }
 
 public fn labeledLiteralFindings(checker: Checker, module: ModuleId, file: SourceFile): List<Finding> {
@@ -62,6 +69,8 @@ fn findingsOfCall(
       return
     }
   }
+  var literals: List<Finding> = []
+  var first = -1
   for (index, argument) in arguments.indexed() {
     if argument.label.isSome() || argument.spread {
       continue
@@ -85,14 +94,58 @@ fn findingsOfCall(
     if !isBool(checker, parameter.type) && !isOptional(checker, parameter.type) {
       continue
     }
-    const message = "`{literal}` sets the option `{parameter.name}`, and a literal does not say so: write `{parameter.name}: {literal}`"
-    const fix = if followedByLabels(arguments, index) {
-      [TextEdit(argument.value.span.start, argument.value.span.start, "{parameter.name}: ")]
-    } else {
-      []
+    if first < 0 {
+      first = index
     }
-    findings.append Finding(LintRule.LabeledLiteral, message, argument.value.span, fix)
+    const message = "`{literal}` sets the option `{parameter.name}`, and a literal does not say so: write `{parameter.name}: {literal}`"
+    literals.append Finding(LintRule.LabeledLiteral, message, argument.value.span)
   }
+  if literals.isEmpty() {
+    return
+  }
+  // One fix for the whole call, which every finding of it carries: `--fix` takes the first and leaves the others,
+  // which overlap it
+  const fix = labelsFrom(arguments, first, targets, parameters, call.span) ?? []
+  for finding in literals {
+    findings.append finding.copy(fix: fix)
+  }
+}
+
+/**
+ * The labels from the argument at `first` to the end of the call: every positional argument gets the name of the
+ * parameter the checker matched it to, except the closure that trails the call, which fills its parameter wherever it
+ * is written. `None` where one of them cannot be labeled - a spread, an argument the checker did not match, a variadic
+ * parameter, which a label does not fill.
+ */
+fn labelsFrom(
+  arguments: List<Argument>,
+  first: Int,
+  targets: List<Int>,
+  parameters: List<Target>,
+  at: Span,
+): List<TextEdit>? {
+  const trailing = trailingClosureAt arguments, at
+  var edits: List<TextEdit> = []
+  var index = first
+  while index < arguments.length() {
+    const argument = arguments[index]
+    if argument.label.isNone() && index != trailing {
+      if argument.spread {
+        return None
+      }
+      const target = targets.get(index) ?? -1
+      if target < 0 {
+        return None
+      }
+      const parameter = parameters.get(target)?
+      if parameter.variadic || parameter.name.isEmpty() {
+        return None
+      }
+      edits.append TextEdit(argument.value.span.start, argument.value.span.start, "{parameter.name}: ")
+    }
+    index = index + 1
+  }
+  edits
 }
 
 /** `true`, `false` and `None` as written: the literals that have no name of their own. */
@@ -101,27 +154,6 @@ fn literalText(value: Expression): String? {
     .BoolLiteral(flag) => if flag { "true" } else { "false" }
     .Name(text) if text == "None" => text
     _ => None
-  }
-}
-
-/** Whether every argument behind this one is labeled, or is the closure that trails the call. */
-fn followedByLabels(arguments: List<Argument>, index: Int): Bool {
-  var next = index + 1
-  while next < arguments.length() {
-    const argument = arguments[next]
-    const isTrailingClosure = next == arguments.length() - 1 && isClosure(argument.value)
-    if argument.label.isNone() && !isTrailingClosure {
-      return false
-    }
-    next = next + 1
-  }
-  true
-}
-
-fn isClosure(value: Expression): Bool {
-  match value.kind {
-    .Closure(_) => true
-    _ => false
   }
 }
 
@@ -149,7 +181,11 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       }
       var targets: List<Target> = []
       for parameter in signature.form.parameters {
-        targets.append Target(parameter.name?, parameter.type)
+        const variadic = match parameter.mode {
+          .Variadic => true
+          _ => false
+        }
+        targets.append Target(parameter.name?, parameter.type, variadic: variadic)
       }
       targets
     }
