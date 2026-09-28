@@ -6,6 +6,10 @@
 
 /** `\` becomes `/`, and empty, `.` and `..` segments are resolved. An absolute path keeps its root. */
 public fn normalizePath(path: String): String {
+  // Most paths that arrive here are normalized already - the names of modules and packages, asked for again and again
+  if isNormalized(path) {
+    return path
+  }
   const slashed = path.replace "\\", "/"
   const root = if slashed.startsWith("/") { "/" } else { "" }
   var segments: List<String> = []
@@ -27,6 +31,20 @@ public fn normalizePath(path: String): String {
   } else {
     "{root}{joined}"
   }
+}
+
+/**
+ * Whether [normalizePath] would answer the path itself: no `\`, no empty segment but the root's, and no `.` or `..`
+ * segment. Asked of the text as it is, without splitting it.
+ */
+fn isNormalized(path: String): Bool {
+  if path.isEmpty() || path.contains("\\") || path.contains("//") || path.endsWith("/") {
+    return false
+  }
+  if path == "." || path == ".." || path.startsWith("./") || path.startsWith("../") {
+    return false
+  }
+  !path.endsWith("/.") && !path.endsWith("/..") && !path.contains("/./") && !path.contains("/../")
 }
 
 /** The directory that contains the path: `parentPath("std/fs")` is `"std"`, `parentPath("std")` is `"."`. */
