@@ -39,9 +39,9 @@ List.of(1, 2, 3)                         from arguments
 List.of(...anyIterate)                   from a spread
 List.from(anyIterate)                    from any Iterate
 anyIterate.toList()                      from a pipeline
-list[index]                              Indexed.at: panics if index is out of range
-list.get(index)                          Indexed.get: an Option
-list[index] = value                      MutableIndexed.set
+list[index]                              Index.at: panics if index is out of range
+list.get(index)                          Index.get: an Option
+list[index] = value                      MutableIndex.set
 ```
 
 ## Rules
@@ -52,7 +52,7 @@ list[index] = value                      MutableIndexed.set
    `appended` copies the list into a `var`, calls `append` on the copy and answers it.
 
 2. **Reading `list[index]` panics if the index is out of range; `list.get(index)` answers an `Option` instead.**
-   `[index]` is `Indexed.at`, which calls `get` and panics on `None`; `get` itself never panics.
+   `[index]` is `Index.at`, which calls `get` and panics on `None`; `get` itself never panics.
 
    ```trb check
    const numbers = [1, 2, 3]

@@ -52,7 +52,7 @@ pipeline into one is a type beside it (`ListAccumulator`, `into<Target>()` - see
 
 ```trb fragment
 public trait List<Item>
-  with Iterate<Item>, Length, MutableIndexed<Int, Item>, MutableSlice
+  with Iterate<Item>, Length, MutableIndex<Int, Item>, MutableSlice
 {
   static fn of(...items: Item): List<Item>
   static fn filled(count: Int, value: Item): List<Item>
@@ -99,7 +99,7 @@ same reason.
 
 ```trb fragment
 public trait Map<Key, Value>
-  with Iterate<(key: Key, value: Value)>, Length, MutableIndexed<Key, Value>
+  with Iterate<(key: Key, value: Value)>, Length, MutableIndex<Key, Value>
 {
   static fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash
   var fn remove(key: Key): Value?

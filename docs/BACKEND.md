@@ -1891,7 +1891,7 @@ after both.
 **The instance count, and what would bound it.** The *instance count* is the number this sub-milestone really moved, and
 it is the monomorphization risk of section 7 arriving in practice. What drives it is the **element type**: a container
 literal builds the witness table of `List<Item>`, and that one table drags in every default member of `Iterate`,
-`Collection`, `MutableIndexed`, `Length` and `Accumulator` *for that one item type* - `map`, `filter`, `fold`, `find`,
+`Collection`, `MutableIndex`, `Length` and `Accumulator` *for that one item type* - `map`, `filter`, `fold`, `find`,
 `joined`, `added`, `contains`, and so on down. Two small real files (`syntax/source.trb` and `syntax/diagnostic.trb`) with
 two element types cost 228 functions, 18 witness tables and 2 element descriptors, and `compiler/tests/lower.test.trb`
 asserts all three **exactly**, so an explosion fails a test instead of being noticed as a build time. It is deliberately
@@ -1944,7 +1944,7 @@ first, plus the two findings that were hiding behind each other.
   closed type like any other and `witnessFor` names the one implementation of it, so `.Forwarded` goes dynamic only for a
   member with a receiver now. Object safety says the same thing from the other side: a static member is never in a
   table.
-- **`a[key]` is `Indexed.at`, and the panic on a missing key is the language's own.** `at` is a member of `std/` -
+- **`a[key]` is `Index.at`, and the panic on a missing key is the language's own.** `at` is a member of `std/` -
   the one of `ArrayList`, `Array` and the maps, which name the index and the length or the key, or the *default* of
   `std/core` - so what an index out of range does is decided once and is the same in every back end - `lowerIndexRead`
   needs no rule for it at all. The tail of `lowerCallable` - which of the five
@@ -2039,7 +2039,7 @@ written.
   258 functions / 20 witness tables / 2 element descriptors to **78 / 108 / 24 / 2** - a quarter of the functions, and
   more tables only because the *nested* ones below are built now. Over the whole repository `torb ir --statistics ..`
   went from 15257 of 17250 (88%) to **8301 of 9182 (90%)**: the *total* is what halved, because every collection's table
-  used to drag every default of `Iterate`, `Collection`, `MutableIndexed`, `Length` and `Accumulator` in per element
+  used to drag every default of `Iterate`, `Collection`, `MutableIndex`, `Length` and `Accumulator` in per element
   type. The 705 `Range.iterate` findings and the 140 `ArrayList.from` findings are gone (both are TorbScript now), the
   `a[key]` assignment finding of `List.swapAt` and `List.updated` is gone from every table (neither is instantiated at
   all any more), and the wall time of `torb ir --statistics ..` fell from 1m53s to 1m39s.
@@ -2127,7 +2127,7 @@ written.
   `Subtract`, `match` does not handle `[_, _, ...]`, and `visit`/`seen`/`limit`/`toMap` are names that are not there. So
   5.7's row needs a gate that is a program: `tests/conformance/{collections,ranges,collection-index}.trb` are it -
   the literals of every element shape, `for` over a list and over a trait-typed `Iterate` with `break` and `continue`,
-  `a[key]` and its panic (exit 101, the message of `Indexed.at` and therefore the language's own), growth over the
+  `a[key]` and its panic (exit 101, the message of `Index.at` and therefore the language's own), growth over the
   doubling of the buffer, copy on write through a local, a field and a `var` parameter, the closure pipelines, and a range
   in all four spellings. Each is compiled, run, compared with stage 0 byte for byte and asserted to leave zero live
   blocks. **`examples/tour/src/07-collections.trb` is two findings away**, and both are the index *places* of the next
@@ -2147,7 +2147,7 @@ path *is*.
 
 - **Decision: an index step of a path is a take-out and a put-back of two members the language already has, and not
   `Instruction.TakeOut`/`PutBack`.** `points[0].x = 100` reads `points[0]` into a slot of the frame through
-  **`Indexed.at`**, writes the `x` of that slot, and puts the element back through **`MutableIndexed.set`**. That is
+  **`Index.at`**, writes the `x` of that slot, and puts the element back through **`MutableIndex.set`**. That is
   literally the concept's model of an index path ("take it out, change it, put it back", `var` Paths) with the two halves
   spelled as the two members `std/core` declares - so what a *missing key* does is decided in `std/` and not in a back
   end: a `var` access panics, because `at` panics on a missing key, and `map[key] = value` **inserts**,
@@ -2605,7 +2605,7 @@ line).
 - **`length()` for every test, `at(index)` for every item, `skip(index).toList()` for a rest.** `[]` is `length == 0`,
   `[first, ...rest]` is `length >= 1`, `[..., last]` reads `at(length() - 1 - index)`. Nothing about a list pattern is a
   new mechanism: an item is **no `PathStep`**, because a list has no layout at all - a `List<Item>` value is a trait-typed
-  one and reading from it is a call through its witness table, exactly as `a[key]` is. `Indexed.at` is the member, so
+  one and reading from it is a call through its witness table, exactly as `a[key]` is. `Index.at` is the member, so
   what an index out of range does is decided once in `std/core` and is the same everywhere; here none is ever out of
   range, because the length was tested on the way into the block.
 - **A rest is a copy, and it cannot be anything else.** `Slice.slice` answers `Self`, so object safety keeps it out of the
@@ -3560,7 +3560,7 @@ directory. A problem of *loading* keeps the path of the machine, because it is e
 | The panic report and the exit code (`error:` and 1 against `panic:` and 101) | stage 0 | every `.stderr` of the suite |
 | `Integer overflow` against ``arithmetic overflow in `*` ``, with the operator in it | stage 0 | `overflow.trb`, `negate-overflow.trb` |
 | `Division by zero` against ``division by zero in `/` `` | stage 0 | `division-by-zero.trb`, `remainder-by-zero.trb` |
-| An index out of range: stage 0's own message against `Indexed.at`'s `Key does not exist` | stage 0 | `collection-index.trb` |
+| An index out of range: stage 0's own message against `Index.at`'s `Key does not exist` | stage 0 | `collection-index.trb` |
 | A slice out of range and a reversed one | stage 0 | `slice-out-of-range.trb`, `slice-reversed.trb` |
 | A text sliced past its end, and an offset inside a character | stage 0 | `text-slice-past-end.trb` |
 | `expect` on `None` and on a `Fail`: the message, and which file of `std/core` the frame names | stage 0 | `expect-none.trb`, `expect-failure.trb` |

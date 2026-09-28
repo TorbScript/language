@@ -15,7 +15,7 @@ an ordinary trait and every implementation is an ordinary type.
            List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
            append         insert       set              push           enqueue
            removeAt       remove       remove           pop, peek      dequeue, peek
-           + MutableIndexed            + MutableIndexed
+           + MutableIndex            + MutableIndex
            + MutableSlice
 
                       Accumulator<Item, Output>   add(), finish(), isDone()
@@ -75,11 +75,11 @@ std/iteration
 
 std/collections
   Collection<Item>            with Iterable, Length, Accumulator<Item, Self>         8 members
-    List<Item>                with MutableIndexed<Int, Item>, MutableSlice          18 members
+    List<Item>                with MutableIndex<Int, Item>, MutableSlice          18 members
       ArrayList  TrieList  ListIterator
     Set<Item>                                                                       10 members
       TrieSet  HashSet  SetIterator  HashSetIterator
-    Map<Key, Value>           with MutableIndexed<Key, Value>                       13 members
+    Map<Key, Value>           with MutableIndex<Key, Value>                       13 members
       TrieMap  HashMap  MapIterator  HashMapIterator
     Stack<Item>                                                                      7 members
       ArrayStack
@@ -87,11 +87,11 @@ std/collections
       ArrayQueue
 
 std/core
-  Indexed<Key, Value>         get(), at()            a[key]
-  MutableIndexed<Key, Value>  set()                  a[key] = v
+  Index<Key, Value>         get(), at()            a[key]
+  MutableIndex<Key, Value>  set()                  a[key] = v
   Slice                       slice()                a[from..to]
   MutableSlice                replace(), compact()   a[from..to] = v
-  Array<Item, const Size>     with Iterable, Length, MutableIndexed<Int, Item>
+  Array<Item, const Size>     with Iterable, Length, MutableIndex<Int, Item>
   Range RangeFrom RangeTo Bounds<Value>  RangeIterator
 
 std/stream
@@ -102,7 +102,7 @@ std/stream
 
 planned
   Buffer<Item>                ECS gap 9, BACKEND — an in-place write when there is one owner, swapRemove
-  Window<Item>                CONCURRENCY section 6 — Length and Indexed, and nothing that resizes
+  Window<Item>                CONCURRENCY section 6 — Length and Index, and nothing that resizes
   Parallel<Item>              CONCURRENCY section 10 — the Iterable vocabulary, terminals answer a Task
   Merge<Item, Output>         CONCURRENCY section 5 — with Collector, one associative merge
 ```
@@ -346,7 +346,7 @@ implementations of one trait.
      List<Item>     Set<Item>    Map<Key, Value>  Stack<Item>    Queue<Item>
      append          insert       set             push           enqueue
      removeAt        remove       remove          pop, peek      dequeue, peek
-     + MutableIndexed<Int, Item>  + MutableIndexed
+     + MutableIndex<Int, Item>  + MutableIndex
      + MutableSlice               <Key, Value>
      ArrayList                 TrieSet    TrieMap   ArrayStack    ArrayQueue
      TrieList                  HashSet    HashMap   ConsStack     BankersQueue
@@ -619,32 +619,32 @@ not opened here, because it doubles the required surface of every iterator to sa
 
 ### 3.7 Indexing and slicing
 
-**The four traits are the right cut, and the probe is why.** Folding `Slice` into a second instantiation of `Indexed`
-— `Indexed<Bounds<Int>, Self>` beside `Indexed<Int, Item>` — is the obvious simplification and it does not work. The
+**The four traits are the right cut, and the probe is why.** Folding `Slice` into a second instantiation of `Index`
+— `Index<Bounds<Int>, Self>` beside `Index<Int, Item>` — is the obvious simplification and it does not work. The
 declaration is accepted and then both operators stop resolving:
 
 ```text
-error: `Twice` does not implement `Indexed`, so `a[key]` has no meaning for it
+error: `Twice` does not implement `Index`, so `a[key]` has no meaning for it
 error: `Twice` does not implement `Slice`, so `a[from..to]` has no meaning for it
   = Operators are traits: a type has the ones it comes `with`, and nothing else
 ```
 
 Two instantiations of one trait on one type would collide in the member namespace anyway — one `get` each — which is
 the same rule section 3.3 relies on. So `a[key]` and `a[from..to]` stay two operators bound to two traits, and
-`MutableIndexed` and `MutableSlice` stay the writing halves. After `compact` moves to `Collection` (section 3.2),
+`MutableIndex` and `MutableSlice` stay the writing halves. After `compact` moves to `Collection` (section 3.2),
 `MutableSlice` is exactly `replace`.
 
-**`list[i]` panics and `get` is the `Option`.** That is decided, it is what `Indexed.at`'s doc comment says, and
+**`list[i]` panics and `get` is the `Option`.** That is decided, it is what `Index.at`'s doc comment says, and
 nothing here touches it.
 
 **What each storage is for.**
 
 | | What it is | Size | Traits | Reach for it |
 |---|---|---|---|---|
-| `Array<Item, const Size>` | inline slots, the count in the type | fixed at compile time | `Iterable`, `Length`, `MutableIndexed` | vectors, matrices, colours, hashes, foreign structs |
-| `List<Item>` | the growable sequence, copy on write | any | `Collection`, `MutableIndexed`, `MutableSlice` | everything that grows |
-| `Buffer<Item>` (planned) | a `List` with an in-place promise and `swapRemove` | any | `Collection`, `MutableIndexed`, `MutableSlice` | ECS columns, tensors, frame budgets |
-| `Window<Item>` (planned) | a borrowed section of a `Buffer`, for one call | fixed for the region | `Length`, `Indexed` — **and nothing that resizes** | data parallelism inside one system |
+| `Array<Item, const Size>` | inline slots, the count in the type | fixed at compile time | `Iterable`, `Length`, `MutableIndex` | vectors, matrices, colours, hashes, foreign structs |
+| `List<Item>` | the growable sequence, copy on write | any | `Collection`, `MutableIndex`, `MutableSlice` | everything that grows |
+| `Buffer<Item>` (planned) | a `List` with an in-place promise and `swapRemove` | any | `Collection`, `MutableIndex`, `MutableSlice` | ECS columns, tensors, frame budgets |
+| `Window<Item>` (planned) | a borrowed section of a `Buffer`, for one call | fixed for the region | `Length`, `Index` — **and nothing that resizes** | data parallelism inside one system |
 | `Bytes` = `List<UInt8>` | a list of bytes | any | everything `List` has | stream chunks, encodings, HTTP bodies |
 
 `Array` is not a collection and is in `std/core` because the language refers to it — a list literal against an
@@ -783,9 +783,9 @@ every key alone. Today both have to be written through the path — a loop over 
 writes `particles[index].age` — or with `update`, which is what CONCEPT's "the variable of a `for` loop is a `const`"
 sends a reader to.
 
-**It is sugar over `MutableIndexed`, so it works for every container with slots.** The loop visits the keys of the
+**It is sugar over `MutableIndex`, so it works for every container with slots.** The loop visits the keys of the
 container and opens `container[key]` as a `var` path for each of them — exactly the access `container[key].field = x`
-already is (CONCEPT, "`var` Paths"). That takes one member beside `set`: `MutableIndexed<Key, Value>` gains
+already is (CONCEPT, "`var` Paths"). That takes one member beside `set`: `MutableIndex<Key, Value>` gains
 `fn keys(): Iterate<Key>`, the keys the loop visits, in iteration order. A `List`, an `Array` and a slice answer their
 indices as a `Range` (`0..length()`, no allocation), a `Map` answers its keys in insertion order. `Map.keys()` exists
 already with that signature; the member is called `keys` for a list too, because a trait has one name per member and
@@ -814,7 +814,7 @@ knows which container it is.
    error: `for var` changes the slots of a container, and a `Set` has none: an element's place depends on its value
      = Remove the element and insert the changed one, or build a new set with `map`
 
-   error: `for var` needs a container with slots (`MutableIndexed`), and `items` is only an `Iterate<Int>`
+   error: `for var` needs a container with slots (`MutableIndex`), and `items` is only an `Iterate<Int>`
      = Build a new collection with `map`, or loop over a `List` held in a `var`
    ```
 
@@ -880,9 +880,9 @@ namespace of members, so the body it writes is the implementation of one instant
 reports the second entry of the `with` list and names the first:
 
 ```text
-error: `Twice` comes with `Indexed` more than once, and `at` is the body of the first one
+error: `Twice` comes with `Index` more than once, and `at` is the body of the first one
   = A type has one namespace of members, so one body per instantiation is one `extend` per instantiation:
-    `extend Twice with Indexed<...> { fn at(...) }`
+    `extend Twice with Index<...> { fn at(...) }`
 ```
 
 A body that writes the member twice keeps the message the member namespace already has (``already declared``), so the
@@ -992,10 +992,10 @@ checked script and drops the fallbacks. `Add` is not renamed.
 records.
 
 **C9 — `for var`** (section 3.11). The checker: the form in the `for` head, rules 1 to 6, the two rejection messages
-pinned. The standard library: `keys()` on `MutableIndexed`, answered by `List`, `Array`, the slices and `Map`. The
+pinned. The standard library: `keys()` on `MutableIndex`, answered by `List`, `Array`, the slices and `Map`. The
 lowering: an index loop whose body works on the element's address, no iterator. It is a syntax change and takes the
 two commits of 6a.
-*Gate:* a conformance program per container (list, array, slice, map values, a user `MutableIndexed`), a checker test
+*Gate:* a conformance program per container (list, array, slice, map values, a user `MutableIndex`), a checker test
 per rejected shape, and `ir` of a list loop showing no iterator and no copy per element.
 
 What is left is C2c, then C9, then C7 and C8 whenever there is room. Only C7 adds a type.

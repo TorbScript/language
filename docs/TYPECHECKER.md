@@ -685,7 +685,7 @@ This resolves the open question in CONCEPT.md ("generic methods on a trait-typed
 | `a == b`, `a != b`         | `Equals.equals`                               | Both sides the same type                             |
 | `a < b`, `<=`, `>`, `>=`   | `Compare.compare`                             | Non-associative, no chaining (the parser says so)     |
 | `!a`, `a && b`, `a \|\| b`  | built in on `Bool`                            | Not traits: they short-circuit (gap 21)              |
-| `a[k]`                     | `Indexed.at`, `MutableIndexed.set` for a write | `a[k]` as a `var` path needs `MutableIndexed`         |
+| `a[k]`                     | `Index.at`, `MutableIndex.set` for a write | `a[k]` as a `var` path needs `MutableIndex`         |
 | `a[from..to]`              | `Slice.slice`, `MutableSlice.replace`          | As a `var` path it is a window                        |
 | `"{e}"`                    | `Show.show` per part                           | Records `Adaptation.Show`                             |
 | `for x in xs`              | `Iterate.iterate`                            | The subject is evaluated once into a temporary        |
@@ -723,7 +723,7 @@ public type Place {
   /** `self` in a method or receiver closure. */
   case Receiver(binding: BindingId)
   case Field(base: Place, owner: TypeId, field: SymbolId)
-  /** `a[key]`: `MutableIndexed` for a write. */
+  /** `a[key]`: `MutableIndex` for a write. */
   case Index(base: Place, key: Span)
   /** `a[from..to]`: `MutableSlice` for a write. */
   case Range(base: Place, range: Span)
@@ -739,7 +739,7 @@ public fn isMutable(var checker: Checker, place: Place): Bool
 `isMutable` walks from the root: the root must be a `var` binding, a `var` parameter or a `var fn` receiver; every `Field`
 step must be a `var` field _and_ writable from here (`protected var` outside the file of its type yields a const path,
 and const is deep: `config.routes.add(...)` is an error while `config.routes` reads and iterates); `Index` needs
-`MutableIndexed`, `Range` needs `MutableSlice`. `Temporary` is not mutable.
+`MutableIndex`, `Range` needs `MutableSlice`. `Temporary` is not mutable.
 
 What needs a mutable place: assignment, a `var fn` method, a property command, a `var` argument, and `if var` /
 `while var` (gap 3). A `const` root gets "`q` is a `const`. Only a `var` binding can be changed"; a non-`var` field
@@ -1175,7 +1175,7 @@ list. Everything else is as written.
 - **Operators and `a[k]` go through the `with` list of a declaration, transitively** (`declaredTraitArguments`), not
   through implementations. `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` answers
   `1 + 2` with `Int64` and makes `Meters + Float` a mistake, and it needs nothing from 4.3. The same walk answers
-  `Indexed` for `a[key]`, `Slice` for `a[from..to]` and `Iterate<Item>` for `for x in xs`, so `for` is *not* deferred.
+  `Index` for `a[key]`, `Slice` for `a[from..to]` and `Iterate<Item>` for `for x in xs`, so `for` is *not* deferred.
   4.3 replaces the walk with the real lookup; the memoization it needs is already there.
 - **A comparison is a `Bool` and an interpolated text is a `String`, whatever implements them.** Only the witness is
   4.3's, and deferring the *type* of every `==` and of every `"{x}"` would have left almost nothing typed.
@@ -1422,7 +1422,7 @@ list. Everything else is as written.
   Whether such a root may be written is read back off its declaration site (`DeclarationSiteKind.Constant(binding)`),
   which is the only place the `var` survives.
 - **A step carries the type of its base.** `Index(base, at, literal)` and `Range(base, at)` hold the interned type of
-  what they index, because deciding `MutableIndexed` needs it and milestone 5 needs to know which `set` or `replace`
+  what they index, because deciding `MutableIndex` needs it and milestone 5 needs to know which `set` or `replace`
   to emit. `Index` also holds the key **as it was written where that was a literal**, which is the whole of "two
   indexes can be told apart": `items[0]` and `items[1]` are disjoint, `items[i]` and `items[j]` are not, and a window
   overlaps everything of its base.

@@ -134,7 +134,7 @@ print counter.count
 
 6. **The variable of a `for` loop is a `const`.** Changing an element needs the path (`items[index].x = 1`) or a new
    collection built with `map`; the loop variable itself never becomes a `var` path. *(Decided, not implemented:
-   `for var element in items` binds a `var` reference to each slot instead, over `MutableIndexed` - see the collections
+   `for var element in items` binds a `var` reference to each slot instead, over `MutableIndex` - see the collections
    design record, section 3.11. Until it lands the path is the only way.)*
 
 ## What this is not

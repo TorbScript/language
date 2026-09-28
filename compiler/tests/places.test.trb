@@ -2,7 +2,7 @@
  * Places and the mutation rules: what a valid path is, and what a change through it needs.
  *
  * Every rule of this file is one walk from the root of a path outwards - a `var` binding, then `var` fields, then
- * `MutableIndexed` and `MutableSlice` - plus the rule about where a path may *not* start: a temporary is never the base
+ * `MutableIndex` and `MutableSlice` - plus the rule about where a path may *not* start: a temporary is never the base
  * of one (and always a valid argument for a `var` parameter).
  *
  * A **shared object** starts the walk afresh: it has one identity and no copy, so whether it changes is not a question
@@ -133,7 +133,7 @@ group "Fields" {
 }
 
 group "Indexes and windows" {
-  test "`a[key]` is a place where the type is `MutableIndexed`" {
+  test "`a[key]` is a place where the type is `MutableIndex`" {
     const source = "fn probe(var samples: List<Int>) \{\n  samples[0] = 1\n  print samples[0]\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -147,10 +147,10 @@ group "Indexes and windows" {
     assert(found.placeOf("samples[1..3]") == "local samples[..]")
   }
 
-  test "a type that is only `Indexed` has no `var` path through `a[key]`" {
-    const source = "type Frozen with Indexed<Int, Int> \{\n  fn at(key: Int): Int \{\n    0\n  \}\n\}\n\n"
+  test "a type that is only `Index` has no `var` path through `a[key]`" {
+    const source = "type Frozen with Index<Int, Int> \{\n  fn at(key: Int): Int \{\n    0\n  \}\n\}\n\n"
       + "fn probe(var frozen: Frozen) \{\n  frozen[0] = 1\n\}"
-    assert(problems(source) == ["`Frozen` does not implement `MutableIndexed`, so `a[key]` is no `var` path"])
+    assert(problems(source) == ["`Frozen` does not implement `MutableIndex`, so `a[key]` is no `var` path"])
     assert(
       notes(source)
         == ["A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait"],

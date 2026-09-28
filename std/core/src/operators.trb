@@ -1,6 +1,6 @@
 /**
  * `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power` and `Negate`, the traits the arithmetic operators go
- * through, plus `OrElse` for `??` and `Indexed`/`MutableIndexed`/`Slice`/`MutableSlice` for `a[i]` and `a[from..to]`.
+ * through, plus `OrElse` for `??` and `Index`/`MutableIndex`/`Slice`/`MutableSlice` for `a[i]` and `a[from..to]`.
  * Each type parameter list has defaults, which is why `with Add` alone means `Add<Self, Self>`.
  */
 
@@ -93,7 +93,7 @@ public trait OrElse<Value> {
 }
 
 /** `a[key]` */
-public trait Indexed<Key, Value> {
+public trait Index<Key, Value> {
   /** The value at the key, or `None` if there is none. This is what `get` on a `Map` or a `List` calls. */
   fn get(key: Key): Value?
 
@@ -106,7 +106,7 @@ public trait Indexed<Key, Value> {
    * # Panics
    *
    * When the key is not there, with `the key is not in the collection`. That is what `a[key]` promises -
-   * [Indexed.get] is the same question with an `Option` for an answer, for a caller who expects the key to be missing.
+   * [Index.get] is the same question with an `Option` for an answer, for a caller who expects the key to be missing.
    */
   fn at(key: Key): Value {
     match get(key) {
@@ -120,7 +120,7 @@ public trait Indexed<Key, Value> {
  * `a[key] = value`. It also makes `a[key]` a `var` path: `enemies[0].health = 5` and `groups[key].append(value)`
  * take the element out, change it and put it back (without a copy).
  */
-public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
+public trait MutableIndex<Key, Value> with Index<Key, Value> {
   /** Puts the value at the key, replacing whatever was there. This is `a[key] = value`. */
   var fn set(key: Key, value: Value)
 }
@@ -131,12 +131,12 @@ public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
  * It takes [Bounds] and not one range type, because all five spellings have a meaning here: an end the range leaves
  * open is the start or the end of the value, which is the receiver's decision and not the range's.
  *
- * `Index` is what a position of the value is: an `Int` for a list, and a `TextIndex` for a text, whose positions only
+ * `Position` is what a position of the value is: an `Int` for a list, and a `TextIndex` for a text, whose positions only
  * the text itself hands out (docs/design/PANICS.md section 4). The range in the brackets is a range of it.
  */
-public trait Slice<Index: Compare = Int> {
+public trait Slice<Position: Compare = Int> {
   /** The part of the value the range covers. This is `a[from..to]`. */
-  fn slice(range: Bounds<Index>): Self
+  fn slice(range: Bounds<Position>): Self
 }
 
 /**

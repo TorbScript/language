@@ -960,7 +960,7 @@ extend<Item> Iterate<Item> {
 public fn windows<Item: Plain>(var items: Buffer<Item>, count: Int, body: (var window: Window<Item>) => Void)
 
 /** A borrowed section of a buffer: a length and `[index]`, and no way to resize what it does not own. */
-public shared type Window<Item> with Length, Indexed<Int, Item> {}
+public shared type Window<Item> with Length, Index<Int, Item> {}
 ```
 
 **The whole `Parallel` trait, the `Merge` trait and the `Iterate` extension type check today** as written, with bodies
@@ -1117,7 +1117,7 @@ fix:* `var` in front of a closure parameter name, with the existing escape rule 
 the reference.
 
 **6. `Buffer<Item>` and `Window<Item>`.** ECS gap 9 names the buffer; the window is this document's addition — a
-borrowed section with `Length` and `Indexed` and no resize. *Smallest fix:* the window is a `shared type` over a block
+borrowed section with `Length` and `Index` and no resize. *Smallest fix:* the window is a `shared type` over a block
 pointer, an offset and a length, with no `Close`, produced only by the region.
 
 **7. The fork-join barrier.** `runtime/task.c` and `vm/task.trb`: run `n` bodies on the pool, return when all `n` are

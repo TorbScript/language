@@ -1091,7 +1091,7 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
 - A `var` parameter works on the caller's value. The argument has to be a `var` path. There is no marker at the call
   site - the signature says it, tooling shows it. The meaning is "copy in, copy out", so it is the same in every
   back end; implementations pass a reference.
-- A path through `a[key]` (`MutableIndexed`) or `a[from..to]` (`MutableSlice`) means: take it out, change it, put it
+- A path through `a[key]` (`MutableIndex`) or `a[from..to]` (`MutableSlice`) means: take it out, change it, put it
   back - without a copy. This is what other languages need mutable slices and spans for.
 - **References are second-class.** They only exist as a `var` parameter or a `var fn` receiver, for the duration of a call.
   They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
@@ -1657,7 +1657,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   `extend<Key: Hash, Value> Map<Key, Value> with From<Iterate<(Key, Value)>>`. Two such implementations are an
   ambiguity error, and the fix is to name a type (`TrieMap.from(...)`).
 - **An operator is a trait exactly when it is a method call.** `+` is `Add.add`, `==` is `Equals.equals`, `<` is
-  `Compare.compare`, `a[i]` is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`,
+  `Compare.compare`, `a[i]` is `Index.at`, `a[i] = v` is `MutableIndex.set`, `a[from..to]` is `Slice.slice`,
   `a[from..to] = v` is `MutableSlice.replace`, `a ?? b` is `OrElse.orElse`, string interpolation is `Show.show`. The
   three that are **not** traits are the three that are no method call: `?.` chooses between `map` and `flatMap` by the
   type of the result, which would need the `Self<Output>` that
@@ -1941,7 +1941,7 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   loop variable is a `const` copy of each item.
 - **`for var element in container` changes every element in place** (decided, not yet implemented -
   [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
-  body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndexed` plus
+  body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndex` plus
   its `keys()`, so a `List`, an `Array`, a slice and the values of a `Map` (`for (key, var value) in map`) work, and a
   user container joins by implementing that one trait; a `Set` and a plain `Iterate` are rejected with a message that
   says why. The container has to be a `var` path, the body may not touch it any other way (exclusivity), and the loop
@@ -2702,7 +2702,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   The escaping box gave pure value code aliasing, races through `spawn`, an exclusivity bypass and cycles. State that
   has to escape is a `shared type`. Decided, not yet enforced by the checker.
 - **`for var element in container`** (2026-09-22; docs/design/COLLECTIONS.md section 3.11) is a `var` reference to each slot,
-  sugar over `MutableIndexed` plus `keys()`, lowered to an index loop over element paths. Not Swift's mutable copy.
+  sugar over `MutableIndex` plus `keys()`, lowered to an index loop over element paths. Not Swift's mutable copy.
   Decided, not yet implemented.
 - **Every collection kind keeps its own words, and `Iterable` is `Iterate`** (owner, 2026-09-22; docs/design/COLLECTIONS.md
   section 6b). `iterate()`, `List.append`, `Set.insert`/`remove`, `Map.set`/`remove`, `Stack.push`/`pop`/`peek`,

@@ -102,7 +102,7 @@ print stack.toList()
 ```trb error
 const stack = Stack.of 1, 2, 3
 print stack[0]
-// error: `Stack<Int64>` does not implement `Indexed`, so `a[key]` has no meaning for it
+// error: `Stack<Int64>` does not implement `Index`, so `a[key]` has no meaning for it
 ```
 
 **There is no `add` on either.** `add` would be one word for "on top" and "at the back", which is what the words of each

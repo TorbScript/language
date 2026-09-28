@@ -179,7 +179,7 @@ TORB_TEST(an_element_reference_makes_the_storage_unique_first) {
 }
 
 /*
- * The panic of an index out of range is the caller's, word for word: the element step carries the message `Indexed.at`
+ * The panic of an index out of range is the caller's, word for word: the element step carries the message `Index.at`
  * would have handed to `expect`, so the same program says the same thing whether the write went through a copy or
  * through the interior pointer.
  */

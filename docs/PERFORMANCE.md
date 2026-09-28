@@ -149,16 +149,16 @@ same machine code. Each row says **holds** or **does not hold** and names the ev
 | Calling a closure through a parameter | **holds** | `benchmarks/closure` is **0.98x** against a C function pointer plus a context struct |
 | **A closure that captures and does not escape** | **holds** where the callee is known not to keep it | `torb_environment_on_frame((torb_environment *)&s1_environment, NULL)` and no `torb_allocate`: the environment is a local of the frame. A closure a callee *stores* - which every `Iterate.map` does - is a block, because the pointer would outlive nothing |
 | **`x = f(x)` at the last use** | **holds** | `%5 = call ..._appended(%0 owned last)` and no `retain` in front of it: the assignment defines `%0`, so the argument is the last use and the `makeUnique` inside the callee finds a count of one. `benchmarks/accumulate` allocates **20 blocks and copies 1.05 MB** for 60 000 appends, where the C twin does 16 and 1.05 MB |
-| **A retain or release of a literal** | **holds** | A slot whose every definition is a `Constant` is left out of the counted set, so the body of `Indexed.at` holds no `torb_text_release` of the message its `expect` carries |
+| **A retain or release of a literal** | **holds** | A slot whose every definition is a `Constant` is left out of the counted set, so the body of `Index.at` holds no `torb_text_release` of the message its `expect` carries |
 | **String interpolation** | **holds** | `const torb_text_part parts[4] = { { .kind = TORB_PART_TEXT, .text = s5 }, { .kind = TORB_PART_SIGNED, .signed_value = s1_index }, ... }` and one `torb_text_concat_parts`: **2 000 003 allocations** for 2 000 000 interpolations, which is the one `String` each of them answers |
 | **Integer overflow checking of a counter or a guarded value** | **holds in the emitted code** | The increment of every `for index in 0..n` and every `index - 1` under `if index < 2` is the plain C operator: `s5 = s0_index - s4;` and `intrinsic subtract.i64.unchecked %0, %4` (`compiler/tests/ranges.test.trb`). It is worth little to *this* C compiler - `call-depth` moved 378 ms to 371, inside the band - because gcc was already folding those branches itself; what it is worth is that the IR no longer carries them, and the VM has no folding of its own |
 | **Integer overflow checking in general** | **does not hold** | A sum of two values nothing bounds keeps its check, which is what `fibonacci(n-1) + fibonacci(n-2)` is: **2.55x** against a C twin with no checks at all. The C twin isolates it - the same recursion is 0.21 s plain, 0.38 s with all three operations checked and 0.28 s with only the addition - so the addition is the part that is left, and it is the one that can really overflow |
-| **The dispatch of a collection literal** | **holds** | `[1, 2, 3]` is written as `Object(List<Int64>)` and is a `List(Int64)` by the time a back end sees it: `%0 = move %1`, and `numbers[index]` two functions away is `call n_std_..._ArrayList_get__Int64(%0 borrowed, %1 borrowed)` inside an `Indexed.at` gcc inlines. No box, no table, no indirect call |
+| **The dispatch of a collection literal** | **holds** | `[1, 2, 3]` is written as `Object(List<Int64>)` and is a `List(Int64)` by the time a back end sees it: `%0 = move %1`, and `numbers[index]` two functions away is `call n_std_..._ArrayList_get__Int64(%0 borrowed, %1 borrowed)` inside an `Index.at` gcc inlines. No box, no table, no indirect call |
 | **A trait-typed value with one implementation** | **holds** | A local written as the trait, a result of the trait and a parameter of the trait are one class and one concrete value (`compiler/tests/devirtualize.test.trb`). A `var fn` member on one is the ordinary `var` path: `call t_..._Tally_bump(&%0 borrowed)` |
 | **A list literal, used as a list** | **does not hold** | The dispatch is gone and the rest is not: `numbers[index]` is still a bounds check, an `Option` and an `expect` per element against a load, and the C twin vectorizes its sum. `benchmarks/list-index` lost **31%** of its time (28.56x to 19.70x against its twin in one session) |
 | **The cursor of `for value in collection`** | **holds** | `slot %2 local iterator: Record(T_..._ListIterator__Int64)` and `%4 = call t_..._ListIterator_next__Int64(&%2 borrowed)`: no box, no `makeUnique` in the head, no indirect call. A list, a map, a set and a `String` all do this, and so does a user `Iterate`. `benchmarks/list-iterate` allocates **24 blocks** for 40 loops where it allocated 64 - the same 24 `benchmarks/list-index` allocates for the same data |
 | **`for value in collection` as a whole** | **does not hold** | The `Option` per turn and the cross-unit `torb_list_get` are what is left, and gcc cannot see through either: `list-iterate` is **44x** against a pointer walk that vectorizes, which is 1.9x the counted index loop over the same list. Round P11 (a `for` over a concrete list as a counted loop over `Element` steps) is what removes the rest |
-| **A field of a record in a list** | **does not hold**, and it is the *read* that is left | `points[index].y = v` is `makeUnique` of the list and one store through an `Element` step; the record never moves. `benchmarks/record-write` lost **59%** of its time for it and is **12.61x**, and what is left of the ratio is the `Indexed.at` on the right-hand side - a call, a bounds check and a copy of the record for one field |
+| **A field of a record in a list** | **does not hold**, and it is the *read* that is left | `points[index].y = v` is `makeUnique` of the list and one store through an `Element` step; the record never moves. `benchmarks/record-write` lost **59%** of its time for it and is **12.61x**, and what is left of the ratio is the `Index.at` on the right-hand side - a call, a bounds check and a copy of the record for one field |
 | **A nested index write** | **does not hold**, and no allocation is left | `grid[row][column] = v` writes into the grid's own storage: **7 688 813 allocations became 8 813** - all of them the construction of the grid - and 31.65 GB of copying became 13.3 MB. What is left is that the row of a `List<List<Int>>` is still an `Object` box - it goes *into* the outer list, which the devirtualization may not follow - so the write is one `makeUnique` of that box at the element's address and one indirect call |
 | **A pipeline of `map` and `filter`** | **does not hold** | Three allocations per pipeline instead of four, and one indirect call per stage per element: the stages are built around a trait-typed `self` in a **field**, which the devirtualization may not follow, so their cursors are still boxed although the outermost one is not. `benchmarks/pipeline` is **21.77x** |
 
@@ -261,7 +261,7 @@ call n_std_x2f_collections_list_ArrayList_add__Int64(&%0 borrowed, %6 borrowed)
 ```
 
 and `numbers[index]`, two functions away, is `call n_std_x2f_collections_list_ArrayList_get__Int64(%0 borrowed, %1
-borrowed)` inside an `Indexed.at` whose `self` is a `List(Int64)` - a call gcc inlines, which is what makes the bounds
+borrowed)` inside an `Index.at` whose `self` is a `List(Int64)` - a call gcc inlines, which is what makes the bounds
 check and the `Option` visible to it at all.
 
 **How it decides.** The unit is not a slot but a **class of locations**: every slot of every function plus the result
@@ -283,7 +283,7 @@ poison it too, which is the case dictionary passing exists for.
 **The annotation is not what decides it.** `const items: List<Int> = [1, 2, 3]` loses its box like every other literal:
 what the analysis follows is where a value *goes*, not how a binding was written. `benchmarks/list-index` writes `var
 numbers: List<Int> = []`, hands it out of `filled()` as `List<Int>` and indexes it in `total(numbers: List<Int>)`, and
-all five positions - the local, the result, the temporary, the parameter, and the `self` of the `Indexed.at` instance -
+all five positions - the local, the result, the temporary, the parameter, and the `self` of the `Index.at` instance -
 are one class holding one `torb_list`.
 
 **Nothing about the language changed.** The checker is untouched, the type of a literal is still the trait, and the
@@ -333,7 +333,7 @@ element of a container and therefore a value the frame had a count of, so the `M
 
 ```text
 %10 = read %0
-%11 = call t_std_..._Indexed_at__...(%10 borrowed last, %4 borrowed)   # the row - retains it
+%11 = call t_std_..._Index_at__...(%10 borrowed last, %4 borrowed)   # the row - retains it
 release %10
 ...
 makeUnique %11                                                # count is 2, so this COPIES the row
@@ -353,8 +353,8 @@ callWitness value %0[%4] bound 0 member 8(%7 borrowed, %13 borrowed)
 Nothing is taken out and nothing is put back. `%0[%4]` is a `PathStep.Element` into the grid's own storage, so the
 `makeUnique` on it finds a count of one - the grid is the only owner of the row - and copies nothing.
 
-**How it decides.** The round trip the lowering writes is a `Read` of the container, `Indexed.at` into a slot of the
-frame, the access, and `MutableIndexed.set` back. The pass looks for exactly that quadruple inside one block and
+**How it decides.** The round trip the lowering writes is a `Read` of the container, `Index.at` into a slot of the
+frame, the access, and `MutableIndex.set` back. The pass looks for exactly that quadruple inside one block and
 rewrites it only when all of this holds: the put-back is the runtime's own `torb_list_set` (through the wrapper that
 every `native fn` of `std/` reaches it by), the take-out is a member the **lowering recorded** as an index read
 (`IrProgram.elementReaders`, by symbol, so a copy `specializeFrozenCallees` made is the same member), the container is
@@ -396,11 +396,11 @@ write with the leak gate on and proves copy on write - a copy taken before a wri
 
 **Pattern.** `points[index].y = value` - how every entity-component loop is written.
 
-**What was generated.** `Indexed.at` into a temporary, `write %8.y`, then `MutableIndexed.set` back - both of them a
+**What was generated.** `Index.at` into a temporary, `write %8.y`, then `MutableIndex.set` back - both of them a
 direct call since round P5, and still a round trip that copies the record in each direction:
 
 ```text
-%8 = call t_std_..._Indexed_at__...(%7 borrowed last, %4 borrowed)
+%8 = call t_std_..._Index_at__...(%7 borrowed last, %4 borrowed)
 write %8.y = %12 borrowed
 makeUnique %0
 call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %8 borrowed)
@@ -409,7 +409,7 @@ call n_std_x2f_collections_list_ArrayList_set__...(&%0 borrowed, %4 borrowed, %8
 **What is generated now.** The same `Element` step as finding 3, and the record never moves:
 
 ```text
-%7 = call t_std_..._Indexed_at__...(%0 borrowed, %4 borrowed)
+%7 = call t_std_..._Index_at__...(%0 borrowed, %4 borrowed)
 %8 = read %7.x
 %9 = constant s_literal__Int64_1
 %10 = intrinsic add.i64 %8, %9
@@ -425,7 +425,7 @@ element itself is an inline record and carries no count, so there is nothing els
 bounds-checked call per write. Against its C twin it is **12.61x**, where it was 28.71x before the round and 75.60x
 before round P5.
 
-**What is left.** The read on the right-hand side (`made[index].x`) is still `Indexed.at`, which is a call, a bounds
+**What is left.** The read on the right-hand side (`made[index].x`) is still `Index.at`, which is a call, a bounds
 check and a copy of the whole record for one field. That is the *read* half, and it is the open half of finding 8 plus
 the `Option` of `get` - not this finding.
 
@@ -992,7 +992,7 @@ What round P5 had moved:
 
 | Program | torb time | what the devirtualization removed |
 |---------|----------:|-----------------------------------|
-| `list-index` | **-31%** | every access through the box: `Indexed.at` takes a `List(Int64)` and calls `torb_list_get` directly, and gcc inlines the whole chain |
+| `list-index` | **-31%** | every access through the box: `Index.at` takes a `List(Int64)` and calls `torb_list_get` directly, and gcc inlines the whole chain |
 | `record-write` | **-31%** | the two indirect calls of the read-copy-write; the round trip itself is finding 4 |
 | `map-count` | **-20%** | the two probes are direct calls of `torb_map_get` and `torb_map_set`; that there are two of them is finding 10 |
 | `pipeline` | **-13%**, 125 to 105 allocations | one boxed stage per pipeline: `Filtered` is a record now |
@@ -1085,7 +1085,7 @@ the one place the devirtualization may not go, and `benchmarks/pipeline` is how 
 **What P7 built.** A new pass, `compiler/src/ir/elements.trb`, between the devirtualization and the ownership
 pass: it finds the take-out and the put-back of an index path on a concrete list and replaces them with one
 `PathStep.Element`, which the C back end now emits as `torb_list_element_reference`. The step carries the static and
-the site of the panic `Indexed.at` would have produced, read out of that body, so the message stays the one
+the site of the panic `Index.at` would have produced, read out of that body, so the message stays the one
 `std/core` decides. Two
 things came with it: the value of an assignment is lowered **before** its path is formed (BACKEND 2.3's own rule for
 when an access begins), and a function nothing in the translation unit names is emitted with external linkage, because
@@ -1093,7 +1093,7 @@ a pass that removes the last call of one would otherwise make the C stop compili
 `Element` step steps into contiguous storage, and the interior pointer a table needs is P9's `torb_map_slot`.
 
 **What is left of P8.** The **bounds check** half. The interval facts are there and the analysis is written down; what
-is missing is a second path through `Indexed.at`, because the check of `a[index]` is an `Option` the standard library
+is missing is a second path through `Index.at`, because the check of `a[index]` is an `Option` the standard library
 builds and not an `Intrinsic` with a flag on it. Finding 8 says what such a round would have to build.
 
 ---
@@ -1227,8 +1227,8 @@ only types that answered `false`, or the top would have answered `true` - so all
 takes 30.
 
 **A write through a trait-typed list in a field copied what the element held.** `checker.tables` was a `List<Tables>`,
-and `tables[module.value].expressionTypes.set(at, id)` through the trait is the round trip of finding 3 - `Indexed.at`,
-the change, `MutableIndexed.set` - which the element step cannot take away from a field, because the devirtualization
+and `tables[module.value].expressionTypes.set(at, id)` through the trait is the round trip of finding 3 - `Index.at`,
+the change, `MutableIndex.set` - which the element step cannot take away from a field, because the devirtualization
 poisons what is stored in one. The element had a second owner while it changed, so `torb_make_unique` copied the record,
 and the map inside it, now held twice, was copied and rehashed by `torb_map_prepare`: the whole expression table of the
 module, once for every expression the checker typed. `tables`, `typePositions` and `diagnostics` of the checker are an
@@ -1425,7 +1425,7 @@ a buffer of the right size would take; and the range analysis at 6%, most of it 
 `List<Interval>` of each block through its witness table.
 
 **A write through a trait-typed list** - `self.tables[module].types.set(at, id)` where `tables` is a `List` field - is
-still the round trip of finding 3: `Indexed.at`, the change, `MutableIndexed.set`, all through the witness table, with
+still the round trip of finding 3: `Index.at`, the change, `MutableIndex.set`, all through the witness table, with
 the element owned twice while it changes, so that the change copies it. Round one fixed the one that cost by making that
 field an `ArrayList`. The whole class can go in the IR instead of field by field, and not in this round, because it
 takes a native and a seed: `List.update(index, change)` already exists with a default that is the round trip; `ArrayList`

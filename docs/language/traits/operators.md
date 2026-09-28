@@ -10,7 +10,7 @@ keywords:
   - Power
   - precedence
   - bit operators
-  - Indexed
+  - Index
   - Slice
 source:
   - CONCEPT.md#traits
@@ -63,7 +63,7 @@ a & b        Bits.bitwiseAnd(a, b)       a | b   Bits.bitwiseOr(a, b)
 a ^ b        Bits.bitwiseExclusiveOr(a, b)    ~a   Bits.bitwiseNot(a)
 a << n       Bits.shiftedLeft(a, by: n)  a >> n  Bits.shiftedRight(a, by: n)
 a == b       Equals.equals(a, b)         a < b   Compare.compare(a, b) == .Less
-a[i]         Indexed.at(a, i)            a[i] = v    MutableIndexed.set(a, i, v)
+a[i]         Index.at(a, i)            a[i] = v    MutableIndex.set(a, i, v)
 a[from..to]  Slice.slice(a, from..to)    a[from..to] = v   MutableSlice.replace(a, from..to, v)
 a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
 ```
@@ -201,16 +201,16 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    // error: `Board` does not multiply a `String`
    ```
 
-7. **`a[i]` is `Indexed.at`, which panics if the key does not exist; `a.get(i)` is the same lookup, returning an
+7. **`a[i]` is `Index.at`, which panics if the key does not exist; `a.get(i)` is the same lookup, returning an
    `Option` instead.** `at` has a default body that calls `get`, so a type only ever has to write `get`.
 
-8. **`a[i] = v` needs `MutableIndexed`, a supertrait of `Indexed`.** It also makes `a[i]` a `var` path:
+8. **`a[i] = v` needs `MutableIndex`, a supertrait of `Index`.** It also makes `a[i]` a `var` path:
    `enemies[0].health = 5` and `groups[key].append(value)` take the element out, change it and put it back, without a
    copy.
 
 9. **`a[from..to]` is `Slice.slice` and shares the storage of `a`, starting at index `0` again.**
-   `Slice<Index = Int>` says what a position of the value is: an `Int` for a list, and a type of its own for a value
-   whose positions only it can hand out - the range in the brackets is a range of that `Index`.
+   `Slice<Position = Int>` says what a position of the value is: an `Int` for a list, and a type of its own for a value
+   whose positions only it can hand out - the range in the brackets is a range of that `Position`.
    `a[from..to] = v` needs `MutableSlice`, a supertrait of `Slice`, and also makes the range a `var` path:
    `samples[0..100].sort { _ }` works on that part of `samples` in place.
 

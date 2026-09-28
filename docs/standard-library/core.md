@@ -121,11 +121,11 @@ literal type answers.
 
 ### The operator traits
 
-`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power`, `Negate`, `OrElse`, `Indexed`, `MutableIndexed`,
+`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power`, `Negate`, `OrElse`, `Index`, `MutableIndex`,
 `Slice`, `MutableSlice`. Each one has a type parameter list with defaults, which is why `with Add` means
 `Add<Self, Self>`. `a ** b` is `Power.power`, whose first parameter is the `Exponent` (an integer is raised by an
 `Int`, a float by a float or by an `Int`). `a[i]`
-is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is
+is `Index.at`, `a[i] = v` is `MutableIndex.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is
 `MutableSlice.replace`, and `a ?? b` is `OrElse.orElse`, whose `fallback` is `lazy` so that it is only evaluated where
 there is nothing to give back.
 
@@ -165,7 +165,7 @@ brackets.
 
 ```trb fragment
 public native type Array<Item, const Size: Int>
-  with Iterate<Item>, Length, MutableIndexed<Int, Item>
+  with Iterate<Item>, Length, MutableIndex<Int, Item>
 {
   static fn filled(value: Item): Array<Item, Size>
   static fn generated(produce: (index: Int) => Item): Array<Item, Size>

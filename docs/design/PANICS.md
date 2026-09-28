@@ -108,7 +108,7 @@ Conversions are already where the rest should be: nothing converts a number by p
 
 | Operation | Defined in | Message | Site printed | Total twin | Uses (compiler / std / tests / examples, total) |
 |---|---|---|---|---|---|
-| `list[i]`, `array[i]`, `map[key]` read | `Indexed.at` in `std/core/src/operators.trb`: `get(key).expect("Key does not exist")` | `Key does not exist` - no index, no length, no key | `std/core/src/option.trb:172:15`, for all three | `get` answers an `Option` | **2 297** reads (1 664 / 131 / 309 / 183) against **505** `.get(` (397 / 2 / 43 / 62) |
+| `list[i]`, `array[i]`, `map[key]` read | `Index.at` in `std/core/src/operators.trb`: `get(key).expect("Key does not exist")` | `Key does not exist` - no index, no length, no key | `std/core/src/option.trb:172:15`, for all three | `get` answers an `Option` | **2 297** reads (1 664 / 131 / 309 / 183) against **505** `.get(` (397 / 2 / 43 / 62) |
 | `list[i] = value` | `ArrayList.set`, native `torb_list_set` | `index 6 is out of bounds for a length of 3` | `std/collections/src/list.trb:539:17` | none | 82 writes `a[i] = v` of all three kinds (1 / 14 / 39 / 27); the compiler writes through paths such as `a[i].field = v` instead |
 | `array[i] = value` | `Array.set`, `std/core/src/array.trb` | the same | `std/core/src/array.trb:165:7` | none; a literal index out of bounds is a compile error | in the 82 |
 | `map[key] = value` | `HashMap.set`, `TrieMap.set` | - | - | never panics | in the 82 |
@@ -198,7 +198,7 @@ panic: Key does not exist
 ```
 
 The program has no way to tell which of its 1 664 index reads it was. The operators (`+`, `/`, the shifts) and a few
-natives (`repeat`) name the program's line; `Indexed.at`, every slice, both `expect`s, `Array.set` and the list natives
+natives (`repeat`) name the program's line; `Index.at`, every slice, both `expect`s, `Array.set` and the list natives
 reached through `List` name the standard library's. CONCEPT.md promises "in the debug profile, the frames of the task";
 the `dev` profile, which is what `torb run` builds, printed the one site and nothing else. The runtime natives already
 take the site as an argument (`torb_location at`), which is why `repeat` gets it right; a native reached through the
@@ -391,7 +391,7 @@ language, every `indexOf` on that target is a conversion.
 
 - **Two commits** (CLAUDE.md, "Seed and breaking changes"). `Slice` takes `Bounds<Int>` today, and the checker and the
   lowering of `a[from..to]` find it by name (`checker/expression.trb`, `ir/lower/collection.trb`). Commit one teaches
-  them a `Slice` over an index type (`Slice<Index = Int>`, `slice(range: Bounds<Index>)`) beside today's and refreshes
+  them a `Slice` over an index type (`Slice<Position = Int>`, `slice(range: Bounds<Position>)`) beside today's and refreshes
   the seed; commit two changes `String` and migrates every caller.
 - **The migration**: the 135 text slices of the compiler, the texts among the 80 slices of `std/`, the tests and the
   examples, 44 `indexOf`/`lastIndexOf`, 7 `charAt`, and the compiler's `Span`, whose `start` and `end` become
@@ -451,7 +451,7 @@ Ordered by value for the cost. "Two commits" is the procedure of CLAUDE.md for a
 |---|---|---|---|:---:|
 | 1 | **Correct CONCEPT.md's string example** (`Some(4)`, `12`), whatever becomes of the line in 8.2 | minutes | one paragraph | no |
 | 2 | **`readLine()` answers a `Result`** (`Result<String?, IoError>`) instead of panicking on bytes that are not UTF-8, as CONCEPT already promises for files | a native's signature, both back ends | 3 calls | no |
-| 3 | **Fix the four wrong messages**: `list[i]` and `array[i]` say `index 9 is out of bounds for a length of 3` as a slice and `set` already do, a map read says `the key "Alan" is not in the map`, without the key where its type is not `Show`; `charAt` inside a character says so and names its site; `repeat` says `a text cannot be repeated -1 times`; `absolute()` names `absolute` | small: the message is a static the lowering interns next to `Indexed.at`'s | 3 expected outputs name `Key does not exist` | no |
+| 3 | **Fix the four wrong messages**: `list[i]` and `array[i]` say `index 9 is out of bounds for a length of 3` as a slice and `set` already do, a map read says `the key "Alan" is not in the map`, without the key where its type is not `Show`; `charAt` inside a character says so and names its site; `repeat` says `a text cannot be repeated -1 times`; `absolute()` names `absolute` | small: the message is a static the lowering interns next to `Index.at`'s | 3 expected outputs name `Key does not exist` | no |
 | 4 | **A panic raised in `std/` names the program's line.** A function of `std/` that can reach a `panic` gets the call site as a hidden argument, the way the natives already get `torb_location at` and Rust's `#[track_caller]` works; a call inside `std/` passes its own on. Plus the frames CONCEPT promises for the `dev` profile, as a later slice | one pass in the lowering and its twin in the VM; one integer argument on calls of such functions, which are the small ones gcc inlines | 9 expected outputs of `tests/` name a site in `std/` | no |
 | 5 | **The certain failures are compile errors**: a literal zero divisor, an index or a slice of a literal past its end, constant arithmetic that overflows (`Int.maximum + 1`) - the rule `requireIndexInBounds` already applies to arrays | small, in the checker | none: nothing in the repository does it | no |
 | 6 | **The range analysis drops a list's bounds check** where `for index in 0..list.length()` bounds it and the body does not change the list - the open half of PERFORMANCE F8 | moderate, `ir/ranges.trb` learns the length of an unchanged list | none; 409 compiler reads get faster | no |
@@ -528,7 +528,7 @@ Built in the order the decisions above gave, each its own commit:
   a closure still names the line of `std/`; the frames of the `dev` profile are not built.
 - **Compile errors** (recommendation 5): a divisor known to be zero, arithmetic on known operands that leaves its type,
   a range outside a list literal, a key that none of a map literal's keys is.
-- **`TextIndex`** (recommendation 9, two commits): `Slice<Index = Int>`, and `String` is a `Slice<TextIndex>`.
+- **`TextIndex`** (recommendation 9, two commits): `Slice<Position = Int>`, and `String` is a `Slice<TextIndex>`.
   `indexOf`, `lastIndexOf`, `charAt`, `start()`, `end()`, `indexAfter`, `indexBefore`, `indexAt(byteOffset:)`,
   `byteOffset(of:)` and `indexedChars()` are as section 4.4 names them (`index(after:)` became `indexAfter`, a label
   cannot tell two members of one name apart); `text[3..]` is a compile error with a message of its own. The byte-level

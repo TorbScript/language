@@ -37,9 +37,9 @@ print unique
 ```text
 ["a": 1, "b": 2]                         the Map literal: TrieMap<String, Int>
 [:]                                      the empty Map
-map[key]                                 Indexed.at: panics if the key is absent
-map.get(key)                             Indexed.get: an Option
-map[key] = value                         MutableIndexed.set
+map[key]                                 Index.at: panics if the key is absent
+map.get(key)                             Index.get: an Option
+map[key] = value                         MutableIndex.set
 
 const unique: Set<Int> = [1, 2, 2, 3]    a list literal, adapted because Set is From<Iterate<Item>>
 var seen: Set<Int> = []                  the empty Set, and the constant a field of one starts from

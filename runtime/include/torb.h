@@ -1045,7 +1045,7 @@ bool torb_list_get(torb_list list, int64_t index, void *out);
  * pointer is valid for exactly the duration of the access that formed it (BACKEND 2.3).
  *
  * `missing` is the message an index out of range panics with, and `at` the site it is reported at. Both are the
- * **language's**: `a[key]` is `Indexed.at`, whose body is `get(key).expect("Key does not exist")`, so the step hands
+ * **language's**: `a[key]` is `Index.at`, whose body is `get(key).expect("Key does not exist")`, so the step hands
  * over the very static that `expect` would have been given. A runtime message of its own would make the same program
  * say two different things depending on whether the write went through a copy or through this pointer.
  */

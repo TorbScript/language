@@ -106,7 +106,7 @@ write `_`, or `_name` to keep the name. See [Naming](../language/syntax/naming.m
 
 There is no inheritance. A trait with one required method is named after that method - `Hash`, `Equals`, `Compare`,
 `Show`, `Add`, `Close` - and a type says `with Hash`. Operators are traits: `+` is `Add.add`, `==` is `Equals.equals`,
-`a[i]` is `Indexed.at`.
+`a[i]` is `Index.at`.
 
 ```trb
 trait Area {

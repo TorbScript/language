@@ -58,8 +58,8 @@ public type PlacePath {
  * after it has run. A window of `a[from..to]` is one as well, with the range as its key.
  *
  * That is the concept's own model of an index path - "take it out, change it, put it back" (`var` Paths) - and the two
- * halves are two members the language already has: **`Indexed.at`** takes the element out, which is why a missing key
- * *panics* in the one place `std/core` decides it, and **`MutableIndexed.set`** puts it back, which is why a missing key
+ * halves are two members the language already has: **`Index.at`** takes the element out, which is why a missing key
+ * *panics* in the one place `std/core` decides it, and **`MutableIndex.set`** puts it back, which is why a missing key
  * of a map is an *insert* on `map[key] = value`. Neither half is a decision of the back end.
  *
  * **Why it is not `Instruction.TakeOut`/`PutBack`.** Those name a `RuntimeKind` and reach the runtime's own
@@ -80,7 +80,7 @@ public type TakenElement {
   key: Slot
   /** The frame's own slot the element lives in while the access runs. */
   element: Slot
-  /** `MutableIndexed.set` of the container's own type, or `MutableSlice.replace` for a window: what puts it back. */
+  /** `MutableIndex.set` of the container's own type, or `MutableSlice.replace` for a window: what puts it back. */
   setter: Dispatched
   at: Span
 }
@@ -559,8 +559,8 @@ fn loweredKeys(
 }
 
 /**
- * One element on the path: the container as a value, `Indexed.at` to take the element out of it into a slot of the frame,
- * and the `MutableIndexed.set` that will put it back once the access has run. A window is the same with `Slice.slice`
+ * One element on the path: the container as a value, `Index.at` to take the element out of it into a slot of the frame,
+ * and the `MutableIndex.set` that will put it back once the access has run. A window is the same with `Slice.slice`
  * and `MutableSlice.replace`, and the range as the key.
  *
  * The container is **read out of its place** first, because `at` takes `self` by value: a `Read` of a counted value hands
@@ -646,14 +646,14 @@ fn takingMemberOf(
       return None
     }
   }
-  // `Slice<Index>` is applied to the position type of the container, an `Int` for a list: the bound has to say it
+  // `Slice<Position>` is applied to the position type of the container, an `Int` for a list: the bound has to say it
   const empty: List<TypeId> = []
   const arguments = traitArgumentsOf(lowering.checker, container, symbol) ?? empty
   const bound = lowering.checker.nominal symbol, arguments
   dispatchedOn lowering, container, bound, name, at
 }
 
-/** `Indexed.at` and `MutableIndexed.set` of the container's own type: the two halves of an index path. */
+/** `Index.at` and `MutableIndex.set` of the container's own type: the two halves of an index path. */
 fn indexedMemberOf(
   var lowering: Lowering,
   container: TypeId,
@@ -670,7 +670,7 @@ fn indexedMemberOf(
   const symbol = match capability {
     Some(found) => found
     None => {
-      reportUnsupported lowering, "{what} through `a[key]` without `Indexed` in the prelude", at
+      reportUnsupported lowering, "{what} through `a[key]` without `Index` in the prelude", at
       return None
     }
   }
@@ -687,7 +687,7 @@ fn indexedMemberOf(
 }
 
 /**
- * The other half of every `a[key]` on a path: `MutableIndexed.set` puts the element back where it came from, **innermost
+ * The other half of every `a[key]` on a path: `MutableIndex.set` puts the element back where it came from, **innermost
  * first**, after the access has run - an element that is itself in a container has to be back in it before that container
  * goes back into its own.
  *
@@ -817,7 +817,7 @@ public fn lowerPlaceAssignment(
   target: Expression,
   value: Expression,
 ) {
-  // `a[key] = value` is `MutableIndexed.set` and not a `Write`, which is the whole difference between a write and an
+  // `a[key] = value` is `MutableIndex.set` and not a `Write`, which is the whole difference between a write and an
   // insert: what a missing key does is the container's own answer (`map[key] = value` adds it) and no rule of the back end
   if const Some(place) = placeRecordedAt(lowering, target.span) {
     if isIndexedTarget(place) {
@@ -858,7 +858,7 @@ fn isIndexedTarget(place: Place): Bool {
 
 /**
  * `numbers[0] = 5`, `map[key] = value`, `grid[y][x] = v`: the last step of the path is the index, so the assignment is a
- * call of `MutableIndexed.set` on the container the rest of the path leads to. Everything in front of that index is an
+ * call of `MutableIndex.set` on the container the rest of the path leads to. Everything in front of that index is an
  * ordinary place, which is what makes the nested case fall out of nothing: `grid[y]` is taken out and put back around the
  * `set`, by the very machinery a `var` argument uses.
  *

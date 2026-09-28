@@ -178,7 +178,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     `List<Show & Hash>` is legal and only the calls that have no meaning are rejected.
 
 11. **Operators are traits.** `+` is `Add.add`, `-` is `Subtract.subtract`, `==` is `Equals.equals`, `<` is
-    `Compare.compare`, `a[i]` is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, and
+    `Compare.compare`, `a[i]` is `Index.at`, `a[i] = v` is `MutableIndex.set`, `a[from..to]` is `Slice.slice`, and
     string interpolation is `Show.show`. `&&`, `||` and `!` are the exception: they are built into `Bool`, they
     short-circuit, and they cannot be overloaded.
 

@@ -18,7 +18,7 @@ use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 group "`a[key]`" {
   test "an index is a call of the `at` the type provides, the receiver before the key" {
     const source = raw"""
-      type Grid with Indexed<Int, Int> {
+      type Grid with Index<Int, Int> {
         base: Int
 
         fn at(key: Int): Int {
@@ -47,7 +47,7 @@ group "`a[key]`" {
   /** `at` mentions `Self` nowhere but as its receiver, so it is an ordinary member of the table of a trait-typed value. */
   test "an index on a trait-typed value goes through the table it carries" {
     const source = raw"""
-      type Grid with Indexed<Int, Int> {
+      type Grid with Index<Int, Int> {
         base: Int
 
         fn at(key: Int): Int {
@@ -55,7 +55,7 @@ group "`a[key]`" {
         }
       }
 
-      fn cell(grid: Indexed<Int, Int>): Int {
+      fn cell(grid: Index<Int, Int>): Int {
         grid[2]
       }
 
@@ -63,7 +63,7 @@ group "`a[key]`" {
         cell(Grid(1)) + cell(Other())
       }
 
-      type Other with Indexed<Int, Int> {
+      type Other with Index<Int, Int> {
         fn at(key: Int): Int {
           key
         }
@@ -71,8 +71,8 @@ group "`a[key]`" {
       """
     assert(
       irOf(source, "t_acme_x2f_app_main_cell") == raw"""
-        fn t_acme_x2f_app_main_cell(grid: Object(Indexed<Int64, Int64>) borrowed) -> Int64 {
-          slot %0 parameter grid: Object(Indexed<Int64, Int64>)
+        fn t_acme_x2f_app_main_cell(grid: Object(Index<Int64, Int64>) borrowed) -> Int64 {
+          slot %0 parameter grid: Object(Index<Int64, Int64>)
           slot %1 temporary: Int64
           slot %2 temporary: Int64
         b0: # acme/app/src/main.trb:9 body
@@ -84,7 +84,7 @@ group "`a[key]`" {
   }
 
   /**
-   * `a[key] = value` is a call of `MutableIndexed.set` and no `Write`: what a missing key does is then the container's own
+   * `a[key] = value` is a call of `MutableIndex.set` and no `Write`: what a missing key does is then the container's own
    * answer - a list panics out of range and a map inserts - and no rule of the back end. The key is lowered before the
    * value, because a place's own subexpressions are always lowered before the value that is written through it.
    */
@@ -100,7 +100,7 @@ group "`a[key]`" {
         b0: # acme/app/src/main.trb:1 body
           %1 = constant s_literal__Int64_0
           %2 = constant s_literal__Int64_1
-          call n_std_x2f_prelude_types_MutableIndexed_set__List_Int64_Int64_Int64_x24_site(&%0 borrowed, %1 borrowed, %2 borrowed) at acme/app/src/main.trb:2:3
+          call n_std_x2f_prelude_types_MutableIndex_set__List_Int64_Int64_Int64_x24_site(&%0 borrowed, %1 borrowed, %2 borrowed) at acme/app/src/main.trb:2:3
           return
         }""",
     )
@@ -113,7 +113,7 @@ const indexedContainer = raw"""
     var value: Int
   }
 
-  type Row with MutableIndexed<Int, Cell> {
+  type Row with MutableIndex<Int, Cell> {
     var only: Cell
 
     fn at(key: Int): Cell {
@@ -134,7 +134,7 @@ fn indexedProgram(body: String): String {
  * A `var` path **through** `a[key]`: `points[0].x = 100`, `counters[1].increment()` and `bumped items[0]` all change an
  * element of a container, and the concept's own model of that is "take it out, change it, put it back" (`var` Paths).
  *
- * The two halves are two members the language already has - `Indexed.at` takes the element out and `MutableIndexed.set`
+ * The two halves are two members the language already has - `Index.at` takes the element out and `MutableIndex.set`
  * puts it back - so nothing about an index path is a decision of the back end, and it works for a **trait-typed**
  * container (`List<Int>`, `Map<String, Int>`), which is what the compiler itself is full of and what no
  * `Instruction.TakeOut` could reach: a witness table says which members a value has and never that it is a `torb_list`.
@@ -216,7 +216,7 @@ group "a `var` path through `a[key]`" {
         var value: Int
       }
 
-      type Row with MutableIndexed<Int, Cell> {
+      type Row with MutableIndex<Int, Cell> {
         var only: Cell
 
         fn at(key: Int): Cell {
@@ -228,7 +228,7 @@ group "a `var` path through `a[key]`" {
         }
       }
 
-      type Sheet with MutableIndexed<Int, Row> {
+      type Sheet with MutableIndex<Int, Row> {
         var only: Row
 
         fn at(key: Int): Row {

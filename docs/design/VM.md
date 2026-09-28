@@ -391,7 +391,7 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
   | | `fibonacci(30)` | `fibonacci(32)` |
   |---|---|---|
   | native binary | 0.03 s | - |
-  | VM, registers through `Indexed.at`, a `List` of return records, a `Chunk` copied per call | 1.18 s | 3.31 s |
+  | VM, registers through `Index.at`, a `List` of return records, a `Chunk` copied per call | 1.18 s | 3.31 s |
   | VM, registers and code by address, return records in the stack, the image (section 4) | 0.19 s | 0.46 s |
 
   The first number was 2.0 s in a `dev` build. Six times faster is what the reads alone buy; the rest - about seventy
@@ -429,7 +429,7 @@ suite run twice, and the list of what the VM runs that grew with every slice is 
 | 8 | The gate of 7.2: every conformance program in both back ends; `vm.list` deleted | **Done**: every program, `binary-only/` and `vm-only/` too (section 8); `vm.list` is deleted |
 | 11 | `torb test` in the VM: every test file an entry of one program, the report of `runtime/test.c` | **Done**: `TestFile`, `TestFinish`; the default of `torb test`, and tier A runs the test packages of `std/` and `examples/` both ways |
 | 9 | `Array<Item, Size>`, added to the language after the interpreter: inline items, a checked item step | **Done**: `ArrayNew`, the static `Items`, `PlaceStep.Item`, the counted words of every item; the eleven programs with an array |
-| 10 | Speed: register reads without `Indexed.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
+| 10 | Speed: register reads without `Index.at`, return records in the word stack (section 10) | **Done**: the image, addresses and inline `load`/`store` (section 4); six times faster (section 8) |
 | 12 | A native binary that embeds the VM: `torb build --embed-vm` (section 11) | **Done**: `cli/embed.trb`, `vm/embed.trb`; tier B runs `tests/language/` in such binaries |
 
 ## 10. Open

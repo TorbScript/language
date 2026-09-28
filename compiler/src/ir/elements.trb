@@ -2,8 +2,8 @@
  * The element step: a write through `a[key]` goes into the container's own storage instead of through a copy.
  *
  * `grid[row][column] = value`, `points[index].y = value`, `rows[index].append(value)` are all lowered the same way
- * (`ir/lower/place.trb`): the element is **taken out** of the container with `Indexed.at`, changed in a slot of the
- * frame, and **put back** with `MutableIndexed.set`. That is the concept's own model of an index path, and it is what
+ * (`ir/lower/place.trb`): the element is **taken out** of the container with `Index.at`, changed in a slot of the
+ * frame, and **put back** with `MutableIndex.set`. That is the concept's own model of an index path, and it is what
  * a trait-typed container can do - but the container still holds a count of the element while the frame changes it,
  * so the `MakeUnique` in the middle copies. `benchmarks/nested-write` pays two allocations and a whole row per write
  * for it (docs/PERFORMANCE.md, finding 3).
@@ -85,7 +85,7 @@ public fn rewriteElementPlaces(var program: IrProgram) {
 
 /**
  * `a[key]` on an `Array<Item, Size>` as one `Read` through an `Element` step, where the instruction is the call of
- * `Indexed.at` that read it: the item is a slot of the array's own struct, so there is nothing to call, no `Option` to
+ * `Index.at` that read it: the item is a slot of the array's own struct, so there is nothing to call, no `Option` to
  * build and no copy of the whole array to hand to `at` by value.
  *
  * The step carries the site of the panic `at` would have produced - read out of its body, exactly as a list's round
@@ -253,9 +253,9 @@ fn foldedRead(
 type ElementWrite {
   /** The `Read` of the container, which the take-out needed because `at` takes `self` by value. */
   read: Int
-  /** The `Indexed.at` that took the element out. */
+  /** The `Index.at` that took the element out. */
   take: Int
-  /** The `MutableIndexed.set` that put it back. */
+  /** The `MutableIndex.set` that put it back. */
   putBack: Int
   /** Whether the instruction in front of the put-back is the `MakeUnique` of the container it needed. */
   hasOwnerUnique: Bool
@@ -357,7 +357,7 @@ fn elementWriteAt(
 }
 
 /**
- * The three arguments of a put-back: a `MutableIndexed.set` on the runtime's own list, answering nothing.
+ * The three arguments of a put-back: a `MutableIndex.set` on the runtime's own list, answering nothing.
  *
  * The **native symbol** decides it and not a name of the source: `torb_list_set` is what `ArrayList.set` and
  * `TrieList.set` both are, and a function of the program that merely looks like one is not one.
@@ -471,7 +471,7 @@ type Forwarded {
 }
 
 /**
- * The slot the container was read into, where the instruction is the `Indexed.at` that defines the element from it.
+ * The slot the container was read into, where the instruction is the `Index.at` that defines the element from it.
  *
  * `program.elementReaders` is what says it is one: the lowering wrote the symbol of the member it dispatched there,
  * so a copy `specializeFrozenCallees` made answers the same question and a two-argument call that only looks like an

@@ -139,13 +139,13 @@ print text.length()
 // error: `String` has no member `length`
 ```
 
-**A `String` is not `Indexed`.** `text[0]` is not "the first character"; it is not legal at all, because indexing by
+**A `String` is not `Index`.** `text[0]` is not "the first character"; it is not legal at all, because indexing by
 a single position would face the same ambiguity `length()` does.
 
 ```trb error
 const text = "hello"
 print text[0]
-// error: `String` does not implement `Indexed`, so `a[key]` has no meaning for it
+// error: `String` does not implement `Index`, so `a[key]` has no meaning for it
 ```
 
 ## Related
