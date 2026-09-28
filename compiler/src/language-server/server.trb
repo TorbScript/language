@@ -125,14 +125,14 @@ public type LanguageServer {
         return
       }
     }
-    const params = memberAt(message, ["params"]) ?? JsonValue.Null
+    const parameters = memberAt(message, ["params"]) ?? JsonValue.Null
     match memberAt(message, ["id"]) {
-      Some(id) => request id, method, params
-      None => notify method, params
+      Some(id) => request id, method, parameters
+      None => notify method, parameters
     }
   }
 
-  private var fn request(id: JsonValue, method: String, params: JsonValue) {
+  private var fn request(id: JsonValue, method: String, parameters: JsonValue) {
     if phase == Phase.Starting && method != "initialize" {
       respondError(id, -32002, "the server is not initialized")
       return
@@ -142,53 +142,53 @@ public type LanguageServer {
       return
     }
     match method {
-      "initialize" => respond id, initialize(params)
+      "initialize" => respond id, initialize(parameters)
       "shutdown" => {
         phase = Phase.ShuttingDown
         respond id, JsonValue.Null
       }
       "textDocument/hover" => {
-        const result = match located(params) {
+        const result = match located(parameters) {
           Some((analysis, document, offset)) => hoverOf analysis, document.path, offset
           None => JsonValue.Null
         }
         respond id, result
       }
       "textDocument/definition" => {
-        const result = match located(params) {
+        const result = match located(parameters) {
           Some((analysis, document, offset)) => definitionOf analysis, locations, document.path, offset
           None => JsonValue.Null
         }
         respond id, result
       }
       "textDocument/completion" => {
-        const result = match located(params) {
+        const result = match located(parameters) {
           Some((analysis, document, offset)) => completion analysis, document, offset
           None => JsonValue.Null
         }
         respond id, result
       }
       "textDocument/semanticTokens/full" => {
-        const result = match located(params) {
+        const result = match located(parameters) {
           Some((analysis, document, _)) => semanticTokensOf analysis, document.path
           None => JsonValue.Null
         }
         respond id, result
       }
-      "textDocument/codeAction" => codeActions id, params
+      "textDocument/codeAction" => codeActions id, parameters
       _ => respondError(id, -32601, "`{method}` is not a request this server answers")
     }
   }
 
-  private var fn notify(method: String, params: JsonValue) {
+  private var fn notify(method: String, parameters: JsonValue) {
     match method {
       "exit" => {
         phase = Phase.Exited(if phase == Phase.ShuttingDown { 0 } else { 1 })
       }
-      "textDocument/didOpen" => opened params
-      "textDocument/didChange" => changedDocument params
-      "textDocument/didClose" => closed params
-      "workspace/didChangeWatchedFiles" => watchedFilesChanged params
+      "textDocument/didOpen" => opened parameters
+      "textDocument/didChange" => changedDocument parameters
+      "textDocument/didClose" => closed parameters
+      "workspace/didChangeWatchedFiles" => watchedFilesChanged parameters
       // `initialized`, `$/cancelRequest`, `$/setTrace`, `textDocument/didSave`, `workspace/didChangeConfiguration`:
       // nothing to do. A request is answered before the next message is read, so none is ever cancelled in flight
       _ => {}
@@ -197,8 +197,8 @@ public type LanguageServer {
 
   // --- The life cycle --------------------------------------------------------------------------------------------------
 
-  private var fn initialize(params: JsonValue): JsonValue {
-    const rootUri = textAt(params, ["rootUri"]) ?? rootUriOfFolders(params)
+  private var fn initialize(parameters: JsonValue): JsonValue {
+    const rootUri = textAt(parameters, ["rootUri"]) ?? rootUriOfFolders(parameters)
     if readsDisk && !rootUri.isEmpty() {
       if const Some(root) = absolutePathOf(rootUri) {
         locations = Locations.of rootUri, root
@@ -232,8 +232,8 @@ public type LanguageServer {
 
   // --- Documents -------------------------------------------------------------------------------------------------------
 
-  private var fn opened(params: JsonValue) {
-    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+  private var fn opened(parameters: JsonValue) {
+    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
     const path = match locations.pathOf(uri) {
       Some(found) => found
       None => {
@@ -241,8 +241,8 @@ public type LanguageServer {
         return
       }
     }
-    const content = textAt(params, ["textDocument", "text"]) ?? ""
-    const version = integerAt(params, ["textDocument", "version"]) ?? 0
+    const content = textAt(parameters, ["textDocument", "text"]) ?? ""
+    const version = integerAt(parameters, ["textDocument", "version"]) ?? 0
     documents.set path, Document(uri, path, version, content)
     if tree.isNone() {
       tree = readTreeOf path
@@ -251,8 +251,8 @@ public type LanguageServer {
     markChanged path
   }
 
-  private var fn changedDocument(params: JsonValue) {
-    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+  private var fn changedDocument(parameters: JsonValue) {
+    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
     const path = match locations.pathOf(uri) {
       Some(found) => found
       None => {
@@ -267,7 +267,7 @@ public type LanguageServer {
       }
     }
     var content = document.text
-    for change in itemsAt(params, ["contentChanges"]) {
+    for change in itemsAt(parameters, ["contentChanges"]) {
       const replacement = textAt(change, ["text"]) ?? ""
       content = match rangeAt(change, ["range"]) {
         Some(range) => {
@@ -279,14 +279,14 @@ public type LanguageServer {
         None => replacement
       }
     }
-    const version = integerAt(params, ["textDocument", "version"]) ?? document.version
+    const version = integerAt(parameters, ["textDocument", "version"]) ?? document.version
     documents.set path, Document(uri, path, version, content)
     tree = tree?.withFile(path, content)
     markChanged path
   }
 
-  private var fn closed(params: JsonValue) {
-    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+  private var fn closed(parameters: JsonValue) {
+    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
     const path = match locations.pathOf(uri) {
       Some(found) => found
       None => {
@@ -309,12 +309,12 @@ public type LanguageServer {
   }
 
   /** A file the client watches changed on disk: an open document keeps its own text, every other file is read again. */
-  private var fn watchedFilesChanged(params: JsonValue) {
+  private var fn watchedFilesChanged(parameters: JsonValue) {
     if !readsDisk {
       return
     }
     var any = false
-    for change in itemsAt(params, ["changes"]) {
+    for change in itemsAt(parameters, ["changes"]) {
       const path = match locations.pathOf(textAt(change, ["uri"]) ?? "") {
         Some(found) => found
         None => {
@@ -437,10 +437,10 @@ public type LanguageServer {
    * The run, the document and the byte offset a request about a position names, once the document's run is current.
    * `None` for a document that is not open, and for one no run could check.
    */
-  private var fn located(params: JsonValue): (Analysis, Document, Int)? {
-    const document = documentOf(params)?
+  private var fn located(parameters: JsonValue): (Analysis, Document, Int)? {
+    const document = documentOf(parameters)?
     const analysis = analysisOf(document.path)?
-    const position = positionAt(params, ["position"]) ?? Position(0, 0)
+    const position = positionAt(parameters, ["position"]) ?? Position(0, 0)
     (analysis, document, LineMap.of(document.text).offsetOf(position))
   }
 
@@ -473,8 +473,8 @@ public type LanguageServer {
     }
   }
 
-  private var fn codeActions(id: JsonValue, params: JsonValue) {
-    const document = match documentOf(params) {
+  private var fn codeActions(id: JsonValue, parameters: JsonValue) {
+    const document = match documentOf(parameters) {
       Some(found) => found
       None => {
         respond id, array([])
@@ -482,7 +482,7 @@ public type LanguageServer {
       }
     }
     const _analysis = analysisOf document.path
-    const range = rangeAt(params, ["range"]) ?? Range(Position(0, 0), Position(0, 0))
+    const range = rangeAt(parameters, ["range"]) ?? Range(Position(0, 0), Position(0, 0))
     const lines = LineMap.of document.text
     const from = lines.offsetOf range.start
     const to = lines.offsetOf range.end
@@ -490,8 +490,8 @@ public type LanguageServer {
   }
 
   /** The open document a request names. */
-  private fn documentOf(params: JsonValue): Document? {
-    const path = locations.pathOf(textAt(params, ["textDocument", "uri"]) ?? "")?
+  private fn documentOf(parameters: JsonValue): Document? {
+    const path = locations.pathOf(textAt(parameters, ["textDocument", "uri"]) ?? "")?
     documents.get path
   }
 
@@ -516,11 +516,11 @@ public type LanguageServer {
   }
 
   private var fn publish(uri: String, diagnostics: List<JsonValue>) {
-    const params = object([("uri", text(uri)), ("diagnostics", array(diagnostics))])
+    const parameters = object([("uri", text(uri)), ("diagnostics", array(diagnostics))])
     outgoing.append(object([
       ("jsonrpc", text("2.0")),
       ("method", text("textDocument/publishDiagnostics")),
-      ("params", params),
+      ("params", parameters),
     ]))
   }
 }
@@ -532,8 +532,8 @@ public type LanguageServer {
 const frontRunLimit = 200
 
 /** The first workspace folder, for a client that sends those instead of `rootUri`; empty where there is none. */
-fn rootUriOfFolders(params: JsonValue): String {
-  for folder in itemsAt(params, ["workspaceFolders"]) {
+fn rootUriOfFolders(parameters: JsonValue): String {
+  for folder in itemsAt(parameters, ["workspaceFolders"]) {
     if const Some(uri) = textAt(folder, ["uri"]) {
       return uri
     }

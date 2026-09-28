@@ -38,10 +38,10 @@ fn send(var server: LanguageServer, messages: List<String>): List<JsonValue> {
 }
 
 /** A JSON text for a message, from its method, its parameters and, for a request, its id. */
-fn message(method: String, params: String, id: Int? = None): String {
+fn message(method: String, parameters: String, id: Int? = None): String {
   match id {
-    Some(number) => "\{\"jsonrpc\":\"2.0\",\"id\":{number},\"method\":\"{method}\",\"params\":{params}\}"
-    None => "\{\"jsonrpc\":\"2.0\",\"method\":\"{method}\",\"params\":{params}\}"
+    Some(number) => "\{\"jsonrpc\":\"2.0\",\"id\":{number},\"method\":\"{method}\",\"params\":{parameters}\}"
+    None => "\{\"jsonrpc\":\"2.0\",\"method\":\"{method}\",\"params\":{parameters}\}"
   }
 }
 
@@ -468,8 +468,8 @@ group "Quick fixes" {
     const source = "type Point \{\n  x: Int\n\n  static fn origin(): Point \{\n    Self(0)\n  \}\n\}\n\nprint Point.origin()\n"
     const _first = send server, [opened(mainUri, source)]
     const range = "\"range\":\{\"start\":\{\"line\":3,\"character\":0\},\"end\":\{\"line\":3,\"character\":30\}\}"
-    const params = "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\},{range},\"context\":\{\"diagnostics\":[]\}\}"
-    const answer = only server, [message("textDocument/codeAction", params, 15)]
+    const parameters = "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\},{range},\"context\":\{\"diagnostics\":[]\}\}"
+    const answer = only server, [message("textDocument/codeAction", parameters, 15)]
     const actions = itemsAt answer, ["result"]
     assert(actions.length() == 1)
     assert(textAt(actions[0], ["kind"]) == "quickfix")
