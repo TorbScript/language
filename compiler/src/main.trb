@@ -82,6 +82,7 @@ fn printUsage() {
   printError "                         --native: build them into one binary and run it instead"
   printError "                         --profile dev|release, --release: build them natively with that profile"
   printError "                         --shard k/n: only the k-th of every n files, so n processes run one suite"
+  printError "                         --shards n: with --native, build once and run all n shards at the same time"
   printError "                         --jobs N: accepted and ignored - one program is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
@@ -514,21 +515,39 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
 }
 
 /**
- * `torb test [path]... [--native] [--profile dev|release] [--shard k/n] [--jobs N]`: in the VM unless told otherwise,
- * and a profile says to build natively, because only a binary has one. `--jobs` means nothing here: one program holds
- * every test file, so there is one process whatever the number says. It is accepted and ignored. `--shard 2/4` runs the
- * second of every four files, so several processes can run one suite at once ([TestShard]).
+ * `torb test [path]... [--native] [--profile dev|release] [--shard k/n | --shards n] [--jobs N]`: in the VM unless told
+ * otherwise, and a profile says to build natively, because only a binary has one. `--jobs` means nothing here: one
+ * program holds every test file, so there is one process whatever the number says. It is accepted and ignored.
+ * `--shard 2/4` runs the second of every four files, so several processes can run one suite at once ([TestShard]), and
+ * `--shards 4` builds the binary once and runs all four of them at the same time.
  */
 fn testOptionsOf(arguments: List<String>): TestOptions? {
   const choice = profileChoiceOf(arguments, Profile.Dev)?
   var paths: List<String> = []
   var wantsJobs = false
   var wantsShard = false
+  var wantsShards = false
   var shard: TestShard? = None
+  var shards = 1
   var usesMachine = choice.rest.length() == arguments.length()
   for argument in choice.rest {
     if wantsJobs {
       wantsJobs = false
+      continue
+    }
+    if wantsShards {
+      wantsShards = false
+      shards = match Int.tryFrom(argument).ok() {
+        Some(count) if count >= 1 => count
+        _ => {
+          printError "error: `--shards` takes how many processes run the suite, a whole number above zero: `--shards 4`"
+          return None
+        }
+      }
+      continue
+    }
+    if argument == "--shards" {
+      wantsShards = true
       continue
     }
     if wantsShard {
@@ -572,8 +591,21 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     printError "error: `--shard` needs `<index>/<count>`: `--shard 2/4`"
     return None
   }
+  if wantsShards {
+    printError "error: `--shards` needs how many processes run the suite: `--shards 4`"
+    return None
+  }
+  if shards > 1 && shard.isSome() {
+    printError "error: `--shard` runs one shard and `--shards` all of them: give one of the two"
+    return None
+  }
+  // The shards are processes of one binary, and the VM runs inside `torb`
+  if shards > 1 && usesMachine {
+    printError "error: `--shards` runs a native test binary several times at once: add `--native`"
+    return None
+  }
   const given = if paths.isEmpty() { [defaultTestPath()] } else { paths }
-  TestOptions given, choice.profile, usesMachine, shard
+  TestOptions given, choice.profile, usesMachine, shard, shards
 }
 
 /**

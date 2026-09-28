@@ -17,6 +17,7 @@ sh tools/bootstrap.sh                                   # Build it: seed -> torb
 sh tools/gates.sh a                                     # Tier A (below); tier B is `sh tools/gates.sh b`
 torb test --native compiler/tests                       # The TorbScript tests of the compiler (profile dev)
 torb test --native compiler/tests/calls.test.trb        # ...one file
+torb test --native compiler/tests --shards 4            # ...built once, run as four processes at the same time
 torb test std/path/tests                                # A test package, in the VM (the default of torb test)
 torb check .                                            # The compiler checks the whole repository: "no problems"
 torb check tests/conformance tests/language             # ...and the two test workspaces, which stand outside it

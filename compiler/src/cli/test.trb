@@ -23,6 +23,7 @@ use File, IoError from "std/fs"
 use Process from "std/process"
 use normalizePath, joinPath, parentPath, pathName, pathDepth from "../project/path"
 use BuildOptions, Profile, build, buildFailedCode from "./build"
+use findRuntime from "../project/toolchain"
 use testInMachine from "../vm/run"
 
 /**
@@ -46,6 +47,11 @@ public type TestOptions {
   usesMachine: Bool = true
   /** `--shard 2/4`: a part of the files, or `None` for all of them. */
   shard: TestShard? = None
+  /**
+   * `--shards 4`: the binary is built once and runs as that many shards at the same time, each a process of its own
+   * (`tools/test-shards.sh`), whose reports come one after the other once all of them have ended. 1 is one process.
+   */
+  shards: Int = 1
 }
 
 /**
@@ -141,6 +147,16 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   }
   // A C compiler on Windows appends `.exe` to an output name without an extension
   const binary = if File.exists(output) { output } else { "{output}.exe" }
+  if options.shards > 1 {
+    const script = joinPath parentPath(findRuntime(options.paths) ?? "runtime"), "tools/test-shards.sh"
+    const logs = joinPath directory, "build/{profile}/shards"
+    // Without `sh` or the script the suite runs in one process, which is what the shards add up to
+    if File.exists(script) {
+      if const Ok(code) = Process.runPassingThrough("sh", [script, binary, "{options.shards}", logs]) {
+        return code
+      }
+    }
+  }
   // The report is the binary's own output and is not touched on its way out: the binary is handed this process's three
   // streams, so every line appears while the suite runs instead of after it, and a panic that escaped every recovery
   // point stays on standard error where the binary put it

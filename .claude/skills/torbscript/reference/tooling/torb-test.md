@@ -17,6 +17,7 @@ source:
   - std/test/src/lib.trb
   - runtime/memory.c
   - runtime/test.c
+  - tools/test-shards.sh
 ---
 
 A `.test.trb` file is an ordinary script: `test` and `group` are calls, not a keyword, and a test fails when its body
@@ -30,6 +31,7 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
     --profile dev|release           Build natively, this hard does the C compiler optimize (default: dev)
     --release                       The same as --profile release
     --shard k/n                     Only the k-th of every n files, so n processes run the suite between them
+    --shards n                      With --native: build once, and run all n shards at the same time
     --vm                            The default, accepted
 ```
 
@@ -134,6 +136,19 @@ their C is the same, and the object cache compiles and links it once for all of 
 
 The files are dealt out in turn, not by how long they take, so the shard that holds the slowest file takes at least as
 long as that file alone.
+
+`--shards n` does the whole of it in one command: it builds the binary once and runs all n shards of it at the same
+time, each a process of its own (`tools/test-shards.sh`), and once the last one has ended it prints their reports one
+after the other and one summary over all of them. That is what saves time: n commands of `--shard` each check and lower
+the whole suite before its C is known to be the same, which costs the front end n times.
+
+```console
+$ torb test --native compiler/tests --shards 4
+...
+2288 passed, 0 failed (80 files, 4 shards)
+```
+
+The report comes at the end rather than while the suite runs, and the exit code is the highest a shard left with.
 
 ### What the run forwards
 
