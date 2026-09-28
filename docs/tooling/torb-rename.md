@@ -34,7 +34,7 @@ torb rename [<file>:]<Type>.<Case>.<field>=<name>... [path]...
 
 The paths are checked the way [`torb check`](torb-check.md) checks them. Each rename names one field: of a type
 (`Door.isOpen=open`) or of a case (`Shape.Circle.radius=size`), with the end of a file's path in front where more than
-one type of that name is declared (`syntax/ast.trb:Parameter.annotation=type`). Every rename of the command line is made
+one type of that name is declared (`src/syntax.trb:Parameter.annotation=type`). Every rename of the command line is made
 in one go, and every place the checker resolved to the field is edited:
 
 - the declaration;
@@ -84,7 +84,7 @@ renamed 2 fields at 16 places in 5 files
 A field named after a keyword, where two types of the same name are declared:
 
 ```console
-$ torb rename syntax/ast.trb:Parameter.annotation=type .
+$ torb rename src/syntax.trb:Parameter.annotation=type .
 ```
 
 A new name the type already has:

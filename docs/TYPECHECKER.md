@@ -204,7 +204,7 @@ public fn signatureOf(var checker: Checker, symbol: SymbolId): SignatureId
   constant** (`const a = B.b`, `const b = A.a`) and an **alias** (`type A = B`, `type B = A`). Aliases are expanded
   while building types, with the same state map. A `public` function and every trait method must annotate its return
   type, so the cycle is always inside one file and the message can name the fix.
-- Field types are always annotated (`Field.annotation` is not optional), so a type's layout never cycles. A type that
+- Field types are always annotated (`Field.type` is not optional), so a type's layout never cycles. A type that
   contains itself by value (`type Node { next: Node }`) is a different error and belongs to milestone 5; the checker
   reports it here because it is cheap: a walk over the field types with a visited set.
 
