@@ -231,7 +231,11 @@ does not set it: `TORB_CFLAGS="-fsanitize=address,undefined -g"` builds a binary
 UndefinedBehaviorSanitizer, `-fsanitize=thread` one under ThreadSanitizer. The flags are part of the key of every
 object, so a build with them never links an object that was compiled without them; mbedTLS, which a program that
 speaks TLS links, is compiled once without them. A sanitized binary enforces `TORB_MEMORY_LIMIT` by counting its own
-allocations, because the shadow memory a sanitizer reserves would count against a limit the system holds.
+allocations, because the shadow memory a sanitizer reserves would count against a limit the system holds. Where
+AddressSanitizer keeps the locals of a function on a heap of its own - `detect_stack_use_after_return`, which it does by
+default on Linux - the stack check of the runtime sees addresses that are not on the stack and a recursion too deep ends
+in a report of AddressSanitizer instead of `panic: stack overflow`; `ASAN_OPTIONS=detect_stack_use_after_return=0`
+keeps the panic.
 
 When what is compiled is 8 MB or more, the whole batch holds one of `$TORB_BUILD_SLOTS` (default 3) machine-wide build
 slots, through `tools/build-slot.sh` beside the runtime, so that several builds of that size at once do not run the
