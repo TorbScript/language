@@ -70,7 +70,7 @@ Node, the Chivo fonts and a rasteriser).
   four required by VS Code - and each image exists as `<name>-light.svg` and `<name>-dark.svg`; the high-contrast
   themes take the dark and the light one. `install-windows` and `install-posix` belong to the two steps that install
   the toolchain, `create`, `run` and `next` to the other three. Each is 640 x 400, flat, split by 1 px hairlines, with
-  its text outlined (the webview has neither Chivo nor Chivo Mono, and an SVG image loads no font), the syntax colours
+  its text outlined (the webview has neither Chivo nor Geist Mono, and an SVG image loads no font), the syntax colours
   of BRAND.md section 9, and at most one red: the flat mark in `install-*`, the error in `run` (tint, leading border,
   icon and the word, BRAND.md section 4.6), the top rule of torb.dev in `next`, none in `create`. No screenshot of a
   particular theme, and no red button: the walkthrough's buttons are VS Code's own.
