@@ -212,7 +212,16 @@ class TorbLanguageClient {
         // Already gone
       }
     }, 2000);
-    this.diagnostics.clear();
+    this.clearDiagnostics();
+  }
+
+  /** Clears the diagnostics - unless VS Code disposed the collection already, as it does before a window closes. */
+  clearDiagnostics() {
+    try {
+      this.diagnostics.clear();
+    } catch (error) {
+      // Disposed: nothing to clear
+    }
   }
 
   exited(child, code) {
@@ -225,7 +234,7 @@ class TorbLanguageClient {
       waiting.reject(new Error('the language server exited'));
     }
     this.pending.clear();
-    this.diagnostics.clear();
+    this.clearDiagnostics();
     if (this.stopping) {
       return;
     }

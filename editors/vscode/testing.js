@@ -96,6 +96,21 @@ class TorbTests {
       }
     });
     this.listed = true;
+    if (again) {
+      let groups = 0;
+      let tests = 0;
+      const count = (item) => {
+        const kind = kinds.get(item);
+        if (kind && kind.type === 'group') {
+          groups += 1;
+        } else if (kind && kind.type === 'test') {
+          tests += 1;
+        }
+        item.children.forEach(count);
+      };
+      this.controller.items.forEach(count);
+      this.log(`the Test Explorer: ${seen.size} test file(s), ${groups} group(s) and ${tests} test(s) in their source`);
+    }
   }
 
   /** The item of a file, made where there is none yet. */
