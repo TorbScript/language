@@ -357,7 +357,11 @@ static torb_poll torb_stream_resume(torb_task *task) {
 
 /*
  * A task over a frame, started portable: its frame holds nothing counted - a handle of the platform, a buffer of
- * `malloc`'s - so it may turn to the blocking pool, and an idle worker may take it before it first runs.
+ * `malloc`'s - so it may turn to the blocking pool, and an idle worker may take it before it first runs. It runs no
+ * function of the program, so it turns in a program whose tasks `torb_tasks_confine` keeps on their worker too
+ * (`torb_task_start_runtime`): pinned there, a read of a Windows child's output or the wait for any child blocked the
+ * one worker that every other task of the program was on - the server that child was talking to among them
+ * (tests/conformance/confined-child.trb).
  */
 static torb_task *torb_stream_task(const torb_stream_frame *made) {
   torb_task *task = torb_task_new(torb_stream_resume, sizeof(torb_stream_frame), &torb_element_int64);
@@ -365,7 +369,7 @@ static torb_task *torb_stream_task(const torb_stream_frame *made) {
   (void)torb_count_in_machine(counted);
   memcpy(torb_task_frame(task), made, sizeof *made);
   ((torb_stream_frame *)torb_task_frame(task))->counted = counted;
-  torb_task_start_portable(task);
+  torb_task_start_runtime(task);
   return task;
 }
 

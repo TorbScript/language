@@ -3283,13 +3283,22 @@ workers reading `const prefix = names[1]` from a closure corrupted the heap (`te
   starts no interpreter for another worker (`BytecodeProgram.confinesTasks`). Precise pinning - only the tasks whose
   code can reach a read of the cell - would need every way a call can go through a table, a descriptor or a closure,
   and a copy of a trait-typed value would need the layout of its payload, which is erased; both are open.
+  **The runtime's own tasks are not the program's**: a read, write or wait of a file, a standard stream or a child
+  (`runtime/stream.c`) runs no function of the program, so it is started with `torb_task_start_runtime` and still turns
+  to the blocking pool - the ring is never started, a pool of one worker is enough for the turn. Until 2026-09-28 it
+  was pinned too and called the operating system on the one worker every task of the program was on: the registry's
+  `tools/registry/tests/client.test.trb`, which serves the `torb publish` it runs as a child, blocked in `read()` of
+  that child's output while its server could not answer the child, on Linux and Windows alike. The poller took the
+  pipes of a POSIX child the same day, which ended the hang on Linux; a Windows child's pipes, the wait for any child,
+  files and the standard streams still go through `runtime/stream.c` (`tests/conformance/confined-child.trb`).
 - **The read copies the cell into a local before it retains**, so no worker ever writes the cell, and its flag is
   published with a release and read with an acquire (`torb_constant_publish`, `torb_constant_ready`): a worker that
   sees it set sees the value. In the VM the flag is a word of the constant pool like the value, which a machine that
   orders its stores - x86-64 - reads in order; the release and the acquire of it are open.
 
 Tests: `tests/conformance/entry-cell-workers.trb` (a text, a record and a variant read by tasks on four workers, and by
-a closure) and `entry-cell-confined.trb` (a shared object and a `List`: forty tasks count exactly forty).
+a closure), `entry-cell-confined.trb` (a shared object and a `List`: forty tasks count exactly forty) and
+`confined-child.trb` (a timer of the confined worker fires while a read of a child and the wait for one wait).
 
 ### What 5.11 needs, measured before it is written
 

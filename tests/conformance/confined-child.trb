@@ -1,0 +1,88 @@
+/**
+ * **A child's read and wait leave the worker free, in a program whose tasks all stay on it.** A top-level `const` that
+ * functions read holds a shared object, so every task of the program stays on the worker that starts it
+ * (`torb_tasks_confine`, docs/BACKEND.md "The entry cell"). The reads and the wait of a child are tasks of the runtime,
+ * which run no function of the program, and they still wait where they do in any program - a read on the poller of the
+ * IO core on POSIX and on the blocking pool on Windows, the wait on the blocking pool everywhere: while one waits, a
+ * timer of the same worker fires. Before 2026-09-28 they blocked the worker itself - and a registry that served the
+ * very `torb publish` it was waiting for never answered it (tools/registry/tests/client.test.trb).
+ *
+ * The first child writes `first`, waits two seconds and writes `second`; once `first` has arrived, a task on the same
+ * worker sleeps for a twentieth of a second. The second child only waits two seconds, and the same timer starts before
+ * the program waits for it. Where the worker is blocked, the timer takes two seconds and the program says so instead of
+ * hanging, because both children end on their own. The children are the shell, which every machine has; `ping` is how
+ * `cmd` waits.
+ */
+use Process, Child from "std/process"
+use Environment from "std/os"
+use IoError from "std/fs"
+use textOf from "std/stream"
+use sleep, Clock from "std/time"
+
+/** What the timers saw: a shared object that functions of this file read, which keeps every task on its worker. */
+shared type Timers {
+  var slept: List<Int64> = []
+}
+
+const timers = Timers()
+
+/** A timer on the worker that waits for a child: it can only fire while that worker is free. */
+fn wake(): Task<Void> {
+  const started = Clock.milliseconds()
+  sleep(0.05).await()
+  timers.slept.append(Clock.milliseconds() - started)
+}
+
+/** Whether the last timer woke within a second. */
+fn wokeInTime(): Bool {
+  timers.slept.last().map({ _ < 1000 }) ?? false
+}
+
+/** The shell of this machine, with a script for it: `cmd`'s or the POSIX one. */
+fn shell(windows: String, posix: String): Result<Child, IoError> {
+  if Environment.get("COMSPEC").isSome() {
+    return Process.start "cmd", ["/c", windows]
+  }
+  Process.start "/bin/sh", ["-c", posix]
+}
+
+/** Reads a child to its end, with the timer started once `first` has arrived. */
+fn readChild(): Task<Result<Void, IoError>> {
+  using child = shell("echo first& ping -n 3 127.0.0.1 >nul& echo second", "echo first; sleep 2; echo second")?
+  child.endInput()?
+  var output = child.output()
+  var text = ""
+  var waking: Task<Void>? = None
+  while const Some(chunk) = output.next().await()? {
+    text = text + (textOf(chunk).ok() ?? "")
+    if waking.isNone() && text.contains("first") {
+      waking = wake()
+    }
+  }
+  if const Some(task) = waking {
+    task.await()
+  }
+  const code = child.wait().await()?
+  print "the child wrote {text.replace("\r", "").trim().replace("\n", " then ")}, and left with {code}"
+  print "a timer of a twentieth of a second woke within a second while a read waited: {wokeInTime()}"
+  Ok void
+}
+
+/** Waits for a child that writes nothing, with the timer started before. */
+fn waitForChild(): Task<Result<Void, IoError>> {
+  using child = shell("ping -n 3 127.0.0.1 >nul", "sleep 2")?
+  child.endInput()?
+  const waking = wake()
+  const code = child.wait().await()?
+  waking.await()
+  print "a quiet child left with {code}"
+  print "a timer of a twentieth of a second woke within a second while a wait waited: {wokeInTime()}"
+  Ok void
+}
+
+if const Fail(problem) = readChild().await() {
+  print "error: {problem}"
+}
+if const Fail(problem) = waitForChild().await() {
+  print "error: {problem}"
+}

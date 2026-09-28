@@ -1129,14 +1129,14 @@ void torb_tasks_confine(void) {
   torb_atomic_store_u32(&torb_pool_confined, 1u);
 }
 
-void torb_task_start_portable(torb_task *task) {
-  torb_worker *self;
-  if (torb_atomic_load_u32(&torb_pool_confined) != 0u) {
-    torb_task_start(task);
-    return;
-  }
-  self = torb_worker_self();
-  if (torb_pool.started == 0u) {
+/*
+ * The start of a task that may move, which `torb_task_start_portable` and `torb_task_start_runtime` share. A confined
+ * program never starts the ring: the only tasks that may move in it are the runtime's own, and all they need is their
+ * turn to the blocking pool, which a pool of one worker gives as well.
+ */
+static void torb_task_start_movable(torb_task *task) {
+  torb_worker *self = torb_worker_self();
+  if (torb_pool.started == 0u && torb_atomic_load_u32(&torb_pool_confined) == 0u) {
     torb_pool_start();
   }
   task->portable = 1u;
@@ -1145,6 +1145,18 @@ void torb_task_start_portable(torb_task *task) {
   if (torb_pool_threaded != 0u) {
     torb_notify_idle(self);
   }
+}
+
+void torb_task_start_portable(torb_task *task) {
+  if (torb_atomic_load_u32(&torb_pool_confined) != 0u) {
+    torb_task_start(task);
+    return;
+  }
+  torb_task_start_movable(task);
+}
+
+void torb_task_start_runtime(torb_task *task) {
+  torb_task_start_movable(task);
 }
 
 void torb_task_drop(void *block) {
@@ -1419,7 +1431,10 @@ torb_task *torb_pause(void) {
  * was proven movable where it was handed over (or copied, "What crosses a worker"), and the one thing it made since is
  * the turn's handle, a task of nothing. A task started pinned takes the turn in place: it goes on on its own worker, and
  * its body blocks that worker exactly as before there was a pool - correct, and sequential. A task that already runs on
- * a thread of the pool stays there.
+ * a thread of the pool stays there. The runtime's own tasks - the reads, writes and waits of runtime/stream.c - are
+ * started portable even in a program whose tasks `torb_tasks_confine` pins (`torb_task_start_runtime`), because they
+ * run no function of the program: a confined program has all its tasks on one worker, and a read that blocked it
+ * would stop all of them.
  *
  * **Cancelling a task of the blocking pool** is the flag, as everywhere. One that waits in the inbox is taken by a thread
  * and stops at its first check without running its body; one whose body runs is not interrupted - the thread runs the

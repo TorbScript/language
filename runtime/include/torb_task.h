@@ -334,11 +334,21 @@ void torb_task_start(torb_task *task);
 void torb_task_start_portable(torb_task *task);
 
 /**
- * From now on every task stays on the worker that starts it: `torb_task_start_portable` starts it pinned, and
- * `torb_task_copies` answers false. `main` calls it before the program runs where a top-level `const` a function reads
- * holds a counted value that is not copied into an immortal one - a shared object, a trait-typed value, a closure - so
- * the functions that read it, which may run in any task, all run on the thread that made it (docs/BACKEND.md, "The entry
- * cell").
+ * A task of the runtime's own, started the same way - also in a program whose tasks `torb_tasks_confine` keeps on
+ * their workers. Its resume function is C of the runtime that calls no function of the program, and its frame holds
+ * nothing counted: a read, a write or a wait of runtime/stream.c, which turns to the blocking pool before it calls the
+ * operating system. Pinned, it would call it on the worker that started it and block that worker - and every task of a
+ * confined program is on that worker, so a server that answers the child a read waits for could never answer.
+ */
+void torb_task_start_runtime(torb_task *task);
+
+/**
+ * From now on every task of the program stays on the worker that starts it: `torb_task_start_portable` starts it
+ * pinned, and `torb_task_copies` answers false. `main` calls it before the program runs where a top-level `const` a
+ * function reads holds a counted value that is not copied into an immortal one - a shared object, a trait-typed value,
+ * a closure - so the functions that read it, which may run in any task, all run on the thread that made it
+ * (docs/BACKEND.md, "The entry cell"). The runtime's own tasks still turn to the blocking pool
+ * (`torb_task_start_runtime`).
  */
 void torb_tasks_confine(void);
 

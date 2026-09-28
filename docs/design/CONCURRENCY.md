@@ -1727,7 +1727,10 @@ which is why the design's `native fn offload` became TorbScript), and nothing is
   every call did before: correct and sequential, never a race. This is the section's rule that nothing crosses a thread
   unless it is proven to, and it is why `offload` takes a closure that is cheap to prove: a literal path or a number
   crosses, `readText(path)` with a path built at run time does not yet. The copy of an environment ("The copy at the
-  crossing", not built) is what lifts that.
+  crossing", not built) is what lifts that. A program whose entry cells keep every task on its worker
+  (`torb_tasks_confine`) turns no body at all - but the runtime's own tasks, the reads, writes and waits of
+  `runtime/stream.c`, run no function of the program and still turn (`torb_task_start_runtime`): pinned, one wait for
+  a child would block the worker every task of such a program is on.
 - **A thread of the pool has a heap**, where section 7 said it would have none. Section 7 describes the pool the IO
   interface uses, whose threads write into a buffer of the task and run no TorbScript; `offload` runs a body of the
   program, which allocates. The heap is only the block counters (memory.c), so a thread of the pool is a worker without
