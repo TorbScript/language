@@ -20,6 +20,15 @@
  * back to the raw bytes exactly as invalid UTF-8 does.
  */
 
+/* The POSIX half calls POSIX 2008 (`sigaction`, `fileno`), which a strict `-std=c11` hides - the portable seed
+ * builds with musl-gcc and `-std=c11` (tools/build-seed.sh). */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#  define _POSIX_C_SOURCE 200809L
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#  define _DARWIN_C_SOURCE
+#endif
+
 #include "torb.h"
 #include "torb_pool.h"
 
