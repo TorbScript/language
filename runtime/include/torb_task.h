@@ -334,6 +334,15 @@ void torb_task_start(torb_task *task);
 void torb_task_start_portable(torb_task *task);
 
 /**
+ * From now on every task stays on the worker that starts it: `torb_task_start_portable` starts it pinned, and
+ * `torb_task_copies` answers false. `main` calls it before the program runs where a top-level `const` a function reads
+ * holds a counted value that is not copied into an immortal one - a shared object, a trait-typed value, a closure - so
+ * the functions that read it, which may run in any task, all run on the thread that made it (docs/BACKEND.md, "The entry
+ * cell").
+ */
+void torb_tasks_confine(void);
+
+/**
  * The drop of a task block, for `torb_release(task, torb_task_drop)`: releases the result if the task finished. The
  * frame holds nothing live by then - a completed machine released it, and a pending task is never dropped because the
  * scheduler holds it.

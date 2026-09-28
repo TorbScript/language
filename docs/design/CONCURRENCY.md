@@ -1607,6 +1607,12 @@ worker that ran a stolen task gives up the scheduler's reference **before** it p
 release of the task block, and with it the release of a counted result, happens on a thread that held a handle - and the
 handles of a counted result are all on one worker.
 
+**The entry cells are the one value no start sees.** A top-level `const` of the entry file that a function reads lives
+in a cell every function of the file reads, on whatever worker runs it - and a closure that only reads one captures
+nothing, so it crosses. So the cell holds an immortal copy of the value where the crossing copy can walk it whole, and a
+program with a cell of any other counted type keeps every task on the worker that starts it (`torb_tasks_confine`);
+docs/BACKEND.md, "The entry cell", has the rule and its open ends.
+
 **The copy at the crossing.** Where the test fails on a value that may be copied soundly, the frame of a task is made
 private instead - section 6's "copied into the worker's heap", decided on 2026-09-23 as follows:
 

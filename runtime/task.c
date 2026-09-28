@@ -1122,8 +1122,20 @@ void torb_task_start(torb_task *task) {
 
 static void torb_pool_start(void);
 
+/* Set once by `torb_tasks_confine`, before any task of the program starts. */
+static uint32_t torb_pool_confined = 0u;
+
+void torb_tasks_confine(void) {
+  torb_atomic_store_u32(&torb_pool_confined, 1u);
+}
+
 void torb_task_start_portable(torb_task *task) {
-  torb_worker *self = torb_worker_self();
+  torb_worker *self;
+  if (torb_atomic_load_u32(&torb_pool_confined) != 0u) {
+    torb_task_start(task);
+    return;
+  }
+  self = torb_worker_self();
   if (torb_pool.started == 0u) {
     torb_pool_start();
   }
@@ -2383,7 +2395,7 @@ void torb_pool_count_copy(void) {
 
 bool torb_task_copies(void) {
   uint32_t count = torb_pool.chosen != 0u ? torb_pool.chosen : (uint32_t)torb_workers_count();
-  return count > 1u;
+  return count > 1u && torb_atomic_load_u32(&torb_pool_confined) == 0u;
 }
 
 size_t torb_pool_sum_live_blocks(void) {

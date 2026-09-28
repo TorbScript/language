@@ -33,7 +33,7 @@ use taskMachineOf, TaskMachine from "../../ir/suspension"
 use payloadLayoutName from "../../ir/mangle"
 use emittedFunctionsOf, runtimePrototypes, usesTasks from "../c/emit"
 use environmentLayoutOfFunction, countedFormOf from "../c/body"
-use Crossing, privateOf, crossingOf from "../c/crossing"
+use Crossing, privateOf, crossingOf, entryCellCopies from "../c/crossing"
 use CExpression from "../c/writer"
 use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
 use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
@@ -1134,7 +1134,10 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
 
 /**
  * The accessor of an entry cell: `entry.cell` copies the value out of the cell's words, a gap of the constant pool, with
- * one more count for the caller, or copies the binding in, whose count the cell keeps from then on.
+ * one more count for the caller, or copies the binding in, whose count the cell keeps from then on. A value the C back
+ * end copies into an immortal one ([entryCellCopies]) is copied the same way first (`immortal.copy`), because a function
+ * that reads the cell runs on whatever worker runs its task; a program with a cell of any other counted type keeps its
+ * tasks on the worker that starts them (`BytecodeProgram.confinesTasks`).
  */
 fn entryCellChunk(
   var emitter: Emitter,
@@ -1175,6 +1178,17 @@ fn entryCellChunk(
     }
     .Write => {
       parameters.append ParameterEntry(0, width, false)
+      const shape = shapeOperand emitter, program, held
+      if shape != 0 {
+        if entryCellCopies(program, held) {
+          code.append headWord(Opcode.Kernel, 3, 0, 0)
+          code.append kernelNumberOf(KernelOperation.ImmortalCopy)
+          code.append 0
+          code.append(shape - 1)
+        } else {
+          emitter.bytecode.confinesTasks = true
+        }
+      }
       code.append headWord(Opcode.EntryCell, 0, width, 1)
       code.append offset
       code.append headWord(Opcode.Return, 0, 0, 0)

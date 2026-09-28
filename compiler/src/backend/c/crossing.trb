@@ -243,7 +243,7 @@ fn elementPrivateOf(program: IrProgram, arguments: List<IrTypeId>, index: Int): 
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     var visiting: List<Int> = []
-    if !isCopyableLayout(program, layout, visiting) {
+    if !isCopyableLayout(program, layout, visiting, false) {
       return None
     }
     return CExpression.Name privateHelperNameOf(program, layout)
@@ -252,11 +252,28 @@ fn elementPrivateOf(program: IrProgram, arguments: List<IrTypeId>, index: Int): 
 }
 
 /**
+ * Whether the value an entry cell of type `id` holds is an **immortal copy** of the value written into it
+ * (docs/BACKEND.md, "The entry cell"): a function of the entry file reads the cell on whatever worker runs it, so no
+ * count the cell's value reaches may be one that two workers change. That is so for a value [privateOf] copies whole -
+ * texts, lists, maps and sets, and records, tuples and variants of those - which the cell's write copies inside an
+ * immortal region, and whose blocks nobody retains or releases from then on. A closure, a task and a channel are left
+ * out although the crossing copy takes them: an immortal copy would hold the count of their shared block forever.
+ *
+ * A cell of any other counted type - a shared object, a trait-typed value, a resource with `close()` - keeps the value
+ * it is given, and a program that has one keeps every task on the worker that starts it (`torb_tasks_confine`).
+ */
+public fn entryCellCopies(program: IrProgram, id: IrTypeId): Bool {
+  var visiting: List<Int> = []
+  containsCountedType(program, id) && isCopyable(program, id, visiting, true)
+}
+
+/**
  * Whether [privateHelperOf] of a layout is anything but `Never`, answered without building it: a layout that holds a
  * list of itself asks about itself, and `visiting` is what ends that - a layout already being asked about is taken to
- * be copyable, because whatever else it holds is asked about on the way.
+ * be copyable, because whatever else it holds is asked about on the way. With `withoutShared`, a closure, a task or a
+ * channel anywhere inside answers no ([entryCellCopies]).
  */
-fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int>): Bool {
+fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int>, withoutShared: Bool): Bool {
   if visiting.contains(layout.value) {
     return true
   }
@@ -266,7 +283,7 @@ fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int
   }
   visiting.append layout.value
   for field in shape.fields {
-    if !isCopyable(program, field.annotation, visiting) {
+    if !isCopyable(program, field.annotation, visiting, withoutShared) {
       return false
     }
   }
@@ -274,25 +291,25 @@ fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int
 }
 
 /** The same question of one type, in the words of [privateOf]. */
-fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>): Bool {
+fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>, withoutShared: Bool): Bool {
   if !containsCountedType(program, id) {
     return true
   }
   const inner = countedFormOf program, id
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
-    return isCopyableLayout program, layout, visiting
+    return isCopyableLayout program, layout, visiting, withoutShared
   }
   match program.typeAt(inner) {
     .Text => true
-    .Closure(_) => true
+    .Closure(_) => !withoutShared
     .Runtime(kind, arguments) => {
       match kind {
-        .ListStorage => isCopyableElement program, arguments, 0, visiting
-        .SetStorage => isCopyableElement program, arguments, 0, visiting
-        .MapStorage => isCopyableElement(program, arguments, 0, visiting)
-          && isCopyableElement(program, arguments, 1, visiting)
-        .TaskObject => !arguments.any({ containsCountedType program, _ })
-        .ChannelObject => !arguments.any({ containsCountedType program, _ })
+        .ListStorage => isCopyableElement program, arguments, 0, visiting, withoutShared
+        .SetStorage => isCopyableElement program, arguments, 0, visiting, withoutShared
+        .MapStorage => isCopyableElement(program, arguments, 0, visiting, withoutShared)
+          && isCopyableElement(program, arguments, 1, visiting, withoutShared)
+        .TaskObject => !withoutShared && !arguments.any({ containsCountedType program, _ })
+        .ChannelObject => !withoutShared && !arguments.any({ containsCountedType program, _ })
         _ => false
       }
     }
@@ -301,7 +318,13 @@ fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>): Bool {
 }
 
 /** An element [elementPrivateOf] has a function for. */
-fn isCopyableElement(program: IrProgram, arguments: List<IrTypeId>, index: Int, var visiting: List<Int>): Bool {
+fn isCopyableElement(
+  program: IrProgram,
+  arguments: List<IrTypeId>,
+  index: Int,
+  var visiting: List<Int>,
+  withoutShared: Bool,
+): Bool {
   if index >= arguments.length() {
     return false
   }
@@ -314,7 +337,7 @@ fn isCopyableElement(program: IrProgram, arguments: List<IrTypeId>, index: Int, 
     return true
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
-    return isCopyableLayout program, layout, visiting
+    return isCopyableLayout program, layout, visiting, withoutShared
   }
   false
 }

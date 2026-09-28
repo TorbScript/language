@@ -611,6 +611,11 @@ public type KernelOperation {
    * (docs/design/PROJECT.md section 8, `build/manifest-inputs.trb`). Only the host asks for it, after the call.
    */
   case TakeInputs
+  /**
+   * `register, shape`: the value in the register replaced by a copy of it made inside an immortal region, and the count
+   * the register held on the original given back - what an entry cell holds (docs/BACKEND.md, "The entry cell").
+   */
+  case ImmortalCopy
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -685,6 +690,7 @@ public type KernelOperation {
       .SitePush => "site.push"
       .SitePop => "site.pop"
       .TakeInputs => "take.inputs"
+      .ImmortalCopy => "immortal.copy"
     }
   }
 }
@@ -761,6 +767,7 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.SitePop,
   KernelOperation.ListItemAddress,
   KernelOperation.TakeInputs,
+  KernelOperation.ImmortalCopy,
 ]
 
 /**
@@ -1078,6 +1085,11 @@ public type BytecodeProgram {
   var locations: List<Location> = []
   /** Whether the program starts a task: its run hands the scheduler what is left, and finishes it at the end. */
   var usesTasks: Bool = false
+  /**
+   * Whether every task stays on the worker that starts it: a top-level `const` a function reads holds a counted value
+   * that is not copied into an immortal one (`entryCellCopies` of the C back end), and a function may run in any task.
+   */
+  var confinesTasks: Bool = false
   /** The chunk that gives the count of every entry cell back once the program is done, `-1` where it has none. */
   var entryCellRelease: Int = -1
 }

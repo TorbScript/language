@@ -3263,6 +3263,34 @@ copies its words in or out, the read's chunk retains) and runs the release chunk
 entry. Tests: `tests/conformance/shared-top-level-const.trb`, `top-level-const-once.trb` and
 `top-level-const-before-set.trb`, and `compiler/tests/top-level-constants.test.trb`.
 
+**Every worker reads a cell.** A function of the file runs on whatever worker runs the task that called it, and a
+closure that only reads a cell captures nothing, so its empty environment lets it cross - a cell is a way for a value to
+reach another thread that the test beside the start of a task never sees (docs/design/CONCURRENCY.md section 16). Counts
+are plain integers, so a cell must never hold a count two workers could change; before 2026-09-28 it did, and four
+workers reading `const prefix = names[1]` from a closure corrupted the heap (`tests/conformance/parallel-copies.trb`,
+`malloc_consolidate(): unaligned fastbin chunk detected` in three of two hundred runs of the VM on Linux). So:
+
+- **A value the crossing copy walks whole is copied into an immortal one where it is written** (`entryCellCopies` in
+  `backend/c/crossing.trb`: a text, and a list, map or set that is no trait-typed value, a record, tuple or variant of
+  those - no closure, task or channel, whose shared block an immortal copy would hold forever). The write retains the
+  value once, runs the copy at the crossing (`privateOf`) inside an immortal region - which then finds every block held
+  twice and copies it, and a copied container retains its elements, so they are copied in turn - and gives the count of
+  the original back. The cell holds blocks nobody retains or releases, like the value of a module constant, and the
+  functions that read it run on any worker. The VM does the same with the kernel's `immortal.copy`.
+- **A cell of any other counted type keeps every task of the program on the worker that starts it**: a shared object, a
+  trait-typed value such as a `List` or a `Map`, a closure, a resource. `main` calls `torb_tasks_confine` before the
+  program runs, after which `torb_task_start_portable` starts a task pinned and `torb_task_copies` answers false; the VM
+  starts no interpreter for another worker (`BytecodeProgram.confinesTasks`). Precise pinning - only the tasks whose
+  code can reach a read of the cell - would need every way a call can go through a table, a descriptor or a closure,
+  and a copy of a trait-typed value would need the layout of its payload, which is erased; both are open.
+- **The read copies the cell into a local before it retains**, so no worker ever writes the cell, and its flag is
+  published with a release and read with an acquire (`torb_constant_publish`, `torb_constant_ready`): a worker that
+  sees it set sees the value. In the VM the flag is a word of the constant pool like the value, which a machine that
+  orders its stores - x86-64 - reads in order; the release and the acquire of it are open.
+
+Tests: `tests/conformance/entry-cell-workers.trb` (a text, a record and a variant read by tasks on four workers, and by
+a closure) and `entry-cell-confined.trb` (a shared object and a `List`: forty tasks count exactly forty).
+
 ### What 5.11 needs, measured before it is written
 
 Quoted expressions are the one row left between the compiler and its own tests running natively: **58 findings, every one

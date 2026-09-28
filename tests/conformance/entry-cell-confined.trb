@@ -1,0 +1,38 @@
+/**
+ * **A top-level `const` no immortal copy can be made of keeps every task on its worker.** A shared object, and a `List` -
+ * a trait-typed value, whose payload nothing can walk - that functions of the entry file read would be read and written
+ * by every worker that runs one of those functions, so a program with such a constant starts every task on the worker
+ * that starts it (`torb_tasks_confine`, docs/BACKEND.md "The entry cell"). With four workers, forty tasks that count into
+ * the shared object count exactly forty, in the order they were started.
+ */
+use Task from "std/task"
+
+shared type Tally {
+  var count: Int = 0
+  var names: List<String> = []
+}
+
+const tally = Tally()
+var seen: List<String> = []
+for index in 0..4 {
+  seen.append "seen-{index}"
+}
+const known = seen
+
+/** A task that counts into the shared object and reads the list. */
+fn counted(index: Int): Task<Int> {
+  tally.count = tally.count + 1
+  tally.names.append "task-{index}-of-{known.length()}"
+  index
+}
+
+var tasks: List<Task<Int>> = []
+for index in 0..40 {
+  tasks.append counted(index)
+}
+var sum = 0
+for task in tasks {
+  sum = sum + task.await()
+}
+print "{sum} summed, {tally.count} counted, {tally.names.length()} names"
+print "{tally.names[0]} to {tally.names[39]}"

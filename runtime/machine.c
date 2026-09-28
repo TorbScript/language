@@ -1647,7 +1647,8 @@ enum {
   TORB_OPERATION_SITE_PUSH = 66,
   TORB_OPERATION_SITE_POP = 67,
   TORB_OPERATION_LIST_ITEM_ADDRESS = 68,
-  TORB_OPERATION_TAKE_INPUTS = 69
+  TORB_OPERATION_TAKE_INPUTS = 69,
+  TORB_OPERATION_IMMORTAL_COPY = 70
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2331,6 +2332,25 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
                                                          strlen(torb_machine_stop_message));
       torb_machine_stop_kind = 0;
       return kind;
+    }
+    case TORB_OPERATION_IMMORTAL_COPY: {
+      /*
+       * register, shape: what an entry cell holds, as the C back end's `immortalCopyOf` makes it - one more count on
+       * every block of the value first, so the copy at the crossing finds each of them held twice and copies it, inside
+       * an immortal region; then the count the register held on the original goes back
+       */
+      const torb_machine_shape *shape = torb_machine_shape_at(o[1]);
+      int64_t *value = words + base + o[0];
+      size_t bytes = 8u * (size_t)(shape->width < 1 ? 1 : shape->width);
+      int64_t *original = (int64_t *)torb_raw_allocate(bytes);
+      memcpy(original, value, bytes);
+      torb_machine_retain_value(value, shape);
+      torb_begin_immortal();
+      (void)torb_machine_privatize_value(value, shape);
+      torb_end_immortal();
+      torb_machine_release_value(original, shape);
+      torb_raw_free(original, bytes);
+      return torb_machine_queued();
     }
     case TORB_OPERATION_TAKE_INPUTS: {
       /* target: what the sandbox opened last recorded (`torb_sandbox_recorded`), as a text the host reads out */

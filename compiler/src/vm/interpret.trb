@@ -280,11 +280,12 @@ public fn runProgram(
  * its frames and an image that shares the program's lists by address only, so what one thread's interpreter counts no
  * other thread ever touches. Then the kernel lets a task whose frame may cross start portable. A program without tasks
  * needs none of it, and neither does one that runs scripts: the sandbox is the whole process's, so its tasks stay on
- * the thread that runs it.
+ * the thread that runs it - nor one whose top-level `const` a function reads holds a value no immortal copy was made
+ * of (`BytecodeProgram.confinesTasks`), because such a function may run in any task.
  */
 fn workersFor(main: Registers, program: BytecodeProgram): List<Registers> {
   var workers: List<Registers> = []
-  if !program.usesTasks || main.image.runsScripts {
+  if !program.usesTasks || main.image.runsScripts || program.confinesTasks {
     return workers
   }
   // A worker of the ring by its index (kind 0), a thread of the blocking pool by its number (kind 1)

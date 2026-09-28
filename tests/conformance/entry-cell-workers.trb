@@ -1,0 +1,64 @@
+/**
+ * **A top-level `const` a function reads is read by every worker.** A function of the entry file reads the constant from
+ * its entry cell on whatever worker runs the task that called it, so the cell holds an immortal copy of the value - a
+ * text, a record and a variant of texts here, each held by a `var` of the top-level code too - and the tasks that read it
+ * still move to any worker (docs/BACKEND.md, "The entry cell"). So does a closure that reads one: it captures nothing,
+ * and its environment is empty. The results are the same with four workers and with one, and every block is freed.
+ */
+use Task from "std/task"
+
+type Label {
+  name: String
+  suffix: String
+}
+
+type Kind {
+  case Named(name: String)
+  case Numbered(number: Int)
+}
+
+// Texts made while the program runs, held by the list and by the constants alike
+var names: List<String> = []
+for index in 0..6 {
+  names.append "name-{index}-{"z".repeat(index)}"
+}
+const prefix = names[2]
+const label = Label name: names[3], suffix: names[4]
+const kind = Kind.Named names[5]
+
+/** What a task makes of the three constants and its number. */
+fn describe(index: Int): String {
+  const kindName = match kind {
+    .Named(name) => name
+    .Numbered(number) => "{number}"
+  }
+  "{prefix}/{label.name}.{label.suffix}/{kindName}/{index}"
+}
+
+/** A task whose function reads the constants. */
+fn describedOf(index: Int): Task<String> {
+  describe index
+}
+
+/** A task whose frame holds a closure. */
+fn formattedOf(format: (Int) => String, index: Int): Task<String> {
+  format index
+}
+
+var described: List<Task<String>> = []
+for index in 0..32 {
+  described.append describedOf(index)
+}
+var formatted: List<Task<String>> = []
+for index in 0..32 {
+  formatted.append formattedOf({ "{prefix}:{_}" }, index)
+}
+var bytes = 0
+for task in described {
+  bytes = bytes + task.await().byteLength()
+}
+for task in formatted {
+  bytes = bytes + task.await().byteLength()
+}
+print describe(99)
+print "{bytes} bytes read back, {names.length()} names, the last {names[5]}"

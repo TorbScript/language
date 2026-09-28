@@ -41,7 +41,7 @@ use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 use frameCrossingOf, framePrivateOf, privateHelperOf, privateHelperNameOf, privateHelpersNamedIn from "./crossing"
-use environmentCopyOf, environmentCopyNameOf from "./crossing"
+use environmentCopyOf, environmentCopyNameOf, privateOf, entryCellCopies from "./crossing"
 
 /**
  * One entry function the generated `main` calls, and what it is called for.
@@ -99,7 +99,7 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>, exports: 
   if !entries.isEmpty() {
     emitEntryCellRelease emission, program, functions
   }
-  emitMain emission, entries, functions
+  emitMain emission, entries, functions, confinesTasks(program, functions)
   emitExports emission, program, functions, exports
   emission
 }
@@ -1380,6 +1380,14 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
       privateHelpersNamedIn copy, names
     }
   }
+  // The copy an entry cell makes of what is written into it
+  for (_, held) in entryCellsOf(functions) {
+    if entryCellCopies(program, held) {
+      if const .When(copy) = privateOf(program, held, CExpression.Name("value")) {
+        privateHelpersNamedIn copy, names
+      }
+    }
+  }
   var layouts: List<LayoutId> = []
   var index = 0
   while index < names.length() {
@@ -1696,10 +1704,18 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
         collectHelperDemand program, function, instruction, retains, drops
       }
     }
-    // An entry cell has no blocks: its read retains what it hands out
+    // An entry cell has no blocks: its read retains what it hands out, the write of a copied value retains and releases
+    // it ([immortalCopyOf]), and the end of the program releases the cell
     if const .EntryCell(_, access) = function.kind {
-      if const .Read = access {
-        markRetained program, retains, function.signature.result
+      match access {
+        .Read => markRetained program, retains, function.signature.result
+        .Write => {
+          const held = function.signature.parameters[0].annotation
+          markDropped program, drops, held
+          if entryCellCopies(program, held) {
+            markRetained program, retains, held
+          }
+        }
       }
     }
     // A stop path releases what is live where the task stops, which may be a value the body itself only ever moves
@@ -2425,23 +2441,84 @@ fn emitConstantCell(var emission: Emission, program: IrProgram, function: IrFunc
  * One access to an entry cell (`FunctionKind.EntryCell`): the cell is a file-scope `static` with a count of its own. A
  * read hands out one more count, a write keeps the one it is handed, and [emitEntryCellRelease] gives the cell's back
  * once the program is done.
+ *
+ * A function that reads a cell runs on whatever worker runs its task, so the cell is read by several threads at once
+ * (docs/BACKEND.md, "The entry cell"). A value [entryCellCopies] says may be copied is copied where it is written, into
+ * an immortal region: the cell holds blocks nobody retains or releases, and what was written is given back. The read
+ * copies the cell into a local before it retains, so it never writes the cell. The flag (`{cell}_set`) is published
+ * with a release where the value is in place and read with an acquire, so a worker that sees it set sees the value.
  */
 fn emitEntryCell(var emission: Emission, program: IrProgram, function: IrFunction, cell: String, access: CellAccess) {
   var statements: List<CStatement> = []
+  const place = CExpression.Name cell
+  const isFlag = cell.endsWith "_set"
   match access {
     .Read => {
-      if const Some(retain) = retainStatement(program, function.signature.result, CExpression.Name(cell)) {
-        statements.append retain
+      const held = function.signature.result
+      if isFlag {
+        const ready = CExpression.Call CExpression.Name("torb_constant_ready"), [CExpression.AddressOf(place)]
+        statements.append CStatement.Return(ready)
+      } else {
+        const value = CExpression.Name "value"
+        statements.append CStatement.Declaration(valueTypeOf(program, held), "value", place)
+        if const Some(retain) = retainStatement(program, held, value) {
+          statements.append retain
+        }
+        statements.append CStatement.Return(value)
       }
-      statements.append CStatement.Return(CExpression.Name(cell))
     }
     .Write => {
+      const held = function.signature.parameters[0].annotation
       const value = CExpression.Name slotNameOf(function, Slot(0))
-      statements.append CStatement.Assignment(CExpression.Name(cell), value)
+      if isFlag {
+        // The top-level code only ever sets it
+        const publish = CExpression.Call CExpression.Name("torb_constant_publish"), [CExpression.AddressOf(place)]
+        statements.append CStatement.If(value, [CStatement.Evaluate(publish)])
+      } else {
+        statements.append CStatement.Assignment(place, value)
+        if entryCellCopies(program, held) {
+          statements.appendAll immortalCopyOf(program, held, place, value)
+        }
+      }
     }
   }
   const comment = "{function.name}: the entry cell {cell}"
   write emission, CDeclaration.Definition(comment, signatureHeadOf(program, function), statements)
+}
+
+/**
+ * The immortal copy of the value in `place`, which holds the count of `value`: one more count on every block of it first,
+ * so the copy at the crossing ([privateOf]) finds each of them held twice and copies it - and a copied container retains
+ * its elements, so they are copied in turn, down to the last block. Everything it allocates is born immortal. Then the
+ * count `value` held on the original goes back.
+ */
+fn immortalCopyOf(program: IrProgram, held: IrTypeId, place: CExpression, value: CExpression): List<CStatement> {
+  var statements: List<CStatement> = []
+  if const Some(retain) = retainStatement(program, held, place) {
+    statements.append retain
+  }
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_begin_immortal"), []))
+  if const .When(copy) = privateOf(program, held, place) {
+    statements.append CStatement.Evaluate(CExpression.Cast("void", copy))
+  }
+  statements.append CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_end_immortal"), []))
+  if const Some(release) = releaseStatement(program, held, value) {
+    statements.append release
+  }
+  statements
+}
+
+/**
+ * Whether a top-level `const` a function reads holds a counted value that is not copied into an immortal one: then
+ * every task of the program stays on the worker that starts it (`torb_tasks_confine`, [entryCellCopies]).
+ */
+fn confinesTasks(program: IrProgram, functions: List<IrFunction>): Bool {
+  for (_, held) in entryCellsOf(functions) {
+    if containsCountedType(program, held) && !entryCellCopies(program, held) {
+      return true
+    }
+  }
+  false
 }
 
 /** What gives the count of every entry cell back, from `main`. A name no mangled name can be: those start with a prefix. */
@@ -2557,11 +2634,15 @@ fn commentOf(program: IrProgram, function: IrFunction): String {
  * function, because nothing in it runs. Its `main` starts and finishes the runtime and calls nothing, so the program
  * is one that does nothing rather than C that names a function it never defines.
  */
-fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List<IrFunction>) {
+fn emitMain(var emission: Emission, entries: List<ProgramEntry>, functions: List<IrFunction>, confines: Bool) {
   if entries.isEmpty() {
     return
   }
   var lines = ["torb_process_start(argument_count, argument_values);"]
+  // Before any task starts: a top-level `const` a function reads may be read from every task (`confinesTasks`)
+  if confines {
+    lines.append "torb_tasks_confine();"
+  }
   const hasCells = !entryCellsOf(functions).isEmpty()
   // A program that ends in `Process.exit` never comes back here, so the runtime gives the cells' counts back there
   if hasCells {
