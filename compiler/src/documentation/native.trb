@@ -23,10 +23,10 @@
 use File, IoError from "std/fs"
 use Environment from "std/os"
 use Process from "std/process"
-use joinPath from "../project/path"
+use joinPath, parentPath from "../project/path"
 use threadArguments from "../project/toolchain"
 use hostTarget from "../project/target"
-use runtimeSourcesOf, tlsArgumentsOf from "../cli/build"
+use runtimeSourcesOf, tlsArgumentsOf, argumentsThroughFile from "../cli/build"
 use tlsSymbolPrefix from "../backend/c/natives"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
@@ -273,7 +273,8 @@ fn compileProgram(source: String, binary: String, runtime: String, usesTls: Bool
   }
   arguments.appendAll threadArguments()
   arguments.append "-lm"
-  const output = Process.runBlocking(compiler, arguments)?
+  const passed = argumentsThroughFile(arguments, joinPath(parentPath(source), "c-arguments.txt"))?
+  const output = Process.runBlocking(compiler, passed)?
   if output.exitCode == 0 {
     return ""
   }

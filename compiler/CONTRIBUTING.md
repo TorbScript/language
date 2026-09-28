@@ -196,7 +196,10 @@ change copies the binary and compiles nothing. The fixpoint still compares `prog
 An object - mbedTLS's in `build/vendor/` too - and a kept binary are made by one build at a time: the script holds
 `<object>.lock` while it compiles or links, and a build that finds it taken does the rest of its work first and then
 waits for the object and uses it, so the programs of the conformance suite that start together compile and link
-their common parts once.
+their common parts once. A link whose arguments are
+long (`$TORB_RESPONSE_FILE_BYTES`, default 16384) reads them from a response file, `@<file>`, as does a C compiler
+`torb` starts itself: Windows refuses a command line of more than 32767 characters, which the objects of the compiler's
+test suite in a worktree with a long path come close to.
 
 **Build slots.** A build whose C files to compile are 8 MB or more together - the compiler, a test suite of it - runs
 its compiles through `tools/build-slot.sh`, which `torb build` finds beside the runtime: at most `$TORB_BUILD_SLOTS`

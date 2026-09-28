@@ -1223,21 +1223,63 @@ public fn runCompiler(
   size: Int,
   runtime: String,
 ): Result<ProcessOutput, IoError> {
+  const passed = argumentsThroughFile(arguments, joinPath(parentPath(source), "c-arguments.txt"))?
   const script = joinPath parentPath(runtime), "tools/build-slot.sh"
   if size < slottedSize || compiler.isMicrosoft || !File.exists(script) {
-    return Process.runBlocking compiler.command, arguments
+    return Process.runBlocking compiler.command, passed
   }
   const log = joinPath parentPath(source), "c-compiler.log"
   var slotted = [script, log, compiler.command]
-  slotted.appendAll arguments
+  slotted.appendAll passed
   match Process.runPassingThrough("sh", slotted) {
     Ok(code) => {
       const text = File.readText(log).ok() ?? ""
       ProcessOutput code, text, ""
     }
     // No `sh` to start the script with
-    Fail(_) => Process.runBlocking compiler.command, arguments
+    Fail(_) => Process.runBlocking compiler.command, passed
   }
+}
+
+/**
+ * The arguments of a C compiler as they are, or `@<file>` in their place where together they are longer than
+ * `$TORB_RESPONSE_FILE_BYTES` (default 16384, `0` always): Windows refuses a command line of more than 32767
+ * characters, and a build in a checkout with a long path - an agent's worktree - lists every file of the runtime and
+ * every object of mbedTLS with that path in front. gcc, clang and Microsoft's `cl` all read the arguments of such a
+ * response file, and gcc hands them on to its linker in one of its own (`tools/build-units.sh` does the same for its
+ * link).
+ */
+public fn argumentsThroughFile(arguments: List<String>, file: String): Result<List<String>, IoError> {
+  const given = Environment.get("TORB_RESPONSE_FILE_BYTES") ?? ""
+  const threshold = Int.tryFrom(given).ok() ?? 16_384
+  if !isLongerThan(arguments, threshold) {
+    return arguments
+  }
+  File.writeText(file, responseFileText(arguments))?
+  ["@{file}"]
+}
+
+/** Whether the arguments are longer than `threshold` bytes, each with its two quotes and the space in front of it. */
+public fn isLongerThan(arguments: List<String>, threshold: Int): Bool {
+  var length = 0
+  for argument in arguments {
+    length = length + argument.byteLength() + 3
+  }
+  length > threshold
+}
+
+/**
+ * The text of a response file: every argument in double quotes on a line of its own, with each backslash turned into a
+ * slash and each double quote escaped. gcc's quoting takes a backslash for an escape and that of Windows - clang's and
+ * `cl`'s there - for a character, and a slash is the separator of a path to all three.
+ */
+public fn responseFileText(arguments: List<String>): String {
+  var lines: List<String> = []
+  for argument in arguments {
+    const escaped = argument.replace("\\", "/").replace("\"", "\\\"")
+    lines.append "\"{escaped}\"\n"
+  }
+  lines.joined separator: ""
 }
 
 // --- Units in parallel, and the cache of their objects --------------------------------------------------------------

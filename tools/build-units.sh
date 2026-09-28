@@ -26,7 +26,8 @@
 # `$TORB_BUILD_JOBS` compiles run at a time, by default as many as the machine has processors, each lane of them
 # taking every n-th line of the list: `torb build` lists the largest files first. Then the objects are linked, with
 # `-flto=<jobs>` where `torb build` asks for the program to be optimized across its units - unless the binary of the
-# very same link is in the cache, and then it is copied.
+# very same link is in the cache, and then it is copied. A link whose arguments are longer than
+# `$TORB_RESPONSE_FILE_BYTES` (default 16384) reads them from a response file, `@<list>.link.arguments`.
 #
 # What a failing compiler or linker said is printed on standard output once every compile has ended, in the order of
 # the list, and the exit code is 1; nothing else is printed. `torb build` runs this through `tools/build-slot.sh` where
@@ -49,6 +50,13 @@ cache=$2
 shift 2
 
 tab=$(printf '\t')
+
+# The length of the link's arguments from which they are handed over in a response file: half of what Windows takes,
+# since MSYS may lengthen a path on the way; `$TORB_RESPONSE_FILE_BYTES` sets another, `0` a response file always
+response_threshold=${TORB_RESPONSE_FILE_BYTES:-16384}
+case "$response_threshold" in
+  '' | *[!0-9]*) response_threshold=16384 ;;
+esac
 
 processors() {
   case "${TORB_BUILD_JOBS-}" in
@@ -288,8 +296,28 @@ copy_kept() {
 
 # The link itself, and the binary kept in the cache where it succeeded
 link_arguments() {
+  linker=$1
+  shift
+  length=0
+  for argument in "$@"; do
+    length=$((length + ${#argument} + 3))
+  done
+  # Windows refuses a command line of more than 32767 characters, and a checkout with a long path - an agent's worktree
+  # - comes close with the objects of the compiler's test suite, mbedTLS's among them. Such a link reads its arguments
+  # from a response file, which gcc, clang and cl all read, and gcc hands on to its linker in one of its own: each one
+  # in double quotes on a line of its own, a backslash turned into the slash every one of them reads in a path, because
+  # gcc's quoting takes a backslash for an escape and that of Windows for a character
+  if [ "$length" -gt "$response_threshold" ]; then
+    for argument in "$@"; do
+      printf '%s\n' "$argument"
+    done | sed -e 's|\\|/|g' -e 's|"|\\"|g' -e 's|.*|"&"|' >"$list.link.arguments"
+    set -- "$linker" "@$list.link.arguments"
+  else
+    set -- "$linker" "$@"
+  fi
   "$@" >"$list.link.log" 2>&1
   status=$?
+  rm -f "$list.link.arguments"
   if [ "$status" -ne 0 ]; then
     printf '%s\n' "the link:"
     cat "$list.link.log"
