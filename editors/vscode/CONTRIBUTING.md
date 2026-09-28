@@ -31,11 +31,12 @@ anything else, so it runs the compiler of this checkout.
 |------|---------|
 | `package.json` | The manifest: the language, the grammars, the commands, the walkthrough, the settings, the palette |
 | `extension.js` | Activation; highlights `trb` blocks in the Markdown preview (highlight.js classes); the semantic tokens of `torb highlight` where the language server does not run; "New Project..." and "Run File" |
-| `lsp-client.js` | The client of `torb lsp`: the Language Server Protocol over the server's standard input and output, with no dependency |
+| `lsp-client.js` | The client of `torb lsp`: the Language Server Protocol over the server's standard input and output, with no dependency - diagnostics, hover, definition, references, rename, completion, signature help, symbols, formatting for `formatting.js`, semantic tokens, quick fixes |
 | `toolchain.js` | Finding `torb` (`torbscript.executablePath`, `build/release`, `PATH`, the installers' places), `torb --version`, the context key `torbscript.toolchainFound`, the status bar item, the installer as a task |
 | `testing.js` | The Test Explorer: discovery through the request `torbscript/tests`, runs through `torb test --report json`, and the Debug profile |
 | `debugging.js` | The debugger: `torb debug` as the debug adapter, a configuration for F5 without a `launch.json`, "Debug File", the CodeLens "Run \| Debug" of an entry file |
-| `formatting.js` | Format Document through `torb format` over a temporary copy |
+| `formatting.js` | Format Document and Format Selection: through the language server where it runs, and through `torb format` over a temporary copy of the whole text where it does not |
+| `test/debugging.js`, `test/language-server.js` | What `sh tools/vscode-test.sh [debugging \| language-server]` runs in an Extension Development Host: the debugger, and every feature of the language server through VS Code's own commands |
 | `syntaxes/trb.tmLanguage.json` | The TextMate grammar for the editor (`source.trb`) |
 | `syntaxes/trb.markdown.tmLanguage.json` | Injects `source.trb` into fenced code blocks in Markdown |
 | `language-configuration.json` | Comments, brackets, indentation, doc comment continuation |
@@ -126,6 +127,16 @@ editor, its tests where it is a test file. The Test Explorer's profile "Debug" s
 `torbscript/testReport` events, and a `DebugAdapterTracker` maps them onto the run's items with the same code the
 Run profile reads a report with. The session's `configuration` carries `torbscriptTestRun`, which is how the tracker
 finds its run.
+
+## Trying it in a real VS Code
+
+`sh tools/vscode-test.sh language-server` starts an Extension Development Host over the package of
+`tests/lsp/navigation/` and a file with a problem beside it, and runs `test/language-server.js`: a hover, signature
+help, the references, the symbols, a completion and its documentation, the diagnostics of the file nobody opened, a
+keystroke until its diagnostics arrive, formatting and a rename - each through the command VS Code's editors run
+(`vscode.executeHoverProvider`, `vscode.executeDocumentRenameProvider`, ...). `sh tools/vscode-test.sh` runs the
+debugger's suite. Both open a window for as long as they run, so neither is a gate; run them after a change of the
+extension or of the server, with `VSCODE_TEST_TORB` naming another `torb`.
 
 ## Tasks
 

@@ -1,6 +1,8 @@
 // The client of `torb lsp` (docs/tooling/torb-lsp.md): starts the language server, speaks the Language Server
-// Protocol to it over its standard input and output, and hands VS Code what it answers - the diagnostics, hover, go to
-// definition, completion, semantic tokens and the quick fixes of the lint rules.
+// Protocol to it over its standard input and output, and hands VS Code what it answers - the diagnostics of the open
+// documents and of the rest of the workspace, hover, go to definition, completion with the documentation of each item,
+// signature help, the references, a checked rename, the symbols of a document and of the workspace, the formatting of
+// `torb format` (formatting.js asks for it), semantic tokens and the quick fixes of the lint rules.
 //
 // It is written against the protocol directly rather than on `vscode-languageclient`, so the extension stays a folder
 // of plain files with no `node_modules` and no build step (docs/design/LANGUAGE-SERVER.md, "The client"). It speaks
@@ -100,6 +102,7 @@ class TorbLanguageClient {
     this.stopped = null;
     this.executable = this.resolveExecutable();
     const folder = (vscode.workspace.workspaceFolders || [])[0];
+    const settings = vscode.workspace.getConfiguration('torbscript');
     let child;
     try {
       child = this.cp.spawn(this.executable, ['lsp'], {
@@ -144,12 +147,34 @@ class TorbLanguageClient {
         textDocument: {
           synchronization: { didSave: false },
           hover: { contentFormat: ['markdown'] },
-          completion: { completionItem: { snippetSupport: false } },
+          completion: {
+            completionItem: {
+              snippetSupport: false,
+              documentationFormat: ['markdown'],
+              resolveSupport: { properties: ['detail', 'documentation'] },
+            },
+          },
+          signatureHelp: {
+            signatureInformation: { documentationFormat: ['markdown'], parameterInformation: { labelOffsetSupport: true } },
+          },
+          references: {},
+          rename: { prepareSupport: true },
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          formatting: {},
+          rangeFormatting: {},
           publishDiagnostics: { tagSupport: { valueSet: [1] } },
           semanticTokens: { requests: { full: true }, formats: ['relative'] },
           codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix'] } } },
         },
+        workspace: {
+          symbol: {},
+          workspaceEdit: { documentChanges: true },
+          didChangeWatchedFiles: {},
+          didChangeConfiguration: {},
+          workspaceFolders: true,
+        },
       },
+      initializationOptions: workspaceSettingsOf(settings),
     }).then(
       (result) => {
         this.capabilities = (result && result.capabilities) || {};
@@ -341,6 +366,14 @@ class TorbLanguageClient {
     this.notify('workspace/didChangeWatchedFiles', { changes: [{ uri: uri.toString(), type }] });
   }
 
+  /** Tells the server what the settings of the check of the workspace are now. */
+  configured() {
+    const settings = this.vscode.workspace.getConfiguration('torbscript');
+    this.notify('workspace/didChangeConfiguration', {
+      settings: { torbscript: { languageServer: workspaceSettingsOf(settings) } },
+    });
+  }
+
   published(params) {
     const { vscode } = this;
     const uri = vscode.Uri.parse(params.uri);
@@ -383,10 +416,150 @@ class TorbLanguageClient {
         if (each.sortText) {
           item.sortText = each.sortText;
         }
+        // What `completionItem/resolve` hands back: the item as the server wrote it, with the place of its declaration
+        item.torbItem = each;
         return item;
       }),
       Boolean(result.isIncomplete),
     );
+  }
+
+  /** The signature and the documentation of the declaration of an item, once VS Code shows it. */
+  async resolveCompletion(item) {
+    if (!this.running || !item.torbItem || !item.torbItem.data) {
+      return item;
+    }
+    try {
+      const resolved = await this.request('completionItem/resolve', item.torbItem);
+      if (resolved && resolved.detail) {
+        item.detail = resolved.detail;
+      }
+      if (resolved && resolved.documentation) {
+        item.documentation = new this.vscode.MarkdownString(resolved.documentation.value || '');
+      }
+    } catch (error) {
+      // Nothing more to say than the item already does
+    }
+    return item;
+  }
+
+  async signatureHelp(document, position) {
+    const result = await this.ask('textDocument/signatureHelp', document, position);
+    if (!result || !Array.isArray(result.signatures) || result.signatures.length === 0) {
+      return undefined;
+    }
+    const { vscode } = this;
+    const help = new vscode.SignatureHelp();
+    help.signatures = result.signatures.map((each) => {
+      const documentation = each.documentation ? new vscode.MarkdownString(each.documentation.value || '') : undefined;
+      const information = new vscode.SignatureInformation(each.label, documentation);
+      information.parameters = (each.parameters || []).map((parameter) => new vscode.ParameterInformation(parameter.label));
+      return information;
+    });
+    help.activeSignature = result.activeSignature || 0;
+    help.activeParameter = result.activeParameter || 0;
+    return help;
+  }
+
+  async references(document, position, context) {
+    if (!this.running) {
+      return undefined;
+    }
+    try {
+      const result = await this.request('textDocument/references', {
+        textDocument: { uri: document.uri.toString() },
+        position: { line: position.line, character: position.character },
+        context: { includeDeclaration: Boolean(context && context.includeDeclaration) },
+      });
+      return (result || []).map((each) => new this.vscode.Location(this.vscode.Uri.parse(each.uri), this.fromRange(each.range)));
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  /** The range and the name a rename starts from; a refusal of the server is thrown, and VS Code shows its reason. */
+  async prepareRename(document, position) {
+    if (!this.running) {
+      throw new Error('the language server is not running');
+    }
+    const result = await this.request('textDocument/prepareRename', {
+      textDocument: { uri: document.uri.toString() },
+      position: { line: position.line, character: position.character },
+    });
+    if (!result) {
+      throw new Error('there is nothing to rename here');
+    }
+    return { range: this.fromRange(result.range), placeholder: result.placeholder };
+  }
+
+  /** The edits of a checked rename; a refusal of the server - a rename that would change meaning - is thrown. */
+  async rename(document, position, newName) {
+    if (!this.running) {
+      throw new Error('the language server is not running');
+    }
+    const result = await this.request('textDocument/rename', {
+      textDocument: { uri: document.uri.toString() },
+      position: { line: position.line, character: position.character },
+      newName,
+    });
+    return result ? this.fromWorkspaceEdit(result) : undefined;
+  }
+
+  async documentSymbols(document) {
+    if (!this.running) {
+      return undefined;
+    }
+    try {
+      const result = await this.request('textDocument/documentSymbol', { textDocument: { uri: document.uri.toString() } });
+      return (result || []).map((each) => this.fromDocumentSymbol(each, document));
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  async workspaceSymbols(query) {
+    if (!this.running) {
+      return undefined;
+    }
+    try {
+      const result = await this.request('workspace/symbol', { query });
+      const { vscode } = this;
+      return (result || []).map(
+        (each) =>
+          new vscode.SymbolInformation(
+            each.name,
+            (each.kind || 1) - 1,
+            each.containerName || '',
+            new vscode.Location(vscode.Uri.parse(each.location.uri), this.fromRange(each.location.range)),
+          ),
+      );
+    } catch (error) {
+      return undefined;
+    }
+  }
+
+  /**
+   * The edits of `torb format` for a document, or for the lines of a range of it; `undefined` where the server does not
+   * run or does not answer, and formatting.js formats a copy of the text itself.
+   */
+  async formatting(document, range) {
+    if (!this.running || document.uri.scheme !== 'file') {
+      return undefined;
+    }
+    try {
+      const textDocument = { uri: document.uri.toString() };
+      const options = { tabSize: 2, insertSpaces: true };
+      const result = range
+        ? await this.request('textDocument/rangeFormatting', { textDocument, range: this.toRange(range), options })
+        : await this.request('textDocument/formatting', { textDocument, options });
+      if (result === null) {
+        // The text does not parse: nothing to do, which is what the fallback would find too
+        return [];
+      }
+      return (result || []).map((each) => this.vscode.TextEdit.replace(this.fromRange(each.range), each.newText));
+    } catch (error) {
+      return undefined;
+    }
   }
 
   async semanticTokens(document) {
@@ -483,6 +656,36 @@ class TorbLanguageClient {
     return new this.vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character);
   }
 
+  fromWorkspaceEdit(result) {
+    const { vscode } = this;
+    const edit = new vscode.WorkspaceEdit();
+    for (const change of result.documentChanges || []) {
+      const uri = vscode.Uri.parse(change.textDocument.uri);
+      for (const each of change.edits || []) {
+        edit.replace(uri, this.fromRange(each.range), each.newText);
+      }
+    }
+    for (const uri of Object.keys(result.changes || {})) {
+      for (const each of result.changes[uri]) {
+        edit.replace(vscode.Uri.parse(uri), this.fromRange(each.range), each.newText);
+      }
+    }
+    return edit;
+  }
+
+  fromDocumentSymbol(symbol, document) {
+    const { vscode } = this;
+    const found = new vscode.DocumentSymbol(
+      symbol.name,
+      symbol.detail || '',
+      (symbol.kind || 1) - 1,
+      this.fromRange(symbol.range),
+      this.fromRange(symbol.selectionRange),
+    );
+    found.children = (symbol.children || []).map((each) => this.fromDocumentSymbol(each, document));
+    return found;
+  }
+
   fromDiagnostic(diagnostic) {
     const { vscode } = this;
     const severities = [
@@ -532,9 +735,44 @@ function startLanguageClient(context, vscode, cp, executable, log, startNow = tr
     }),
     vscode.languages.registerCompletionItemProvider(
       selector,
-      { provideCompletionItems: (document, position) => client.completion(document, position) },
+      {
+        provideCompletionItems: (document, position) => client.completion(document, position),
+        resolveCompletionItem: (item) => client.resolveCompletion(item),
+      },
       '.',
     ),
+    vscode.languages.registerSignatureHelpProvider(
+      selector,
+      { provideSignatureHelp: (document, position) => client.signatureHelp(document, position) },
+      { triggerCharacters: ['(', ','], retriggerCharacters: [')'] },
+    ),
+    vscode.languages.registerReferenceProvider(selector, {
+      provideReferences: (document, position, context) => client.references(document, position, context),
+    }),
+    vscode.languages.registerRenameProvider(selector, {
+      prepareRename: (document, position) => client.prepareRename(document, position),
+      provideRenameEdits: (document, position, newName) => client.rename(document, position, newName),
+    }),
+    vscode.languages.registerDocumentSymbolProvider(selector, {
+      provideDocumentSymbols: (document) => client.documentSymbols(document),
+    }),
+    vscode.languages.registerWorkspaceSymbolProvider({
+      provideWorkspaceSymbols: (query) => client.workspaceSymbols(query),
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration('torbscript.languageServer.workspaceDiagnostics') ||
+        event.affectsConfiguration('torbscript.languageServer.workspaceDiagnosticsDelay')
+      ) {
+        client.configured();
+      }
+    }),
+    // Every folder is a project of the server's own, which it reads when it starts
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      if (client.isRunning()) {
+        client.restart();
+      }
+    }),
     vscode.languages.registerCodeActionsProvider(
       selector,
       { provideCodeActions: (document, range) => client.codeActions(document, range) },
@@ -560,4 +798,15 @@ function startLanguageClient(context, vscode, cp, executable, log, startNow = tr
   return client;
 }
 
-module.exports = { startLanguageClient, TorbLanguageClient, MessageReader, frame };
+/**
+ * What the settings say about the check of the workspace, as the server reads it: in the `initializationOptions` of
+ * `initialize`, and below `torbscript.languageServer` in `workspace/didChangeConfiguration`.
+ */
+function workspaceSettingsOf(settings) {
+  return {
+    workspaceDiagnostics: settings.get('languageServer.workspaceDiagnostics', true),
+    workspaceDiagnosticsDelay: settings.get('languageServer.workspaceDiagnosticsDelay', 1000),
+  };
+}
+
+module.exports = { startLanguageClient, TorbLanguageClient, MessageReader, frame, workspaceSettingsOf };

@@ -457,7 +457,7 @@ async function activate(context) {
     );
   }
 
-  registerFormatter(context, vscode, cp, fs, os, path, toolchain, say);
+  registerFormatter(context, vscode, cp, fs, os, path, toolchain, say, languageClient);
   const tests = startTests(context, vscode, cp, fs, path, toolchain, languageClient, say);
   startDebugging(context, vscode, path, toolchain, say);
   if (languageClient) {

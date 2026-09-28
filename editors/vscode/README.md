@@ -8,13 +8,25 @@ debugger, the formatter, and a walkthrough that installs the toolchain for you.
 ## Features
 
 - **Problems as you type.** Every error `torb check` reports, while you type, and every finding of `torb lint` as a
-  hint with its rule; a binding nothing reads is faded.
+  hint with its rule; a binding nothing reads is faded. A keystroke inside of a function checks that function again,
+  so even the largest file answers at once.
+- **Problems of the whole workspace**: the files you have not opened are checked in the background as well - once the
+  language server has started, and again when files change on disk - and their errors are in the Problems view.
 - **Quick fixes** (Ctrl+. / Cmd+.): the fix `torb lint --fix` would write, one finding at a time.
-- **Hover**: a declaration as the source writes it, with its doc comment; a local or a constant with its type.
+- **Hover**: a declaration with its documentation as `torb doc` renders it - the signature, the doc comment with its
+  links, its parameters and its sections - and at a call of a generic function what its type parameters are there; a
+  local or a constant with its type.
 - **Go to definition** (F12): locals, functions, types, fields, cases and constants, in any file of the program and in
   the standard library.
+- **Find All References** (Shift+F12) and **Rename Symbol** (F2): every place the checker resolved to the declaration,
+  in every file of the workspace - never a place that only has the same text. A rename is checked before it is made:
+  one that would make a name mean something else, or bring a problem, is refused with the reason.
 - **Completion**: after `value.` its fields and methods, after `Type.` its cases and `static` members, and the names in
-  scope everywhere else.
+  scope everywhere else, each with the signature and the documentation of its declaration.
+- **Signature help**: inside the arguments of a call, the signature of what it calls, with the parameter at the cursor
+  marked.
+- **Outline and symbols**: the declarations of a file in the Outline view and in breadcrumbs, and those of the whole
+  workspace in "Go to Symbol in Workspace" (Ctrl+T / Cmd+T).
 - **Semantic highlighting**: fields, locals, parameters, cases, methods, functions and generics each in their own
   color, and every `var` underlined - from the language server, or from `torb highlight` where it does not run.
 - **Tests in the Test Explorer**: every `*.test.trb` of the workspace, with its `group "..."` and `test "..."` calls
@@ -27,7 +39,8 @@ debugger, the formatter, and a walkthrough that installs the toolchain for you.
   with records, cases, lists and maps to open, values on hover, watch expressions such as `point.x` or `names[2]`, and
   a stop where a panic begins - a failing `assert` too. The program runs in the VM under `torb debug`, and a test's
   result lands in the Testing view as for a run.
-- **Format Document** (Shift+Alt+F / Shift+Option+F) with `torb format`: the one layout of the language.
+- **Format Document** (Shift+Alt+F / Shift+Option+F) and **Format Selection** with `torb format`: the one layout of
+  the language, as the few edits that change the text.
 - **Run File**: the play button of the editor runs the file with `torb run`, in a terminal.
 - **A walkthrough** (Help > Welcome > Walkthroughs > "Get Started with TorbScript"): install the toolchain, create a
   first program with `torb new`, run it, and find the documentation. It opens by itself the first time the extension
@@ -75,6 +88,8 @@ durations - and says so once, with `torb upgrade` a click away.
 |---------|---------|---------|
 | `torbscript.executablePath` | `""` | The `torb` to run; on Windows `.exe` may be left out. Empty searches the places above, in that order |
 | `torbscript.languageServer.enabled` | `true` | Start `torb lsp`. Read when the window loads |
+| `torbscript.languageServer.workspaceDiagnostics` | `true` | Check the files that are not open too, in the background, and show their problems |
+| `torbscript.languageServer.workspaceDiagnosticsDelay` | `1000` | How long after the start, or after the last change on disk, that check begins, in milliseconds |
 | `torbscript.semanticHighlighting.enabled` | `true` | Semantic colors, from the language server or from `torb highlight`; off leaves the grammar's colors alone |
 | `torbscript.toolchain.offerInstall` | `true` | Offer the installer in a notification when `torb` is not found. The status bar item shows either way |
 
@@ -96,8 +111,9 @@ durations - and says so once, with `torb upgrade` a click away.
 
 Where the language server is turned off, cannot be started, or has crashed three times within three minutes, the
 extension says so once in the "TorbScript" output channel (View > Output) and keeps working with less: the TextMate
-grammar colors the code, `torb highlight` adds the semantic colors where a `torb` runs at all, and the Test Explorer
-lists the test files, each run as a whole. There are no error popups for any of this.
+grammar colors the code, `torb highlight` adds the semantic colors where a `torb` runs at all, Format Document runs
+`torb format` over a copy of the text, and the Test Explorer lists the test files, each run as a whole. There are no
+error popups for any of this.
 
 The grammar is a heuristic - regular expressions cannot tell a field from a local or a case from a type - which is why
 the semantic colors from the syntax tree are layered over it.

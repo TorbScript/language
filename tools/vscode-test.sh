@@ -1,20 +1,34 @@
 #!/bin/sh
 # The VS Code extension of editors/vscode in a real VS Code: an Extension Development Host with its own user data and
-# extension directories, over a workspace of tests/debug/'s programs, runs editors/vscode/test/debugging.js through
-# `--extensionTestsPath` - the debugger to a breakpoint and through its steps, the CodeLens of an entry file, and the
-# Test Explorer's Debug profile - and prints what it found. It opens a window of VS Code for as long as it runs, so it
-# is no gate; run it after a change of the debugger or of the extension.
+# extension directories runs one suite of editors/vscode/test/ through `--extensionTestsPath` and prints what it found.
+# It opens a window of VS Code for as long as it runs, so it is no gate; run it after a change of the extension.
+#
+# - `debugging` (the default), over a workspace of tests/debug/'s programs: the debugger to a breakpoint and through
+#   its steps, the CodeLens of an entry file, and the Test Explorer's Debug profile.
+# - `language-server`, over the package of tests/lsp/navigation/ and a file with a problem beside it: hover, signature
+#   help, the references, the symbols, a completion and its documentation, the diagnostics of a file nobody opened, a
+#   keystroke and its diagnostics, formatting, and a rename.
 #
 # `$VSCODE` is the executable of VS Code (`Code.exe` on Windows, not the `code` script, which returns before the run
 # ends); without it the script looks where the installers put it. `$VSCODE_TEST_TORB` is the `torb` the extension runs,
 # `build/release/torb` by default. POSIX sh; runs in Git Bash on Windows and on Linux/macOS.
 #
 #   sh tools/vscode-test.sh
+#   sh tools/vscode-test.sh language-server
 
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
+
+suite=${1:-debugging}
+case "$suite" in
+  debugging | language-server) ;;
+  *)
+    printf '%s\n' "usage: sh tools/vscode-test.sh [debugging | language-server]" >&2
+    exit 2
+    ;;
+esac
 
 say() {
   printf '%s\n' "$*" >&2
@@ -67,8 +81,13 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 workspace="$scratch/workspace"
 mkdir -p "$workspace/.vscode"
-cp tests/debug/breakpoint/main.trb "$workspace/main.trb"
-cp tests/debug/tests/math.test.trb "$workspace/math.test.trb"
+if [ "$suite" = debugging ]; then
+  cp tests/debug/breakpoint/main.trb "$workspace/main.trb"
+  cp tests/debug/tests/math.test.trb "$workspace/math.test.trb"
+else
+  cp -R tests/lsp/navigation/. "$workspace/"
+  printf 'const total: Int = "no"\n' >"$workspace/src/broken.trb"
+fi
 torb_native=$(cd "$(dirname "$torb")" && (pwd -W 2>/dev/null || pwd))/$(basename "$torb")
 printf '{\n  "torbscript.executablePath": "%s",\n  "torbscript.languageServer.enabled": true\n}\n' "$torb_native" \
   >"$workspace/.vscode/settings.json"
@@ -84,7 +103,7 @@ TORBSCRIPT_TEST_RESULT="$result" "$vscode" \
   --skip-welcome \
   --skip-release-notes \
   --extensionDevelopmentPath="$(native_path "$root/editors/vscode")" \
-  --extensionTestsPath="$(native_path "$root/editors/vscode/test")/debugging.js" \
+  --extensionTestsPath="$(native_path "$root/editors/vscode/test")/$suite.js" \
   "$(native_path "$workspace")" >"$scratch/vscode.log" 2>&1 || status=$?
 if [ -f "$scratch/result.txt" ]; then
   cat "$scratch/result.txt"
