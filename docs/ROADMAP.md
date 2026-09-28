@@ -10,6 +10,10 @@ The order is the order of dependence. Milestones 7 and 8 are the core, and the p
 so neither blocks 1.0. Beside the milestones, a few packages and language features are designed and wait for a slot;
 they are listed after the milestones.
 
+The public release also carries the brand of [design/BRAND.md](design/BRAND.md): the logo, the icons and the design
+tokens are in `brand/`, and applying them to the website, the registry, the forge, the colours of `torb`'s output and
+the VS Code extension is that record's five slices (section 13).
+
 - **[Milestone 7: the VM, tasks and the sandbox](#milestone-7-the-vm-tasks-and-the-sandbox)**
 - **[Milestone 8: formatter, linter, language server, package manager](#milestone-8-formatter-linter-language-server-package-manager)**
 - **[The kernel of natives](#the-kernel-of-natives)**
