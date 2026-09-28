@@ -64,7 +64,7 @@ compile_flags="$common_flags -std=c11 -O2 -g0 -DTORB_HOSTS_MACHINE"
 # the working directory `/torb/work` without a variable
 link_flags="-sMODULARIZE=1 -sEXPORT_NAME=createTorb -sENVIRONMENT=web,worker,node -sINVOKE_RUN=0 -sEXIT_RUNTIME=1
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=16MB
-  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV -sFORCE_FILESYSTEM=1 --embed-file std@/torb/std"
+  -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV -sFORCE_FILESYSTEM=1 --embed-file build/playground-std/std@/torb/std"
 
 compile_inside() {
   c_directory=$1
@@ -118,6 +118,10 @@ compile_inside() {
   while IFS= read -r file; do
     set -- "$@" "$objects/$(printf '%s' "$file" | tr '/' '_').o"
   done <"$list"
+  # std/ as torb reads it, and nothing a build left inside it: a test of std/archive builds into its own build/
+  rm -rf build/playground-std
+  mkdir -p build/playground-std
+  tar -cf - --exclude=build std | tar -xf - -C build/playground-std
   say "linking $output/torb.js and $output/torb.wasm"
   # shellcheck disable=SC2086
   "$emcc" $common_flags -O2 -g0 -o "$output/torb.js" "$@" $link_flags ${TORB_LINK_FLAGS-}

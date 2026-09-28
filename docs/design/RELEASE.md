@@ -527,16 +527,16 @@ environment is empty and standard input at its end. Not in the lowering, because
 `std/process` and is built for the target; its natives link there and fail at run time, which no program of the
 playground can reach.
 
-**Size and speed**, measured on the build of 2026-09-28:
+**Size and speed**, measured on the builds of 2026-09-28 and 29, on a machine that ran other gates at the same time:
 
 | | |
 |---|---|
-| `torb.wasm` | 12.41 MB raw, 3.76 MB gzip -9 (what nginx sends, `torb.wasm.gz` beside it), 2.62 MB brotli -11 |
-| `torb.js` | 97 KB, 26 KB gzipped |
-| hello world, headless Chrome, local server | first output 0.58 to 0.65 s cold (fetch, compile, instantiate, check, lower, run), 0.30 to 0.34 s warm, 0.50 to 0.56 s on a second visit from the browser's cache |
-| the same over 50 Mbit/s | 1.55 s cold |
-| WebKit (Safari's engine), local | 1.44 s cold, 0.82 s warm, for a twelve-line program |
-| node 24 (`smoke-test.mjs`) | 0.88 s cold, 0.45 s warm |
+| `torb.wasm` | 12.41 MB raw, 3.76 MB gzip -9 (what nginx sends, `torb.wasm.gz` beside it), 2.63 MB brotli -11 |
+| `torb.js`, `playground.js` | 98 KB and 33 KB, 26 KB and 10 KB gzipped |
+| hello world, headless Chrome, local server | first output 0.50 to 0.65 s cold (fetch, compile, instantiate, check, lower, run), 0.26 to 0.34 s warm, 0.50 to 0.56 s on a second visit from the browser's cache |
+| the same over 50 and 10 Mbit/s | 1.3 to 1.5 s and 4.0 s cold, 0.8 s on a second visit over 10 Mbit/s |
+| WebKit (Safari's engine), local | 1.4 to 2.2 s cold, 0.8 to 1.0 s warm, for a twelve-line program |
+| node 24 (`smoke-test.mjs`) | 0.59 to 0.88 s cold, 0.31 to 0.45 s warm |
 | the VM | about 4.5 times slower than natively (`fibonacci(25)`: 244 ms, 54 ms); the compiler's own work about 1.5 to 2 times |
 
 **The page's side is hand-written and small**, and takes one pattern from each of the playgrounds it was measured
