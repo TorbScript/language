@@ -125,6 +125,25 @@ public fn finishLoop(debugger: Debugger) {
 }
 
 /**
+ * A `statement` instruction: the debugger of the run, where it has one, reaches the statement. The loop's arm is this
+ * one call, so that the loop of every program that is not debugged stays the loop it was.
+ */
+public fn atStatement(
+  registers: Registers,
+  program: BytecodeProgram,
+  first: Int,
+  chunk: Int,
+  pc: Int,
+  base: Int,
+  depth: Int,
+  statement: Int,
+) {
+  if const Some(debugger) = registers.debugger {
+    reachStatement debugger, program, first, chunk, pc, base, depth, statement
+  }
+}
+
+/**
  * The loop reached the statement `statement` of `chunk`, at the code offset `pc` of the image: the innermost loop's
  * record is written, the channel is looked at every [pollInterval] statements, and the program stops where a pause, a
  * breakpoint, the first statement or the step in progress says so.

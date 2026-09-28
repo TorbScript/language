@@ -45,7 +45,7 @@ use Opcode, KernelOperation, kernelNumberOf, opcodeOf, tailLengthOf, stoppedWord
 use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
 use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
 use CountedKind, ElementKind, widthOfPart from "../backend/bytecode/format"
-use Debugger, beginLoop, finishLoop, reachStatement from "./debug"
+use Debugger, beginLoop, finishLoop, atStatement from "./debug"
 
 /**
  * The register file, shared by the loop and by the interpreter the kernel calls back into: one object, so a call back
@@ -2269,10 +2269,8 @@ fn executeLoop(
       }
       // Only a debugged program has it: the debugger decides whether the program stops here
       .Statement => {
-        if const Some(debugger) = registers.debugger {
-          const statement = Machine.load(code + 8 * (pc + 1))
-          reachStatement debugger, program, first, chunk, pc, base, depth, statement
-        }
+        // One call and nothing else, so the loop every other program runs is the loop it was
+        atStatement registers, program, first, chunk, pc, base, depth, Machine.load(code + 8 * (pc + 1))
         pc = pc + 2
       }
     }
