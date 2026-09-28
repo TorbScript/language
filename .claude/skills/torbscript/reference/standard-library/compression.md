@@ -55,9 +55,10 @@ public fn inflated(bytes: Bytes): Result<Bytes, CompressionError>
 ```
 
 Raw DEFLATE streams. **Inflating reads every stream the format allows**: stored blocks, the fixed codes and dynamic
-Huffman codes. **Deflating is deterministic and simple**: one block of the fixed codes, with a greedy search for
-matches along hash chains over the last 32 KiB. It compresses text to roughly half where zlib gets to a third, and
-every inflater reads it.
+Huffman codes, decoded through a table of the next ten bits of the stream; a 30 MB release tarball gunzips in about
+0.6 seconds in a release binary, about twice what `gzip -d` takes. **Deflating is deterministic and simple**: one block
+of the fixed codes, with a greedy search for matches along hash chains over the last 32 KiB. It compresses text to
+roughly half where zlib gets to a third, and every inflater reads it.
 
 ### `crc32`
 

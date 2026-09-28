@@ -2,8 +2,11 @@
 
 **Status: built (2026-09-27)** — the owner decided on 2026-09-27 that the standard library has one package for binary
 formats, `std/binary`, with the types `ByteReader`, `ByteWriter`, `BitReader` and `BitWriter`. It exists, and
-`std/dns` (the wire format), `std/compression` (the DEFLATE bits and the gzip header) and `std/archive` (the tar
-headers) read and write with it; `std/digest` writes its padding and its digest with it (decision 9).
+`std/dns` (the wire format), `std/compression` (the gzip header) and `std/archive` (the tar headers) read and write
+with it; `std/digest` writes its padding and its digest with it (decision 9). The DEFLATE bits of `std/compression`
+were read and written with `BitReader` and `BitWriter` until 2026-09-28, and are its own again since: a buffer of 56
+bits refilled a byte at a time and codes decoded through tables, which a reader that answers a `Result` per read
+cannot be (section 6).
 
 **A read never panics, and a write never fails.** Every read answers a `Result` whose failure names the byte and what
 was expected there, so bytes from a file or the network are read without a check in front of every field; a format
@@ -132,8 +135,11 @@ is DEFLATE's business, and `std/compression` reverses a code before it writes it
 
 The reader loads a byte when a read needs one of its bits, so fewer than eight bits wait between two reads, and
 `position()` - the bytes it has started - is where a format goes on after `alignToByte()`: a stored block of DEFLATE
-reads its length with `bits(16)` and its bytes with `bytes(count)`, and gzip reads its trailer at the `position()` the
-DEFLATE stream ended on. `seek(position)` starts at the first bit of a byte, which is where a DEFLATE stream inside a
+could read its length with `bits(16)` and its bytes with `bytes(count)`, and gzip its trailer at the `position()` the
+DEFLATE stream ended on. **A decoder that reads a symbol per few bits does not use it**: `std/compression` read one bit
+per call through `bits(1)` and a `Result`, and inflated a 30 MB release tarball in 3.5 to 5.8 seconds; with a buffer
+of its own that holds up to 56 bits and a table indexed by the next ten of them it takes 0.6 (docs/PERFORMANCE.md
+section 4.2). `seek(position)` starts at the first bit of a byte, which is where a DEFLATE stream inside a
 gzip member begins. 56 is the most a read can load into the 64 bits of an `Int` with seven bits still waiting; a width
 outside 0 to 56 is a panic, because it is the caller's mistake and not the data's.
 

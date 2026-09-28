@@ -1,5 +1,6 @@
 /** [crc32]: the checksum of gzip, zip and PNG. */
 
+use ArrayList from "std/collections"
 use Bytes from "std/stream"
 
 /** The CRC-32 of ISO 3309 and ITU-T V.42 - the reflected polynomial `0xEDB88320` - of `bytes`. */
@@ -9,6 +10,37 @@ public fn crc32(bytes: Bytes): UInt32 {
 
 /** The same checksum as an `Int` below 2^32: what gzip writes into its trailer. */
 public fn crcValue(bytes: Bytes): Int {
+  const table = crcTable()
+  var crc = 0xFFFFFFFF
+  var index = 0
+  const length = bytes.length()
+  while index < length {
+    crc = table[(crc ^ Int.from(bytes[index])) & 255] ^ (crc >> 8)
+    index = index + 1
+  }
+  crc ^ 0xFFFFFFFF
+}
+
+/**
+ * The checksum of the bytes of `bytes` from `from` up to `to` (exclusive): what gunzipping checks a member with, in the
+ * list every member is inflated into, which is a concrete `ArrayList` and read without a call through a witness table.
+ */
+public fn crcBetween(bytes: ArrayList<UInt8>, from: Int, to: Int): Int {
+  const table = crcTable()
+  // A slice of an `ArrayList` shares its storage, and a loop from 0 to its length reads it without a bounds check
+  const part = bytes[from..to]
+  const length = part.length()
+  var crc = 0xFFFFFFFF
+  var index = 0
+  while index < length {
+    crc = table[(crc ^ Int.from(part[index])) & 255] ^ (crc >> 8)
+    index = index + 1
+  }
+  crc ^ 0xFFFFFFFF
+}
+
+/** The remainder of every byte, the table the checksum goes through a byte at a time. */
+fn crcTable(): Array<Int, 256> {
   var table: Array<Int, 256> = Array.filled 0
   for index in 0..256 {
     var value = index
@@ -17,9 +49,5 @@ public fn crcValue(bytes: Bytes): Int {
     }
     table[index] = value
   }
-  var crc = 0xFFFFFFFF
-  for byte in bytes {
-    crc = table[(crc ^ Int.from(byte)) & 255] ^ (crc >> 8)
-  }
-  crc ^ 0xFFFFFFFF
+  table
 }

@@ -1,23 +1,37 @@
 /** [gzipped] and [gunzipped]: gzip members (RFC 1952) around DEFLATE. */
 
-use ByteOrder, ByteReader, ByteWriter from "std/binary"
+use ByteOrder, ByteReader from "std/binary"
+use ArrayList from "std/collections"
 use Bytes from "std/stream"
 use CompressionError from "./error"
-use crcValue from "./crc"
-use deflated from "./deflate"
-use inflatedFrom from "./inflate"
+use crcBetween, crcValue from "./crc"
+use deflateInto from "./deflate"
+use inflateInto from "./inflate"
 
 /**
  * `bytes` as one gzip member, with nothing in its header that depends on the machine or the moment: no file name, no
  * time, the operating system "unknown". The same bytes give the same member everywhere.
  */
 public fn gzipped(bytes: Bytes): Bytes {
-  var writer = ByteWriter order: ByteOrder.LittleEndian
-  writer.append([0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255])
-  writer.append deflated(bytes)
-  writer.uint32 word(crcValue(bytes))
-  writer.uint32 word(bytes.length())
-  writer.bytes()
+  // The header, the stream and the trailer written into one concrete list
+  var output: ArrayList<UInt8> = ArrayList.withCapacity(bytes.length() / 2 + 64)
+  for byte in header {
+    output.append byte
+  }
+  deflateInto bytes, output
+  appendWord output, crcValue(bytes)
+  appendWord output, bytes.length()
+  output
+}
+
+/** The ten bytes of the header: the magic number, DEFLATE, no flags, no time, no extra flags, an unknown system. */
+const header: List<UInt8> = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 255]
+
+/** The lowest 32 bits of `value`, little endian: what a gzip trailer holds of a checksum and a length. */
+fn appendWord(var output: ArrayList<UInt8>, value: Int) {
+  for shift in [0, 8, 16, 24] {
+    output.append(UInt8.tryFrom((value >> shift) & 255).ok() ?? 0)
+  }
 }
 
 /**
@@ -29,7 +43,8 @@ public fn gzipped(bytes: Bytes): Bytes {
  *   checksum or a length does not match what was inflated.
  */
 public fn gunzipped(bytes: Bytes): Result<Bytes, CompressionError> {
-  var output: List<UInt8> = []
+  // Every member is inflated into the one list, which is checked where each member starts in it
+  var output: ArrayList<UInt8> = ArrayList.withCapacity 0
   var reader = ByteReader bytes, order: ByteOrder.LittleEndian
   loop {
     const start = reader.position()
@@ -65,18 +80,18 @@ public fn gunzipped(bytes: Bytes): Result<Bytes, CompressionError> {
     if flags & 2 != 0 {
       streamStart = streamStart + 2
     }
-    const (member, end) = inflatedFrom(bytes, streamStart)?
+    const first = output.length()
+    const end = inflateInto(bytes, streamStart, output)?
     reader.seek(end)?
     if reader.remaining() < 8 {
       return Fail CompressionError("the input ends inside a gzip trailer", end)
     }
-    if Int.from(reader.uint32()?) != crcValue(member) {
+    if Int.from(reader.uint32()?) != crcBetween(output, first, output.length()) {
       return Fail CompressionError("the CRC-32 of the member does not match what it holds", start)
     }
-    if Int.from(reader.uint32()?) != member.length() & 0xFFFFFFFF {
+    if Int.from(reader.uint32()?) != (output.length() - first) & 0xFFFFFFFF {
       return Fail CompressionError("the length of the member does not match what it holds", start)
     }
-    output.appendAll member
     if reader.remaining() == 0 {
       return output
     }
@@ -99,9 +114,4 @@ fn afterZero(var reader: ByteReader, from: Int): Result<Int, CompressionError> {
     }
   }
   Fail CompressionError("the input ends inside a text field of a gzip header", from)
-}
-
-/** The lowest 32 bits of `value`, what a gzip trailer holds of a checksum and a length. */
-fn word(value: Int): UInt32 {
-  UInt32.tryFrom(value & 0xFFFFFFFF).ok() ?? 0
 }

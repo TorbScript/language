@@ -1051,6 +1051,44 @@ to +6% on gzip. The column that does not move, the allocation count of the whole
 20 587 652 after**, and the bytes allocated went from 691.6 to 689.8 MB. SHA-256 still reads its blocks straight from the
 list (decision 9 of docs/design/BINARY.md), so its rows measure the writes of `finished` and the machine.
 
+### 4.2 `std/compression`: inflate and deflate rewritten for speed
+
+`gunzipped` decoded one bit per call - `BitReader.bits(1)`, a `Result`, a walk of the canonical code per symbol - and
+appended to a trait-typed `List<UInt8>`, so every byte of the output went through a witness table; `gunzipped` then
+copied each member into the result with `appendAll`, one call through the table per byte again, and `crcValue` read the
+member through an iterator. `deflated` read the input, its hash chains and its `BitWriter` through witness tables too.
+What changed, with the same API, the same answers and the same errors at the same offsets:
+
+- **Inflating**: a buffer of up to 56 bits refilled a byte at a time, one refill per symbol; a table of the next ten
+  bits for each code (`Array<Int, 1024>`, an entry `symbol << 4 | length`), and `puff.c`'s walk only for a longer code;
+  the last 32 KiB in an `Array<UInt8, 32768>` on the stack, which a match reads and writes inline; every member
+  appended to one concrete `ArrayList<UInt8>`, and its checksum read from a slice of it with the bounds check dropped
+  (section 1, finding 8).
+- **Deflating**: the chains and the output in concrete `ArrayList`s, the fixed codes reversed ahead of time, the hash
+  of three bytes rolled from the one before, and a candidate compared only where it matches the byte just past the best
+  match so far - the only way it could become longer, so the output is byte for byte what it was.
+
+| 30 MB, `torb build` (release, `-O2`), fastest of three | before | after | `gzip` 1.13 |
+|---|---:|---:|---:|
+| `gunzipped`, a release tarball: `torb.exe`, `std/`, `runtime/` (7.4 MB `gzip -6`) | 3.48 s | **0.60 s** | 0.28 s (`-d`, user) |
+| `gunzipped`, 30 MB of C (1.6 MB `gzip -6`) | 2.25 s | **0.42 s** | 0.12 s (`-d`, user) |
+| `gzipped`, the tarball | 14.07 s | **4.68 s** | 1.19 s (`-6`, user) |
+| `gzipped`, the C | 11.90 s | **2.67 s** | |
+
+The machine was shared with other gate runs, and the same binary moved by up to 60% between runs (the first run of
+the old `gunzipped` took 5.8 s). The differential check: 14 members - `gzip -1` to `-9` of text and of a binary,
+random bytes (stored blocks), zeros, an empty and a one-byte input, a name in the header, three members in a row -
+each cut at 40 points and changed at 40 bytes, 1 162 lines of results, the same with the `std/` before and after; the
+gzip members the two write are the same bytes. In the VM nothing got slower (a 300 KB member: 1.86 s before, 1.59 s
+after).
+
+**What is left** is the runtime: an append to an `ArrayList` is a call of `torb_list_add` (about 13 ns, measured by
+appending a constant 30 million times), which is 0.39 s of the 0.60, and a read of a list whose index is not proven
+inside is a call of `torb_list_get`. The search of `deflated` reads the input and the chains that way for every
+candidate, up to 64 of them per position; the input is a trait-typed `Bytes`, which a copy into a concrete list made
+slower rather than faster (7.4 s against 4.7 s). A bulk append of a range of the list itself - what a match is - or an
+inline fast path of `torb_list_add` for a unique list with room would be the next step, and both are the runtime's.
+
 ---
 
 ## 5. The plan

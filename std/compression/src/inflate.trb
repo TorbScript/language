@@ -1,57 +1,148 @@
 /**
- * [inflated]: DEFLATE read back (RFC 1951), after Mark Adler's `puff.c` - canonical Huffman codes decoded one bit at a
- * time, which is short and exact rather than fast.
+ * [inflated]: DEFLATE read back (RFC 1951). The bits come from a buffer of up to 56 of them that is refilled a byte at a
+ * time, a Huffman code is decoded through a table indexed by the next bits of the stream - only a code longer than the
+ * table is walked bit by bit, the canonical way of Mark Adler's `puff.c` - and a match copies from a window of the last
+ * 32 KiB, an `Array` inline on the stack, rather than from the list the output grows in.
  */
 
-use BitOrder, BitReader from "std/binary"
+use ArrayList from "std/collections"
 use Bytes from "std/stream"
 use CompressionError from "./error"
 
 /** Everything a raw DEFLATE stream holds, which has to end with its last block. */
 public fn inflated(bytes: Bytes): Result<Bytes, CompressionError> {
-  const (output, _) = inflatedFrom(bytes, 0)?
+  var output: ArrayList<UInt8> = ArrayList.withCapacity 0
+  const _ = inflateInto(bytes, 0, output)?
   output
 }
 
 /**
- * The DEFLATE stream that starts at `start`, and the offset of the first byte after it: gzip reads its trailer there,
- * and the next member after that.
+ * Appends what the DEFLATE stream that starts at `start` holds to `output`, and answers the offset of the first byte
+ * after it: gzip reads its trailer there, and the next member after that. The output is a concrete `ArrayList`, which
+ * a byte is appended to without a call through a witness table.
  */
-public fn inflatedFrom(bytes: Bytes, start: Int): Result<(Bytes, Int), CompressionError> {
-  if start > bytes.length() {
+public fn inflateInto(bytes: Bytes, start: Int, var output: ArrayList<UInt8>): Result<Int, CompressionError> {
+  if start < 0 || start > bytes.length() {
     return Fail CompressionError("the stream ends in the middle of a block", start)
   }
-  var reader = BitReader bytes, order: BitOrder.LeastSignificantFirst
-  reader.seek(start)?
-  var output: List<UInt8> = []
+  var inflater = Inflater input: bytes, cursor: start
+  // The last bytes produced, the byte at position `p` of the output in slot `p & windowMask`: what a match reads
+  var window: Array<UInt8, 32768> = Array.filled 0
   loop {
-    const last = reader.bits(1)?
-    const kind = reader.bits(2)?
-    match kind {
-      0 => storedBlock(reader, output)?
+    // The last-block flag, then the type of the block in two bits
+    const header = inflater.bits(3)?
+    match header >> 1 {
+      0 => storedBlock(inflater, window, output)?
       1 => {
-        const (lengths, distances) = fixedCodes()?
-        blockCodes(reader, lengths, distances, output)?
+        const (literals, distances) = fixedCodes()?
+        blockCodes(inflater, window, literals, distances, output)?
       }
       2 => {
-        const (lengths, distances) = dynamicCodes(reader)?
-        blockCodes(reader, lengths, distances, output)?
+        const (literals, distances) = dynamicCodes(inflater)?
+        blockCodes(inflater, window, literals, distances, output)?
       }
       _ => {
-        return Fail CompressionError("a block of the reserved type 3", reader.position())
+        return Fail CompressionError("a block of the reserved type 3", inflater.position())
       }
     }
-    if last == 1 {
+    if header & 1 == 1 {
       break
     }
   }
-  (output, reader.position())
+  inflater.position()
 }
 
-/** A canonical Huffman code: how many codes each length has, and the symbols in code order. */
+/**
+ * A DEFLATE stream being read back: its bytes, the next one to load, the bits loaded ahead of what was read - up to 56,
+ * the next one lowest - and how many bytes it produced. Bits past the end of the input read as zero, and a read that
+ * took any of them fails.
+ */
+type Inflater {
+  input: Bytes
+  /** The next byte to load. */
+  var cursor: Int
+  /** Bits loaded and not read yet, the next one lowest. */
+  var buffer: Int = 0
+  /** How many bits `buffer` holds. */
+  var count: Int = 0
+  /** How many bytes the stream produced so far. */
+  var produced: Int = 0
+
+  /** The byte the next bit comes from: the next one to load, less the whole bytes loaded ahead. */
+  fn position(): Int {
+    cursor - count / 8
+  }
+
+  /** What a read past the end of the input fails with. */
+  fn truncated(): CompressionError {
+    truncatedAt input.length()
+  }
+
+  /** Loads bytes until more than 48 bits wait, or the input ends. */
+  var fn refill() {
+    // The list is read through a local, which a read of the field would retain and release for every byte
+    const bytes = input
+    const length = bytes.length()
+    while count <= 48 && cursor < length {
+      buffer = buffer | (Int.from(bytes[cursor]) << count)
+      cursor = cursor + 1
+      count = count + 8
+    }
+  }
+
+  /** The next `width` bits, at most 48, the first one read the lowest of the number. */
+  var fn bits(width: Int): Result<Int, CompressionError> {
+    if count < width {
+      refill()
+    }
+    const value = buffer & ((1 << width) - 1)
+    buffer = buffer >> width
+    count = count - width
+    if count < 0 {
+      return Fail truncated()
+    }
+    value
+  }
+
+  /** The next symbol of `code`. */
+  var fn decode(code: Huffman): Result<Int, CompressionError> {
+    if count < maximumBits {
+      refill()
+    }
+    const entry = code.entry buffer
+    if entry == 0 {
+      // Fewer bits than the longest code: the walk would have run past the end of the input before it gave up
+      if count < maximumBits {
+        return Fail truncated()
+      }
+      return Fail CompressionError("a code that no symbol has", position())
+    }
+    const used = entry & 15
+    buffer = buffer >> used
+    count = count - used
+    if count < 0 {
+      return Fail truncated()
+    }
+    entry >> 4
+  }
+
+  /** Drops the bits left of the current byte and gives back the whole bytes loaded ahead, so the next byte is read next. */
+  var fn alignToByte() {
+    cursor = cursor - count / 8
+    buffer = 0
+    count = 0
+  }
+}
+
+/**
+ * A canonical Huffman code: how many codes each length has, the symbols in code order, and the table of its short
+ * codes. An entry of the table is `symbol << 4 | length` for the code the next `tableBits` bits of the stream start
+ * with, and 0 where that code is longer or no symbol has it.
+ */
 type Huffman {
   counts: List<Int>
   symbols: List<Int>
+  table: Array<Int, 1024>
 
   /**
    * The code whose symbol `index` has `lengths[index]` bits, 0 for a symbol that has none; and how many codes are left
@@ -62,8 +153,9 @@ type Huffman {
     for length in lengths {
       counts[length] = counts[length] + 1
     }
+    var table: Array<Int, 1024> = Array.filled 0
     if counts[0] == lengths.length() {
-      return (Self(counts, []), 0)
+      return (Self(counts, [], table), 0)
     }
     var left = 1
     for length in 1..(maximumBits + 1) {
@@ -84,47 +176,97 @@ type Huffman {
         offsets[length] = offsets[length] + 1
       }
     }
-    (Self(counts, symbols), left)
+    // The codes in order, each one more than the one before and shifted left where the length grows: a code of
+    // `length` bits fills every entry whose lowest `length` bits are its bits read backwards, as the stream holds them
+    var code = 0
+    var index = 0
+    for length in 1..(tableBits + 1) {
+      for _ in 0..counts[length] {
+        const entry = (symbols[index] << 4) | length
+        var slot = reversed code, length
+        while slot < tableSize {
+          table[slot] = entry
+          slot = slot + (1 << length)
+        }
+        code = code + 1
+        index = index + 1
+      }
+      code = code << 1
+    }
+    (Self(counts, symbols, table), left)
   }
 
-  /** The next symbol of the stream. */
-  fn decode(var reader: BitReader): Result<Int, CompressionError> {
+  /** The entry of the code `bits` start with, the first bit lowest: from the table, or walked. */
+  fn entry(bits: Int): Int {
+    const fast = table[bits & tableMask]
+    if fast != 0 {
+      return fast
+    }
+    walked bits
+  }
+
+  /** The entry of the code `bits` start with, walked a bit at a time through the lengths; 0 where no symbol has one. */
+  fn walked(bits: Int): Int {
     var code = 0
     var first = 0
     var index = 0
     for length in 1..(maximumBits + 1) {
-      code = code | reader.bits(1)?
+      code = code | ((bits >> (length - 1)) & 1)
       const count = counts[length]
       if code - count < first {
-        return symbols[index + (code - first)]
+        return (symbols[index + (code - first)] << 4) | length
       }
       index = index + count
       first = (first + count) << 1
       code = code << 1
     }
-    Fail CompressionError("a code that no symbol has", reader.position())
+    0
   }
 }
 
+/** The lowest `width` bits of `code` in the opposite order. */
+fn reversed(code: Int, width: Int): Int {
+  var result = 0
+  var rest = code
+  for _ in 0..width {
+    result = (result << 1) | (rest & 1)
+    rest = rest >> 1
+  }
+  result
+}
+
 /** A stored block: its length, the length's complement, and that many bytes as they are. */
-fn storedBlock(var reader: BitReader, var output: List<UInt8>): Result<Void, CompressionError> {
-  reader.alignToByte()
-  const at = reader.position()
-  if reader.remaining() < 32 {
+fn storedBlock(
+  var inflater: Inflater,
+  var window: Array<UInt8, 32768>,
+  var output: ArrayList<UInt8>,
+): Result<Void, CompressionError> {
+  inflater.alignToByte()
+  const at = inflater.cursor
+  const input = inflater.input
+  if input.length() - at < 4 {
     return Fail CompressionError("the stream ends in the header of a stored block", at)
   }
-  // After the alignment the two numbers are whole bytes, and the least significant order reads them little endian
-  const length = reader.bits(16)?
-  const complement = reader.bits(16)?
+  // After the alignment the two numbers are whole bytes, little endian
+  const length = Int.from(input[at]) | (Int.from(input[at + 1]) << 8)
+  const complement = Int.from(input[at + 2]) | (Int.from(input[at + 3]) << 8)
   if length != (~complement & 0xFFFF) {
     return Fail CompressionError("a stored block whose length and complement disagree", at)
   }
-  match reader.bytes(length) {
-    Ok(stored) => output.appendAll stored
-    Fail(_) => {
-      return Fail CompressionError("the stream ends inside a stored block", at)
-    }
+  const first = at + 4
+  if input.length() - first < length {
+    return Fail CompressionError("the stream ends inside a stored block", at)
   }
+  // A later match may reach back into the block, so it goes into the window as well
+  var produced = inflater.produced
+  for index in first..(first + length) {
+    const byte = input[index]
+    window[produced & windowMask] = byte
+    output.append byte
+    produced = produced + 1
+  }
+  inflater.produced = produced
+  inflater.cursor = first + length
   Ok void
 }
 
@@ -140,25 +282,26 @@ fn fixedCodes(): Result<(Huffman, Huffman), CompressionError> {
 }
 
 /** The codes of a dynamic block, read from its header (RFC 1951 section 3.2.7). */
-fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionError> {
-  const literalCount = reader.bits(5)? + 257
-  const distanceCount = reader.bits(5)? + 1
-  const codeCount = reader.bits(4)? + 4
+fn dynamicCodes(var inflater: Inflater): Result<(Huffman, Huffman), CompressionError> {
+  const header = inflater.bits(14)?
+  const literalCount = (header & 31) + 257
+  const distanceCount = ((header >> 5) & 31) + 1
+  const codeCount = (header >> 10) + 4
   if literalCount > 286 || distanceCount > 30 {
-    return Fail CompressionError("a dynamic block with more codes than DEFLATE has", reader.position())
+    return Fail CompressionError("a dynamic block with more codes than DEFLATE has", inflater.position())
   }
   var codeLengths = List.filled 19, 0
   for index in 0..codeCount {
-    codeLengths[codeLengthOrder[index]] = reader.bits(3)?
+    codeLengths[codeLengthOrder[index]] = inflater.bits(3)?
   }
-  const (lengthCode, lengthLeft) = Huffman.of(codeLengths, reader.position())?
+  const (lengthCode, lengthLeft) = Huffman.of(codeLengths, inflater.position())?
   if lengthLeft != 0 {
-    return Fail CompressionError("an incomplete code for the code lengths", reader.position())
+    return Fail CompressionError("an incomplete code for the code lengths", inflater.position())
   }
   const total = literalCount + distanceCount
   var lengths: List<Int> = []
   while lengths.length() < total {
-    const symbol = lengthCode.decode(reader)?
+    const symbol = inflater.decode(lengthCode)?
     if symbol < 16 {
       lengths.append symbol
       continue
@@ -169,75 +312,182 @@ fn dynamicCodes(var reader: BitReader): Result<(Huffman, Huffman), CompressionEr
       repeated = match lengths.last() {
         Some(previous) => previous
         None => {
-          return Fail CompressionError("a repeat of the previous length before the first one", reader.position())
+          return Fail CompressionError("a repeat of the previous length before the first one", inflater.position())
         }
       }
-      times = 3 + reader.bits(2)?
+      times = 3 + inflater.bits(2)?
     } else if symbol == 17 {
-      times = 3 + reader.bits(3)?
+      times = 3 + inflater.bits(3)?
     } else {
-      times = 11 + reader.bits(7)?
+      times = 11 + inflater.bits(7)?
     }
     if lengths.length() + times > total {
-      return Fail CompressionError("a repeat that runs past the code lengths", reader.position())
+      return Fail CompressionError("a repeat that runs past the code lengths", inflater.position())
     }
     for _ in 0..times {
       lengths.append repeated
     }
   }
   if lengths[256] == 0 {
-    return Fail CompressionError("a dynamic block without an end-of-block code", reader.position())
+    return Fail CompressionError("a dynamic block without an end-of-block code", inflater.position())
   }
   const literalLengths = lengths[0..literalCount]
-  const (literals, literalLeft) = Huffman.of(literalLengths, reader.position())?
+  const (literals, literalLeft) = Huffman.of(literalLengths, inflater.position())?
   if literalLeft != 0 && literalCount != literals.counts[0] + literals.counts[1] {
-    return Fail CompressionError("an incomplete code for the literals and lengths", reader.position())
+    return Fail CompressionError("an incomplete code for the literals and lengths", inflater.position())
   }
   const distanceLengths = lengths[literalCount..total]
-  const (distances, distanceLeft) = Huffman.of(distanceLengths, reader.position())?
+  const (distances, distanceLeft) = Huffman.of(distanceLengths, inflater.position())?
   if distanceLeft != 0 && distanceCount != distances.counts[0] + distances.counts[1] {
-    return Fail CompressionError("an incomplete code for the distances", reader.position())
+    return Fail CompressionError("an incomplete code for the distances", inflater.position())
   }
   (literals, distances)
 }
 
-/** The symbols of a fixed or dynamic block, up to its end-of-block code. */
+/**
+ * The symbols of a fixed or dynamic block, up to its end-of-block code. The loop keeps the inflater's position, its
+ * bits and its count of bytes in locals and hands them back at the end of the block, and it loads bytes once per
+ * symbol: a symbol takes at most 48 bits, a length code of 15 with 5 extra bits and a distance code of 15 with 13.
+ */
 fn blockCodes(
-  var reader: BitReader,
+  var inflater: Inflater,
+  var window: Array<UInt8, 32768>,
   literals: Huffman,
   distances: Huffman,
-  var output: List<UInt8>,
+  var output: ArrayList<UInt8>,
 ): Result<Void, CompressionError> {
+  const input = inflater.input
+  const inputLength = input.length()
+  const literalTable = literals.table
+  const distanceTable = distances.table
+  // A top-level constant is built where it is read: once here, not once per literal
+  const literalBytes = byteValues
+  var cursor = inflater.cursor
+  var buffer = inflater.buffer
+  var count = inflater.count
+  var produced = inflater.produced
   loop {
-    const symbol = literals.decode(reader)?
+    while count <= 48 && cursor < inputLength {
+      buffer = buffer | (Int.from(input[cursor]) << count)
+      cursor = cursor + 1
+      count = count + 8
+    }
+    var entry = literalTable[buffer & tableMask]
+    if entry == 0 {
+      entry = literals.walked buffer
+      if entry == 0 {
+        return Fail broken("a code that no symbol has", count - maximumBits, cursor, inputLength)
+      }
+    }
+    const used = entry & 15
+    buffer = buffer >> used
+    count = count - used
+    const symbol = entry >> 4
     if symbol < 256 {
-      output.append(UInt8.tryFrom(symbol).ok() ?? 0)
+      if count < 0 {
+        return Fail truncatedAt(inputLength)
+      }
+      const byte = literalBytes[symbol]
+      window[produced & windowMask] = byte
+      output.append byte
+      produced = produced + 1
       continue
     }
     if symbol == 256 {
+      if count < 0 {
+        return Fail truncatedAt(inputLength)
+      }
+      inflater.cursor = cursor
+      inflater.buffer = buffer
+      inflater.count = count
+      inflater.produced = produced
       return Ok void
     }
     const lengthIndex = symbol - 257
     if lengthIndex >= 29 {
-      return Fail CompressionError("a length symbol that DEFLATE does not have", reader.position())
+      return Fail broken("a length symbol that DEFLATE does not have", count, cursor, inputLength)
     }
-    const length = lengthBase[lengthIndex] + reader.bits(lengthExtra[lengthIndex])?
-    const distanceIndex = distances.decode(reader)?
+    const lengthBits = lengthExtra[lengthIndex]
+    const length = lengthBase[lengthIndex] + (buffer & ((1 << lengthBits) - 1))
+    buffer = buffer >> lengthBits
+    count = count - lengthBits
+    var distanceEntry = distanceTable[buffer & tableMask]
+    if distanceEntry == 0 {
+      distanceEntry = distances.walked buffer
+      if distanceEntry == 0 {
+        return Fail broken("a code that no symbol has", count - maximumBits, cursor, inputLength)
+      }
+    }
+    const distanceUsed = distanceEntry & 15
+    buffer = buffer >> distanceUsed
+    count = count - distanceUsed
+    const distanceIndex = distanceEntry >> 4
     if distanceIndex >= 30 {
-      return Fail CompressionError("a distance symbol that DEFLATE does not have", reader.position())
+      return Fail broken("a distance symbol that DEFLATE does not have", count, cursor, inputLength)
     }
-    const distance = distanceBase[distanceIndex] + reader.bits(distanceExtra[distanceIndex])?
-    if distance > output.length() {
-      return Fail CompressionError("a distance back past the start of the output", reader.position())
+    const distanceBits = distanceExtra[distanceIndex]
+    const distance = distanceBase[distanceIndex] + (buffer & ((1 << distanceBits) - 1))
+    buffer = buffer >> distanceBits
+    count = count - distanceBits
+    if count < 0 {
+      return Fail truncatedAt(inputLength)
     }
-    const start = output.length() - distance
-    for index in 0..length {
-      output.append output[start + index]
+    if distance > produced {
+      return Fail broken("a distance back past the start of the output", count, cursor, inputLength)
+    }
+    // A match may overlap what it writes, so it is copied a byte at a time, each one readable at once
+    const end = produced + length
+    while produced < end {
+      const byte = window[(produced - distance) & windowMask]
+      window[produced & windowMask] = byte
+      output.append byte
+      produced = produced + 1
     }
   }
 }
 
+/**
+ * What a block fails with: `reason` at the byte the next bit comes from - unless the bits read so far ran past the end
+ * of the input, which `count` below zero says, and then the stream ends in the middle of the block.
+ */
+fn broken(reason: String, count: Int, cursor: Int, inputLength: Int): CompressionError {
+  if count < 0 {
+    return truncatedAt inputLength
+  }
+  CompressionError(reason, cursor - count / 8)
+}
+
+/** A read past the end of the input: the stream ends where the input does. */
+fn truncatedAt(inputLength: Int): CompressionError {
+  CompressionError "the stream ends in the middle of a block", inputLength
+}
+
 const maximumBits = 15
+
+/** How many bits of the stream index the table of a code, how many entries that is, and what selects them. */
+const tableBits = 10
+
+const tableSize = 1024
+
+const tableMask = 1023
+
+/** How far back a match reaches, and what selects a slot of the window. */
+const windowMask = 32767
+
+/** Every byte at its own index: a literal symbol is the byte it stands for. */
+const byteValues: Array<UInt8, 256> = [
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+  32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+  61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+  90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
+  115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
+  138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
+  161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183,
+  184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206,
+  207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229,
+  230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252,
+  253, 254, 255,
+]
 
 /** The order the lengths of the code-length code are written in. */
 const codeLengthOrder = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]

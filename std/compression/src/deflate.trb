@@ -2,39 +2,65 @@
  * [deflated]: DEFLATE written (RFC 1951) as one block of the fixed codes. The matches come from a greedy search along
  * hash chains over the last 32 KiB, at most [longestChain] candidates deep, so the output is a function of the input
  * alone.
+ *
+ * The chains and the output are concrete lists, so no position and no byte written goes through a witness table, and
+ * a code is one write of its bits reversed ahead of time. A candidate is compared byte by byte only where it matches
+ * the byte just past the best match so far, which is the only way it could become longer: the choice is the same as
+ * without the check, and so is every byte written.
  */
 
-use BitOrder, BitWriter from "std/binary"
+use ArrayList from "std/collections"
 use Bytes from "std/stream"
 use lengthBase, lengthExtra, distanceBase, distanceExtra from "./inflate"
 
 /** `bytes` as a raw DEFLATE stream: one final block of the fixed Huffman codes. */
 public fn deflated(bytes: Bytes): Bytes {
-  var writer = BitWriter order: BitOrder.LeastSignificantFirst
-  // The final block, of the fixed codes
-  writer.bits 1, 1
-  writer.bits 1, 2
+  var output: ArrayList<UInt8> = ArrayList.withCapacity(bytes.length() / 2 + 64)
+  deflateInto bytes, output
+  output
+}
+
+/** Appends what [deflated] writes for `bytes` to `output`: gzip puts its header in front of it. */
+public fn deflateInto(bytes: Bytes, var output: ArrayList<UInt8>) {
   const total = bytes.length()
-  var heads = List.filled(hashSize, 0 - 1)
-  var previous = List.filled(windowSize, 0 - 1)
+  const literalCodes = fixedLiteralCodes()
+  const lengthIndexes = lengthIndexTable()
+  const distanceIndexes = distanceIndexTable()
+  // The sink takes the list over; the first byte it appends copies what was there, a header at most
+  var writer = BitSink output: output
+  // The final block, of the fixed codes: the flag 1, then the type 1 in two bits
+  writer.bits 3, 3
+  var heads = filledList(hashSize, 0 - 1)
+  var previous = filledList(windowSize, 0 - 1)
+  // The hash of the three bytes at `at`, rolled on from the one before: each hash keeps the lowest 15 bits
+  var hash = 0
+  if total >= 2 {
+    hash = (Int.from(bytes[0]) << 5) ^ Int.from(bytes[1])
+  }
   var at = 0
   while at < total {
     var bestLength = 0
     var bestDistance = 0
     if at + 2 < total {
-      var candidate = heads[hashAt(bytes, at)]
+      hash = ((hash << 5) ^ Int.from(bytes[at + 2])) & (hashSize - 1)
+      var candidate = heads[hash]
       var depth = 0
       const longest = if total - at < longestMatch { total - at } else { longestMatch }
+      // The byte just past the best match so far, read once for every candidate it is compared with
+      var beyond = bytes[at]
       while candidate >= 0 && at - candidate <= windowSize && depth < longestChain {
-        var length = 0
-        while length < longest && bytes[candidate + length] == bytes[at + length] {
-          length = length + 1
-        }
-        if length > bestLength {
-          bestLength = length
-          bestDistance = at - candidate
-          if length == longest {
-            break
+        if bytes[candidate + bestLength] == beyond {
+          var length = 0
+          while length < longest && bytes[candidate + length] == bytes[at + length] {
+            length = length + 1
+          }
+          if length > bestLength {
+            bestLength = length
+            bestDistance = at - candidate
+            if length == longest {
+              break
+            }
+            beyond = bytes[at + length]
           }
         }
         const next = previous[candidate & windowMask]
@@ -47,78 +73,166 @@ public fn deflated(bytes: Bytes): Bytes {
       }
     }
     if bestLength >= 3 {
-      writeLength writer, bestLength
-      writeDistance writer, bestDistance
-      for position in at..(at + bestLength) {
-        insert bytes, position, heads, previous
+      const lengthIndex = lengthIndexes[bestLength]
+      writer.code literalCodes[257 + lengthIndex]
+      writer.bits(bestLength - lengthBase[lengthIndex], lengthExtra[lengthIndex])
+      const distanceIndex = distanceIndexOf distanceIndexes, bestDistance
+      writer.bits reversed(distanceIndex, 5), 5
+      writer.bits(bestDistance - distanceBase[distanceIndex], distanceExtra[distanceIndex])
+      // Every position of the match goes into the chains, the hash rolled along
+      insert at, hash, heads, previous
+      var position = at + 1
+      const end = at + bestLength
+      while position < end {
+        if position + 2 < total {
+          hash = ((hash << 5) ^ Int.from(bytes[position + 2])) & (hashSize - 1)
+          insert position, hash, heads, previous
+        }
+        position = position + 1
       }
-      at = at + bestLength
+      at = end
     } else {
-      writeLiteral writer, Int.from(bytes[at])
-      insert bytes, at, heads, previous
+      writer.code literalCodes[Int.from(bytes[at])]
+      if at + 2 < total {
+        insert at, hash, heads, previous
+      }
       at = at + 1
     }
   }
-  writeLiteral writer, 256
-  writer.bytes()
+  writer.code literalCodes[256]
+  output = writer.finished()
 }
 
-/** Records `position` as the newest start of its three bytes. */
-fn insert(bytes: Bytes, position: Int, var heads: List<Int>, var previous: List<Int>) {
-  if position + 2 >= bytes.length() {
-    return
-  }
-  const hash = hashAt bytes, position
+/** Records `position`, whose three bytes have `hash`, as the newest start of them. */
+fn insert(position: Int, hash: Int, var heads: ArrayList<Int>, var previous: ArrayList<Int>) {
   previous[position & windowMask] = heads[hash]
   heads[hash] = position
 }
 
-fn hashAt(bytes: Bytes, position: Int): Int {
-  const first = Int.from(bytes[position]) << 10
-  const second = Int.from(bytes[position + 1]) << 5
-  (first ^ second ^ Int.from(bytes[position + 2])) & (hashSize - 1)
+/** A concrete list of `count` copies of `value`. */
+fn filledList(count: Int, value: Int): ArrayList<Int> {
+  var list: ArrayList<Int> = ArrayList.withCapacity count
+  for _ in 0..count {
+    list.append value
+  }
+  list
 }
 
-/** A Huffman code of `width` bits, its highest bit first: DEFLATE packs its codes the other way round from its numbers. */
-fn writeCode(var writer: BitWriter, code: Int, width: Int) {
-  var reversed = 0
-  for index in 0..width {
-    reversed = (reversed << 1) | ((code >> index) & 1)
+/**
+ * Bits packed into bytes lowest first, as DEFLATE packs them, into a concrete list: up to 56 of them wait for a byte to
+ * fill.
+ */
+type BitSink {
+  var output: ArrayList<UInt8>
+  /** Bits written and not yet a full byte, the first one lowest. */
+  var buffer: Int = 0
+  /** How many bits `buffer` holds: fewer than eight between two writes. */
+  var count: Int = 0
+
+  /** The lowest `width` bits of `value`, at most 48, its lowest bit first. */
+  var fn bits(value: Int, width: Int) {
+    buffer = buffer | ((value & ((1 << width) - 1)) << count)
+    count = count + width
+    while count >= 8 {
+      output.append byteOf(buffer & 255)
+      buffer = buffer >> 8
+      count = count - 8
+    }
   }
-  writer.bits reversed, width
+
+  /** A code of the fixed Huffman table: its bits read backwards in the high part of `entry`, its width in the low four. */
+  var fn code(entry: Int) {
+    bits(entry >> 4, entry & 15)
+  }
+
+  /** Everything written, the byte that is not full yet filled up with zero bits. */
+  var fn finished(): ArrayList<UInt8> {
+    if count > 0 {
+      output.append byteOf(buffer)
+      buffer = 0
+      count = 0
+    }
+    output
+  }
 }
 
-/** A literal byte, or 256 for the end of the block, in the fixed code of RFC 1951 section 3.2.6. */
-fn writeLiteral(var writer: BitWriter, symbol: Int) {
-  if symbol < 144 {
-    writeCode(writer, 0x30 + symbol, 8)
-  } else if symbol < 256 {
-    writeCode(writer, 0x190 + symbol - 144, 9)
-  } else if symbol < 280 {
-    writeCode(writer, symbol - 256, 7)
-  } else {
-    writeCode(writer, 0xC0 + symbol - 280, 8)
-  }
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
 }
 
-/** A match length from 3 to 258: its symbol, then its extra bits. */
-fn writeLength(var writer: BitWriter, length: Int) {
-  var index = lengthBase.length() - 1
-  while lengthBase[index] > length {
-    index = index - 1
+/**
+ * The fixed code of every literal and length symbol (RFC 1951 section 3.2.6), written as [BitSink.code] takes it: the
+ * code's bits in the opposite order, as DEFLATE packs a code from its highest bit, shifted over its width.
+ */
+fn fixedLiteralCodes(): Array<Int, 288> {
+  var codes: Array<Int, 288> = Array.filled 0
+  for symbol in 0..288 {
+    var code = 0
+    var width = 0
+    if symbol < 144 {
+      code = 0x30 + symbol
+      width = 8
+    } else if symbol < 256 {
+      code = 0x190 + symbol - 144
+      width = 9
+    } else if symbol < 280 {
+      code = symbol - 256
+      width = 7
+    } else {
+      code = 0xC0 + symbol - 280
+      width = 8
+    }
+    codes[symbol] = (reversed(code, width) << 4) | width
   }
-  writeLiteral(writer, 257 + index)
-  writer.bits(length - lengthBase[index], lengthExtra[index])
+  codes
 }
 
-/** A match distance from 1 to 32768: its five-bit code, then its extra bits. */
-fn writeDistance(var writer: BitWriter, distance: Int) {
-  var index = distanceBase.length() - 1
-  while distanceBase[index] > distance {
-    index = index - 1
+/** For every match length from 3 to 258, the index of its length symbol: the last whose shortest length it reaches. */
+fn lengthIndexTable(): Array<Int, 259> {
+  var indexes: Array<Int, 259> = Array.filled 0
+  var index = 0
+  for length in 3..(longestMatch + 1) {
+    while index + 1 < lengthBase.length() && lengthBase[index + 1] <= length {
+      index = index + 1
+    }
+    indexes[length] = index
   }
-  writeCode writer, index, 5
-  writer.bits(distance - distanceBase[index], distanceExtra[index])
+  indexes
+}
+
+/**
+ * The distance symbol of every distance, zlib's way: a distance `d` up to 256 by `d - 1`, and a longer one by
+ * `256 + (d - 1) >> 7`, which works because every symbol from 16 on covers a multiple of 128 distances, aligned.
+ */
+fn distanceIndexTable(): Array<Int, 512> {
+  var indexes: Array<Int, 512> = Array.filled 0
+  for slot in 0..512 {
+    const distance = if slot < 256 { slot + 1 } else { ((slot - 256) << 7) + 1 }
+    var index = 0
+    while index + 1 < distanceBase.length() && distanceBase[index + 1] <= distance {
+      index = index + 1
+    }
+    indexes[slot] = index
+  }
+  indexes
+}
+
+fn distanceIndexOf(indexes: Array<Int, 512>, distance: Int): Int {
+  if distance <= 256 {
+    return indexes[distance - 1]
+  }
+  indexes[256 + ((distance - 1) >> 7)]
+}
+
+/** The lowest `width` bits of `code` in the opposite order. */
+fn reversed(code: Int, width: Int): Int {
+  var result = 0
+  var rest = code
+  for _ in 0..width {
+    result = (result << 1) | (rest & 1)
+    rest = rest >> 1
+  }
+  result
 }
 
 /** How far back a match may reach. */
