@@ -157,6 +157,8 @@ uint64_t torb_hash_i64(int64_t value);
 uint64_t torb_hash_u64(uint64_t value);
 /* installInterruptHandler */
 void torb_install_interrupt_handler(void);
+/* isErrorTerminal */
+bool torb_is_error_terminal(void);
 /* Float64.isNaN */
 bool torb_is_nan_f64(double value);
 /* isTerminal */

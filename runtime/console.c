@@ -599,12 +599,12 @@ bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error) {
 /* =================================================================================== the terminal and Ctrl+C === */
 
 /**
- * `isTerminal()`: whether standard output is a live terminal rather than a pipe or a file - `isatty` everywhere but
- * Windows. A program asks this to decide whether it writes escape sequences (colours, `torb repl`'s faint types), so on
- * Windows the answer is whether the console behind the handle interprets them: the first call turns on its
- * virtual-terminal processing, which every console of Windows 10 and later has, and a console that refuses it answers
- * false, so its program writes plain text instead of the sequences' bytes. Asked once and cached: what a stream is
- * redirected to cannot change while the process runs.
+ * `isTerminal()` and `isErrorTerminal()`: whether standard output, or standard error, is a live terminal rather than a
+ * pipe or a file - `isatty` everywhere but Windows. A program asks this to decide whether it writes escape sequences
+ * (colours, `torb repl`'s faint types), so on Windows the answer is whether the console behind the handle interprets
+ * them: the first call turns on its virtual-terminal processing, which every console of Windows 10 and later has, and a
+ * console that refuses it answers false, so its program writes plain text instead of the sequences' bytes. Asked once
+ * per stream and cached: what a stream is redirected to cannot change while the process runs.
  */
 #if defined(_WIN32)
 #  ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
@@ -634,9 +634,17 @@ static bool torb_std_takes_sequences(DWORD id) {
 bool torb_is_terminal(void) {
   return torb_std_takes_sequences(STD_OUTPUT_HANDLE);
 }
+
+bool torb_is_error_terminal(void) {
+  return torb_std_takes_sequences(STD_ERROR_HANDLE);
+}
 #else
 bool torb_is_terminal(void) {
   return isatty(fileno(stdout)) != 0;
+}
+
+bool torb_is_error_terminal(void) {
+  return isatty(fileno(stderr)) != 0;
 }
 #endif
 

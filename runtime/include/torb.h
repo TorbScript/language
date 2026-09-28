@@ -1235,6 +1235,9 @@ void torb_print_error_parts(const torb_text *parts, size_t count);
 /** `isTerminal()`: whether standard output is a live terminal that shows escape sequences (console.c). */
 bool torb_is_terminal(void);
 
+/** `isErrorTerminal()`: the same for standard error. */
+bool torb_is_error_terminal(void);
+
 /** `printErrorRaw(text: String)`: `text` to standard error exactly as given - no join, no trailing `\n`. `text` borrowed. */
 void torb_print_error_raw(torb_text text);
 
