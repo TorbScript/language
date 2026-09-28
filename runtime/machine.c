@@ -1467,6 +1467,43 @@ static bool torb_machine_privatize_environment(int64_t *place) {
   return true;
 }
 
+/*
+ * A trait-typed value's payload at the crossing (the C back end's `torb_object_privatize`): nothing where it is
+ * immortal; otherwise the block itself where only this value holds it, else a block of its own with every word
+ * retained, and then every field made private in place by the shape of the contents - which the VM keeps in the block,
+ * so the payload is not erased here. False where a field cannot be copied (a shared object) or the payload has a
+ * destructor, and the block made for it is given back.
+ */
+static bool torb_machine_privatize_payload(int64_t *place) {
+  void *block = (void *)(intptr_t)place[0];
+  torb_header *header = (torb_header *)block;
+  const torb_machine_shape *shape;
+  int64_t *contents;
+  void *made;
+  if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+    return true;
+  }
+  contents = torb_machine_contents(block);
+  shape = torb_machine_shape_at(contents[0]);
+  if (shape->closer >= 0) {
+    return false;
+  }
+  if (header->count == 1u) {
+    return torb_machine_privatize_value(contents + 1, shape);
+  }
+  made = torb_allocate_zeroed(torb_machine_block_size(shape->width), (torb_block_kind)header->kind);
+  memcpy(torb_machine_contents(made), contents, 8u + 8u * (size_t)shape->width);
+  torb_machine_retain_value(torb_machine_contents(made) + 1, shape);
+  if (!torb_machine_privatize_value(torb_machine_contents(made) + 1, shape)) {
+    torb_machine_release_block(made);
+    return false;
+  }
+  torb_machine_release_block(block);
+  place[0] = (int64_t)(intptr_t)made;
+  torb_pool_count_copy();
+  return true;
+}
+
 static bool torb_machine_privatize_element(const void *context, void *element) {
   const torb_machine_descriptor *self = (const torb_machine_descriptor *)context;
   return torb_machine_privatize_value((int64_t *)element, torb_machine_shape_at(self->shape));
@@ -1530,6 +1567,8 @@ static bool torb_machine_privatize_word(int64_t *value, const torb_machine_word 
       return true;
     case TORB_COUNTED_ENVIRONMENT:
       return torb_machine_privatize_environment(place);
+    case TORB_COUNTED_PAYLOAD:
+      return torb_machine_privatize_payload(place);
     case TORB_COUNTED_NESTED:
       return torb_machine_privatize_value(place, torb_machine_shape_at(word->shape));
     default:

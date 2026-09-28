@@ -18,7 +18,7 @@
  */
 
 use LiteralValue from "../../semantics/checker/type"
-use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
+use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId, TraitId from "../../ir/ir"
 use Slot, Instruction, WitnessTable, WitnessTableId, Ownership, FunctionKind, CellAccess from "../../ir/ir"
 use taskMachineOf from "../../ir/suspension"
 use ElementId, ElementDescriptor from "../../ir/ir"
@@ -32,7 +32,7 @@ use nativeEntries, scriptHostPrototypes from "./natives"
 use CExpression, CStatement, CSwitchCase, CDeclaration, CMember, declarationOf, cStringOf from "./writer"
 use Emission, write, reportUnsupported, emittedText, locationExpression, slotNameOf from "./emission"
 use writePlaced, Placement from "./emission"
-use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
+use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf, arrayDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
 use resultPointerName, keptFunctions, frameTypeName, callerSiteName from "./body"
@@ -42,6 +42,7 @@ use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf
 use retainStatement, releaseStatement, describeCounted from "./body"
 use frameCrossingOf, framePrivateOf, privateHelperOf, privateHelperNameOf, privateHelpersNamedIn from "./crossing"
 use environmentCopyOf, environmentCopyNameOf, privateOf, entryCellCopies from "./crossing"
+use objectPrivateNameOf, payloadLayoutsOf from "./crossing"
 
 /**
  * One entry function the generated `main` calls, and what it is called for.
@@ -86,14 +87,14 @@ public fn emitProgram(program: IrProgram, entries: List<ProgramEntry>, exports: 
   // The frames of the tasks come after the layouts, because a frame slot is a value of any of them
   emitTaskFrames emission, program, functions
   emitCountedHelpers emission, program, functions, layouts
-  emitPrivateHelpers emission, program, functions
+  const copiedTraits = emitPrivateHelpers emission, program, functions, layouts
   emitStaticData emission, program, functions
   emitConstantCellStorage emission, program, functions
   emitPrototypes emission, program, functions
   // The descriptors and the tables come between the prototypes and the bodies: their initializers name a thunk, and a
   // body names one of them
   emitElementDescriptors emission, program
-  emitWitnessTables emission, program
+  emitWitnessTables emission, program, copiedTraits
   emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
   if !entries.isEmpty() {
@@ -267,6 +268,10 @@ fn emitHeader(var emission: Emission) {
      * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
      * so a call through a table converts the pointer back to the type the function really has - which is what C allows
      * and what makes a dynamic call need no `void *` cast of an argument anywhere.
+     *
+     * `privatize` makes every field of the boxed payload private in place, the copy at the crossing of a worker
+     * (`torb_object_privatize`, docs/design/CONCURRENCY.md section 16): `NULL` where the payload cannot be copied, or
+     * where no copy of a value with this table is ever made.
      */
     typedef void (*torb_witness_member)(void);
 
@@ -276,6 +281,7 @@ fn emitHeader(var emission: Emission) {
       size_t size;
       const struct torb_witness_table *const *nested;
       const torb_witness_member *members;
+      bool (*privatize)(void *);
     } torb_witness_table;
     """))
 }
@@ -353,8 +359,11 @@ fn collectObjectType(program: IrProgram, var names: List<String>, var byName: Ma
  * A **thunk** is what makes a dynamic call well defined C rather than a cast between two function types that do not
  * match: it takes the payload as `const void *`, unwraps it to the concrete type, and calls the real member. So the
  * function the table points at really has the erased signature a call site converts its pointer back to.
+ *
+ * A table of one of `copiedTraits` - the traits whose values the program copies at the crossing of a worker
+ * ([emitPrivateHelpers]) - points at the copy of its payload as well.
  */
-fn emitWitnessTables(var emission: Emission, program: IrProgram) {
+fn emitWitnessTables(var emission: Emission, program: IrProgram, copiedTraits: List<TraitId>) {
   const order = witnessTableOrder program
   if order.isEmpty() {
     return
@@ -391,7 +400,7 @@ fn emitWitnessTables(var emission: Emission, program: IrProgram) {
   }
   for id in order {
     const table = program.witnessTableAt id
-    emitWitnessTable emission, program, table, names
+    emitWitnessTable emission, program, table, names, copiedTraits.contains(table.applied)
   }
 }
 
@@ -684,7 +693,13 @@ fn isVoidResultOf(program: IrProgram, id: IrTypeId): Bool {
   resultTypeOf(program, id) == "void"
 }
 
-fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTable, names: Map<String, String>) {
+fn emitWitnessTable(
+  var emission: Emission,
+  program: IrProgram,
+  table: WitnessTable,
+  names: Map<String, String>,
+  isCopied: Bool,
+) {
   var members: List<CExpression> = []
   for index in 0..table.members.length() {
     const name = thunkNameOf program, table, index, names
@@ -743,7 +758,19 @@ fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTa
   } else {
     CExpression.Name nestedName
   }
-  const initializer = CExpression.Initializer([drop, retain, size, inner, array])
+  // The copy of the payload, where a value with this table is copied at all and its payload can be
+  var privatize = CExpression.Literal "NULL"
+  if isCopied {
+    if const Some(found) = payload {
+      match privateHelperOf(program, found) {
+        .Never => {}
+        _ => {
+          privatize = CExpression.Name privateHelperNameOf(program, found)
+        }
+      }
+    }
+  }
+  const initializer = CExpression.Initializer([drop, retain, size, inner, array, privatize])
   // Once the devirtualization has turned the last dispatch through a table into a direct call, nothing in the
   // translation unit names that table any more, and a `static const` nothing reads is an error under
   // `-Wunused-const-variable -Werror` - so it is `TORB_MAYBE_UNUSED`. It stays `static`: a program and the script host
@@ -1351,8 +1378,18 @@ fn helperHeadOf(prefix: String, name: String): String {
  * a record or a tuple (docs/design/CONCURRENCY.md section 16, "The copy at the crossing"). Which ones are named is read
  * off the very expressions the starts are written with ([framePrivateOf]), and then off the bodies of those functions,
  * so exactly the ones called are defined - an unused `static` function is an error under `-Werror`.
+ *
+ * A trait-typed value is made private by a `PO_<object>` ([objectPrivateNameOf]), which reaches the erased payload
+ * through the value's first witness table: every table of that trait then carries the `P_<payload>` of its target
+ * (`privatize`), which is named here as well. Answers those traits, whose tables [emitWitnessTables] fills in; every
+ * other table's `privatize` stays `NULL`, so a program that copies no trait-typed value defines no copy of a payload.
  */
-fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+fn emitPrivateHelpers(
+  var emission: Emission,
+  program: IrProgram,
+  functions: List<IrFunction>,
+  used: List<Bool>,
+): List<TraitId> {
   var names: List<String> = []
   for function in functions {
     for block in function.blocks {
@@ -1388,11 +1425,40 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
       }
     }
   }
+  // The trait-typed values of the program by the name of their struct, for the `PO_<object>` a copy names
+  var objects: Map<String, IrTypeId> = [:]
+  for id in objectTypesOf(program, functions, used) {
+    objects.set cTypeOf(program, id), id
+  }
   var layouts: List<LayoutId> = []
+  var copiedObjects: List<IrTypeId> = []
+  var traits: List<TraitId> = []
   var index = 0
   while index < names.length() {
     const name = names[index]
     index = index + 1
+    if name.startsWith("PO_") {
+      const object = match objects.get(name.dropping(characters: 3)) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      copiedObjects.append object
+      if const .Object(bounds) = program.typeAt(object) {
+        if !traits.contains(bounds[0]) {
+          traits.append bounds[0]
+          // What the tables of the trait point at: the copy of each payload that may be copied at all
+          for payload in payloadLayoutsOf(program, bounds[0]) {
+            if const .Never = privateHelperOf(program, payload) {
+              continue
+            }
+            privateHelpersNamedIn CExpression.Name(privateHelperNameOf(program, payload)), names
+          }
+        }
+      }
+      continue
+    }
     const found = match program.layoutNamed(name.dropping(characters: 2)) {
       Some(layout) => layout
       None => {
@@ -1404,27 +1470,69 @@ fn emitPrivateHelpers(var emission: Emission, program: IrProgram, functions: Lis
       privateHelpersNamedIn copy, names
     }
   }
-  if layouts.isEmpty() {
+  if layouts.isEmpty() && copiedObjects.isEmpty() {
     emitEnvironmentCopies emission, program, copies
-    return
+    return traits
   }
   write emission, CDeclaration.Comment("Making one element private at the crossing of a worker (CONCURRENCY.md 16).")
   for layout in layouts {
     write emission, CDeclaration.Prototype(privateHeadOf(program, layout))
   }
+  for object in copiedObjects {
+    write emission, CDeclaration.Prototype(objectPrivateHeadOf(program, object))
+  }
   for layout in layouts {
     const name = program.layoutAt(layout).name
-    const cast = CExpression.Cast "{name} *", CExpression.Name("block")
-    var body = [CStatement.Declaration("{name} *", "value", cast)]
     const answer = match privateHelperOf(program, layout) {
       .When(copy) => copy
       .Always => CExpression.Literal "true"
       .Never => CExpression.Literal "false"
     }
+    // A payload with nothing counted inside is private once its block is: the table's copy answers true at once
+    var body: List<CStatement> = []
+    if const .Literal(_) = answer {
+      body.append CStatement.Evaluate(CExpression.Cast("void", CExpression.Name("block")))
+    } else {
+      const cast = CExpression.Cast "{name} *", CExpression.Name("block")
+      body.append CStatement.Declaration("{name} *", "value", cast)
+    }
     body.append CStatement.Return(answer)
     write emission, CDeclaration.Definition("", privateHeadOf(program, layout), body)
   }
+  for object in copiedObjects {
+    emitObjectPrivate emission, program, object
+  }
   emitEnvironmentCopies emission, program, copies
+  traits
+}
+
+/** `static bool PO_<object>(void *block)`: the copy of one trait-typed value at the crossing of a worker. */
+fn objectPrivateHeadOf(program: IrProgram, object: IrTypeId): String {
+  "static bool {objectPrivateNameOf(program, object)}(void *block)"
+}
+
+/**
+ * The body of a `PO_<object>`: the value's first witness table knows the size of the erased payload, its two helpers
+ * and its copy (`privatize`), and `torb_object_privatize` copies the block where somebody else holds it too, then every
+ * field of it. The zero value of a trait-typed slot has no table and nothing to copy.
+ */
+fn emitObjectPrivate(var emission: Emission, program: IrProgram, object: IrTypeId) {
+  const name = cTypeOf program, object
+  const value = CExpression.Name "value"
+  const table = CExpression.PointerMember value, witnessMemberNameOf(0)
+  const copied = CExpression.Call(CExpression.Name("torb_object_privatize"), [
+    CExpression.AddressOf(CExpression.PointerMember(value, "data")),
+    CExpression.PointerMember(table, "size"),
+    CExpression.PointerMember(table, "retain_children"),
+    CExpression.PointerMember(table, "drop"),
+    CExpression.PointerMember(table, "privatize"),
+  ])
+  const empty = CExpression.Binary table, "==", CExpression.Literal("NULL")
+  const body = [
+    CStatement.Declaration("{name} *", "value", CExpression.Cast("{name} *", CExpression.Name("block"))),
+    CStatement.Return(CExpression.Binary(empty, "||", copied)),
+  ]
+  write emission, CDeclaration.Definition("", objectPrivateHeadOf(program, object), body)
 }
 
 /**

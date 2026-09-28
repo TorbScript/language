@@ -14,8 +14,8 @@
  * each such value is replaced by an equal one that shares no counted block with anything else, on the thread that
  * starts the task, before anybody else can see the frame ([privateOf], docs/design/CONCURRENCY.md section 16, "The
  * copy at the crossing"). What has an identity - a shared object, a task or a channel of counted items, a captured
- * `var`, a trait-typed value whose payload nothing here can walk - is never copied, and neither is a value whose type
- * implements `Close`, which a copy would close twice.
+ * `var` - is never copied, and neither is a value whose type implements `Close`, which a copy would close twice. A
+ * trait-typed value is copied through its witness table, which knows the erased payload ([objectPrivateNameOf]).
  *
  * # Related
  *
@@ -24,8 +24,9 @@
  * - [framePrivateOf] - the copy that makes a frame movable where the test cannot.
  */
 
-use IrProgram, IrTypeId, LayoutId, RuntimeKind from "../../ir/ir"
+use IrProgram, IrTypeId, LayoutId, RuntimeKind, TraitId from "../../ir/ir"
 use Layout, containsCountedType from "../../ir/layout"
+use objectTypeName, payloadLayoutName from "../../ir/mangle"
 use memberNameOf, variantMemberNameOf from "./type"
 use CExpression from "./writer"
 use countedFormOf, inlineCountedLayoutOf, environmentMemberName from "./body"
@@ -176,9 +177,53 @@ public fn privateOf(program: IrProgram, id: IrTypeId, place: CExpression): Cross
       const environment = CExpression.AddressOf CExpression.Member(place, environmentMemberName)
       Crossing.When CExpression.Call(CExpression.Name("torb_closure_privatize"), [environment])
     }
+    // The payload is erased: its copy is its witness table's (`PO_<object>`, `torb_object_privatize`)
+    .Object(bounds) => {
+      if bounds.isEmpty() {
+        return Crossing.Never
+      }
+      Crossing.When(CExpression.Call(
+        CExpression.Name(objectPrivateNameOf(program, inner)),
+        [CExpression.AddressOf(place)],
+      ))
+    }
     .Runtime(kind, arguments) => runtimePrivateOf program, kind, arguments, place
     _ => Crossing.Never
   }
+}
+
+/**
+ * The name of the function that makes a trait-typed value of type `id` private through a `void *`: `PO_<object>`, which
+ * the emitter writes for every one a copy names. The payload is erased, so the function reaches it through the value's
+ * first witness table - the size, the helpers and the copy of the payload's layout (`privatize`), which only the table
+ * still knows - and `torb_object_privatize` copies the block where somebody else holds it too. A table whose payload
+ * cannot be copied has no copy, and the value then stays where it is.
+ */
+public fn objectPrivateNameOf(program: IrProgram, id: IrTypeId): String {
+  if const .Object(bounds) = program.typeAt(id) {
+    return "PO_{objectTypeName(program, bounds)}"
+  }
+  "PO_"
+}
+
+/**
+ * The payload layouts a trait-typed value whose first bound is `bound` may hold: one per witness table of that trait,
+ * whose target was boxed into one. A table whose target was never boxed - one only handed to a generic function - has
+ * no payload layout and holds nothing.
+ */
+public fn payloadLayoutsOf(program: IrProgram, bound: TraitId): List<LayoutId> {
+  var layouts: List<LayoutId> = []
+  for table in program.witnessTables {
+    if table.applied != bound {
+      continue
+    }
+    if const Some(layout) = program.layoutNamed(payloadLayoutName(program, table.target)) {
+      if !layouts.contains(layout) {
+        layouts.append layout
+      }
+    }
+  }
+  layouts
 }
 
 /** A container is copied by the runtime, with what makes one element private; a task and a channel never are. */
@@ -248,6 +293,11 @@ fn elementPrivateOf(program: IrProgram, arguments: List<IrTypeId>, index: Int): 
     }
     return CExpression.Name privateHelperNameOf(program, layout)
   }
+  if const .Object(bounds) = program.typeAt(inner) {
+    if !bounds.isEmpty() {
+      return CExpression.Name objectPrivateNameOf(program, inner)
+    }
+  }
   None
 }
 
@@ -255,12 +305,14 @@ fn elementPrivateOf(program: IrProgram, arguments: List<IrTypeId>, index: Int): 
  * Whether the value an entry cell of type `id` holds is an **immortal copy** of the value written into it
  * (docs/BACKEND.md, "The entry cell"): a function of the entry file reads the cell on whatever worker runs it, so no
  * count the cell's value reaches may be one that two workers change. That is so for a value [privateOf] copies whole -
- * texts, lists, maps and sets, and records, tuples and variants of those - which the cell's write copies inside an
- * immortal region, and whose blocks nobody retains or releases from then on. A closure, a task and a channel are left
- * out although the crossing copy takes them: an immortal copy would hold the count of their shared block forever.
+ * texts, lists, maps and sets, records, tuples and variants of those, and a trait-typed value such as a `List` or a
+ * `Map` whose every possible payload is one of those - which the cell's write copies inside an immortal region, and
+ * whose blocks nobody retains or releases from then on. A closure, a task and a channel are left out although the
+ * crossing copy takes them: an immortal copy would hold the count of their shared block forever.
  *
- * A cell of any other counted type - a shared object, a trait-typed value, a resource with `close()` - keeps the value
- * it is given, and a program that has one keeps every task on the worker that starts it (`torb_tasks_confine`).
+ * A cell of any other counted type - a shared object, a closure, a resource with `close()`, a trait-typed value one of
+ * whose targets is one of those - keeps the value it is given, and a program that has one keeps every task on the
+ * worker that starts it (`torb_tasks_confine`).
  */
 public fn entryCellCopies(program: IrProgram, id: IrTypeId): Bool {
   var visiting: List<Int> = []
@@ -313,8 +365,30 @@ fn isCopyable(program: IrProgram, id: IrTypeId, var visiting: List<Int>, without
         _ => false
       }
     }
+    .Object(bounds) => isCopyableObject program, bounds, visiting, withoutShared
     _ => false
   }
+}
+
+/**
+ * The same question of a trait-typed value, whose payload is erased. At the crossing the copy of its table answers it
+ * while the program runs (`torb_object_privatize`), so any value with a table may be asked. With `withoutShared` - the
+ * immortal copy of an entry cell, which may not fail - every payload a value of these bounds may hold has to be
+ * copyable: the payload layout of every witness table of the first bound, whose target a `TraitValue` boxed.
+ */
+fn isCopyableObject(program: IrProgram, bounds: List<TraitId>, var visiting: List<Int>, withoutShared: Bool): Bool {
+  if bounds.isEmpty() {
+    return false
+  }
+  if !withoutShared {
+    return true
+  }
+  for layout in payloadLayoutsOf(program, bounds[0]) {
+    if !isCopyableLayout(program, layout, visiting, withoutShared) {
+      return false
+    }
+  }
+  true
 }
 
 /** An element [elementPrivateOf] has a function for. */
@@ -338,6 +412,9 @@ fn isCopyableElement(
   }
   if const Some(layout) = inlineCountedLayoutOf(program, inner) {
     return isCopyableLayout program, layout, visiting, withoutShared
+  }
+  if const .Object(bounds) = program.typeAt(inner) {
+    return isCopyableObject program, bounds, visiting, withoutShared
   }
   false
 }
@@ -438,13 +515,13 @@ fn layoutCrossingOf(
 }
 
 /**
- * The `P_<layout>` functions an expression the emitter wrote names, by their names: what the emitter has to define
- * before the functions that start tasks.
+ * The `P_<layout>` and `PO_<object>` functions an expression the emitter wrote names, by their names: what the emitter
+ * has to define before the functions that start tasks.
  */
 public fn privateHelpersNamedIn(expression: CExpression, var names: List<String>) {
   match expression {
     .Name(name) => {
-      if name.startsWith("P_") && !names.contains(name) {
+      if (name.startsWith("P_") || name.startsWith("PO_")) && !names.contains(name) {
         names.append name
       }
     }

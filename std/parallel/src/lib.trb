@@ -26,14 +26,13 @@
  * # Pitfalls
  *
  * - A chunk moves to another worker only where its piece and the closures of the pipeline may cross one: plain items
- *   (`Int`, `Float`, a range, a record of those) as they are, `String`s, lists, variants and records of those as a copy
- *   made when the chunk's task starts, and so is the environment of a closure that captures them. A pipeline over
- *   `shared type` objects, or with a closure that captures one, a `var` or a trait-typed value, runs its chunks on the
- *   caller's worker, one after the other - the same answer, without the speed-up (docs/design/CONCURRENCY.md section 16,
- *   "The copy at the crossing").
+ *   (`Int`, `Float`, a range, a record of those) as they are, `String`s, lists, maps, variants and records of those as a
+ *   copy made when the chunk's task starts, and so is the environment of a closure that captures them. A pipeline over
+ *   `shared type` objects, or with a closure that captures one or a `var`, runs its chunks on the caller's worker, one
+ *   after the other - the same answer, without the speed-up (docs/design/CONCURRENCY.md section 16, "The copy at the
+ *   crossing").
  * - `collect` runs the stages on the workers and the accumulator on the caller's worker, one chunk after the other,
- *   joining the chunks' outputs with the accumulator's `merge`: an accumulator is a trait-typed value, which cannot
- *   cross to another worker yet.
+ *   joining the chunks' outputs with the accumulator's `merge`.
  * - Cancelling the task a terminal answers stops every chunk at its next suspension point or loop turn.
  *
  * # Related

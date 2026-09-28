@@ -123,6 +123,10 @@ group "The translation unit" {
          * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
          * so a call through a table converts the pointer back to the type the function really has - which is what C allows
          * and what makes a dynamic call need no `void *` cast of an argument anywhere.
+         *
+         * `privatize` makes every field of the boxed payload private in place, the copy at the crossing of a worker
+         * (`torb_object_privatize`, docs/design/CONCURRENCY.md section 16): `NULL` where the payload cannot be copied, or
+         * where no copy of a value with this table is ever made.
          */
         typedef void (*torb_witness_member)(void);
 
@@ -132,6 +136,7 @@ group "The translation unit" {
           size_t size;
           const struct torb_witness_table *const *nested;
           const torb_witness_member *members;
+          bool (*privatize)(void *);
         } torb_witness_table;
 
         /* The compile-time constants of the program. */
@@ -828,7 +833,7 @@ group "Trait-typed values" {
     assert(text.contains(
       "const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small ="
         + " \{ NULL, NULL, sizeof(T_payload__T_acme_x2f_app_main_Small), NULL,"
-        + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members \};",
+        + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members, NULL \};",
     ))
   }
 
@@ -888,7 +893,7 @@ group "Trait-typed values" {
       "const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged = \{"
         + " D_T_payload__T_acme_x2f_app_main_Tagged, R_T_payload__T_acme_x2f_app_main_Tagged,"
         + " sizeof(T_payload__T_acme_x2f_app_main_Tagged), NULL,"
-        + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged_members \};",
+        + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged_members, NULL \};",
     ))
   }
 }

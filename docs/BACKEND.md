@@ -3271,18 +3271,31 @@ workers reading `const prefix = names[1]` from a closure corrupted the heap (`te
 `malloc_consolidate(): unaligned fastbin chunk detected` in three of two hundred runs of the VM on Linux). So:
 
 - **A value the crossing copy walks whole is copied into an immortal one where it is written** (`entryCellCopies` in
-  `backend/c/crossing.trb`: a text, and a list, map or set that is no trait-typed value, a record, tuple or variant of
-  those - no closure, task or channel, whose shared block an immortal copy would hold forever). The write retains the
-  value once, runs the copy at the crossing (`privateOf`) inside an immortal region - which then finds every block held
-  twice and copies it, and a copied container retains its elements, so they are copied in turn - and gives the count of
-  the original back. The cell holds blocks nobody retains or releases, like the value of a module constant, and the
-  functions that read it run on any worker. The VM does the same with the kernel's `immortal.copy`.
+  `backend/c/crossing.trb`: a text, a list, map or set, a record, tuple or variant of those, and a trait-typed value
+  such as a `List` or a `Map` whose every possible payload is one of those - no closure, task or channel, whose shared
+  block an immortal copy would hold forever). The write retains the value once, runs the copy at the crossing
+  (`privateOf`) inside an immortal region - which then finds every block held twice and copies it, and a copied
+  container retains its elements, so they are copied in turn - and gives the count of the original back. The cell holds
+  blocks nobody retains or releases, like the value of a module constant, and the functions that read it run on any
+  worker. The VM does the same with the kernel's `immortal.copy`.
+- **A trait-typed value is copied through its witness table** (since 2026-09-28, CONCURRENCY.md section 16, "The copy
+  at the crossing"): the payload is erased, but its first table knows the payload's size and helpers, and carries its
+  copy (`privatize`, the `P_<layout>` of the payload) where the program copies values of that trait at all; a
+  `PO_<object>` per trait-typed type hands the four to `torb_object_privatize`. That the immortal copy of a cell cannot
+  fail is decided when the program is compiled: every witness table of the value's first bound is one a `TraitValue`
+  boxed a target into, so every payload the cell may hold is the payload layout of one of them, and each has to be
+  copyable (`isCopyableObject`). A payload that holds a shared object - an ordinary trait may not hide one, so it is
+  one its type names, `List<Tally>` - is not, and confines the program.
 - **A cell of any other counted type keeps every task of the program on the worker that starts it**: a shared object, a
-  trait-typed value such as a `List` or a `Map`, a closure, a resource. `main` calls `torb_tasks_confine` before the
-  program runs, after which `torb_task_start_portable` starts a task pinned and `torb_task_copies` answers false; the VM
-  starts no interpreter for another worker (`BytecodeProgram.confinesTasks`). Precise pinning - only the tasks whose
-  code can reach a read of the cell - would need every way a call can go through a table, a descriptor or a closure,
-  and a copy of a trait-typed value would need the layout of its payload, which is erased; both are open.
+  closure, a resource, a trait-typed value with such a payload. `main` calls `torb_tasks_confine` before the program
+  runs, after which `torb_task_start_portable` starts a task pinned and `torb_task_copies` answers false; the VM starts
+  no interpreter for another worker (`BytecodeProgram.confinesTasks`). Precise pinning - only the tasks whose code can
+  reach a read of the cell - would need every way a call can go through a table, a descriptor or a closure, and is open.
+  What the copy of a `List` bought is measured by a program whose function reads a `List<String>` and a
+  `Map<String, Int>` of the entry file, four thousand times each for each of four thousand items of a `parallel()` map
+  (16 processors, a machine other gate runs shared, fastest of three): natively 0.84 s confined and 0.17 s with eight
+  workers after (4.9x), and in the VM 36.9 s and 13.3 s (2.8x) - the same program, which confined ran exactly as long
+  as the sequential loop beside it.
   **The runtime's own tasks are not the program's**: a read, write or wait of a file, a standard stream or a child
   (`runtime/stream.c`) runs no function of the program, so it is started with `torb_task_start_runtime` and still turns
   to the blocking pool - the ring is never started, a pool of one worker is enough for the turn. Until 2026-09-28 it

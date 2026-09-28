@@ -1609,8 +1609,9 @@ handles of a counted result are all on one worker.
 
 **The entry cells are the one value no start sees.** A top-level `const` of the entry file that a function reads lives
 in a cell every function of the file reads, on whatever worker runs it - and a closure that only reads one captures
-nothing, so it crosses. So the cell holds an immortal copy of the value where the crossing copy can walk it whole, and a
-program with a cell of any other counted type keeps every task on the worker that starts it (`torb_tasks_confine`);
+nothing, so it crosses. So the cell holds an immortal copy of the value where the crossing copy can walk it whole - a
+`List` or a `Map` too, through its witness table, where every payload its trait may hold can be copied - and a program
+with a cell of any other counted type keeps every task on the worker that starts it (`torb_tasks_confine`);
 docs/BACKEND.md, "The entry cell", has the rule and its open ends.
 
 **The copy at the crossing.** Where the test fails on a value that may be copied soundly, the frame of a task is made
@@ -1642,11 +1643,17 @@ private instead - section 6's "copied into the worker's heap", decided on 2026-0
   else a block of its own with every capture retained, and then every capture made private in place
   (`torb_closure_privatize`). The VM copies its environment blocks by the shape of their contents
   (`torb_machine_privatize_environment`).
+- **A trait-typed value** - a `List`, a `Map`, a `Bytes` - is copied the same way through its first witness table,
+  which is what still knows the payload its type erased (since 2026-09-28): the table carries the payload's size, its
+  two helpers and a `privatize` function (the `P_<layout>` of the payload), and `torb_object_privatize` makes the boxed
+  payload the value's own and then every field of it private, called through a `PO_<object>` the emitter writes per
+  trait-typed type. A payload that cannot be copied - it holds a shared object, or has a destructor - has no
+  `privatize`, and the value answers no. Only the tables of a trait whose values the program copies get one. The VM
+  keeps the shape of a payload in its block and walks it (`torb_machine_privatize_payload`).
 - **What never.** Whatever has an identity or cannot be walked: a `shared type` object, a task or a channel of counted
   items, a captured `var` (so a closure over one gets no copy and crosses only where its environment is shared), a
-  `lazy` cell, a trait-typed value (its payload is erased), a boxed record, and a value whose type implements `Close`,
-  which a copy would close twice. Where a value answers no, the task stays on its worker, correct and sequential, exactly
-  as before the copy existed.
+  `lazy` cell, a boxed record, and a value whose type implements `Close`, which a copy would close twice. Where a value
+  answers no, the task stays on its worker, correct and sequential, exactly as before the copy existed.
 
 The emitter decides it per type (`compiler/src/backend/c/crossing.trb`, `privateOf`); the runtime copies
 (`runtime/text.c`, `list.c`, `map.c`); `runtime/tests/pool_test.c` pins that a copy happens only where somebody else holds
@@ -1688,7 +1695,7 @@ an `ArrayList` of plain items passes `torb_list_may_move`, a `Range<Int>` is a p
 environment holds nothing but other shared closures. At most `workers:` chunks run at once, the results are read back in
 input order, and `find` starts no further chunk once the results before it, read in order, hold a match. `collect` runs
 the stages on the workers and the accumulator on the caller's worker, chunk by chunk, joined with its `merge`: an
-`Accumulator` is a trait-typed value, whose payload is erased and which therefore never crosses. Measured with
+`Accumulator` is a trait-typed value, which until 2026-09-28 never crossed because its payload was erased. Measured with
 `benchmarks/parallel.sh` on 16 logical processors (`parallel-map.trb`: the Collatz steps of two million numbers,
 summed; whole process, fastest of five): 632 ms with one worker, 377 ms with two, 275 with four, 205 with eight, 167 with
 sixteen - 3.8x, with the building of the list, the cutting into chunks and the start of the process in every number.
@@ -1757,8 +1764,9 @@ the standard streams, the wait for a child, and every pipe of a Windows child st
 **Not built, and why each waits:**
 
 - **`Plain`, `Window`, `windows`** (slice F), and `flatMap` on `Parallel`.
-- **An accumulator that runs on the workers**: `collect` accumulates on the caller's worker, chunk by chunk, because an
-  `Accumulator` is a trait-typed value, whose payload is erased and which the copy at the crossing does not walk.
+- **An accumulator that runs on the workers**: `collect` accumulates on the caller's worker, chunk by chunk. An
+  `Accumulator` is a trait-typed value, which the copy at the crossing did not walk when `collect` was written; it does
+  now, through the value's witness table, so what is left is `collect` itself.
 - **The measurements of section 9** and the skewed-cost benchmark; the pool counts resumes and thefts
   (`torb_pool_statistics_now`), nothing prints a histogram.
 - **A race detector**: there is no `-fsanitize=thread` for Windows targets, so the pool was verified by its tests run
@@ -1807,10 +1815,11 @@ print counter.count
 ```
 
 `spawn` sees an `Action`, which is not a `shared trait`, and lets it in; the `Counter` inside is changed by two tasks.
-**It is memory safe** - a trait-typed value fails the crossing test of section 16 ("The copy at the crossing"), so the
-task that holds one is started pinned (`torb_task_start`) and runs on the worker that made the object, and no count is
-ever touched by two threads - but it is not what rule 7 promises: the object is reached from two tasks, and the order
-of their changes is the scheduler's.
+**It is memory safe** - a trait-typed value fails the crossing test of section 16 ("The copy at the crossing"), and one
+whose payload holds an object has no copy either (its table's `privatize` is `NULL`), so the task that holds one is
+started pinned (`torb_task_start`) and runs on the worker that made the object, and no count is ever touched by two
+threads - but it is not what rule 7 promises: the object is reached from two tasks, and the order of their changes is
+the scheduler's.
 
 **The options.** The language rule stays as it is until the owner decides; both ways to close the hole cost something.
 

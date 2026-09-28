@@ -2616,6 +2616,22 @@ bool torb_closure_privatize(torb_environment **environment) {
   return true;
 }
 
+bool torb_object_privatize(torb_object **payload, size_t size, torb_retain_children_function retain_children,
+                           torb_drop_function drop, torb_privatize_function fields) {
+  torb_object *held = *payload;
+  if (held == NULL || held->header.count == TORB_IMMORTAL_COUNT) {
+    return true;
+  }
+  if (fields == NULL) {
+    return false;
+  }
+  if (!torb_is_unique(held)) {
+    *payload = (torb_object *)torb_make_unique(held, size, retain_children, drop);
+    torb_pool_count_copy();
+  }
+  return fields(*payload);
+}
+
 /* Nobody else can change a count this reads: an immortal one never changes, and a count of 1 is this value's alone. */
 static bool torb_block_may_move(const void *block, bool transfer) {
   const torb_header *header = (const torb_header *)block;

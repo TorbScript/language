@@ -720,6 +720,16 @@ bool torb_task_copies(void);
  * `environment` in and out.
  */
 bool torb_closure_privatize(torb_environment **environment);
+/**
+ * A trait-typed value's boxed payload (`PO_<object>` of the emitter): nothing where it is immortal; otherwise the block
+ * itself where only this value holds it, else a copy of it - `size` bytes, `retain_children` run on the copy, `drop`
+ * for the count given back - and then `fields` run on the block, which makes every field of the payload private in
+ * place. All four come out of the value's witness table, which is what knows the erased payload; `fields` is `NULL`
+ * where the payload cannot be copied (a shared object, a destructor), and the answer is then false. `payload` in and
+ * out.
+ */
+bool torb_object_privatize(torb_object **payload, size_t size, torb_retain_children_function retain_children,
+                           torb_drop_function drop, torb_privatize_function fields);
 /** A `String`: its own storage where somebody else holds it too. Always true. `text` in and out. */
 bool torb_text_privatize(torb_text *text);
 /** The same through a `void *`: the element function of a list, a map or a set of `String`s. */

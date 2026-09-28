@@ -138,6 +138,134 @@ group "The copy at the crossing" {
   }
 }
 
+/**
+ * A trait-typed value made by a function and handed to a task, and one that a top-level `const` holds. The trait is
+ * the program's own, so that the payload is a record of it - the lists of the workspace's `std/` are no values the
+ * lowering builds.
+ */
+const traitTyped = raw"""
+  trait Named {
+    fn name(): String
+  }
+
+  type Person with Named {
+    label: String
+
+    fn name(): String {
+      label
+    }
+  }
+
+  fn made(): Named {
+    Person(label: "Ada")
+  }
+
+  const named = made()
+
+  fn measured(index: Int): Task<Int> {
+    named.name().byteLength() + index
+  }
+
+  fn handed(given: Named): Task<Int> {
+    given.name().byteLength()
+  }
+
+  fn started(): Int {
+    const _ = handed made()
+    7
+  }
+
+  const _ = measured(1)
+  const _ = started()
+  """
+
+/**
+ * The same with a shared object inside the payload, which no copy can be made of. The type of the trait names it -
+ * an ordinary trait may not hide an object - so it is a type argument.
+ */
+const sharedBehindTrait = raw"""
+  trait Holder<Item> {
+    fn first(): Item
+  }
+
+  type Box<Item> with Holder<Item> {
+    item: Item
+
+    fn first(): Item {
+      item
+    }
+  }
+
+  shared type Tally {
+    var count: Int = 0
+  }
+
+  fn made(): Holder<Tally> {
+    Box(item: Tally())
+  }
+
+  const holder = made()
+
+  fn measured(index: Int): Task<Int> {
+    holder.first().count + index
+  }
+
+  const _ = measured(1)
+  """
+
+/** The C of a whole program. */
+fn programOf(source: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  emittedProgramText found.program, entryName
+}
+
+group "A trait-typed value at the crossing" {
+  test "a trait-typed value is copied through its witness table, which knows the erased payload" {
+    const found = functionOf traitTyped, "t_acme_x2f_app_main_handed"
+    assert found.contains("(torb_task_copies()) ? PO_T_object__acme_x2f_app_main_Named(&")
+  }
+
+  test "the table of the trait points at the copy of its payload, and the copy of the value goes through it" {
+    const text = programOf traitTyped
+    assert text.contains("static bool P_T_payload__T_acme_x2f_app_main_Person(void *block) \{")
+    assert text.contains("  return torb_text_privatize(&value->f_value.f_label);")
+    assert text.contains("_members, P_T_payload__T_acme_x2f_app_main_Person \};")
+    assert text.contains("  return value->w0 == NULL || torb_object_privatize(&value->data, value->w0->size, ")
+  }
+
+  test "a payload that holds a shared object has no copy, so its value stays where it is" {
+    const text = programOf sharedBehindTrait
+    assert text.contains("_members, NULL \};")
+    assert(!text.contains("static bool P_T_payload__"))
+  }
+
+  test "a program that copies no trait-typed value gives no table a copy" {
+    const text = programOf tasks
+    assert(!text.contains("static bool PO_"))
+    assert(!text.contains(", P_T_payload__"))
+  }
+}
+
+/**
+ * A top-level `const` of the entry file that a function reads, held by an entry cell (docs/BACKEND.md, "The entry
+ * cell"): a trait-typed value whose every payload may be copied is an immortal copy, and anything else keeps every task
+ * on the worker that starts it.
+ */
+group "A top-level const that functions read" {
+  test "a trait-typed value whose payloads may be copied is an immortal copy, and no task is confined" {
+    const text = programOf traitTyped
+    assert text.contains("  torb_begin_immortal();\n  (void)PO_T_object__acme_x2f_app_main_Named(&t_acme_x2f_app_main_named_entry);")
+    assert(!text.contains("torb_tasks_confine();"))
+  }
+
+  test "a trait-typed value one of whose payloads is a shared object keeps every task on the worker that starts it" {
+    const text = programOf sharedBehindTrait
+    assert text.contains("torb_tasks_confine();")
+    assert(!text.contains("torb_begin_immortal();"))
+  }
+}
+
 group "The environment of a closure" {
   test "captures that are plain values make it shared, so the closure may run on several workers" {
     const found = functionOf tasks, "t_acme_x2f_app_main_scaled"

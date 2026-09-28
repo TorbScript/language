@@ -1,0 +1,63 @@
+/**
+ * **A top-level `const` that holds a `List` or a `Map` is an immortal copy, and the tasks that read it still move.** A
+ * trait-typed value is copied through its witness table, which knows the payload the type erased: where every target a
+ * value of its trait may hold is one the crossing copy walks whole - the runtime's list and map, of texts and of records
+ * here - the write of the entry cell copies it into an immortal region, and the functions that read it run on any of
+ * four workers (docs/BACKEND.md, "The entry cell"). So does a closure that reads them: it captures nothing. The results
+ * are the same with four workers and with one, and every block is freed.
+ */
+use Task from "std/task"
+
+type Point {
+  label: String
+  x: Int
+}
+
+// Texts made while the program runs, held by the list below and by the constants alike
+var names: List<String> = []
+for index in 0..6 {
+  names.append "name-{index}-{"z".repeat(index)}"
+}
+const words: List<String> = names
+var table: Map<String, Int> = [:]
+for index in 0..6 {
+  table.set(names[index], index * index)
+}
+const squares = table
+const points = [Point(label: names[1], x: 1), Point(label: names[2], x: 2)]
+
+/** What a task makes of the three constants and its number. */
+fn describe(index: Int): String {
+  const word = words[index % 6]
+  const square = squares.get(word) ?? 0
+  const point = points[index % 2]
+  "{word}={square}/{point.label}:{point.x}/{index}"
+}
+
+/** A task whose function reads the constants. */
+fn describedOf(index: Int): Task<String> {
+  describe index
+}
+
+/** A task whose frame holds a closure. */
+fn formattedOf(format: (Int) => String, index: Int): Task<String> {
+  format index
+}
+
+var described: List<Task<String>> = []
+for index in 0..32 {
+  described.append describedOf(index)
+}
+var formatted: List<Task<String>> = []
+for index in 0..32 {
+  formatted.append formattedOf({ "{words[_ % 6]}:{squares.length()}" }, index)
+}
+var bytes = 0
+for task in described {
+  bytes = bytes + task.await().byteLength()
+}
+for task in formatted {
+  bytes = bytes + task.await().byteLength()
+}
+print describe(5)
+print "{bytes} bytes read back, {names.length()} names, the last {names[5]}"
