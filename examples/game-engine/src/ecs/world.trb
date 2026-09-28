@@ -45,13 +45,13 @@ public type World {
 
   // --- Changed copies: what systems return ----------------------------------------------------------------
 
-  fn despawned(id: EntityId): World {
+  fn despawned(id: EntityId): Self {
     var result = self
     result.despawn id
     result
   }
 
-  fn updated(id: EntityId, change: (entity: Entity) => Entity): World {
+  fn updated(id: EntityId, change: (entity: Entity) => Entity): Self {
     var result = self
     result.update id, change
     result
@@ -63,11 +63,11 @@ public type World {
   }
 
   /** Applies `change` to every entity that has all of the given components. */
-  fn mapEntities(kinds: List<ComponentKind>, change: (entity: Entity) => Entity): World {
+  fn mapEntities(kinds: List<ComponentKind>, change: (entity: Entity) => Entity): Self {
     query(...kinds).fold(self) { world, entity => world.updated entity.id, change }
   }
 
-  fn stepped(systems: List<System>, deltaTime: Float): World {
+  fn stepped(systems: List<System>, deltaTime: Float): Self {
     var next = systems.fold self { world, system => system world, deltaTime }
     next.time = time + deltaTime
     next

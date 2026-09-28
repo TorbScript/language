@@ -46,7 +46,7 @@ public type DecodeError with Show, Error {
   path: List<String> = []
 
   /** `error.inside("price")`: an error collects its path on the way out, so the message names the field chain. */
-  fn inside(segment: String): DecodeError {
+  fn inside(segment: String): Self {
     copy path: path.inserted(0, segment)
   }
 
@@ -176,7 +176,7 @@ extend Bool with Encode, Decode, Describe {
     target.bool self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Bool, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.bool()
   }
 
@@ -191,7 +191,7 @@ extend Int64 with Encode, Decode, Describe {
     target.int self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Int64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.int()
   }
 
@@ -206,7 +206,7 @@ extend Float64 with Encode, Decode, Describe {
     target.float self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Float64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.float()
   }
 
@@ -221,7 +221,7 @@ extend String with Encode, Decode, Describe {
     target.string self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<String, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.string()
   }
 
@@ -374,13 +374,13 @@ public type EncodedValue with Show {
   case Float(value: Float64)
   case String(value: String)
   case Bytes(value: List<UInt8>)
-  case Sequence(items: List<EncodedValue>)
-  case Mapping(entries: List<EncodedValue>)
+  case Sequence(items: List<Self>)
+  case Mapping(entries: List<Self>)
   case Record(typeName: String, fields: List<EncodedField>)
   case Variant(typeName: String, name: String, fields: List<EncodedField>)
 
   /** `EncodedValue.of(user)` - the value's own `encode` is an instance method, so no bound has to be looked up. */
-  static fn of<Value: Encode>(value: Value): EncodedValue {
+  static fn of<Value: Encode>(value: Value): Self {
     var builder = Values()
     value.encode builder
     builder.result()
@@ -626,7 +626,7 @@ public type ValueDecoder with Decoder {
   private var frames: List<ValueCursor> = []
   private lenient: Bool = false
 
-  static fn of(value: EncodedValue, lenient: Bool = false): ValueDecoder {
+  static fn of(value: EncodedValue, lenient: Bool = false): Self {
     Self root: value, lenient: lenient
   }
 
@@ -912,12 +912,12 @@ public type Structure {
   case Floating
   case Text
   case Binary
-  case Optional(of: Structure)
-  case Sequence(of: Structure)
-  case Mapping(key: Structure, value: Structure)
+  case Optional(of: Self)
+  case Sequence(of: Self)
+  case Mapping(key: Self, value: Self)
   case Record(typeName: String, fields: List<StructureField>)
   /** A type that is its one value (`with Encode by value`). It keeps its name, so a format can map it. */
-  case Wrapper(typeName: String, of: Structure)
+  case Wrapper(typeName: String, of: Self)
   case Variant(typeName: String, cases: List<StructureCase>)
   /** A type that is already being described further up: the schema refers to it by name. */
   case Reference(typeName: String)
@@ -941,7 +941,7 @@ public type Structure {
   }
 
   /** `Int?` and `Int` describe the same column, so a schema asks what is underneath before it asks what it is. */
-  fn withoutOptional(): Structure {
+  fn withoutOptional(): Self {
     match self {
       .Optional(inner) => inner
       other => other

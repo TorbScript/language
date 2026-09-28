@@ -20,7 +20,7 @@ type ParseError {
 type Email with TryFrom<String, ParseError> {
   private value: String
 
-  static fn tryFrom(value: String): Result<Email, ParseError> {
+  static fn tryFrom(value: String): Result<Self, ParseError> {
     if !value.contains("@") {
       return Fail ParseError("'{value}' is not an email address")
     }
@@ -34,9 +34,9 @@ extend Email with Encode, Decode {
     target.string value                 // An Email is a string on the wire, not a record with one field
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const text = source.string()?
-    Email.tryFrom(text).mapError { DecodeError _.message }
+    Self.tryFrom(text).mapError { DecodeError _.message }
   }
 }
 
@@ -104,7 +104,7 @@ type LegacyUser {
 
 /** Reads the `LegacyUser` shape by hand: there is no annotation to bridge `mail` and the nested `contact.e_mail`. */
 extend LegacyUser with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<LegacyUser, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("LegacyUser")?
     if !source.field("user_name")? {
       return Fail DecodeError("a value is needed").inside("user_name")
@@ -115,7 +115,7 @@ extend LegacyUser with Decode {
     }
     const contact = LegacyContact.decode(source)?
     source.finish()?
-    LegacyUser name: name, mail: contact.mail
+    Self name: name, mail: contact.mail
   }
 }
 
@@ -126,14 +126,14 @@ type LegacyContact {
 
 /** Reads the field name this older format actually uses: `e_mail`, not `mail`. */
 extend LegacyContact with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<LegacyContact, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("LegacyContact")?
     if !source.field("e_mail")? {
       return Fail DecodeError("a value is needed").inside("e_mail")
     }
     const mail = source.string()?
     source.finish()?
-    LegacyContact mail: mail
+    Self mail: mail
   }
 }
 

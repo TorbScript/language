@@ -43,12 +43,12 @@ extend Price with Encode, Decode, Describe {
     target.finish()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Price, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("lab/Price")?
     const amount = requiredField(source, "amount", { inner => inner.float() })?
     const currency = requiredField(source, "currency", { inner => inner.string() })?
     source.finish()?
-    Price amount: amount, currency: currency
+    Self amount: amount, currency: currency
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -74,7 +74,7 @@ extend Price with Encode, Decode, Describe {
 public type Email with TryFrom<String, String> {
   private value: String
 
-  static fn tryFrom(value: String): Result<Email, String> {
+  static fn tryFrom(value: String): Result<Self, String> {
     if !value.contains("@") {
       return Fail "'{value}' is not an email address"
     }
@@ -104,11 +104,11 @@ extend Email with Encode, Decode, Describe {
     target.finish()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("lab/Email")?
     const text = source.string()?
     source.finish()?
-    Email.tryFrom(text).mapError { message => DecodeError message }
+    Self.tryFrom(text).mapError { message => DecodeError message }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -128,7 +128,7 @@ extend Email with Encode, Decode, Describe {
 public type Slug with From<String> {
   private value: String
 
-  static fn from(value: String): Slug {
+  static fn from(value: String): Self {
     Self value.toLowerCase().replace(" ", "-")
   }
 
@@ -139,7 +139,7 @@ public type Slug with From<String> {
 
 /** The way back out, and with [Slug.from] the pair the three forms below are derived through. */
 extend String with From<Slug> {
-  static fn from(value: Slug): String {
+  static fn from(value: Slug): Self {
     value.text()
   }
 }
@@ -163,9 +163,9 @@ extend Slug with Encode, Decode, Describe {
     encoded text(), target
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Slug, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const text = source.string()?
-    Slug.from text
+    Self.from text
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -198,12 +198,12 @@ extend Status with Encode, Decode, Describe {
     target.finish()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Status, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const name = source.variant("lab/Status")?
     const found = match name {
-      "Draft" => Status.Draft
-      "Shipped" => Status.Shipped
-      "Rejected" => Status.Rejected(requiredField(source, "reason", { inner => inner.string() })?)
+      "Draft" => Self.Draft
+      "Shipped" => Self.Shipped
+      "Rejected" => Self.Rejected(requiredField(source, "reason", { inner => inner.string() })?)
       other => {
         return Fail DecodeError("`{other}` is not a case of `Status`")
       }
@@ -272,7 +272,7 @@ extend Order with Encode, Decode, Describe {
     target.finish()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Order, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("lab/Order")?
     const id = requiredField(source, "id", { inner => inner.int() })?
     const customer = requiredField(source, "customer", Email.decode)?
@@ -282,7 +282,7 @@ extend Order with Encode, Decode, Describe {
     const tags = optionalField(source, "tags", [], readTextSequence)?
     const logLabel = optionalField(source, "logLabel", "order", { inner => inner.string() })?
     source.finish()?
-    Order id: id, customer: customer, price: price, status: status, note: note, tags: tags, logLabel: logLabel
+    Self id: id, customer: customer, price: price, status: status, note: note, tags: tags, logLabel: logLabel
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -371,7 +371,7 @@ extend Shipment with Encode, Decode, Describe {
     target.finish()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Shipment, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("lab/Shipment")?
     const orderId = requiredField(source, "orderId", { inner => inner.int() })?
     const recipient = requiredField(source, "recipient", Email.decode)?
@@ -379,7 +379,7 @@ extend Shipment with Encode, Decode, Describe {
     const tracking = optionalField(source, "tracking", None, readOptionalText)?
     const express = optionalField(source, "express", false, { inner => inner.bool() })?
     source.finish()?
-    Shipment orderId: orderId, recipient: recipient, price: price, tracking: tracking, express: express
+    Self orderId: orderId, recipient: recipient, price: price, tracking: tracking, express: express
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -435,7 +435,7 @@ extend<Item: Encode> Page<Item> with Encode {
  * member reached through a bound. It type checks. `main.trb` exercises the monomorphized form by hand.
  */
 extend<Item: Decode> Page<Item> with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<Page<Item>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.record("lab/Page")?
     const items = requiredField(source, "items", { inner => decodeSequence inner, Item.decode })?
     const total = optionalField(source, "total", 0, { inner => inner.int() })?
@@ -472,7 +472,7 @@ public type Category {
   /** What the category is called. */
   name: String
   /** The categories below this one. */
-  children: List<Category> = []
+  children: List<Self> = []
 }
 
 /** DERIVED. The second `record("lab/Category")` answers `false`, so the walk stops and refers to the name. */
@@ -498,7 +498,7 @@ extend Category with Encode, Describe {
       default: FieldDefault.Constant(EncodedValue.Sequence([])),
     ))
     target.sequence()
-    Category.describe target
+    Self.describe target
     target.finish()
     target.finish()
   }

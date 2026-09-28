@@ -12,7 +12,7 @@ type Point {
   var y: Int
 
   // Static constant
-  static origin = Point 0, 0
+  static origin = Self 0, 0
 
   // Method: declares `self`, accesses members implicitly
   fn area(): Int {
@@ -26,12 +26,12 @@ type Point {
   }
 
   // Its participle returns a changed copy
-  fn translated(deltaX: Int = 0, deltaY: Int = 0): Point {
+  fn translated(deltaX: Int = 0, deltaY: Int = 0): Self {
     copy(x: x + deltaX, y: y + deltaY)
   }
 
   // Static function: no `self`
-  static fn diagonal(size: Int): Point {
+  static fn diagonal(size: Int): Self {
     Self size, size
   }
 }
@@ -143,7 +143,7 @@ type ParseError {
 type Email with TryFrom<String, ParseError> {
   private value: String              // Private without default: only `Email` can call `Email(...)`
 
-  static fn tryFrom(value: String): Result<Email, ParseError> {
+  static fn tryFrom(value: String): Result<Self, ParseError> {
     const trimmed = value.trim()
     if !trimmed.contains("@") {
       return Fail ParseError("'{value}' is not an email address")
@@ -175,8 +175,8 @@ type Fahrenheit {
 
 /** `Celsius.from` and, for free, `Fahrenheit.into()`. */
 extend Celsius with From<Fahrenheit> {
-  static fn from(value: Fahrenheit): Celsius {
-    Celsius((value.degrees - 32.0) / 1.8)
+  static fn from(value: Fahrenheit): Self {
+    Self((value.degrees - 32.0) / 1.8)
   }
 }
 
@@ -188,7 +188,7 @@ const freezing: Celsius = Fahrenheit(32.0).into()   // `Into` comes for free
 type Percent with TryFrom<Int, ParseError> {
   value: Int
 
-  static fn tryFrom(value: Int): Result<Percent, ParseError> {
+  static fn tryFrom(value: Int): Result<Self, ParseError> {
     if value < 0 || value > 100 {
       return Fail ParseError("{value} is not between 0 and 100")
     }
@@ -230,7 +230,7 @@ type Rectangle {
   fn area(): Int { width * height }
 
   // The same thing without the `fn` sugar
-  static perimeter: (self: Rectangle) => Int = { 2 * (width + height) }
+  static perimeter: (self: Self) => Int = { 2 * (width + height) }
 }
 
 const rectangle = Rectangle 3, 4
