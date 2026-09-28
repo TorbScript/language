@@ -575,7 +575,7 @@ name in this file ``. An import that names a member the package does not add is 
 None of this touches the operators, `for`, interpolation, `?`/`??` or `into()`: those resolve through traits of the
 prelude, which is a name of every file.
 
-`isVarSelf` on the resolved member turns the receiver into a `var` access (section 5). A member that needs a `var`
+`takesVarSelf` on the resolved member turns the receiver into a `var` access (section 5). A member that needs a `var`
 and does not get one reports the participle if one exists by name ("`add` needs a `var`. Did you mean `added`?").
 
 ### 4.2 Implementations
@@ -1414,7 +1414,7 @@ list. Everything else is as written.
   `PlaceStep.Field | .Index | .Range | .TupleField`. Section 5.1's nested form makes every question about a path a
   recursion; the flat one makes "is one path a prefix of the other" a loop over two lists, which is what exclusivity
   asks about every access. Two cases of the design fall away with it: **`.Receiver` is a `Local`** whose binding
-  `isReceiver` (`LocalBinding` says so already), and **`.Unknown` is the fourth root** - a construct a later
+  `bindsReceiver` (`LocalBinding` says so already), and **`.Unknown` is the fourth root** - a construct a later
   sub-milestone resolves, or one a message was already given about, and every rule of this pass stays quiet about it.
 - **`PlaceRoot.Declared` is the root the design has no case for.** A top-level `const` or `var` of a module, a script
   or an entry file is a *symbol* and not a local (milestone 3 declares it, and `checkTopLevelBinding` asks for its
@@ -1432,7 +1432,7 @@ list. Everything else is as written.
   `var checker` although it decides nothing: the memoized member lookups behind `traitArgumentsOf` do.
 - **`private(var)` carries its `var` in the modifier.** `private(var) balance: Int = 0` parses to
   `Visibility.PrivateVar` with `Field.isVar == false`, so "is this a `var` field" was the two of them together - until
-  4.9 made the signature say it (`FieldSignature.isVar`), which is where it belongs: the place only asks *who* may write
+  4.9 made the signature say it (`FieldSignature.var`), which is where it belongs: the place only asks *who* may write
   the field, never whether anybody may.
 - **`private` is checked as gap 29 states it, not per package.** A private field is writable inside the body of its
   type and inside every `extend` of it in the same package - both are "`Self` is this type here" - and the *head* of
@@ -1462,7 +1462,7 @@ list. Everything else is as written.
   noted *after* the value has been read - otherwise `total = total + 1` would count its own right-hand side as the
   read that keeps it alive.
 - **A reference is exempt, and three things are one.** A `var` parameter, a `var fn` receiver and the names an `if var` pattern
-  binds into its subject all write into a place of the caller, so `LocalBinding.isParameter` marks all three and the
+  binds into its subject all write into a place of the caller, so `LocalBinding.bindsParameter` marks all three and the
   dead-change rule skips them. It is also what a closure may not carry off (BACKEND gap 14). A `const` binding and an
   exempt one are never recorded at all, which is what keeps the use list of one body short in a pass that names
   `checker` on every second line.
@@ -1578,7 +1578,7 @@ list. Everything else is as written.
   `Expression<Bool>` holds a single expression" for every statement, `?`, an `if` without an `else`, a pattern in an
   `if`, a second statement in a quoted closure; "`match` cannot be quoted yet"; and "A spread has no node in an
   expression tree" for a spread and for a closure parameter that destructures (a `Lambda` node names its parameters).
-- **`Adaptation.Force` is new, and `LocalBinding.isLazy` is what records it.** Design 3.4 says a `lazy` argument records
+- **`Adaptation.Force` is new, and `LocalBinding.lazy` is what records it.** Design 3.4 says a `lazy` argument records
   `Adaptation.Lazy`; nothing said how milestone 5 finds the *reads* that have to force the cell, and a
   `Resolution.Local` cannot say it on its own. So a `lazy` parameter's binding is marked, and every read of one records
   `Force`. Only a `fn` parameter is marked: `lazy` in a function *type* is legal, but no closure in the repository fills
@@ -1620,7 +1620,7 @@ list. Everything else is as written.
   every `use` of the workspace, kept.
 - **`protected var` is the `var`, written where every `var` field writes it.** `protected var balance: Int = 0` parses
   to `Visibility.Protected` with `Field.isVar == true`. `private(var) balance: Int = 0`, the spelling it replaced,
-  carried the `var` inside the modifier; the signature knows one visibility, `Protected`, and `FieldSignature.isVar`
+  carried the `var` inside the modifier; the signature knows one visibility, `Protected`, and `FieldSignature.var`
   is true for both. `protected` on anything but a `var` field is an error (gap 30), and `private(var)` is an error
   that names `protected var`, with the lint rule `protected-field` as its fix.
 - **Who may write a field is decided in one place, `place.trb`.** 4.9 asked it of the target of an assignment and of a
@@ -1673,7 +1673,7 @@ list. Everything else is as written.
   own scope.
 - **`self` without a receiver is reported.** It was silently `Deferred`, which made `height: Int = self.width` a field
   default that nobody objected to. A `static fn` gets the same message.
-- **Gap 22 was already recorded.** `Implementation.isNative` exists since 4.3 and `checkOneImplementation` skips a native
+- **Gap 22 was already recorded.** `Implementation.native` exists since 4.3 and `checkOneImplementation` skips a native
   implementation, so "a required trait member without a body in a `native type` is a requirement on the runtime" needed
   nothing but the test. What 4.9 adds is that only a package of the standard library may write `native` at all.
 - **What is left off, and why:**
@@ -1817,13 +1817,13 @@ nothing told a back end how such a literal is built.
 - **A `const` parameter that nothing solves gets its own note.** `Array.filled(0.0)` with no expected type is
   `` Cannot infer `Size` of `Array` `` with the note "`` `Size` `` is a `const` parameter and is never inferred from
   an argument: write it in the type that is expected of this value". The ordinary note names the closure parameter,
-  the result and the written type argument, and none of the three applies to a value: `VariableState.isConst` carries
-  `ParameterDeclaration.isConst` from the instantiation to `reportUnsolved`.
+  the result and the written type argument, and none of the three applies to a value: `VariableState.const` carries
+  `ParameterDeclaration.const` from the instantiation to `reportUnsolved`.
 
 ### What the follow-ups add (gaps 53 and 54)
 
 - **The dead-change rule reaches the top level of a file** (gap 54). A top-level `var` is a declaration, not a local, so
-  `BindingUse` became `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)`, `Checker.isTopLevel` says
+  `BindingUse` became `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)`, `Checker.topLevel` says
   which body is the statement sequence of a file, and `Checker.readDeclarations` is every top-level `var` that a
   function, a closure or another top-level initializer reads. The message and its two notes are unchanged - the rule is
   the same rule - and `settleChanges` at the end of `checkModule` now has something to settle. It found six dead changes
@@ -2420,6 +2420,8 @@ _Decision:_ accepted. `Range.isInclusive` is `Range.inclusive` (CONCEPT, "Lexica
 The compiler's own `is...` fields are **not** renamed with it: about 60 of them are named after keywords (`isVar`,
 `isStatic`, `isPublic`, `isNative`, `isShared`, `isConst`), and `var: Bool` is not a name - each one needs its own
 decision, either another word or a type instead of a flag, which runs after the fixpoint with the method conversion.
+_Since 2026-09-28_ they are: `torb lint --fix --rule question-field` renamed the ones whose adjective it is certain of,
+and `torb rename` the others, each with its own word (`Field.var`, `Modifiers.native`, `LocalBinding.bindsParameter`).
 
 **46. Which case does a bare uppercase pattern name mean when the matched type has one of the same name?**
 Since an imported case may be written bare in a pattern (`None =>`, `Fail(problem) =>`), the name is resolved through
@@ -2619,7 +2621,7 @@ the difference between a local and a declaration actually is. Anything weaker le
 trap - a script - unchecked.
 
 _Decision:_ accepted. `BindingUse` is `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)` (the two
-roots of a `Place` the rule counts), `Checker.isTopLevel` says which body is the statement sequence of the file, and
+roots of a `Place` the rule counts), `Checker.topLevel` says which body is the statement sequence of the file, and
 `Checker.readDeclarations` collects every top-level `var` that something else reads. Three consequences:
 - **A read in the initializer of another top-level binding counts as "something else",** because that initializer is a
   body of its own (`checkInitializer`) and is reached lazily through `resultOf`. So `var first = counters[0]` keeps

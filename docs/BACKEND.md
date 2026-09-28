@@ -149,9 +149,9 @@ public type Instruction {
 
 public type Terminator {
   case Jump(target: BlockId)
-  case Branch(condition: Slot, then: BlockId, otherwise: BlockId)
+  case Branch(condition: Slot, then: BlockId, else: BlockId)
   /** Variant tags, integer and char literals. Dense or sparse is the back end's business. */
-  case Switch(scrutinee: Slot, values: List<Int>, targets: List<BlockId>, otherwise: BlockId)
+  case Switch(scrutinee: Slot, values: List<Int>, targets: List<BlockId>, else: BlockId)
   case Return(value: Argument?)
   /** `panic`, `Process.exit`, a `Never` call, an exhausted decision tree. */
   case Unreachable
@@ -328,7 +328,7 @@ underscore is written when it would create one).
 | `world.entities[id].health = 1` | `MakeUnique` per counted owner outermost first, then `Write` through one `Reference`                     |
 | `map[key].add(x)`            | `TakeOut` / call / `PutBack` when the container is not contiguous; `Element` step when it is                |
 | `samples[1..4].sort { _ }`   | A `Reference` with an `Element`-range step after `MakeUnique`: a window, no copy                            |
-| closure                      | `Closure(function, captures, isEscaping)`. `const` captures by `Copy`, `var` captures as a retained `Box`, a `var` reference only when `isEscaping` is false |
+| closure                      | `Closure(function, captures, escaping)`. `const` captures by `Copy`, `var` captures as a retained `Box`, a `var` reference only when `isEscaping` is false |
 | receiver closure             | An ordinary closure whose first parameter is the receiver, `Reference` for `(var self: R)`                   |
 | `lazy Value` argument        | `BoxNew` of a `Lazy(T)` cell holding a capture-free-or-not closure; each use is `Intrinsic.LazyForce`        |
 | `match`                      | `MatchPlan` to a decision tree of `Switch`/`Branch`/comparison blocks, tests memoized so the DAG is shared  |
@@ -436,7 +436,7 @@ Three linear passes over the whole IR, in this order. No pass depends on the ord
    evaluation order** (so that `f(x, x)` marks only the second occurrence as the last use):
    - if the slot is in `live`: `Owned` position gets a `Copy` before the instruction, `Borrowed` position gets
      nothing.
-   - if the slot is not in `live`: `Owned` position becomes a `Move` with `isLastUse`, `Borrowed` position keeps the
+   - if the slot is not in `live`: `Owned` position becomes a `Move` with `last`, `Borrowed` position keeps the
      borrow and gets a `Release` **after** the instruction.
    - then add the slot to `live`.
    After the instruction's operands: if it defines a managed slot that is not in `live` at that point, the value is
@@ -600,7 +600,7 @@ constant index into an `Array` is checked by the checker instead (gap 38).
 
 **A check that cannot fire is not emitted.** `ir/ranges.trb` is a forward interval analysis over one function - an
 integer constant, the operation that computed a slot, and the comparison a `Branch` stands on are its only facts - and
-an `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own width is marked `isChecked: false` on
+an `Add`, `Subtract`, `Multiply` or `Negate` whose result provably fits its own width is marked `checked: false` on
 the `Intrinsic`. It prints as `add.i64.unchecked` and the C back end emits the plain operator for it. Nothing about the
 *semantics* moves: unknown is the whole range of the type, an operation whose exact result interval does not fit an
 `Int64` keeps its check, and a dropped check that could fire would be a missing panic - which is why the analysis
@@ -1075,7 +1075,7 @@ the code won and this is the list. Everything else is as written.
   that contains itself, which the language does not have.
 - **`Block` gained `at: LocationId?`.** The text format of section 1.7 prints `b0: # main.trb:19 body`, which is a
   location *and* a label, and the C emitter needs the same thing for `#line`. `Layout` gained `size`, `alignment`,
-  `isRecursive`, `commonFieldCount`, `origin` and `arguments`, so that a layout answers for itself.
+  `recursive`, `commonFieldCount`, `origin` and `arguments`, so that a layout answers for itself.
 - **`resultMode` is not part of the interning key of a signature**, and `finishProgram` fills it in. It follows from
   the size of the result, and a size is only final once every layout is - which is after the last instance was
   lowered. `finishProgram` also fills in the sizes of the element descriptors, and it has to run before anything is
@@ -1602,7 +1602,7 @@ allows, the code won and this is the list. Everything else is as written.
   `torb_environment_release` is the one runtime function this sub-milestone added. A closure value has the type of every
   closure of its shape, so the release site cannot know which captures are inside one - the alternative was a third
   pointer in every closure value, which would change what a closure costs (section 1.3's two words).
-- **The environment is always a counted heap block, and `isEscaping` is recorded and not yet used.** Section 0 leaves
+- **The environment is always a counted heap block, and `escaping` is recorded and not yet used.** Section 0 leaves
   "stack or heap environment" to a back end and the flag is in the IR and in the text format, but taking it needs
   liveness to hold every captured value live to the closure's **last use** rather than to the `Closure` instruction: a
   borrowing environment whose captures die right after it was built would read freed memory at the call one line later.
@@ -1805,7 +1805,7 @@ after both.
   same name.** `Int.tryFrom(text)` fails with `NumberParseError(text)`, which is exactly what the runtime cannot answer
   and what the wrapper has in hand. An error type with a field no parameter names is a clean finding and no guess - which
   is why `Int32.tryFrom` (`NumberRangeError { message }` against `tryFrom(value)`) stays one.
-- **`IrParameter.isOut` was added**, and it is the only new field in the IR. An out parameter is a `var` parameter the
+- **`IrParameter.out` was added**, and it is the only new field in the IR. An out parameter is a `var` parameter the
   callee never *reads*: the base of such a place starts empty and owns a value afterwards. Without saying so in the IR,
   `verify.trb` reports "used before it is defined" and `ownership-verify.trb` reports "used after it was moved out of"
   for every wrapper. Both read it through one shared `outParameterSlotsOf`, and the text format prints `out` where it
@@ -1866,7 +1866,7 @@ after both.
   the source can never disagree. A list asks for neither, because an element that is not `Hash` may still be in a list.
 - **`Instruction.ContainerNew(target, kind, elements)` was added**, and it is the only instruction the containers need.
   `torb_list_new` takes an element descriptor and no declaration of `std/` can name one, so this cannot be a `native fn`.
-- **`IrParameter.isByAddress` is a different flag from `isReference`.** An element the runtime takes by address is an
+- **`IrParameter.byAddress` is a different flag from `byReference`.** An element the runtime takes by address is an
   ordinary **value** position - the callee takes the count of it exactly as `ownership` says - and the address is only how
   one C implementation reaches an element whose type it does not know. A place carries no count and this carries one, so
   making them one flag made the ownership verifier reject every `add`.
@@ -2059,7 +2059,7 @@ written.
   the bound index plus the `nested` indices a coercion has to follow; the emitter renders a step as `->nested[i]`. The
   indices are a property of the **trait** and of nothing the value erased, which is exactly why a narrowing works at all.
   Two things fell out of building them: a supertrait whose own table cannot be built leaves a **hole** (a null pointer, and
-  the narrowing that would have read it is a clean finding, which is what `Lowering.isSilent` is for), and the tables are
+  the narrowing that would have read it is a clean finding, which is what `Lowering.silent` is for), and the tables are
   emitted in **topological** order rather than by name alone, because the initializer of a `static const` takes the
   address of its nested tables and a tentative definition of a `const` object is not portable C (MSVC refuses one). The
   order is still a pure function of the set: the name-smallest table whose nested tables are all placed goes next.
@@ -4001,7 +4001,7 @@ yet, and `std/` is built by the seed. It changes once the seed is refreshed.
 **A window is the round trip of an index.** The row once said a slice as a `var` path needs an interior pointer into
 the base. It does not: `samples[1..4].sort { _ }` is exactly `a[key]` with a range for the key - the part is taken out
 with `Slice.slice` into a slot of the frame, the access runs against that slot, and `MutableSlice.replace` puts it back
-(`takenElement` in `ir/lower/place.trb`, with `TakenKind.isWindow`). The key is the range as the `Bounds<Int>` the
+(`takenElement` in `ir/lower/place.trb`, with `TakenKind.takesWindow`). The key is the range as the `Bounds<Int>` the
 checker coerced it to, lowered once and used by both halves. Everything a path does falls out: a `var fn` on the window,
 a `var` argument (`zero readings[1..3]`), an assignment (`samples[0..2] = [8]`, a `Write` to the window and then the
 `replace`), a window behind a field (`shelf.books[0..3]`) and behind an index (`grid[1][0..2]`).

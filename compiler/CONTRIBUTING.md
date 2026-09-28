@@ -274,12 +274,13 @@ reaches no file at all is an error, never "0 files, no problems".
   integer ids (`ModuleId`, `SymbolId`, `TypeId`, ...).
 - **A `Bool` is an adjective, a question is a method.** A `Bool` field, parameter or binding is an adjective or a
   participle (`inclusive`, `discarded`, `exported`); a question that is computed is a method with `is`/`has`
-  (`isEmpty()`, `hasGuard()`). The public standard library follows it (`Range.inclusive`). **The compiler's own
-  `is...` fields stay as they are for now:** about 60 of them at 135 places are named after keywords (`isVar`,
-  `isStatic`, `isPublic`, `isNative`, `isShared`, `isConst` - `var: Bool` is not a name), so each one needs its own
-  decision (another word, or better a type instead of a flag: `Visibility` exists). That runs after the fixpoint,
-  with the method conversion and a checked rename instead of a text replacement; until then `torb lint`'s rule
-  `question-field` lists them.
+  (`isEmpty()`, `hasGuard()`). The standard library and the compiler follow it (`Range.inclusive`, `Field.var`,
+  `Layout.built`): **a `Bool` field never starts with `is`**. `torb lint --fix --rule question-field` renames a field
+  whose word after `is` it is certain of, at every use the checker resolves; for a noun, a keyword or a clash it names
+  `torb rename Type.isField=<word>`, which takes the word somebody chose - the modifier a flag mirrors where there is
+  one (`var`, `const`, `static`, `native`, `shared`, `lazy`), a participle or an adjective where there is one
+  (`broken`, `suspendable`), and a phrase in the style of `takesSelf` where there is none (`bindsParameter`,
+  `inCommandPosition`).
 - Cases: `.Case` in patterns, `Type.Case` in an expression where no expected type says which type is meant. An
   **imported** case needs nothing in front of it, in an expression and in a pattern (`Some(found) =>`, `None =>`); a
   pattern name that starts with a lowercase letter binds, an uppercase one never does. Positional arguments come before
@@ -305,7 +306,9 @@ reaches no file at all is an error, never "0 files, no problems".
   `Encode`/`Decode` come from are
   [docs/language/types/data-or-capsule](../docs/language/types/data-or-capsule.md).
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
-- `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).
+- A keyword cannot name a parameter, a binding, a function or a type (`annotation`, `capability`, ...). A field, a
+  method, a case field and a label may be named after one, and inside its type such a member is `self.type`:
+  `Parameter.type`, `ExpressionKind.If.else`.
 - **A `public` function and a trait method never infer their result.** Without a result type they produce `Void`, which
   is why `public fn emit(var builder: Builder) { ... }` needs no annotation; a body that ends in a value or returns one
   has to declare which type that is. Everything that is not `public` infers as usual. A `fn` inside of a block is not a

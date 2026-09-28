@@ -214,8 +214,8 @@ public type TemplateValue with Show, Equals, Hash {
 }
 public type TemplateVariable with Show, Equals, Hash {
   name: String
-  isOptional: Bool
-  isExploded: Bool
+  optional: Bool
+  exploded: Bool
 }
 ```
 

@@ -72,13 +72,19 @@ does not recognize.
 
 ## Examples
 
-Two fields of the syntax tree named after a keyword, and the `else` of an `if`, over the whole repository:
+A field of a type and a field of a case, over the whole workspace:
 
 ```console
-$ torb rename syntax/ast.trb:Parameter.annotation=type syntax/ast.trb:ExpressionKind.If.otherwise=else .
-Parameter.annotation -> type: 17 places
-ExpressionKind.If.otherwise -> else: 3 places
-renamed 2 fields at 20 places in 14 files
+$ torb rename Door.isLocked=locked Shape.Circle.radius=size .
+Door.isLocked -> locked: 12 places
+Shape.Circle.radius -> size: 4 places
+renamed 2 fields at 16 places in 5 files
+```
+
+A field named after a keyword, where two types of the same name are declared:
+
+```console
+$ torb rename syntax/ast.trb:Parameter.annotation=type .
 ```
 
 A new name the type already has:
