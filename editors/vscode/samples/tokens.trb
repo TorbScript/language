@@ -1,0 +1,163 @@
+// Every semantic token kind of the extension, in one file: open it in VS Code to see the palette of README.md in place,
+// from the language server or, where it does not run, from `torb highlight`. Turn
+// `torbscript.semanticHighlighting.enabled` off to see the colors of the TextMate grammar alone.
+//
+// It is a script like any other file of the repository, so `torb check .` and `torb format --check .` hold it to the
+// language as it is now, and `torb run editors/vscode/samples/tokens.trb` runs it.
+
+use * as collections from "std/collections" // `collections`: `namespace`, here and at every use
+
+// `describedKey`: `function`, not `method` - a call through a namespace is a free function
+const described = collections.describedKey 1
+
+/** A trait: `interface`, here and where a type comes `with` it. */
+trait Describe {
+  // A required method: `method`
+  fn describe(): String
+}
+
+/** A type: `type`. `Item` and `Size` are its generics: `typeParameter`, at their declaration and every use. */
+type Buffer<Item, const Size: Int> with Describe {
+  // A `var` field: `property` + `mutable` (underlined)
+  var length: Int = 0
+  // A field without `var`: `property` + `readonly`
+  slots: Array<Item, Size>
+  var last: Item
+
+  /** A `var fn`: `method` + `mutable`, underlined at its declaration and at every call of it. */
+  var fn push(value: Item) {
+    // A bare field: `property`, `mutable` where it is a `var` field
+    length = length + 1
+    last = value
+  }
+
+  /** A `static fn`: `method` + `static` (italic). */
+  static fn around(slots: Array<Item, Size>, first: Item): Self {
+    Self slots: slots, last: first
+  }
+
+  /** Another method of the same type, called bare: still `method` (the receiver is implicit). */
+  fn isEmpty(): Bool {
+    length == 0
+  }
+
+  fn describe(): String {
+    "Buffer of {length}, empty: {isEmpty()}"
+  }
+}
+
+/** Cases: `enumMember`, and the field of a case: `property`. */
+type Shape {
+  case Circle(radius: Float)
+  case Rectangle(width: Float, height: Float)
+  case Empty
+}
+
+/** A free function: `function`, distinct from a `method`. `Value` is its own generic: `typeParameter`. */
+fn identity<Value>(value: Value): Value {
+  // `kept`: `variable` + `readonly`; `value`: `parameter`
+  const kept = value
+  // `calls`: `variable` + `mutable` (underlined)
+  var calls = 0
+  calls = calls + 1
+  print "identity, call {calls}"
+  kept
+}
+
+// Command style and call style color the same: both calls of `identity` are `function`
+const one = identity 1
+const two = identity(1) + 1
+
+/** A case written every way there is: `.Case`, `Type.Case`, and the four cases of the prelude bare. */
+fn describeShape(shape: Shape): String {
+  match shape {
+    // `.Circle`: `enumMember`; `radius`: `variable`
+    .Circle(radius) => "circle r={radius}"
+    // `Shape`: `type`, `Rectangle`: `enumMember`
+    Shape.Rectangle(width, _) => "{width} wide"
+    .Empty => "empty"
+  }
+}
+
+fn firstWord(text: String): Result<String, String> {
+  match text.split(" ").first() {
+    // Bare `Some` and `Ok`: `enumMember` + `defaultLibrary`
+    Some(word) => Ok word
+    // Bare `None` and `Fail`: `enumMember` + `defaultLibrary`
+    None => Fail "empty"
+  }
+}
+
+/** The labels of a constructor are `property` (they name a field); the labels of a function's call are `parameter`. */
+type Point with Describe {
+  x: Int
+  y: Int
+
+  fn describe(): String {
+    "({x}, {y})"
+  }
+}
+
+fn distance(target: Point, to: Point): Int {
+  (to.x - target.x).absolute() + (to.y - target.y).absolute()
+}
+
+// `x`, `y`: `property`
+const origin = Point x: 0, y: 0
+// `target`, `to`: `parameter`
+const far = distance target: origin, to: Point(x: 1, y: 1)
+
+/** A dotted call is a method call, a bare one a function call - in command style and in call style. */
+fn methodAndFunction(point: Point): String {
+  // `describe`: `method` (through a value, not a type)
+  const shown = point.describe()
+  // `identity`: `function` (bare)
+  identity shown
+}
+
+/** A `var fn` is underlined where it is called too, so a change shows without reading the signature. */
+type Counter {
+  var count: Int = 0
+
+  // `grow`: `method` + `mutable` (underlined)
+  var fn grow(by: Int) {
+    count = count + by
+  }
+}
+
+fn counted(): Int {
+  var counter = Counter()
+  // `grow` again: `method` + `mutable` (underlined)
+  counter.grow 1
+  counter.count
+}
+
+/** Closures, `for`, `if const`, and a nested `fn` that does not see the locals around it. */
+fn scoping(items: List<Int>): Int {
+  // `outer`: `variable`
+  const outer = 10
+  // `item`: `parameter` (of a closure)
+  const doubled = items.map({ item => item * 2 }).toList()
+  // `entry`: `variable`, scoped to the body of the loop
+  for entry in doubled {
+    print entry
+  }
+  // `first`: `variable`, only inside the block
+  if const Some(first) = doubled.first() {
+    print first
+  }
+
+  fn helper(): Int {
+    // `outer` is not in scope here: a nested `fn` is not a closure. It gets no (wrong) token at all
+    42
+  }
+  helper() + doubled.length() + outer
+}
+
+var buffer = Buffer<String, 2>.around(Array<String, 2>.filled(""), "first")
+buffer.push "second"
+print buffer.describe()
+print "{described} {one} {two} {far} {counted()} {scoping([1, 2])}"
+print describeShape(Shape.Circle(1.0))
+print methodAndFunction(origin)
+print firstWord("hello world")

@@ -1,0 +1,309 @@
+{
+  "name": "torbscript",
+  "displayName": "TorbScript",
+  "description": "TorbScript for VS Code: the language server of torb lsp (diagnostics, hover, go to definition, completion, quick fixes, semantic tokens), tests in the Test Explorer, a getting-started walkthrough that installs the toolchain, and syntax highlighting.",
+  "version": "0.1.0",
+  "publisher": "torbscript",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1E1E1E",
+    "theme": "dark"
+  },
+  "homepage": "https://torb.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://git.torb.dev/torbscript/language"
+  },
+  "bugs": {
+    "url": "https://git.torb.dev/torbscript/language/issues"
+  },
+  "engines": {
+    "vscode": "^1.89.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Testing",
+    "Snippets"
+  ],
+  "keywords": [
+    "torbscript",
+    "torb",
+    "trb",
+    "language server",
+    "lsp"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "workspaceContains:**/*.trb"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "trb",
+        "aliases": [
+          "TorbScript",
+          "trb"
+        ],
+        "extensions": [
+          ".trb"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "trb",
+        "scopeName": "source.trb",
+        "path": "./syntaxes/trb.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.trb.codeblock",
+        "path": "./syntaxes/trb.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.trb": "trb"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "trb",
+        "path": "./snippets/trb.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "torbscript.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.installToolchain",
+        "title": "Install or Update Toolchain",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.installToolchainWithInstaller",
+        "title": "Run the Toolchain Installer",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.checkToolchain",
+        "title": "Check Toolchain",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.openDownloadPage",
+        "title": "Open the Download Page",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.openWalkthrough",
+        "title": "Get Started",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.newProject",
+        "title": "New Project...",
+        "category": "TorbScript"
+      },
+      {
+        "command": "torbscript.runFile",
+        "title": "Run File",
+        "category": "TorbScript",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "torbscript.runFile",
+          "when": "editorLangId == trb"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "torbscript.runFile",
+          "when": "resourceLangId == trb",
+          "group": "navigation"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "torbscript",
+        "required": [
+          "task"
+        ],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "What the task does: `run`, `Install Toolchain` or `Update Toolchain`."
+          },
+          "file": {
+            "type": "string",
+            "description": "The file `torb run` runs, relative to its workspace folder."
+          }
+        }
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "torbscript.gettingStarted",
+        "title": "Get Started with TorbScript",
+        "description": "Install the toolchain, create a first program, run it, and find the documentation.",
+        "steps": [
+          {
+            "id": "installToolchainWindows",
+            "title": "Install the TorbScript toolchain",
+            "description": "Everything this extension does runs `torb`: the language server, the tests, `torb run`. The official installer puts it into `%LOCALAPPDATA%\\Programs\\torb` and adds it to your PATH, in a terminal you can watch (`irm https://torb.dev/install.ps1 | iex`).\n[Install TorbScript](command:torbscript.installToolchainWithInstaller)\n[Open the download page](command:torbscript.openDownloadPage)\nAlready installed somewhere else? [Check again](command:torbscript.checkToolchain) or set `torbscript.executablePath`. This step completes itself once `torb --version` answers.",
+            "when": "isWindows",
+            "media": {
+              "image": "walkthrough/install.svg",
+              "altText": "A terminal running the TorbScript installer."
+            },
+            "completionEvents": [
+              "onContext:torbscript.toolchainFound"
+            ]
+          },
+          {
+            "id": "installToolchainPosix",
+            "title": "Install the TorbScript toolchain",
+            "description": "Everything this extension does runs `torb`: the language server, the tests, `torb run`. The official installer puts it into `~/.torb/bin` and prints the line that adds it to your PATH, in a terminal you can watch (`curl -fsSL https://torb.dev/install.sh | sh`).\n[Install TorbScript](command:torbscript.installToolchainWithInstaller)\n[Open the download page](command:torbscript.openDownloadPage)\nAlready installed somewhere else? [Check again](command:torbscript.checkToolchain) or set `torbscript.executablePath`. This step completes itself once `torb --version` answers.",
+            "when": "!isWindows",
+            "media": {
+              "image": "walkthrough/install.svg",
+              "altText": "A terminal running the TorbScript installer."
+            },
+            "completionEvents": [
+              "onContext:torbscript.toolchainFound"
+            ]
+          },
+          {
+            "id": "createProgram",
+            "title": "Create a first program",
+            "description": "`torb new` writes a package: `project.trb`, a `src/main.trb` that prints a greeting, and `tests/main.test.trb` with one passing test. Pick a folder, give it a name, and it opens.\n[Create a Project](command:torbscript.newProject)",
+            "media": {
+              "image": "walkthrough/create.svg",
+              "altText": "The files of a new TorbScript package."
+            },
+            "completionEvents": [
+              "onCommand:torbscript.newProject"
+            ]
+          },
+          {
+            "id": "runProgram",
+            "title": "Run it, and see what the checker says",
+            "description": "Open `src/main.trb` and run it: `torb run` checks it and runs it in the VM, in a terminal. The language server checks as you type: change `print` to `prnt` and `Cannot find prnt here` shows at once. The tests of `tests/` are in the Testing view, with a run button beside each.\n[Run the Current File](command:torbscript.runFile)\n[Open the Testing View](command:workbench.view.testing.focus)",
+            "media": {
+              "image": "walkthrough/run.svg",
+              "altText": "A TorbScript program running in the terminal, with a diagnostic in the editor."
+            },
+            "completionEvents": [
+              "onCommand:torbscript.runFile"
+            ]
+          },
+          {
+            "id": "nextSteps",
+            "title": "Where to go next",
+            "description": "[The guide](https://torb.dev/learn) goes from nothing to a working program, one step per page, and then the tour. [The documentation](https://torb.dev/docs/) has one page per construct of the language, per package of the standard library and per command of torb. Packages of other people are at [packages.torb.dev](https://packages.torb.dev).\n[Start the Guide](https://torb.dev/learn)",
+            "media": {
+              "image": "walkthrough/next.svg",
+              "altText": "The TorbScript documentation."
+            },
+            "completionEvents": [
+              "onLink:https://torb.dev/learn",
+              "onLink:https://torb.dev/docs/",
+              "onLink:https://packages.torb.dev"
+            ]
+          }
+        ]
+      }
+    ],
+    "markdown.markdownItPlugins": true,
+    "configuration": {
+      "title": "TorbScript",
+      "properties": {
+        "torbscript.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to the `torb` executable that runs the language server (`torb lsp`), the tests, `torb run` and, where the language server does not run, semantic highlighting (`torb highlight --stdin`). Empty searches `build/release/torb[.exe]` below every open workspace folder (a checkout of the TorbScript repository), then `PATH`, then where the installers put it (`~/.torb/bin/torb`, `%LOCALAPPDATA%\\Programs\\torb\\bin\\torb.exe`)."
+        },
+        "torbscript.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Start `torb lsp` for diagnostics, hover, go to definition, completion, semantic tokens, the quick fixes of the lint rules, and the tests of the Test Explorer. Takes effect on the next window reload. When off, or when the language server cannot be started, the TextMate grammar and `torb highlight` still color the code."
+        },
+        "torbscript.semanticHighlighting.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Color fields, locals, parameters, cases, methods and generics precisely, from the language server or from `torb highlight`. When off, or when torb cannot be found or run, only the TextMate grammar's (less precise) colors are used - never an error popup."
+        },
+        "torbscript.toolchain.offerInstall": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When `torb` is not found, say so once per window with a button that runs the official installer in a terminal. The status bar item shows either way."
+        }
+      }
+    },
+    "semanticTokenModifiers": [
+      {
+        "id": "mutable",
+        "description": "A `var` binding, a `var` field, a `var` parameter, or a `var fn` - at its declaration and at every call of it. The only visual difference from a `const`/non-`var` name of the same kind."
+      }
+    ],
+    "configurationDefaults": {
+      "[trb]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "enabled": true,
+        "rules": {
+          "type:trb": "#4EC9B0",
+          "interface:trb": "#B8D7A3",
+          "typeParameter:trb": "#5DBCD2",
+          "enumMember:trb": "#4FC1FF",
+          "function:trb": "#DCDCAA",
+          "method:trb": "#E2C08D",
+          "parameter:trb": "#9CDCFE",
+          "variable:trb": "#C8CCD4",
+          "property:trb": "#E8E8E8",
+          "*.mutable:trb": {
+            "underline": true
+          },
+          "*.static:trb": {
+            "italic": true
+          }
+        }
+      }
+    },
+    "problemMatchers": [
+      {
+        "name": "torb",
+        "owner": "torbscript",
+        "source": "torb",
+        "severity": "error",
+        "fileLocation": "relative",
+        "pattern": [
+          {
+            "regexp": "^error: (.*)$",
+            "message": 1
+          },
+          {
+            "regexp": "^\\s*-->\\s(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ]
+  }
+}

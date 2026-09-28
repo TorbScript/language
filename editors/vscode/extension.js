@@ -7,6 +7,9 @@
 // front of `var` (`protected var count: Int`) and a name everywhere else, so `highlightCode` asks for the `var`.
 
 const { startLanguageClient } = require('./lsp-client');
+const { createToolchain } = require('./toolchain');
+const { startTests } = require('./testing');
+const { registerFormatter } = require('./formatting');
 
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'break', 'continue', 'return',
@@ -148,41 +151,12 @@ function log(vscode, message) {
   outputChannel.appendLine(message);
 }
 
-// Where a `torb` is looked for under a workspace folder: the compiler that `sh tools/bootstrap.sh` writes.
-const EXECUTABLE_CANDIDATES = [
-  ['build', 'release'],
-];
-
-/** `torbscript.executablePath`, or the first `torb`/`torb.exe` of `EXECUTABLE_CANDIDATES` that exists under an open
- * workspace folder, or finally the bare command name to try on `PATH`. */
-function findExecutable(vscode, fs, path) {
-  const vscode_config = vscode.workspace.getConfiguration('torbscript');
-  const configured = vscode_config.get('executablePath');
-  if (configured) {
-    return configured;
-  }
-  const exeName = process.platform === 'win32' ? 'torb.exe' : 'torb';
-  for (const folder of vscode.workspace.workspaceFolders || []) {
-    for (const parts of EXECUTABLE_CANDIDATES) {
-      const candidate = path.join(folder.uri.fsPath, ...parts, exeName);
-      try {
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      } catch (error) {
-        // Treated the same as "not found": fall through to the next candidate.
-      }
-    }
-  }
-  return exeName === 'torb.exe' ? 'torb' : exeName; // Try PATH under the bare command name either way.
-}
-
 class TorbSemanticTokensProvider {
-  constructor(vscode, cp, fs, path) {
+  /** `executable` answers the `torb` to run for each request (toolchain.js decides where it is). */
+  constructor(vscode, cp, executable) {
     this.vscode = vscode;
     this.cp = cp;
-    this.fs = fs;
-    this.path = path;
+    this.executable = executable;
     this.legend = new vscode.SemanticTokensLegend(TOKEN_TYPES, TOKEN_MODIFIERS);
     this.current = null; // The child process of the request still in flight, if any.
   }
@@ -207,7 +181,10 @@ class TorbSemanticTokensProvider {
   highlightTokens(document, cancellationToken, builder) {
     const { vscode } = this;
     this.killCurrent();
-    const executable = findExecutable(vscode, this.fs, this.path);
+    const executable = this.executable();
+    if (!executable) {
+      return builder.build(); // No `torb` found: the TextMate grammar colors alone, and the status bar says why
+    }
     return new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
@@ -315,23 +292,190 @@ class TorbSemanticTokensProvider {
   }
 }
 
+// --- Commands of the walkthrough: a new project, and running a file ---------------------------------------------------
+
+/** Where `torb` is needed and missing: says so, with the installer one click away. Answers whether it is there. */
+async function needToolchain(vscode, toolchain, what) {
+  if (!toolchain.isFound()) {
+    await toolchain.check();
+  }
+  if (toolchain.isFound()) {
+    return true;
+  }
+  const answer = await vscode.window.showWarningMessage(`${what} needs the TorbScript toolchain.`, 'Install TorbScript');
+  if (answer) {
+    await vscode.commands.executeCommand('torbscript.installToolchain');
+  }
+  return false;
+}
+
+/** A package name as `torb new` and project.trb take it: lowercase letters, digits and `-`, starting with a letter. */
+function packageNameProblem(name) {
+  if (!name) {
+    return 'The name of the package, which is also the name of its folder';
+  }
+  return /^[a-z][a-z0-9-]*$/.test(name) ? undefined : 'Lowercase letters, digits and `-`, starting with a letter: `hello-world`';
+}
+
+/**
+ * "TorbScript: New Project...": asks for a folder and a name, runs `torb new <name>` there - `project.trb`,
+ * `src/main.trb` and `tests/main.test.trb` - and opens the new folder, with `src/main.trb` in the editor once it has.
+ */
+async function newProject(context, vscode, cp, path, toolchain) {
+  if (!(await needToolchain(vscode, toolchain, 'A new project'))) {
+    return;
+  }
+  const parents = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Create the Project in This Folder',
+    title: 'TorbScript: where the folder of the new project goes',
+  });
+  if (!parents || parents.length === 0) {
+    return;
+  }
+  const name = await vscode.window.showInputBox({
+    title: 'TorbScript: the name of the new package',
+    prompt: 'A folder of this name is created, with project.trb, src/main.trb and tests/main.test.trb',
+    value: 'hello',
+    validateInput: packageNameProblem,
+  });
+  if (!name) {
+    return;
+  }
+  const parent = parents[0].fsPath;
+  const created = await new Promise((resolve) => {
+    cp.execFile(toolchain.command(), ['new', name], { cwd: parent, windowsHide: true }, (error, stdout, stderr) => {
+      log(vscode, `torb new ${name} in ${parent}: ${(stdout || '').trim()} ${(stderr || '').trim()}`.trim());
+      resolve(error ? (stderr || error.message).trim() : null);
+    });
+  });
+  if (created !== null) {
+    vscode.window.showErrorMessage(`torb new ${name} failed: ${created}`);
+    return;
+  }
+  const folder = vscode.Uri.file(path.join(parent, name));
+  await context.globalState.update(OPEN_AFTER_START, path.join(folder.fsPath, 'src', 'main.trb'));
+  const hasWorkspace = (vscode.workspace.workspaceFolders || []).length > 0;
+  await vscode.commands.executeCommand('vscode.openFolder', folder, { forceNewWindow: hasWorkspace });
+}
+
+/** The file `newProject` asked to open, once the window of its folder has started. */
+async function openPendingFile(context, vscode, path) {
+  const pending = context.globalState.get(OPEN_AFTER_START);
+  if (!pending) {
+    return;
+  }
+  const inWorkspace = (vscode.workspace.workspaceFolders || []).some((folder) =>
+    !path.relative(folder.uri.fsPath, pending).startsWith('..')
+  );
+  if (!inWorkspace) {
+    return;
+  }
+  await context.globalState.update(OPEN_AFTER_START, undefined);
+  try {
+    await vscode.window.showTextDocument(vscode.Uri.file(pending));
+  } catch (error) {
+    log(vscode, `could not open ${pending}: ${error.message}`);
+  }
+}
+
+/**
+ * "TorbScript: Run File": saves the file and runs it with `torb run` in a terminal, from its workspace folder. The
+ * problems the language server found are in the editor already; the ones `torb run` finds are in the terminal.
+ */
+async function runFile(vscode, path, toolchain, uri) {
+  const editor = vscode.window.activeTextEditor;
+  const target = uri instanceof vscode.Uri ? uri : editor && editor.document.languageId === 'trb' ? editor.document.uri : undefined;
+  if (!target) {
+    vscode.window.showInformationMessage('Open a .trb file to run it.');
+    return;
+  }
+  if (!(await needToolchain(vscode, toolchain, 'Running a file'))) {
+    return;
+  }
+  const document = vscode.workspace.textDocuments.find((each) => each.uri.toString() === target.toString());
+  if (document && document.isDirty) {
+    await document.save();
+  }
+  const folder = vscode.workspace.getWorkspaceFolder(target);
+  const cwd = folder ? folder.uri.fsPath : path.dirname(target.fsPath);
+  const file = path.relative(cwd, target.fsPath);
+  const execution = new vscode.ProcessExecution(toolchain.command(), ['run', file], { cwd });
+  const task = new vscode.Task(
+    { type: 'torbscript', task: 'run', file },
+    folder || vscode.TaskScope.Workspace,
+    `run ${file}`,
+    'TorbScript',
+    execution,
+    ['$torb']
+  );
+  task.presentationOptions = { reveal: vscode.TaskRevealKind.Always, panel: vscode.TaskPanelKind.Shared, clear: true };
+  await vscode.tasks.executeTask(task);
+}
+
 /** The client of `torb lsp` while the extension is active, or `null` where the setting turns it off. */
 let languageClient = null;
 
-function activate(context) {
+/** The walkthrough of package.json, as `workbench.action.openWalkthrough` names it: `<publisher>.<name>#<id>`. */
+const WALKTHROUGH = 'torbscript.torbscript#torbscript.gettingStarted';
+/** globalState: whether the walkthrough was opened once by itself, and a file to open once a new project's window starts. */
+const WALKTHROUGH_SHOWN = 'torbscript.walkthroughShown';
+const OPEN_AFTER_START = 'torbscript.openAfterStart';
+
+async function activate(context) {
   const vscode = require('vscode');
   const cp = require('child_process');
   const fs = require('fs');
+  const os = require('os');
   const path = require('path');
+  const say = (message) => log(vscode, message);
 
-  const provider = new TorbSemanticTokensProvider(vscode, cp, fs, path);
-  languageClient = startLanguageClient(context, vscode, cp, findExecutable(vscode, fs, path), (message) =>
-    log(vscode, message)
-  );
+  const toolchain = createToolchain(context, vscode, cp, fs, path, os, say);
+  await toolchain.check();
+
+  const provider = new TorbSemanticTokensProvider(vscode, cp, () => toolchain.executable);
+  languageClient = startLanguageClient(context, vscode, cp, () => toolchain.command(), say, toolchain.isFound());
   provider.languageClient = languageClient;
   context.subscriptions.push(
     vscode.languages.registerDocumentSemanticTokensProvider({ language: 'trb' }, provider, provider.legend)
   );
+  if (!languageClient) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand('torbscript.restartLanguageServer', () =>
+        vscode.window.showInformationMessage('The language server is turned off (torbscript.languageServer.enabled).')
+      )
+    );
+  }
+
+  registerFormatter(context, vscode, cp, fs, os, path, toolchain, say);
+  const tests = startTests(context, vscode, cp, fs, path, toolchain, languageClient, say);
+  if (languageClient) {
+    languageClient.onDidStart(() => tests.discoverAll(true));
+  }
+  // A `torb` that appears, or another one, starts the language server with it
+  toolchain.onDidChange(() => {
+    if (languageClient && toolchain.isFound()) {
+      languageClient.restart();
+    }
+  });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('torbscript.openWalkthrough', () =>
+      vscode.commands.executeCommand('workbench.action.openWalkthrough', WALKTHROUGH, false)
+    ),
+    vscode.commands.registerCommand('torbscript.newProject', () => newProject(context, vscode, cp, path, toolchain)),
+    vscode.commands.registerCommand('torbscript.runFile', (uri) => runFile(vscode, path, toolchain, uri))
+  );
+
+  await openPendingFile(context, vscode, path);
+  if (!context.globalState.get(WALKTHROUGH_SHOWN)) {
+    await context.globalState.update(WALKTHROUGH_SHOWN, true);
+    await vscode.commands.executeCommand('torbscript.openWalkthrough');
+  } else if (!toolchain.isFound()) {
+    toolchain.offerInstall();
+  }
 
   return {
     extendMarkdownIt(md) {
@@ -352,4 +496,4 @@ function deactivate() {
   return languageClient ? languageClient.stop() : undefined;
 }
 
-module.exports = { activate, deactivate, highlight, TorbSemanticTokensProvider, findExecutable, TOKEN_TYPES, TOKEN_MODIFIERS };
+module.exports = { activate, deactivate, highlight, TorbSemanticTokensProvider, packageNameProblem, TOKEN_TYPES, TOKEN_MODIFIERS };

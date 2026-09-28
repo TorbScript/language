@@ -59,10 +59,12 @@ function frame(message) {
 
 /** One running `torb lsp`, and the VS Code side of every feature it provides. */
 class TorbLanguageClient {
+  /** `executable` is the path of `torb`, or a function that answers it each time the server is started. */
   constructor(vscode, cp, executable, log) {
     this.vscode = vscode;
     this.cp = cp;
-    this.executable = executable;
+    this.resolveExecutable = typeof executable === 'function' ? executable : () => executable;
+    this.executable = this.resolveExecutable();
     this.log = log;
     this.child = null;
     this.nextId = 1;
@@ -71,6 +73,8 @@ class TorbLanguageClient {
     this.stopping = false;
     this.crashes = [];
     this.stopped = null;
+    this.capabilities = {};
+    this.startListeners = [];
     this.diagnostics = vscode.languages.createDiagnosticCollection('torb');
   }
 
@@ -79,11 +83,22 @@ class TorbLanguageClient {
     return this.running;
   }
 
+  /** Calls `listener()` every time the server has started and answered `initialize`. */
+  onDidStart(listener) {
+    this.startListeners.push(listener);
+  }
+
+  /** Whether the server answers `torbscript/tests` (`capabilities.experimental.tests`). */
+  supportsTests() {
+    return Boolean(this.capabilities.experimental && this.capabilities.experimental.tests);
+  }
+
   /** Starts the server and says which documents are open. Resolves to whether it runs. */
   async start() {
     const { vscode } = this;
     this.stopping = false;
     this.stopped = null;
+    this.executable = this.resolveExecutable();
     const folder = (vscode.workspace.workspaceFolders || [])[0];
     let child;
     try {
@@ -135,7 +150,13 @@ class TorbLanguageClient {
           codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix'] } } },
         },
       },
-    }).then(() => true, () => false);
+    }).then(
+      (result) => {
+        this.capabilities = (result && result.capabilities) || {};
+        return true;
+      },
+      () => false,
+    );
     const started = await Promise.race([initialized, exited]);
     if (!started) {
       return false;
@@ -145,7 +166,23 @@ class TorbLanguageClient {
     for (const document of vscode.workspace.textDocuments) {
       this.opened(document);
     }
+    for (const listener of this.startListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.log(`a listener of the language server's start failed: ${error.message}`);
+      }
+    }
     return true;
+  }
+
+  /** Stops the server where it runs and starts it again, with the crashes forgotten: a newly built or found `torb`. */
+  async restart() {
+    if (this.child) {
+      await this.stop();
+    }
+    this.crashes = [];
+    return this.start();
   }
 
   /** `shutdown`, then `exit`; the process is killed if it has not gone after two seconds. Once, however often asked. */
@@ -392,6 +429,23 @@ class TorbLanguageClient {
     });
   }
 
+  /**
+   * The groups and tests of a `*.test.trb` file (`torbscript/tests`, docs/tooling/torb-lsp.md): nodes of `kind`, `name`,
+   * `range`, `selectionRange` and `children`, in the order of the source. `undefined` where the server does not run or
+   * does not answer the request.
+   */
+  async tests(uri) {
+    if (!this.running || !this.supportsTests()) {
+      return undefined;
+    }
+    try {
+      const result = await this.request('torbscript/tests', { textDocument: { uri: uri.toString() } });
+      return Array.isArray(result) ? result : undefined;
+    } catch (error) {
+      return undefined;
+    }
+  }
+
   /** A request about a position; `undefined` where the server is not running or failed to answer. */
   async ask(method, document, position) {
     if (!this.running) {
@@ -447,10 +501,11 @@ class TorbLanguageClient {
 }
 
 /**
- * Starts the client and registers every feature with VS Code. Answers the client, or `null` where the setting turns
- * the language server off.
+ * Registers every feature with VS Code and starts the client, unless `startNow` is false (no `torb` found yet: the
+ * extension calls `restart()` once there is one). `executable` is a path or a function that answers one at each start.
+ * Answers the client, or `null` where the setting turns the language server off.
  */
-function startLanguageClient(context, vscode, cp, executable, log) {
+function startLanguageClient(context, vscode, cp, executable, log, startNow = true) {
   const settings = vscode.workspace.getConfiguration('torbscript');
   if (!settings.get('languageServer.enabled', true)) {
     return null;
@@ -476,11 +531,7 @@ function startLanguageClient(context, vscode, cp, executable, log) {
       { provideCodeActions: (document, range) => client.codeActions(document, range) },
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
     ),
-    vscode.commands.registerCommand('torbscript.restartLanguageServer', async () => {
-      await client.stop();
-      client.crashes = [];
-      await client.start();
-    }),
+    vscode.commands.registerCommand('torbscript.restartLanguageServer', () => client.restart()),
     { dispose: () => client.stop() },
   );
   const watcher = vscode.workspace.createFileSystemWatcher('**/*.trb');
@@ -490,11 +541,13 @@ function startLanguageClient(context, vscode, cp, executable, log) {
     watcher.onDidChange((uri) => client.watched(uri, 2)),
     watcher.onDidDelete((uri) => client.watched(uri, 3)),
   );
-  client.start().then((started) => {
-    if (!started) {
-      log(`the language server did not start; the grammar and \`torb highlight\` color the code`);
-    }
-  });
+  if (startNow) {
+    client.start().then((started) => {
+      if (!started) {
+        log(`the language server did not start; the grammar and \`torb highlight\` color the code`);
+      }
+    });
+  }
   return client;
 }
 
