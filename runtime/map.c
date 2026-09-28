@@ -141,6 +141,8 @@ static void torb_map_reindex(torb_map_storage *storage) {
 
 /** Room for `wanted` entries in total: grows the buffers, drops the tombstones, and rebuilds the buckets. */
 static void torb_map_reserve(torb_map_storage *storage, uint32_t wanted) {
+  /* The buffers of an immortal storage are never freed with it: they count as immortal too (torb_pool.h) */
+  const bool immortal = storage->header.count == TORB_IMMORTAL_COUNT;
   uint32_t capacity = storage->entry_capacity < 8u ? 8u : storage->entry_capacity;
   uint32_t buckets;
   uint8_t *entries;
@@ -160,6 +162,9 @@ static void torb_map_reserve(torb_map_storage *storage, uint32_t wanted) {
     torb_panic_text("a map that large is not supported", torb_location_unknown);
   }
   entries = (uint8_t *)torb_raw_allocate_zeroed((size_t)capacity * (size_t)storage->entry_stride);
+  if (immortal) {
+    torb_raw_count_immortal();
+  }
   for (index = 0u; index < storage->entry_count; index += 1u) {
     if (!torb_entry_alive(storage, index)) {
       continue;
@@ -168,6 +173,9 @@ static void torb_map_reserve(torb_map_storage *storage, uint32_t wanted) {
            (size_t)storage->entry_stride);
     target += 1u;
   }
+  if (immortal && storage->entries != NULL) {
+    torb_raw_count_mortal();
+  }
   torb_raw_free(storage->entries, (size_t)storage->entry_capacity * (size_t)storage->entry_stride);
   storage->entries = entries;
   storage->entry_capacity = capacity;
@@ -175,8 +183,14 @@ static void torb_map_reserve(torb_map_storage *storage, uint32_t wanted) {
   storage->live_count = target;
   buckets = torb_next_power_of_two(capacity * 2u);
   if (buckets != storage->bucket_count) {
+    if (immortal && storage->buckets != NULL) {
+      torb_raw_count_mortal();
+    }
     torb_raw_free(storage->buckets, (size_t)storage->bucket_count * sizeof(int32_t));
     storage->buckets = (int32_t *)torb_raw_allocate((size_t)buckets * sizeof(int32_t));
+    if (immortal) {
+      torb_raw_count_immortal();
+    }
     storage->bucket_count = buckets;
   }
   torb_map_reindex(storage);

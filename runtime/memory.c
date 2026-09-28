@@ -153,6 +153,21 @@ void *torb_raw_allocate_zeroed(size_t size) {
   return buffer;
 }
 
+void torb_raw_count_immortal(void) {
+  torb_heap *heap = torb_heap_current();
+  torb_count_live(heap, -1);
+  torb_count_immortal(heap);
+}
+
+void torb_raw_count_mortal(void) {
+  torb_heap *heap = torb_heap_current();
+  heap->immortal_blocks -= 1;
+  if (heap->in_machine != 0u) {
+    heap->machine_immortal_blocks -= 1;
+  }
+  torb_count_live(heap, 1);
+}
+
 void torb_raw_free(void *buffer, size_t size) {
   (void)size;
   if (buffer == NULL) {

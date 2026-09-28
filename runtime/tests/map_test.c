@@ -405,6 +405,39 @@ TORB_TEST(the_item_cursor_walks_a_set_in_insertion_order) {
   torb_set_release(set);
 }
 
+/*
+ * The copy an entry cell holds (docs/BACKEND.md, "The entry cell"): a map somebody else holds too, made private inside
+ * an immortal region. The copy's storage, its keys and its two buffers are immortal and never freed, so nothing of it
+ * may stay in the live count - the buffers of an immortal storage count as immortal (torb_pool.h).
+ */
+TORB_TEST(a_map_copied_inside_an_immortal_region_leaves_nothing_live) {
+  size_t before = torb_live_block_count();
+  size_t immortal = torb_immortal_block_count();
+  torb_map map = torb_map_new(&torb_element_text, &torb_element_int64);
+  torb_map copy;
+  int64_t index;
+  int64_t found = 0;
+  for (index = 0; index < 20; index += 1) {
+    char key[32];
+    snprintf(key, sizeof key, "key-%lld", (long long)index);
+    set_text_to_whole(&map, key, index);
+  }
+  copy = torb_map_retained(map);
+  torb_begin_immortal();
+  TORB_CHECK(torb_map_privatize(&copy, torb_text_privatize_place, NULL));
+  torb_end_immortal();
+  TORB_CHECK(copy.storage != map.storage);
+  TORB_CHECK(torb_immortal_block_count() > immortal);
+  torb_map_release(map);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  TORB_CHECK(get_whole(copy, "key-17", &found));
+  TORB_CHECK_INTEGER(found, 17);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+  /* Releasing the immortal copy does nothing: it is never freed */
+  torb_map_release(copy);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
 void torb_register_map_tests(void) {
   TORB_ADD(a_map_answers_what_was_put_in);
   TORB_ADD(setting_a_key_again_keeps_its_place_in_the_order);
@@ -418,4 +451,5 @@ void torb_register_map_tests(void) {
   TORB_ADD(the_entry_cursor_skips_tombstones_and_retains_what_it_answers);
   TORB_ADD(the_entry_cursor_ends_and_stays_ended);
   TORB_ADD(the_item_cursor_walks_a_set_in_insertion_order);
+  TORB_ADD(a_map_copied_inside_an_immortal_region_leaves_nothing_live);
 }

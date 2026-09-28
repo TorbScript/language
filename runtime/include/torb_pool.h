@@ -339,6 +339,15 @@ void torb_clock_prepare(void);
 /** One block copied at a crossing, for `torb_pool_statistics.copied` (text.c, list.c, map.c). From any thread. */
 void torb_pool_count_copy(void);
 
+/**
+ * A side buffer of an immortal block - the entries and the buckets of a map built inside an immortal region, as a module
+ * constant or the copy an entry cell holds is (memory.c) - is never freed either, so it moves from the live count of the
+ * calling thread's heap to the immortal one; and back, right before its block frees it while it is still being built
+ * (a map that grows). The leak report then says `live blocks at exit: 0` for a program that holds such a map.
+ */
+void torb_raw_count_immortal(void);
+void torb_raw_count_mortal(void);
+
 /* ------------------------------------------------------------------------------------------ waiting on IO --- */
 
 /*
