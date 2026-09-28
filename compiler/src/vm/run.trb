@@ -23,7 +23,7 @@ use verifyOwnedProgram from "../ir/ownership-verify"
 use lowerWorkspace, lowerScripts, pathsOfModules, isLowered from "../ir/lower/lower"
 use hostTarget from "../project/target"
 use entryNameOf from "../ir/lower/function"
-use renderDiagnostic, renderProblem from "../cli/render"
+use printDiagnostic, printProblem, printErrorMessage from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
 use BytecodeProgram from "../backend/bytecode/format"
 use RuntimeScript from "../semantics/scripts"
@@ -64,17 +64,17 @@ public fn runInMachine(
   const module = match chosenPrograms(checked, tree, requested, options) {
     .Chosen(found) => {
       if found.length() > 1 {
-        printError "error: {nameOne(found, options)}"
+        printErrorMessage "{nameOne(found, options)}"
         return refusedCode
       }
       found[0].module
     }
     .Libraries(what) => {
-      printError "error: {what}: there is nothing to run"
+      printErrorMessage "{what}: there is nothing to run"
       return refusedCode
     }
     .Refused(message) => {
-      printError "error: {message}"
+      printErrorMessage "{message}"
       return refusedCode
     }
   }
@@ -132,7 +132,7 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const modules = match entryModulesOf(checked, tree, BuildOptions(paths, testing: true)) {
     Some(found) => found
     None => {
-      printError "error: no test file (`*.test.trb`) below {paths.joined(", ")}"
+      printErrorMessage "no test file (`*.test.trb`) below {paths.joined(", ")}"
       return refusedCode
     }
   }
@@ -153,7 +153,7 @@ fn runModules(
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return refusedCode
     }
   }
@@ -196,15 +196,15 @@ public fn bytecodeOf(
   var refused = 0
   for problem in lowering.problems {
     const inside = checked.program.graph.at problem.module
-    printError renderDiagnostic(tree.display(inside.path), LineIndex.of(inside.source.text), problem.diagnostic)
+    printDiagnostic tree.display(inside.path), LineIndex.of(inside.source.text), problem.diagnostic
     refused = refused + 1
   }
   for blocked in lowering.unsupported {
-    printError "error: {blocked.what} (at {blocked.at})"
+    printErrorMessage "{blocked.what} (at {blocked.at})"
     refused = refused + 1
   }
   for what in lowering.program.planned {
-    printError "error: {what}"
+    printErrorMessage "{what}"
     refused = refused + 1
   }
   for problem in lowering.program.problems {
@@ -230,7 +230,7 @@ public fn bytecodeOf(
   const emission = emitBytecode lowering.program, entries, files: files
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
-      printError "error: {what} is not supported by the VM yet"
+      printErrorMessage "{what} is not supported by the VM yet"
     }
     return None
   }
@@ -396,7 +396,7 @@ public fn importsOf(checked: Checked, module: ModuleId): String {
 public fn reportChecked(checked: Checked): Int {
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError renderProblem(problem)
+    printProblem problem
   }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
@@ -405,7 +405,7 @@ public fn reportChecked(checked: Checked): Int {
     problems = problems + file.diagnostics.length()
     const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
-      printError renderDiagnostic(file.path, lines, diagnostic)
+      printDiagnostic file.path, lines, diagnostic
       printError ""
     }
   }

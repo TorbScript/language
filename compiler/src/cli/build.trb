@@ -46,7 +46,7 @@ use findCompilerSources from "../project/toolchain"
 use scriptHostObjectOf, programSourcesOf, hostedStandardLibraryOf from "./host"
 use manifestOfProject from "../vm/manifest"
 use Clock from "std/time"
-use renderDiagnostic, renderProblem, counted from "./render"
+use counted, printDiagnostic, printProblem, printErrorMessage, printProblemCount from "./render"
 
 /**
  * How a program is built: how hard the C compiler optimizes the one C file. The C itself is the same under every
@@ -185,7 +185,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     const modules = match entryModulesOf(checked, tree, options) {
       Some(found) => found
       None => {
-        printError "error: no test file (`*.test.trb`) below {options.paths.joined(", ")}"
+        printErrorMessage "no test file (`*.test.trb`) below {options.paths.joined(", ")}"
         return buildFailedCode
       }
     }
@@ -196,7 +196,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     .Libraries(what) => {
       // A library builds nothing, which is no error; a library that is to be run is one
       if options.command == "run" {
-        printError "error: {what}: there is nothing to run"
+        printErrorMessage "{what}: there is nothing to run"
         return buildFailedCode
       }
       if options.saysWhatItWrote {
@@ -205,13 +205,13 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
       return 0
     }
     .Refused(message) => {
-      printError "error: {message}"
+      printErrorMessage "{message}"
       return buildFailedCode
     }
   }
   if programs.length() > 1 && (!options.output.isEmpty() || options.onlyC) {
     const flag = if options.onlyC { "--emit-c" } else { "--output" }
-    printError "error: {nameOne(programs, options)}"
+    printErrorMessage "{nameOne(programs, options)}"
     if options.command == "build" {
       printError "  `{flag}` is for one program"
     }
@@ -241,28 +241,28 @@ fn buildProgram(
   const manifest = match manifestOfEntry(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return buildFailedCode
     }
   }
   const pool = match poolOfManifest(checked, modules[0], manifest) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return buildFailedCode
     }
   }
   const settings = match profileSettingsOf(checked, modules[0], manifest, options.profile) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return buildFailedCode
     }
   }
   const host = hostTarget()
   const target = options.target ?? host
   if target != host && !options.onlyC {
-    printError "error: this machine is {host.name()}, and a binary for {target.name()} needs a C compiler for that target"
+    printErrorMessage "this machine is {host.name()}, and a binary for {target.name()} needs a C compiler for that target"
     printError "  `torb build --target {target.name()} --emit-c` writes the C, which builds on that system"
     return buildFailedCode
   }
@@ -293,14 +293,14 @@ fn buildProgram(
   const entries = programEntriesOf lowering, checked, tree, modules, options
   const found = reportLowering checked, tree, lowering
   if found > 0 {
-    printError "{counted(found, "problem")} the native back end cannot compile yet, nothing was built"
+    printProblemCount "{counted(found, "problem")} the native back end cannot compile yet, nothing was built"
     return buildFailedCode
   }
   noteTiming options, "verifying", clock.taken()
   const emission = emitProgram lowering.program, entries
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
-      printError "error: {what}"
+      printErrorMessage "{what}"
     }
     return buildFailedCode
   }
@@ -496,7 +496,7 @@ fn profileSettingsOf(
 public fn reportChecked(checked: Checked): Int {
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError renderProblem(problem)
+    printProblem problem
   }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
@@ -505,7 +505,7 @@ public fn reportChecked(checked: Checked): Int {
     problems = problems + file.diagnostics.length()
     const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
-      printError renderDiagnostic(file.path, lines, diagnostic)
+      printDiagnostic file.path, lines, diagnostic
       printError ""
     }
   }
@@ -522,16 +522,16 @@ public fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering)
   for problem in lowering.problems {
     const module = checked.program.graph.at problem.module
     const lines = LineIndex.of module.source.text
-    printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
+    printDiagnostic tree.display(module.path), lines, problem.diagnostic
     printError ""
     found = found + 1
   }
   for blocked in lowering.unsupported {
-    printError "error: {blocked.what} (at {blocked.at})"
+    printErrorMessage "{blocked.what} (at {blocked.at})"
     found = found + blocked.count
   }
   for what in lowering.program.planned {
-    printError "error: {what}"
+    printErrorMessage "{what}"
     found = found + 1
   }
   for problem in lowering.program.problems {
@@ -1113,7 +1113,7 @@ fn compile(
   const compiler = match findCompiler() {
     Some(found) => found
     None => {
-      printError "error: no C compiler found. `torb build` needs one until the native back end emits machine code."
+      printErrorMessage "no C compiler found. `torb build` needs one until the native back end emits machine code."
       printError "  tried: $TORB_CC, clang, gcc, cc, cl"
       printError "  on Windows: winget install LLVM.LLVM, or open a \"x64 Native Tools\" prompt"
       printError "  `torb build --emit-c` writes the C without compiling it"
@@ -1123,7 +1123,7 @@ fn compile(
   const runtime = match findRuntime(options.paths) {
     Some(found) => found
     None => {
-      printError "error: the C runtime was not found above the program, the working directory or `torb`."
+      printErrorMessage "the C runtime was not found above the program, the working directory or `torb`."
       printError "  Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
       return noCompilerCode
     }
@@ -1179,7 +1179,7 @@ fn compile(
     Ok(found) => found
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
     Fail(problem) => {
-      printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
+      printErrorMessage "the C compiler `{compiler.command}` could not be started: {problem.message}"
       return noCompilerCode
     }
   }

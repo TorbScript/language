@@ -24,6 +24,7 @@
  */
 
 use Span from "../syntax/source"
+use Palette, Role from "../cli/color"
 use EntryPlan, lineStartOf from "./entry"
 
 /** A text the module copies pieces of: an entry of the session, with the label a message names it by. */
@@ -87,8 +88,8 @@ public type Form {
   shown: Shown = Shown.Bound
   /** The last statement's names where it is a binding instead of an expression, each with what it shows. */
   shownBindings: List<(String, Shown)> = []
-  /** Whether standard output is a terminal: a shown type is dimmed (ANSI faint) only then. */
-  colored: Bool = false
+  /** The palette of standard output: a shown type is dimmed (ANSI faint) only where it is coloured. */
+  palette: Palette = Palette.Plain
   /**
    * `(name, path)` of every type the written types name that the session never imported itself - the `IoError` of a
    * binding `File.readText` answered - each written as `use <name> from "<path>"` in front of everything else.
@@ -224,8 +225,8 @@ public fn synthesize(
     match shown {
       .Bound => {}
       .Nothing => {}
-      .Printed(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.colored)} = \{{name}}\"\n"
-      .Described(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.colored)}\"\n"
+      .Printed(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.palette)} = \{{name}}\"\n"
+      .Described(typeText) => writer.write "print \"{name}: {dimmed(typeText, form.palette)}\"\n"
     }
   }
   for index in 0..form.outputs.length() {
@@ -235,8 +236,8 @@ public fn synthesize(
   match form.shown {
     .Bound => {}
     .Nothing => {}
-    .Printed(typeText) => writer.write "print \"\{replShown}: {dimmed(typeText, form.colored)}\"\n"
-    .Described(typeText) => writer.write "print \"<{dimmed(typeText, form.colored)}>\"\n"
+    .Printed(typeText) => writer.write "print \"\{replShown}: {dimmed(typeText, form.palette)}\"\n"
+    .Described(typeText) => writer.write "print \"<{dimmed(typeText, form.palette)}>\"\n"
   }
   writer.write "}\n"
   if form.failure.isSome() {
@@ -281,16 +282,11 @@ fn escaped(text: String): String {
 }
 
 /**
- * A type, escaped and wrapped in ANSI faint (`\u{1b}[2m`...`\u{1b}[0m`) where the session is a terminal - plain text
+ * A type, escaped and dimmed in the palette of the session (`\u{1b}[2m`...`\u{1b}[0m`) where it is coloured - plain text
  * otherwise, which is what every session piped for `tests/repl/` compares (docs/design/REPL.md section 8).
  */
-fn dimmed(typeText: String, colored: Bool): String {
-  const safe = escaped typeText
-  if colored {
-    "\u{1b}[2m{safe}\u{1b}[0m"
-  } else {
-    safe
-  }
+fn dimmed(typeText: String, palette: Palette): String {
+  palette.paint Role.Type, escaped(typeText)
 }
 
 /** The module being written: its parts, and which of them are pieces of a source. */

@@ -29,6 +29,7 @@ use emittedText from "../backend/c/emission"
 use scriptHostLoadFunction, scriptHostRunFunction from "../backend/c/natives"
 use EmbeddedSources, embeddedSourcesText from "../vm/host"
 use BuildOptions, CCompiler, runCompiler, reportChecked, reportLowering, reportInternalError, identityFileName from "./build"
+use printErrorMessage from "./render"
 
 /** The module of the host that exists only in memory: the two exported functions and the standard library as text. */
 const entryName = "src/vm/script-host.trb"
@@ -102,13 +103,13 @@ public fn programSourcesOf(
  */
 public fn scriptHostObjectOf(options: BuildOptions, runtime: String, compiler: CCompiler): Result<String?, IoError> {
   if compiler.microsoft {
-    printError "error: a native binary that loads receiver scripts is built with gcc or clang: its script host is not built with `cl` yet"
+    printErrorMessage "a native binary that loads receiver scripts is built with gcc or clang: its script host is not built with `cl` yet"
     return Ok None
   }
   const sources = match findCompilerSources(options.paths) {
     Some(found) => found
     None => {
-      printError "error: a native binary that loads receiver scripts embeds the front end, which is built from the toolchain's own sources, and there is no `compiler/` beside it"
+      printErrorMessage "a native binary that loads receiver scripts embeds the front end, which is built from the toolchain's own sources, and there is no `compiler/` beside it"
       return Ok None
     }
   }
@@ -145,7 +146,7 @@ public fn scriptHostObjectOf(options: BuildOptions, runtime: String, compiler: C
   const output = match runCompiler(compiler, arguments, source, size, runtime) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
+      printErrorMessage "the C compiler `{compiler.command}` could not be started: {problem.message}"
       return Ok None
     }
   }
@@ -217,7 +218,7 @@ fn writeHostC(tree: SourceTree, sources: String, standard: String, source: Strin
   const emission = emitProgram lowering.program, [], programExports
   if !emission.unsupported.isEmpty() {
     for what in emission.unsupported {
-      printError "error: {what}"
+      printErrorMessage "{what}"
     }
     return false
   }

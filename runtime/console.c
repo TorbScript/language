@@ -599,15 +599,40 @@ bool torb_read_line_or_end(torb_text path, torb_text *out, torb_text *error) {
 /* =================================================================================== the terminal and Ctrl+C === */
 
 /**
- * `isTerminal()`: whether standard output is a live console rather than a pipe or a file - the same question
- * `torb_std_is_console` answers for `print` on Windows, and `isatty` everywhere else. Decided fresh every call: the
- * answer cannot change while the process runs, but nothing above this file calls it often enough for that to matter,
- * and `torb_std_is_console` already caches its own half of the answer.
+ * `isTerminal()`: whether standard output is a live terminal rather than a pipe or a file - `isatty` everywhere but
+ * Windows. A program asks this to decide whether it writes escape sequences (colours, `torb repl`'s faint types), so on
+ * Windows the answer is whether the console behind the handle interprets them: the first call turns on its
+ * virtual-terminal processing, which every console of Windows 10 and later has, and a console that refuses it answers
+ * false, so its program writes plain text instead of the sequences' bytes. Asked once and cached: what a stream is
+ * redirected to cannot change while the process runs.
  */
 #if defined(_WIN32)
+#  ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#    define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#  endif
+static bool torb_std_takes_sequences(DWORD id) {
+  /* Per stream, standard output first: -1 unknown, 0 no, 1 yes. The console lock keeps two threads from asking at once */
+  static int known[2] = {-1, -1};
+  const size_t slot = id == STD_ERROR_HANDLE ? 1u : 0u;
+  bool answer;
+  torb_console_lock();
+  if (known[slot] < 0) {
+    HANDLE handle;
+    DWORD mode = 0;
+    bool takes = false;
+    if (torb_std_is_console(id, &handle) && GetConsoleMode(handle, &mode) != 0) {
+      takes = (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 ||
+              SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+    }
+    known[slot] = takes ? 1 : 0;
+  }
+  answer = known[slot] == 1;
+  torb_console_unlock();
+  return answer;
+}
+
 bool torb_is_terminal(void) {
-  HANDLE handle;
-  return torb_std_is_console(STD_OUTPUT_HANDLE, &handle);
+  return torb_std_takes_sequences(STD_OUTPUT_HANDLE);
 }
 #else
 bool torb_is_terminal(void) {

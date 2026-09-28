@@ -34,6 +34,7 @@ use Process from "std/process"
 use Environment, OsError from "std/os"
 use hostTarget from "../project/target"
 use parentPath from "../project/path"
+use printErrorMessage from "./render"
 
 /** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
 public type UpgradeOptions {
@@ -478,7 +479,7 @@ fn printAvailable(home: String, channel: String): Int {
   const active = activeVersion home
   match fetchText(baseUrl(), "versions.txt") {
     Fail(message) => {
-      printError "error: {message}"
+      printErrorMessage "{message}"
       1
     }
     Ok(text) => {
@@ -509,7 +510,7 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Int
   match upgraded(home, info, options) {
     Ok(_) => 0
     Fail(message) => {
-      printError "error: {message}"
+      printErrorMessage "{message}"
       1
     }
   }
@@ -583,7 +584,7 @@ public fn runUpgrade(options: UpgradeOptions): Int {
   const home = match torbHome() {
     Ok(path) => path
     Fail(error) => {
-      printError "error: {error.show()}"
+      printErrorMessage "{error.show()}"
       return 1
     }
   }
@@ -593,13 +594,13 @@ public fn runUpgrade(options: UpgradeOptions): Int {
   const info = match readInstallInfo(home) {
     Some(found) => found
     None => {
-      printError "error: no {home}/install.trb; torb upgrade only manages a toolchain tools/install.sh or"
+      printErrorMessage "no {home}/install.trb; torb upgrade only manages a toolchain tools/install.sh or"
       printError "tools/install.ps1 installed (docs/design/RELEASE.md section 5)"
       return 1
     }
   }
   if info.method != "script" {
-    printError "error: this toolchain was installed with {info.method}; run {packageManagerCommand(info.method)}"
+    printErrorMessage "this toolchain was installed with {info.method}; run {packageManagerCommand(info.method)}"
     return 1
   }
   performUpgrade home, info, options

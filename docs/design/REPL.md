@@ -253,8 +253,9 @@ runs in a sandbox all the same, because the sandbox is also the recovery point.*
 - **The value an entry shows is Scala/Kotlin style, value first: `1 + 2` shows `3: Int64`**, on standard output,
   through `Show` - a line the program printed and a value the session shows are told apart by the trailing `: Type`,
   and `print "hello"` shows nothing of its own because it answers `Void`. The type is dimmed (ANSI faint,
-  `\u{1b}[2m`...`\u{1b}[0m`) when standard output is a terminal (`isTerminal`, decided once when the session starts)
-  and plain otherwise, which is what every piped session of `tests/repl/` compares. A value without a `show` - a
+  `\u{1b}[2m`...`\u{1b}[0m`) when standard output is coloured - a terminal, unless `--color` or `NO_COLOR` says
+  otherwise (docs/design/BRAND.md section 10), decided once when the session starts - and plain otherwise, which is
+  what every piped session of `tests/repl/` compares. A value without a `show` - a
   function - shows its type alone, in angle brackets: `<(value: Int64) => Int64>`.
 - **A `let`/`const`/`var` entry shows the same way, with its name in front**: `const total = 6 * 7` shows
   `total: Int64 = 42`; a tuple pattern shows every name it binds, one line each, in the order they are written. A

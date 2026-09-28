@@ -1232,7 +1232,7 @@ void torb_print_error(torb_text text);
 void torb_print_parts(const torb_text *parts, size_t count);
 void torb_print_error_parts(const torb_text *parts, size_t count);
 
-/** `isTerminal()`: whether standard output is a live console rather than a pipe or a file. */
+/** `isTerminal()`: whether standard output is a live terminal that shows escape sequences (console.c). */
 bool torb_is_terminal(void);
 
 /** `printErrorRaw(text: String)`: `text` to standard error exactly as given - no join, no trailing `\n`. `text` borrowed. */

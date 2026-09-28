@@ -1,0 +1,177 @@
+/**
+ * The colours of `torb`'s output (docs/design/BRAND.md section 10, `compiler/src/cli/color.trb`): when a stream is
+ * coloured - `--color`, `FORCE_COLOR`, `NO_COLOR`, a terminal - and what a diagnostic looks like in each palette. The
+ * plain rendering is the one the golden files of the other suites compare, byte for byte.
+ */
+
+use test, group from "std/test"
+use LineIndex, Span from "../src/syntax/source"
+use Diagnostic from "../src/syntax/diagnostic"
+use renderDiagnostic, renderDiagnosticAs, renderProblem from "../src/cli/render"
+use Palette, Role, Ground, ColorChoice, ColorEnvironment, paletteOf, colorArguments from "../src/cli/color"
+
+/** `count = 4` on the third line of a file, with a note: the example of BRAND.md section 10. */
+const source = "var total = 0\nconst count = 3\ncount = 4\n"
+const assignment = Diagnostic.error(
+  "`count` is a `const`. Only a `var` binding can be changed",
+  Span(30, 35),
+).withNote("`const` is deep: through it nothing is assigned")
+
+fn rendered(palette: Palette): String {
+  renderDiagnostic "src/main.trb", LineIndex.of(source), assignment, palette
+}
+
+/** The palette of `--color always` on a terminal with 24 bits whose `COLORFGBG` is `pair`. */
+fn paletteOfPair(pair: String): Palette {
+  paletteOf ColorChoice.Always, ColorEnvironment(colorTerminal: "truecolor", foregroundAndBackground: pair)
+}
+
+group "When a stream is coloured" {
+  test "`--color always` colours a pipe, and `--color never` a terminal" {
+    assert(paletteOf(ColorChoice.Always, ColorEnvironment()) == Palette.Sixteen)
+    assert(paletteOf(ColorChoice.Never, ColorEnvironment(terminal: true)) == Palette.Plain)
+  }
+
+  test "`auto` colours a terminal and leaves a pipe or a file plain" {
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(terminal: true)) == Palette.Sixteen)
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment()) == Palette.Plain)
+  }
+
+  test "`NO_COLOR` turns a terminal plain, `NO_COLOR=0` as well" {
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(noColor: "1", terminal: true)) == Palette.Plain)
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(noColor: "0", terminal: true)) == Palette.Plain)
+  }
+
+  test "`--color always` wins over `NO_COLOR`, and `FORCE_COLOR` or `CLICOLOR_FORCE` wins over it too" {
+    assert(paletteOf(ColorChoice.Always, ColorEnvironment(noColor: "1")) == Palette.Sixteen)
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(forceColor: "1", noColor: "1")) == Palette.Sixteen)
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(commandLineColorForce: "1")) == Palette.Sixteen)
+  }
+
+  test "`FORCE_COLOR=0` forces nothing, and `--color never` wins over `FORCE_COLOR`" {
+    assert(paletteOf(ColorChoice.Auto, ColorEnvironment(forceColor: "0")) == Palette.Plain)
+    assert(paletteOf(ColorChoice.Never, ColorEnvironment(forceColor: "1")) == Palette.Plain)
+  }
+
+  test "a terminal whose `TERM` is `dumb` stays plain" {
+    const dumb = ColorEnvironment terminalType: "dumb", terminal: true
+    assert(paletteOf(ColorChoice.Auto, dumb) == Palette.Plain)
+  }
+
+  test "24 bits only where `COLORTERM` has them and the ground is known" {
+    const truecolor = ColorEnvironment colorTerminal: "truecolor"
+    assert(paletteOf(ColorChoice.Always, truecolor) == Palette.Sixteen)
+    assert(paletteOf(ColorChoice.Always, truecolor.copy(background: "dark")) == Palette.TrueColor(Ground.Dark))
+    assert(paletteOf(ColorChoice.Always, truecolor.copy(background: "light")) == Palette.TrueColor(Ground.Light))
+    const known = ColorEnvironment colorTerminal: "24bit", background: "dark"
+    assert(paletteOf(ColorChoice.Always, known) == Palette.TrueColor(Ground.Dark))
+    assert(paletteOf(ColorChoice.Always, ColorEnvironment(background: "dark")) == Palette.Sixteen)
+  }
+
+  test "the ground of `COLORFGBG` is its last field: 0 to 6 and 8 dark, 7 and 9 to 15 light" {
+    assert(paletteOfPair("15;0") == Palette.TrueColor(Ground.Dark))
+    assert(paletteOfPair("15;default;8") == Palette.TrueColor(Ground.Dark))
+    assert(paletteOfPair("0;7") == Palette.TrueColor(Ground.Light))
+    assert(paletteOfPair("0;15") == Palette.TrueColor(Ground.Light))
+    assert(paletteOfPair("0;16") == Palette.Sixteen)
+    assert(paletteOfPair("0;default") == Palette.Sixteen)
+    const both = ColorEnvironment colorTerminal: "truecolor", background: "light", foregroundAndBackground: "15;0"
+    assert(paletteOf(ColorChoice.Always, both) == Palette.TrueColor(Ground.Light))
+  }
+}
+
+group "The `--color` of the command line" {
+  test "it stands in front of the command or behind it, and leaves the rest as it was" {
+    const behind = colorArguments(["check", "--color", "always", "."]).ok()
+    assert(behind?.choice == Some(ColorChoice.Always))
+    assert(behind?.arguments == Some(["check", "."]))
+    const inFront = colorArguments(["--color=never", "test", "--native"]).ok()
+    assert(inFront?.choice == Some(ColorChoice.Never))
+    assert(inFront?.arguments == Some(["test", "--native"]))
+  }
+
+  test "without it the choice is `auto`, and a later one wins over an earlier one" {
+    assert(colorArguments(["check"]).ok()?.choice == Some(ColorChoice.Auto))
+    const twice = colorArguments(["--color", "never", "check", "--color=always"]).ok()
+    assert(twice?.choice == Some(ColorChoice.Always))
+  }
+
+  test "what `torb run` hands its program is the program's, from the path on" {
+    const program = ["run", "--native", "tool.trb", "--color", "never"]
+    const handed = colorArguments(program).ok()
+    assert(handed?.choice == Some(ColorChoice.Auto))
+    assert(handed?.arguments == Some(program))
+    const own = colorArguments(["run", "--profile", "release", "--color", "always", "tool.trb", "--color=never"]).ok()
+    assert(own?.choice == Some(ColorChoice.Always))
+    assert(own?.arguments == Some(["run", "--profile", "release", "tool.trb", "--color=never"]))
+  }
+
+  test "a value that is not `auto`, `always` or `never` is a mistake, and so is none" {
+    assert(
+      colorArguments(["check", "--color", "purple"])
+        == Fail("`--color` takes `auto`, `always` or `never`, not `purple`"),
+    )
+    assert(colorArguments(["check", "--color"]) == Fail("`--color` needs `auto`, `always` or `never`: `--color never`"))
+    assert(colorArguments(["check", "--color="]).ok() == None)
+  }
+}
+
+group "A diagnostic in each palette" {
+  test "plain, it is the text `torb` always wrote" {
+    const expected = [
+      "error: `count` is a `const`. Only a `var` binding can be changed",
+      " --> src/main.trb:3:1",
+      "  |",
+      "3 | count = 4",
+      "  | ^^^^^",
+      "  = `const` is deep: through it nothing is assigned",
+    ]
+    assert(rendered(Palette.Plain) == expected.joined(separator: "\n"))
+    assert(renderDiagnostic("src/main.trb", LineIndex.of(source), assignment) == rendered(Palette.Plain))
+  }
+
+  test "in the 16 colours: the word bold red, the message bold, the gutter faint, the carets red, the note's `=` cyan" {
+    const expected = [
+      "\u{1b}[1;31merror\u{1b}[0m\u{1b}[1m: `count` is a `const`. Only a `var` binding can be changed\u{1b}[0m",
+      " \u{1b}[2m-->\u{1b}[0m src/main.trb:3:1",
+      "  \u{1b}[2m|\u{1b}[0m",
+      "\u{1b}[2m3 |\u{1b}[0m count = 4",
+      "  \u{1b}[2m|\u{1b}[0m \u{1b}[31m^^^^^\u{1b}[0m",
+      "  \u{1b}[1;36m=\u{1b}[0m `const` is deep: through it nothing is assigned",
+    ]
+    assert(rendered(Palette.Sixteen) == expected.joined(separator: "\n"))
+  }
+
+  test "a warning takes yellow for its word and its carets" {
+    const warning = renderDiagnosticAs "warning", "src/main.trb", LineIndex.of(source), assignment, Palette.Sixteen
+    assert warning.startsWith("\u{1b}[1;33mwarning\u{1b}[0m")
+    assert warning.contains("\u{1b}[33m^^^^^\u{1b}[0m")
+  }
+
+  test "in 24 bits the error is the error text of its ground, and never the brand red" {
+    const dark = rendered Palette.TrueColor(Ground.Dark)
+    assert dark.startsWith("\u{1b}[1;38;2;255;166;163merror\u{1b}[0m")
+    assert dark.contains("\u{1b}[38;2;255;166;163m^^^^^")
+    const light = rendered Palette.TrueColor(Ground.Light)
+    assert light.startsWith("\u{1b}[1;38;2;176;9;33merror\u{1b}[0m")
+    assert light.contains("\u{1b}[38;2;120;113;111m3 |")
+    // Torb Red, #D4002D, marks the brand and no state
+    assert(!dark.contains("212;0;45"))
+    assert(!light.contains("212;0;45"))
+  }
+
+  test "a problem of the workspace colours its word the same way" {
+    assert(renderProblem("no project here") == "error: no project here")
+    assert(
+      renderProblem("no project here", Palette.Sixteen)
+        == "\u{1b}[1;31merror\u{1b}[0m\u{1b}[1m: no project here\u{1b}[0m",
+    )
+  }
+
+  test "an empty text stays empty in every palette" {
+    assert(Palette.Sixteen.paint(Role.Gutter, "") == "")
+    assert(Palette.TrueColor(Ground.Light).paint(Role.Clean, "") == "")
+    assert(Palette.Plain.paint(Role.Clean, "3 files, no problems") == "3 files, no problems")
+    assert(Palette.Sixteen.paint(Role.Clean, "3 files, no problems") == "\u{1b}[32m3 files, no problems\u{1b}[0m")
+  }
+}

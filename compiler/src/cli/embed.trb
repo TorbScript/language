@@ -16,11 +16,12 @@ use check from "../semantics/check"
 use programText from "../vm/embed"
 use bytecodeOf, reportChecked from "../vm/run"
 use BuildOptions, buildTree, buildFailedCode, chosenPrograms, nameOne, poolOf from "./build"
+use printErrorMessage from "./render"
 
 /** The exit code of `torb build --embed-vm`: `build`'s own for the binary of the VM, or why nothing was built. */
 public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   if options.onlyC || options.target.isSome() {
-    printError "error: `--embed-vm` builds a binary for this machine, and takes neither `--emit-c` nor `--target`"
+    printErrorMessage "`--embed-vm` builds a binary for this machine, and takes neither `--emit-c` nor `--target`"
     return buildFailedCode
   }
   const tree = readSourceTree(options.paths)?
@@ -32,16 +33,16 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   const chosen = match chosenPrograms(checked, tree, requested, options) {
     .Chosen(found) => found
     .Libraries(what) => {
-      printError "error: {what}, and `--embed-vm` needs a program"
+      printErrorMessage "{what}, and `--embed-vm` needs a program"
       return buildFailedCode
     }
     .Refused(message) => {
-      printError "error: {message}"
+      printErrorMessage "{message}"
       return buildFailedCode
     }
   }
   if chosen.length() > 1 {
-    printError "error: {nameOne(chosen, options)}"
+    printErrorMessage "{nameOne(chosen, options)}"
     printError "  `--embed-vm` builds one program"
     return buildFailedCode
   }
@@ -49,7 +50,7 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return buildFailedCode
     }
   }
@@ -62,7 +63,7 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
   const compiler = match findCompilerSources(options.paths) {
     Some(found) => found
     None => {
-      printError "error: `--embed-vm` builds the VM from the toolchain's own sources, and there is no `compiler/` beside it"
+      printErrorMessage "`--embed-vm` builds the VM from the toolchain's own sources, and there is no `compiler/` beside it"
       return buildFailedCode
     }
   }

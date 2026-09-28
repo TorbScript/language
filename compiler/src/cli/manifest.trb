@@ -10,7 +10,7 @@
 
 use IoError from "std/fs"
 use LineIndex from "../syntax/source"
-use renderDiagnostic, renderProblem, counted from "./render"
+use counted, printDiagnostic, printProblem, printErrorMessage from "./render"
 use evaluateManifests, manifestOfSettings, EvaluatedManifest from "../vm/manifest"
 use ScriptStop from "../vm/sandbox"
 
@@ -21,10 +21,10 @@ public fn runManifest(paths: List<String>, checks: Bool): Result<Int, IoError> {
     Ok(found) => found
     Fail(failure) => {
       for problem in failure.problems {
-        printError renderProblem(problem)
+        printProblem problem
       }
       for (path, text, diagnostic) in failure.diagnostics {
-        printError renderDiagnostic(path, LineIndex.of(text), diagnostic)
+        printDiagnostic path, LineIndex.of(text), diagnostic
         printError ""
       }
       return 1
@@ -46,7 +46,7 @@ public fn runManifest(paths: List<String>, checks: Bool): Result<Int, IoError> {
         }
         const read = manifestOfSettings settings
         if read != manifest.statically {
-          printError "error: the evaluation of {manifest.path} and the static reader disagree"
+          printErrorMessage "the evaluation of {manifest.path} and the static reader disagree"
           printError "  static:    {manifest.statically}"
           printError "  evaluated: {read}"
           printError ""

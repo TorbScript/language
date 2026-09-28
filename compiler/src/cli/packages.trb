@@ -29,7 +29,7 @@ use Workspace, Package, findWorkspace, lockProblems from "../project/workspace"
 use Manifest, RegistryBinding, readManifest from "../project/manifest"
 use check from "../semantics/check"
 use evaluateManifests, manifestOfSettings from "../vm/manifest"
-use renderDiagnostic, renderProblem, counted from "./render"
+use counted, printDiagnostic, printProblem, printErrorMessage, printClean from "./render"
 use Version, languageVersion from "../package/version"
 use VersionSet from "../package/version-set"
 use Requirement, requirementOf, versionsOf from "../package/requirement"
@@ -130,7 +130,7 @@ public fn runPackageCommand(options: PackageOptions): Int {
   const context = match contextOf(options) {
     Ok(found) => found
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       return 1
     }
   }
@@ -146,7 +146,7 @@ public fn runPackageCommand(options: PackageOptions): Int {
   match outcome {
     Ok(code) => code
     Fail(problem) => {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
       1
     }
   }
@@ -235,7 +235,7 @@ fn runAdd(context: Context, options: PackageOptions): Result<Int, String> {
     Ok(found) => found
     Fail(explanation) => {
       printError explanation
-      printError "error: nothing was changed: the dependencies of project.trb have no solution"
+      printErrorMessage "nothing was changed: the dependencies of project.trb have no solution"
       return 1
     }
   }
@@ -299,7 +299,7 @@ fn runUpdate(context: Context, options: PackageOptions): Result<Int, String> {
     for gain in gains {
       printError "  {gain}"
     }
-    printError "error: the update gains capabilities: nothing was changed. `--accept-capabilities` takes them"
+    printErrorMessage "the update gains capabilities: nothing was changed. `--accept-capabilities` takes them"
     return 1
   }
   writeLock(context, after.copy(settings: before.settings))?
@@ -318,7 +318,7 @@ fn runInstall(context: Context): Result<Int, String> {
   const problems = lockProblems context.members, lock, true, context.bindings
   if !problems.isEmpty() {
     for problem in problems {
-      printError renderProblem(problem)
+      printProblem problem
     }
     return 1
   }
@@ -615,7 +615,7 @@ fn runLock(context: Context, options: PackageOptions): Result<Int, String> {
   const problems = lockProblems context.members, lock, before.isSome(), context.bindings
   if !problems.isEmpty() {
     for problem in problems {
-      printError renderProblem(problem)
+      printProblem problem
     }
     return 1
   }
@@ -633,7 +633,7 @@ fn runLock(context: Context, options: PackageOptions): Result<Int, String> {
     return 0
   }
   if options.checks {
-    printError "error: {shown} is not what `torb lock` writes"
+    printErrorMessage "{shown} is not what `torb lock` writes"
     for line in differingLines(before ?? "", written) {
       printError "  {line}"
     }
@@ -673,14 +673,14 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
   const problems = publishProblems manifest, lockOf(context)
   if !problems.isEmpty() {
     for problem in problems {
-      printError "error: {problem}"
+      printErrorMessage "{problem}"
     }
-    printError "error: {manifest.name} cannot be published: nothing was built"
+    printErrorMessage "{manifest.name} cannot be published: nothing was built"
     return 1
   }
   const checkedFiles = checkedCount context.tree, package.directory
   if checkedFiles < 0 {
-    printError "error: {manifest.name} does not check: `torb check {context.tree.display(package.directory)}` says where"
+    printErrorMessage "{manifest.name} does not check: `torb check {context.tree.display(package.directory)}` says where"
     return 1
   }
   const paths = packageFiles(package.directory).mapError({ _.show() })?
@@ -698,7 +698,7 @@ fn runPublish(context: Context, options: PackageOptions): Result<Int, String> {
     size = size + entry.bytes.length()
   }
   print "{manifest.name} {manifest.version}"
-  print "  checked:       {counted(checkedFiles, "file")}, no problems"
+  printClean "  checked:       {counted(checkedFiles, "file")}, no problems"
   if reaches.isEmpty() {
     print "  capabilities:  none - the package imports nothing that reaches the machine"
   } else {
@@ -774,13 +774,13 @@ fn checkedCount(tree: SourceTree, directory: String): Int {
   const checked = check tree, [directory]
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError renderProblem(problem)
+    printProblem problem
   }
   for file in checked.files {
     problems = problems + file.diagnostics.length()
     const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
-      printError renderDiagnostic(file.path, lines, diagnostic)
+      printDiagnostic file.path, lines, diagnostic
       printError ""
     }
   }

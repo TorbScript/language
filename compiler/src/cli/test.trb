@@ -27,6 +27,8 @@ use normalizePath, joinPath, parentPath, pathName, pathDepth from "../project/pa
 use BuildOptions, Profile, build, buildFailedCode from "./build"
 use findRuntime from "../project/toolchain"
 use testInMachine from "../vm/run"
+use printErrorMessage from "./render"
+use colorFlag from "./color"
 
 /** What `torb test --help` prints: every flag of the command, and what a path is. */
 public fn testUsage(): String {
@@ -47,6 +49,7 @@ public fn testUsage(): String {
     "  --filter <name>          Only the test of this full name (`Group > test`), or every test of the group of this",
     "                           name; any number of them, and a test runs when it matches one",
     "  --report json            JSON Lines on standard output instead of the report a person reads, for an editor",
+    "  --color auto|always|never  Colour `ok`, `FAILED` and the summary (default: where the output is a terminal)",
     "  --jobs N                 Accepted and ignored: one program is one process",
   ]
   lines.joined separator: "\n"
@@ -187,6 +190,7 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   if options.report == TestReport.Json {
     selection.appendAll(["--report", "json"])
   }
+  selection.appendAll colorFlag()
   arguments.appendAll selection
   const built = build(BuildOptions(
     options.paths,
@@ -216,7 +220,7 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   match Process.runPassingThrough(binary, arguments) {
     Ok(code) => code
     Fail(problem) => {
-      printError "error: the test binary `{binary}` could not be started: {problem.message}"
+      printErrorMessage "the test binary `{binary}` could not be started: {problem.message}"
       buildFailedCode
     }
   }

@@ -2,26 +2,37 @@
  * [renderDiagnostic]: a [Diagnostic] as the text the command line prints, with the source line and a caret under it.
  * [renderProblem]: a problem that belongs to no file, with how to fix it where the command line knows that.
  * [counted]: a count with its noun, for the summary lines.
+ *
+ * Each renders in a [Palette], plain unless one is given; the `print` functions below give the palette of the stream
+ * they write to (`./color`), so a terminal sees the colours of docs/design/BRAND.md section 10 and a pipe the plain
+ * text, byte for byte.
  */
 
 use LineIndex from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
+use Palette, Role, Stream, paletteFor from "./color"
 
 /**
  * A problem of the workspace as text. A prelude that was not found gets the two ways out, because it is what a file
  * outside of every workspace runs into first and the message of the name resolution cannot know about the toolchain.
  */
-public fn renderProblem(problem: String): String {
+public fn renderProblem(problem: String, palette: Palette = Palette.Plain): String {
+  const first = errorLine problem, palette
   if !problem.startsWith("The prelude package") {
-    return "error: {problem}"
+    return first
   }
   const lines = [
-    "error: {problem}",
+    first,
     "  The standard library is looked for above the named paths, the working directory and `torb` itself, in a",
     "  directory that has `std/prelude/project.trb`. Run a `torb` that lies inside of a checkout of the toolchain,",
     "  make the project a member of a workspace that has `std/*`, or set $TORB_STD to the toolchain's `std` directory.",
   ]
   lines.joined separator: "\n"
+}
+
+/** `error: <message>`, the word in the colour of an error and the message bold. */
+public fn errorLine(message: String, palette: Palette = Palette.Plain): String {
+  "{palette.paint(Role.ErrorWord, "error")}{palette.paint(Role.Message, ": {message}")}"
 }
 
 /**
@@ -33,12 +44,27 @@ public fn renderProblem(problem: String): String {
  *    12 | const chained = a < b > c
  *       |                       ^
  */
-public fn renderDiagnostic(path: String, lines: LineIndex, diagnostic: Diagnostic): String {
-  renderDiagnosticAs "error", path, lines, diagnostic
+public fn renderDiagnostic(
+  path: String,
+  lines: LineIndex,
+  diagnostic: Diagnostic,
+  palette: Palette = Palette.Plain,
+): String {
+  renderDiagnosticAs "error", path, lines, diagnostic, palette
 }
 
-/** The same with another word in front of the message: `warning` for what `torb lint` finds. */
-public fn renderDiagnosticAs(severity: String, path: String, lines: LineIndex, diagnostic: Diagnostic): String {
+/**
+ * The same with another word in front of the message: `warning` for what `torb lint` finds. In a palette the word and
+ * the carets take the colour of the severity, the message is bold, the arrow, the gutter and the line numbers are
+ * faint, and the `=` of a note takes the colour of a note; the location, the source line and the notes stay plain.
+ */
+public fn renderDiagnosticAs(
+  severity: String,
+  path: String,
+  lines: LineIndex,
+  diagnostic: Diagnostic,
+  palette: Palette = Palette.Plain,
+): String {
   const (line, column) = lines.lineAndColumn diagnostic.span.start
   const (endLine, endColumn) = lines.lineAndColumn diagnostic.span.end
   const text = lines.lineText line
@@ -47,18 +73,54 @@ public fn renderDiagnosticAs(severity: String, path: String, lines: LineIndex, d
   } else {
     (text.chars().count() - (column - 1)).max(1)
   }
+  const (word, caret) = if severity == "warning" {
+    (Role.WarningWord, Role.WarningCaret)
+  } else {
+    (Role.ErrorWord, Role.ErrorCaret)
+  }
   const gutter = " ".repeat("{line}".byteLength())
+  const bar = palette.paint Role.Gutter, "|"
   var rendered = [
-    "{severity}: {diagnostic.message}",
-    "{gutter}--> {path}:{line}:{column}",
-    "{gutter} |",
-    "{line} | {text}",
-    "{gutter} | {" ".repeat(column - 1)}{"^".repeat(width)}",
+    "{palette.paint(word, severity)}{palette.paint(Role.Message, ": {diagnostic.message}")}",
+    "{gutter}{palette.paint(Role.Gutter, "-->")} {path}:{line}:{column}",
+    "{gutter} {bar}",
+    "{palette.paint(Role.Gutter, "{line} |")} {text}",
+    "{gutter} {bar} {" ".repeat(column - 1)}{palette.paint(caret, "^".repeat(width))}",
   ]
   for note in diagnostic.notes {
-    rendered.append "{gutter} = {note}"
+    rendered.append "{gutter} {palette.paint(Role.NoteMarker, "=")} {note}"
   }
   rendered.joined separator: "\n"
+}
+
+/** A diagnostic on standard error, in the palette of standard error. */
+public fn printDiagnostic(path: String, lines: LineIndex, diagnostic: Diagnostic) {
+  printError renderDiagnostic(path, lines, diagnostic, paletteFor(Stream.Error))
+}
+
+/** A diagnostic with another word in front, on standard error, in the palette of standard error. */
+public fn printDiagnosticAs(severity: String, path: String, lines: LineIndex, diagnostic: Diagnostic) {
+  printError renderDiagnosticAs(severity, path, lines, diagnostic, paletteFor(Stream.Error))
+}
+
+/** A problem of the workspace on standard error, in the palette of standard error. */
+public fn printProblem(problem: String) {
+  printError renderProblem(problem, paletteFor(Stream.Error))
+}
+
+/** `error: <message>` on standard error, in the palette of standard error: every mistake of a command line. */
+public fn printErrorMessage(message: String) {
+  printError errorLine(message, paletteFor(Stream.Error))
+}
+
+/** A summary that found nothing wrong, `3 files, no problems`, on standard output: green where it is coloured. */
+public fn printClean(line: String) {
+  print paletteFor(Stream.Output).paint(Role.Clean, line)
+}
+
+/** A summary that counts problems, `1 problem in 1 of 1 file`, on standard error: bold where it is coloured. */
+public fn printProblemCount(line: String) {
+  printError paletteFor(Stream.Error).paint(Role.Problems, line)
 }
 
 /**

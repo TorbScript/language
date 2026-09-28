@@ -4,8 +4,9 @@
 than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Chivo Mono; the depth gradient as
 the primary form of the mark; a red button only for the main call to action. The logo files, the icons, the social card
 and the tokens are in `brand/` (`brand/README.md` lists every file). The VS Code extension carries the icons and the
-walkthrough, and the released Windows `torb.exe` the Orb (section 11); the extension's two colour themes, the website,
-the registry, the forge's theme and the colours of `torb`'s output are the slices of section 13 still to come.
+walkthrough, the released Windows `torb.exe` the Orb (section 11), and `torb` colours its output (section 10); the
+extension's two colour themes, the website, the registry and the forge's theme are the slices of section 13 still to
+come.
 
 **One mark, one red, one type family, and every value a named token.** The identity has to look like the language it
 stands for: one clear shape instead of several, exact about where things change, confident without effects.
@@ -501,8 +502,11 @@ only token in the brand's hue.
 
 ## 10. The terminal
 
-**Status of this section: proposed.** `torb` prints no colour today except the REPL's faint types
-(`compiler/src/repl/synthesis.trb`); this is what it prints once it does.
+**Status of this section: applied** (2026-09-28). `compiler/src/cli/color.trb` holds the palette and the rules below,
+`compiler/src/cli/render.trb` renders the diagnostics, and `runtime/test.c` colours the report of `torb test` by the
+same rules; `docs/tooling/the-torb-command.md` ("`--color`") describes it for users. Not yet: a `help` label (no
+diagnostic has one), a `skipped` test (the runner has none), OSC 8 hyperlinks and in-place progress lines, and standard
+error is judged by whether standard output is a terminal until the seed knows `isErrorTerminal` of `std/console`.
 
 **Decision: `torb` colours by meaning, in the 16 ANSI colours, and never in the brand red.** In a terminal red means
 error and nothing else: no red banner, no red `torb`, no red progress. The name and the version are bold.
@@ -679,7 +683,7 @@ from it, never one SVG edited alone.
 2. **The registry:** the same shell and the package page of section 11.
 3. **The forge's theme:** the two CSS files, `app.ini`, logo and favicon on git.torb.dev.
 4. **`torb`'s colours:** the rules of section 10, in `compiler/src/cli/render.trb` and the summary lines, with a
-   `--color` flag; `torb.ico` as a resource of `torb.exe` (done).
+   `--color` flag; `torb.ico` as a resource of `torb.exe` (both done).
 5. **The VS Code extension:** the icons and the walkthrough (done), the two themes.
 
 ## 14. Open

@@ -63,6 +63,10 @@ fi
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
+# The gates compare what `torb` writes byte for byte, and a pipe is written without colour - unless the environment
+# forces it (docs/tooling/the-torb-command.md, `--color`), which a shell that sets FORCE_COLOR for other tools would
+unset FORCE_COLOR CLICOLOR_FORCE
+
 say() {
   printf '%s\n' "$*" >&2
 }

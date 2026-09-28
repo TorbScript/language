@@ -61,6 +61,8 @@ torb install           Fetch and verify every package project.lock.trb pins into
 torb publish           Build and check the archive of a package, and publish it (--dry-run: build only)
 torb lock [--check]    Write the settings of every member into project.lock.trb; --check only compares
 torb --version         Print `torb <version>`: the one number of the toolchain, the language and std
+
+Every command: --color auto|always|never   colour where the output is a terminal, always, or never
 ```
 
 `torb` is `build/release/torb`, what `sh tools/bootstrap.sh` writes, and every command below is
@@ -85,6 +87,54 @@ Prints one line to standard output, `torb 0.1.0`, and leaves with 0. The number 
 RELEASE.md section 3: the toolchain, the language and the standard library share it, so it is
 also what the language server names in its `serverInfo` and what the `language` line of a release in the index of a
 registry is compared with.
+
+### `--color`
+
+Every command takes `--color auto`, `--color always` or `--color never` (also written `--color=never`), in front of the
+command or anywhere among its own arguments - but not behind the path of `torb run`, where every argument is the
+program's. `torb` colours what its output means, in the 16 colours of the terminal's own theme:
+
+| What | Colour |
+|------|--------|
+| the word `error` | bold red, and its carets `^^^` red |
+| the word `warning` of `torb lint` | bold yellow, and its carets yellow |
+| the message after the word | bold |
+| ` --> `, the bar of the gutter and the line numbers | faint |
+| the `=` in front of a note | bold cyan |
+| a summary that found nothing, `3 files, no problems` | green |
+| a summary that counts problems, `1 problem in 1 of 1 file` | bold |
+| `ok` and `FAILED` of `torb test`, and its summary | green, bold red, and green or bold |
+| the name in `torb --version`, a type the REPL shows | bold, faint |
+
+Colour never carries anything alone: every diagnostic starts with its word, the carets mark its span and every summary
+counts in words, so a run without colour loses nothing - and it writes exactly the bytes it wrote before `torb` had
+colours, which is what every golden file compares. The first of these rules that applies decides:
+
+1. `--color always` or `--color never`.
+2. `FORCE_COLOR` or `CLICOLOR_FORCE` set to anything but empty or `0`: colour.
+3. `NO_COLOR` set to anything but empty: no colour ([no-color.org](https://no-color.org)).
+4. `auto`, the default: colour where the output is a terminal whose `TERM` is not `dumb`. Today standard error is
+   coloured where standard output is a terminal, as an interactive `torb` has one terminal for both.
+
+On Windows a console shows the colours once `torb` has turned on its processing of escape sequences, which every
+console of Windows 10 and later has; one that refuses gets plain text. Where `COLORTERM` is `truecolor` or `24bit` and
+the ground of the terminal is known - `TORB_BACKGROUND=light` or `dark`, or the last field of `COLORFGBG` - `torb`
+writes the text colours of the brand in 24 bits instead (BRAND.md section 10): a 24-bit colour
+chosen without knowing the background can vanish on it. The red of an error is never the brand's red.
+
+`torb test --native` hands `--color always` or `--color never` to the test binary, which writes its own report; with
+`auto` the binary decides the same way, on the same streams.
+
+```console
+$ torb check --color always src/main.trb 2>&1 | cat -v
+^[[1;31merror^[[0m^[[1m: Cannot find `prnt` here^[[0m
+ ^[[2m-->^[[0m src/main.trb:1:1
+  ^[[2m|^[[0m
+^[[2m1 |^[[0m prnt "hello"
+  ^[[2m|^[[0m ^[[31m^^^^^[[0m
+
+^[[1m1 problem in 1 of 1 file^[[0m
+```
 
 ### `run`
 

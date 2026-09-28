@@ -1,6 +1,6 @@
 #!/bin/sh
-# `torb test --filter` and `torb test --report json` over the suite of `tests/test-report/suite/`, in the VM and in a
-# native binary. Every case of the table below runs in both back ends, and what it writes to standard output - the
+# `torb test --filter`, `torb test --report json` and `torb test --color` over the suite of `tests/test-report/suite/`,
+# in the VM and in a native binary. Every case of the table below runs in both back ends, and what it writes to standard output - the
 # durations of the JSON report masked as `<ms>` - plus a last line `exit <code>` is compared with
 # `tests/test-report/<case>.expected`: one file for both back ends, because the runtime writes the report of both
 # (`runtime/test.c`). The one thing a back end adds is the frames of a failure, which a binary of the `dev` profile
@@ -19,6 +19,9 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
+
+# Colour is what a case asks for, never what the environment brings along: the report is compared byte for byte
+unset FORCE_COLOR CLICOLOR_FORCE NO_COLOR COLORTERM TORB_BACKGROUND COLORFGBG
 
 say() {
   printf '%s\n' "$*" >&2
@@ -116,6 +119,19 @@ case_of filter-test --filter "Arithmetic > Division > divides"
 case_of filter-group --report json --filter "Arithmetic" --filter "Größe > zählt Äpfel 日本"
 # The shard in the summary of the JSON report
 case_of shard --report json --shard 2/2
+# The human report in colour: `ok` green, `FAILED` bold red, the summary bold because a test failed
+case_of color --color always
+# FORCE_COLOR colours a pipe as `--color always` does, and wins over NO_COLOR
+FORCE_COLOR=1
+NO_COLOR=1
+export FORCE_COLOR NO_COLOR
+case_of forced-color
+unset FORCE_COLOR NO_COLOR
+# `--color never` wins over FORCE_COLOR: the report is the plain one
+FORCE_COLOR=1
+export FORCE_COLOR
+case_of never-color --color never
+unset FORCE_COLOR
 
 # The mistakes of the command line: what each writes and its exit code, refused before anything is built. The path
 # comes first, so that an option at the end has nothing behind it to take for its value. `--help` lists the flags
@@ -138,6 +154,7 @@ done <<'EOF'
 --filter
 --report
 --frobnicate
+--color purple
 EOF
 status=0
 "$torb" test --help >"$scratch/arguments.err" 2>&1 || status=$?

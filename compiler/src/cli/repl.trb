@@ -16,6 +16,7 @@ use readSourceTree from "../project/read"
 use normalizePath from "../project/path"
 use Session, Outcome, newSession, evaluate, typeOf, closeSession from "../repl/session"
 use isComplete from "../repl/entry"
+use printErrorMessage from "./render"
 
 /** What one read of the input answered: a whole line, Ctrl+C, or the end of the input (docs/design/REPL.md section 2). */
 public type ReadEvent {
@@ -185,22 +186,22 @@ fn command(var session: Session, directory: String, sandboxed: Bool, line: Strin
     }
     ":type" => {
       if rest.isEmpty() {
-        printError "error: `:type` needs an expression"
+        printErrorMessage "`:type` needs an expression"
       } else if const Some(shown) = typeOf(session, rest) {
         print shown
       }
     }
     ":load" => {
       if rest.isEmpty() {
-        printError "error: `:load` needs a file"
+        printErrorMessage "`:load` needs a file"
       } else if !File.exists(rest) {
-        printError "error: `{rest}` does not exist"
+        printErrorMessage "`{rest}` does not exist"
       } else {
         const text = File.readText(rest)?
         return exitCodeOf evaluate(session, text, rest)
       }
     }
-    _ => printError "error: `{name}` is no command of the session: :help lists them"
+    _ => printErrorMessage "`{name}` is no command of the session: :help lists them"
   }
   Ok None
 }

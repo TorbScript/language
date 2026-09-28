@@ -15,7 +15,7 @@ use lex from "./syntax/lexer"
 use parse from "./syntax/parser/parser"
 use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
-use renderDiagnostic, renderProblem, counted from "./cli/render"
+use counted, printDiagnostic, printProblem, printErrorMessage, printClean, printProblemCount from "./cli/render"
 use printPartialOperations from "./cli/partial"
 use readSourceTree, absolutePaths from "./project/read"
 use SourceTree from "./project/source-tree"
@@ -50,6 +50,7 @@ use languageServerUsage, isLanguageServerArguments, startLanguageServer from "./
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 use packageOptionsOf, runPackageCommand from "./cli/packages"
 use languageVersion from "./package/version"
+use Role, Stream, colorArguments, paletteFor from "./cli/color"
 
 /** Leaves with the code a command answered, where it is not 0. */
 fn exitWith(code: Int) {
@@ -71,7 +72,7 @@ fn refuseUnknownFlag(arguments: List<String>, known: List<String>) {
 }
 
 fn reportUnknownFlag(flag: String) {
-  printError "error: unknown flag {flag}, see `torb --help`"
+  printErrorMessage "unknown flag {flag}, see `torb --help`"
 }
 
 /** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
@@ -146,6 +147,9 @@ fn printUsage() {
   printError "  torb --version         `torb <version>`: the one number of the toolchain, the language and std"
   printDocUsage()
   printDocumentationUsage()
+  printError ""
+  printError "Every command: --color auto|always|never - colour where the output is a terminal (auto, the default, which"
+  printError "  NO_COLOR, FORCE_COLOR and CLICOLOR_FORCE override), always, or never"
 }
 
 fn printTokens(path: String): Result<Void, IoError> {
@@ -182,14 +186,14 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
     problems = problems + parsed.diagnostics.length()
     const lines = LineIndex.of text
     for diagnostic in parsed.diagnostics {
-      printError renderDiagnostic(path, lines, diagnostic)
+      printDiagnostic path, lines, diagnostic
       printError ""
     }
   }
   if problems == 0 {
-    print "{counted(files.length(), "file")}, no problems"
+    printClean "{counted(files.length(), "file")}, no problems"
   } else {
-    printError "{counted(problems, "problem")} in {filesWithProblems} of {counted(files.length(), "file")}"
+    printProblemCount "{counted(problems, "problem")} in {filesWithProblems} of {counted(files.length(), "file")}"
   }
   problems
 }
@@ -217,7 +221,7 @@ fn checkProjects(
   var problems = checked.problems.length()
   var filesWithProblems = 0
   for problem in checked.problems {
-    printError renderProblem(problem)
+    printProblem problem
   }
   for file in checked.files {
     if file.diagnostics.isEmpty() {
@@ -227,7 +231,7 @@ fn checkProjects(
     problems = problems + file.diagnostics.length()
     const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
-      printError renderDiagnostic(file.path, lines, diagnostic)
+      printDiagnostic file.path, lines, diagnostic
       printError ""
     }
   }
@@ -237,15 +241,15 @@ fn checkProjects(
     for path in paths {
       named.append "`{path}`"
     }
-    printError "error: {named.joined(separator: ", ")} holds no TorbScript file to check"
+    printErrorMessage "{named.joined(separator: ", ")} holds no TorbScript file to check"
     printError "  a file is checked when it is named, or is one of the files of a project: a `.trb` file below its directory"
     return problems + 1
   }
   if problems == 0 {
-    print "{counted(checked.files.length(), "file")}, no problems"
+    printClean "{counted(checked.files.length(), "file")}, no problems"
   } else {
     const total = counted checked.files.length(), "file"
-    printError "{counted(problems, "problem")} in {filesWithProblems} of {total}"
+    printProblemCount "{counted(problems, "problem")} in {filesWithProblems} of {total}"
   }
   if withEveryTarget && problems == 0 {
     return checkEveryTarget checked, tree
@@ -274,16 +278,16 @@ fn checkEveryTarget(checked: Checked, tree: SourceTree): Int {
     for problem in found.problems {
       const module = checked.program.graph.at problem.module
       const lines = LineIndex.of module.source.text
-      printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
+      printDiagnostic tree.display(module.path), lines, problem.diagnostic
       printError ""
       problems = problems + 1
     }
   }
   if problems == 0 {
-    print "{counted(targets.length(), "target")}, no problems"
+    printClean "{counted(targets.length(), "target")}, no problems"
   } else {
     const names = failing.joined separator: ", "
-    printError "{counted(problems, "problem")} on {counted(failing.length(), "target")} of {targets.length()}: {names}"
+    printProblemCount "{counted(problems, "problem")} on {counted(failing.length(), "target")} of {targets.length()}: {names}"
   }
   problems
 }
@@ -330,13 +334,13 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool, asByt
   const checked = check(tree, absolutePaths(paths)?, false, checksEveryBody: true)
   var problems = checked.problems.length()
   for problem in checked.problems {
-    printError renderProblem(problem)
+    printProblem problem
   }
   for file in checked.files {
     problems = problems + file.diagnostics.length()
     const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
-      printError renderDiagnostic(file.path, lines, diagnostic)
+      printDiagnostic file.path, lines, diagnostic
       printError ""
     }
   }
@@ -384,11 +388,11 @@ fn printBytecode(checked: Checked, lowering: Lowering): Int {
   print disassemble(emission.program)
   var found = emission.unsupported.length()
   for blocked in owned.unsupported {
-    printError "error: {blocked.what} (at {blocked.at})"
+    printErrorMessage "{blocked.what} (at {blocked.at})"
     found = found + blocked.count
   }
   for what in emission.unsupported {
-    printError "error: {what}"
+    printErrorMessage "{what}"
   }
   found
 }
@@ -425,7 +429,7 @@ fn profileChoiceOf(arguments: List<String>, fallback: Profile): ProfileChoice? {
       profile = match profileNamed(argument) {
         Some(named) => named
         None => {
-          printError "error: `{argument}` is no profile: the profiles are `dev` and `release`"
+          printErrorMessage "`{argument}` is no profile: the profiles are `dev` and `release`"
           return None
         }
       }
@@ -442,7 +446,7 @@ fn profileChoiceOf(arguments: List<String>, fallback: Profile): ProfileChoice? {
     rest.append argument
   }
   if wantsProfile {
-    printError "error: `--profile` needs a name: `dev` or `release`"
+    printErrorMessage "`--profile` needs a name: `dev` or `release`"
     return None
   }
   ProfileChoice profile, rest
@@ -484,7 +488,7 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
         Some(found) => found
         None => {
           const known = everyTarget().map({ _.name() }).toList().joined(separator: ", ")
-          printError "error: `{argument}` is no target: the targets are {known}"
+          printErrorMessage "`{argument}` is no target: the targets are {known}"
           return None
         }
       }
@@ -519,14 +523,14 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
       continue
     }
     if !program.isEmpty() {
-      printError "error: `torb build` builds every program or one of them, and `{program}` and `{argument}` are two"
+      printErrorMessage "`torb build` builds every program or one of them, and `{program}` and `{argument}` are two"
       printError "  a directory or a file is written as a path: `./{argument}`"
       return None
     }
     program = argument
   }
   if wantsTarget {
-    printError "error: `--target` needs a name such as `linux-x64`"
+    printErrorMessage "`--target` needs a name such as `linux-x64`"
     return None
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
@@ -576,7 +580,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     if wantsReport {
       wantsReport = false
       if argument != "json" {
-        printError "error: `--report` takes `json`, the one report besides the human one: `--report json`"
+        printErrorMessage "`--report` takes `json`, the one report besides the human one: `--report json`"
         return None
       }
       report = TestReport.Json
@@ -587,7 +591,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
       continue
     }
     if argument.startsWith("--filter=") {
-      printError "error: the name of a filter is an argument of its own: `--filter \"Group > test\"`"
+      printErrorMessage "the name of a filter is an argument of its own: `--filter \"Group > test\"`"
       return None
     }
     if argument == "--report" {
@@ -595,7 +599,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
       continue
     }
     if argument.startsWith("--report=") {
-      printError "error: the report is an argument of its own: `--report json`"
+      printErrorMessage "the report is an argument of its own: `--report json`"
       return None
     }
     if wantsJobs {
@@ -607,7 +611,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
       shards = match Int.tryFrom(argument).ok() {
         Some(count) if count >= 1 => count
         _ => {
-          printError "error: `--shards` takes how many processes run the suite, a whole number above zero: `--shards 4`"
+          printErrorMessage "`--shards` takes how many processes run the suite, a whole number above zero: `--shards 4`"
           return None
         }
       }
@@ -622,7 +626,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
       shard = match testShardNamed(argument) {
         Some(found) => found
         None => {
-          printError "error: `--shard` takes `<index>/<count>`, an index from 1 to the count: `--shard 2/4`"
+          printErrorMessage "`--shard` takes `<index>/<count>`, an index from 1 to the count: `--shard 2/4`"
           return None
         }
       }
@@ -634,7 +638,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     }
     // The runtime reads the shard off the command line as two arguments, the VM inside `torb` as well
     if argument.startsWith("--shard=") {
-      printError "error: the shard is an argument of its own: `--shard 2/4`"
+      printErrorMessage "the shard is an argument of its own: `--shard 2/4`"
       return None
     }
     if argument == "--vm" {
@@ -654,39 +658,39 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     }
     // Not a path: a flag this command does not know, which would otherwise be looked for as a file that does not exist
     if argument.startsWith("--") {
-      printError "error: unknown flag {argument}, see `torb test --help`"
+      printErrorMessage "unknown flag {argument}, see `torb test --help`"
       return None
     }
     paths.append argument
   }
   if wantsShard {
-    printError "error: `--shard` needs `<index>/<count>`: `--shard 2/4`"
+    printErrorMessage "`--shard` needs `<index>/<count>`: `--shard 2/4`"
     return None
   }
   if wantsShards {
-    printError "error: `--shards` needs how many processes run the suite: `--shards 4`"
+    printErrorMessage "`--shards` needs how many processes run the suite: `--shards 4`"
     return None
   }
   if wantsFilter {
-    printError "error: `--filter` needs the full name of a test or of a group: `--filter \"Group > test\"`"
+    printErrorMessage "`--filter` needs the full name of a test or of a group: `--filter \"Group > test\"`"
     return None
   }
   if wantsReport {
-    printError "error: `--report` needs what to write: `--report json`"
+    printErrorMessage "`--report` needs what to write: `--report json`"
     return None
   }
   // One stream of events and one summary: the reports of several processes, one after the other, are neither
   if report == TestReport.Json && shards > 1 {
-    printError "error: `--report json` runs one process, and `--shards` several: give each process its `--shard k/n`"
+    printErrorMessage "`--report json` runs one process, and `--shards` several: give each process its `--shard k/n`"
     return None
   }
   if shards > 1 && shard.isSome() {
-    printError "error: `--shard` runs one shard and `--shards` all of them: give one of the two"
+    printErrorMessage "`--shard` runs one shard and `--shards` all of them: give one of the two"
     return None
   }
   // The shards are processes of one binary, and the VM runs inside `torb`
   if shards > 1 && usesMachine {
-    printError "error: `--shards` runs a native test binary several times at once: add `--native`"
+    printErrorMessage "`--shards` runs a native test binary several times at once: add `--native`"
     return None
   }
   const given = if paths.isEmpty() { [defaultTestPath()] } else { paths }
@@ -823,15 +827,25 @@ fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering)
   for problem in lowering.problems {
     const module = checked.program.graph.at problem.module
     const lines = LineIndex.of module.source.text
-    printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
+    printDiagnostic tree.display(module.path), lines, problem.diagnostic
     printError ""
   }
   lowering.problems.length()
 }
 
-match Process.arguments() {
+// `--color` belongs to every command, and `paletteFor` reads it off the command line itself (`./cli/color`): the
+// commands match what is left
+const arguments = match colorArguments(Process.arguments()) {
+  Ok(found) => found.arguments
+  Fail(problem) => {
+    printErrorMessage problem
+    Process.exit 2
+  }
+}
+
+match arguments {
   // docs/design/RELEASE.md section 3: one number for the toolchain, the language and the standard library
-  ["--version"] => print "torb {languageVersion}"
+  ["--version"] => print "{paletteFor(Stream.Output).paint(Role.Emphasis, "torb")} {languageVersion}"
   ["check", ...more] => {
     const flags = ["--statistics", "--timings", "--every-target", "--partial"]
     refuseUnknownFlag more, flags
@@ -909,7 +923,7 @@ match Process.arguments() {
     const options = match packageOptionsOf(command, more) {
       Ok(found) => found
       Fail(problem) => {
-        printError "error: {problem}"
+        printErrorMessage "{problem}"
         Process.exit 2
       }
     }

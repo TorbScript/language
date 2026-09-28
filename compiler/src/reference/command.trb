@@ -23,7 +23,7 @@ use Environment from "std/os"
 use readSourceTree, absolutePaths from "../project/read"
 use findRuntime from "../project/toolchain"
 use check from "../semantics/check"
-use counted from "../cli/render"
+use counted, printErrorMessage from "../cli/render"
 use DocumentationProblem from "../documentation/markdown"
 use NativeOptions from "../documentation/native"
 use Reference, referenceOf from "./model"
@@ -104,7 +104,7 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
   const roots = absolutePaths(paths)?
   const checked = check tree, roots
   if checked.files.isEmpty() {
-    printError "error: {paths.joined(separator: ", ")} holds no package to document"
+    printErrorMessage "{paths.joined(separator: ", ")} holds no package to document"
     return 1
   }
   var compileErrors = 0
@@ -112,7 +112,7 @@ public fn runDoc(options: DocOptions): Result<Int, IoError> {
     compileErrors = compileErrors + file.diagnostics.length()
   }
   if compileErrors > 0 {
-    printError "error: {counted(compileErrors, "problem")} in the checked files. `torb check` says what they are"
+    printErrorMessage "{counted(compileErrors, "problem")} in the checked files. `torb check` says what they are"
     return 1
   }
   const reference = referenceOf checked

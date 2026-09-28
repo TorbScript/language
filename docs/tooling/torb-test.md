@@ -38,6 +38,7 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
     --shards n                      With --native: build once, and run all n shards at the same time
     --filter <name>                 Only the test of this full name, or every test of the group of this name; repeatable
     --report json                   JSON Lines on standard output instead of the report a person reads
+    --color auto|always|never       Colour `ok`, `FAILED` and the summary (default: where the output is a terminal)
     --vm                            The default, accepted
 torb test --help                 Every flag, and what a path is
 ```
@@ -178,6 +179,16 @@ is written as it is (`--filter "Größe > zählt Äpfel"`): the runtime reads th
 Like `--shard`, it reaches the tests through the command line of the process - `test` hands it to the binary, and the
 VM reads `torb`'s own - so a binary started by hand takes it too, and the name is always an argument of its own:
 `--filter=...` is refused.
+
+### `--color`
+
+The report a person reads is coloured where standard output is a terminal: `ok` green, `FAILED` bold red, and the
+summary green when nothing failed and bold when something did. `--color always` and `--color never` say otherwise, and
+`NO_COLOR`, `FORCE_COLOR` and `CLICOLOR_FORCE` decide `auto` as they do for every command
+([the torb command](the-torb-command.md#--color)). The runtime writes the report, so the flag reaches it like the others:
+the VM reads `torb`'s own command line, and a native binary is handed `--color always` or `--color never` - with
+`auto` it looks at its streams itself. The JSON report is never coloured, and a report without colour is byte for byte
+what it was before.
 
 ### `--report json`
 

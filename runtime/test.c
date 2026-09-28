@@ -38,6 +38,10 @@
  *   not run. Files still print their line, and the counts count what ran.
  * - `--report json` writes JSON Lines instead of the human report (`torb_test_json_*`): one object per line, an event
  *   of the run, flushed as it is written so that an editor reads each one while the suite runs.
+ * - `--color auto|always|never` colours the human report (`torb_test_decide_colors`): `ok` green, `FAILED` bold red,
+ *   the summary green without failures and bold with them. `auto` asks the environment and whether standard output is
+ *   a terminal. Colour is always redundant - every line says its outcome in a word - and a plain report is the same
+ *   bytes it was before the report had colours.
  */
 
 #include "torb.h"
@@ -85,6 +89,26 @@ typedef struct torb_test_buffer {
 /** Whether the options are read, and what they said besides the shard. */
 static bool torb_test_options_read = false;
 static bool torb_test_reports_json = false;
+
+/**
+ * How the human report is coloured (docs/design/BRAND.md section 10): not at all, in the 16 colours of the terminal's
+ * theme, or in 24 bits for a known light or dark ground. Decided once, with the options (`torb_test_decide_colors`).
+ */
+typedef enum torb_test_palette {
+  TORB_TEST_PLAIN,
+  TORB_TEST_SIXTEEN,
+  TORB_TEST_LIGHT,
+  TORB_TEST_DARK,
+} torb_test_palette;
+static torb_test_palette torb_test_colors = TORB_TEST_PLAIN;
+
+/** What a coloured part of the report means: `ok`, `FAILED`, a summary without failures, one with failures. */
+typedef enum torb_test_role {
+  TORB_TEST_PASSED,
+  TORB_TEST_FAILED,
+  TORB_TEST_CLEAN,
+  TORB_TEST_PROBLEMS,
+} torb_test_role;
 /** The names of `--filter`, each an owned copy; none is a run of every test. */
 static torb_test_buffer *torb_test_filters = NULL;
 static size_t torb_test_filter_count = 0;
@@ -189,18 +213,129 @@ static void torb_test_add_filter(torb_text name) {
   torb_test_filter_count += 1u;
 }
 
+/* ------------------------------------------------------------------------------------------------- the colours --- */
+
+/** An environment variable of up to `size - 1` bytes, or the empty text where it is not set or longer than that. */
+static void torb_test_variable(const char *name, char *buffer, size_t size) {
+  char *value = NULL;
+  size_t length = 0u;
+  buffer[0] = '\0';
+  if (!torb_platform_environment_variable(name, &value, &length)) {
+    return;
+  }
+  if (length < size) {
+    memcpy(buffer, value, length + 1u);
+  }
+  torb_raw_free(value, length + 1u);
+}
+
+/** Whether a variable of the kind of `FORCE_COLOR` forces colour: set, and not to `0`. */
+static bool torb_test_forces(const char *value) {
+  return value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
 /**
- * Reads `--shard`, `--filter` and `--report` off the command line, once. Through `torb_process_arguments` and not the
- * `argv` of `main`: on Windows that `argv` is not UTF-8 (process.c), and the name of a test that a filter names may hold
- * any character. An option and its value are two arguments, read as a pair wherever they stand, which is what `torb test`
- * checks before it runs anything (`testOptionsOf` in `compiler/src/main.trb`) and what it hands a native binary; the
- * other arguments - `torb`'s own subcommand and paths, in the VM - are passed over. A value that says nothing an option
- * could mean is a mistake of the caller.
+ * The palette of the report, by the rules `compiler/src/cli/color.trb` colours the rest of `torb`'s output with - the
+ * first that applies: `--color always` or `never` (`choice` 1 or 2; 0 is `auto`, the default), `FORCE_COLOR` or
+ * `CLICOLOR_FORCE` set to anything but empty or `0`, `NO_COLOR` set to anything but empty, and otherwise whether
+ * standard output is a terminal whose `TERM` is not `dumb`. Coloured, it is 24 bits only where `COLORTERM` is
+ * `truecolor` or `24bit` and `TORB_BACKGROUND` (`light`, `dark`) or the last field of `COLORFGBG` (0 to 6 and 8 dark,
+ * 7 and 9 to 15 light) says the ground.
+ */
+static torb_test_palette torb_test_decide_colors(int choice) {
+  char value[64];
+  char other[64];
+  bool colored;
+  bool one_digit;
+  bool two_digits;
+  const char *field;
+  if (choice == 1) {
+    colored = true;
+  } else if (choice == 2) {
+    colored = false;
+  } else {
+    torb_test_variable("FORCE_COLOR", value, sizeof value);
+    torb_test_variable("CLICOLOR_FORCE", other, sizeof other);
+    if (torb_test_forces(value) || torb_test_forces(other)) {
+      colored = true;
+    } else {
+      torb_test_variable("NO_COLOR", value, sizeof value);
+      torb_test_variable("TERM", other, sizeof other);
+      colored = value[0] == '\0' && strcmp(other, "dumb") != 0 && torb_is_terminal();
+    }
+  }
+  if (!colored) {
+    return TORB_TEST_PLAIN;
+  }
+  torb_test_variable("COLORTERM", value, sizeof value);
+  if (strcmp(value, "truecolor") != 0 && strcmp(value, "24bit") != 0) {
+    return TORB_TEST_SIXTEEN;
+  }
+  torb_test_variable("TORB_BACKGROUND", value, sizeof value);
+  if (strcmp(value, "light") == 0) {
+    return TORB_TEST_LIGHT;
+  }
+  if (strcmp(value, "dark") == 0) {
+    return TORB_TEST_DARK;
+  }
+  torb_test_variable("COLORFGBG", value, sizeof value);
+  field = strrchr(value, ';');
+  field = field == NULL ? value : field + 1;
+  one_digit = field[0] >= '0' && field[0] <= '9' && field[1] == '\0';
+  two_digits = field[0] >= '0' && field[0] <= '9' && field[1] >= '0' && field[1] <= '9' && field[2] == '\0';
+  if (one_digit || two_digits) {
+    const int number = one_digit ? field[0] - '0' : (field[0] - '0') * 10 + (field[1] - '0');
+    if (number <= 6 || number == 8) {
+      return TORB_TEST_DARK;
+    }
+    if (number <= 15) {
+      return TORB_TEST_LIGHT;
+    }
+  }
+  return TORB_TEST_SIXTEEN;
+}
+
+/**
+ * The SGR parameters of a role in the palette of the run: `ok` and a clean summary green, `FAILED` bold red, a summary
+ * with failures bold - in 24 bits the success and error text tokens of the brand and ink or paper, never the brand red.
+ */
+static const char *torb_test_sgr(torb_test_role role) {
+  switch (torb_test_colors) {
+    case TORB_TEST_LIGHT:
+      return role == TORB_TEST_FAILED     ? "1;38;2;176;9;33"
+             : role == TORB_TEST_PROBLEMS ? "1;38;2;20;17;15"
+                                          : "38;2;0;110;48";
+    case TORB_TEST_DARK:
+      return role == TORB_TEST_FAILED     ? "1;38;2;255;166;163"
+             : role == TORB_TEST_PROBLEMS ? "1;38;2;249;246;245"
+                                          : "38;2;146;215;160";
+    default:
+      return role == TORB_TEST_FAILED ? "1;31" : role == TORB_TEST_PROBLEMS ? "1" : "32";
+  }
+}
+
+/** `text` into `buffer` in the colour of `role`, reset behind it, or as it is where the report is plain. */
+static void torb_test_paint(char *buffer, size_t size, torb_test_role role, const char *text) {
+  if (torb_test_colors == TORB_TEST_PLAIN) {
+    snprintf(buffer, size, "%s", text);
+  } else {
+    snprintf(buffer, size, "\x1b[%sm%s\x1b[0m", torb_test_sgr(role), text);
+  }
+}
+
+/**
+ * Reads `--shard`, `--filter`, `--report` and `--color` off the command line, once. Through `torb_process_arguments`
+ * and not the `argv` of `main`: on Windows that `argv` is not UTF-8 (process.c), and the name of a test that a filter
+ * names may hold any character. An option and its value are two arguments, read as a pair wherever they stand, which is
+ * what `torb test` checks before it runs anything (`testOptionsOf` in `compiler/src/main.trb`) and what it hands a
+ * native binary; the other arguments - `torb`'s own subcommand and paths, in the VM - are passed over. A value that says
+ * nothing an option could mean is a mistake of the caller; `--color` also takes `--color=<when>`, as `torb` does.
  */
 static void torb_test_read_options(void) {
   torb_list arguments;
   int64_t count;
   int64_t index = 0;
+  int color = 0;
   if (torb_test_options_read) {
     return;
   }
@@ -230,6 +365,23 @@ static void torb_test_read_options(void) {
     }
     index += 2;
   }
+  /* `--color <when>` or `--color=<when>`, the last one; `torb` refused any other value before the run began, so one it
+     does not know is `auto` here rather than a panic */
+  for (index = 0; index < count; index += 1) {
+    const torb_text option = *(const torb_text *)torb_list_at(arguments, index, torb_location_unknown);
+    torb_text value = option;
+    if (torb_test_text_is(option, "--color") && index + 1 < count) {
+      value = *(const torb_text *)torb_list_at(arguments, index + 1, torb_location_unknown);
+      index += 1;
+    } else if (option.length > 8 && memcmp((const char *)option.storage->data + option.offset, "--color=", 8u) == 0) {
+      value.offset += 8;
+      value.length -= 8;
+    } else {
+      continue;
+    }
+    color = torb_test_text_is(value, "always") ? 1 : torb_test_text_is(value, "never") ? 2 : 0;
+  }
+  torb_test_colors = torb_test_reports_json ? TORB_TEST_PLAIN : torb_test_decide_colors(color);
   torb_list_release(arguments);
 }
 
@@ -508,10 +660,20 @@ void torb_test_case(torb_text name, torb_closure body) {
   torb_test_buffer_release(&whole);
   torb_test_full_name(full, sizeof full, name);
   if (passed) {
-    torb_test_line_of("  ok      ", full, strlen(full));
+    char word[48];
+    char prefix[64];
+    torb_test_paint(word, sizeof word, TORB_TEST_PASSED, "ok");
+    snprintf(prefix, sizeof prefix, "  %s      ", word);
+    torb_test_line_of(prefix, full, strlen(full));
     return;
   }
-  torb_test_line_of("  FAILED  ", full, strlen(full));
+  {
+    char word[48];
+    char prefix[64];
+    torb_test_paint(word, sizeof word, TORB_TEST_FAILED, "FAILED");
+    snprintf(prefix, sizeof prefix, "  %s  ", word);
+    torb_test_line_of(prefix, full, strlen(full));
+  }
   torb_test_print_indented(point.message);
   if (point.at.path != NULL) {
     char site[TORB_TEST_NAME_SIZE];
@@ -549,7 +711,7 @@ void torb_test_file(const char *path, size_t length) {
 
 int torb_test_finish(void) {
   char shard[64] = "";
-  char summary[192];
+  char summary[256];
   torb_test_read_options();
   if (torb_test_reports_json) {
     if (torb_test_shard_count != 0) {
@@ -559,12 +721,16 @@ int torb_test_finish(void) {
     snprintf(summary, sizeof summary, "{\"event\":\"summary\",\"passed\":%lld,\"failed\":%lld,\"files\":%lld%s}",
              (long long)torb_test_passed, (long long)torb_test_failed, (long long)torb_test_files, shard);
   } else {
+    char counts[192];
     if (torb_test_shard_count != 0) {
       snprintf(shard, sizeof shard, ", shard %lld of %lld", (long long)torb_test_shard_index,
                (long long)torb_test_shard_count);
     }
-    snprintf(summary, sizeof summary, "\n%lld passed, %lld failed (%lld %s%s)", (long long)torb_test_passed,
+    snprintf(counts, sizeof counts, "%lld passed, %lld failed (%lld %s%s)", (long long)torb_test_passed,
              (long long)torb_test_failed, (long long)torb_test_files, torb_test_files == 1 ? "file" : "files", shard);
+    summary[0] = '\n';
+    torb_test_paint(summary + 1, sizeof summary - 1, torb_test_failed == 0 ? TORB_TEST_CLEAN : TORB_TEST_PROBLEMS,
+                    counts);
   }
   torb_write_line_out(summary, strlen(summary));
   fflush(stdout);

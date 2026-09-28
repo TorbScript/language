@@ -21,7 +21,7 @@ use SourceText, LineIndex from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
 use parse from "../syntax/parser/parser"
 use SourceFile from "../syntax/ast"
-use renderDiagnosticAs, counted from "../cli/render"
+use counted, printDiagnosticAs, printClean, printProblemCount from "../cli/render"
 use collectFormatFiles from "../format/command"
 use readSourceTree, absolutePaths from "../project/read"
 use normalizePath from "../project/path"
@@ -308,7 +308,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
       total = total + 1
       const ruleIndex = everyLintRule().indexOf(finding.rule) ?? 0
       perRule[ruleIndex] = perRule[ruleIndex] + 1
-      printError renderDiagnosticAs("warning", file, lines, diagnosticOf(finding))
+      printDiagnosticAs "warning", file, lines, diagnosticOf(finding)
       printError ""
     }
   }
@@ -316,7 +316,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
     printError "skipped {file}: it does not parse (`torb parse` says why)"
   }
   if total == 0 {
-    print "{counted(files.length(), "file")}, no findings"
+    printClean "{counted(files.length(), "file")}, no findings"
     return 0
   }
   var counts: List<String> = []
@@ -325,7 +325,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
       counts.append "{rule.id()} {perRule[index]}"
     }
   }
-  printError "{counted(total, "finding")} in {filesWithFindings} of {counted(files.length(), "file")} ({counts.joined(separator: ", ")})"
+  printProblemCount "{counted(total, "finding")} in {filesWithFindings} of {counted(files.length(), "file")} ({counts.joined(separator: ", ")})"
   1
 }
 

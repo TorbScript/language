@@ -1,0 +1,333 @@
+/**
+ * The colours of `torb`'s output (docs/design/BRAND.md section 10): the one place that says which [Role] gets which
+ * escape sequence, and whether a stream is coloured at all. Every other file names a role and asks [paletteFor] for
+ * the palette of its stream.
+ *
+ * Colour is always redundant: a diagnostic starts with its word, carets mark its span and a summary counts in words, so
+ * [Palette.Plain] loses nothing and writes exactly the bytes `torb` wrote before it had colours. The colours are the 16
+ * of the terminal's own theme, and never the brand red: in a terminal red means an error and nothing else.
+ * `runtime/test.c` colours the lines of a test run with the same rules and the same sequences.
+ */
+
+use Environment from "std/os"
+use Process from "std/process"
+use isTerminal from "std/console"
+
+/** What a piece of output means, which is all that decides its colour. */
+public type Role {
+  /** The word `error` in front of a diagnostic */
+  case ErrorWord
+  /** The carets under the span of an error */
+  case ErrorCaret
+  /** The word `warning` in front of what `torb lint` finds */
+  case WarningWord
+  /** The carets under the span of a warning */
+  case WarningCaret
+  /** The `=` in front of a note */
+  case NoteMarker
+  /** The message after the word */
+  case Message
+  /** The ` --> ` in front of a location, the bar of the gutter and the line numbers */
+  case Gutter
+  /** A summary that found nothing wrong: `3 files, no problems` */
+  case Clean
+  /** A summary that counts problems: `1 problem in 1 of 1 file` */
+  case Problems
+  /** The name `torb`, in `torb --version` */
+  case Emphasis
+  /** A type the REPL shows beside a value */
+  case Type
+}
+
+/** The ground of a terminal, which a 24-bit colour has to know to stay readable on it. */
+public type Ground {
+  case Light
+  case Dark
+}
+
+/** How a stream is coloured. */
+public type Palette {
+  /** Not at all: the text as it is. */
+  case Plain
+  /** In the 16 colours of the terminal, whose theme chooses the hues and knows its own background. */
+  case Sixteen
+  /** In 24 bits, the text tokens of the brand for a known ground. */
+  case TrueColor(ground: Ground)
+
+  /** `text` in the colour of `role`, reset behind it; an empty text stays empty. */
+  fn paint(role: Role, text: String): String {
+    if text.isEmpty() {
+      return text
+    }
+    match self {
+      .Plain => text
+      .Sixteen => "\u{1b}[{sixteenOf(role)}m{text}\u{1b}[0m"
+      .TrueColor(ground) => "\u{1b}[{trueColorOf(role, ground)}m{text}\u{1b}[0m"
+    }
+  }
+}
+
+/**
+ * The SGR parameters of a role in the 16 colours (BRAND.md section 10). The gutter is faint rather than bright black,
+ * because several themes make bright black the colour of the background.
+ */
+fn sixteenOf(role: Role): String {
+  match role {
+    .ErrorWord => "1;31"
+    .ErrorCaret => "31"
+    .WarningWord => "1;33"
+    .WarningCaret => "33"
+    .NoteMarker => "1;36"
+    .Message => "1"
+    .Gutter => "2"
+    .Clean => "32"
+    .Problems => "1"
+    .Emphasis => "1"
+    .Type => "2"
+  }
+}
+
+/**
+ * The SGR parameters of a role in 24 bits: bold where the 16-colour form is, and the text token of its state on the
+ * ground (BRAND.md sections 4.5 and 10) - the error text, which is never the brand's `#D4002D`, the warning text, the
+ * cyan of the terminal scheme for a note, the success text, ink or paper, and the subtle text for the gutter.
+ */
+fn trueColorOf(role: Role, ground: Ground): String {
+  const light = ground == Ground.Light
+  const (bold, color) = match role {
+    .ErrorWord => (true, if light { 0xB00921 } else { 0xFFA6A3 })
+    .ErrorCaret => (false, if light { 0xB00921 } else { 0xFFA6A3 })
+    .WarningWord => (true, if light { 0x7D5000 } else { 0xEEB976 })
+    .WarningCaret => (false, if light { 0x7D5000 } else { 0xEEB976 })
+    .NoteMarker => (true, if light { 0x006770 } else { 0x78D6DB })
+    .Message | .Problems | .Emphasis => (true, if light { 0x14110F } else { 0xF9F6F5 })
+    .Gutter | .Type => (false, if light { 0x78716F } else { 0x857E7C })
+    .Clean => (false, if light { 0x006E30 } else { 0x92D7A0 })
+  }
+  const rgb = "38;2;{(color >> 16) & 0xFF};{(color >> 8) & 0xFF};{color & 0xFF}"
+  if bold {
+    return "1;{rgb}"
+  }
+  rgb
+}
+
+/** `--color`: what the command line asked for. */
+public type ColorChoice {
+  /** Colour where the stream is a terminal and the environment does not say otherwise: the default */
+  case Auto
+  case Always
+  case Never
+}
+
+/** The stream a text is written to: whether it is coloured is decided for each. */
+public type Stream {
+  case Output
+  case Error
+}
+
+/**
+ * What the environment says about colour, besides the command line: the variables of BRAND.md section 10, each the
+ * empty text where it is not set, and whether the stream is a terminal.
+ */
+public type ColorEnvironment {
+  /** `FORCE_COLOR` */
+  forceColor: String = ""
+  /** `CLICOLOR_FORCE` */
+  commandLineColorForce: String = ""
+  /** `NO_COLOR` */
+  noColor: String = ""
+  /** `TERM` */
+  terminalType: String = ""
+  /** `COLORTERM` */
+  colorTerminal: String = ""
+  /** `TORB_BACKGROUND`: `light` or `dark` */
+  background: String = ""
+  /** `COLORFGBG`: the foreground and the background as numbers of the 16 colours, `15;0` */
+  foregroundAndBackground: String = ""
+  /** Whether the stream is a live terminal rather than a pipe or a file */
+  terminal: Bool = false
+}
+
+/**
+ * The palette of a stream, as BRAND.md section 10 decides it - the first rule that applies:
+ *
+ * 1. `--color always` or `--color never`.
+ * 2. `FORCE_COLOR` or `CLICOLOR_FORCE` set to anything but empty or `0`: colour.
+ * 3. `NO_COLOR` set to anything but empty: no colour (no-color.org), `NO_COLOR=0` included.
+ * 4. Colour where the stream is a terminal and `TERM` is not `dumb`.
+ *
+ * Coloured, it is 24 bits only where `COLORTERM` is `truecolor` or `24bit` and the ground is known, and the 16 colours
+ * everywhere else.
+ */
+public fn paletteOf(choice: ColorChoice, around: ColorEnvironment): Palette {
+  const colored = match choice {
+    .Always => true
+    .Never => false
+    .Auto => {
+      if forces(around.forceColor) || forces(around.commandLineColorForce) {
+        true
+      } else if !around.noColor.isEmpty() {
+        false
+      } else {
+        around.terminal && around.terminalType != "dumb"
+      }
+    }
+  }
+  if !colored {
+    return Palette.Plain
+  }
+  if around.colorTerminal != "truecolor" && around.colorTerminal != "24bit" {
+    return Palette.Sixteen
+  }
+  match groundOf(around) {
+    Some(ground) => Palette.TrueColor ground
+    None => Palette.Sixteen
+  }
+}
+
+/** Whether a variable of the kind of `FORCE_COLOR` forces colour: set, and not to `0`. */
+fn forces(value: String): Bool {
+  !value.isEmpty() && value != "0"
+}
+
+/**
+ * The ground `TORB_BACKGROUND` names, or else the background field of `COLORFGBG`, its last: 0 to 6 and 8 are dark,
+ * 7 and 9 to 15 light. `None` where neither says.
+ */
+fn groundOf(around: ColorEnvironment): Ground? {
+  if around.background == "light" {
+    return Ground.Light
+  }
+  if around.background == "dark" {
+    return Ground.Dark
+  }
+  const fields = around.foregroundAndBackground.split(";").toList()
+  const last = fields.last() ?? ""
+  const number = Int.tryFrom(last).ok()?
+  if number < 0 || number > 15 {
+    return None
+  }
+  if number <= 6 || number == 8 {
+    return Ground.Dark
+  }
+  Ground.Light
+}
+
+/**
+ * The palette `stream` is written in by this process: the `--color` of its command line, its environment, and whether
+ * the stream is a terminal.
+ */
+public fn paletteFor(stream: Stream): Palette {
+  const terminal = match stream {
+    .Output => isTerminal()
+    // What `isTerminal` answers for standard output, until the seed knows `isErrorTerminal` of `std/console`: an
+    // interactive `torb` has one terminal for both streams
+    .Error => isTerminal()
+  }
+  const choice = match colorArguments(Process.arguments()) {
+    Ok(found) => found.choice
+    Fail(_) => ColorChoice.Auto
+  }
+  const around = ColorEnvironment(
+    forceColor: variable("FORCE_COLOR"),
+    commandLineColorForce: variable("CLICOLOR_FORCE"),
+    noColor: variable("NO_COLOR"),
+    terminalType: variable("TERM"),
+    colorTerminal: variable("COLORTERM"),
+    background: variable("TORB_BACKGROUND"),
+    foregroundAndBackground: variable("COLORFGBG"),
+    terminal: terminal,
+  )
+  paletteOf choice, around
+}
+
+fn variable(name: String): String {
+  Environment.get(name) ?? ""
+}
+
+/** What [colorArguments] found: the choice, and the command line without the `--color` that said it. */
+public type ColorArguments {
+  choice: ColorChoice
+  arguments: List<String>
+}
+
+/**
+ * `--color auto|always|never` or `--color=<when>` read off `torb`'s command line, and the command line without it: the
+ * flag belongs to every command and may stand anywhere among `torb`'s own arguments, in front of the command or behind
+ * it - but not among the arguments `torb run` hands its program, which begin with the path of the program. A later
+ * `--color` wins over an earlier one. `Fail` names what is wrong with a value.
+ */
+public fn colorArguments(arguments: List<String>): Result<ColorArguments, String> {
+  var choice = ColorChoice.Auto
+  var rest: List<String> = []
+  var command = ""
+  // Whether the next argument is the value of `torb run --profile`, and whether the program's own arguments began
+  var expectsProfile = false
+  var ownsRest = true
+  var index = 0
+  while index < arguments.length() {
+    const argument = arguments[index]
+    if ownsRest && argument == "--color" {
+      choice = colorChoiceNamed(arguments.get(index + 1) ?? "")?
+      index = index + 2
+      continue
+    }
+    if ownsRest {
+      if const Some(value) = argument.withoutPrefix("--color=") {
+        choice = colorChoiceNamed(value)?
+        index = index + 1
+        continue
+      }
+    }
+    rest.append argument
+    index = index + 1
+    if !ownsRest {
+      continue
+    }
+    if command.isEmpty() {
+      if !argument.startsWith("--") {
+        command = argument
+      }
+      continue
+    }
+    // `torb run [flag]... <path> [argument]...`: the flags of `runOptionsOf` in `main.trb`, then the program's own
+    if command == "run" {
+      if expectsProfile {
+        expectsProfile = false
+      } else if argument == "--profile" {
+        expectsProfile = true
+      } else if !["--timings", "--vm", "--native", "--release"].contains(argument) {
+        ownsRest = false
+      }
+    }
+  }
+  ColorArguments choice, rest
+}
+
+/**
+ * The `--color` a program `torb` starts is handed so it colours as this process was told: a test binary, which writes
+ * its report itself (`runtime/test.c`). Nothing for `auto`, because the program is handed this process's streams and
+ * environment and decides it the same way.
+ */
+public fn colorFlag(): List<String> {
+  const choice = match colorArguments(Process.arguments()) {
+    Ok(found) => found.choice
+    Fail(_) => ColorChoice.Auto
+  }
+  match choice {
+    .Auto => []
+    .Always => ["--color", "always"]
+    .Never => ["--color", "never"]
+  }
+}
+
+/** The choice a value of `--color` names. */
+fn colorChoiceNamed(value: String): Result<ColorChoice, String> {
+  match value {
+    "auto" => ColorChoice.Auto
+    "always" => ColorChoice.Always
+    "never" => ColorChoice.Never
+    "" => Fail "`--color` needs `auto`, `always` or `never`: `--color never`"
+    _ => Fail "`--color` takes `auto`, `always` or `never`, not `{value}`"
+  }
+}
