@@ -377,7 +377,7 @@ group "Types and patterns" {
   test "several traits are one type, combined with `&`" {
     match statements("fn audit(entry: Show & Encode) \{\}")[0].kind {
       .Declare(declaration) => match declaration.kind {
-        .Function(function) => match function.parameters[0].annotation {
+        .Function(function) => match function.parameters[0].type {
           Some(reference) => match reference.kind {
             .Intersection(members) => assert(members.length() == 2)
             other => panic "Unexpected annotation: {other}"
@@ -873,7 +873,7 @@ group "The members of a type" {
     match statements("fn probe(value: Int??) \{\}")[0].kind {
       .Declare(declaration) => match declaration.kind {
         .Function(function) => {
-          const annotation = function.parameters[0].annotation ?? panic("Expected an annotation")
+          const annotation = function.parameters[0].type ?? panic("Expected an annotation")
           match annotation.kind {
             .Optional(inner) => match inner.kind {
               .Optional(innermost) => match innermost.kind {

@@ -160,7 +160,7 @@ fn walkStatement(var walk: Walk, scope: Scope, statement: Statement) {
 }
 
 fn walkBinding(var walk: Walk, scope: Scope, binding: Binding) {
-  if const Some(annotation) = binding.annotation {
+  if const Some(annotation) = binding.type {
     walkType walk, scope, annotation
   }
   walkExpression walk, scope, binding.value
@@ -226,7 +226,7 @@ fn namedSymbol(walk: Walk, reference: TypeReference): SymbolId? {
 fn walkFunction(var walk: Walk, scope: Scope, function: FunctionDeclaration) {
   const inner = withGenerics walk, scope, function.generics
   for parameter in function.parameters {
-    if const Some(annotation) = parameter.annotation {
+    if const Some(annotation) = parameter.type {
       walkType walk, inner, annotation
     }
     if const Some(default) = parameter.default {
@@ -258,7 +258,7 @@ fn walkMembers(var walk: Walk, scope: Scope, members: List<Member>) {
 }
 
 fn walkField(var walk: Walk, scope: Scope, field: Field) {
-  walkType walk, scope, field.annotation
+  walkType walk, scope, field.type
   if const Some(default) = field.default {
     walkExpression walk, scope, default
   }
@@ -323,7 +323,7 @@ fn walkType(var walk: Walk, scope: Scope, reference: TypeReference) {
     .Optional(inner) => walkType walk, scope, inner
     .TupleType(fields) => {
       for field in fields {
-        walkType walk, scope, field.annotation
+        walkType walk, scope, field.type
       }
     }
     // The values of a literal type are literals by construction: there is no name in them
@@ -331,7 +331,7 @@ fn walkType(var walk: Walk, scope: Scope, reference: TypeReference) {
     .Intersection(members) => walkTypes walk, scope, members
     .FunctionType(parameters, result) => {
       for parameter in parameters {
-        walkType walk, scope, parameter.annotation
+        walkType walk, scope, parameter.type
       }
       walkType walk, scope, result
     }
@@ -503,7 +503,7 @@ fn walkExpression(var walk: Walk, scope: Scope, expression: Expression) {
     }
     .Closure(closure) => {
       for parameter in closure.parameters {
-        if const Some(annotation) = parameter.annotation {
+        if const Some(annotation) = parameter.type {
           walkType walk, scope, annotation
         }
       }

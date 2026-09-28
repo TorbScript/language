@@ -76,7 +76,7 @@ public type TypeForm {
 /** A label is documentation for a position, not part of type identity - see `sameType` in `unify.trb`. */
 public type TupleField {
   label: String?
-  annotation: TypeId
+  type: TypeId
 }
 
 /** The shape of a callable: `(Int, String) => Bool`, and the `form` every [Signature] carries. */
@@ -91,7 +91,7 @@ public type ParameterForm {
   name: String?
   mode: ParameterMode
   /** For a variadic parameter this is the type of one item, not the list the parameter holds. */
-  annotation: TypeId
+  type: TypeId
   /** A default makes the parameter optional. Only in a signature, never in a function type. */
   hasDefault: Bool = false
 }
@@ -208,7 +208,7 @@ public fn formKey(form: TypeForm): String {
     .Tuple(fields) => {
       var key = "U"
       for field in fields {
-        key = key + ";{keyOfText(field.label ?? "")}#{field.annotation.value}"
+        key = key + ";{keyOfText(field.label ?? "")}#{field.type.value}"
       }
       key
     }
@@ -240,7 +240,7 @@ fn keyOfFunction(form: FunctionForm): String {
   var key = "F"
   for parameter in form.parameters {
     const default = if parameter.hasDefault { "=" } else { "" }
-    key = key + ";{keyOfMode(parameter.mode)}{default}{keyOfText(parameter.name ?? "")}#{parameter.annotation.value}"
+    key = key + ";{keyOfMode(parameter.mode)}{default}{keyOfText(parameter.name ?? "")}#{parameter.type.value}"
   }
   key + "->{form.result.value}"
 }
@@ -297,7 +297,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .Tuple(fields) => {
       var parts: List<String> = []
       for field in fields {
-        const shown = describeType types, symbols, field.annotation
+        const shown = describeType types, symbols, field.type
         parts.append(match field.label {
           Some(label) => "{label}: {shown}"
           None => shown
@@ -333,7 +333,7 @@ public fn describeFunction(types: TypeTable, symbols: Symbols, form: FunctionFor
 }
 
 fn describeParameter(types: TypeTable, symbols: Symbols, parameter: ParameterForm): String {
-  const shown = describeType types, symbols, parameter.annotation
+  const shown = describeType types, symbols, parameter.type
   const named = match parameter.name {
     Some(name) => "{name}: {shown}"
     None => shown
@@ -439,7 +439,7 @@ public type Signature {
 public type FieldSignature {
   symbol: SymbolId
   name: String
-  annotation: TypeId
+  type: TypeId
   isVar: Bool
   hasDefault: Bool
   visibility: Visibility

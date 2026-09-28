@@ -721,7 +721,7 @@ fn everyMemberReaches(var checker: Checker, capability: SymbolId): Bool {
 fn memberReaches(function: FunctionDeclaration): Bool {
   var takesSelf = false
   for parameter in function.parameters {
-    if parameter.name.text == "self" && parameter.annotation.isNone() {
+    if parameter.name.text == "self" && parameter.type.isNone() {
       takesSelf = true
     }
   }
@@ -748,7 +748,7 @@ fn namesSelf(reference: TypeReference): Bool {
     .Intersection(members) => anyNamesSelf members
     .TupleType(fields) => {
       for field in fields {
-        if namesSelf(field.annotation) {
+        if namesSelf(field.type) {
           return true
         }
       }
@@ -756,7 +756,7 @@ fn namesSelf(reference: TypeReference): Bool {
     }
     .FunctionType(parameters, result) => {
       for parameter in parameters {
-        if namesSelf(parameter.annotation) {
+        if namesSelf(parameter.type) {
           return true
         }
       }
@@ -836,7 +836,7 @@ fn matchPattern(
         return false
       }
       for position in 0..fields.length() {
-        if !matchPattern(checker, fields[position].annotation, other[position].annotation, generics, mapping) {
+        if !matchPattern(checker, fields[position].type, other[position].type, generics, mapping) {
           return false
         }
       }
@@ -853,8 +853,8 @@ fn matchPattern(
         return false
       }
       for position in 0..form.parameters.length() {
-        const left = form.parameters[position].annotation
-        const right = other.parameters[position].annotation
+        const left = form.parameters[position].type
+        const right = other.parameters[position].type
         if !matchPattern(checker, left, right, generics, mapping) {
           return false
         }
@@ -895,12 +895,12 @@ fn bindOwnParameters(
     }
     .Tuple(fields) => {
       for field in fields {
-        bindOwnParameters checker, field.annotation, generics, mapping
+        bindOwnParameters checker, field.type, generics, mapping
       }
     }
     .Function(form) => {
       for parameter in form.parameters {
-        bindOwnParameters checker, parameter.annotation, generics, mapping
+        bindOwnParameters checker, parameter.type, generics, mapping
       }
       bindOwnParameters checker, form.result, generics, mapping
     }
@@ -1419,7 +1419,7 @@ public fn isConcrete(checker: Checker, annotation: TypeId): Bool {
     .Traits(bounds) => everyConcrete checker, bounds
     .Tuple(fields) => {
       for field in fields {
-        if !isConcrete(checker, field.annotation) {
+        if !isConcrete(checker, field.type) {
           return false
         }
       }
@@ -1427,7 +1427,7 @@ public fn isConcrete(checker: Checker, annotation: TypeId): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if !isConcrete(checker, parameter.annotation) {
+        if !isConcrete(checker, parameter.type) {
           return false
         }
       }
@@ -2936,7 +2936,7 @@ fn describeOwnGenerics(
 
 fn isComparableForm(checker: Checker, form: FunctionForm): Bool {
   for parameter in form.parameters {
-    if !isWritten(checker, parameter.annotation) {
+    if !isWritten(checker, parameter.type) {
       return false
     }
   }
@@ -2966,7 +2966,7 @@ fn isWritten(checker: Checker, annotation: TypeId): Bool {
     }
     .Tuple(fields) => {
       for field in fields {
-        if !isWritten(checker, field.annotation) {
+        if !isWritten(checker, field.type) {
           return false
         }
       }
@@ -3042,7 +3042,7 @@ fn describeRequirement(
   }
   var parts: List<String> = []
   for parameter in form.parameters {
-    const shown = describeType checker.types, checker.symbols, parameter.annotation
+    const shown = describeType checker.types, checker.symbols, parameter.type
     const named = match parameter.name {
       Some(label) => "{label}: {shown}"
       None => shown

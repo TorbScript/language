@@ -44,7 +44,7 @@ public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
           return false
         }
         for index in 0..fields.length() {
-          if !sameType(types, fields[index].annotation, otherFields[index].annotation) {
+          if !sameType(types, fields[index].type, otherFields[index].type) {
             return false
           }
         }
@@ -119,7 +119,7 @@ public fn sameFunction(types: TypeTable, left: FunctionForm, right: FunctionForm
     if !sameMode(parameter.mode, other.mode) || parameter.hasDefault != other.hasDefault {
       return false
     }
-    if !sameType(types, parameter.annotation, other.annotation) {
+    if !sameType(types, parameter.type, other.type) {
       return false
     }
   }
@@ -154,8 +154,8 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
       var replaced: List<TupleField> = []
       var isChanged = false
       for field in fields {
-        const inner = substitute types, field.annotation, mapping
-        isChanged = isChanged || inner != field.annotation
+        const inner = substitute types, field.type, mapping
+        isChanged = isChanged || inner != field.type
         replaced.append TupleField(field.label, inner)
       }
       if !isChanged {
@@ -196,7 +196,7 @@ public fn substituteFunction(
 ): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.append parameter.copy(annotation: substitute(types, parameter.annotation, mapping))
+    parameters.append parameter.copy(type: substitute(types, parameter.type, mapping))
   }
   FunctionForm parameters, substitute(types, form.result, mapping)
 }
@@ -395,8 +395,8 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
       var replaced: List<TupleField> = []
       var isChanged = false
       for field in fields {
-        const inner = resolveDeep(checker, field.annotation, depth + 1)
-        isChanged = isChanged || inner != field.annotation
+        const inner = resolveDeep(checker, field.type, depth + 1)
+        isChanged = isChanged || inner != field.type
         replaced.append TupleField(field.label, inner)
       }
       if !isChanged {
@@ -426,7 +426,7 @@ fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<
 fn resolveFunction(var checker: Checker, form: FunctionForm, depth: Int): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.append parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1))
+    parameters.append parameter.copy(type: resolveDeep(checker, parameter.type, depth + 1))
   }
   FunctionForm parameters, resolveDeep(checker, form.result, depth + 1)
 }
@@ -449,7 +449,7 @@ public fn hasVariable(var checker: Checker, id: TypeId): Bool {
     .Traits(bounds) => anyVariable checker, bounds
     .Tuple(fields) => {
       for field in fields {
-        if hasVariable(checker, field.annotation) {
+        if hasVariable(checker, field.type) {
           return true
         }
       }
@@ -457,7 +457,7 @@ public fn hasVariable(var checker: Checker, id: TypeId): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if hasVariable(checker, parameter.annotation) {
+        if hasVariable(checker, parameter.type) {
           return true
         }
       }
@@ -493,12 +493,12 @@ public fn suppressVariables(var checker: Checker, id: TypeId) {
     .Traits(bounds) => suppressAll checker, bounds
     .Tuple(fields) => {
       for field in fields {
-        suppressVariables checker, field.annotation
+        suppressVariables checker, field.type
       }
     }
     .Function(form) => {
       for parameter in form.parameters {
-        suppressVariables checker, parameter.annotation
+        suppressVariables checker, parameter.type
       }
       suppressVariables checker, form.result
     }
@@ -592,7 +592,7 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
           return false
         }
         for index in 0..fields.length() {
-          if !unifyDeep(checker, fields[index].annotation, otherFields[index].annotation, depth + 1) {
+          if !unifyDeep(checker, fields[index].type, otherFields[index].type, depth + 1) {
             return false
           }
         }
@@ -649,7 +649,7 @@ fn occursIn(var checker: Checker, variable: VariableId, id: TypeId): Bool {
     .Traits(bounds) => occursInAny checker, variable, bounds
     .Tuple(fields) => {
       for field in fields {
-        if occursIn(checker, variable, field.annotation) {
+        if occursIn(checker, variable, field.type) {
           return true
         }
       }
@@ -657,7 +657,7 @@ fn occursIn(var checker: Checker, variable: VariableId, id: TypeId): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if occursIn(checker, variable, parameter.annotation) {
+        if occursIn(checker, variable, parameter.type) {
           return true
         }
       }
@@ -699,7 +699,7 @@ fn unifyFunction(var checker: Checker, left: FunctionForm, right: FunctionForm, 
     if !sameMode(parameter.mode, other.mode) {
       return false
     }
-    if !unifyDeep(checker, parameter.annotation, other.annotation, depth + 1) {
+    if !unifyDeep(checker, parameter.type, other.type, depth + 1) {
       return false
     }
   }

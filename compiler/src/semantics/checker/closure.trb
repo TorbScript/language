@@ -47,7 +47,7 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   if !hasParameters {
     for index in (receiver + 1)..parameters.length() {
       implicit.append parameters[index].name
-      types.append parameters[index].annotation
+      types.append parameters[index].type
       used.append(-1)
     }
   }
@@ -119,21 +119,21 @@ fn parameterFormsOf(var checker: Checker, closure: Closure, form: FunctionForm?,
       mode = wanted[index].mode
     }
     var annotation = checker.deferredType
-    match parameter.annotation {
+    match parameter.type {
       Some(reference) => {
         annotation = typeFromReference checker, reference, scope.forType()
         // An annotation that disagrees with the expected function type is a mistake in the closure, and the closure
         // keeps the type it was asked for: one root cause gets one message
         if index < wanted.length() {
-          if !unify(checker, annotation, wanted[index].annotation) {
-            reportParameterMismatch checker, annotation, wanted[index].annotation, reference.span
+          if !unify(checker, annotation, wanted[index].type) {
+            reportParameterMismatch checker, annotation, wanted[index].type, reference.span
             isBroken = true
           }
         }
       }
       None => {
         if index < wanted.length() {
-          annotation = wanted[index].annotation
+          annotation = wanted[index].type
         } else if form.isNone() {
           reportMissingParameterTypes checker, parameter.pattern.span
         }
@@ -238,8 +238,8 @@ fn checkClosureBody(
       const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
       const isVar = isVarMode form.mode
       const own = closure.parameters[index].pattern
-      checkPattern checker, own, form.annotation, isVar
-      requireIrrefutable checker, own, form.annotation, "The parameter of a closure", "value"
+      checkPattern checker, own, form.type, isVar
+      requireIrrefutable checker, own, form.type, "The parameter of a closure", "value"
     }
   }
   // A `var` parameter of a closure and a `var fn` receiver are references like any other, so a nested closure may not
@@ -310,17 +310,17 @@ fn declareReceiver(
   const isVar = isVarMode form.mode
   // A closure that wrote fewer parameters than the expected type has said so already, and its receiver stays implicit
   if !hasParameters || index >= closure.parameters.length() {
-    const binding = checker.declareBinding LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
+    const binding = checker.declareBinding LocalBinding("self", form.type, isVar, at, isReceiver: true)
     checker.setReceiver binding
-    checker.recordReceiver at, ReceiverClosure(binding, form.annotation, isVar, isImplicit: true)
+    checker.recordReceiver at, ReceiverClosure(binding, form.type, isVar, isImplicit: true)
     return
   }
   const before = checker.bindings.length()
-  checkPattern checker, closure.parameters[index].pattern, form.annotation, isVar
+  checkPattern checker, closure.parameters[index].pattern, form.type, isVar
   checker.receiverType = None
   checker.receiverBinding = None
   if checker.bindings.length() > before {
-    checker.recordReceiver at, ReceiverClosure(BindingId(before), form.annotation, isVar, isImplicit: false)
+    checker.recordReceiver at, ReceiverClosure(BindingId(before), form.type, isVar, isImplicit: false)
   }
 }
 

@@ -75,7 +75,7 @@ fn walkMember(var nodes: Nodes, member: Member) {
 }
 
 fn walkField(var nodes: Nodes, field: Field) {
-  walkType nodes, field.annotation
+  walkType nodes, field.type
   if const Some(default) = field.default {
     walkExpression nodes, default
   }
@@ -83,7 +83,7 @@ fn walkField(var nodes: Nodes, field: Field) {
 
 fn walkFunction(var nodes: Nodes, declaration: FunctionDeclaration) {
   for parameter in declaration.parameters {
-    if const Some(annotation) = parameter.annotation {
+    if const Some(annotation) = parameter.type {
       walkType nodes, annotation
     }
     if const Some(default) = parameter.default {
@@ -100,7 +100,7 @@ fn walkFunction(var nodes: Nodes, declaration: FunctionDeclaration) {
 
 fn walkBinding(var nodes: Nodes, binding: Binding) {
   walkPattern nodes, binding.pattern
-  if const Some(annotation) = binding.annotation {
+  if const Some(annotation) = binding.type {
     walkType nodes, annotation
   }
   walkExpression nodes, binding.value
@@ -215,7 +215,7 @@ fn walkExpression(var nodes: Nodes, expression: Expression) {
     .Closure(closure) => {
       for parameter in closure.parameters {
         walkPattern nodes, parameter.pattern
-        if const Some(annotation) = parameter.annotation {
+        if const Some(annotation) = parameter.type {
           walkType nodes, annotation
         }
       }
@@ -280,7 +280,7 @@ fn walkType(var nodes: Nodes, reference: TypeReference) {
     .Optional(inner) | .Lazy(inner) => walkType nodes, inner
     .TupleType(fields) => {
       for field in fields {
-        walkType nodes, field.annotation
+        walkType nodes, field.type
       }
     }
     .Literals(_) | .Invalid => {}
@@ -291,7 +291,7 @@ fn walkType(var nodes: Nodes, reference: TypeReference) {
     }
     .FunctionType(parameters, result) => {
       for parameter in parameters {
-        walkType nodes, parameter.annotation
+        walkType nodes, parameter.type
       }
       walkType nodes, result
     }

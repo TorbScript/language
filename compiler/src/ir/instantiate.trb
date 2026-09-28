@@ -198,7 +198,7 @@ fn tupleType(
   const empty: Map<ParameterId, TypeId> = [:]
   var annotations: List<IrTypeId> = []
   for field in fields {
-    annotations.append instantiateType(program, checker, instantiation, empty, field.annotation)
+    annotations.append instantiateType(program, checker, instantiation, empty, field.type)
   }
   const name = tupleLayoutName program, annotations
   const reserved = program.reserveLayout name, LayoutKind.Tuple
@@ -242,11 +242,11 @@ fn instantiateParameterType(
   parameter: ParameterForm,
 ): IrTypeId {
   const empty: Map<ParameterId, TypeId> = [:]
-  const annotation = instantiateType program, checker, instantiation, empty, parameter.annotation
+  const annotation = instantiateType program, checker, instantiation, empty, parameter.type
   match parameter.mode {
-    .Lazy => cellType program, checker, instantiation, parameter.annotation, annotation
+    .Lazy => cellType program, checker, instantiation, parameter.type, annotation
     // The `List<Item>` the body sees, exactly as `ir/instances.trb` builds it for a function's own signature
-    .Variadic => variadicType program, checker, instantiation, parameter.annotation, annotation
+    .Variadic => variadicType program, checker, instantiation, parameter.type, annotation
     _ => annotation
   }
 }
@@ -390,7 +390,7 @@ fn buildNominalLayout(
   var fields: List<FieldLayout> = []
   // A type may carry fields of its own *and* cases; those fields are in front of every group
   for field in signature.fields {
-    const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
+    const annotation = instantiateType program, checker, instantiation, mapping, field.type
     fields.append FieldLayout(field.name, annotation, field.symbol)
   }
   const common = fields.length()
@@ -398,7 +398,7 @@ fn buildNominalLayout(
   for declared in signature.cases {
     const first = fields.length()
     for field in declared.fields {
-      const annotation = instantiateType program, checker, instantiation, mapping, field.annotation
+      const annotation = instantiateType program, checker, instantiation, mapping, field.type
       fields.append FieldLayout(field.name, annotation, field.symbol)
     }
     variants.append VariantLayout(declared.name, first, fields.length() - first, declared.symbol)

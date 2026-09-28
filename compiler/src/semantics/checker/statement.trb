@@ -196,7 +196,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   const scope = scopeHere checker
   var annotation: TypeId? = None
   var alias: String? = None
-  if const Some(reference) = binding.annotation {
+  if const Some(reference) = binding.type {
     annotation = typeFromReference checker, reference, scope.forType()
     alias = checker.aliasNameAt checker.module, reference.span
     if const Some(written) = alias {
@@ -734,7 +734,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   checker.openScope()
   openInference checker
   var annotation: TypeId? = None
-  if const Some(reference) = binding.annotation {
+  if const Some(reference) = binding.type {
     annotation = typeFromReference checker, reference, TypeScope(module).forType()
     if const Some(written) = checker.aliasNameAt(module, reference.span) {
       checker.expectAlias module, binding.value.span, written
@@ -869,7 +869,7 @@ fn declareBindingsFor(
 ) {
   var index = 0
   for parameter in written {
-    if parameter.name.text == "self" && parameter.annotation.isNone() {
+    if parameter.name.text == "self" && parameter.type.isNone() {
       if takesSelf {
         const annotation = owner ?? checker.deferredType
         const binding = checker.declareBinding(LocalBinding(
@@ -912,7 +912,7 @@ fn bindingTypeOf(var checker: Checker, form: ParameterForm): TypeId {
   if const .Variadic = form.mode {
     match checker.wellKnown.list {
       Some(list) => {
-        const bound = checker.nominal list, [form.annotation]
+        const bound = checker.nominal list, [form.type]
         return checker.types.intern TypeForm.Traits([bound])
       }
       None => {
@@ -920,5 +920,5 @@ fn bindingTypeOf(var checker: Checker, form: ParameterForm): TypeId {
       }
     }
   }
-  form.annotation
+  form.type
 }

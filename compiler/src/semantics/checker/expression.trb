@@ -191,7 +191,7 @@ public fn resolveTarget(
         given.append typeFromReference(checker, reference, scope.forEither())
       }
       const found = resolveTarget checker, inner, expected, given
-      const _ = checker.typed inner.span, found.annotation
+      const _ = checker.typed inner.span, found.type
       found
     }
     _ => {
@@ -211,12 +211,12 @@ public fn resolveTarget(
  */
 public fn valueOfTarget(var checker: Checker, target: Target, at: Span): TypeId {
   if target.generics.isEmpty() {
-    return target.annotation
+    return target.type
   }
   const form = match target.form {
     Some(found) => found
     None => {
-      return target.annotation
+      return target.type
     }
   }
   const instantiation = instantiateTarget checker, target, form, at
@@ -244,10 +244,10 @@ fn memberTarget(
 ): Target {
   const owner = resolveTarget checker, base, expected: None
   checker.resolved base.span, owner.resolution
-  const _ = checker.typed base.span, owner.annotation
+  const _ = checker.typed base.span, owner.type
   // `a?.m` is `Option.map`, or `flatMap` when `m` gives back an `Option` itself: it never nests one
   if isOptional {
-    return optionalTarget checker, owner.annotation, text, at
+    return optionalTarget checker, owner.type, text, at
   }
   // `namespace.b` from `use * as text from "./text"`: a top-level declaration of that module
   if const .Namespace(target) = owner.resolution {
@@ -284,7 +284,7 @@ fn memberTarget(
       }
     }
   }
-  const receiver = owner.annotation
+  const receiver = owner.type
   match lookupMember(checker, receiver, text, at) {
     Some(candidate) => {
       recordDelegation checker, at, candidate
@@ -369,7 +369,7 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
     }
   }
   const target = targetOfCandidate checker, candidate, text
-  if checker.absorbs(target.annotation) {
+  if checker.absorbs(target.type) {
     return target
   }
   match target.form {
@@ -379,12 +379,12 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
       checker.recordFlattenedOptional at, isOption(checker, form.result)
       const wrapped = optionalOf checker, form.result
       const inner = FunctionForm form.parameters, wrapped
-      target.copy annotation: checker.functionType(inner), form: inner
+      target.copy type: checker.functionType(inner), form: inner
     }
     // A field or a constant behind `?.`: the value itself becomes optional
     None => {
-      checker.recordFlattenedOptional at, isOption(checker, target.annotation)
-      target.copy annotation: optionalOf(checker, target.annotation)
+      checker.recordFlattenedOptional at, isOption(checker, target.type)
+      target.copy type: optionalOf(checker, target.type)
     }
   }
 }
@@ -1386,7 +1386,7 @@ fn tupleLiteralType(var checker: Checker, items: List<Argument>, expected: TypeI
       None => None
     }
     const inner = if index < wanted.length() {
-      Expectation.Type wanted[index].annotation
+      Expectation.Type wanted[index].type
     } else {
       Expectation.None
     }
@@ -1731,7 +1731,7 @@ fn itemOfIterated(var checker: Checker, expected: TypeId?): TypeId? {
 fn entryTypesOf(checker: Checker, item: TypeId): (TypeId, TypeId)? {
   if const .Tuple(fields) = checker.types.form(item) {
     if fields.length() == 2 {
-      return (fields[0].annotation, fields[1].annotation)
+      return (fields[0].type, fields[1].type)
     }
   }
   None
@@ -3627,7 +3627,7 @@ fn traitForParameterDeep(var checker: Checker, given: TypeId, wanted: TypeId, de
           return false
         }
         for index in 0..fields.length() {
-          if traitForParameterDeep(checker, otherFields[index].annotation, fields[index].annotation, depth + 1) {
+          if traitForParameterDeep(checker, otherFields[index].type, fields[index].type, depth + 1) {
             return true
           }
         }
@@ -3758,7 +3758,7 @@ fn conflictsWhereDecided(var checker: Checker, given: TypeId, wanted: TypeId): B
     return false
   }
   for index in 0..found.parameters.length() {
-    if disagreesWhereDecided(checker, found.parameters[index].annotation, expected.parameters[index].annotation) {
+    if disagreesWhereDecided(checker, found.parameters[index].type, expected.parameters[index].type) {
       return true
     }
   }
@@ -3802,7 +3802,7 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
     }
     .Tuple(fields) => {
       for field in fields {
-        if isUndecided(checker, field.annotation) {
+        if isUndecided(checker, field.type) {
           return true
         }
       }
@@ -3810,7 +3810,7 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if isUndecided(checker, parameter.annotation) {
+        if isUndecided(checker, parameter.type) {
           return true
         }
       }
@@ -3919,7 +3919,7 @@ fn deferTypeArguments(var checker: Checker, arguments: List<TypeReference>) {
 public fn deferClosureParameters(var checker: Checker, closure: Closure) {
   const scope = scopeHere checker
   for parameter in closure.parameters {
-    if const Some(annotation) = parameter.annotation {
+    if const Some(annotation) = parameter.type {
       const _ = typeFromReference checker, annotation, scope.forType()
     }
   }
@@ -3951,7 +3951,7 @@ fn deferStatement(var checker: Checker, statement: Statement) {
   match statement.kind {
     .Declare(declaration) => checkDeclaration checker, scope, declaration
     .Bind(binding) => {
-      if const Some(annotation) = binding.annotation {
+      if const Some(annotation) = binding.type {
         const _ = typeFromReference checker, annotation, scope.forType()
       }
       deferExpression checker, binding.value

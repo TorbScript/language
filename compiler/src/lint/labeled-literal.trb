@@ -24,7 +24,7 @@ use everyNodeOf from "./nodes"
 /** One parameter a call can fill: the label it has, and the type it is declared with. */
 type Target {
   name: String
-  annotation: TypeId
+  type: TypeId
 }
 
 public fn labeledLiteralFindings(checker: Checker, module: ModuleId, file: SourceFile): List<Finding> {
@@ -82,7 +82,7 @@ fn findingsOfCall(
         continue
       }
     }
-    if !isBool(checker, parameter.annotation) && !isOptional(checker, parameter.annotation) {
+    if !isBool(checker, parameter.type) && !isOptional(checker, parameter.type) {
       continue
     }
     const message = "`{literal}` sets the option `{parameter.name}`, and a literal does not say so: write `{parameter.name}: {literal}`"
@@ -149,7 +149,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       }
       var targets: List<Target> = []
       for parameter in signature.form.parameters {
-        targets.append Target(parameter.name?, parameter.annotation)
+        targets.append Target(parameter.name?, parameter.type)
       }
       targets
     }
@@ -157,7 +157,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       const shape = typeSignatureOf(checker, owner)?
       var targets: List<Target> = []
       for field in shape.fields {
-        targets.append Target(field.name, field.annotation)
+        targets.append Target(field.name, field.type)
       }
       targets
     }
@@ -166,7 +166,7 @@ fn parametersOf(checker: Checker, module: ModuleId, call: Expression, callee: Ex
       const found = shape.cases.find({ _.symbol == variant })?
       var targets: List<Target> = []
       for field in found.fields {
-        targets.append Target(field.name, field.annotation)
+        targets.append Target(field.name, field.type)
       }
       targets
     }

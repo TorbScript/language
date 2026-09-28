@@ -191,7 +191,7 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
     var index = 0
     for field in fields {
       if field.label == name || name == "{index}" {
-        return Candidate CandidateKind.TupleField(receiver, index), field.annotation
+        return Candidate CandidateKind.TupleField(receiver, index), field.type
       }
       index = index + 1
     }
@@ -249,7 +249,7 @@ fn nominalMember(
   if !isStatic {
     for field in shape.fields {
       if field.name == name {
-        const annotation = substitute checker.types, field.annotation, mapping
+        const annotation = substitute checker.types, field.type, mapping
         return Candidate CandidateKind.Field(receiver, field.symbol), annotation
       }
     }
@@ -692,7 +692,7 @@ fn mentionsSelf(form: FunctionForm, selfParameter: TypeId?): Bool {
     }
   }
   for parameter in form.parameters {
-    if parameter.annotation == own {
+    if parameter.type == own {
       return true
     }
   }
@@ -796,7 +796,7 @@ fn constructorForm(
 ): FunctionForm {
   var parameters: List<ParameterForm> = []
   for field in shape.fields {
-    const annotation = substitute checker.types, field.annotation, mapping
+    const annotation = substitute checker.types, field.type, mapping
     const hasDefault = allOptional || field.hasDefault
     parameters.append ParameterForm(field.name, ParameterMode.Value, annotation, hasDefault)
   }
@@ -812,7 +812,7 @@ public fn fieldsOf(var checker: Checker, owner: TypeId): List<FieldSignature> {
       const mapping = argumentMapping shape.generics, arguments
       var found: List<FieldSignature> = []
       for field in shape.fields {
-        found.append field.copy(annotation: substitute(checker.types, field.annotation, mapping))
+        found.append field.copy(type: substitute(checker.types, field.type, mapping))
       }
       found
     }
@@ -831,7 +831,7 @@ public fn caseNamed(var checker: Checker, owner: TypeId, name: String): CaseSign
         if variant.name == name {
           var fields: List<FieldSignature> = []
           for field in variant.fields {
-            fields.append field.copy(annotation: substitute(checker.types, field.annotation, mapping))
+            fields.append field.copy(type: substitute(checker.types, field.type, mapping))
           }
           return variant.copy fields: fields
         }

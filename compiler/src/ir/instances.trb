@@ -108,14 +108,14 @@ fn nestingDepthOf(var lowering: Lowering, id: TypeId, depth: Int): Int {
     .Tuple(fields) => {
       var deepest = depth + 1
       for field in fields {
-        deepest = deepest.max nestingDepthOf(lowering, field.annotation, depth + 1)
+        deepest = deepest.max nestingDepthOf(lowering, field.type, depth + 1)
       }
       deepest
     }
     .Function(form) => {
       var deepest = depth + 1
       for parameter in form.parameters {
-        deepest = deepest.max nestingDepthOf(lowering, parameter.annotation, depth + 1)
+        deepest = deepest.max nestingDepthOf(lowering, parameter.type, depth + 1)
       }
       deepest.max nestingDepthOf(lowering, form.result, depth + 1)
     }
@@ -364,7 +364,7 @@ fn mentionsLiteralType(var lowering: Lowering, id: TypeId, depth: Int): Bool {
     .Traits(bounds) => anyMentionsLiteralType lowering, bounds, depth
     .Tuple(fields) => {
       for field in fields {
-        if mentionsLiteralType(lowering, field.annotation, depth + 1) {
+        if mentionsLiteralType(lowering, field.type, depth + 1) {
           return true
         }
       }
@@ -372,7 +372,7 @@ fn mentionsLiteralType(var lowering: Lowering, id: TypeId, depth: Int): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if mentionsLiteralType(lowering, parameter.annotation, depth + 1) {
+        if mentionsLiteralType(lowering, parameter.type, depth + 1) {
           return true
         }
       }
@@ -424,7 +424,7 @@ public fn isClosedType(var lowering: Lowering, id: TypeId): Bool {
     .Constant(_, of) => isClosedType lowering, of
     .Tuple(fields) => {
       for field in fields {
-        if !isClosedType(lowering, field.annotation) {
+        if !isClosedType(lowering, field.type) {
           return false
         }
       }
@@ -432,7 +432,7 @@ public fn isClosedType(var lowering: Lowering, id: TypeId): Bool {
     }
     .Function(form) => {
       for parameter in form.parameters {
-        if !isClosedType(lowering, parameter.annotation) {
+        if !isClosedType(lowering, parameter.type) {
           return false
         }
       }
@@ -523,7 +523,7 @@ public fn irSignatureUnder(
 
 /** `lazy Value` is a one-shot memo cell and a variadic parameter holds the list the call site builds (BACKEND 1.6). */
 fn parameterTypeOf(var lowering: Lowering, parameter: ParameterForm, mapping: Map<ParameterId, TypeId>): IrTypeId {
-  const applied = substitute lowering.checker.types, parameter.annotation, mapping
+  const applied = substitute lowering.checker.types, parameter.type, mapping
   const annotation = irTypeOfClosed lowering, applied
   match parameter.mode {
     .Lazy => cellTypeFor lowering, applied, annotation

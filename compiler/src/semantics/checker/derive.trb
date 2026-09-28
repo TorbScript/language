@@ -355,7 +355,7 @@ fn everyFieldImplements(
   match checker.types.form(target) {
     .Tuple(fields) => {
       for field in fields {
-        if !fieldImplements(checker, field.annotation, target, bound) {
+        if !fieldImplements(checker, field.type, target, bound) {
           return false
         }
       }
@@ -372,14 +372,14 @@ fn everyFieldImplements(
         if passableOnly && !isPassable(field) {
           continue
         }
-        const annotation = substitute checker.types, field.annotation, mapping
+        const annotation = substitute checker.types, field.type, mapping
         if !fieldImplements(checker, annotation, target, bound) {
           return false
         }
       }
       for variant in shape.cases {
         for field in variant.fields {
-          const annotation = substitute checker.types, field.annotation, mapping
+          const annotation = substitute checker.types, field.type, mapping
           if !fieldImplements(checker, annotation, target, bound) {
             return false
           }
@@ -447,7 +447,7 @@ fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool
     if variant.fields.length() != 1 {
       continue
     }
-    const annotation = substitute checker.types, variant.fields[0].annotation, mapping
+    const annotation = substitute checker.types, variant.fields[0].type, mapping
     if sameType(checker.types, annotation, source) {
       matches = matches + 1
     }
@@ -631,7 +631,7 @@ fn failingFieldOf(var checker: Checker, target: TypeId, bound: TypeId): FailingF
     fields.appendAll variant.fields
   }
   for field in fields {
-    const annotation = substitute checker.types, field.annotation, mapping
+    const annotation = substitute checker.types, field.type, mapping
     if !fieldImplements(checker, annotation, target, bound) {
       return FailingField field.name, annotation
     }

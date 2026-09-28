@@ -281,7 +281,7 @@ fn resolveStatement(var resolver: Resolver, statement: Statement) {
 
 fn resolveBinding(var resolver: Resolver, binding: Binding) {
   resolveExpression resolver, binding.value
-  if const Some(annotation) = binding.annotation {
+  if const Some(annotation) = binding.type {
     resolveTypeReference resolver, annotation
   }
   // A top-level binding is already a global; only a local one needs a slot of its own
@@ -355,7 +355,7 @@ fn resolveDeclaration(var resolver: Resolver, declaration: Declaration) {
 
 fn resolveConstantBinding(var resolver: Resolver, binding: Binding) {
   resolveExpression resolver, binding.value
-  if const Some(annotation) = binding.annotation {
+  if const Some(annotation) = binding.type {
     resolveTypeReference resolver, annotation
   }
   patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.isVar
@@ -367,7 +367,7 @@ fn resolveForeignMember(var resolver: Resolver, member: Member) {
     .Function(function) => resolveFunction resolver, function, isMethod: false
     .Field(field) => {
       pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
-      resolveTypeReference resolver, field.annotation
+      resolveTypeReference resolver, field.type
     }
     .Constant(binding) => resolveConstantBinding resolver, binding
     _ => {}
@@ -437,7 +437,7 @@ fn resolveMember(var resolver: Resolver, member: Member) {
   match member.kind {
     .Field(field) => {
       pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
-      resolveTypeReference resolver, field.annotation
+      resolveTypeReference resolver, field.type
       if const Some(default) = field.default {
         resolveExpression resolver, default
       }
@@ -445,7 +445,7 @@ fn resolveMember(var resolver: Resolver, member: Member) {
     // `static origin = Point(0, 0)`: a value of the type, read as a property everywhere
     .Constant(binding) => {
       resolveExpression resolver, binding.value
-      if const Some(annotation) = binding.annotation {
+      if const Some(annotation) = binding.type {
         resolveTypeReference resolver, annotation
       }
       for bound in patternNames(binding.pattern) {
@@ -457,7 +457,7 @@ fn resolveMember(var resolver: Resolver, member: Member) {
       pushToken resolver, caseDeclaration.name.span, "enumMember", ["declaration"]
       for field in caseDeclaration.fields {
         pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
-        resolveTypeReference resolver, field.annotation
+        resolveTypeReference resolver, field.type
         if const Some(default) = field.default {
           resolveExpression resolver, default
         }
@@ -520,7 +520,7 @@ fn resolveParameter(var resolver: Resolver, parameter: Parameter) {
     pushToken resolver, parameter.name.span, "parameter", declarationModifiers(parameter.isVar)
   }
   declareLocal resolver, parameter.name.text, .Parameter, isVar: parameter.isVar
-  if const Some(annotation) = parameter.annotation {
+  if const Some(annotation) = parameter.type {
     resolveTypeReference resolver, annotation
   }
   if const Some(default) = parameter.default {
@@ -544,7 +544,7 @@ fn resolveTypeReference(var resolver: Resolver, reference: TypeReference) {
         if const Some(label) = field.label {
           pushToken resolver, label.span, "property", ["declaration"]
         }
-        resolveTypeReference resolver, field.annotation
+        resolveTypeReference resolver, field.type
       }
     }
     .Literals(values) => {
@@ -562,7 +562,7 @@ fn resolveTypeReference(var resolver: Resolver, reference: TypeReference) {
         if const Some(name) = parameter.name {
           pushToken resolver, name.span, "parameter", ["declaration"]
         }
-        resolveTypeReference resolver, parameter.annotation
+        resolveTypeReference resolver, parameter.type
       }
       resolveTypeReference resolver, result
     }
@@ -786,7 +786,7 @@ fn resolveClosure(var resolver: Resolver, closure: Closure) {
   pushScope resolver
   for parameter in closure.parameters {
     resolvePattern resolver, parameter.pattern, .Parameter, isVar: false
-    if const Some(annotation) = parameter.annotation {
+    if const Some(annotation) = parameter.type {
       resolveTypeReference resolver, annotation
     }
   }

@@ -248,7 +248,7 @@ fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding
     }
   }
   var annotation: TypeId? = None
-  if const Some(reference) = binding.annotation {
+  if const Some(reference) = binding.type {
     annotation = typeFromReference checker, reference, scope.forType()
   }
   const found = checkInitializer checker, scope.module, binding.value, scope.selfType, annotation
@@ -332,7 +332,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
   for member in members {
     match member.kind {
       .Field(field) => {
-        const annotation = typeFromReference checker, field.annotation, scope.forType()
+        const annotation = typeFromReference checker, field.type, scope.forType()
         checkFieldDefault checker, scope, field.default, annotation
       }
       // The annotation of a `const` member is its signature; a `const` that got no id keeps the ordinary way
@@ -353,7 +353,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
       }
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          const annotation = typeFromReference checker, field.annotation, scope.forType()
+          const annotation = typeFromReference checker, field.type, scope.forType()
           checkFieldDefault checker, scope, field.default, annotation
         }
       }
@@ -404,7 +404,7 @@ fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDecla
     }
     // The type of the parameter is the one its signature built: a `lazy` one records the type inside of it
     var annotation: TypeId? = None
-    if const Some(reference) = parameter.annotation {
+    if const Some(reference) = parameter.type {
       const known = checker.typePositions[scope.module.value]
       annotation = known.get reference.span
     }
@@ -448,7 +448,7 @@ fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, an
  */
 fn checkUnnamedBody(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
   for parameter in function.parameters {
-    if const Some(reference) = parameter.annotation {
+    if const Some(reference) = parameter.type {
       const _ = typeFromReference checker, reference, scope.forType()
     }
   }

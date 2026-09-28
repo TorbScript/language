@@ -29,7 +29,7 @@ use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 public type Target {
   resolution: Resolution
   /** The target read as a value. `Deferred` where this pass has not resolved it yet. */
-  annotation: TypeId
+  type: TypeId
   /** When the target can be called: its form, with everything that is known already substituted. */
   form: FunctionForm? = None
   /** For a message: "`connect` takes 2 arguments". */
@@ -259,7 +259,7 @@ public fn noteDefaultSource(var checker: Checker, target: Target) {
       return
     }
   }
-  checker.noteDefaultSource target.annotation, source
+  checker.noteDefaultSource target.type, source
 }
 
 /** A name of the file scope, of the prelude, or one the language provides. */
@@ -830,10 +830,9 @@ fn hasOpenPart(checker: Checker, of: TypeId, depth: Int): Bool {
     .Variable(_) | .Invalid | .Deferred => true
     .Nominal(_, arguments) => arguments.any({ hasOpenPart(checker, _, depth + 1) })
     .Traits(bounds) => bounds.any({ hasOpenPart(checker, _, depth + 1) })
-    .Tuple(fields) => fields.any({ hasOpenPart(checker, _.annotation, depth + 1) })
+    .Tuple(fields) => fields.any({ hasOpenPart(checker, _.type, depth + 1) })
     .Function(form) => {
-      form.parameters.any({ hasOpenPart(checker, _.annotation, depth + 1) })
-        || hasOpenPart(checker, form.result, depth + 1)
+      form.parameters.any({ hasOpenPart(checker, _.type, depth + 1) }) || hasOpenPart(checker, form.result, depth + 1)
     }
     _ => false
   }

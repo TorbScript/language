@@ -97,7 +97,7 @@ public fn checkCall(
     None => {
       reportUncallable checker, target, expression.span
       checker.resolved callee.span, target.resolution
-      const _ = checker.typed callee.span, target.annotation
+      const _ = checker.typed callee.span, target.type
       deferArguments checker, arguments
       checker.resolved expression.span, Resolution.Deferred
       return checker.deferredType
@@ -218,7 +218,7 @@ fn withGeneratedConversion(var checker: Checker, target: Target, arguments: List
   // A `from` the lookup found already takes it: the ordinary call, or the ordinary choice between overloads
   for candidate in candidates {
     if const Some(parameter) = candidate.parameters.first() {
-      if parameter.annotation != checker.neverType && fitsType(checker, given, parameter.annotation) {
+      if parameter.type != checker.neverType && fitsType(checker, given, parameter.type) {
         return target
       }
     }
@@ -246,7 +246,7 @@ fn withGeneratedConversion(var checker: Checker, target: Target, arguments: List
 fn hasExactParameter(var checker: Checker, candidates: List<FunctionForm>, given: TypeId): Bool {
   for candidate in candidates {
     if const Some(parameter) = candidate.parameters.first() {
-      if sameType(checker.types, parameter.annotation, given) {
+      if sameType(checker.types, parameter.type, given) {
         return true
       }
     }
@@ -550,7 +550,7 @@ fn fitsArguments(
       return false
     }
     if const Some(found) = given[index] {
-      const wanted = parameters[position].annotation
+      const wanted = parameters[position].type
       const fits = if isExact {
         sameType checker.types, found, wanted
       } else {
@@ -601,7 +601,7 @@ fn reportAmbiguousOverload(var checker: Checker, target: Target, fitting: List<C
 fn takesNever(checker: Checker, candidate: Candidate): Bool {
   if const Some(form) = candidate.form {
     if const Some(parameter) = form.parameters.first() {
-      return parameter.annotation == checker.neverType
+      return parameter.type == checker.neverType
     }
   }
   false
@@ -616,7 +616,7 @@ fn describeOverload(var checker: Checker, candidate: Candidate): String {
     }
   }
   if const Some(parameter) = form.parameters.first() {
-    return checker.describe parameter.annotation
+    return checker.describe parameter.type
   }
   checker.describe form.result
 }
@@ -808,7 +808,7 @@ fn checkArguments(
     // Nothing was read from the arguments, so the callee's own parameters are not solved: their "Cannot infer" would
     // be about the same line again
     for parameter in form.parameters {
-      suppressVariables checker, parameter.annotation
+      suppressVariables checker, parameter.type
     }
     suppressVariables checker, form.result
     return
@@ -850,7 +850,7 @@ fn checkArgumentPass(
       continue
     }
     // What the parameter is may have been learned from an argument to its left, so it is resolved here and not before
-    const annotation = resolveType checker, parameter.annotation
+    const annotation = resolveType checker, parameter.type
     const inner = expectationOf checker, annotation
     const at = argument.value.span
     // `lazy Value`: the argument is a thunk the callee evaluates at most once, so it becomes a closure of its own
@@ -1134,7 +1134,7 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
   match traitArgumentsOf(checker, given, iterable) {
     Some(found) => {
       if const Some(item) = found.first() {
-        const _ = unify checker, item, parameter.annotation
+        const _ = unify checker, item, parameter.type
       }
     }
     None => {
@@ -1290,7 +1290,7 @@ fn recordPlan(var checker: Checker, at: Span, form: FunctionForm, plan: Argument
     checker.adapted at, Adaptation.Reorder(plan.targets)
   }
   if plan.variadic >= 0 {
-    const element = resolveType checker, form.parameters[plan.variadic].annotation
+    const element = resolveType checker, form.parameters[plan.variadic].type
     checker.adapted at, Adaptation.Variadic(element, plan.variadicFrom)
   }
   for position in plan.defaults {
@@ -1451,7 +1451,7 @@ fn optionalWithoutDefaultNote(var checker: Checker, name: String, parameter: Par
     return None
   }
   const field = parameter.name?
-  const inner = optionValueOf(checker, parameter.annotation)?
+  const inner = optionValueOf(checker, parameter.type)?
   const shown = checker.describe inner
   "`{field}` is optional in `{name}` and has no default, so it is still required: write `{field}: None` here,"
     + " or give the field one (`{field}: {shown}? = None`)"

@@ -445,7 +445,7 @@ fn normalizedTuple(var checker: Checker, var state: Normalizing, items: List<Pat
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.append field.annotation
+      types.append field.type
     }
   }
   if types.length() != items.length() {
@@ -475,12 +475,12 @@ fn normalizedVariant(
   const declared = declaredCaseName checker, name
   if const Some(variant) = caseNamed(checker, subject, declared) {
     for field in variant.fields {
-      types.append field.annotation
+      types.append field.type
     }
     constructor = Constructor.Named declared, ".{declared}", types.length()
   } else if name == "Self" || typeNameOf(checker, subject) == name {
     for field in fieldsOf(checker, subject) {
-      types.append field.annotation
+      types.append field.type
     }
     const shown = typeNameOf(checker, subject) ?? name
     constructor = Constructor.Named shown, shown, types.length()
@@ -739,7 +739,7 @@ fn tupleBranches(
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.append field.annotation
+      types.append field.type
     }
   }
   var branches: List<PatternBranch> = [PatternBranch([], [])]
@@ -821,7 +821,7 @@ fn variantBranches(
       }
       const field = variant.fields[index]
       const step = PatternStep.CaseField subject, variant.symbol, index, field.symbol
-      const grown = branchesOf checker, written, field.annotation, path.appended(step)
+      const grown = branchesOf checker, written, field.type, path.appended(step)
       branches = combined branches, grown
     }
     return branches
@@ -838,7 +838,7 @@ fn variantBranches(
     }
     const field = declared[index]
     const step = PatternStep.Field subject, index, field.symbol
-    const grown = branchesOf checker, written, field.annotation, path.appended(step)
+    const grown = branchesOf checker, written, field.type, path.appended(step)
     branches = combined branches, grown
   }
   branches

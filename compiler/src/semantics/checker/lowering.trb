@@ -86,7 +86,7 @@ fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): 
           Some(name) => Some name.text
           None => None
         }
-        built.append TupleField(label, typeFromReference(checker, field.annotation, scope.forType()))
+        built.append TupleField(label, typeFromReference(checker, field.type, scope.forType()))
       }
       checker.types.intern TypeForm.Tuple(built)
     }
@@ -277,7 +277,7 @@ fn mentionsParameter(checker: Checker, annotation: TypeId, parameter: TypeId): B
     .Traits(bounds) => mentionsAny checker, bounds, parameter
     .Tuple(fields) => {
       for field in fields {
-        if mentionsParameter(checker, field.annotation, parameter) {
+        if mentionsParameter(checker, field.type, parameter) {
           return true
         }
       }
@@ -285,7 +285,7 @@ fn mentionsParameter(checker: Checker, annotation: TypeId, parameter: TypeId): B
     }
     .Function(form) => {
       for inner in form.parameters {
-        if mentionsParameter(checker, inner.annotation, parameter) {
+        if mentionsParameter(checker, inner.type, parameter) {
           return true
         }
       }
@@ -733,12 +733,12 @@ fn functionTypeParameter(var checker: Checker, parameter: FunctionTypeParameter,
     mode = ParameterMode.Receiver parameter.isVar
   }
   var annotation = checker.invalidType
-  if const .Lazy(inner) = parameter.annotation.kind {
+  if const .Lazy(inner) = parameter.type.kind {
     mode = ParameterMode.Lazy
     annotation = typeFromReference checker, inner, scope.forType()
-    checker.recordType scope.module, parameter.annotation.span, annotation
+    checker.recordType scope.module, parameter.type.span, annotation
   } else {
-    annotation = typeFromReference checker, parameter.annotation, scope.forType()
+    annotation = typeFromReference checker, parameter.type, scope.forType()
   }
   ParameterForm name, mode, annotation
 }

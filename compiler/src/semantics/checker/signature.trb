@@ -238,7 +238,7 @@ fn cycleKindOf(checker: Checker, symbol: SymbolId): CycleKind {
     return CycleKind.Alias
   }
   if const Some(binding) = bindingOfSite(site) {
-    if binding.annotation.isNone() {
+    if binding.type.isNone() {
       return CycleKind.Initializer
     }
   }
@@ -377,7 +377,7 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
         }
         .Field(field) => {
           const scope = TypeScope site.module, selfType: owner
-          const annotation = typeFromReference checker, field.annotation, scope.forType()
+          const annotation = typeFromReference checker, field.type, scope.forType()
           Signature(
             symbol,
             genericsOf(checker, symbol),
@@ -470,7 +470,7 @@ fn constantSignature(
   // `static zero: Self`: the requirement of a trait, whose value every implementation provides. It has a type and no
   // body, like a `fn` a trait requires, and anywhere but in a trait it is a constant that forgot its value
   if binding.required {
-    const annotation = match binding.annotation {
+    const annotation = match binding.type {
       Some(reference) => typeFromReference checker, reference, scope.forType()
       None => checker.invalidType
     }
@@ -499,7 +499,7 @@ fn constantSignature(
   // An annotated initializer is checked here too, and not where the declaration is walked: the annotation *is* the
   // signature, so nobody would ask for the value again - and a `const` that holds a receiver closure
   // (`const perimeter: (self: Rectangle) => Int`) would never have its body looked at
-  const annotation = match binding.annotation {
+  const annotation = match binding.type {
     Some(reference) => {
       const built = typeFromReference checker, reference, scope.forType()
       checker.checkedBodies.set symbol, true
@@ -528,14 +528,14 @@ fn functionSignature(
   var takesSelf = false
   var isVarSelf = false
   for parameter in function.parameters {
-    if parameter.name.text == "self" && parameter.annotation.isNone() {
+    if parameter.name.text == "self" && parameter.type.isNone() {
       takesSelf = true
       isVarSelf = parameter.isVar
       continue
     }
     parameters.append parameterForm(checker, parameter, scope)
     // `fn find(id: EntityId)`: what a message about an argument of it calls the type (`Checker.parameterAliases`)
-    if const Some(reference) = parameter.annotation {
+    if const Some(reference) = parameter.type {
       if const Some(written) = checker.aliasNameAt(module, reference.span) {
         checker.parameterAliases.set "{symbol.value}:{parameters.length() - 1}", written
       }
@@ -659,12 +659,12 @@ fn requireSharedForTaskChanges(
   // The parameter list of the signature has no entry for `self`, so the two walk side by side by name
   var index = 0
   for parameter in function.parameters {
-    if parameter.name.text == "self" && parameter.annotation.isNone() {
+    if parameter.name.text == "self" && parameter.type.isNone() {
       continue
     }
     if parameter.isVar {
       const annotation = match parameters.get(index) {
-        Some(form) => Some form.annotation
+        Some(form) => Some form.type
         None => None
       }
       reportValueChangedByTask checker, module, name, parameter.name.text, annotation, parameter.name.span
@@ -735,7 +735,7 @@ fn caseSignature(
   const scope = TypeScope module, selfType: owner
   var parameters: List<ParameterForm> = []
   for field in caseDeclaration.fields {
-    const annotation = typeFromReference checker, field.annotation, scope.forType()
+    const annotation = typeFromReference checker, field.type, scope.forType()
     parameters.append ParameterForm(field.name.text, ParameterMode.Value, annotation, field.default.isSome())
   }
   const result = owner ?? checker.invalidType
@@ -748,7 +748,7 @@ fn parameterForm(var checker: Checker, parameter: Parameter, scope: TypeScope): 
     mode = ParameterMode.Variadic
   }
   var annotation = checker.invalidType
-  if const Some(reference) = parameter.annotation {
+  if const Some(reference) = parameter.type {
     if const .Lazy(inner) = reference.kind {
       mode = ParameterMode.Lazy
       annotation = typeFromReference checker, inner, scope.forType()
@@ -1128,11 +1128,11 @@ public fn extensionMembers(
       }
       // Fields and cases belong to the declaration of a type; one written on an `extend` is reported elsewhere
       .Field(field) => {
-        const _ = typeFromReference checker, field.annotation, scope.forType()
+        const _ = typeFromReference checker, field.type, scope.forType()
       }
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          const _ = typeFromReference checker, field.annotation, scope.forType()
+          const _ = typeFromReference checker, field.type, scope.forType()
         }
       }
     }
@@ -1147,7 +1147,7 @@ fn fieldSignature(
   member: Member,
   scope: TypeScope,
 ): FieldSignature {
-  const annotation = typeFromReference checker, field.annotation, scope.forType()
+  const annotation = typeFromReference checker, field.type, scope.forType()
   // `private(var) balance: Int = 0` is an error that names `protected var balance: Int = 0`, and it means the same: the
   // field is writable, and only the file of its type may write it. The signature knows one spelling, `Protected`, so
   // nothing else is reported about it
