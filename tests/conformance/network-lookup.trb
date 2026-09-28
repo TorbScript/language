@@ -121,6 +121,36 @@ fn shown(result: Result<List<Record>, NetworkError>): String {
   }
 }
 
+/**
+ * The listener and the datagram socket of the server that knows the names, on one loopback port. Windows keeps ranges
+ * of ports from TCP that it still hands to UDP, and other ranges from UDP that it hands to TCP, so the port one of them
+ * chooses may be one the other is refused. Each attempt lets the listener choose and the datagram socket take the same
+ * number, then the other way around: the ports a listener is given may come one after the other through a whole range
+ * UDP is kept from, where those of a datagram socket are spread out.
+ */
+fn serverSockets(): Result<(TcpListener, UdpSocket), NetworkError> {
+  const loopback = SocketAddress IpAddress.loopback, 0
+  var attempts = 0
+  loop {
+    attempts = attempts + 1
+    const listener = TcpListener.listen(loopback)?
+    if const Ok(socket) = UdpSocket.bind(listener.localAddress()) {
+      return Ok((listener, socket))
+    }
+    const socket = UdpSocket.bind(loopback)?
+    match TcpListener.listen(socket.localAddress()) {
+      Ok(other) => {
+        return Ok((other, socket))
+      }
+      Fail(problem) => {
+        if attempts == 10 {
+          return Fail problem
+        }
+      }
+    }
+  }
+}
+
 /** A socket bound to a loopback port that nobody answers on any more. */
 fn closedPort(): Result<SocketAddress, NetworkError> {
   const socket = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
@@ -129,9 +159,8 @@ fn closedPort(): Result<SocketAddress, NetworkError> {
 
 fn run(): Task<Result<Void, NetworkError>> {
   const loopback = SocketAddress IpAddress.loopback, 0
-  const server = UdpSocket.bind(loopback)?
+  const (listener, server) = serverSockets()?
   const address = server.localAddress()
-  const listener = TcpListener.listen(address)?
   const failing = UdpSocket.bind(loopback)?
   const silent = UdpSocket.bind(loopback)?
   var answering = serveDatagrams server, false
