@@ -8,7 +8,9 @@
 #                 archive, the source, the seed and the signature - a draft until every asset is uploaded, so the
 #                 webhook "published" reaches release-sync with all of them there - and the seed added to `seeds.txt`
 #   4. images     the root server's container images from the release's assets, pushed to cr.torb.dev and signed
-#                 (images.yml), and the package manager channels (publish-packages)
+#                 (images.yml), the package manager channels (publish-packages), and the VS Code extension of the
+#                 release on the Visual Studio Marketplace and Open VSX (publish-extension) - each store only where
+#                 its token is a secret of the repository (VSCE_PAT, OVSX_PAT)
 #
 # A red gate anywhere stops the release before anything is published. Nothing here runs for a pull request: the only
 # trigger is a tag, which only somebody with write access can push, and pushing it is the approval - the forge has no
@@ -53,14 +55,20 @@ jobs:
             echo "::error::$TAG is not v0.MINOR.PATCH without leading zeros"
             exit 1
           }
-          # The download, the manifests and the documentation carry one number (RELEASE.md section 3)
+          # The download, the manifests, the editor extension and the documentation carry one number (RELEASE.md
+          # section 3). A manifest writes `version = "0.2.0"`; the older `version "0.2.0"` is read as well
           for manifest in project.trb compiler/project.trb; do
-            declared=$(sed -n 's/^version "\(.*\)"$/\1/p' "$manifest" | tr -d '\r')
+            declared=$(tr -d '\r' <"$manifest" | sed -n 's/^version *=\{0,1\} *"\([^"]*\)".*$/\1/p' | head -n 1)
             if [ "$declared" != "$version" ]; then
               echo "::error file=$manifest::says version \"$declared\", and the tag is $TAG"
               exit 1
             fi
           done
+          declared=$(tr -d '\r' <editors/vscode/package.json | sed -n 's/^  "version": "\([^"]*\)",$/\1/p' | head -n 1)
+          if [ "$declared" != "$version" ]; then
+            echo "::error file=editors/vscode/package.json::says version \"$declared\", and the tag is $TAG"
+            exit 1
+          fi
           # fetch-depth 0 fetched every branch, main among them
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
@@ -165,6 +173,45 @@ jobs:
       channel: stable
       source: artifact
     secrets: inherit
+
+  publish-extension:
+    name: the VS Code extension on the Marketplace and Open VSX
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # The .vsix the release carries - the file SHA256SUMS lists and the forge serves - and no second one packed here
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - uses: ./.forgejo/actions/node
+      # vsce reads its token from VSCE_PAT and ovsx from OVSX_PAT, so neither is ever on a command line. A store whose
+      # secret is missing is skipped, and says so; a store that refuses fails the job, after the release is out. A
+      # version the store has already is passed over (--skip-duplicate), so the job can be run again for the other one
+      - name: Visual Studio Marketplace
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::notice::the secret VSCE_PAT is not set, so torbscript $VERSION is not published to the Visual Studio Marketplace (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 0
+          fi
+          npx --yes @vscode/vsce@4.0.0 publish --skip-duplicate --packagePath "dist/torbscript-$VERSION.vsix" </dev/null
+      - name: Open VSX
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::notice::the secret OVSX_PAT is not set, so torbscript $VERSION is not published to Open VSX (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 0
+          fi
+          npx --yes ovsx@1.2.0 publish --skip-duplicate "dist/torbscript-$VERSION.vsix" </dev/null
 
   publish-packages:
     name: package manager channels (docs/design/RELEASE.md section 5)

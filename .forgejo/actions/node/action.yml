@@ -1,0 +1,22 @@
+# Node.js on the PATH: the pinned release that packs and publishes the VS Code extension (tools/package-extension.sh,
+# `@vscode/vsce` and `ovsx`, which need Node.js 22 or newer), checked against the SHA-256 that nodejs.org lists for it
+# in SHASUMS256.txt. The runner's image has a Node.js of its own for the JavaScript actions; its version is the image's
+# business, so the extension does not depend on it. Linux x64 only - the one runner of the forge.
+name: Node.js
+description: Installs the pinned Node.js release into the job's PATH.
+runs:
+  using: composite
+  steps:
+    - name: Node.js 24.21.0
+      shell: bash
+      run: |
+        version=24.21.0
+        sum=6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff
+        directory="${RUNNER_TEMP:-/tmp}/node-$version"
+        archive="$directory/node-v$version-linux-x64.tar.gz"
+        mkdir -p "$directory"
+        curl -fsSL --retry 3 -o "$archive" "https://nodejs.org/dist/v$version/node-v$version-linux-x64.tar.gz"
+        echo "$sum  $archive" | sha256sum -c -
+        tar -xzf "$archive" -C "$directory"
+        echo "$directory/node-v$version-linux-x64/bin" >>"$GITHUB_PATH"
+        "$directory/node-v$version-linux-x64/bin/node" --version
