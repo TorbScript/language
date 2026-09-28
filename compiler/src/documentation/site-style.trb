@@ -45,8 +45,10 @@ public fn fontFaces(prefix: String): String {
 }
 
 /**
- * What runs before the page is painted, inline in its head: the theme somebody chose last time, and whether the logo of
- * the front page has assembled once in this visit already. Without storage it does nothing.
+ * What runs before the page is painted, inline in its head: the theme somebody chose last time with the toggle, and
+ * whether the reader comes from another page of the site, who has seen the logo of the front page assemble already.
+ * Nothing is stored for the second: the page it came from says so, so the site keeps nothing on a reader's device that
+ * the reader did not ask for. Without storage the theme follows the system.
  */
 public const headScript = raw"""
   try {
@@ -54,7 +56,9 @@ public const headScript = raw"""
     if (theme === "light" || theme === "dark") {
       document.documentElement.setAttribute("data-theme", theme);
     }
-    if (sessionStorage.getItem("torb-hero")) {
+  } catch (error) {}
+  try {
+    if (document.referrer && new URL(document.referrer).origin === location.origin) {
       document.documentElement.classList.add("assembled");
     }
   } catch (error) {}
@@ -1765,9 +1769,10 @@ public const themeScript = raw"""
   """
 
 /**
- * The site's script: the header's shadow after scrolling, the copy buttons, the search, the version switcher, the
- * contents that follow the reader, and the logo that assembles once per visit. Each part checks that its element is
- * there and does nothing otherwise.
+ * The site's script: the header's shadow after scrolling, the menu of a narrow window for a keyboard, the copy
+ * buttons, the search, the version switcher, and the contents that follow the reader. Each part checks that its
+ * element is there and does nothing otherwise. It stores nothing; only the theme toggle stores the choice it is asked
+ * to remember.
  */
 public const siteScript = raw"""
   "use strict";
@@ -1785,12 +1790,6 @@ public const siteScript = raw"""
       };
       window.addEventListener("scroll", onScroll, { passive: true });
       onScroll();
-    }
-
-    if (document.querySelector(".hero-mark")) {
-      try {
-        sessionStorage.setItem("torb-hero", "1");
-      } catch (error) {}
     }
 
     var menu = document.querySelector(".menu-button");

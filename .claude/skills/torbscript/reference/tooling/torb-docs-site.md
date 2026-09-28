@@ -99,6 +99,12 @@ the rules written for the site, with a light and a dark theme that follow the sy
 The fonts are served by the site itself, never by a font service. Every script only adds to a page that is complete
 without it: the copy buttons, the theme toggle, the search and the version switcher.
 
+**What a page asks of a reader's browser**: no cookie, and no request to another host - the fonts, the icons, the
+search index and `versions.json` all come from the site. The one thing stored on the device is the theme a reader
+picks with the toggle (`localStorage`, key `torb-theme`), and only when the toggle is used. The logo of the front page
+assembles when the reader arrives from elsewhere and not again on the way back from another page of the site, which
+the page it came from says, so nothing is stored for it.
+
 ### The check
 
 Every `href` and `src` of the written pages that is relative has to lead to a file of the site, or the command fails
