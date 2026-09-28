@@ -22,6 +22,31 @@ fn place(name: String): String {
   directory
 }
 
+/**
+ * A new directory on another volume than `near`, where the machine has one: `/dev/shm`, the memory file system of
+ * Linux, which the temporary directory is usually not on - and only where a rename from `near` into it fails as a move
+ * across volumes, which is what makes it another volume. `None` everywhere else, Windows included.
+ */
+fn otherVolume(near: String): String? {
+  if !File.isDirectory("/dev/shm") {
+    return None
+  }
+  const other = File.createTemporaryDirectory(prefix: "torb-fs-test-", inside: "/dev/shm").ok()?
+  File.writeText("{near}/probe", "probe").ok()?
+  const crossed = File.rename "{near}/probe", "{other}/probe"
+  const _ = File.remove "{near}/probe"
+  match crossed {
+    Fail(problem) => {
+      if problem.isCrossDevice() {
+        return other
+      }
+    }
+    Ok(_) => void
+  }
+  const _ = File.removeDirectory other
+  None
+}
+
 /** Every byte from 0 to 255 once, and a few that would end a text early. */
 fn everyByte(): List<UInt8> {
   var bytes: List<UInt8> = []
@@ -185,6 +210,48 @@ group "the tree" {
     File.rename("{directory}/before", "{directory}/after").expect("the rename")
     assert(File.readText("{directory}/after/inner/file") == "x")
     assert(!File.exists("{directory}/before"))
+  }
+
+  test "move is a rename on one volume, for a file and for a directory with everything in it" {
+    const directory = place "move"
+    File.writeText("{directory}/first", "one").expect("a file")
+    File.writeText("{directory}/second", "two").expect("the file it replaces")
+    File.move("{directory}/first", "{directory}/second").expect("the move of the file")
+    assert(File.readText("{directory}/second") == "one")
+    assert(!File.exists("{directory}/first"))
+    File.createDirectory("{directory}/before/inner").expect("the directories")
+    File.writeText("{directory}/before/inner/file", "x").expect("a file inside")
+    File.move("{directory}/before", "{directory}/after").expect("the move of the directory")
+    assert(File.readText("{directory}/after/inner/file") == "x")
+    assert(!File.exists("{directory}/before"))
+    assert File.move("{directory}/nothing", "{directory}/else").isError()
+  }
+
+  test "a failure across volumes says so, in the words of every system" {
+    assert IoError("a", "Invalid cross-device link").isCrossDevice()
+    assert IoError("a", "Cross-device link").isCrossDevice()
+    assert(!IoError("a", "No such file or directory").isCrossDevice())
+  }
+
+  test "move crosses volumes as a copy and a removal, where the machine has a second volume" {
+    const directory = place "move-across"
+    File.writeText("{directory}/single", "one").expect("a file")
+    File.createDirectory("{directory}/tree/inner").expect("the directories")
+    File.writeText("{directory}/tree/inner/file", "deep").expect("a file inside")
+    File.setPermissions("{directory}/tree/inner/file", Permissions(0b110_100_000)).expect("its permissions")
+    if const Some(other) = otherVolume(directory) {
+      File.move("{directory}/single", "{other}/single").expect("the file moved across")
+      assert(File.readText("{other}/single") == "one")
+      assert(!File.exists("{directory}/single"))
+      File.move("{directory}/tree", "{other}/tree").expect("the directory moved across")
+      assert(File.readText("{other}/tree/inner/file") == "deep")
+      const moved = File.metadata("{other}/tree/inner/file").expect("the metadata of the moved file")
+      assert(moved.permissions == Permissions(0b110_100_000))
+      assert(!File.exists("{directory}/tree"))
+      // Nothing is left of the hidden copy the move renamed into place
+      assert(File.list(other) == ["single", "tree"])
+      File.removeDirectory(other).expect("the directory on the other volume removed")
+    }
   }
 
   test "copy takes the content and the permissions, and refuses a directory" {

@@ -1,6 +1,6 @@
 ---
 title: std/fs
-summary: File and IoError - whole files as text or bytes, a File as both ends of a byte stream, and the tree around them - remove, rename, copy, metadata, links, temporary files and atomic replacement.
+summary: File and IoError - whole files as text or bytes, a File as both ends of a byte stream, and the tree around them - remove, rename, move, copy, metadata, links, temporary files and atomic replacement.
 kind: package
 status: stable
 order: 130
@@ -53,12 +53,18 @@ fn wordCount(path: String): Result<Int, IoError> {
 public type IoError with Show, Error {
   path: String
   message: String
+
+  fn isCrossDevice(): Bool
 }
 ```
 
 What went wrong, with which path, in the operating system's own words. Bytes off a disk are not always UTF-8, and a
 `String` always is, so decoding is one of the ways reading fails: `extend IoError with From<Utf8Error>` (see
 [std/stream](stream.md)) is what lets `?` convert a decoding failure into an `IoError` automatically.
+
+`isCrossDevice` says whether the operation failed because its two paths are on different volumes - what `rename`
+answers across file systems (`EXDEV`, `ERROR_NOT_SAME_DEVICE` on Windows), which the runtime words the same on every
+system.
 
 ### File: whole files
 
@@ -109,6 +115,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   static fn walk(path: String): Result<List<String>, IoError>
   static fn remove(path: String): Result<Void, IoError>
   static fn rename(path: String, to: String): Result<Void, IoError>
+  static fn move(path: String, to: String): Result<Void, IoError>
   static fn copy(path: String, to: String): Result<Void, IoError>
 }
 ```
@@ -125,9 +132,14 @@ order `list` answers them, and a symbolic link as an entry that is not followed.
 `IoError` whose message shows its bytes.
 
 `rename` moves a file or a directory in one step and replaces a file that is at the target, which is what makes it the
-last step of every replacement that must not be seen half done; both paths have to be on one volume. `copy` takes the
-content and the permissions of a file to a target it creates or replaces; a symbolic link is followed, a directory is
-refused. `absolutePath` is text arithmetic against the working directory (`.` and `..` resolved), does not require the
+last step of every replacement that must not be seen half done; both paths have to be on one volume, and across two it
+fails with an `IoError` whose `isCrossDevice()` is true. `move` is the move that also crosses volumes: on one volume it
+is `rename`, across two it copies a file, a symbolic link or a directory with everything in it beside the target under
+a hidden name, renames the copy onto the target in one step once it is whole, and removes the original - so the target
+is never seen half written, and a copy that fails leaves both as they were. It is not one step, though: during the copy
+the original is still there, and where removing it fails it is in both places. Where that matters, stage on the
+target's volume and `rename`. `copy` takes the content and the permissions of a file to a target it creates or
+replaces; a symbolic link is followed, a directory is refused. `absolutePath` is text arithmetic against the working directory (`.` and `..` resolved), does not require the
 path to exist and does not follow links.
 
 ```trb check

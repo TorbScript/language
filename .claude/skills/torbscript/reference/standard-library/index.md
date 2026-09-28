@@ -50,7 +50,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/time](time.md)** - Instant and Duration, the two time values, Timestamp, a point on the wall clock, plus Clock and sleep, which read and wait on the clock.
 - **[std/path](path.md)** - Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - **[std/uri](uri.md)** - Uri and UriReference after RFC 3986, normalized at construction, with IRIs, Urn, UriTemplate, the file bridge to Path and the form codec of HTML - values that open nothing.
-- **[std/fs](fs.md)** - File and IoError - whole files as text or bytes, a File as both ends of a byte stream, and the tree around them - remove, rename, copy, metadata, links, temporary files and atomic replacement.
+- **[std/fs](fs.md)** - File and IoError - whole files as text or bytes, a File as both ends of a byte stream, and the tree around them - remove, rename, move, copy, metadata, links, temporary files and atomic replacement.
 - **[std/resource](resource.md)** - Resource, EmbeddedBytes and EmbeddedText - a file of the package named by a string literal, resolved by the compiler where it is written; reading the bytes comes with the next slices.
 - **[std/storage](storage.md)** - Storage, a capability over a Uri whose scheme chooses the driver - FileStorage for files, MemoryStorage for tests - and Storage.registry, one storage over the drivers a program names.
 - **[std/io](io.md)** - Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.

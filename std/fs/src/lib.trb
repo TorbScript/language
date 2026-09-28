@@ -3,17 +3,18 @@
  * operation here fails with. The whole-file helpers (`readText`, `writeText`, `readBytes`, `writeBytes`) are for what
  * fits in memory; `chunks()`, `lines()` and the `Sink` side are for everything else (`docs/design/STREAMS.md`).
  *
- * Around the contents: `remove`, `rename`, `copy`, `createDirectory`, `removeDirectory`, `list` and `walk` for the tree,
- * `metadata` for what a path is, symbolic links, temporary files and directories, and `writeBytesAtomically` for a
- * file that is replaced whole or not at all. Every one of them takes the same path text on every system - `/` between
- * the names, a drive letter on Windows - and the runtime converts it where it calls the system (`docs/design/PATH.md`
- * section 6), so nothing here branches on the operating system.
+ * Around the contents: `remove`, `rename`, `move`, `copy`, `createDirectory`, `removeDirectory`, `list` and `walk` for
+ * the tree, `metadata` for what a path is, symbolic links, temporary files and directories, and `writeBytesAtomically`
+ * for a file that is replaced whole or not at all. Every one of them takes the same path text on every system - `/`
+ * between the names, a drive letter on Windows - and the runtime converts it where it calls the system
+ * (`docs/design/PATH.md` section 6), so nothing here branches on the operating system.
  */
 
 use Source, Sink, Bytes, Utf8Error from "std/stream"
 use ArrayList from "std/collections"
 use Timestamp from "std/time"
 use lines as streamLines from "std/stream"
+use Path from "std/path"
 public use FileKind, Permissions, Metadata from "./metadata"
 
 /** What went wrong with which path. */
@@ -26,6 +27,14 @@ public type IoError with Show, Error {
   /** `{path}: {message}`. */
   fn show(): String {
     "{path}: {message}"
+  }
+
+  /**
+   * Whether the operation failed because its two paths are on different volumes: what `rename` answers across file
+   * systems (`EXDEV`, `ERROR_NOT_SAME_DEVICE` on Windows), which the runtime words the same on every system.
+   */
+  fn isCrossDevice(): Bool {
+    message.toLowerCase().contains("cross-device link")
   }
 }
 
@@ -283,9 +292,51 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   /**
    * Moves `path` to `to` in one step, replacing a file that is at `to` - which is what makes it the last step of every
    * replacement that must not be seen half done. Both have to be on one volume: across volumes a move is a `copy` and a
-   * `remove`, and no system does that in one step.
+   * `remove`, and no system does that in one step - the failure then says so (`IoError.isCrossDevice`), and
+   * [File.move] is the move that does it in two.
    */
   native static fn rename(path: String, to: String): Result<Void, IoError>
+
+  /**
+   * Moves `path` - a file, a symbolic link, or a directory with everything in it - to `to`, replacing a file that is
+   * at `to`. On one volume this is `rename`, one step. Across volumes it is a copy and a removal: `path` is copied
+   * beside `to` under a hidden name of its own, renamed onto `to` in one step once the copy is whole, and then removed.
+   * So `to` is never seen half written either way, and a copy that fails leaves `to` and `path` as they were.
+   *
+   * # Pitfalls
+   *
+   * - Across volumes it is not one step: while the copy runs `path` is still there, and where removing it fails after
+   *   the rename, it is in both places. Where two readers must never see the old and the new at once, stage on the
+   *   volume of `to` and `rename` - which is what `writeBytesAtomically` does.
+   * - A device, a pipe or a socket cannot be copied, so it moves only within one volume.
+   *
+   * # Examples
+   *
+   *     fn archive(report: String, archive: String): Result<Void, IoError> {
+   *       File.createDirectory(archive)?
+   *       File.move report, "{archive}/report.txt"
+   *     }
+   */
+  static fn move(path: String, to: String): Result<Void, IoError> {
+    const problem = match Self.rename(path, to) {
+      Ok(_) => { return Ok void }
+      Fail(failure) => failure
+    }
+    if !problem.isCrossDevice() {
+      return Fail problem
+    }
+    const found = Self.linkMetadata(path)?
+    const staging = temporaryEntry(".{nameOf(to)}.", directoryOf(to), found.kind == FileKind.Directory)?
+    const placed = match copiedEntry(path, staging, found) {
+      Ok(_) => Self.rename staging, to
+      Fail(failure) => Fail failure
+    }
+    if const Fail(failure) = placed {
+      const _ = removedEntry staging
+      return Fail failure
+    }
+    removedEntry path
+  }
 
   /**
    * Copies the content and the permissions of the file `path` to `to`, which is created or replaced. A symbolic link is
@@ -395,6 +446,55 @@ fn joinedPath(path: String, name: String): String {
     "{path}{name}"
   } else {
     "{path}/{name}"
+  }
+}
+
+/** The directory `path` is an entry of, where a new entry beside it goes: `.` for a name without one. */
+fn directoryOf(path: String): String {
+  const above = Path.from(path).parent().map({ _.show() }) ?? "."
+  if above.isEmpty() {
+    "."
+  } else {
+    above
+  }
+}
+
+/** The last name of `path`: `c` of `a/b/c`. */
+fn nameOf(path: String): String {
+  Path.from(path).name() ?? path
+}
+
+/**
+ * `path` copied to `to` as what `found` says it is - a directory with everything below it and its permissions, a
+ * symbolic link as a link with the same target, a file with its content and permissions - for [File.move] across
+ * volumes. `to` may be there already: an empty directory or file, which [File.move] made to reserve a name.
+ */
+fn copiedEntry(path: String, to: String, found: Metadata): Result<Void, IoError> {
+  match found.kind {
+    .Directory => {
+      File.createDirectory(to)?
+      for name in File.list(path)? {
+        const child = joinedPath path, name
+        copiedEntry(child, joinedPath(to, name), File.linkMetadata(child)?)?
+      }
+      File.setPermissions to, found.permissions
+    }
+    .SymbolicLink => {
+      if File.linkMetadata(to).isOk() {
+        File.remove(to)?
+      }
+      File.createSymbolicLink(to, File.symbolicLinkTarget(path)?)
+    }
+    .File => File.copy path, to
+    .Other => Fail IoError(path, "a device, a pipe or a socket cannot be copied to another volume")
+  }
+}
+
+/** Removes what is at `path`, whatever it is: `removeDirectory` for a directory, `remove` for everything else. */
+fn removedEntry(path: String): Result<Void, IoError> {
+  match File.linkMetadata(path) {
+    Ok(found) => if found.kind == FileKind.Directory { File.removeDirectory path } else { File.remove path }
+    Fail(problem) => if File.exists(path) { Fail problem } else { Ok void }
   }
 }
 
