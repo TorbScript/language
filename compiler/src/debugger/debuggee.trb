@@ -559,8 +559,12 @@ fn applyBreakpoints(session: Session) {
 /**
  * What arrived while the program ran, every thousand statements: answered in order, until the first request that needs
  * a stopped program - it waits, with everything after it, but a pause, `disconnect` and `terminate` are acted on.
+ * Once the adapter said that nothing more comes, nothing is read: the end of the input behind it ends nothing.
  */
 fn pollChannel(session: Session) {
+  if session.inputEnded {
+    return
+  }
   while hasPending(session.kernel) {
     const request = match receive(session.kernel) {
       Some(found) => found
