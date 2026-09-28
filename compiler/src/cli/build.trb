@@ -943,27 +943,47 @@ fn tlsPartsOf(runtime: String, command: String, microsoft: Bool, binary: String)
   const key = "mbedtls-{version}-{configuration}-{pathName(command)}"
   const common = joinPath parentPath(runtime), "build/vendor/{key}"
   const unique = "{binary.hash()}-{Clock.milliseconds()}".replace("-", "n")
-  const objects = match vendorObjectsOf(common, unique, vendor, flags, command, microsoft) {
+  const compilation = VendorCompilation vendor, flags, command, microsoft, joinPath(parentPath(runtime), "tools")
+  const objects = match vendorObjectsOf(compilation, common, unique) {
     Ok(found) => found
-    Fail(_) => vendorObjectsOf(joinPath(parentPath(binary), key), unique, vendor, flags, command, microsoft)?
+    Fail(_) => vendorObjectsOf(compilation, joinPath(parentPath(binary), key), unique)?
   }
   TlsParts flags, sources, objects
 }
 
+/** How mbedTLS is compiled: its directory, the flags of the TLS part, the C compiler, and where the scripts are. */
+type VendorCompilation {
+  vendor: String
+  flags: List<String>
+  command: String
+  microsoft: Bool
+  tools: String
+}
+
 /**
- * The objects of mbedTLS in `directory`: those of a build that finished there, or compiled now into a directory of
- * this build's own - so two builds that compile at the same time never write one file, and neither reads a file the
- * other is still writing. A build that finished leaves `compiled-version` behind, and only then is it read.
+ * The objects of mbedTLS in `directory`, one per C file of its library, named after the file: those that are there
+ * already, or compiled now by `tools/build-units.sh` - every file at once, as many at a time as the machine has
+ * processors. The script moves an object into place only once it is complete, and holds a lock beside it while it
+ * compiles it, so several builds that start at once compile mbedTLS once: the others wait for its objects and use them.
+ *
+ * Without `sh`, without the script, or with Microsoft's C compiler, whose flags the script does not speak, the files are
+ * compiled one after the other into a directory of this build's own instead, which leaves `compiled-version` behind
+ * when it is complete, and only then is it read.
  */
-fn vendorObjectsOf(
-  directory: String,
-  unique: String,
-  vendor: String,
-  flags: List<String>,
-  command: String,
-  microsoft: Bool,
-): Result<List<String>, IoError> {
-  const suffix = if microsoft { ".obj" } else { ".o" }
+fn vendorObjectsOf(compilation: VendorCompilation, directory: String, unique: String): Result<List<String>, IoError> {
+  const suffix = if compilation.microsoft { ".obj" } else { ".o" }
+  const library = joinPath compilation.vendor, "library"
+  var sources: List<String> = []
+  var objects: List<String> = []
+  for entry in File.list(library)? {
+    if entry.endsWith(".c") {
+      sources.append joinPath(library, entry)
+      objects.append joinPath(directory, "{entry.substringBefore(".c") ?? entry}{suffix}")
+    }
+  }
+  if objects.all({ File.exists _ }) {
+    return objects
+  }
   if File.isDirectory(directory) {
     for entry in File.list(directory)? {
       const candidate = joinPath directory, entry
@@ -972,9 +992,44 @@ fn vendorObjectsOf(
       }
     }
   }
-  const target = joinPath directory, "objects-{unique}"
+  File.createDirectory(directory)?
+  const script = joinPath compilation.tools, "build-units.sh"
+  if !compilation.microsoft && File.exists(script) {
+    printError "compiling mbedTLS once into {directory}, or waiting for the build that compiles it"
+    var lines: List<String> = []
+    for (index, object) in objects.indexed() {
+      lines.append "compile\t{object}\t{sources[index]}\t"
+    }
+    const list = joinPath directory, "c-units-{unique}.txt"
+    File.writeText(list, lines.joined(separator: "\n") + "\n")?
+    var arguments = [script, list, directory, compilation.command, "-std=c11", "-O2", "-w"]
+    arguments.appendAll compilation.flags
+    arguments.append "-I{library}"
+    const ran = Process.runBlocking "sh", arguments
+    const _ = File.remove list
+    // No `sh` to start the script with: the files are compiled one after the other below
+    if const Ok(output) = ran {
+      if output.exitCode != 0 {
+        const said = if output.standardOutput.trim().isEmpty() { output.standardError } else { output.standardOutput }
+        return Fail IoError(library, said)
+      }
+      return objects
+    }
+  }
+  sequentialVendorObjectsOf compilation, joinPath(directory, "objects-{unique}"), suffix
+}
+
+/** mbedTLS compiled one file after the other into `target`, a directory of this build's own. */
+fn sequentialVendorObjectsOf(
+  compilation: VendorCompilation,
+  target: String,
+  suffix: String,
+): Result<List<String>, IoError> {
+  const microsoft = compilation.microsoft
+  const flags = compilation.flags
+  const command = compilation.command
   File.createDirectory(target)?
-  const library = joinPath vendor, "library"
+  const library = joinPath compilation.vendor, "library"
   printError "compiling mbedTLS once into {target}"
   for entry in File.list(library)? {
     if !entry.endsWith(".c") {
@@ -996,7 +1051,7 @@ fn vendorObjectsOf(
       return Fail IoError(joinPath(library, entry), said)
     }
   }
-  File.writeText(joinPath(target, "compiled-version"), "{directory}\n")?
+  File.writeText(joinPath(target, "compiled-version"), "{parentPath(target)}\n")?
   objectsIn target, suffix
 }
 

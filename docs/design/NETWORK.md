@@ -409,8 +409,11 @@ every platform, the platform's trust decisions where the platform has them:
 - **Linked where it is reached.** The rows of the manifest name their part (`NativeEntry.part`, `"tls"`); the driver
   adds `runtime/tls/` and mbedTLS to a program whose C calls a `torb_tls_` function, and defines `TORB_WITH_TLS`, under
   which the VM's thunks for those rows exist - elsewhere they panic, so every other program links as before. mbedTLS is
-  compiled once per checkout, C compiler, version and configuration into `build/vendor/` (half a minute with gcc), in a
-  directory per build that is read only once a marker says it finished, so two builds at once never share a file.
+  compiled once per checkout, C compiler, version and configuration into `build/vendor/`, by `tools/build-units.sh`
+  with every file at once, which moves an object into place only when it is complete and holds a lock beside it while
+  it compiles it: builds that start together - the programs of the conformance suite - compile it once, and the others
+  wait for its objects. Microsoft's `cl` compiles it one file after the other into a directory of the build's own, read
+  once a marker says it finished.
 - **One lock around every call of mbedTLS.** PSA's key store and generator are global in mbedTLS and not safe for two
   threads without `MBEDTLS_THREADING_C`; the calls never wait, so one mutex is correct and costs only parallel
   handshakes. `MBEDTLS_THREADING_ALT` over the runtime's mutexes is the speed change when a benchmark asks for it.

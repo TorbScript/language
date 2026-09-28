@@ -193,6 +193,10 @@ after it.
 processor (`$TORB_BUILD_JOBS`), and links with gcc's `-flto`. Every object - the units' and the runtime's - and the
 binary itself are kept in `build/objects/` under the hash of everything that decides them: a build whose C did not
 change copies the binary and compiles nothing. The fixpoint still compares `program.c`, which is the whole program.
+An object - mbedTLS's in `build/vendor/` too - and a kept binary are made by one build at a time: the script holds
+`<object>.lock` while it compiles or links, and a build that finds it taken does the rest of its work first and then
+waits for the object and uses it, so the programs of the conformance suite that start together compile and link
+their common parts once.
 
 **Build slots.** A build whose C files to compile are 8 MB or more together - the compiler, a test suite of it - runs
 its compiles through `tools/build-slot.sh`, which `torb build` finds beside the runtime: at most `$TORB_BUILD_SLOTS`
