@@ -4,6 +4,7 @@ summary: Every page belongs to one of three levels - Start, Guide, Reference - a
 kind: explanation
 status: stable
 order: 25
+skill: omit
 keywords:
   - levels
   - start
