@@ -15,7 +15,7 @@ use ModuleId from "../module"
 use SymbolId from "../symbols"
 use TypeId, TypeForm, ParameterForm, ParameterId from "./type"
 use Checker, Expectation, LocalBinding, TypeScope, ResultRule from "./context"
-use checkExpression, inferExpression, checkCondition from "./expression"
+use checkExpression, inferExpression, inferValue, checkCondition from "./expression"
 use expectationOf, isNested, settleTries from "./expression"
 use declareParameterOwners from "./escape"
 use isFullyKnown from "./name"
@@ -214,7 +214,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
       }
       checkExpression checker, binding.value, inner
     }
-    None => inferExpression checker, binding.value
+    None => inferValue checker, binding.value
   }
   var bound = annotation ?? found
   // Nothing is known about a value the checker could not type, so neither is anything about the name it is bound to
@@ -332,7 +332,7 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
     }
   }
   if checker.resultInferred {
-    const found = inferExpression checker, expression
+    const found = inferValue checker, expression
     checker.returnTypes.append found
     // A `public` function and a trait method do not infer: `return e` has to say what `e` is
     requireDeclaredResult checker, found, expression.span
@@ -701,7 +701,7 @@ public fn checkInitializer(
       const inner = expectationOf checker, wanted
       checkExpression checker, value, inner
     }
-    None => inferExpression checker, value
+    None => inferValue checker, value
   }
   closeInference checker
   found = resolveType checker, found
@@ -745,7 +745,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
       const inner = expectationOf checker, wanted
       checkExpression checker, binding.value, inner
     }
-    None => inferExpression checker, binding.value
+    None => inferValue checker, binding.value
   }
   var subject = annotation ?? found
   if checker.absorbs(subject) {

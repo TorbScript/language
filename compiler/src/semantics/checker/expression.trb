@@ -82,6 +82,15 @@ public fn inferExpression(var checker: Checker, expression: Expression): TypeId 
 }
 
 /**
+ * The same for a value that is kept without a type that says what it is - the initializer of `const found = ...`, the
+ * value of a `return` whose body infers its result - where the arms of an `if` or a `match` have to agree
+ * ([Expectation.Value]).
+ */
+public fn inferValue(var checker: Checker, expression: Expression): TypeId {
+  checkExpression checker, expression, Expectation.Value
+}
+
+/**
  * Whether an expression hands what is expected of it to its parts. A block, an `if` and a `match` do, so a message
  * about one of their arms must not be given a second time about the whole.
  */
@@ -2589,7 +2598,7 @@ fn ifType(
   if expected.isStatement() {
     return checker.voidType
   }
-  armResult checker, [first.annotation, second]
+  armResult checker, [first.annotation, second], [then.span, alternative.span], expected, "The branches of this `if`"
 }
 
 /**
@@ -2646,7 +2655,8 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
   if expected.isStatement() {
     return checker.voidType
   }
-  armResult checker, produced
+  const spans = arms.map({ _.body.span }).toList()
+  armResult checker, produced, spans, expected, "The arms of this `match`"
 }
 
 /**
@@ -2654,18 +2664,40 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
  * statement, and what they agree on is the value. Where they do not agree the arms are *statements* - a body without a
  * declared result whose last expression is a `match` used for effect is the ordinary case and must not be reported - so
  * the whole has the type `Void`. With an expectation every arm was checked against it and said everything there is.
+ *
+ * Where the value is kept without a type ([Expectation.Value]: `const found = match ...`) the arms are no statements, and
+ * arms that do not agree are an error at the first one that does not fit the ones before it (`spans` are theirs, and
+ * `named` is what the message calls them); the whole is then invalid, so that what reads it adds no second message.
  */
-fn armResult(var checker: Checker, arms: List<TypeId>): TypeId {
+fn armResult(
+  var checker: Checker,
+  arms: List<TypeId>,
+  spans: List<Span>,
+  expected: Expectation,
+  named: String,
+): TypeId {
   var found: TypeId? = None
-  for arm in arms {
-    const annotation = resolveType checker, arm
+  for index in 0..arms.length() {
+    const annotation = resolveType checker, arms[index]
     if checker.absorbs(annotation) {
       continue
     }
     match found {
       Some(known) => {
         if !unify(checker, known, annotation) {
-          return checker.voidType
+          if !expected.keepsValue() {
+            return checker.voidType
+          }
+          const first = checker.describe known
+          const other = checker.describe annotation
+          checker.reportHere(
+            Diagnostic.error("{named} do not agree on a type: the first is `{first}`, this one `{other}`", spans[index])
+              .withNote(
+                "Nothing says which of the two is meant: write the type where the value goes, `const name: Type = ...`,"
+                  + " and every arm is checked against it",
+              ),
+          )
+          return checker.invalidType
         }
       }
       None => {

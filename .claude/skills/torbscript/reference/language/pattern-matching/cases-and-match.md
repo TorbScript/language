@@ -11,10 +11,12 @@ keywords:
   - exhaustive
   - imported case
   - unread binding
+  - arms of two types
 source:
   - CONCEPT.md#algebraic-data-types-and-pattern-matching
   - CONCEPT.md#modules-and-packages
   - examples/tour/src/04-adts-and-matching.trb
+  - compiler/src/semantics/checker/expression.trb
 ---
 
 A `case` inside a `type` declares a variant. `match` takes a value apart and is an expression, so it produces a value and
@@ -130,6 +132,22 @@ match <subject> {
 
 7. **`match` is an expression and must be exhaustive.** There are no open or non-exhaustive types: a public type with
    cases is a promise, and adding a case is a breaking change the compiler points out at every `match`.
+
+   Its value has the one type its arms agree on. Where the value is kept without a type that says which one - a binding
+   without an annotation, a `return` - arms of two types are an error at the first arm that does not fit; the
+   annotation settles it, and every arm is checked against it. Where nothing keeps the value, the `match` is a
+   statement and its arms may be anything, and the same holds for the two branches of an `if`.
+
+   ```trb error
+   fn label(value: Int?): String {
+     const shown = match value {
+       Some(found) => found
+       None => "nothing"
+     }
+     "{shown}"
+   }
+   // error: The arms of this `match` do not agree on a type: the first is `Int64`, this one `String`
+   ```
 
 8. **An arm that can never be reached is an error.** Like a dead change and a discarded value, an unreachable arm is
    always a mistake rather than a defensive line.

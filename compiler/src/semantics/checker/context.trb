@@ -734,6 +734,12 @@ public type Expectation {
   case Unwrapped(annotation: TypeId)
   /** The arms of a `match` that is used as a statement, and the body of a `for`: a value is not wanted. */
   case Statement
+  /**
+   * Nothing says what the type should be, and the value is kept: the initializer of a binding without a type, the value
+   * of a `return` in a body whose result is inferred. It is [Expectation.None] to everything but the arms of an `if`
+   * and a `match`, which have to agree here - where nothing keeps the value they may be statements that disagree.
+   */
+  case Value
 
   /** The type that is expected, if any. */
   fn annotationOf(): TypeId? {
@@ -754,6 +760,14 @@ public type Expectation {
   fn isStatement(): Bool {
     match self {
       .Statement => true
+      _ => false
+    }
+  }
+
+  /** Whether the value is kept without a type that says what it is ([Expectation.Value]). */
+  fn keepsValue(): Bool {
+    match self {
+      .Value => true
       _ => false
     }
   }

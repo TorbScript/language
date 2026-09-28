@@ -626,6 +626,7 @@ and a function *type* still names it: `(self: Point) => Int` and `(var self: Con
 | `type point`, `fn Distance` | `type Point`, `fn distance` | the first letter of a name is a rule, not a convention |
 | `Config(host)` for a type of three fields | `Config(host, ...)` | a pattern that does not name every field ends in `...` |
 | `Person("Ada")` where `nickname: String?` | `Person("Ada", nickname: None)` | an optional field without a default is required |
+| `const name = match found { Some(text) => text  None => None }` | `const name: String? = match found { ... }` | arms of two types are an error where a binding without a type keeps the value; the annotation wraps `text` |
 
 ### How to check yourself
 

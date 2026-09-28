@@ -255,6 +255,40 @@ group "The arms of an `if` and a `match`" {
     assert(problems(source) == ["Expected `Int64`, found `String`"])
   }
 
+  test "arms that do not agree where a binding keeps the value are an error at the arm that does not fit" {
+    const arms = "match given \{\n    Some(text) => text\n    None => if flag \{ Some(\"a\") \} else \{ None \}\n  \}"
+    const source = "fn probe(flag: Bool, given: String?) \{\n  const found = {arms}\n  print found\n\}"
+    assert(
+      problems(source)
+        == ["The arms of this `match` do not agree on a type: the first is `String`, this one `Option<String>`"],
+    )
+    assert(
+      notes(source) == [
+        "Nothing says which of the two is meant: write the type where the value goes, `const name: Type = ...`, and every arm is checked against it",
+      ],
+    )
+  }
+
+  test "branches of an `if` that do not agree where a binding keeps the value are an error too" {
+    const source = inBody "  const found = if true \{ 1 \} else \{ \"two\" \}\n  print found"
+    assert(
+      problems(source) == ["The branches of this `if` do not agree on a type: the first is `Int64`, this one `String`"],
+    )
+  }
+
+  test "the value of a `return` is kept as well" {
+    const source = "fn probe(given: Int?) \{\n  return match given \{\n    Some(value) => value\n    None => \"none\"\n  \}\n\}"
+    assert(
+      problems(source) == ["The arms of this `match` do not agree on a type: the first is `Int64`, this one `String`"],
+    )
+  }
+
+  test "the type written on the binding is what every arm is checked against" {
+    const arms = "match given \{\n    Some(text) => text\n    None => if flag \{ Some(\"a\") \} else \{ None \}\n  \}"
+    const source = "fn probe(flag: Bool, given: String?) \{\n  const found: String? = {arms}\n  print found\n\}"
+    assert problems(source).isEmpty()
+  }
+
   test "an arm that diverges decides nothing" {
     const source = "fn probe(flag: Bool): Int \{\n  const found = if flag \{ 1 \} else \{ panic \"no\" \}\n  found\n\}"
     assert problems(source).isEmpty()
