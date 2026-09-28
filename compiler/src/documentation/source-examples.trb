@@ -19,9 +19,10 @@ use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use SourceTree from "../project/source-tree"
 use check, Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
 use DocumentationProblem, linesOf from "./markdown"
 use ExampleKind from "./comments"
-use canonProblems from "./canon"
+use canonProblems, noFieldCallsOf, CanonScope from "./canon"
 use lineOfOffset from "./snippets"
 
 /** One example of a doc comment, with everything the check of it needs. */
@@ -90,7 +91,9 @@ fn syntaxProblemsOf(example: SourceExample): List<DocumentationProblem> {
   if !parsed.diagnostics.isEmpty() {
     return problems
   }
-  for problem in canonProblems(example.text, parsed.file) {
+  // An example the checker checks is asked the rule `calls` once the checker has resolved its callees
+  const scope = if needsChecker(example.kind) { CanonScope.StringsOnly } else { CanonScope.Everything }
+  for problem in canonProblems(example.text, parsed.file, scope) {
     problems.append DocumentationProblem(example.path, example.line + problem.line - 1, problem.message)
   }
   problems
@@ -164,6 +167,50 @@ public fn typeCheckExamples(
         problems.append DocumentationProblem(example.path, lineInFile(example, moduleLine), diagnostic.message)
       }
     }
+    problems.appendAll typedCallProblems(checked, workspace, example)
   }
   TypedExamples problems, checked
+}
+
+/**
+ * The rule `calls` of the canon for an example the checker checked, with what it resolved the callees to: a call of a
+ * field that holds a function keeps its parentheses, because a command would write the field. The module is the
+ * example behind its context, so its spans are moved back by the context before the example's own tree reads them.
+ */
+fn typedCallProblems(checked: Checked, workspace: SourceTree, example: SourceExample): List<DocumentationProblem> {
+  const shown = workspace.display example.module
+  var module: ModuleId? = checked.program.graph.moduleAt example.module
+  if module.isNone() {
+    for candidate in checked.program.graph.modules {
+      if workspace.display(candidate.path) == shown {
+        module = candidate.id
+      }
+    }
+  }
+  const found = match module {
+    Some(identifier) => identifier
+    None => {
+      return []
+    }
+  }
+  const shape = checked.program.graph.at found
+  if shape.source.text != moduleTextOf(example) || !shape.diagnostics.isEmpty() {
+    return []
+  }
+  const parsed = parse SourceText.of(example.text)
+  if !parsed.diagnostics.isEmpty() {
+    return []
+  }
+  const preamble = example.context.byteLength() + 2
+  var noField: Set<Int> = Set.of()
+  for start in noFieldCallsOf(checked.checker, found, shape.file) {
+    if start >= preamble {
+      noField.insert(start - preamble)
+    }
+  }
+  var problems: List<DocumentationProblem> = []
+  for problem in canonProblems(example.text, parsed.file, CanonScope.CallsOnly(noField)) {
+    problems.append DocumentationProblem(example.path, example.line + problem.line - 1, problem.message)
+  }
+  problems
 }

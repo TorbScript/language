@@ -15,6 +15,12 @@
  * snippet that passes here is in the canon; that it is in the layout is not promised, and
  * `docs/contributing/checks.md` says so.
  *
+ * One question of the rule `calls` is not the syntax tree's: whether a callee is a field that holds a function.
+ * `debugger.stop(event)` calls it, and `debugger.stop event` is an error the checker reports, because a command on a
+ * field writes it. Inside the type the tree sees the field; anywhere else only the checker does. So a block the checker
+ * checks is asked the rule `calls` with what the checker resolved ([CanonScope.CallsOnly], [noFieldCallsOf]), the way
+ * `torb format` asks it, and one nothing checks with what the tree shows.
+ *
  * [canonProblems] is the entry point, called once per snippet with its already-parsed tree.
  */
 
@@ -24,11 +30,27 @@ use lex from "../syntax/lexer"
 use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
 use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
 use Pattern, PatternKind, TextSegment from "../syntax/ast"
+use Checker, Resolution from "../semantics/checker/context"
+use ModuleId from "../semantics/module"
 
 /** One place in a snippet where the canon says something else. `line` and `column` are inside the block. */
 public type CanonProblem {
   line: Int
   message: String
+}
+
+/** Which of the two rules a snippet is asked, and what the rule `calls` knows about the callees of its calls. */
+public type CanonScope {
+  /** Both rules, and a callee is a field where the tree shows one: a block nothing type checks */
+  case Everything
+  /** Only `strings`: the block is type checked, and `calls` is asked once the checker has resolved its callees */
+  case StringsOnly
+  /**
+   * Only `calls`, with the start of every call whose callee the checker resolved to something that is no field. A call
+   * of a field, and one whose callee the checker did not resolve, keeps the way it is written, as `torb format` keeps
+   * it.
+   */
+  case CallsOnly(noField: Set<Int>)
 }
 
 /** Every call the walk found, with the two questions the rule `calls` asks about its place. */
@@ -46,27 +68,79 @@ type Walk {
 }
 
 /**
- * The canon problems of one snippet. The source has to have parsed without diagnostics: the rule reads a tree, and a
- * tree with holes in it would report the holes instead of the style.
+ * The canon problems of one snippet, for the rules `scope` names. The source has to have parsed without diagnostics:
+ * the rule reads a tree, and a tree with holes in it would report the holes instead of the style.
  */
-public fn canonProblems(text: String, file: SourceFile): List<CanonProblem> {
+public fn canonProblems(text: String, file: SourceFile, scope: CanonScope = CanonScope.Everything): List<CanonProblem> {
   const source = SourceText.of text
   const tokens = lex(source).tokens
   const lines = linesWithOffsets text
-  var walk = Walk([], [])
-  walkStatements walk, file.statements
   var problems: List<CanonProblem> = []
-  const sites = walk.sites
-  for site in sites {
-    const found = callProblem text, tokens, lines, site
-    match found {
-      Some(problem) => problems.append problem
-      None => {}
+  const asksCalls = match scope {
+    .StringsOnly => false
+    _ => true
+  }
+  if asksCalls {
+    var walk = Walk([], [])
+    walkStatements walk, file.statements
+    const sites = walk.sites
+    for site in sites {
+      if isFieldCall(site, scope) {
+        continue
+      }
+      const found = callProblem text, tokens, lines, site
+      match found {
+        Some(problem) => problems.append problem
+        None => {}
+      }
     }
   }
-  problems.appendAll stringProblems(text, tokens, lines)
+  const asksStrings = match scope {
+    .CallsOnly(_) => false
+    _ => true
+  }
+  if asksStrings {
+    problems.appendAll stringProblems(text, tokens, lines)
+  }
   problems.sort({ _.line })
   problems
+}
+
+/**
+ * Whether the parentheses of a call decide what its line means rather than how it looks, because its callee is a field
+ * (property commands) - or may be one, where the checker did not resolve it. Without the checker the tree says it.
+ */
+fn isFieldCall(site: CallSite, scope: CanonScope): Bool {
+  match scope {
+    .CallsOnly(noField) => !noField.contains(site.call.span.start)
+    _ => site.calleeCouldBeAField
+  }
+}
+
+/**
+ * The start of every call of a checked module whose callee the checker resolved to something that is no field: a
+ * method, a function, a case, a local or a constant that holds a closure. A field is not one, and neither is a callee
+ * without a resolution - a name after an error. What [CanonScope.CallsOnly] holds.
+ */
+public fn noFieldCallsOf(checker: Checker, module: ModuleId, file: SourceFile): Set<Int> {
+  var walk = Walk([], [])
+  walkStatements walk, file.statements
+  var found: Set<Int> = Set.of()
+  for site in walk.sites {
+    if const .Call(callee, _, _) = site.call.kind {
+      if isNoField(checker.resolutionAt(module, callee.span)) {
+        found.insert site.call.span.start
+      }
+    }
+  }
+  found
+}
+
+fn isNoField(resolution: Resolution?): Bool {
+  match resolution {
+    None | Some(.Field(_, _)) | Some(.PropertyWrite(_, _)) | Some(.Deferred) => false
+    Some(_) => true
+  }
 }
 
 /**
@@ -396,11 +470,8 @@ fn isFieldName(fields: List<String>, callee: Expression): Bool {
 
 // --- Rule `calls` -------------------------------------------------------------------------------------------------
 
+/** What the rule `calls` says about a call whose callee is no field ([isFieldCall] left the others out). */
 fn callProblem(text: String, tokens: List<Token>, lines: Lines, site: CallSite): CanonProblem? {
-  // Where the callee names a field, the parentheses decide what the line means, not how it looks (property commands)
-  if site.calleeCouldBeAField {
-    return None
-  }
   match site.call.kind {
     .Call(callee, arguments, style) => {
       match style {

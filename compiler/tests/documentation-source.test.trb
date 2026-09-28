@@ -6,10 +6,11 @@
  */
 
 use test, group from "std/test"
+use preludeSource from "./harness"
 use SourceTree from "../src/project/source-tree"
 use NameIndex, buildNameIndex from "../src/documentation/source-scope"
 use Tree, readSource, sourceProblems from "../src/documentation/source"
-use exampleSyntaxProblems from "../src/documentation/source-examples"
+use exampleSyntaxProblems, exampleTypeProblems from "../src/documentation/source-examples"
 use CommentLine, commentLines, historyHits from "../src/documentation/comments"
 use SourceText, LineIndex from "../src/syntax/source"
 use lex from "../src/syntax/lexer"
@@ -42,6 +43,38 @@ fn findings(text: String, tree: Tree): List<String> {
 
 fn standard(text: String): List<String> {
   findings text, Tree.Standard
+}
+
+/**
+ * The findings of one file of `std/a` with both halves of the examples' check: what the syntax says, and what the
+ * checker says - the rule `calls` of the canon among it, which needs to know what a callee is. The workspace is the
+ * harness's prelude, the small library, and the file.
+ */
+fn checkedExamples(text: String): List<String> {
+  const read = readSource "std/a/src/a.trb", "std/a/src/a.trb", Tree.Standard, text
+  const checked = sourceProblems read, index()
+  const exports = [
+    "public use Show, Equals, Compare, Hash, Negate, Iterate, Iterator from \"./types\"",
+    "public use Add, Subtract, Multiply, Divide, Remainder, Index, Slice from \"./types\"",
+    "public use Numeric, Int64, Float64, Bool, Char, String, Int, Float, Option, Result, List from \"./types\"",
+    "public use print, panic, assert, Void from \"./types\"",
+    "public use Option.Some, Option.None from \"./types\"",
+    "public use Result.Ok, Result.Fail from \"./types\"",
+    "",
+  ]
+  const tree = SourceTree.of([
+    "project.trb": "name \"docs/examples\"\n\nworkspace \{\n  members \"std/*\"\n\}\n",
+    "std/prelude/project.trb": "name \"std/prelude\"\n",
+    "std/prelude/src/types.trb": preludeSource,
+    "std/prelude/src/lib.trb": exports.joined(separator: "\n"),
+    "std/iteration/project.trb": "name \"std/iteration\"\n",
+    "std/iteration/src/lib.trb": libraryModule,
+    "std/a/project.trb": "name \"std/a\"\n",
+    "std/a/src/a.trb": text,
+  ])
+  var messages = exampleSyntaxProblems(checked.examples).map({ _.show() }).toList()
+  messages.appendAll exampleTypeProblems(tree, ["std/a"], checked.examples).map({ _.show() }).toList()
+  messages
 }
 
 /** One file that passes, which is what every test about a single broken rule starts from. */
@@ -256,18 +289,27 @@ group "the links of a doc comment" {
 
 group "the examples of a doc comment" {
   test "an example that is not in the canon is a finding" {
-    const found = standard withSections(" * # Examples\n *\n *     print(\"one\")\n")
+    const found = checkedExamples withSections(" * # Examples\n *\n *     print(\"one\")\n")
     assert(found.length() == 1)
     assert found[0].contains("A call is a command")
   }
 
   test "an example in the canon is no finding" {
-    assert standard(withSections(" * # Examples\n *\n *     print \"one\"\n")).isEmpty()
+    assert checkedExamples(withSections(" * # Examples\n *\n *     print \"one\"\n")).isEmpty()
   }
 
   test "an example names the line it stands on" {
-    const found = standard withSections(" * # Examples\n *\n *     print(\"one\")\n")
+    const found = checkedExamples withSections(" * # Examples\n *\n *     print(\"one\")\n")
     assert found[0].startsWith("std/a/src/a.trb:10:")
+  }
+
+  test "the rule `calls` waits for the checker, which knows a field that holds a function" {
+    // The syntax tree cannot tell `hook.stop(1)` of a field from a method call; `hook.stop 1` would write the field
+    const example = " * # Examples\n *\n *     const hook = Hook(\{ value => print value \})\n *     hook.stop(1)\n"
+    const text = withSections(example)
+      + "\n/** Something to call. */\npublic type Hook \{\n  /** What a call runs. */\n  stop: (Int) => Void\n\}\n"
+    assert standard(text).isEmpty()
+    assert checkedExamples(text).isEmpty()
   }
 
   test "a fragment is only lexed" {

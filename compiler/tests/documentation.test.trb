@@ -733,6 +733,44 @@ group "the type check of a snippet" {
     assert(found.any({ _.contains "none of its `// error:` lines expects" }))
   }
 
+  test "a checked snippet is asked the rule `calls` with what the checker resolved" {
+    var files = goodTree()
+    const page = referencePage("Bindings")
+      .replace("```trb\n", "```trb check\n")
+      .replace("print answer", "print(answer)")
+    files.set "language/bindings.md", page
+    // The half without the checker leaves the rule to the half with it
+    assert check(files).isEmpty()
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkSnippetTypes(documentation, standardLibrary()) {
+      found.append problem.show()
+    }
+    assert(found.any({ _.contains "Write `print ...` without parentheses" }))
+  }
+
+  test "a call of a field that holds a function keeps its parentheses: a command would write the field" {
+    // `debugger.stop event` is what the syntax tree alone would ask for, and the checker rejects it
+    const source = [
+      "type Debugger \{",
+      "  stop: (Int) => Void",
+      "\}",
+      "",
+      "fn pause(debugger: Debugger, event: Int) \{",
+      "  debugger.stop(event)",
+      "\}",
+    ].joined(separator: "\n")
+    var files = goodTree()
+    const block = "```trb check\n{source}\n```"
+    files.set(
+      "language/bindings.md",
+      referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", block),
+    )
+    assert check(files).isEmpty()
+    const documentation = documentationOf "docs", files
+    assert checkSnippetTypes(documentation, standardLibrary()).isEmpty()
+  }
+
   test "an error block may expect several diagnostics, one line each" {
     var files = goodTree()
     const both = "```trb error\nconst answer: Bool = 42\nconst other: Bool = missing\n// error: Expected `Bool`\n// error: Cannot find `missing`\n```"

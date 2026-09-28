@@ -34,7 +34,7 @@ use SourceTree from "../project/source-tree"
 use check, Checked from "../semantics/check"
 use DocumentationProblem, CodeBlock, linesOf from "./markdown"
 use Page, Documentation from "./tree"
-use canonProblems from "./canon"
+use canonProblems, noFieldCallsOf, CanonScope from "./canon"
 use nativeNote from "./schema"
 
 /** How hard a fenced block is checked, decided by its marker. The spelling mirrors the markers themselves. */
@@ -298,11 +298,21 @@ fn syntaxProblemsOf(snippet: Snippet): List<DocumentationProblem> {
   if isFailing {
     return problems
   }
-  for problem in canonProblems(snippet.text, parsed.file) {
+  // A block the checker checks is asked the rule `calls` once the checker has resolved its callees
+  const scope = if asksCallsWhenTyped(snippet.kind) { CanonScope.StringsOnly } else { CanonScope.Everything }
+  for problem in canonProblems(snippet.text, parsed.file, scope) {
     const line = snippet.contentLine + problem.line - 1
     problems.append DocumentationProblem(snippet.path, line, problem.message)
   }
   problems
+}
+
+/**
+ * Whether the rule `calls` of the canon waits for the type checker: a `trb check` and a `trb run` block are checked,
+ * and only the checker says whether a callee is a field. A `trb error` block is not held to the canon at all.
+ */
+fn asksCallsWhenTyped(kind: SnippetKind): Bool {
+  kind == SnippetKind.Checked || kind == SnippetKind.Running
 }
 
 /** The 1-based line of a byte offset inside a snippet. */
@@ -415,8 +425,37 @@ public fn typeCheckSnippets(
       }
     }
     problems.appendAll snippetTypeProblems(snippet, messages)
+    problems.appendAll typedCallProblems(checked, snippet)
   }
   TypedSnippets problems, wanted, checked
+}
+
+/**
+ * The rule `calls` of the canon for a block the checker checked, with what it resolved the callees to: a call of a
+ * field that holds a function keeps its parentheses, because `debugger.stop event` would write the field.
+ */
+fn typedCallProblems(checked: Checked, snippet: Snippet): List<DocumentationProblem> {
+  if !asksCallsWhenTyped(snippet.kind) {
+    return []
+  }
+  const module = match checked.program.graph.moduleAt(snippetPath(snippet)) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const shape = checked.program.graph.at module
+  // The block is the whole file, so a span of the module is a span of the block
+  if shape.source.text != snippet.text || !shape.diagnostics.isEmpty() {
+    return []
+  }
+  const noField = noFieldCallsOf checked.checker, module, shape.file
+  var problems: List<DocumentationProblem> = []
+  for problem in canonProblems(snippet.text, shape.file, CanonScope.CallsOnly(noField)) {
+    const line = snippet.contentLine + problem.line - 1
+    problems.append DocumentationProblem(snippet.path, line, problem.message)
+  }
+  problems
 }
 
 fn snippetTypeProblems(snippet: Snippet, messages: List<String>): List<DocumentationProblem> {

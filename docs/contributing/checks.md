@@ -165,8 +165,12 @@ The C runtime is `$TORB_RUNTIME`, or the `runtime/` beside the standard library.
 Two of the rules of the formatter canon are decided on every block that parses:
 
 - **calls**: a call is a command wherever the grammar allows it, and has parentheses everywhere else. Both directions
-  are reported. A call whose callee names a field of the type it stands in is left alone, because there the parentheses
-  are meaning and not style.
+  are reported. A call of a field that holds a function is left alone, because there the parentheses are meaning and
+  not style: `debugger.stop(event)` calls the field, and `debugger.stop event` would write it. Only the type checker
+  knows what a callee is, so a `trb check` and a `trb run` block are held to this rule in the type check, with what
+  the checker resolved - a call of a field, and one whose callee it did not resolve, keeps the way it is written, as
+  `torb format` keeps it. A `trb` block, which nothing type checks, leaves alone a callee that names a field of the
+  type it stands in.
 - **strings**: a multi-line `"""` or `raw"""` is indented two spaces deeper than the line its statement starts on, with
   a closing `"""` that stands alone aligned with the content.
 
