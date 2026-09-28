@@ -84,16 +84,12 @@ public type WellKnown {
    */
   expression: SymbolId? = None
   encode: SymbolId? = None
-  /**
-   * `for x in xs` and `...x` ask a type for this one, `a[key]` for `Index`, `a[from..to]` for `Slice`. `Index` and
-   * `MutableIndex` are taken as well, for a prelude that exports the two under those names (compiler/CONTRIBUTING.md,
-   * "Two commits for a breaking change").
-   */
+  /** `for x in xs` and `...x` ask a type for this one, `a[key]` for `Index`, `a[from..to]` for `Slice`. */
   iterate: SymbolId? = None
-  indexed: SymbolId? = None
+  index: SymbolId? = None
   slice: SymbolId? = None
   /** A `var` path through `a[key]` needs `MutableIndex`, one through `a[from..to]` needs `MutableSlice`. */
-  mutableIndexed: SymbolId? = None
+  mutableIndex: SymbolId? = None
   mutableSlice: SymbolId? = None
   /** The traits the collection literals build, and the ones the operators go through. */
   list: SymbolId? = None
@@ -193,9 +189,9 @@ public fn wellKnownOf(program: Program): WellKnown {
     expression: exports.get("Expression"),
     encode: exports.get("Encode"),
     iterate: exports.get("Iterate"),
-    indexed: firstExported(exports, ["Index", "Index"]),
+    index: exports.get("Index"),
     slice: exports.get("Slice"),
-    mutableIndexed: firstExported(exports, ["MutableIndex", "MutableIndex"]),
+    mutableIndex: exports.get("MutableIndex"),
     mutableSlice: exports.get("MutableSlice"),
     list: exports.get("List"),
     map: exports.get("Map"),
@@ -206,16 +202,6 @@ public fn wellKnownOf(program: Program): WellKnown {
     checked: checkedNames,
     checkedSymbols: checked,
   )
-}
-
-/** The symbol of the first of the names that the exports have. */
-fn firstExported(exports: Map<String, SymbolId>, names: List<String>): SymbolId? {
-  for name in names {
-    if const Some(found) = exports.get(name) {
-      return found
-    }
-  }
-  None
 }
 
 /**
