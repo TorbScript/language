@@ -1,6 +1,6 @@
 ---
 title: torb test
-summary: torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees.
+summary: torb test runs every *.test.trb file below the paths it is given - one binary for all of them - and prints ok or FAILED for every test call it sees, or JSON Lines for an editor, of every test or of the ones a filter names.
 kind: tooling
 status: stable
 order: 60
@@ -9,11 +9,15 @@ keywords:
   - test runner
   - jobs
   - shard
+  - filter
+  - report
+  - JSON Lines
   - assert
   - memory limit
 source:
   - compiler/src/cli/test.trb
   - compiler/src/cli/build.trb
+  - compiler/src/main.trb
   - std/test/src/lib.trb
   - runtime/memory.c
   - runtime/test.c
@@ -32,8 +36,14 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
     --release                       The same as --profile release
     --shard k/n                     Only the k-th of every n files, so n processes run the suite between them
     --shards n                      With --native: build once, and run all n shards at the same time
+    --filter <name>                 Only the test of this full name, or every test of the group of this name; repeatable
+    --report json                   JSON Lines on standard output instead of the report a person reads
     --vm                            The default, accepted
+torb test --help                 Every flag, and what a path is
 ```
+
+Any other argument that starts with `--` is refused with `error: unknown flag <argument>` before anything runs, rather
+than looked for as a file; a path that starts with `--` is written `./--name`.
 
 ## What it does
 
@@ -149,6 +159,64 @@ $ torb test --native compiler/tests --shards 4
 ```
 
 The report comes at the end rather than while the suite runs, and the exit code is the highest a shard left with.
+
+### `--filter`
+
+`--filter <name>` runs **the tests of one name**: `<name>` is a full name as the report writes it, the names of the
+groups and of the test joined with ` > `. A test runs when its full name is the name, or starts with the name followed
+by ` > ` - then the name is a group's, and every test below that group runs. The flag can be given any number of times,
+and a test runs when it matches any of them:
+
+```console
+$ torb test --filter "Vector2 > adds component-wise" --filter "Matrix" tests
+```
+
+A group whose full name is on the way to none of the names is passed over whole - no name is it, lies below it, or
+names a group it lies in - and its body does not run, as a file of another shard does not. Every file still prints its
+line, and the counts and the summary count the tests that ran. The name is compared byte for byte, so a name outside ASCII
+is written as it is (`--filter "Größe > zählt Äpfel"`): the runtime reads the command line as UTF-8 on every system.
+Like `--shard`, it reaches the tests through the command line of the process - `test` hands it to the binary, and the
+VM reads `torb`'s own - so a binary started by hand takes it too, and the name is always an argument of its own:
+`--filter=...` is refused.
+
+### `--report json`
+
+`--report json` writes **JSON Lines** on standard output in place of the report a person reads: one JSON object per
+line, UTF-8, each ending in `\n` and flushed as it is written, so an editor that reads the output sees every event
+while the suite runs. A test's own output - what it `print`s - stays on standard output as plain lines between the
+events: a line that does not start with `{"event":` is output of the test that is running. The exit code is the same
+as without the flag, and it combines with `--filter` and `--shard`; `--shards` is refused, because the report is one
+stream of one process.
+
+| Event | When | Keys |
+|-------|------|------|
+| `file` | Before the tests of a file | `path`: the file as the human report prints its line |
+| `start` | Before a test's body runs | `file`; `groups`, the names of its groups outermost first; `name`, the test's own; `fullName`, all of them joined with ` > ` |
+| `test` | After the body and the tasks it started have ended | the keys of `start`, then `outcome` (`passed` or `failed`) and `duration` (milliseconds, a number with a fraction) |
+| `summary` | At the end | `passed`, `failed` and `files`, the counts of the summary line; `shard` with `index` and `count` where `--shard` was given |
+
+A `test` event of a failure has three more keys: `message`, the message of the panic as it is, line breaks included;
+`location` with `path`, `line` and `column` where the site is known - the path as the `at` line of the human report
+names it, the name of the package in front of the path inside it; and `frames`, the frames a binary of the `dev`
+profile prints below the site, where there are any (the VM has none). A key that has nothing to say is left out rather
+than `null`. Strings are escaped as JSON escapes them - `"`, `\` and every control character - and every other
+character is written as it is.
+
+A file of a package `shop` with a group, a test that passes and one that prints a line and fails:
+
+```console
+$ torb test --report json tests/cart.test.trb
+{"event":"file","path":"tests/cart.test.trb"}
+{"event":"start","file":"tests/cart.test.trb","groups":["Cart"],"name":"adds","fullName":"Cart > adds"}
+{"event":"test","file":"tests/cart.test.trb","groups":["Cart"],"name":"adds","fullName":"Cart > adds","outcome":"passed","duration":0.026}
+{"event":"start","file":"tests/cart.test.trb","groups":["Cart"],"name":"sums","fullName":"Cart > sums"}
+a line the test prints
+{"event":"test","file":"tests/cart.test.trb","groups":["Cart"],"name":"sums","fullName":"Cart > sums","outcome":"failed","duration":0.107,"message":"Assertion failed: 7 / 2 == 4","location":{"path":"shop/tests/cart.test.trb","line":10,"column":5}}
+{"event":"summary","passed":1,"failed":1,"files":1}
+```
+
+The same run with `--native` adds `"frames":"  in a closure in a closure in the top level\n..."` to the failure.
+`tools/test-report.sh` holds the reports of both back ends to one expected output.
 
 ### What the run forwards
 

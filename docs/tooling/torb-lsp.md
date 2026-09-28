@@ -16,6 +16,7 @@ source:
   - compiler/src/language-server/command.trb
   - compiler/src/language-server/server.trb
   - compiler/src/language-server/analysis.trb
+  - compiler/src/language-server/test-tree.trb
   - docs/design/LANGUAGE-SERVER.md
 ---
 
@@ -53,6 +54,7 @@ checker, with what each pass cost - goes to standard error, which an editor show
 | `textDocument/completion` | Behind `value.` the fields and methods of its type, behind `Type.` its cases and `static` members, behind `module.` its exports; anywhere else the locals, the names of the file, its prelude and the keywords |
 | `textDocument/semanticTokens/full` | The tokens of `torb highlight`, with every member behind a `.` classified by the member the checker resolved |
 | `textDocument/codeAction` | The fix of every finding of `torb lint`'s rules that touches the range, as a quick fix |
+| `torbscript/tests` | The tests and groups of a file, from its syntax tree alone (below) |
 | `workspace/didChangeWatchedFiles` | Reads the changed files again, unless they are open |
 | `shutdown`, then `exit` | Ends with exit code 0; `exit` without `shutdown` ends with 1 |
 
@@ -64,6 +66,57 @@ Every problem `torb check` reports for a document is an error with the range of 
 message on lines of their own. Every finding of the rules of `torb lint` is a hint that names its rule as the code and
 `torb lint` as the source; a binding nothing reads is marked as unneeded, which an editor fades. The rules that read the
 checker's tables only run on a document the checker found no problem in, as `torb lint` does.
+
+### The tests of a file
+
+`torbscript/tests` is a request of this server's own, which `initialize` announces as `"experimental":{"tests":true}`
+among the capabilities: an editor's list of tests asks it for every `*.test.trb` of the workspace. Its parameters name
+a document, `{"textDocument":{"uri":"<file uri>"}}`, and the answer is an array of the tests and groups of the file in
+source order, each an object of five keys:
+
+| Key | What it holds |
+|-----|---------------|
+| `kind` | `group` or `test` |
+| `name` | What the string literal of the name reads, escapes decoded: the name the report of `torb test` prints |
+| `range` | The whole call, from `test` or `group` to the end of its closure |
+| `selectionRange` | The string literal of the name, its quotes included |
+| `children` | The tests and groups inside of a group, the same way; `[]` for a test |
+
+A test is a call of the bare name `test` or `group` in any style - `test "name" { ... }`, `test("name") { ... }`,
+`test("name", { ... })` - whose first argument is a string literal without interpolation. Every statement and
+expression of the file is looked at, closures and the bodies of `if`, `for` and `while` included, except the body of a
+`test` and the body of a function the file declares, whose tests belong to whatever group it is called in. A call
+whose name is interpolated or no literal is left out with everything inside it: its name is known when it runs, and
+`torb test --report json` names it then ([torb test](torb-test.md)).
+
+It costs a parse and no run of the checker, so it answers for a file nobody opened as fast as for an open one: the text
+is the open document's where the client opened it, and otherwise what the disk holds now. A URI that is no file, and a
+file that cannot be read, answer `[]` rather than an error.
+
+For this file, whose second test is written in parentheses:
+
+```trb check
+use test, group from "std/test"
+
+group "Größe" {
+  test "zählt 😀" {
+    assert(1 + 1 == 2)
+  }
+
+  test("in parentheses", { assert true })
+}
+
+test "top level" {
+  assert true
+}
+```
+
+the request and its answer are these (`tests/lsp/tests.lsp` is this session):
+
+```text
+--> {"jsonrpc":"2.0","id":2,"method":"torbscript/tests","params":{"textDocument":{"uri":"file:///work/app/math.test.trb"}}}
+<-- {"jsonrpc":"2.0","id":2,"result":[{"kind":"group","name":"Größe","range":{"start":{"line":2,"character":0},"end":{"line":8,"character":1}},"selectionRange":{"start":{"line":2,"character":6},"end":{"line":2,"character":13}},"children":[{"kind":"test","name":"zählt 😀","range":{"start":{"line":3,"character":2},"end":{"line":5,"character":3}},"selectionRange":{"start":{"line":3,"character":7},"end":{"line":3,"character":17}},"children":[]},{"kind":"test","name":"in parentheses","range":{"start":{"line":7,"character":2},"end":{"line":7,"character":41}},"selectionRange":{"start":{"line":7,"character":7},"end":{"line":7,"character":23}},"children":[]}]},{"kind":"test","name":"top level","range":{"start":{"line":10,"character":0},"end":{"line":12,"character":1}},"selectionRange":{"start":{"line":10,"character":5},"end":{"line":10,"character":16}},"children":[]}]}
+```
 
 ### What a keystroke costs
 

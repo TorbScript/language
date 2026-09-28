@@ -7,7 +7,10 @@ members and of the names in scope, semantic tokens, and the fixes of `torb lint`
 in `editors/vscode` starts it (`lsp-client.js`), published to the Visual Studio Marketplace and Open VSX with every
 release (section 10). A keystroke redoes the part of the one file that changed
 (section 6). `compiler/tests/language-server.test.trb` holds sessions fed to the server in memory, `tests/lsp/` whole
-sessions over standard input and output (`tools/lsp.sh`, a gate of tier A). Section 11 is what is left.
+sessions over standard input and output (`tools/lsp.sh`, a gate of tier A). `torbscript/tests`, a request of the
+server's own (`experimental.tests` among the capabilities), answers the tests and groups of a file from its syntax tree
+alone, without the checker, for the list of tests of an editor; `torb test --report json` reports how they ran
+([torb lsp](../tooling/torb-lsp.md)). Section 11 is what is left.
 
 The roadmap says it in one line: *the language server is the compiler* - `check` incremental per file, and the checker's
 tables answer hover, go to definition, completion and diagnostics; its semantic tokens replace `torb highlight`, and a

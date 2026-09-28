@@ -60,6 +60,7 @@ torb update [package]...  Resolve every package, or the named ones, to the highe
 torb install           Fetch and verify every package project.lock.trb pins into the cache
 torb publish           Build and check the archive of a package, and publish it (--dry-run: build only)
 torb lock [--check]    Write the settings of every member into project.lock.trb; --check only compares
+torb --version         Print `torb <version>`: the one number of the toolchain, the language and std
 ```
 
 `torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command below is
@@ -72,6 +73,13 @@ torb format --check .
 ```
 
 ## What it does
+
+### `--version`
+
+Prints one line to standard output, `torb 0.1.0`, and leaves with 0. The number is the one of
+[RELEASE.md](../design/RELEASE.md) section 3: the toolchain, the language and the standard library share it, so it is
+also what the language server names in its `serverInfo` and what the `language` line of a release in the index of a
+registry is compared with.
 
 ### `run`
 
@@ -209,7 +217,9 @@ whatever it tests: one binary per file would be one C compile of a translation u
 compiler is where the time of a build goes. The whole suite together is about the size of one such translation unit.
 That is also why `--jobs` means nothing here - one binary is one process - and it is accepted and ignored rather than
 rejected. What runs a suite on several cores is `--shard k/n`: the k-th of every n files, so n processes of the one
-binary run it between them, and `--shards n` builds the binary once and runs all n of them at the same time
+binary run it between them, and `--shards n` builds the binary once and runs all n of them at the same time.
+`--filter <name>` runs the test of one full name, or every test of a group, and `--report json` writes JSON Lines in
+place of the lines a person reads, an event per file and per test, which is what an editor's list of tests reads
 ([torb test](torb-test.md)).
 
 `test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and the report comes
