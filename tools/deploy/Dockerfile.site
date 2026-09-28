@@ -2,11 +2,11 @@
 # "reading is static files"), built from a release. It serves
 #
 #   torb.dev            the website of this release, which `torb docs site` writes from its docs/ (docs/design/RELEASE.md
-#                       section 6): the front page, /install, /docs/<version>/ with its search, and /imprint and
-#                       /privacy where docs/site/ has their pages; install.sh, install.ps1, cosign.pub (the public half
-#                       of the key the releases are signed with, empty until the source has one), the reference of the
-#                       standard library (/docs/<version>/reference/, `torb doc std`), and /download/... - what
-#                       release-sync writes
+#                       section 6): the front page, /install, /play, /docs/<version>/ with its search, and /imprint and
+#                       /privacy where docs/site/ has their pages; the playground (the release's `torb` as WebAssembly,
+#                       in /assets/); install.sh, install.ps1, cosign.pub (the public half of the key the releases are
+#                       signed with, empty until the source has one), the reference of the standard library
+#                       (/docs/<version>/reference/, `torb doc std`), and /download/... - what release-sync writes
 #   packages.torb.dev   /index, /archives, /docs - what the registry's write service writes
 #
 # Nothing here writes: release-sync and the registry are the only writers of /srv/torb, which is mounted read-only.
@@ -15,10 +15,13 @@
 #   docker buildx build -f tools/deploy/Dockerfile.site --build-arg VERSION=0.2.0 \
 #     --platform linux/amd64,linux/arm64 dist/
 #
-# The site and the reference are the same for every architecture, so they are generated once, on the machine that
-# builds, by the toolchain of the release itself.
+# The site, the reference and the playground are the same for every architecture, so they are generated once, on the
+# machine that builds, by the toolchain of the release itself. The build stage is the pinned emscripten image
+# (playground/build.sh), because the playground is compiled here from the release's source: its `torb` emits the
+# compiler's C for browser-wasm64, and that emscripten compiles it - the same inputs give the same wasm, and nothing
+# but the release is downloaded for it.
 
-FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS build
+FROM --platform=$BUILDPLATFORM emscripten/emsdk:6.0.10 AS build
 ARG VERSION
 ARG BUILDARCH
 COPY torb-${VERSION}-source.tar.gz torb-${VERSION}-linux-*.tar.gz /dist/
@@ -32,8 +35,9 @@ RUN set -eu; \
     tar -xzf "/dist/torb-$VERSION-$target.tar.gz" -C /opt/torb --strip-components=1; \
     tar -xzf "/dist/torb-$VERSION-source.tar.gz" -C /src --strip-components=1
 WORKDIR /src
+RUN TORB=/opt/torb/bin/torb TORB_EMCC=emcc sh playground/build.sh
 RUN set -eu; \
-    /opt/torb/bin/torb docs site docs --output /site --version "$VERSION"; \
+    /opt/torb/bin/torb docs site docs --output /site --version "$VERSION" --playground build/playground; \
     /opt/torb/bin/torb doc std --output "/site/docs/$VERSION/reference"; \
     cp tools/install.sh tools/install.ps1 /site/; \
     if [ -f tools/deploy/cosign.pub ]; then cp tools/deploy/cosign.pub /site/; else : >/site/cosign.pub; fi; \

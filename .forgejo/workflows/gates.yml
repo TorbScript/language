@@ -7,13 +7,15 @@
 #   linux-x64     bootstrap (seed from program.c -> torb -> torb, fixpoint), then tier A, tier B and the tests of
 #                 tools/release-sync and tools/registry as parallel jobs
 #   agree         every host emits the same C for every target (tools/agree.sh): linux-x64 emits the compiler's C for
-#                 all eight targets with `torb build --emit-c --target`, every other runner of this run does the same,
+#                 all nine targets with `torb build --emit-c --target`, every other runner of this run does the same,
 #                 and the lists have to agree
 #   windows-x64   bootstrap, `check .`, the conformance suite, the runtime's tests (.forgejo/actions/portable)
 #   linux-arm64   the same
 #   macos-arm64   the same
 #   extension     the VS Code extension of editors/vscode packed into a .vsix (tools/package-extension.sh), which a
 #                 release and a nightly carry among their assets
+#   playground    the compiler built for browser-wasm64 by the pinned emscripten (playground/build.sh), and its
+#                 smoke test under node (playground/smoke-test.mjs)
 #
 # The forge has one runner today (labels ubuntu-latest and ubuntu-24.04), so the last three run only for the targets
 # the repository variable TORB_RUNNERS names - `windows-x64 linux-arm64 macos-arm64`, or any of them - once a runner
@@ -385,6 +387,32 @@ jobs:
           path: build/extension/
           retention-days: 7
           if-no-files-found: error
+
+  # The playground's toolchain (docs/design/RELEASE.md section 6): the compiler's C for browser-wasm64, emitted by the
+  # compiler of this run and compiled by the pinned emscripten this job runs in, and hello world run in it under node
+  # the way a page runs it - so a change that breaks the WebAssembly build fails here, and not in the site image
+  playground:
+    name: the playground (torb as WebAssembly)
+    needs: linux-x64
+    runs-on: ubuntu-latest
+    container:
+      image: emscripten/emsdk:6.0.10
+    timeout-minutes: 60
+    env:
+      TORB_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - run: chmod +x build/release/torb
+      - name: sh playground/build.sh
+        run: sh playground/build.sh
+      - name: node playground/smoke-test.mjs
+        run: node playground/smoke-test.mjs build/playground
 
   seed:
     name: pack the seed
