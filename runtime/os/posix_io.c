@@ -56,6 +56,25 @@
 #  define TORB_POSIX_NO_SIGPIPE_OPTION 0
 #endif
 
+/* Two more answers of `getaddrinfo` that say a name has no address: a name server that knows the name and has no A or
+   AAAA record for it, and none of the family asked for. musl, macOS and FreeBSD name them where they answer them;
+   glibc names them only for `_GNU_SOURCE`, which this file does not ask for, and answers them all the same - with the
+   values below. Where a system has neither, "no such name" stands in, which the resolver compares with anyway. */
+#if defined(EAI_NODATA)
+#  define TORB_POSIX_NO_ADDRESS EAI_NODATA
+#elif defined(__GLIBC__)
+#  define TORB_POSIX_NO_ADDRESS (-5)
+#else
+#  define TORB_POSIX_NO_ADDRESS EAI_NONAME
+#endif
+#if defined(EAI_ADDRFAMILY)
+#  define TORB_POSIX_NO_FAMILY EAI_ADDRFAMILY
+#elif defined(__GLIBC__)
+#  define TORB_POSIX_NO_FAMILY (-9)
+#else
+#  define TORB_POSIX_NO_FAMILY EAI_NONAME
+#endif
+
 /* Linux passes the errors already pending on a connection through the `accept` that takes it, and names them in
    accept(2): those of TCP/IP. BSD and macOS report a connection that is gone before its accept as `ECONNABORTED` alone. */
 #if defined(__linux__)
@@ -280,9 +299,12 @@ int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {
     if (code == EAI_SYSTEM) {
       return torb_io_posix_failed(errno);
     }
-    return torb_io_failed(code == EAI_NONAME || code == EAI_AGAIN || code == EAI_FAIL ? TORB_IO_HOST_NOT_FOUND
-                                                                                       : TORB_IO_OTHER,
-                          0u);
+    /* A name the name server has no address for is a name that was not found, not a failure of the network */
+    if (code == EAI_NONAME || code == TORB_POSIX_NO_ADDRESS || code == TORB_POSIX_NO_FAMILY || code == EAI_AGAIN
+        || code == EAI_FAIL) {
+      return torb_io_failed(TORB_IO_HOST_NOT_FOUND, 0u);
+    }
+    return torb_io_failed(TORB_IO_OTHER, 0u);
   }
   for (entry = found; entry != NULL; entry = entry->ai_next) {
     torb_io_address address;
