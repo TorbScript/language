@@ -1,0 +1,760 @@
+/**
+ * The template machinery behind `torb new` and `torb init` (docs/tooling/torb-new.md): the flags both share
+ * ([ScaffoldChoices]), the six questions asked interactively ([answersFor]), where a template comes from
+ * ([templateLocationOf]), fetching and unpacking it ([fetchTemplateEntries]), reading its `template.trb`
+ * ([readTemplateManifest]), and applying the drops and the substitutions it describes ([appliedEntries]).
+ *
+ * `torb new` and `torb init` (`./new`, `./init`) call [attemptScaffold]; a `Fail` is theirs to turn into the plain,
+ * built-in scaffold - this file never writes it, so it depends on nothing of `./new`.
+ */
+
+use File from "std/fs"
+use Process from "std/process"
+use Environment from "std/os"
+use readLine from "std/io"
+use isTerminal, printErrorRaw from "std/console"
+use Bytes from "std/stream"
+use textOf from "std/stream"
+use TarEntry, untarred from "std/archive"
+use gunzipped from "std/compression"
+use extract from "std/archive/extract"
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use Setting, readSettings from "../project/manifest"
+
+// ------------------------------------------------------------------------------------------------- the command line
+
+/** The flags `torb new` and `torb init` share, read off the command line ([scaffoldChoicesOf]). */
+public type ScaffoldChoices {
+  /** `--template <name|url>`: a built-in name (`package`, `app`), `owner/repo`, `github:owner/repo`, or a URL. */
+  template: String? = None
+  /** `--name`: the project's name, over the one derived from the directory. */
+  name: String? = None
+  /** `--owner`: the registry owner, over the one derived from `git config user.name`. */
+  owner: String? = None
+  /** `--ci`: `github`, `forgejo`, `both` or `none`. */
+  ci: String? = None
+  /** `--license`: `mit`, `apache-2.0` or `none`. */
+  license: String? = None
+  /** `--git` / `--no-git`: whether to run `git init`. */
+  git: Bool? = None
+  /** `--yes`: every question not answered by a flag takes its default. */
+  yes: Bool = false
+  /** `--offline`: never reach the network, even where a template would otherwise be downloaded. */
+  offline: Bool = false
+}
+
+/** What [scaffoldChoicesOf] found: the choices, and the command line without them. */
+public type ScaffoldParse {
+  choices: ScaffoldChoices
+  rest: List<String>
+}
+
+/** The values `--ci` takes. */
+public const ciValues = ["github", "forgejo", "both", "none"]
+
+/** The values `--license` takes. */
+public const licenseValues = ["mit", "apache-2.0", "none"]
+
+/**
+ * Reads `--template`, `--name`, `--owner`, `--ci`, `--license`, `--git`/`--no-git`, `--yes` and `--offline` off
+ * `arguments`, in any order, and answers what is left. `Fail` for a value `--ci` or `--license` does not take, with
+ * the message ready to print.
+ */
+public fn scaffoldChoicesOf(arguments: List<String>): Result<ScaffoldParse, String> {
+  var choices = ScaffoldChoices()
+  var rest: List<String> = []
+  var wants = ""
+  for argument in arguments {
+    if !wants.isEmpty() {
+      const word = wants
+      wants = ""
+      match word {
+        "template" => { choices = choices.copy template: Some(argument) }
+        "name" => { choices = choices.copy name: Some(argument) }
+        "owner" => { choices = choices.copy owner: Some(argument) }
+        "ci" => {
+          if !ciValues.contains(argument) {
+            return Fail "`--ci` takes {ciValues.joined(separator: ", ")}, not `{argument}`"
+          }
+          choices = choices.copy ci: Some(argument)
+        }
+        "license" => {
+          if !licenseValues.contains(argument) {
+            return Fail "`--license` takes {licenseValues.joined(separator: ", ")}, not `{argument}`"
+          }
+          choices = choices.copy license: Some(argument)
+        }
+        _ => {}
+      }
+      continue
+    }
+    match argument {
+      "--template" => { wants = "template" }
+      "--name" => { wants = "name" }
+      "--owner" => { wants = "owner" }
+      "--ci" => { wants = "ci" }
+      "--license" => { wants = "license" }
+      "--git" => { choices = choices.copy git: Some(true) }
+      "--no-git" => { choices = choices.copy git: Some(false) }
+      "--yes" => { choices = choices.copy yes: true }
+      "--offline" => { choices = choices.copy offline: true }
+      _ => { rest.append argument }
+    }
+  }
+  if !wants.isEmpty() {
+    return Fail "`--{wants}` needs a value"
+  }
+  ScaffoldParse choices, rest
+}
+
+/** Every flag [scaffoldChoicesOf] reads, for `refuseUnknownFlag` in `main.trb`. */
+public const scaffoldFlags = [
+  "--template", "--name", "--owner", "--ci", "--license", "--git", "--no-git", "--yes", "--offline",
+]
+
+// --------------------------------------------------------------------------------------------------- the questions
+
+/** What the six questions of `torb new`/`torb init` answered, one way or another. */
+public type ScaffoldAnswers {
+  /** `package` or `app`: which built-in template this is, where `choices.template` named neither. */
+  kind: String
+  /** The template `--template` names, or the built-in of `kind`. */
+  template: String
+  name: String
+  owner: String
+  ci: String
+  license: String
+  git: Bool
+}
+
+/** The built-in templates, in the order the interactive question lists them. */
+public const builtinTemplates = [
+  (name: "package", title: "Package", description: "a library to publish"),
+  (name: "app", title: "App", description: "a command-line program"),
+]
+
+/**
+ * Whether to ask instead of taking defaults: a live terminal, `--yes` not given, and `TORB_INIT_INTERACTIVE` not
+ * saying otherwise - the seam `compiler/tests/template.test.trb` drives instead of a pseudo-terminal, since nothing
+ * of this file may depend on one existing.
+ */
+public fn isInteractive(): Bool {
+  match Environment.get("TORB_INIT_INTERACTIVE") {
+    Some(value) => value == "1" || value == "true"
+    None => isTerminal()
+  }
+}
+
+/** A real line of standard input, or `None` at its end or on a read error - what every prompt reads by default. */
+fn defaultNextLine(): String? {
+  match readLine() {
+    Ok(line) => line
+    Fail(_) => None
+  }
+}
+
+/**
+ * The six questions, each a flag of [ScaffoldChoices] first, then - interactively - a prompt with a default, then the
+ * default itself. `defaultName` is the directory's own name (`torb new`) or the working directory's (`torb init`).
+ *
+ * `nextLine` is where a typed line comes from - [defaultNextLine] unless a caller says otherwise, which is the seam
+ * `compiler/tests/template.test.trb` scripts answers through instead of a pseudo-terminal.
+ */
+public fn answersFor(
+  defaultName: String,
+  choices: ScaffoldChoices,
+  interactive: Bool,
+  nextLine: () => String? = defaultNextLine,
+): ScaffoldAnswers {
+  const kind = kindOf choices, interactive, nextLine
+  const name = choices.name ?? if interactive { ask "Name?", defaultName, nextLine } else { defaultName }
+  const ownerDefault = defaultOwner()
+  const owner = choices.owner ?? if interactive {
+    ask "Registry owner?", ownerDefault, nextLine
+  } else {
+    ownerDefault
+  }
+  const ci = choices.ci ?? if interactive { askCi nextLine } else { "github" }
+  const license = choices.license ?? if interactive { askLicense nextLine } else { "mit" }
+  const gitDefault = gitAvailable()
+  const git = choices.git ?? if interactive {
+    askYesNo "Initialise a git repository?", gitDefault, nextLine
+  } else {
+    gitDefault
+  }
+  ScaffoldAnswers kind, templateOf(choices, kind), name, owner, ci, license, git
+}
+
+/** `package` or `app`: the flag if it names one, else the question, else the default `package`. */
+fn kindOf(choices: ScaffoldChoices, interactive: Bool, nextLine: () => String?): String {
+  match choices.template {
+    Some("package") => "package"
+    Some("app") => "app"
+    // A URL or `owner/repo` names no built-in kind; the question is about the built-ins alone
+    Some(_) => "package"
+    None => if interactive { askKind nextLine } else { "package" }
+  }
+}
+
+/** What `--template` (or the answer to the first question) resolves to: the flag as given, or the kind's own name. */
+fn templateOf(choices: ScaffoldChoices, kind: String): String {
+  choices.template ?? kind
+}
+
+fn askKind(nextLine: () => String?): String {
+  printError "What are you building?"
+  for index in 0..builtinTemplates.length() {
+    const found = builtinTemplates[index]
+    printError "  {index + 1}. {found.title} - {found.description}"
+  }
+  const line = ask "Choice", "1", nextLine
+  for index in 0..builtinTemplates.length() {
+    const found = builtinTemplates[index]
+    if line == "{index + 1}" || line.toLowerCase() == found.name || line.toLowerCase() == found.title.toLowerCase() {
+      return found.name
+    }
+  }
+  "package"
+}
+
+fn askCi(nextLine: () => String?): String {
+  const line = ask("CI? GitHub, Forgejo, both, or none", "GitHub", nextLine).toLowerCase()
+  if ciValues.contains(line) { line } else { "github" }
+}
+
+fn askLicense(nextLine: () => String?): String {
+  const line = ask("License? MIT, Apache-2.0 or none", "MIT", nextLine).toLowerCase()
+  if licenseValues.contains(line) { line } else { "mit" }
+}
+
+/** `text [default]: `, on standard error - a prompt is not a line of its own. The default where the line is empty. */
+fn ask(text: String, default: String, nextLine: () => String?): String {
+  printErrorRaw "{text} [{default}]: "
+  const line = nextLine() ?? ""
+  const trimmed = line.trim()
+  if trimmed.isEmpty() { default } else { trimmed }
+}
+
+fn askYesNo(text: String, default: Bool, nextLine: () => String?): Bool {
+  const shown = if default { "Y/n" } else { "y/N" }
+  printErrorRaw "{text} [{shown}]: "
+  const line = (nextLine() ?? "").trim().toLowerCase()
+  match line {
+    "" => default
+    "y" | "yes" => true
+    "n" | "no" => false
+    _ => default
+  }
+}
+
+/**
+ * A short summary of what is about to be written, then "Create? (Y/n)": `false` where the answer is no, which ends
+ * the command with nothing written. Not interactive: always `true`, the summary printed all the same.
+ */
+public fn confirmed(
+  target: String,
+  answers: ScaffoldAnswers,
+  interactive: Bool,
+  nextLine: () => String? = defaultNextLine,
+): Bool {
+  // Nothing to confirm without a question to ask: `--yes` and a script stay quiet until "wrote ..." or a failure
+  if !interactive {
+    return true
+  }
+  printError "About to create {shownTarget(target)}:"
+  printError "  template: {answers.template}"
+  printError "  name: {answers.name}"
+  printError "  owner: {answers.owner}"
+  printError "  ci: {answers.ci}"
+  printError "  license: {answers.license}"
+  printError "  git: {if answers.git { "yes" } else { "no" }}"
+  askYesNo "Create?", true, nextLine
+}
+
+fn shownTarget(target: String): String {
+  if target == "." { "the current directory" } else { "`{target}`" }
+}
+
+/** `cd <dir>`, `torb test`, `torb run`: the next steps, after the files are written. */
+public fn printNextSteps(target: String, isInit: Bool) {
+  print ""
+  if !isInit {
+    print "cd {target}"
+  }
+  print "torb test"
+  print "torb run"
+}
+
+/** `git config --get user.name`, made a valid registry owner - `your-name` where there is none or `git` is missing. */
+fn defaultOwner(): String {
+  sanitizedOwner(gitUserName() ?? "")
+}
+
+fn gitUserName(): String? {
+  match Process.runBlocking("git", ["config", "--get", "user.name"]) {
+    Ok(output) => {
+      if !output.isSuccess() {
+        return None
+      }
+      const trimmed = output.standardOutput.trim()
+      if trimmed.isEmpty() { None } else { trimmed }
+    }
+    Fail(_) => None
+  }
+}
+
+fn gitAvailable(): Bool {
+  match Process.runBlocking("git", ["--version"]) {
+    Ok(output) => output.isSuccess()
+    Fail(_) => false
+  }
+}
+
+/**
+ * `raw`, lowercased, with everything but `a`-`z`, `0`-`9` and `-` turned into `-` (runs of it collapsed, the ends
+ * trimmed): a valid registry owner. `your-name` for one with nothing left, which is also `sanitizedOwner("")`.
+ */
+public fn sanitizedOwner(raw: String): String {
+  const dash: UInt8 = UInt8.tryFrom(45).ok() ?? 0
+  var kept: List<UInt8> = []
+  var lastWasDash = true
+  for byte in raw.toLowerCase().bytes() {
+    const value = Int.from byte
+    const isLower = value >= 97 && value <= 122
+    const isDigit = value >= 48 && value <= 57
+    if isLower || isDigit {
+      kept.append byte
+      lastWasDash = false
+    } else if !lastWasDash {
+      kept.append dash
+      lastWasDash = true
+    }
+  }
+  while kept.last() == Some(dash) {
+    kept.removeAt(kept.length() - 1)
+  }
+  const text = textOf(kept).ok() ?? ""
+  if text.isEmpty() { "your-name" } else { text }
+}
+
+/** Runs `git init` in `target`, quietly - a missing `git` or a failing init changes nothing else `torb new` did. */
+public fn initializeGitRepository(target: String) {
+  const _ = Process.runBlocking "git", ["-C", target, "init", "--quiet"]
+}
+
+// ----------------------------------------------------------------------------------------------- the template.trb
+
+/** One `text "..." , becomes: "name" | "owner"` line of a `replace { file "..." { ... } }` block. */
+public type TemplateReplacement {
+  file: String
+  text: String
+  /** `"name"` or `"owner"` today; an unknown target, or `"description"` without a value to give it, is skipped. */
+  becomes: String
+}
+
+/** One `path "...", unless: "<field>", isAnyOf: "<comma-separated values>"` line of a `drop { ... }` block. */
+public type TemplateDrop {
+  path: String
+  field: String
+  keptFor: List<String>
+}
+
+/** `template.trb`, read the way `project.trb`'s static subset is ([readTemplateManifest]): nothing is evaluated. */
+public type TemplateManifest {
+  /** Shown in the interactive list, for a template named by a URL or `owner/repo` (docs/tooling/torb-new.md). */
+  title: String = ""
+  description: String = ""
+  /** The template's own default project name, where `--name` and the interactive question do not say otherwise. */
+  name: String = ""
+  replacements: List<TemplateReplacement> = []
+  drops: List<TemplateDrop> = []
+}
+
+/** `template.trb` parsed and read, the same static way [readManifest] of `../project/manifest` reads `project.trb`. */
+public fn readTemplateManifest(text: String): TemplateManifest {
+  const parsed = parse SourceText.of(text)
+  templateManifestOf readSettings(parsed.file.statements)
+}
+
+/** [readTemplateManifest] once the file is settings: the literal `title`, `description`, `name`, `replace`, `drop`. */
+public fn templateManifestOf(settings: List<Setting>): TemplateManifest {
+  var manifest = TemplateManifest()
+  for setting in settings {
+    match setting.word {
+      "title" => { if const Some(text) = setting.first() { manifest = manifest.copy title: text } }
+      "description" => { if const Some(text) = setting.first() { manifest = manifest.copy description: text } }
+      "name" => { if const Some(text) = setting.first() { manifest = manifest.copy name: text } }
+      "replace" => { manifest = manifest.copy replacements: manifest.replacements.appendedAll(replacementsOf(setting)) }
+      "drop" => { manifest = manifest.copy drops: manifest.drops.appendedAll(dropsOf(setting)) }
+      _ => {}
+    }
+  }
+  manifest
+}
+
+fn replacementsOf(setting: Setting): List<TemplateReplacement> {
+  var found: List<TemplateReplacement> = []
+  for fileSetting in setting.block {
+    if fileSetting.word != "file" {
+      continue
+    }
+    const path = fileSetting.first() ?? ""
+    if path.isEmpty() {
+      continue
+    }
+    for textSetting in fileSetting.block {
+      if textSetting.word != "text" {
+        continue
+      }
+      const text = textSetting.first() ?? ""
+      const becomes = textSetting.labeled.get("becomes") ?? ""
+      if !text.isEmpty() && !becomes.isEmpty() {
+        found.append TemplateReplacement(path, text, becomes)
+      }
+    }
+  }
+  found
+}
+
+fn dropsOf(setting: Setting): List<TemplateDrop> {
+  var found: List<TemplateDrop> = []
+  for pathSetting in setting.block {
+    if pathSetting.word != "path" {
+      continue
+    }
+    const path = pathSetting.first() ?? ""
+    const field = pathSetting.labeled.get("unless") ?? ""
+    const values = pathSetting.labeled.get("isAnyOf") ?? ""
+    if !path.isEmpty() && !field.isEmpty() {
+      const kept = values.split(",").map({ _.trim() }).filter({ !_.isEmpty() }).toList()
+      found.append TemplateDrop(path, field, kept)
+    }
+  }
+  found
+}
+
+/** The value [TemplateDrop.field] and [TemplateReplacement.becomes] name, out of what the six questions answered. */
+fn fieldValue(field: String, answers: ScaffoldAnswers): String? {
+  match field {
+    "ci" => answers.ci
+    "license" => answers.license
+    "name" => answers.name
+    "owner" => answers.owner
+    "owner/name" => "{answers.owner}/{answers.name}"
+    _ => None
+  }
+}
+
+// -------------------------------------------------------------------------------------------------- where it is
+
+/** Where a template comes from, once `--template` (or the built-in `kind`) and `TORB_TEMPLATE_BASE_URL` are read. */
+public type TemplateLocation {
+  /** A repository at a Forgejo (an `archive/<ref>.tar.gz`) or at GitHub (a `tar.gz/refs/heads/<ref>` of codeload). */
+  case Repository(host: String, owner: String, repo: String, isGitHub: Bool)
+  /** A URL to an archive, downloaded with `curl` or `wget`. */
+  case Url(url: String)
+  /** A local path: a directory, copied as it is, or a file, read as an archive. */
+  case Path(path: String)
+}
+
+/** `TORB_TEMPLATE_BASE_URL`, or `https://git.torb.dev`: the host `owner/repo` and the built-ins resolve against. */
+fn templateBaseUrl(): String {
+  Environment.get("TORB_TEMPLATE_BASE_URL") ?? "https://git.torb.dev"
+}
+
+/**
+ * `template` (`--template`, or `package`/`app` from the first question) as a place to fetch from: a URL or `file://`
+ * as given, `github:owner/repo` at codeload, `owner/repo` (the built-ins included) at `base` - a directory there
+ * instead of a host, where `base` is a local path rather than a URL. `base` is [templateBaseUrl] in `torb` itself;
+ * a parameter here so `compiler/tests/template.test.trb` can point it at a temporary directory.
+ */
+public fn templateLocationOf(template: String, base: String): TemplateLocation {
+  if template.startsWith("http://") || template.startsWith("https://") {
+    return TemplateLocation.Url template
+  }
+  if const Some(rest) = template.withoutPrefix("file://") {
+    return TemplateLocation.Path withoutDriveSlash(rest)
+  }
+  if const Some(rest) = template.withoutPrefix("github:") {
+    if const Some((owner, repo)) = ownerRepoOf(rest) {
+      return TemplateLocation.Repository "codeload.github.com", owner, repo, true
+    }
+  }
+  const slug = builtinSlugOf(template) ?? template
+  if const Some((owner, repo)) = ownerRepoOf(slug) {
+    if base.startsWith("http://") || base.startsWith("https://") {
+      return TemplateLocation.Repository base, owner, repo, false
+    }
+    return TemplateLocation.Path "{base}/{owner}/{repo}"
+  }
+  TemplateLocation.Path slug
+}
+
+fn builtinSlugOf(template: String): String? {
+  match template {
+    "package" => "torb/package-template"
+    "app" => "torb/app-template"
+    _ => None
+  }
+}
+
+/**
+ * `owner` and `repo` of `owner/repo`, or `None` for anything that is not exactly that shape - `.` and `..` segments,
+ * a leading `/` or a `\`, which mark a path instead (`./my-template`, `/srv/templates`, `..\other`).
+ */
+fn ownerRepoOf(text: String): (String, String)? {
+  if text.startsWith(".") || text.startsWith("/") || text.contains("\\") {
+    return None
+  }
+  const parts = text.split("/").toList()
+  if parts.length() != 2 || parts[0].isEmpty() || parts[1].isEmpty() {
+    return None
+  }
+  (parts[0], parts[1])
+}
+
+/** `file:///C:/some/dir` names `C:/some/dir`, not `/C:/some/dir`: the one slash before a drive letter is the URI's. */
+fn withoutDriveSlash(path: String): String {
+  if path.startsWith("/") && path.byteLength() >= 3 && path.sliceBytes(2, 3) == ":" {
+    path.sliceBytes 1, path.byteLength()
+  } else {
+    path
+  }
+}
+
+// ----------------------------------------------------------------------------------------------- fetching, in bytes
+
+/**
+ * `curl`, falling back to `wget` - the same choice `torb upgrade` makes (`./upgrade`), bounded to a few seconds of
+ * connecting and half a minute in all: an offline machine fails fast into the built-in scaffold rather than hanging.
+ */
+fn download(url: String, destination: String): Result<Void, String> {
+  const curlArguments = ["--connect-timeout", "5", "--max-time", "30", "-fsSL", url, "-o", destination]
+  match captured("curl", curlArguments) {
+    Ok(_) => Ok(void)
+    Fail(curlFailure) => {
+      match captured("wget", ["--timeout=5", "-q", url, "-O", destination]) {
+        Ok(_) => Ok(void)
+        Fail(_) => Fail curlFailure
+      }
+    }
+  }
+}
+
+fn captured(program: String, arguments: List<String>): Result<String, String> {
+  match Process.runBlocking(program, arguments) {
+    Ok(output) => {
+      if output.isSuccess() {
+        output.standardOutput.trim()
+      } else {
+        Fail "{program} {arguments.joined(separator: " ")} failed: {output.standardError.trim()}"
+      }
+    }
+    Fail(error) => Fail "{program} could not be started: {error.show()}"
+  }
+}
+
+/**
+ * The entries of the template at `location`, its own top-level directory stripped where it is an archive - a
+ * directory names none, so it is copied as it is: every file below it, one entry each, in [File.walk]'s order.
+ * `scratch` is a directory of its own to download an archive into.
+ */
+fn fetchTemplateEntries(location: TemplateLocation, scratch: String): Result<List<TarEntry>, String> {
+  match location {
+    .Path(path) => {
+      if File.isDirectory(path) {
+        return directoryEntries path
+      }
+      if !File.exists(path) {
+        return Fail "{path} does not exist"
+      }
+      const bytes = File.readBytes(path).mapError({ "{path} could not be read: {_.show()}" })?
+      strippedEntries bytes, path
+    }
+    .Url(url) => {
+      const archivePath = "{scratch}/template.tar.gz"
+      download(url, archivePath)?
+      const bytes = File.readBytes(archivePath).mapError({ "{archivePath} could not be read: {_.show()}" })?
+      strippedEntries bytes, url
+    }
+    .Repository(host, owner, repo, isGitHub) => {
+      var lastFailure = "{owner}/{repo} has neither a main nor a master branch"
+      for ref in ["main", "master"] {
+        const url = if isGitHub {
+          "https://{host}/{owner}/{repo}/tar.gz/refs/heads/{ref}"
+        } else {
+          "{host}/{owner}/{repo}/archive/{ref}.tar.gz"
+        }
+        const archivePath = "{scratch}/template.tar.gz"
+        match download(url, archivePath) {
+          Ok(_) => {
+            const bytes = File.readBytes(archivePath).mapError({ "{archivePath} could not be read: {_.show()}" })?
+            return strippedEntries bytes, url
+          }
+          Fail(message) => { lastFailure = message }
+        }
+      }
+      Fail lastFailure
+    }
+  }
+}
+
+/** Every file and directory below `root`, as entries whose path is already relative to it. */
+fn directoryEntries(root: String): Result<List<TarEntry>, String> {
+  const relatives = File.walk(root).mapError({ "{root} could not be read: {_.show()}" })?
+  var entries: List<TarEntry> = []
+  for relative in relatives {
+    const full = "{root}/{relative}"
+    if File.isDirectory(full) {
+      entries.append TarEntry.directory(relative)
+    } else {
+      const bytes = File.readBytes(full).mapError({ "{full} could not be read: {_.show()}" })?
+      entries.append TarEntry(relative, bytes)
+    }
+  }
+  entries
+}
+
+/** `bytes` as gzip over a tar archive, its first path segment (the archive's own top directory) dropped. */
+fn strippedEntries(bytes: Bytes, label: String): Result<List<TarEntry>, String> {
+  const decompressed = gunzipped(bytes).mapError({ "{label} is not gzip: {_.show()}" })?
+  const raw = untarred(decompressed).mapError({ "{label} is not a tar archive: {_.show()}" })?
+  var entries: List<TarEntry> = []
+  for entry in raw {
+    if const Some(path) = withoutFirstSegment(entry.path) {
+      entries.append entry.copy(path: path)
+    }
+  }
+  entries
+}
+
+/** `path` without its first `/`-separated segment, or `None` for a path with none (the archive's own top entry). */
+fn withoutFirstSegment(path: String): String? {
+  const parts = path.replace("\\", "/").split("/").toList()
+  if parts.length() <= 1 {
+    return None
+  }
+  const rest = parts[1..parts.length()].joined separator: "/"
+  if rest.isEmpty() { None } else { rest }
+}
+
+// ----------------------------------------------------------------------------------------------- drop and replace
+
+/** Whether `path` is `.git` or below it: never copied, whether the template is a directory or an archive. */
+fn isGitMetadata(path: String): Bool {
+  path == ".git" || path.startsWith(".git/")
+}
+
+/** Whether `manifest`'s `drop` block drops `path`: some [TemplateDrop] names it (or a directory above it) and its
+ * field's answer is not one of the values that keep it. */
+fn isDropped(path: String, manifest: TemplateManifest, answers: ScaffoldAnswers): Bool {
+  for drop in manifest.drops {
+    if path != drop.path && !path.startsWith("{drop.path}/") {
+      continue
+    }
+    const value = fieldValue(drop.field, answers) ?? ""
+    if !drop.keptFor.contains(value) {
+      return true
+    }
+  }
+  false
+}
+
+/** `text`, every [TemplateReplacement] of `path` applied that names a value - `becomes: "description"` today. */
+fn substituted(path: String, text: String, manifest: TemplateManifest, answers: ScaffoldAnswers): String {
+  var result = text
+  for replacement in manifest.replacements {
+    if replacement.file != path {
+      continue
+    }
+    if const Some(value) = fieldValue(replacement.becomes, answers) {
+      result = result.replace replacement.text, value
+    }
+  }
+  result
+}
+
+/**
+ * `entries`, with `.git` dropped always, every [TemplateDrop] of `manifest` applied, and every [TemplateReplacement]
+ * substituted into the files that decode as UTF-8 - a file that does not (an image, a binary) is copied unchanged.
+ */
+public fn appliedEntries(
+  entries: List<TarEntry>,
+  manifest: TemplateManifest,
+  answers: ScaffoldAnswers,
+): List<TarEntry> {
+  var kept: List<TarEntry> = []
+  for entry in entries {
+    if entry.path == "template.trb" || isGitMetadata(entry.path) || isDropped(entry.path, manifest, answers) {
+      continue
+    }
+    if const .File = entry.kind {
+      match textOf(entry.bytes) {
+        Ok(text) => {
+          const replaced = substituted entry.path, text, manifest, answers
+          kept.append entry.copy(bytes: replaced.bytes())
+        }
+        Fail(_) => { kept.append entry }
+      }
+    } else {
+      kept.append entry
+    }
+  }
+  kept
+}
+
+// -------------------------------------------------------------------------------------------------------- writing
+
+/** The relative paths `entries` would write, files and directories alike. */
+fn pathsOf(entries: List<TarEntry>): List<String> {
+  entries.map({ _.path }).toList()
+}
+
+/** The paths of `entries` that already exist below `target` - what `torb init` refuses to overwrite. */
+public fn conflictingPaths(target: String, entries: List<TarEntry>): List<String> {
+  pathsOf(entries).filter({ File.exists "{target}/{_}" }).toList()
+}
+
+/**
+ * Fetches `answers.template`, reads its `template.trb` where it has one, applies the drops and the substitutions,
+ * and writes the result below `target` - refusing where a file it would write is already there.
+ *
+ * `offline` skips the network outright: a `TemplateLocation.Repository` or `.Url` fails at once, without a `curl` or
+ * `wget` that would only time out. A `.Path` (a local directory or archive, `file://` included) still reads: nothing
+ * of it reaches the network, and a test that names one this way runs the same whether `--offline` was given.
+ */
+public fn attemptScaffold(target: String, answers: ScaffoldAnswers, offline: Bool): Result<Void, String> {
+  const location = templateLocationOf answers.template, templateBaseUrl()
+  if offline {
+    if const .Repository(_, ...) = location { return Fail "`--offline`: no network for a template of a repository" }
+    if const .Url(_) = location { return Fail "`--offline`: no network for a template of a URL" }
+  }
+  const scratch = File.createTemporaryDirectory(prefix: "torb-template-").mapError({ _.show() })?
+  const outcome = fetchTemplateEntries location, scratch
+  const _ = File.removeDirectory scratch
+  const fetched = outcome?
+  const manifest = manifestOf fetched
+  const applied = appliedEntries fetched, manifest, answers
+  const conflicts = conflictingPaths target, applied
+  if !conflicts.isEmpty() {
+    return Fail "already exists: {conflicts.joined(separator: ", ")}"
+  }
+  File.createDirectory(target).mapError({ _.show() })?
+  extract(applied, into: target, stripComponents: 0).mapError({ _.show() })
+}
+
+/** `template.trb` of the entries, read statically - [TemplateManifest]() where there is none. */
+fn manifestOf(entries: List<TarEntry>): TemplateManifest {
+  for entry in entries {
+    if entry.path == "template.trb" {
+      if const .File = entry.kind {
+        match textOf(entry.bytes) {
+          Ok(text) => { return readTemplateManifest text }
+          Fail(_) => {}
+        }
+      }
+    }
+  }
+  TemplateManifest()
+}

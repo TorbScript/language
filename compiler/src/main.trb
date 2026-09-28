@@ -29,6 +29,8 @@ use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
 use TestOptions, TestShard, TestReport, testShardNamed, runTests, defaultTestPath, testUsage from "./cli/test"
 use NewOptions, runNew from "./cli/new"
+use InitOptions, runInit from "./cli/init"
+use scaffoldChoicesOf from "./cli/template"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
 use insertOwnership from "./ir/ownership"
@@ -108,8 +110,12 @@ fn printUsage() {
   printError "                         --filter <name>: a test's full name (`Group > test`) or a group's; repeatable"
   printError "                         --report json: JSON Lines instead of the report a person reads, for an editor"
   printError "                         --jobs N: accepted and ignored - one program is one process"
-  printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
-  printError "                         refuses if <name> already exists"
+  printError "  torb new <path>        A new package, from a template (default: package) or the built-in scaffold"
+  printError "                         refuses if <path> already exists; --template <name|url>: package, app,"
+  printError "                         owner/repo, github:owner/repo or a URL; without one, and on a terminal, asks"
+  printError "                         --name, --owner, --ci github|forgejo|both|none, --license mit|apache-2.0|none,"
+  printError "                         --git|--no-git, --yes (every default), --offline (the built-in scaffold only)"
+  printError "  torb init [--template ...]  The same, into the current, empty-enough directory; refuses to overwrite"
   printError "  torb upgrade [version]  Installs another version beside this one, and makes it the one in use"
   printError "                         --channel stable|nightly: switches the channel, then upgrades within it"
   printError "                         --list: what is installed and what is available, installs nothing"
@@ -765,15 +771,46 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
 }
 
 /**
- * `torb new <name>`: the one argument is both the directory `torb new` writes and the package's `name`. `None`
- * without it, which is the whole usage error - there is no flag to parse.
+ * `torb new <path> [--template <name|url>] [--name ...] [--owner ...] [--ci ...] [--license ...] [--git|--no-git]
+ * [--yes] [--offline]`: the path is both the directory `torb new` creates and, unless `--name` says otherwise, the
+ * project's name. `None` without a path, or where a flag is wrong - `scaffoldChoicesOf` (`./cli/template`) has
+ * already printed why.
  */
 fn newOptionsOf(arguments: List<String>): NewOptions? {
-  const name = arguments.first() ?? ""
-  if name.isEmpty() {
+  const parsed = match scaffoldChoicesOf(arguments) {
+    Ok(found) => found
+    Fail(message) => {
+      printErrorMessage message
+      return None
+    }
+  }
+  refuseUnknownFlag parsed.rest, []
+  const path = parsed.rest.first() ?? ""
+  if path.isEmpty() {
+    printErrorMessage "`torb new` needs a directory to create: `torb new hello`"
     return None
   }
-  NewOptions name
+  NewOptions path, parsed.choices
+}
+
+/**
+ * `torb init [--template <name|url>] [--name ...] [--owner ...] [--ci ...] [--license ...] [--git|--no-git] [--yes]
+ * [--offline]`: the same flags as `torb new`, without a path - it fills the current directory.
+ */
+fn initOptionsOf(arguments: List<String>): InitOptions? {
+  const parsed = match scaffoldChoicesOf(arguments) {
+    Ok(found) => found
+    Fail(message) => {
+      printErrorMessage message
+      return None
+    }
+  }
+  refuseUnknownFlag parsed.rest, []
+  if !parsed.rest.isEmpty() {
+    printErrorMessage "`torb init` takes no path: it fills the current directory, `torb new <path>` makes a new one"
+    return None
+  }
+  InitOptions parsed.choices
 }
 
 /**
@@ -903,15 +940,23 @@ match arguments {
       Process.exit code
     }
   }
+  // newOptionsOf/initOptionsOf print the specific problem themselves - the usage text changes with every subcommand
   ["new", ...more] => {
     const options = match newOptionsOf(more) {
       Some(found) => found
-      None => {
-        printUsage()
-        Process.exit 2
-      }
+      None => Process.exit 2
     }
     const code = runNew(options)?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  ["init", ...more] => {
+    const options = match initOptionsOf(more) {
+      Some(found) => found
+      None => Process.exit 2
+    }
+    const code = runInit(options)?
     if code != 0 {
       Process.exit code
     }

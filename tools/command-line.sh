@@ -76,6 +76,13 @@ check --color
 --color=never check --frobnicate
 test --color always --frobnicate
 debug --frobnicate
+new --frobnicate
+new somewhere --frobnicate
+new somewhere --ci bogus
+new somewhere --license bogus
+new somewhere --template
+init --frobnicate
+init somewhere
 EOF
 status=0
 "$torb" --help >/dev/null 2>&1 || status=$?

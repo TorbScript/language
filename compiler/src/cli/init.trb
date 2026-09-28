@@ -1,0 +1,68 @@
+/**
+ * `torb init`: the same template `torb new` writes (`./template`, `./new`), into the current directory instead of a
+ * new one - Cargo's `cargo init` beside its `cargo new`. Refuses to overwrite a file that is already there, rather
+ * than merge into it silently.
+ */
+
+use File, IoError from "std/fs"
+use printErrorMessage from "./render"
+use pathName, normalizePath from "../project/path"
+use ScaffoldChoices from "./template"
+use isInteractive, answersFor, confirmed, attemptScaffold, initializeGitRepository, printNextSteps from "./template"
+use manifestFor, mainFor, testFor from "./new"
+
+/** What `torb init` needs from the command line: the shared template flags, and nothing else (the path is "."). */
+public type InitOptions {
+  choices: ScaffoldChoices = ScaffoldChoices()
+}
+
+/**
+ * Fills the current directory with a template, or the built-in scaffold. The project's name defaults to the
+ * directory's own name - the same rule `torb new` uses for the directory it creates.
+ */
+public fn runInit(options: InitOptions): Result<Int, IoError> {
+  const target = "."
+  const directory = File.absolutePath(target)?
+  const interactive = isInteractive() && !options.choices.yes
+  const defaultName = pathName normalizePath(directory)
+  const answers = answersFor defaultName, options.choices, interactive
+  if !confirmed(target, answers, interactive) {
+    print "nothing written"
+    return 0
+  }
+  const wrote = match attemptScaffold(target, answers, options.choices.offline) {
+    Ok(_) => {
+      print "wrote the \"{answers.template}\" template into the current directory"
+      true
+    }
+    Fail(reason) => {
+      printError "note: {reason} - writing the built-in scaffold instead"
+      writePlainScaffold(answers.name)?
+    }
+  }
+  if !wrote {
+    return 1
+  }
+  if answers.git {
+    initializeGitRepository target
+  }
+  printNextSteps target, isInit: true
+  0
+}
+
+/** The built-in scaffold, refusing where `project.trb`, `src/main.trb` or `tests/main.test.trb` is already there. */
+fn writePlainScaffold(name: String): Result<Bool, IoError> {
+  const wanted = ["project.trb", "src/main.trb", "tests/main.test.trb"]
+  const conflicts = wanted.filter({ File.exists _ }).toList()
+  if !conflicts.isEmpty() {
+    printErrorMessage "already exists: {conflicts.joined(separator: ", ")}"
+    return Ok false
+  }
+  File.createDirectory("src")?
+  File.createDirectory("tests")?
+  File.writeText("project.trb", manifestFor(name))?
+  File.writeText("src/main.trb", mainFor(name))?
+  File.writeText("tests/main.test.trb", testFor(name))?
+  print "wrote project.trb, src/main.trb, tests/main.test.trb"
+  Ok true
+}

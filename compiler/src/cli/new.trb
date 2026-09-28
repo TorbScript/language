@@ -1,40 +1,68 @@
 /**
- * `torb new`: scaffolds a package - `project.trb`, a `src/main.trb` that prints a greeting, and a
- * `tests/main.test.trb` with one passing test - so that starting a project is one command instead of copying an
- * example by hand and editing its name everywhere.
+ * `torb new`: a new directory, from a template (`./template`) - `torb/package-template` or `torb/app-template` of
+ * git.torb.dev by default, `--template` naming another one - or, offline or where the template cannot be reached,
+ * the built-in scaffold this file has always written: `project.trb`, a `src/main.trb` that prints a greeting, and a
+ * `tests/main.test.trb` with one passing test.
  *
- * The three files are ordinary text and name nothing about the workspace the command runs in, so the package they
- * describe finds the toolchain's own `std/` and `runtime/` the way any standalone project does, searched for above
- * the new directory, the working directory and `torb` itself: `torb new` works the same inside this repository and
- * in an empty directory anywhere else.
+ * The built-in scaffold names nothing about the workspace the command runs in, so the package it describes finds the
+ * toolchain's own `std/` and `runtime/` the way any standalone project does, searched for above the new directory,
+ * the working directory and `torb` itself: `torb new` works the same inside this repository and in an empty
+ * directory anywhere else. A template found over the network may of course declare dependencies of its own.
  */
 
 use File, IoError from "std/fs"
 use printErrorMessage from "./render"
+use pathName, normalizePath from "../project/path"
+use ScaffoldChoices from "./template"
+use isInteractive, answersFor, confirmed, attemptScaffold, initializeGitRepository, printNextSteps from "./template"
 
-/** What `torb new` needs from the command line: the one name that becomes both the directory and the package name. */
+/** What `torb new` needs from the command line: the directory to create, and the shared template flags. */
 public type NewOptions {
-  /** The directory `torb new` creates, and the package's `name` in the `project.trb` it writes. */
-  name: String
+  /** The directory `torb new` creates. Unless `--name` overrides it, the project's name is its last segment. */
+  path: String
+  choices: ScaffoldChoices = ScaffoldChoices()
 }
 
 /**
- * `<name>/project.trb`, `<name>/src/main.trb` and `<name>/tests/main.test.trb`. Refuses with an error and changes
- * nothing where `<name>` already exists, so a typo on the command line never writes into a directory that was there
- * for another reason.
+ * `<path>/project.trb`, `<path>/src/main.trb` and `<path>/tests/main.test.trb` - from a template, or the built-in
+ * scaffold. Refuses with an error and changes nothing where `<path>` already exists, so a typo on the command line
+ * never writes into a directory that was there for another reason.
  */
 public fn runNew(options: NewOptions): Result<Int, IoError> {
-  if File.exists(options.name) {
-    printErrorMessage "`{options.name}` already exists"
+  if File.exists(options.path) {
+    printErrorMessage "`{options.path}` already exists"
     return 1
   }
-  File.createDirectory("{options.name}/src")?
-  File.createDirectory("{options.name}/tests")?
-  File.writeText("{options.name}/project.trb", manifestFor(options.name))?
-  File.writeText("{options.name}/src/main.trb", mainFor(options.name))?
-  File.writeText("{options.name}/tests/main.test.trb", testFor(options.name))?
-  print "wrote {options.name}/project.trb, {options.name}/src/main.trb, {options.name}/tests/main.test.trb"
+  const interactive = isInteractive() && !options.choices.yes
+  const defaultName = pathName normalizePath(options.path)
+  const answers = answersFor defaultName, options.choices, interactive
+  if !confirmed(options.path, answers, interactive) {
+    print "nothing written"
+    return 0
+  }
+  match attemptScaffold(options.path, answers, options.choices.offline) {
+    Ok(_) => print "wrote {options.path}/ from the \"{answers.template}\" template"
+    Fail(reason) => {
+      printError "note: {reason} - writing the built-in scaffold instead"
+      writePlainScaffold(options.path, answers.name)?
+    }
+  }
+  if answers.git {
+    initializeGitRepository options.path
+  }
+  printNextSteps options.path, isInit: false
   0
+}
+
+/** The built-in scaffold `torb new` has always written, where a template is not reached or not asked for. */
+fn writePlainScaffold(path: String, name: String): Result<Void, IoError> {
+  File.createDirectory("{path}/src")?
+  File.createDirectory("{path}/tests")?
+  File.writeText("{path}/project.trb", manifestFor(name))?
+  File.writeText("{path}/src/main.trb", mainFor(name))?
+  File.writeText("{path}/tests/main.test.trb", testFor(name))?
+  print "wrote {path}/project.trb, {path}/src/main.trb, {path}/tests/main.test.trb"
+  Ok void
 }
 
 /**
