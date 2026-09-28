@@ -72,11 +72,13 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
   belongs to the command", generics decided by the token after `>`, and string interpolation are context rules that
   are a few lines of code by hand and a fight with every generator. Error messages and recovery are better by hand,
   which matters for the language server.
-- **Newlines are resolved in one place.** A single filter removes the line breaks that do not end a statement (inside
-  `(`/`[`, after an operator or `,`, before `.`, `?.`, an operator, `with`, `where`). The parser only sees the ones that
-  count.
-- **The lexer works on characters, spans are byte offsets.** `SourceText` holds the characters of a file and the byte
-  offset of each. That keeps the lexer free of UTF-8 arithmetic, and spans are what `text[from..to]` takes.
+- **Newlines are resolved in one place.** The lexer drops the line breaks that do not end a statement (inside
+  `(`/`[`, after an operator or `,`, before `.`, `?.`, an operator, `with`, `where`) as it appends the token after them.
+  The parser only sees the ones that count.
+- **The lexer works on bytes, and so do spans.** A position is a byte offset into the text, which is what
+  `text[from..to]` takes; a character is decoded where the lexer looks at one (`String.charAtByte`), and a comment,
+  which it only skips, is searched for as bytes. No byte of a character past its first is ASCII, so a search for `*/`
+  or a line break cannot stop inside one.
 - **Speculation instead of lookahead tables.** Generic arguments in expressions, closure parameter lists and command
   calls are parsed by trying. The parser is a value: `const before = parser`, try, and `parser = before` if it did not
   work out. No checkpoint type, nothing to forget to restore.

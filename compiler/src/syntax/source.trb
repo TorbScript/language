@@ -1,6 +1,6 @@
 /**
- * The text of a source file as the lexer and every diagnostic see it: [Span], a byte range into it, and
- * [SourceText]/[LineIndex], which translate between bytes, characters and line/column positions.
+ * The text of a source file as the lexer and every diagnostic see it: [Span], a byte range into it, [SourceText], and
+ * [LineIndex], which translates bytes to line/column positions.
  */
 
 /** A range of bytes in a source file. */
@@ -15,45 +15,20 @@ public type Span {
 }
 
 /**
- * The text of a file, prepared for the lexer: the characters, and the byte offset of every character.
- * Positions inside of the lexer are character indices, spans are byte offsets (that is what `text[from..to]` takes).
+ * The text of a file as the lexer reads it. Positions everywhere are byte offsets - inside of the lexer as in a span -
+ * and a character is decoded where one is looked at (`String.charAtByte`), so preparing a file costs nothing: a
+ * decoded copy of every character, and the offset of each, were once a quarter of lexing.
  */
 public type SourceText {
   text: String
-  characters: List<Char>
-  /** One entry per character, plus the length of the text at the end */
-  offsets: List<Int>
 
-  static fn of(text: String): SourceText {
-    const characters = text.chars().toList()
-    var offsets: List<Int> = []
-    var offset = 0
-    for character in characters {
-      offsets.append offset
-      offset = offset + character.byteLength()
-    }
-    offsets.append offset
-    SourceText text, characters, offsets
+  static fn of(text: String): Self {
+    Self text
   }
 
-  /** The index of the character that starts at this byte offset. */
-  fn indexAt(offset: Int): Int {
-    var low = 0
-    var high = offsets.length() - 1
-    while low < high {
-      const middle = (low + high) / 2
-      if offsets[middle] < offset {
-        low = middle + 1
-      } else {
-        high = middle
-      }
-    }
-    low
-  }
-
-  /** The text between two character indices. */
-  fn slice(from: Int, to: Int): String {
-    text.sliceBytes offsets[from], offsets[to]
+  /** The text between two byte offsets, each at the start of a character or at the end. */
+  fn slice(start: Int, end: Int): String {
+    text.sliceBytes start, end
   }
 }
 
@@ -62,14 +37,14 @@ public type LineIndex {
   private text: String
   private lineStarts: List<Int>
 
-  static fn of(text: String): LineIndex {
+  static fn of(text: String): Self {
     var lineStarts = [0]
+    const length = text.byteLength()
     var offset = 0
-    for character in text.chars() {
-      offset = offset + character.byteLength()
-      if character == '\n' {
-        lineStarts.append offset
-      }
+    // A line break is one byte, and no byte of another character is one: the breaks are searched for as bytes
+    while const Some(found) = text.sliceBytes(offset, length).byteOffsetOf("\n") {
+      offset = offset + found + 1
+      lineStarts.append offset
     }
     Self text, lineStarts
   }

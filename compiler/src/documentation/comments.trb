@@ -46,35 +46,35 @@ fn collectComments(var found: List<CommentLine>, source: SourceText, lines: Line
   if from >= to {
     return
   }
-  const characters = source.characters
-  const end = source.indexAt to
-  var index = source.indexAt(from)
-  while index < end {
-    const isLineComment = characters[index] == '/' && characters.get(index + 1) == '/'
+  // Byte by byte: `/`, `*` and the line break are ASCII, and no byte of another character is one of them
+  const text = source.text
+  var index = from
+  while index < to {
+    const isLineComment = text.byteAt(index) == 47 && text.byteAt(index + 1) == 47
     if isLineComment {
       var stop = index
-      while stop < end && characters[stop] != '\n' {
+      while stop < to && text.byteAt(stop) != 10 {
         stop = stop + 1
       }
-      const line = lineAt lines, source.offsets[index]
+      const line = lineAt lines, index
       found.append CommentLine(line, source.slice(index + 2, stop))
       index = stop
       continue
     }
-    const isBlockComment = characters[index] == '/' && characters.get(index + 1) == '*'
+    const isBlockComment = text.byteAt(index) == 47 && text.byteAt(index + 1) == 42
     if isBlockComment {
       var stop = index + 2
-      while stop < end {
-        if characters[stop] == '*' && characters.get(stop + 1) == '/' {
+      while stop < to {
+        if text.byteAt(stop) == 42 && text.byteAt(stop + 1) == 47 {
           stop = stop + 2
           break
         }
         stop = stop + 1
       }
-      const line = lineAt lines, source.offsets[index]
-      const text = source.slice index, stop
+      const line = lineAt lines, index
+      const comment = source.slice index, stop
       var offset = 0
-      for content in linesOf(text) {
+      for content in linesOf(comment) {
         found.append CommentLine(line + offset, content)
         offset = offset + 1
       }

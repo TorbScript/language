@@ -170,7 +170,7 @@ src/
 │   ├ spelling.trb      How a name is spelled is a rule of the language, not a convention
 │   └ check.trb         The walk over the declarations of a module
 └ syntax/
-  ├ source.trb          Span, SourceText (characters and byte offsets), LineIndex
+  ├ source.trb          Span, SourceText (the text, read by byte offset), LineIndex
   ├ diagnostic.trb      Diagnostic
   ├ token.trb           Token, TokenKind, Keyword
   ├ lexer.trb           Source text to tokens
