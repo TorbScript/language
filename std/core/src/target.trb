@@ -23,7 +23,7 @@ use Show from "./convert"
  *     fn searchPathSeparator(): String {
  *       match OperatingSystem.current {
  *         .Windows => ";"
- *         .Linux | .MacOs | .FreeBsd => ":"
+ *         .Linux | .MacOs | .FreeBsd | .Browser => ":"
  *       }
  *     }
  *
@@ -43,6 +43,11 @@ public type OperatingSystem with Show, Equals, Hash {
   case MacOs
   /** FreeBSD. */
   case FreeBsd
+  /**
+   * A web browser, where the playground runs `torb` as WebAssembly (docs/design/RELEASE.md section 6): printing and
+   * the clock are real, `std/fs` is a file system in memory, and `std/process` and the network do not exist.
+   */
+  case Browser
 
   /**
    * The operating system this program is compiled for: the `--target` of the build, the host by default, and in the VM
@@ -55,8 +60,8 @@ public type OperatingSystem with Show, Equals, Hash {
   static current: Self = targetOperatingSystem()
 
   /**
-   * Whether the system follows POSIX, which is every case but `Windows`. The question for a branch that should include
-   * a system that is added later.
+   * Whether the system follows POSIX, which is every case but `Windows` and `Browser`. The question for a branch that
+   * should include a system that is added later.
    *
    * # Examples
    *
@@ -64,13 +69,13 @@ public type OperatingSystem with Show, Equals, Hash {
    */
   fn isPosix(): Bool {
     match self {
-      .Windows => false
+      .Windows | .Browser => false
       .Linux | .MacOs | .FreeBsd => true
     }
   }
 
   /**
-   * The name as its vendor writes it: `Windows`, `Linux`, `macOS`, `FreeBSD`.
+   * The name as its vendor writes it: `Windows`, `Linux`, `macOS`, `FreeBSD`, and `Browser` for a web browser.
    *
    * # Examples
    *
@@ -82,6 +87,7 @@ public type OperatingSystem with Show, Equals, Hash {
       .Linux => "Linux"
       .MacOs => "macOS"
       .FreeBsd => "FreeBSD"
+      .Browser => "Browser"
     }
   }
 }
@@ -95,6 +101,7 @@ public type OperatingSystem with Show, Equals, Hash {
  *       match Architecture.current {
  *         .X64 => "x86-64"
  *         .Arm64 => "arm64"
+ *         .Wasm64 => "wasm64"
  *       }
  *     }
  */
@@ -103,12 +110,14 @@ public type Architecture with Show, Equals, Hash {
   case X64
   /** 64-bit Arm, also called AArch64. */
   case Arm64
+  /** WebAssembly with 64-bit pointers: what the playground's `torb` is built for, with `OperatingSystem.Browser`. */
+  case Wasm64
 
   /** The architecture this program is compiled for. A compile-time constant, like [OperatingSystem.current]. */
   static current: Self = targetArchitecture()
 
   /**
-   * `x86-64`, `arm64`.
+   * `x86-64`, `arm64`, `wasm64`.
    *
    * # Examples
    *
@@ -118,6 +127,7 @@ public type Architecture with Show, Equals, Hash {
     match self {
       .X64 => "x86-64"
       .Arm64 => "arm64"
+      .Wasm64 => "wasm64"
     }
   }
 }

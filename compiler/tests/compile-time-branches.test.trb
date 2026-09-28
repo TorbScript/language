@@ -22,6 +22,7 @@ const targetModule = raw"""
     case Linux
     case MacOs
     case FreeBsd
+    case Browser
 
     static current: OperatingSystem = targetOperatingSystem()
   }
@@ -29,6 +30,7 @@ const targetModule = raw"""
   public type Architecture with Equals {
     case X64
     case Arm64
+    case Wasm64
 
     static current: Architecture = targetArchitecture()
   }
@@ -117,7 +119,7 @@ const systemMatch = raw"""
   fn systemName(): String {
     match OperatingSystem.current {
       .Windows => windowsName()
-      .Linux | .MacOs | .FreeBsd => posixName()
+      .Linux | .MacOs | .FreeBsd | .Browser => posixName()
     }
   }
 
@@ -255,7 +257,7 @@ group "Every arm is type checked on every machine" {
       fn systemName(): String {
         match OperatingSystem.current {
           .Windows => missing()
-          .Linux | .MacOs | .FreeBsd => "posix"
+          .Linux | .MacOs | .FreeBsd | .Browser => "posix"
         }
       }
 
@@ -433,6 +435,7 @@ group "A native of one operating system" {
         match OperatingSystem.current {
           .Windows => Windows.tickCount()
           .Linux | .MacOs | .FreeBsd => Posix.effectiveUserIdentifier()
+          .Browser => 0
         }
       }
 
@@ -451,6 +454,7 @@ group "A native of one operating system" {
         failing.append found.target.name()
       }
     }
-    assert(failing == ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "freebsd-x64", "freebsd-arm64"])
+    const expected = ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64", "freebsd-x64", "freebsd-arm64"]
+    assert(failing == expected.appended("browser-wasm64"))
   }
 }

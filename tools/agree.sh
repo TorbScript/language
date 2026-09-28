@@ -6,7 +6,7 @@
 #   sh tools/agree.sh emit <torb> <file>      the compiler's C for every target: "<target> <program.hash>" per line
 #   sh tools/agree.sh compare <file>...       whether every file names the same hash for every target it lists
 #
-# `emit` runs `torb build ./compiler --emit-c --target <target>` for the eight targets `torb build --target` knows,
+# `emit` runs `torb build ./compiler --emit-c --target <target>` for the nine targets `torb build --target` knows,
 # which needs no C compiler, and writes one line per target into <file>, the host's own name on the first line as a
 # comment. It also checks that the C `torb` emits for its own machine is the C of the bootstrap
 # (`build/release/program.hash`), where that is there: `--target` for this machine must change nothing.
@@ -28,7 +28,7 @@ fail() {
   exit 1
 }
 
-targets="windows-x64 windows-arm64 linux-x64 linux-arm64 macos-x64 macos-arm64 freebsd-x64 freebsd-arm64"
+targets="windows-x64 windows-arm64 linux-x64 linux-arm64 macos-x64 macos-arm64 freebsd-x64 freebsd-arm64 browser-wasm64"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 

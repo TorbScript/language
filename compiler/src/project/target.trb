@@ -6,8 +6,12 @@
  * `torb build --target linux-x64` names one, [hostTarget] is the default, and [everyTarget] is the toolchain's list
  * that `torb check --every-target` lowers once per entry. The target is a parameter of the lowering and of nothing
  * before it: the checker checks every arm for every target, and knows none of them.
+ *
+ * `browser-wasm64` is the one target that is not a machine: the playground's `torb`, compiled by emscripten
+ * (`playground/build.sh`, docs/design/RELEASE.md section 6), and whatever that `torb` runs in its VM.
  */
 
+use OperatingSystem from "std/core"
 use Environment from "std/os"
 use Process from "std/process"
 
@@ -17,6 +21,7 @@ public type TargetSystem {
   case Linux
   case MacOs
   case FreeBsd
+  case Browser
 
   /** The name of the case of `std/core`'s `OperatingSystem` this is, which the lowering builds. */
   fn caseName(): String {
@@ -25,26 +30,37 @@ public type TargetSystem {
       .Linux => "Linux"
       .MacOs => "MacOs"
       .FreeBsd => "FreeBsd"
+      .Browser => "Browser"
     }
   }
 
-  /** The first half of a target's name on the command line: `windows`, `linux`, `macos`, `freebsd`. */
+  /** The first half of a target's name on the command line: `windows`, `linux`, `macos`, `freebsd`, `browser`. */
   fn word(): String {
     match self {
       .Windows => "windows"
       .Linux => "linux"
       .MacOs => "macos"
       .FreeBsd => "freebsd"
+      .Browser => "browser"
     }
   }
 
-  /** The name as its vendor writes it, for a message: `Windows`, `Linux`, `macOS`, `FreeBSD`. */
+  /** The name as its vendor writes it, for a message: `Windows`, `Linux`, `macOS`, `FreeBSD`, `the browser`. */
   fn displayName(): String {
     match self {
       .Windows => "Windows"
       .Linux => "Linux"
       .MacOs => "macOS"
       .FreeBsd => "FreeBSD"
+      .Browser => "the browser"
+    }
+  }
+
+  /** The architectures the toolchain builds for on this system: a machine has two, a browser WebAssembly. */
+  fn architectures(): List<TargetArchitecture> {
+    match self {
+      .Windows | .Linux | .MacOs | .FreeBsd => [.X64, .Arm64]
+      .Browser => [.Wasm64]
     }
   }
 }
@@ -53,20 +69,23 @@ public type TargetSystem {
 public type TargetArchitecture {
   case X64
   case Arm64
+  case Wasm64
 
   /** The name of the case of `std/core`'s `Architecture` this is. */
   fn caseName(): String {
     match self {
       .X64 => "X64"
       .Arm64 => "Arm64"
+      .Wasm64 => "Wasm64"
     }
   }
 
-  /** The second half of a target's name on the command line: `x64`, `arm64`. */
+  /** The second half of a target's name on the command line: `x64`, `arm64`, `wasm64`. */
   fn word(): String {
     match self {
       .X64 => "x64"
       .Arm64 => "arm64"
+      .Wasm64 => "wasm64"
     }
   }
 }
@@ -89,17 +108,18 @@ public type BuildTarget {
 
 /** Every operating system the toolchain knows, in the order of the cases of `OperatingSystem`. */
 public fn everySystem(): List<TargetSystem> {
-  [.Windows, .Linux, .MacOs, .FreeBsd]
+  [.Windows, .Linux, .MacOs, .FreeBsd, .Browser]
 }
 
 /**
- * The toolchain's list of targets: every operating system on every architecture. `torb check --every-target` lowers a
- * program once per entry, so a mistake only another target's build would meet is reported on any machine.
+ * The toolchain's list of targets: every operating system on each of its architectures - the four systems on x64 and
+ * Arm64, and the browser on WebAssembly. `torb check --every-target` lowers a program once per entry, so a mistake
+ * only another target's build would meet is reported on any machine.
  */
 public fn everyTarget(): List<BuildTarget> {
   var found: List<BuildTarget> = []
   for system in everySystem() {
-    for architecture in [TargetArchitecture.X64, TargetArchitecture.Arm64] {
+    for architecture in system.architectures() {
       found.append BuildTarget(system, architecture)
     }
   }
@@ -119,7 +139,9 @@ public fn targetNamed(name: String): BuildTarget? {
 /**
  * The machine `torb` runs on, which is what a build is for unless `--target` says otherwise.
  *
- * Windows is told by its environment (`OS`, `PROCESSOR_ARCHITECTURE`); every other system by one call of `uname`.
+ * The playground's `torb` is built for the browser, and that is the one answer its own build gives: it cannot start
+ * `uname`, and what it runs in its VM is for the browser too. Windows is told by its environment (`OS`,
+ * `PROCESSOR_ARCHITECTURE`); every other system by one call of `uname`.
  *
  * # Pitfalls
  *
@@ -128,10 +150,17 @@ public fn targetNamed(name: String): BuildTarget? {
  * # Open
  *
  * - `torb` is built for the machine it runs on, so `OperatingSystem.current` and `Architecture.current` of its own build
- *   are this answer without asking anything. Reading them needs a seed that knows the target natives, because the
- *   seed compiles the compiler (CLAUDE.md, "Seed and breaking changes").
+ *   could answer every machine without asking anything, as they answer the browser. They are asked only there, so
+ *   that the compiler's C stays one C for every machine: the published seed is the C of linux-x64, and a checkout on
+ *   Windows or macOS compiles that same C (`tools/fetch-seed.sh`).
  */
 public fn hostTarget(): BuildTarget {
+  match OperatingSystem.current {
+    .Browser => {
+      return BuildTarget TargetSystem.Browser, TargetArchitecture.Wasm64
+    }
+    .Windows | .Linux | .MacOs | .FreeBsd => {}
+  }
   if Environment.get("OS") == "Windows_NT" {
     const reported = Environment.get("PROCESSOR_ARCHITEW6432") ?? Environment.get("PROCESSOR_ARCHITECTURE") ?? ""
     const architecture = if reported == "ARM64" { TargetArchitecture.Arm64 } else { TargetArchitecture.X64 }

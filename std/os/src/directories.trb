@@ -12,6 +12,7 @@ use * as windows from "./windows/directories"
 use * as macos from "./macos/directories"
 use * as posix from "./posix/directories"
 use * as xdg from "./xdg/directories"
+use * as browser from "./browser/directories"
 
 /**
  * Where a user's files belong, by the convention of the system. Each answers the base: an application joins its own
@@ -24,6 +25,8 @@ use * as xdg from "./xdg/directories"
  *   `FOLDERID_LocalAppData` for state and cache, and `GetTempPath2W`.
  * - **macOS** answers `HOME` (else the account entry), `~/Library/Application Support` for configuration, data and
  *   state, `~/Library/Caches`, and `TMPDIR` (else the user's own temporary directory).
+ * - **A browser** has no user, so everything but the temporary directory, `/tmp` of its file system in memory, is
+ *   `Unsupported`.
  *
  * # Examples
  *
@@ -42,6 +45,7 @@ public type Directories {
     match OperatingSystem.current {
       .Windows => windows.home()
       .Linux | .MacOs | .FreeBsd => posix.home()
+      .Browser => browser.unsupported "the home directory"
     }
   }
 
@@ -51,6 +55,7 @@ public type Directories {
       .Windows => windows.roaming()
       .Linux | .FreeBsd => xdg.configuration()
       .MacOs => macos.applicationSupport()
+      .Browser => browser.unsupported "the configuration directory"
     }
   }
 
@@ -60,6 +65,7 @@ public type Directories {
       .Windows => windows.roaming()
       .Linux | .FreeBsd => xdg.data()
       .MacOs => macos.applicationSupport()
+      .Browser => browser.unsupported "the data directory"
     }
   }
 
@@ -69,6 +75,7 @@ public type Directories {
       .Windows => windows.local()
       .Linux | .FreeBsd => xdg.state()
       .MacOs => macos.applicationSupport()
+      .Browser => browser.unsupported "the state directory"
     }
   }
 
@@ -78,6 +85,7 @@ public type Directories {
       .Windows => windows.local()
       .Linux | .FreeBsd => xdg.cache()
       .MacOs => macos.caches()
+      .Browser => browser.unsupported "the cache directory"
     }
   }
 
@@ -87,6 +95,7 @@ public type Directories {
       .Windows => windows.temporary()
       .Linux | .FreeBsd => posix.temporary()
       .MacOs => macos.temporary()
+      .Browser => browser.temporary()
     }
   }
 }
