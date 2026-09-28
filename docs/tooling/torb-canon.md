@@ -73,6 +73,11 @@ compile error, and `port = 8080` is the fix. The one property command left is a 
 is a record type: `database { ... }` configures the value in place, which is a fact about what the call means and not
 a choice of how to write it.
 
+That is why a call of a field that holds a function keeps its parentheses: `debugger.stop(event)` calls it, and
+`debugger.stop event` would be the command the checker rejects. Inside the type the syntax tree sees the field; behind
+another value, in an `extend` and in a receiver closure only the type checker does, and
+[`torb format`](torb-format.md#what-the-type-checker-adds) asks it before it rewrites a call.
+
 ### A multi-line string is indented
 
 The opening `"""` stays where it is; the content is two spaces deeper than the line the statement starts on; a

@@ -15,12 +15,20 @@
  * call style erased, has to be the tree that went in, or the layout of that file is dropped and reported - a formatter
  * that would change what a program means is a bug, so `--check` fails on it too. The whole of it runs until nothing
  * changes any more, which is what makes it idempotent: a second run over its output changes nothing.
+ *
+ * **The type checker** is asked about every file the syntax tree alone would change (`./typed`): the tree cannot tell
+ * the method in `debugger.stop(event)` from a field that holds a function, and only the method's call may become a
+ * command. The checker says which callees are no field, the files are formatted again with that, and what comes out
+ * is checked once more: a file that type checked before and would not any more keeps its text and is reported like
+ * every other dropped edit.
  */
 
 use File, IoError from "std/fs"
 use rewrite, Rule, canonicalText from "../canon/command"
+use Callees from "../canon/walk"
 use laidOut from "./layout"
 use fitted, maximumWidth from "./width"
+use typedOutcomes from "./typed"
 use counted from "../cli/render"
 
 /** `torb format --help` */
@@ -37,6 +45,8 @@ public fn formatUsage(): String {
     "  the layout: two spaces per level, the spaces between tokens, at most one blank line in a row, one line break at",
     "  the end, and a width of 120 columns: a longer line breaks at the outermost bracket that makes it fit, and what",
     "  the formatter broke joins again once it fits. Strings, comments and each file's line endings are kept.",
+    "  A file that changes is type checked before and after: a call of a field that holds a function keeps its",
+    "  parentheses, and a file that type checked keeps doing so.",
     "",
     "  --check   Write nothing, list the files that would change, leave with 1 if there is one",
   ].joined(separator: "\n")
@@ -115,13 +125,17 @@ const canonRules = [Rule.Calls, Rule.Strings, Rule.ImportedCasePatterns, Rule.Un
 /** How many rounds the formatter runs before it gives up on reaching a text that stays as it is. */
 const maximumRounds = 4
 
-/** The layout of one source text. Public for the tests. */
-public fn formatted(source: String): Formatted {
+/**
+ * The layout of one source text. Public for the tests. [Callees] is what the type checker knows about the callees of
+ * its calls: without it, a call is rewritten wherever the syntax tree allows it; with it, only where the checker
+ * resolved the callee to something that is no field.
+ */
+public fn formatted(source: String, callees: Callees? = None): Formatted {
   var result = Formatted source
   var text = source
   var round = 0
   loop {
-    const once = formattedOnce text
+    const once = formattedOnce text, callees
     if round == 0 && once.skipped.isSome() {
       return once
     }
@@ -142,9 +156,9 @@ public fn formatted(source: String): Formatted {
 }
 
 /** One round: the rules of the canon, the layout, and the rule `strings` again where the layout moved a line. */
-fn formattedOnce(source: String): Formatted {
+fn formattedOnce(source: String, callees: Callees?): Formatted {
   var result = Formatted source
-  const canon = rewrite source, canonRules
+  const canon = rewrite source, canonRules, callees
   for reason in canon.skipped {
     if reason == "it does not parse" {
       result.skipped = reason
@@ -156,7 +170,7 @@ fn formattedOnce(source: String): Formatted {
   var text = canon.text
   const laid = match laidOut(text) {
     Some(found) => {
-      match fitted(found) {
+      match fitted(found, callees) {
         Some(fitting) => Some fitting
         None => {
           result.dropped.append "fitting the lines into {maximumWidth} columns made the file stop parsing"
@@ -191,13 +205,22 @@ public fn runFormat(options: FormatOptions): Result<Int, IoError> {
     collectFormatFiles(files, path)?
   }
   files.sort({ _ })
+  var sources: List<String> = []
+  var outcomes: List<Formatted> = []
+  for file in files {
+    const source = File.readText(file)?
+    sources.append source
+    outcomes.append formatted(source)
+  }
+  // What the syntax tree alone would change is held against the type checker
+  outcomes = typedOutcomes(options.paths, files, sources, outcomes)?
   var changed: List<String> = []
   var skipped: List<String> = []
   var notes: List<String> = []
   var dropped: List<String> = []
-  for file in files {
-    const source = File.readText(file)?
-    const outcome = formatted source
+  for (index, file) in files.indexed() {
+    const source = sources[index]
+    const outcome = outcomes[index]
     if const Some(reason) = outcome.skipped {
       skipped.append "{file}: {reason}"
       continue

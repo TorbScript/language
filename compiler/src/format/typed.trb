@@ -1,0 +1,168 @@
+/**
+ * What `torb format` asks the type checker. The syntax tree says where a call may be written as a command; it cannot
+ * say what the callee is, and one callee the parentheses mean something for looks like every other: a field that holds
+ * a function. `debugger.stop(event)` calls it, and `debugger.stop event` is an error, because a command on a field would
+ * write it (`compiler/CONTRIBUTING.md`, "property commands") - while `buffer.append(3)` of a method becomes
+ * `buffer.append 3`. Inside the type the syntax tree sees the field (`CallSite.calleeCouldBeAField`); anywhere else only
+ * the checker does.
+ *
+ * So every file the syntax tree alone would change is checked, formatted again with the [Callees] the checker gives,
+ * and checked once more. A file it leaves as it is needs none of it: what the checker knows only ever leaves a call
+ * alone that the syntax tree would rewrite, so the checker costs nothing where there is nothing to format - a
+ * `torb format --check` of a repository in the layout runs no check at all.
+ */
+
+use File, IoError from "std/fs"
+use SourceFile from "../syntax/ast"
+use readSourceTree from "../project/read"
+use normalizePath from "../project/path"
+use SourceTree from "../project/source-tree"
+use check, Checked from "../semantics/check"
+use Checker, Resolution from "../semantics/checker/context"
+use ModuleId from "../semantics/module"
+use walk, Callees from "../canon/walk"
+use formatted, Formatted from "./command"
+
+/**
+ * The outcomes of the files, held against the type checker; `outcomes` is what the syntax tree alone made of `sources`,
+ * one of each per file.
+ *
+ * 1. The files it would change are checked as they are, which gives the [Callees] of each and whether it type checks.
+ * 2. Each of them is formatted again with its [Callees]: a call of a field, or of a callee the checker did not
+ *    resolve, keeps the way it is written.
+ * 3. **The safety net**: what comes out is checked again, and a file that type checked before and would not any more
+ *    keeps its text, with the first new message in `dropped` - the formatter never turns code that type checks into
+ *    code that does not, and a file it would is a bug of the formatter that `--check` fails on.
+ */
+public fn typedOutcomes(
+  paths: List<String>,
+  files: List<String>,
+  sources: List<String>,
+  outcomes: List<Formatted>,
+): Result<List<Formatted>, IoError> {
+  var changed: List<Int> = []
+  var absolute: List<String> = []
+  for (index, outcome) in outcomes.indexed() {
+    if outcome.skipped.isNone() && outcome.text != sources[index] {
+      changed.append index
+      absolute.append normalizePath(File.absolutePath(files[index])?)
+    }
+  }
+  if changed.isEmpty() {
+    return outcomes
+  }
+  const tree = readSourceTree(paths)?
+  const before = check tree, absolute
+  var result = outcomes
+  var still: List<Int> = []
+  var formattedPaths: List<String> = []
+  var formattedTexts: List<String> = []
+  for (position, index) in changed.indexed() {
+    const callees = calleesAt before, absolute[position], sources[index]
+    const again = formatted sources[index], callees
+    result[index] = again
+    if again.skipped.isNone() && again.text != sources[index] {
+      still.append index
+      formattedPaths.append absolute[position]
+      formattedTexts.append again.text
+    }
+  }
+  const introduced = problemsIntroduced tree, before, formattedPaths, formattedTexts
+  for (position, index) in still.indexed() {
+    if const Some(message) = introduced[position] {
+      var kept = result[index]
+      kept.text = sources[index]
+      kept.dropped.append "formatting it would make it stop type checking, so it is left as it is: {message}"
+      result[index] = kept
+    }
+  }
+  result
+}
+
+/**
+ * The safety net: what the files at `paths` would be wrong in with `texts`, one per path - the first message of the
+ * checker for a file that type checked in `before` and would not any more, and `None` for a file that still does. A
+ * file with a problem of its own before is not held to it, because its messages may quote what the layout changed.
+ * Public for the tests.
+ */
+public fn problemsIntroduced(
+  tree: SourceTree,
+  before: Checked,
+  paths: List<String>,
+  texts: List<String>,
+): List<String?> {
+  var found: List<String?> = []
+  if paths.isEmpty() {
+    return found
+  }
+  var after = tree
+  for (index, path) in paths.indexed() {
+    after = after.withFile path, texts[index]
+  }
+  const problemsBefore = firstProblems before
+  const problemsAfter = firstProblems check(after, paths)
+  for path in paths {
+    const shown = tree.display path
+    const wasClean = before.files.any({ _.path == shown }) && !problemsBefore.containsKey(shown)
+    found.append(if wasClean { problemsAfter.get shown } else { None })
+  }
+  found
+}
+
+/**
+ * The [Callees] of the file at an absolute path, from a check that read it with exactly this text. A file the check did
+ * not read, or read with another text, has none that is known.
+ */
+fn calleesAt(checked: Checked, path: String, source: String): Callees {
+  const module = match checked.program.graph.moduleAt(path) {
+    Some(found) if checked.requested.contains(found) => found
+    _ => {
+      return Callees.nothingKnown()
+    }
+  }
+  const shape = checked.program.graph.at module
+  if shape.source.text != source {
+    return Callees.nothingKnown()
+  }
+  calleesOf checked.checker, module, shape.file
+}
+
+/**
+ * What the checker resolved the callee of every call of a module to, in the order of the walk of the canon: the calls
+ * whose callee is known to be no field. Public for the tests.
+ */
+public fn calleesOf(checker: Checker, module: ModuleId, file: SourceFile): Callees {
+  const sites = walk file
+  var resolved: Set<Int> = Set.of()
+  for (index, site) in sites.calls.indexed() {
+    if const .Call(callee, _, _) = site.call.kind {
+      if isNoField(checker.resolutionAt(module, callee.span)) {
+        resolved.insert index
+      }
+    }
+  }
+  Callees sites.calls.length(), resolved
+}
+
+/**
+ * Whether a callee resolved to something the parentheses mean nothing for. A field is not (a command would write it),
+ * and neither is a callee without a resolution: a body the checker did not check - a branch of another target - or a
+ * name after an error.
+ */
+fn isNoField(resolution: Resolution?): Bool {
+  match resolution {
+    None | Some(.Field(_, _)) | Some(.PropertyWrite(_, _)) | Some(.Deferred) => false
+    Some(_) => true
+  }
+}
+
+/** The first message of every file of a check that has one, by the path the check shows it with. */
+fn firstProblems(checked: Checked): Map<String, String> {
+  var found: Map<String, String> = [:]
+  for file in checked.files {
+    if const Some(first) = file.diagnostics.first() {
+      found.set file.path, first.message
+    }
+  }
+  found
+}

@@ -1,8 +1,10 @@
 // "Format Document" for `.trb` files: `torb format` (docs/tooling/torb-format.md) over the text the editor holds.
 //
 // `torb format` rewrites files in place and reads no standard input, so the text is written to a file of its own in the
-// system's temporary directory, formatted there and read back; the layout depends on the syntax tree alone, so where the
-// file lies does not change it. A text that does not parse is left as it is, and the status bar says so.
+// system's temporary directory, formatted there and read back. The layout depends on the syntax tree alone; the one
+// thing `torb format` asks the type checker - which callee is a field that holds a function - a copy there answers for
+// what it reaches, and a call whose callee depends on a module the copy does not reach is left as it is written, never
+// made a command that would not type check. A text that does not parse is left as it is, and the status bar says so.
 
 'use strict';
 

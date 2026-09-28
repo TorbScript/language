@@ -235,7 +235,9 @@ formatter canon - a call becomes a command wherever the grammar allows it and ge
 multi-line `"""` string is indented, and the three rules that rewrite a small form of the tree - then indentation, the
 spaces between tokens and blank lines. Line breaks between tokens, comments and each file's line endings are kept. Every
 edit and every layout is parsed again and only stays if the tree is the one from before with every span and call style
-erased, so a run cannot change what a program means ([torb format](torb-format.md)).
+erased, so a run cannot change what a program means ([torb format](torb-format.md)). A file that changes is type
+checked before and after: a call of a field that holds a function keeps its parentheses, and a file that type checked
+still does.
 
 | Flag | What it does |
 |------|--------------|

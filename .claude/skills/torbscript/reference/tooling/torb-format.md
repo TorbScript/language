@@ -17,6 +17,7 @@ source:
   - compiler/src/format/command.trb
   - compiler/src/format/layout.trb
   - compiler/src/format/width.trb
+  - compiler/src/format/typed.trb
 ---
 
 `format` is the formatter of `torb`, milestone 8's replacement for [`torb canon`](torb-canon.md). It runs every rule
@@ -45,6 +46,23 @@ Every rule of [the formatter canon](torb-canon.md) runs, all five of them: a cal
 allows it and has parentheses everywhere else, a multi-line `"""` string is indented one level deeper than the line it
 starts on, `.None` becomes `None` for a case a `use` imported, an unread binding of a refutable pattern becomes `_`,
 and `while true {` becomes `loop {`. Each edit is applied on its own and parsed again, exactly as `torb canon` did.
+
+### What the type checker adds
+
+The syntax tree says where a call may be a command. It cannot say what the callee is, and one kind of callee looks like
+every other although the parentheses mean something for it: a field that holds a function. `debugger.stop(event)` calls
+the function in the field `stop`, and `debugger.stop event` is an error, because a command on a field would write it
+(see [Command calls](../language/syntax/command-calls.md), rule 10) - while `buffer.append(3)` of a method becomes
+`buffer.append 3`.
+
+So every file the syntax tree alone would change is type checked first, the way `torb check` checks it, and formatted
+again with what the checker resolved: the rule `calls` rewrites a call only where the checker resolved its callee to
+something that is no field - a method, a function, a case, or a local or a constant that holds a closure. A call of a
+field keeps the way it is written wherever it stands: behind a value (`debugger.stop(event)`), in an `extend` of the
+type, and inside a receiver closure. So does a call the checker did not resolve at all - a body it did not check, such
+as a branch of another target, or a name after an error. A file the syntax tree leaves as it is is not checked, because
+what the checker knows only ever leaves a call alone: `torb format --check` of a repository in the layout runs no check
+at all.
 
 ### Then the layout
 
@@ -248,6 +266,11 @@ call over several lines with parentheses anyway. A command that writes a field o
 The layout of every file is checked the way the canon checks an edit: the file is parsed again, and the syntax tree that
 comes out - with every span and every call style erased - has to be the tree that went in. If it is not, the layout of
 that file is dropped and reported as `dropped`, because a formatter that would change what a program means is a bug.
+
+Every file that changes is type checked once more, as it comes out. A file that type checked before and would not any
+more keeps its text, and the first message of the checker is reported as `dropped` with it: the formatter never turns
+code that type checks into code that does not. A file that had a problem of its own before is not held to this, since a
+message may quote what the layout changed.
 
 The whole of it - canon, layout, width, and the rule `strings` again where the layout moved a line - runs until the
 text stays as it is, which is what makes it idempotent: a second run over its output changes nothing.

@@ -18,7 +18,7 @@
 use SourceText, LineIndex from "../syntax/source"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
-use walk from "./walk"
+use walk, Callees from "./walk"
 use Edit, EditKind, Document from "./edit"
 use callEdits from "./calls"
 use stringEdits from "./strings"
@@ -78,8 +78,12 @@ public type Outcome {
   var dropped: List<String> = []
 }
 
-/** The canon of one source text. Public for the tests; every rule is here, so a test can ask for one of them alone. */
-public fn rewrite(source: String, rules: List<Rule>): Outcome {
+/**
+ * The canon of one source text. Public for the tests; every rule is here, so a test can ask for one of them alone.
+ * [Callees] is what the type checker knows about the callees of its calls: with it, the rule `calls` leaves every call
+ * alone whose callee the checker did not resolve to something that is no field.
+ */
+public fn rewrite(source: String, rules: List<Rule>, callees: Callees? = None): Outcome {
   var outcome = Outcome source
   const baseline = match canonicalText(source) {
     Some(found) => found
@@ -91,7 +95,7 @@ public fn rewrite(source: String, rules: List<Rule>): Outcome {
   const text = SourceText.of source
   const lexed = lex text
   const parsed = parse text
-  const sites = walk parsed.file
+  const sites = walk parsed.file, callees
 
   var edits: List<Edit> = []
   if rules.contains(Rule.Calls) {

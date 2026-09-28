@@ -7,7 +7,12 @@
  */
 
 use test, group from "std/test"
-use formatted, formatOptionsOf, formatOptionsOfCanon from "../src/format/command"
+use File from "std/fs"
+use formatted, formatOptionsOf, formatOptionsOfCanon, runFormat, Formatted, FormatOptions from "../src/format/command"
+use calleesOf, problemsIntroduced from "../src/format/typed"
+use Callees from "../src/canon/walk"
+use check from "../src/semantics/check"
+use probe, problems, workspaceWith from "./harness"
 
 /** Prints both texts where they differ, so that a failing test says how. */
 fn expectText(actual: String, expected: String) {
@@ -31,6 +36,37 @@ fn formats(source: String, expected: String) {
 /** The source is formatted already. */
 fn keeps(source: String) {
   formats source, source
+}
+
+/** What the formatter makes of a program with the [Callees] the type checker gives for it. */
+fn formattedChecked(source: String): Formatted {
+  const probed = probe source
+  const file = probed.checker.program.graph.at(probed.module).file
+  formatted source, calleesOf(probed.checker, probed.module, file)
+}
+
+/**
+ * The round trip of a program: it type checks, the formatter makes the expected text of it with what the checker knows
+ * about its callees, that text still type checks, and a second run keeps it.
+ */
+fn formatsChecked(source: String, expected: String) {
+  const before = problems source
+  if !before.isEmpty() {
+    print "problems of the source: {before}"
+  }
+  assert before.isEmpty()
+  const once = formattedChecked source
+  if !once.dropped.isEmpty() {
+    print "dropped: {once.dropped}"
+  }
+  assert once.dropped.isEmpty()
+  expectText once.text, expected
+  const after = problems once.text
+  if !after.isEmpty() {
+    print "problems of the formatted text: {after}"
+  }
+  assert after.isEmpty()
+  expectText formattedChecked(once.text).text, once.text
 }
 
 group "Indentation" {
@@ -468,6 +504,143 @@ group "The rules of the canon" {
     const outcome = formatted "fn f( \{\n"
     assert outcome.skipped.isSome()
     assert(outcome.text == "fn f( \{\n")
+  }
+}
+
+/** Every shape of callee a function value is called through, and the methods and functions around them. */
+const callees = raw"""
+  type Event {
+    name: String
+  }
+
+  type Debugger {
+    stop: (Event) => Void
+    handle: (Int, () => Void) => Void
+    handlers: List<(Event) => Void>
+    static fallback = { event: Event => print(event.name) }
+
+    fn onStop(): (Event) => Void {
+      stop
+    }
+  }
+
+  extend Debugger {
+    fn stopAgain(event: Event) {
+      stop(event)
+      self.stop(event)
+    }
+  }
+
+  fn inspect(debugger: Debugger, event: Event, configure: (self: Debugger) => Void) {
+    debugger.stop(event)
+    debugger.handle(1) {
+      print(event.name)
+    }
+    const local = debugger.stop
+    local(event)
+    debugger.handlers[0](event)
+    debugger.onStop()(event)
+    Debugger.fallback(event)
+    configure(debugger)
+  }
+
+  const shout = { event: Event => print(event.name) }
+  const tracer = Debugger({ event => print(event.name) }, { _, next => next() }, [])
+  inspect(tracer, Event("x")) {
+    stop(Event("y"))
+  }
+  tracer.stop(Event("z"))
+  shout(Event("z"))
+  """
+
+group "What the type checker knows about the callees" {
+  test "a call of a field that holds a function keeps its parentheses, which a command would not call" {
+    const expected = callees
+      .replace("print(event.name)", "print event.name")
+      .replace("\n  local(event)\n", "\n  local event\n")
+      .replace("\n  Debugger.fallback(event)\n", "\n  Debugger.fallback event\n")
+      .replace("\n  configure(debugger)\n", "\n  configure debugger\n")
+      .replace("inspect(tracer, Event(\"x\")) \{", "inspect tracer, Event(\"x\") \{")
+      .replace("shout(Event(\"z\"))", "shout Event(\"z\")")
+    formatsChecked callees, expected
+  }
+
+  test "the callee of a field is known wherever it stands, not only inside its type" {
+    const text = formattedChecked(callees).text
+    assert text.contains("\n  debugger.stop(event)\n")
+    assert text.contains("\n  debugger.handle(1) \{\n")
+    assert text.contains("\n    stop(event)\n    self.stop(event)\n")
+    assert text.contains("\n  stop(Event(\"y\"))\n")
+    assert text.contains("\ntracer.stop(Event(\"z\"))\n")
+  }
+
+  test "a closure in a local, in a constant or in a parameter is called as a command" {
+    const text = formattedChecked(callees).text
+    assert text.contains("\n  local event\n")
+    assert text.contains("\n  Debugger.fallback event\n")
+    assert text.contains("\n  configure debugger\n")
+    assert text.contains("\nshout Event(\"z\")\n")
+  }
+
+  test "an item of a list of closures and the closure a method returns are no path, and keep their parentheses" {
+    const text = formattedChecked(callees).text
+    assert text.contains("\n  debugger.handlers[0](event)\n")
+    assert text.contains("\n  debugger.onStop()(event)\n")
+  }
+
+  test "a call the checker did not resolve is left as it is written, and the layout still applies" {
+    formats "fn f() \{\n    print(\"x\")\n\}\n", "fn f() \{\n  print \"x\"\n\}\n"
+    const outcome = formatted "fn f() \{\n    print(\"x\")\n\}\n", Callees.nothingKnown()
+    expectText outcome.text, "fn f() \{\n  print(\"x\")\n\}\n"
+  }
+
+  test "a text that is not the tree the checker read has no callee that is known" {
+    const outcome = formatted "print(\"x\")\nprint(\"y\")\n", Callees(3, Set.of(0, 1))
+    expectText outcome.text, "print(\"x\")\nprint(\"y\")\n"
+    const known = formatted "print(\"x\")\nprint(\"y\")\n", Callees(2, Set.of(1))
+    expectText known.text, "print(\"x\")\nprint \"y\"\n"
+  }
+
+  test "a call of a field that joins into 121 columns stays broken: it will not become the shorter command" {
+    const argument = "\"{"x".repeat(104)}\""
+    const broken = "debugger.stop(\n  {argument},\n)\n"
+    formats broken, "debugger.stop {argument}\n"
+    expectText formatted(broken, Callees(1, Set.of())).text, broken
+  }
+}
+
+group "The safety net of the type checker" {
+  test "a text that would stop type checking is found, and one that still type checks is not" {
+    const tree = workspaceWith(["app/src/main.trb": callees])
+    const before = check tree, ["app"]
+    const broken = callees.replace "tracer.stop(Event(\"z\"))", "tracer.stop Event(\"z\")"
+    const found = problemsIntroduced tree, before, ["app/src/main.trb"], [broken]
+    assert(found == [Some("`stop` is a field: write `stop = Event(\"z\")`")])
+    const kept = problemsIntroduced tree, before, ["app/src/main.trb"], [formattedChecked(callees).text]
+    assert kept[0].isNone()
+  }
+
+  test "a file that had a problem of its own before is not held to it" {
+    const failing = callees + "undeclared(1)\n"
+    const tree = workspaceWith(["app/src/main.trb": failing])
+    const before = check tree, ["app"]
+    const broken = failing.replace "tracer.stop(Event(\"z\"))", "tracer.stop Event(\"z\")"
+    const found = problemsIntroduced tree, before, ["app/src/main.trb"], [broken]
+    assert found[0].isNone()
+  }
+
+  test "`torb format` of a file on disk keeps the call of a field, and what it writes still type checks" {
+    const directory = File.createTemporaryDirectory(prefix: "torb-format-test-").expect("a temporary directory")
+    const path = "{directory}/main.trb"
+    File.writeText(path, callees).expect("the file")
+    const code = runFormat(FormatOptions(check: false, paths: [path])).expect("formatted")
+    const text = File.readText(path).expect("the file")
+    File.removeDirectory(directory).expect("the directory removed")
+    assert(code == 0)
+    assert text.contains("\n  debugger.stop(event)\n")
+    assert text.contains("\ntracer.stop(Event(\"z\"))\n")
+    assert text.contains("\n  local event\n")
+    assert text.contains("\nshout Event(\"z\")\n")
   }
 }
 

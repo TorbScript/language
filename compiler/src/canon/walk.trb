@@ -18,11 +18,36 @@ public type CallSite {
   call: Expression
   inCommandPosition: Bool
   /**
-   * The callee names a field or a constant of the `type`, `trait` or `extend` this call is in, so the parentheses
+   * The callee names a field or a constant of the `type`, `trait` or `extend` this call is in - or, where the type
+   * checker was asked ([Callees]), the checker did not resolve it to something that is no field - so the parentheses
    * decide what the call **means**: a command writes the field ("property commands"), and "calling a function in a
    * field always needs parentheses". Such a call is left exactly as it is written.
    */
   calleeCouldBeAField: Bool
+}
+
+/**
+ * What the type checker knows about the callees of one source text, which the syntax tree alone cannot say: whether
+ * `debugger.stop` names a method or a field that holds a function. The two are written alike, and only the call of the
+ * method may become a command - `debugger.stop event` of a field is an error (`compiler/CONTRIBUTING.md`, "property
+ * commands"). With it, the rule `calls` rewrites only a call whose callee the checker resolved to something that is no
+ * field; one it resolved to a field, and one it did not resolve at all (a body it did not check, a name after an
+ * error), is left exactly as it is written.
+ *
+ * A call is named by its place in the order of [walk], not by its span: every edit of the canon and of the layout
+ * keeps the syntax tree, so the n-th call of the text the checker read is the n-th call of every text the formatter
+ * makes of it, however far the spans move.
+ */
+public type Callees {
+  /** How many calls the walk found in the text the checker read. A text with another number is not that tree */
+  calls: Int
+  /** The place in the walk of every call whose callee the checker resolved to something that is no field */
+  resolved: Set<Int>
+
+  /** A text the checker did not read: no callee is known, so the rule `calls` leaves every call as it is written. */
+  static fn nothingKnown(): Self {
+    Self(-1, Set.of())
+  }
 }
 
 /**
@@ -85,9 +110,22 @@ public type OperatorRun {
   operands: List<Int>
 }
 
-public fn walk(file: SourceFile): Sites {
+/**
+ * The sites of a file. With [Callees], every call whose callee the checker did not resolve to something that is no
+ * field is marked as one whose callee could be a field - and all of them are where the text is not the tree the
+ * checker read.
+ */
+public fn walk(file: SourceFile, callees: Callees? = None): Sites {
   var sites = Sites()
   walkStatements sites, [], file.statements
+  if const Some(known) = callees {
+    const isSameTree = known.calls == sites.calls.length()
+    for (index, site) in sites.calls.indexed() {
+      if !isSameTree || !known.resolved.contains(index) {
+        sites.calls[index] = site.copy calleeCouldBeAField: true
+      }
+    }
+  }
   sites
 }
 

@@ -37,7 +37,7 @@ use Token, TokenKind, Keyword from "../syntax/token"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use Argument, ExpressionKind, CallStyle from "../syntax/ast"
-use walk, Sites, CallSite, ChainSite, OperatorRun from "../canon/walk"
+use walk, Callees, Sites, CallSite, ChainSite, OperatorRun from "../canon/walk"
 use Replacement from "../canon/edit"
 use becomesCommand from "../canon/calls"
 use rewrite, Rule from "../canon/command"
@@ -56,12 +56,13 @@ const maximumJoinRounds = 8
 /**
  * A laid-out source fitted into the width: what the formatter broke and fits again is joined, round by round, then
  * every line that is too long is broken where that makes it fit, and the result is laid out again. `None` where a
- * step does not parse, which is a bug of the formatter.
+ * step does not parse, which is a bug of the formatter. [Callees] is what the type checker knows about the callees of
+ * the calls, which decides which call the canon writes as a command once it is joined.
  */
-public fn fitted(source: String): String? {
+public fn fitted(source: String, callees: Callees? = None): String? {
   const lineEnding = lineEndingOf source
   var text = source
-  var sheet = sheetOf(text)?
+  var sheet = sheetOf(text, callees)?
   var round = 0
   loop {
     const joins = joinEdits sheet
@@ -69,15 +70,15 @@ public fn fitted(source: String): String? {
       break
     }
     text = laidOut(applied(text, joins, lineEnding))?
-    sheet = sheetOf(text)?
+    sheet = sheetOf(text, callees)?
     round = round + 1
   }
   // A call that joined is written as a command where the canon says so before the lines are measured for breaking
   if round > 0 {
-    const commands = rewrite(text, [Rule.Calls]).text
+    const commands = rewrite(text, [Rule.Calls], callees).text
     if commands != text {
       text = laidOut(commands)?
-      sheet = sheetOf(text)?
+      sheet = sheetOf(text, callees)?
     }
   }
   const breaks = breakEdits sheet
@@ -256,7 +257,7 @@ type Measure {
 }
 
 /** The sheet of a laid-out source, or `None` where it does not parse without a diagnostic. */
-fn sheetOf(source: String): Sheet? {
+fn sheetOf(source: String, callees: Callees?): Sheet? {
   const text = SourceText.of source
   const parsed = parse text
   if !parsed.diagnostics.isEmpty() {
@@ -269,7 +270,7 @@ fn sheetOf(source: String): Sheet? {
       tokens.append token
     }
   }
-  const sites = walk parsed.file
+  const sites = walk parsed.file, callees
   const marks = marksOf tokens, sites.infixOperators, sites.prefixOperators, sites.implicitMembers, sites.closureArrows
   var measure = Measure()
   for token in tokens {
