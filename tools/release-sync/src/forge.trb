@@ -1,9 +1,9 @@
 /**
- * The calls this program makes to the forge: the release of a tag, and the newest stable release, each with its
- * assets - through the forge's REST API, with the read-only token where there is one. The forge is Forgejo at
+ * The calls this program makes to the forge: the release of a tag, and the newest releases, each with its assets -
+ * through the forge's REST API, with the read-only token where there is one. The forge is Forgejo at
  * git.torb.dev (docs/design/RELEASE.md, "The forge"); GitHub, which mirrors it, answers the same two questions with
  * nearly the same JSON, and the differences are the members of [Forge]. What the webhook sends is not trusted for its
- * asset list; this call is always made instead, once a webhook or the periodic check names a tag to look at.
+ * asset list: the API is always asked instead - for the webhook's tag, and by the periodic check for the list.
  */
 
 use Uri from "std/uri"
@@ -65,6 +65,18 @@ public type Forge {
   }
 
   /**
+   * The API's address of the newest `limit` releases, drafts left out: Forgejo filters them itself (`draft=false`),
+   * GitHub shows them only to a token that may push, which this program never has.
+   */
+  fn recentReleasesUrl(url: String, repository: String, limit: Int): String {
+    const releases = releasesUrl url, repository
+    match self {
+      .Forgejo => "{releases}?draft=false&limit={limit}"
+      .GitHub => "{releases}?per_page={limit}"
+    }
+  }
+
+  /**
    * Where an asset's bytes are read: the download URL on Forgejo, which a token opens for a private repository too,
    * and the asset's API URL on GitHub, whose download URL answers a private repository's reader with a login page.
    */
@@ -120,6 +132,10 @@ public type ReleaseAsset {
 public type ReleaseInfo {
   tagName: String
   assets: List<ReleaseAsset> = []
+  /** A release only the repository's writers see yet: the workflows publish one once its last asset is up. */
+  draft: Bool = false
+  /** Marked as not for everyone - every nightly is - which keeps it out of the newest stable release. */
+  prerelease: Bool = false
 }
 
 /** What the forge's "release published" webhook posts: the action, and the same release shape as the API. */
@@ -137,12 +153,18 @@ public type ReleaseSource {
 
   /** `GET .../releases/tags/<tag>`. */
   fn release(tag: String): Task<Result<ReleaseInfo, String>> {
-    fetchReleaseAt("{forge.releasesUrl(url, repository)}/tags/{tag}", forge, token).await()
+    const text = fetchTextAt("{forge.releasesUrl(url, repository)}/tags/{tag}", forge, token).await()?
+    parseRelease text
   }
 
-  /** `GET .../releases/latest`: the newest release that is neither a draft nor a prerelease. */
-  fn latestRelease(): Task<Result<ReleaseInfo, String>> {
-    fetchReleaseAt("{forge.releasesUrl(url, repository)}/latest", forge, token).await()
+  /**
+   * `GET .../releases`, the newest `limit` releases, newest first - drafts left out by the forge where it can be asked
+   * to, and never shown to a token that cannot write anyway. A repository without a release answers an empty list,
+   * where `.../releases/latest` would answer `404`.
+   */
+  fn recentReleases(limit: Int): Task<Result<List<ReleaseInfo>, String>> {
+    const text = fetchTextAt(forge.recentReleasesUrl(url, repository, limit), forge, token).await()?
+    parseReleases text
   }
 }
 
@@ -158,7 +180,13 @@ public fn parseRelease(text: String): Result<ReleaseInfo, String> {
   json.decode<ReleaseInfo>(text).mapError({ _.show() })
 }
 
-fn fetchReleaseAt(url: String, forge: Forge, token: String?): Task<Result<ReleaseInfo, String>> {
+/** A list of releases as the API answers it. */
+public fn parseReleases(text: String): Result<List<ReleaseInfo>, String> {
+  json.decode<List<ReleaseInfo>>(text).mapError({ _.show() })
+}
+
+/** The body of a successful `GET` of the API; `Fail` names the address and the status of any other answer. */
+fn fetchTextAt(url: String, forge: Forge, token: String?): Task<Result<String, String>> {
   match Uri.tryFrom(url) {
     Fail(error) => Fail error.show()
     Ok(uri) => {
@@ -168,10 +196,7 @@ fn fetchReleaseAt(url: String, forge: Forge, token: String?): Task<Result<Releas
           if !response.status.isSuccess() {
             Fail "{url}: {response.status.show()}"
           } else {
-            match response.body.text().await() {
-              Fail(error) => Fail error.show()
-              Ok(text) => parseRelease text
-            }
+            response.body.text().await().mapError({ _.show() })
           }
         }
       }

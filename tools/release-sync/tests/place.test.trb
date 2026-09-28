@@ -1,6 +1,8 @@
 /**
- * Tests for `place` of `src/sync.trb` in a temporary directory: the assets moved under `download/<version>/`, the list
- * of versions rewritten with the newest first, and `latest` a symbolic link to a stable release and to nothing else.
+ * Tests for `place` of `src/sync.trb` in a temporary directory: the download's directory renamed whole to
+ * `download/<version>/`, the list of versions rewritten with the newest first, `latest` a symbolic link to a stable
+ * release and to nothing else - and a placement that fails leaving nothing under the version's name, so the periodic
+ * check tries it again.
  *
  * A test body is no task and cannot `await()`, so every placement runs at the top of the file and the tests compare
  * what it left on the disk.
@@ -8,29 +10,68 @@
 
 use test, group from "std/test"
 use OperatingSystem from "std/core"
-use File from "std/fs"
+use File, IoError from "std/fs"
 use Sha256 from "std/digest"
 use ReleaseInfo, ReleaseAsset from "../src/forge"
-use place, verifyHashes from "../src/sync"
+use defaultScratchOf from "../src/config"
+use place, verifyHashes, isPlaced, describedFailure, removeLeftovers from "../src/sync"
 
 const root = File.createTemporaryDirectory(prefix: "release-sync-test-").expect("a temporary directory")
 
-/** A download directory holding one archive and the sums, as `downloadRelease` leaves it. */
-fn downloaded(name: String): String {
-  const directory = "{root}/{name}"
+/** A download directory below `base` holding one archive and the sums, as `downloadRelease` leaves it. */
+fn downloadedInto(base: String, name: String): String {
+  const directory = "{base}/{name}"
   File.createDirectory(directory).expect("the download directory")
   File.writeText("{directory}/torb.tar.gz", "archive of {name}").expect("an archive")
   File.writeText("{directory}/SHA256SUMS", "sums of {name}").expect("the sums")
   directory
 }
 
+/** [downloadedInto] the root of this file. */
+fn downloaded(name: String): String {
+  downloadedInto root, name
+}
+
 const assets = [
   ReleaseAsset("torb.tar.gz", "https://example.test/a"),
   ReleaseAsset("SHA256SUMS", "https://example.test/b"),
 ]
+const placedBefore = isPlaced root, "nightly-20260926"
 const nightly = place(ReleaseInfo("nightly-20260926", assets), downloaded("nightly"), root).await()
+const placedAfter = isPlaced root, "nightly-20260926"
 const stable = place(ReleaseInfo("v0.3.0", assets), downloaded("stable"), root).await()
 const versions = File.readText "{root}/download/versions.txt"
+
+// An older stable release placed after a newer one: a patch of an earlier line
+const older = place(ReleaseInfo("v0.2.5", assets), downloaded("older"), root).await()
+const versionsAfterOlder = File.readText "{root}/download/versions.txt"
+
+// An empty directory under the version's name, as a placement left one before placing was a single rename
+File.createDirectory("{root}/download/nightly-20260927").expect("the empty directory of an earlier placement")
+const emptyCountsAsPlaced = isPlaced root, "nightly-20260927"
+const overEmpty = place(ReleaseInfo("nightly-20260927", assets), downloaded("over-empty"), root).await()
+
+// A placement whose versions.txt cannot be written: a directory is in its place
+const unlisted = File.createTemporaryDirectory(prefix: "release-sync-test-").expect("a second root")
+File.createDirectory("{unlisted}/download/versions.txt/inside").expect("a directory where versions.txt belongs")
+const unlistedDownload = downloadedInto unlisted, "download-attempt"
+const failedList = place(ReleaseInfo("nightly-20260928", assets), unlistedDownload, unlisted).await()
+
+// A stable placement whose `latest` cannot be pointed at it: a directory with something in it is in its place
+const unlinked = File.createTemporaryDirectory(prefix: "release-sync-test-").expect("a third root")
+File.createDirectory("{unlinked}/download/latest/inside").expect("a directory where latest belongs")
+File.writeText("{unlinked}/download/versions.txt", "0.1.0 stable\n").expect("the list of an earlier release")
+const unlinkedDownload = downloadedInto unlinked, "download-attempt"
+const failedLink = place(ReleaseInfo("v0.4.0", assets), unlinkedDownload, unlinked).await()
+
+// What attempts that did not end leave behind, and what is nobody's leftover
+const leftovers = File.createTemporaryDirectory(prefix: "release-sync-test-").expect("a fourth root")
+const scratch = "{leftovers}/download/.incoming"
+File.createDirectory("{scratch}/release-sync-0.1.0-abcdef/inner").expect("an attempt's directory")
+File.createDirectory("{scratch}/somebody-else").expect("a directory release-sync did not make")
+File.createDirectory("{leftovers}/download/.0.1.0.replaced").expect("a version's directory set aside")
+File.createDirectory("{leftovers}/download/0.1.0").expect("a placed version")
+const removed = removeLeftovers leftovers, scratch
 
 // The hashes of a download, read from the files themselves chunk by chunk
 const checked = downloaded "checked"
@@ -45,31 +86,101 @@ File.writeText("{checked}/torb.tar.gz", "another archive").expect("a changed arc
 const differing = verifyHashes(ReleaseInfo("v0.3.1", archiveOnly), checked).await()
 
 group "placing a release" {
-  test "the assets are moved under the version's directory" {
+  test "the download's directory becomes the version's, whole" {
     assert(nightly == Ok(void))
-    assert(File.readText("{root}/download/nightly-20260926/torb.tar.gz") == Ok("archive of nightly"))
-    assert(File.list("{root}/nightly") == Ok([]))
+    assert(File.readText("{root}/download/nightly-20260926/torb.tar.gz") == "archive of nightly")
+    assert(File.list("{root}/download/nightly-20260926") == ["SHA256SUMS", "torb.tar.gz"])
+    assert(!File.exists("{root}/nightly"))
   }
 
-  test "the newest version comes first in versions.txt" {
-    assert(versions == Ok("0.3.0 stable\nnightly-20260926 nightly\n"))
+  test "a version counts as placed once its directory holds SHA256SUMS" {
+    assert(!placedBefore)
+    assert placedAfter
   }
 
-  test "latest is a link to the stable release, where the system lets a program make one" {
+  test "the version's directory can be read by the web server, which is another user" {
+    if OperatingSystem.current != .Windows {
+      const mode = File.metadata("{root}/download/nightly-20260926").expect("the version's directory").permissions.mode
+      assert(mode & 0b000_101_101 == 0b000_101_101)
+    }
+  }
+
+  test "latest is a link to the stable release, and the newest version comes first in versions.txt" {
     match stable {
       Ok(_) => {
-        assert(File.symbolicLinkTarget("{root}/download/latest") == Ok("0.3.0"))
-        assert(File.readText("{root}/download/latest/SHA256SUMS") == Ok("sums of stable"))
-        assert(!File.exists("{root}/download/.latest-0.3.0"))
+        assert(File.symbolicLinkTarget("{root}/download/latest") == "0.3.0")
+        assert(File.readText("{root}/download/latest/SHA256SUMS") == "sums of stable")
+        assert File.linkMetadata("{root}/download/.latest-0.3.0").isError()
+        assert(versions == "0.3.0 stable\nnightly-20260926 nightly\n")
       }
       Fail(message) => {
-        // Windows lets a program create one only in developer mode or with the privilege to
+        // Windows lets a program create one only in developer mode or with the privilege to - and a placement that
+        // cannot point latest at its release is undone
         assert(OperatingSystem.current == .Windows)
         assert message.contains("not permitted")
+        assert(!File.exists("{root}/download/0.3.0"))
+        assert(versions == "nightly-20260926 nightly\n")
       }
     }
   }
 
+  test "an older stable release placed later is listed below the newer one, and latest stays at the newer" {
+    if stable.isOk() {
+      assert(older == Ok(void))
+      assert(File.symbolicLinkTarget("{root}/download/latest") == "0.3.0")
+      assert(versionsAfterOlder == "0.3.0 stable\n0.2.5 stable\nnightly-20260926 nightly\n")
+    }
+  }
+
+  test "an empty directory an earlier placement left is not placed, and a placement replaces it" {
+    assert(!emptyCountsAsPlaced)
+    assert(overEmpty == Ok(void))
+    assert(File.readText("{root}/download/nightly-20260927/torb.tar.gz") == "archive of over-empty")
+    assert(!File.exists("{root}/download/.nightly-20260927.replaced"))
+  }
+}
+
+group "a placement that fails" {
+  test "where versions.txt cannot be written, nothing is left under the version's name" {
+    assert failedList.isError()
+    assert(!File.exists("{unlisted}/download/nightly-20260928"))
+    assert(!isPlaced(unlisted, "nightly-20260928"))
+    // The download is back where it was, for the attempt to remove
+    assert(File.readText("{unlistedDownload}/torb.tar.gz") == "archive of download-attempt")
+  }
+
+  test "where latest cannot be pointed at the release, versions.txt is put back as well" {
+    assert failedLink.isError()
+    assert(!File.exists("{unlinked}/download/0.4.0"))
+    assert(File.readText("{unlinked}/download/versions.txt") == "0.1.0 stable\n")
+    assert File.linkMetadata("{unlinked}/download/.latest-0.4.0").isError()
+    assert(File.list("{unlinked}/download/latest") == ["inside"])
+    assert(File.readText("{unlinkedDownload}/SHA256SUMS") == "sums of download-attempt")
+  }
+
+  test "a rename across file systems names the variable that fixes it" {
+    const message = describedFailure IoError("/tmp/release-sync-0.3.0-x", "Invalid cross-device link"), "/srv/torb"
+    assert message.contains("Invalid cross-device link")
+    assert message.contains("RELEASE_SYNC_SCRATCH")
+    assert message.contains("/srv/torb/download/.incoming")
+    assert(
+      describedFailure(IoError("/srv/torb/download", "Permission denied"), "/srv/torb")
+        == "/srv/torb/download: Permission denied",
+    )
+  }
+
+  test "the scratch directory is hidden inside the downloads unless the environment says otherwise" {
+    assert(defaultScratchOf("/srv/torb") == "/srv/torb/download/.incoming")
+  }
+
+  test "what attempts that did not end left is removed, and nothing else" {
+    assert(removed == ["{scratch}/release-sync-0.1.0-abcdef", "{leftovers}/download/.0.1.0.replaced"])
+    assert(File.list(scratch) == ["somebody-else"])
+    assert(File.list("{leftovers}/download") == [".incoming", "0.1.0"])
+  }
+}
+
+group "verifying a download" {
   test "an archive whose hash is the listed one passes, and a changed one does not" {
     assert(matching == Ok(void))
     match differing {
@@ -77,9 +188,13 @@ group "placing a release" {
       Fail(message) => assert message.contains("expected sha256 {archiveHash}")
     }
   }
+}
 
-  test "the temporary directory is removed again" {
-    File.removeDirectory(root).expect("the root removed")
-    assert(!File.exists(root))
+group "cleaning up" {
+  test "the temporary directories are removed again" {
+    for directory in [root, unlisted, unlinked, leftovers] {
+      File.removeDirectory(directory).expect("a root removed")
+      assert(!File.exists(directory))
+    }
   }
 }

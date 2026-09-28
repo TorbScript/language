@@ -8,31 +8,46 @@
  * `writeTextAtomically` for `versions.txt`, so the web server in front never reads half a list. The signature is checked
  * by calling the `cosign` binary, never reimplemented: **a release with no `cosign` on the machine, no public key to check
  * it against, or a signature that does not verify, is refused and nothing is placed.**
+ *
+ * **A directory under the version's name is always complete.** A release is downloaded into a directory of its own in
+ * the scratch directory, which is on the file system of `<root>/download/` (`<root>/download/.incoming` unless
+ * `RELEASE_SYNC_SCRATCH` says otherwise), and once it is verified that whole directory is renamed to
+ * `<root>/download/<version>` in one step: the web server finds the version complete or not at all, never an empty or a
+ * half-filled directory. A placement that fails after the rename - `versions.txt` or `latest` cannot be written - is
+ * undone, so the periodic check, which asks whether the version is placed (`isPlaced`), tries it again; and whatever
+ * an attempt leaves in the scratch directory is removed when it ends, and when the program starts.
  */
 
-use File, IoError from "std/fs"
+use File, IoError, Permissions from "std/fs"
 use Sha256 from "std/digest"
 use Process from "std/process"
-use Config from "./config"
+use Config, defaultScratchOf from "./config"
 use ReleaseInfo, ReleaseAsset, ReleaseSource from "./forge"
 use expectedHash, isSignature from "./verify"
+use releasesToSync, listedVersions, newestStableIn from "./versions"
+public use versionOf, channelOf from "./versions"
 
-/** `v0.2.0` -> `0.2.0`; a nightly's tag (`nightly-20260925`) has no `v` and is already the version. */
-public fn versionOf(tag: String): String {
-  if tag.startsWith("v") {
-    tag.sliceBytes 1, tag.byteLength()
-  } else {
-    tag
-  }
+/** The start of the name of one attempt's directory in the scratch directory: `release-sync-0.2.0-...`. */
+const attemptPrefix = "release-sync-"
+
+/** Where a version's old directory waits while its new one is renamed in: `<root>/download/.<version>.replaced`. */
+const replacedSuffix = ".replaced"
+
+/**
+ * Whether `<root>/download/<version>/` is there and holds `SHA256SUMS` - the periodic check's "nothing to do". A
+ * directory under the version's name is complete since placing renames it there whole, and asking for `SHA256SUMS`,
+ * which every placed release has, also sees through the empty directory a failed placement left before it did.
+ */
+public fn isPlaced(root: String, version: String): Bool {
+  File.exists "{root}/download/{version}/SHA256SUMS"
 }
 
-/** `stable` for a tagged release, `nightly` for `nightly-YYYYMMDD` - the same two channels `versions.txt` lists. */
-public fn channelOf(version: String): String {
-  if version.startsWith("nightly-") {
-    "nightly"
-  } else {
-    "stable"
-  }
+/**
+ * Of the newest releases the forge lists, the ones the periodic check syncs: those [releasesToSync] chooses - the
+ * newest stable release and the nightlies of the last thirty days - that are not placed yet, oldest first.
+ */
+public fn missingReleases(releases: List<ReleaseInfo>, root: String): List<ReleaseInfo> {
+  releasesToSync(releases).filter({ !isPlaced(root, versionOf(_.tagName)) }).toList()
 }
 
 /**
@@ -174,41 +189,95 @@ public fn verifySignature(directory: String, config: Config, tag: String): Task<
 }
 
 /**
- * Moves every file of `directory` into `<root>/download/<version>/`, then updates `versions.txt` (the version's old
- * line, if any, replaced) and, for a stable release only, `latest` (a symlink to the version's directory - a nightly
- * has no "latest", only `/docs/nightly/` on the site, which this program does not touch).
+ * Renames the verified download `sourceDirectory` - holding the release's assets and nothing else - to
+ * `<root>/download/<version>` in one step, then updates `versions.txt` (the version's old line, if any, replaced) and,
+ * for the newest stable release only, `latest` (a symlink to the version's directory - a nightly has no "latest", only
+ * `/docs/nightly/` on the site, which this program does not touch).
+ *
+ * A directory already under the version's name - the release published again, or an empty one a placement left before
+ * placing was one step - is set aside first and removed once the new one is in place. Where `versions.txt` or `latest`
+ * cannot be written, everything is undone: the download goes back to `sourceDirectory`, the old directory and the old
+ * `versions.txt` come back, and the periodic check tries again later.
  */
 public fn place(release: ReleaseInfo, sourceDirectory: String, root: String): Task<Result<Void, String>> {
   const version = versionOf release.tagName
-  const channel = channelOf version
-  const destination = "{root}/download/{version}"
-  placed(release, sourceDirectory, root, destination, version, channel).mapError({ _.show() })
+  placed(sourceDirectory, root, version, channelOf(version)).mapError({ describedFailure _, root })
+}
+
+/**
+ * What a failed placement says: the failure itself, and for a rename across file systems what to change - the scratch
+ * directory has to be on the file system of `<root>/download/`, because a release is placed by one rename, and no
+ * system renames across file systems.
+ */
+public fn describedFailure(problem: IoError, root: String): String {
+  if !problem.isCrossDevice() {
+    return problem.show()
+  }
+  "{problem.show()}: the scratch directory is on another file system than {root}/download, and a release is placed by "
+    + "renaming its directory there in one step - set RELEASE_SYNC_SCRATCH to a directory on that file system, "
+    + "or leave it unset for {defaultScratchOf(root)}"
 }
 
 /** [place], with every step a function of `std/fs` that fails with an `IoError`. */
-fn placed(
-  release: ReleaseInfo,
-  sourceDirectory: String,
-  root: String,
-  destination: String,
-  version: String,
-  channel: String,
-): Result<Void, IoError> {
-  File.createDirectory(destination)?
-  for asset in release.assets {
-    File.rename("{sourceDirectory}/{asset.name}", "{destination}/{asset.name}")?
+fn placed(sourceDirectory: String, root: String, version: String, channel: String): Result<Void, IoError> {
+  const download = "{root}/download"
+  const destination = "{download}/{version}"
+  const replaced = "{download}/.{version}{replacedSuffix}"
+  File.createDirectory(download)?
+  // The download's directory was its owner's alone while nothing in it was verified; the web server reads it now
+  File.setPermissions(sourceDirectory, Permissions(0b111_101_101))?
+  // What a placement stopped half way left: the next one sets its own old directory aside there
+  File.removeDirectory(replaced)?
+  const replacing = File.linkMetadata(destination).isOk()
+  if replacing {
+    File.rename(destination, replaced)?
   }
-  updateVersionsList("{root}/download/versions.txt", version, channel)?
-  if channel == "stable" {
-    pointLatestAt root, version
-  } else {
-    Ok void
+  if const Fail(problem) = File.rename(sourceDirectory, destination) {
+    if replacing {
+      const _ = File.rename replaced, destination
+    }
+    return Fail problem
   }
+  if const Fail(problem) = listedAndLinked(root, version, channel) {
+    const _ = File.rename destination, sourceDirectory
+    if replacing {
+      const _ = File.rename replaced, destination
+    }
+    return Fail problem
+  }
+  const _ = File.removeDirectory replaced
+  Ok void
+}
+
+/**
+ * `versions.txt` rewritten with `version` in it (`listedVersions`: each channel newest first) and, where it is the
+ * newest stable release, `latest` pointed at it; where `latest` fails, `versions.txt` is put back as it was, so a
+ * failure changes neither.
+ */
+fn listedAndLinked(root: String, version: String, channel: String): Result<Void, IoError> {
+  const listPath = "{root}/download/versions.txt"
+  const before = File.readText(listPath).ok()
+  const after = listedVersions(before ?? "", version, channel)
+  File.writeTextAtomically(listPath, after)?
+  // `latest` is the newest stable release: an older one placed later - a patch of an earlier line, or a release the
+  // periodic check caught up with - leaves it where it is
+  if channel != "stable" || newestStableIn(after) != version {
+    return Ok void
+  }
+  if const Fail(problem) = pointLatestAt(root, version) {
+    const _ = match before {
+      Some(text) => File.writeTextAtomically listPath, text
+      None => File.remove listPath
+    }
+    return Fail problem
+  }
+  Ok void
 }
 
 /**
  * `<root>/download/latest` made a symbolic link to `version`: a new link beside it, renamed over the old one in one
- * step, so a request never finds `latest` missing - which `ln -sfn` cannot promise, because it removes the old link first.
+ * step, so a request never finds `latest` missing - which `ln -sfn` cannot promise, because it removes the old link
+ * first. A link that cannot be renamed there is removed again.
  */
 fn pointLatestAt(root: String, version: String): Result<Void, IoError> {
   const staging = "{root}/download/.latest-{version}"
@@ -216,50 +285,67 @@ fn pointLatestAt(root: String, version: String): Result<Void, IoError> {
     File.remove(staging)?
   }
   File.createSymbolicLink(staging, version)?
-  File.rename staging, "{root}/download/latest"
+  if const Fail(problem) = File.rename(staging, "{root}/download/latest") {
+    const _ = File.remove staging
+    return Fail problem
+  }
+  Ok void
 }
 
-/** Rewrites `path`: `version`'s previous line (if any) removed, then `"<version> <channel>"` put at the top. */
-fn updateVersionsList(path: String, version: String, channel: String): Result<Void, IoError> {
-  const before = File.readText(path).ok() ?? ""
-  var kept: List<String> = []
-  for line in before.lines() {
-    if line.trim().isEmpty() {
-      continue
-    }
-    const first = line.trim().split(" ").first() ?? ""
-    if first != version {
-      kept.append line
+/**
+ * What attempts that did not end left behind - the program was stopped while it downloaded or placed: every
+ * `release-sync-*` directory in `scratch` and every `.<version>.replaced` directory in `<root>/download/`. Run when the
+ * program starts, before any attempt of its own; the names of what was removed, for the log.
+ */
+public fn removeLeftovers(root: String, scratch: String): Result<List<String>, IoError> {
+  var removed: List<String> = []
+  if File.isDirectory(scratch) {
+    for name in File.list(scratch)? {
+      if name.startsWith(attemptPrefix) {
+        File.removeDirectory("{scratch}/{name}")?
+        removed.append "{scratch}/{name}"
+      }
     }
   }
-  const rebuilt = ["{version} {channel}", ...kept].joined(separator: "\n")
-  File.writeTextAtomically path, "{rebuilt}\n"
+  const download = "{root}/download"
+  if File.isDirectory(download) {
+    for name in File.list(download)? {
+      if name.startsWith(".") && name.endsWith(replacedSuffix) {
+        File.removeDirectory("{download}/{name}")?
+        removed.append "{download}/{name}"
+      }
+    }
+  }
+  removed
 }
 
 /**
  * The whole thing, for one release: download, verify, place - `Fail` at the first step that does not check out. The
- * download goes to `config.scratch` (the container's own `/tmp`), never below `<root>`, which the site serves: nothing
- * unverified is ever reachable from outside.
+ * download goes to a directory of its own in `config.scratch`, a hidden directory the site never serves
+ * (`tools/deploy/nginx.conf`) and which only its owner may read until it is verified, so nothing unverified is ever
+ * reachable from outside. Whatever the attempt leaves there - a refused download, a placement undone - is removed when
+ * it ends; a placed release has been renamed out of it.
  */
 public fn syncRelease(release: ReleaseInfo, config: Config): Task<Result<Void, String>> {
-  const scratch = "{config.scratch}/release-sync-{versionOf(release.tagName)}"
-  match run("rm", ["-rf", scratch]).await() {
-    Fail(message) => { return Fail message }
-    Ok(_) => void
+  const version = versionOf release.tagName
+  const created = File.createDirectory(config.scratch).flatMap({
+    File.createTemporaryDirectory prefix: "{attemptPrefix}{version}-", inside: config.scratch
+  })
+  const attempt = match created {
+    Ok(path) => path
+    Fail(problem) => {
+      return Fail "no directory for the download in {config.scratch} (RELEASE_SYNC_SCRATCH): {problem.show()}"
+    }
   }
-  match downloadRelease(release, config.source(), scratch).await() {
-    Fail(message) => { return Fail message }
-    Ok(_) => void
-  }
-  match verifyHashes(release, scratch).await() {
-    Fail(message) => { return Fail message }
-    Ok(_) => void
-  }
-  match verifySignature(scratch, config, release.tagName).await() {
-    Fail(message) => { return Fail message }
-    Ok(_) => void
-  }
-  const placed = place(release, scratch, config.root).await()
-  const _ = run("rm", ["-rf", scratch]).await()
-  placed
+  const outcome = fetchedAndPlaced(release, config, attempt).await()
+  const _ = File.removeDirectory attempt
+  outcome
+}
+
+/** [syncRelease] in the directory of one attempt. */
+fn fetchedAndPlaced(release: ReleaseInfo, config: Config, directory: String): Task<Result<Void, String>> {
+  downloadRelease(release, config.source(), directory).await()?
+  verifyHashes(release, directory).await()?
+  verifySignature(directory, config, release.tagName).await()?
+  place(release, directory, config.root).await()
 }

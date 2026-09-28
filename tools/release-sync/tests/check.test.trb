@@ -1,0 +1,113 @@
+/**
+ * The periodic check against a fake forge over loopback: a server that answers the releases of two repositories the
+ * way Forgejo answers them - one with a month of nightlies, a draft and two stable releases, one with no release at
+ * all - and a `404` for every other path. What the check asks the forge, and which releases it would sync into a
+ * download directory where one of them is placed already, is compared.
+ *
+ * A test body is no task and cannot `await()`, so the calls run at the top of the file and the tests compare what they
+ * answered.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use SocketAddress, IpAddress from "std/network"
+use Server, Request, Response, Status, HttpError, Headers, Body from "std/http"
+use Forge, ReleaseSource from "../src/forge"
+use missingReleases from "../src/sync"
+
+/** What the fake forge was asked: the path and the query of every request, in order. */
+shared type Asked {
+  var requests: List<String> = []
+}
+
+const asked = Asked()
+
+/** One release as Forgejo lists it, cut down to what the check reads and a little around it. */
+fn releaseJson(tag: String, draft: Bool, prerelease: Bool): String {
+  const url = "https://forge.example.test/download/{tag}/SHA256SUMS"
+  const asset = "\{\"name\":\"SHA256SUMS\",\"browser_download_url\":\"{url}\"\}"
+  const flags = "\"draft\":{draft},\"prerelease\":{prerelease}"
+  "\{\"id\":1,\"tag_name\":\"{tag}\",\"name\":\"{tag}\",{flags},\"assets\":[{asset}]\}"
+}
+
+/** The newest releases of `torbscript/language`, newest first, as the forge lists them. */
+fn languageReleases(): String {
+  const releases = [
+    releaseJson("nightly-20260929", draft: true, prerelease: true),
+    releaseJson("nightly-20260928", draft: false, prerelease: true),
+    releaseJson("nightly-20260927", draft: false, prerelease: true),
+    releaseJson("v0.2.0", draft: false, prerelease: false),
+    releaseJson("nightly-20260826", draft: false, prerelease: true),
+    releaseJson("v0.1.0", draft: false, prerelease: false),
+  ]
+  "[{releases.joined(separator: ",")}]"
+}
+
+fn forge(request: Request): Task<Result<Response, HttpError>> {
+  asked.requests.append "{request.path()}?{request.query() ?? ""}"
+  var headers = Headers()
+  headers.set "Content-Type", "application/json"
+  const text = match request.path() {
+    "/api/v1/repos/torbscript/language/releases" => languageReleases()
+    "/api/v1/repos/torbscript/empty/releases" => "[]"
+    _ => { return Response.text "\{\"message\":\"not found\"\}", status: Status.notFound }
+  }
+  Response Status.ok, headers, Body.from(text)
+}
+
+var server = Server.listen(SocketAddress(IpAddress.loopback, 0), forge)?
+var serving = server.serve()
+const base = "http://{server.localAddress()}"
+
+const listed = ReleaseSource(Forge.Forgejo, base, "torbscript/language", token: None).recentReleases(50).await()
+const empty = ReleaseSource(Forge.Forgejo, base, "torbscript/empty", token: None).recentReleases(50).await()
+const missing = ReleaseSource(Forge.Forgejo, base, "torbscript/missing", token: None).recentReleases(50).await()
+serving.cancel()
+
+// A download directory where one of the nightlies is placed already, and another one only half, the way a placement
+// left it before placing was one rename
+const root = File.createTemporaryDirectory(prefix: "release-sync-check-test-").expect("a temporary directory")
+File.createDirectory("{root}/download/nightly-20260927").expect("a placed nightly")
+File.writeText("{root}/download/nightly-20260927/SHA256SUMS", "sums").expect("its sums")
+File.createDirectory("{root}/download/0.2.0").expect("an empty directory under the stable version")
+const toSync = missingReleases(listed.ok() ?? [], root)
+
+group "the periodic check" {
+  test "the forge is asked for its newest releases without the drafts" {
+    assert(asked.requests.first() == "/api/v1/repos/torbscript/language/releases?draft=false&limit=50")
+  }
+
+  test "the releases of the forge are read with their tags, drafts and assets" {
+    match listed {
+      Ok(releases) => {
+        assert(releases.length() == 6)
+        assert releases[0].draft
+        assert(releases[1].tagName == "nightly-20260928")
+        assert releases[1].prerelease
+        assert(!releases[3].prerelease)
+        assert(releases[3].assets[0].name == "SHA256SUMS")
+      }
+      Fail(problem) => panic "the releases were not read: {problem}"
+    }
+  }
+
+  test "every release that is not placed yet is synced, the nightlies and the newest stable one, oldest first" {
+    assert(toSync.map({ _.tagName }).toList() == ["nightly-20260928", "v0.2.0"])
+  }
+
+  test "a repository without a release is nothing to sync, not a failure" {
+    assert(empty == [])
+  }
+
+  test "a repository the forge does not know is a failure that names the address" {
+    match missing {
+      Ok(_) => panic "a missing repository answered releases"
+      Fail(problem) => assert problem.contains("/api/v1/repos/torbscript/missing/releases")
+    }
+  }
+
+  test "the temporary directory is removed again" {
+    File.removeDirectory(root).expect("the root removed")
+    assert(!File.exists(root))
+  }
+}

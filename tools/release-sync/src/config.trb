@@ -36,10 +36,13 @@ public type Config {
   /** How often the periodic check looks for a release the webhook may have missed, in seconds. */
   pollSeconds: Int
   /**
-   * Where a release is downloaded and verified before it is placed: the container's own `/tmp`, never below `root`,
-   * which the site serves - nothing unverified is ever reachable from outside.
+   * Where a release is downloaded and verified before it is placed: `<root>/download/.incoming` by default. It has to
+   * be on the file system of `<root>/download/`, because a verified release is placed by renaming its directory there
+   * in one step, which no system does across file systems - the container's own `/tmp` is not, since only
+   * `<root>/download/` is mounted from the host. The site never serves a hidden directory there
+   * (`tools/deploy/nginx.conf`), and a download is readable only by its owner until it is verified.
    */
-  scratch: String = "/tmp"
+  scratch: String
 
   /** The repository and the token, as the forge's API is asked with them. */
   fn source(): ReleaseSource {
@@ -53,6 +56,7 @@ public type Config {
       Some(path) => Some path
       None => forge.defaultCosignKey()
     }
+    const root = Environment.get("RELEASE_SYNC_ROOT").filter({ !_.trim().isEmpty() }) ?? "/srv/torb"
     Self(
       forge: forge,
       url: Environment.get("RELEASE_SYNC_URL").filter({ !_.trim().isEmpty() }) ?? forge.defaultUrl(),
@@ -61,10 +65,18 @@ public type Config {
       token: Environment.get("RELEASE_SYNC_TOKEN").filter({ !_.trim().isEmpty() }),
       webhookSecret: Environment.get("RELEASE_SYNC_WEBHOOK_SECRET").filter({ !_.trim().isEmpty() }),
       cosignKey: key,
-      root: Environment.get("RELEASE_SYNC_ROOT") ?? "/srv/torb",
+      root: root,
       listenAddress: Environment.get("RELEASE_SYNC_LISTEN") ?? "0.0.0.0:8088",
       pollSeconds: Environment.get("RELEASE_SYNC_POLL_SECONDS").flatMap({ Int.tryFrom(_).ok() }) ?? 300,
-      scratch: Environment.get("RELEASE_SYNC_SCRATCH").filter({ !_.trim().isEmpty() }) ?? "/tmp",
+      scratch: Environment.get("RELEASE_SYNC_SCRATCH").filter({ !_.trim().isEmpty() }) ?? defaultScratchOf(root),
     )
   }
+}
+
+/**
+ * Where the scratch directory is unless `RELEASE_SYNC_SCRATCH` says otherwise: hidden, and on the file system of the
+ * downloads, so that placing a release stays one rename.
+ */
+public fn defaultScratchOf(root: String): String {
+  "{root}/download/.incoming"
 }

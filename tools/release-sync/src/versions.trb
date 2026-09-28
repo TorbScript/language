@@ -1,0 +1,187 @@
+/**
+ * What a tag says about its release, and which releases the periodic check places: the version and the channel of a
+ * tag, the order of two versions of one channel, and - from the newest releases the forge lists - the newest stable
+ * release and the nightlies of the last thirty days, the ones `<root>/download/` keeps (docs/design/RELEASE.md,
+ * "Channels": 30 days of nightly archives). Everything here decides without the network or the disk.
+ */
+
+use Ordering from "std/core"
+use ReleaseInfo from "./forge"
+
+/** How many days of nightlies the periodic check places: the thirty days the forge keeps a nightly for. */
+public const nightlyDays = 30
+
+/** `v0.2.0` -> `0.2.0`; a nightly's tag (`nightly-20260925`) has no `v` and is already the version. */
+public fn versionOf(tag: String): String {
+  if tag.startsWith("v") {
+    tag.sliceBytes 1, tag.byteLength()
+  } else {
+    tag
+  }
+}
+
+/** `stable` for a tagged release, `nightly` for `nightly-YYYYMMDD` - the same two channels `versions.txt` lists. */
+public fn channelOf(version: String): String {
+  if version.startsWith("nightly-") {
+    "nightly"
+  } else {
+    "stable"
+  }
+}
+
+/**
+ * The order of two versions, the newer one greater: numerically segment by segment for a stable version (`0.10.0`
+ * after `0.9.0`), where a segment that is no number compares as text; a nightly's date is in its name, so two nightlies
+ * compare as text, which is the order of their dates.
+ */
+public fn compareVersions(first: String, second: String): Ordering {
+  const firstSegments = first.split(".").toList()
+  const secondSegments = second.split(".").toList()
+  var index = 0
+  while index < firstSegments.length() && index < secondSegments.length() {
+    const one = firstSegments[index]
+    const other = secondSegments[index]
+    const order = match (Int.tryFrom(one).ok(), Int.tryFrom(other).ok()) {
+      (Some(left), Some(right)) => left.compare right
+      _ => one.compare other
+    }
+    if order != Ordering.Equal {
+      return order
+    }
+    index = index + 1
+  }
+  firstSegments.length().compare(secondSegments.length())
+}
+
+/** A version that sorts as [compareVersions] orders it: the key `versions.txt` sorts its stable lines by. */
+type VersionKey with Compare {
+  version: String
+
+  fn compare(other: Self): Ordering {
+    compareVersions version, other.version
+  }
+}
+
+/**
+ * `versions.txt` with `version` of `channel` in it - its old line, if any, replaced - and every line in the order the
+ * installers read it: `install.sh` and `install.ps1` take the first line of their channel, so each channel's lines come
+ * newest first, the stable ones before the nightlies, whatever order the releases were placed in. A line of another
+ * shape is kept, after them.
+ */
+public fn listedVersions(before: String, version: String, channel: String): String {
+  var stable: List<String> = []
+  var nightly: List<String> = []
+  var other: List<String> = []
+  for line in before.lines() {
+    const words = line.trim().split(" ").filter({ !_.isEmpty() }).toList()
+    if words.isEmpty() || words[0] == version {
+      continue
+    }
+    if words.length() == 2 && words[1] == "stable" {
+      stable.append words[0]
+    } else if words.length() == 2 && words[1] == "nightly" {
+      nightly.append words[0]
+    } else {
+      other.append line.trim()
+    }
+  }
+  match channel {
+    "stable" => stable.append version
+    "nightly" => nightly.append version
+    _ => other.append "{version} {channel}"
+  }
+  const newestFirst: List<String> = [
+    ...stable.sorted({ VersionKey _ }).reversed().map({ "{_} stable" }),
+    ...nightly.sorted({ _ }).reversed().map({ "{_} nightly" }),
+    ...other,
+  ]
+  "{newestFirst.joined(separator: "\n")}\n"
+}
+
+/** The first stable version of a `versions.txt` [listedVersions] wrote: the newest stable release. */
+public fn newestStableIn(list: String): String? {
+  for line in list.lines() {
+    const words = line.trim().split(" ").filter({ !_.isEmpty() }).toList()
+    if words.length() == 2 && words[1] == "stable" {
+      return words[0]
+    }
+  }
+  None
+}
+
+/**
+ * The day of a nightly, counted from 1970-01-01: `nightly-20260928` is 20724. `None` for a tag that is no nightly of
+ * the form `nightly-YYYYMMDD`, or names no day of the calendar.
+ */
+public fn nightlyDay(tag: String): Int? {
+  const digits = tag.withoutPrefix("nightly-")?
+  if digits.byteLength() != 8 {
+    return None
+  }
+  const year = Int.tryFrom(digits.sliceBytes(0, 4)).ok()?
+  const month = Int.tryFrom(digits.sliceBytes(4, 6)).ok()?
+  const day = Int.tryFrom(digits.sliceBytes(6, 8)).ok()?
+  if month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) {
+    return None
+  }
+  daysFromCivil year, month, day
+}
+
+/** How many days `month` of `year` has in the Gregorian calendar. */
+fn daysInMonth(year: Int, month: Int): Int {
+  match month {
+    2 => if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 }
+    4 | 6 | 9 | 11 => 30
+    _ => 31
+  }
+}
+
+/**
+ * The days from 1970-01-01 to `year`-`month`-`day` in the proleptic Gregorian calendar: Howard Hinnant's
+ * `days_from_civil`, the inverse of what `std/time` shows a `Timestamp` with, for a year from 1 on.
+ */
+fn daysFromCivil(year: Int, month: Int, day: Int): Int {
+  const shiftedYear = if month <= 2 { year - 1 } else { year }
+  const era = shiftedYear / 400
+  const yearOfEra = shiftedYear - era * 400
+  const shiftedMonth = if month > 2 { month - 3 } else { month + 9 }
+  const dayOfYear = (153 * shiftedMonth + 2) / 5 + day - 1
+  const dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+  era * 146_097 + dayOfEra - 719_468
+}
+
+/**
+ * Which of `releases` - the newest ones the forge lists, in any order - the periodic check places, oldest first: the
+ * newest stable release (neither a draft nor a prerelease), and every nightly of the `days` days that end with the
+ * newest nightly listed. Drafts never. The window is counted from the newest nightly rather than from the clock of
+ * this machine, so a check that runs while no nightly has been made for a while still places the last ones.
+ */
+public fn releasesToSync(releases: List<ReleaseInfo>, days: Int = nightlyDays): List<ReleaseInfo> {
+  var newestStable: ReleaseInfo? = None
+  var nightlies: List<(Int, ReleaseInfo)> = []
+  for release in releases {
+    if release.draft {
+      continue
+    }
+    const version = versionOf release.tagName
+    if channelOf(version) == "nightly" {
+      if const Some(day) = nightlyDay(release.tagName) {
+        nightlies.append((day, release))
+      }
+    } else if !release.prerelease {
+      const newer = match newestStable {
+        Some(found) => compareVersions(version, versionOf(found.tagName)) == Ordering.Greater
+        None => true
+      }
+      if newer {
+        newestStable = release
+      }
+    }
+  }
+  const lastDay = nightlies.fold(0, { newest, entry => newest.max entry.0 })
+  var chosen = nightlies.filter({ lastDay - _.0 < days }).sorted({ _.0 }).map({ _.1 }).toList()
+  if const Some(release) = newestStable {
+    chosen.append release
+  }
+  chosen
+}

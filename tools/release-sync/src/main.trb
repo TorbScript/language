@@ -9,30 +9,40 @@ use SocketAddress from "std/network"
 use Server from "std/http"
 use sleep from "std/time"
 use spawn from "std/task"
-use File from "std/fs"
 use Config from "./config"
 use handler from "./webhook"
-use ReleaseInfo from "./forge"
-use syncRelease, versionOf from "./sync"
+use syncRelease, missingReleases, removeLeftovers from "./sync"
 
-/** Whether `<root>/download/<version>/` already exists - the periodic check's "nothing to do" answer. */
-fn isPlaced(root: String, release: ReleaseInfo): Bool {
-  File.exists "{root}/download/{versionOf(release.tagName)}"
-}
+/** How many of the newest releases the periodic check asks the forge for: a month of nightlies, and stable releases. */
+const recentCount = 50
 
-/** Every `pollSeconds`, the newest stable release - in case its webhook never arrived or this program was down for it. */
+/**
+ * At the start and then every `pollSeconds`: every release that should be under `<root>/download/` and is not - in case
+ * its webhook never arrived, this program was down for it, or its placement failed, which leaves no directory under the
+ * version's name. The forge does not deliver a webhook again by itself, so this is what places a release whose
+ * delivery was lost, a nightly as well as a stable release.
+ */
 fn poll(config: Config): Task<Void> {
   loop {
+    check(config).await()
     sleep(Float64.from(config.pollSeconds)).await()
-    match config.source().latestRelease().await() {
-      Fail(message) => printError "release-sync: the periodic check could not reach the forge: {message}"
-      Ok(release) => {
-        if !isPlaced(config.root, release) {
-          print "release-sync: the periodic check found {release.tagName}, not yet placed - syncing"
-          match syncRelease(release, config).await() {
-            Fail(message) => printError "release-sync: syncing {release.tagName} failed: {message}"
-            Ok(_) => print "release-sync: synced {release.tagName}"
-          }
+  }
+}
+
+/**
+ * One periodic check: the newest releases the forge lists, and of those the newest stable one and the nightlies of the
+ * last thirty days, each synced unless it is placed already (`missingReleases`). Says nothing where there is nothing
+ * to do - also while the repository has no release at all.
+ */
+fn check(config: Config): Task<Void> {
+  match config.source().recentReleases(recentCount).await() {
+    Fail(message) => printError "release-sync: the periodic check could not reach the forge: {message}"
+    Ok(releases) => {
+      for release in missingReleases(releases, config.root) {
+        print "release-sync: the periodic check found {release.tagName}, not yet placed - syncing"
+        match syncRelease(release, config).await() {
+          Fail(message) => printError "release-sync: syncing {release.tagName} failed: {message}"
+          Ok(_) => print "release-sync: synced {release.tagName}"
         }
       }
     }
@@ -41,6 +51,14 @@ fn poll(config: Config): Task<Void> {
 
 const config = Config.fromEnvironment()
 print "release-sync: listening on {config.listenAddress}, watching {config.repository} on {config.url}, polling every {config.pollSeconds}s"
+match removeLeftovers(config.root, config.scratch) {
+  Ok(removed) => {
+    for path in removed {
+      print "release-sync: removed {path}, left by an attempt that did not end"
+    }
+  }
+  Fail(problem) => printError "release-sync: what earlier attempts left could not be removed: {problem.show()}"
+}
 const address = SocketAddress.tryFrom(config.listenAddress)?
 var server = Server.listen(address, handler(config))?
 const polling = spawn { poll(config).await() }
