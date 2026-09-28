@@ -283,8 +283,8 @@ fn steppedFrom(
   var position = 0
   for step in written {
     const taking = match step {
-      .Index(container, _, _) => Some TakenKind(container, isWindow: false)
-      .Range(container, _) => Some TakenKind(container, isWindow: true)
+      .Index(container, _, _) => Some TakenKind(container, takesWindow: false)
+      .Range(container, _) => Some TakenKind(container, takesWindow: true)
       _ => None
     }
     if const Some(kind) = taking {
@@ -325,7 +325,7 @@ fn steppedFrom(
 type TakenKind {
   /** The container's type as the checker wrote it. */
   container: TypeId
-  isWindow: Bool
+  takesWindow: Bool
 }
 
 /** One step of a path, and the type it leads to. */
@@ -398,7 +398,7 @@ fn rootReferenceOf(
  * `Sandbox.load` - so there is no frame to put the receiver in until the sandbox exists.
  */
 fn describeRoot(var lowering: Lowering, binding: BindingId): String {
-  if lowering.checker.binding(binding).isReceiver {
+  if lowering.checker.binding(binding).bindsReceiver {
     return "the receiver of a receiver script, which `Sandbox.load` applies"
   }
   "a binding the back end cannot reach"
@@ -580,15 +580,15 @@ fn takenElement(
   at: Span,
 ): TakenElement? {
   const subject = substituted lowering, kind.container
-  const readerName = if kind.isWindow { "slice" } else { "at" }
-  const setterName = if kind.isWindow { "replace" } else { "set" }
-  const reader = match takingMemberOf(lowering, subject, false, kind.isWindow, readerName, what, at) {
+  const readerName = if kind.takesWindow { "slice" } else { "at" }
+  const setterName = if kind.takesWindow { "replace" } else { "set" }
+  const reader = match takingMemberOf(lowering, subject, false, kind.takesWindow, readerName, what, at) {
     Some(found) => found
     None => {
       return None
     }
   }
-  const setter = match takingMemberOf(lowering, subject, true, kind.isWindow, setterName, what, at) {
+  const setter = match takingMemberOf(lowering, subject, true, kind.takesWindow, setterName, what, at) {
     Some(found) => found
     None => {
       return None
@@ -608,7 +608,7 @@ fn takenElement(
   if !lowering.isSupported {
     return None
   }
-  if kind.isWindow {
+  if kind.takesWindow {
     return TakenElement container, key, element, setter, at
   }
   // Which member this was, so that `ir/elements.trb` can recognize the round trip once the container is concrete and
@@ -719,7 +719,7 @@ public fn isReferenceSlot(builder: FunctionBuilder, slot: Slot): Bool {
   }
   if const .Parameter(index) = builder.function.slots[slot.value].role {
     if const Some(parameter) = builder.function.signature.parameters.get(index) {
-      return parameter.isReference
+      return parameter.byReference
     }
   }
   false

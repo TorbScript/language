@@ -22,7 +22,7 @@ use verifyOwnedProgram from "../src/ir/ownership-verify"
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
@@ -37,7 +37,7 @@ fn variantLayout(var program: IrProgram, name: String, cases: List<List<FieldLay
     variants.append VariantLayout(names[index], first, cases[index].length())
   }
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, built: true)
   reserved.layout
 }
 
@@ -116,7 +116,7 @@ group "Every operand position of every instruction" {
     const choice = variantLayout program, "T_Choice", [[FieldLayout("name", text)], []], ["First", "Second"]
     const choiceType = program.internType IrType.Variant(choice)
     const signature = IrSignature(
-      [IrParameter("table", mapping, isReference: true), IrParameter("key", text)],
+      [IrParameter("table", mapping, byReference: true), IrParameter("key", text)],
       voidType,
     )
     var builder = newFunction "t_container", None, signature, "body"
@@ -160,7 +160,7 @@ group "Every operand position of every instruction" {
     // A closure body takes its environment first, and one field of it stands for one capture (BACKEND 5.8)
     const reserved = program.reserveLayout "T_environment__t_inner", LayoutKind.Environment
     const held = program.layoutAt reserved.layout
-    program.setLayout reserved.layout, held.copy(fields: [FieldLayout("text", text)], isBuilt: true)
+    program.setLayout reserved.layout, held.copy(fields: [FieldLayout("text", text)], built: true)
     const environmentType = program.internType IrType.Record(reserved.layout)
     var innerBuilder = newFunction(
       "t_inner",
@@ -174,7 +174,7 @@ group "Every operand position of every instruction" {
     var builder = newFunction "t_indirect", None, signature, "body"
     const made = addTemporary builder, closureType
     const shownValue = addTemporary builder, objectType
-    emit builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], isEscaping: false)
+    emit builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], escaping: false)
     emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(0))])
     emit builder, Instruction.TraitValue(shownValue, borrowed(Slot(0)), [WitnessSource(WitnessRoot.Table(table))])
     emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Table(table)), 0, [borrowed(shownValue)])

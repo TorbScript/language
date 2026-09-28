@@ -187,21 +187,21 @@ public type IrParameter {
   name: String
   annotation: IrTypeId
   /** A `var` parameter or a `var fn` receiver: a reference into the caller's frame, never counted (BACKEND 2.3). */
-  isReference: Bool = false
+  byReference: Bool = false
   ownership: Ownership = Ownership.Borrowed
   /**
    * An **out** parameter: the callee never reads what is there and writes a value the caller then owns. Only the
    * functions of `runtime/` whose result is an `Option` or a `Result` have one (BACKEND 5.R1), and it is what tells the
    * ownership verifier that the base of such a place starts empty and owns a value afterwards.
    */
-  isOut: Bool = false
+  out: Bool = false
   /**
    * An **element of a container**, handed over by address. It is an ordinary *value* position - the callee takes the
    * count of it exactly as `ownership` says - and the address is only how the one C list and the one C hash table reach
    * an element whose type they do not know (BACKEND 3.1). A `var` path is a different thing, which is why it is a
    * different flag: a place carries no count, and this carries one.
    */
-  isByAddress: Bool = false
+  byAddress: Bool = false
 }
 
 /**
@@ -458,7 +458,7 @@ public type PathStep {
 public type Argument {
   slot: Slot
   ownership: Ownership = Ownership.Borrowed
-  isLastUse: Bool = false
+  last: Bool = false
   /**
    * The place an argument of a `var` parameter refers to: the whole path, formed at the call site (BACKEND 3.2), so
    * that a C back end can take its address and the VM can carry a (frame, slot, path) triple.
@@ -472,12 +472,12 @@ public type Argument {
 
 /** A borrowed operand: what phase 1 of the lowering emits everywhere. */
 public fn borrowed(slot: Slot): Argument {
-  Argument slot, Ownership.Borrowed, isLastUse: false
+  Argument slot, Ownership.Borrowed, last: false
 }
 
 /** An operand position that takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return`, a stored parameter. */
 public fn owned(slot: Slot): Argument {
-  Argument slot, Ownership.Owned, isLastUse: false
+  Argument slot, Ownership.Owned, last: false
 }
 
 /**
@@ -688,7 +688,7 @@ public type Instruction {
   /** The variant index of a value of a variant layout. */
   case Tag(target: Slot, source: Slot)
 
-  case Closure(target: Slot, function: FunctionId, captures: List<Capture>, isEscaping: Bool)
+  case Closure(target: Slot, function: FunctionId, captures: List<Capture>, escaping: Bool)
   case BoxNew(target: Slot, value: Argument)
   case TraitValue(target: Slot, value: Argument, tables: List<WitnessSource>)
 
@@ -927,12 +927,12 @@ public type IrProgram {
    */
   var fn reserveLayout(name: String, kind: LayoutKind): ReservedLayout {
     if const Some(existing) = layoutIdentifiers.get(name) {
-      return ReservedLayout existing, isFresh: false
+      return ReservedLayout existing, fresh: false
     }
     const identifier = LayoutId layouts.length()
     layouts.append Layout(name, kind)
     layoutIdentifiers.set name, identifier
-    ReservedLayout identifier, isFresh: true
+    ReservedLayout identifier, fresh: true
   }
 
   fn layoutAt(id: LayoutId): Layout {
@@ -1075,7 +1075,7 @@ public type IrProgram {
 public type ReservedLayout {
   layout: LayoutId
   /** `false` when the layout was there already - which, while it is being built, means the type is recursive. */
-  isFresh: Bool
+  fresh: Bool
 }
 
 // --- Interning keys -------------------------------------------------------------------------------------------------
@@ -1151,9 +1151,9 @@ public fn keyOfTrait(applied: IrTrait): String {
 public fn keyOfSignature(signature: IrSignature): String {
   var key = ""
   for parameter in signature.parameters {
-    const reference = if parameter.isReference { "&" } else { "" }
-    const out = if parameter.isOut { "!" } else { "" }
-    const address = if parameter.isByAddress { "@" } else { "" }
+    const reference = if parameter.byReference { "&" } else { "" }
+    const out = if parameter.out { "!" } else { "" }
+    const address = if parameter.byAddress { "@" } else { "" }
     const ownership = keyOfOwnership parameter.ownership
     key = key + ";{reference}{out}{address}{ownership}{parameter.annotation.value}"
   }

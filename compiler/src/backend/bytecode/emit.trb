@@ -733,7 +733,7 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     }
     const declared = function.signature.parameters[position]
     var retained = 0 - 1
-    if !declared.isReference && declared.ownership == Ownership.Owned {
+    if !declared.byReference && declared.ownership == Ownership.Owned {
       if containsCountedType(program, declared.annotation) {
         retained = valueShapeIndex emitter, program, declared.annotation
       }
@@ -1177,7 +1177,7 @@ fn entryCellChunk(
       code.append headWord(Opcode.Return, 0, width, 0)
     }
     .Write => {
-      parameters.append ParameterEntry(0, width, isReference: false)
+      parameters.append ParameterEntry(0, width, byReference: false)
       const shape = shapeOperand emitter, program, held
       if shape != 0 {
         if entryCellCopies(program, held) {
@@ -1245,7 +1245,7 @@ fn entryCellReleaseChunk(var emitter: Emitter, program: IrProgram): Chunk {
 fn isReferenceRole(function: IrFunction, role: SlotRole): Bool {
   if const .Parameter(index) = role {
     if const Some(parameter) = function.signature.parameters.get(index) {
-      return parameter.isReference
+      return parameter.byReference
     }
   }
   false

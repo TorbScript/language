@@ -121,7 +121,7 @@ fn parseCommandPath(var parser: Parser): Expression? {
     if parser.isAt(TokenKind.Dot) && isNameOrKeyword(parser.kindAt(1)) {
       parser.bump()
       const name = parser.nameOrKeyword()
-      path = Expression ExpressionKind.Member(path, name, isOptional: false), start.to(parser.previousSpan())
+      path = Expression ExpressionKind.Member(path, name, optional: false), start.to(parser.previousSpan())
       settled = parser
       settledPath = path
       continue
@@ -185,7 +185,7 @@ fn parseCommandCall(var parser: Parser, start: Span, callee: Expression): Expres
   checkArgumentOrder parser, arguments
   // The `{` belongs to the command, like the `{` after the head of an `if`
   if parser.allowsTrailingClosures && parser.isAt(TokenKind.BraceOpen) {
-    arguments.append Argument(label: None, isSpread: false, value: parseClosure(parser))
+    arguments.append Argument(label: None, spread: false, value: parseClosure(parser))
     if parser.isAtAny([TokenKind.Dot, TokenKind.QuestionDot, TokenKind.BraceOpen]) {
       parser.errorHere "The `\{ ... \}` in front of this belongs to the command call, like the `\{` after the head of an `if`. To pass a closure to one of the arguments, call the command with parentheses: `print(list.map \{ ... \})`"
       parser.recoverToLineEnd()
@@ -389,7 +389,7 @@ fn parsePostfix(var parser: Parser): Expression {
         }
       }
       .BraceOpen if parser.allowsTrailingClosures && takesTrailingClosure(expression) => {
-        const closure = Argument label: None, isSpread: false, value: parseClosure(parser)
+        const closure = Argument label: None, spread: false, value: parseClosure(parser)
         match expression.kind {
           .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call(
             callee,
@@ -509,7 +509,7 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
         true,
         { parser => parser.commaSeparated TokenKind.ParenClose, parseArgument },
       )
-      if items.length() == 1 && items[0].label.isNone() && !items[0].isSpread {
+      if items.length() == 1 && items[0].label.isNone() && !items[0].spread {
         items[0].value.kind
       } else {
         ExpressionKind.TupleLiteral items

@@ -116,7 +116,7 @@ fn replacementsFor(
   var replacements: List<Replacement> = []
   for (index, line) in lines.indexed() {
     const isTheFirst = index == 0 && missingLineBreak
-    if line.isTheClosingQuotes {
+    if line.closing {
       addIfChanged replacements, source, line.start, line.content, target
       continue
     }
@@ -149,7 +149,7 @@ type Line {
   end: Int
   /** `false` for a blank line and for the line of a closing `"""` that stands alone: what the lexer calls a line without content and strips whole */
   hasContent: Bool
-  isTheClosingQuotes: Bool
+  closing: Bool
 }
 
 /**
@@ -170,7 +170,7 @@ fn linesOf(source: String, body: Int, close: Int): List<Line> {
     const content = start + (indexOfFirstNonSpaceOrTab(text) ?? text.byteLength())
     const rest = source.sliceBytes content, source.byteLength()
     const hasContent = !(rest.startsWith("\n") || rest.startsWith("\r") || content == close)
-    lines.append Line(start, content, end, hasContent, isTheClosingQuotes: content == close)
+    lines.append Line(start, content, end, hasContent, closing: content == close)
     if lineBreak.isNone() {
       return lines
     }

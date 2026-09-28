@@ -106,7 +106,7 @@ public type ParameterMode {
   /** `...rest: Int`: the parameter holds a `List<Int>`, the argument list does not. */
   case Variadic
   /** `(self: Receiver) => Value`, `(var self: Receiver) => Void`: names inside resolve against the receiver. */
-  case Receiver(isVar: Bool)
+  case Receiver(var: Bool)
 }
 
 /** The value of a literal type and of a const argument. There is no arithmetic in types, so equality is enough. */
@@ -128,7 +128,7 @@ public type ParameterDeclaration {
   /** The `fn`, `type`, `trait` or `extend` the parameter belongs to. */
   owner: SymbolId?
   /** `<const Size: Int>`: the parameter is a value, and its type is the single item of its bounds. */
-  isConst: Bool
+  const: Bool
   /** The position in the parameter list it was declared in, `-1` for the `Self` of a trait. */
   index: Int
   /** `<Other = Self>`: filled in where the argument list is shorter, never inferred. */
@@ -430,7 +430,7 @@ public type Signature {
   owner: TypeId?
   /** `fn area()` against `fn square(size: Int)`. */
   takesSelf: Bool
-  isVarSelf: Bool
+  takesVarSelf: Bool
   /** A requirement of a trait and a `native` function have none. */
   hasBody: Bool
 }
@@ -440,7 +440,7 @@ public type FieldSignature {
   symbol: SymbolId
   name: String
   type: TypeId
-  isVar: Bool
+  var: Bool
   hasDefault: Bool
   visibility: Visibility
 }
@@ -471,8 +471,8 @@ public type TypeSignature {
   cases: List<CaseSignature>
   /** The constants and functions of the body, by name. */
   members: Map<String, SymbolId>
-  isNative: Bool
-  isShared: Bool
+  native: Bool
+  shared: Bool
 }
 
 /**
@@ -533,7 +533,7 @@ public type Implementation {
   /** Where a message about this implementation points: the name of the type, or the target of the `extend`. */
   at: Span
   /** A `native type` provides the members of its traits through the runtime, without bodies. */
-  isNative: Bool = false
+  native: Bool = false
 }
 
 /** What the target of an implementation covers, which is what the index is built on. */
@@ -619,7 +619,7 @@ public type ImplementationTable {
   var inherentOpen: List<Int> = []
   /** `"{module}:{span.start}"` of an `extend`: the first implementation it produced, so its members are built once. */
   var bySpan: Map<String, Int> = [:]
-  var isBuilt: Bool = false
+  var built: Bool = false
 
   fn at(id: ImplementationId): Implementation {
     all[id.value]

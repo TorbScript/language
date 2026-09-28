@@ -55,9 +55,9 @@ public type GlobalKind {
 
 /** A field of a type, or a `static` value of it, as far as the syntax alone says. */
 public type FieldSymbol {
-  isVar: Bool
+  var: Bool
   /** A `static` value of the type, and not a field of every value of it. */
-  isStatic: Bool
+  static: Bool
 }
 
 /** A member `fn` of a type: whether it has a receiver at all, and whether it changes it. */
@@ -197,7 +197,7 @@ fn collectStatement(var scope: FileScope, statement: Statement, topLevel: Bool) 
     .Bind(binding) => {
       if topLevel {
         for bound in patternNames(binding.pattern) {
-          scope.globals.set bound.text, binding.isVar
+          scope.globals.set bound.text, binding.var
         }
       }
       collectExpression scope, binding.value
@@ -348,7 +348,7 @@ fn collectDeclaration(var scope: FileScope, declaration: Declaration, topLevel: 
     .Constant(binding) => {
       if topLevel {
         for bound in patternNames(binding.pattern) {
-          scope.globals.set bound.text, binding.isVar
+          scope.globals.set bound.text, binding.var
         }
       }
     }
@@ -407,15 +407,15 @@ fn typeInfoOf(members: List<Member>, kind: GlobalKind?): TypeInfo {
   var info = TypeInfo kind
   for member in members {
     match member.kind {
-      .Field(field) => info.fields.set field.name.text, FieldSymbol(field.isVar, isStatic: false)
+      .Field(field) => info.fields.set field.name.text, FieldSymbol(field.var, static: false)
       .Constant(binding) => {
         for bound in patternNames(binding.pattern) {
-          info.fields.set bound.text, FieldSymbol(isVar: false, isStatic: true)
+          info.fields.set bound.text, FieldSymbol(var: false, static: true)
         }
       }
       .Function(function) => {
         const receiver = receiverOf function
-        const changes = receiver.map({ _.isVar }) ?? false
+        const changes = receiver.map({ _.var }) ?? false
         info.methods.set function.name.text, MethodSymbol(receiver.isSome(), changesReceiver: changes)
       }
       .Case(caseDeclaration) => info.cases.insert caseDeclaration.name.text

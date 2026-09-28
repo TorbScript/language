@@ -263,7 +263,7 @@ fn reportPrivateArguments(
       }
       continue
     }
-    if argument.isSpread {
+    if argument.spread {
       continue
     }
     if const Some(field) = fields.get(position) {
@@ -299,7 +299,7 @@ fn reportPrivateField(var checker: Checker, shown: String, name: String, at: Spa
 public fn requireInhabitedType(var checker: Checker, symbol: SymbolId, at: Span) {
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
-  if shape.isNative || shape.isShared {
+  if shape.native || shape.shared {
     return
   }
   if isInhabited(checker, shape.own, []) {
@@ -361,7 +361,7 @@ fn isInhabited(var checker: Checker, annotation: TypeId, path: List<SymbolId>): 
   const shape = checker.typeSignature identifier
   // A native type is storage the runtime owns, and a `shared type` is reached through its identity: neither one puts
   // a value of the type it names inside of the record
-  if shape.isNative || shape.isShared {
+  if shape.native || shape.shared {
     return true
   }
   var walked = path
@@ -531,7 +531,7 @@ fn checkAppliedBounds(var checker: Checker, module: ModuleId, annotation: TypeId
  * the names of the files decide both (docs/design/PROJECT.md section 3): nothing a manifest says makes it an entry.
  */
 public fn allowsTopLevelCode(var checker: Checker, module: ModuleId): Bool {
-  if checker.program.graph.at(module).isEntry {
+  if checker.program.graph.at(module).runnable {
     return true
   }
   if isLibraryModule(checker, module) {
@@ -591,7 +591,7 @@ fn reportTopLevelCode(var checker: Checker, module: ModuleId, at: Span) {
  * all: a module exports constants, it has no mutable state.
  */
 fn checkModuleBinding(var checker: Checker, module: ModuleId, binding: Binding) {
-  if binding.isVar {
+  if binding.var {
     checker.report(
       module,
       Diagnostic.error("A module has no mutable state, so it has no top-level `var`", binding.pattern.span)
@@ -692,7 +692,7 @@ fn isWriteProtected(visibility: Visibility): Bool {
  * can use it (CONCEPT.md, "Foreign Functions").
  */
 fn requireStandardLibrary(var checker: Checker, module: ModuleId, modifiers: Modifiers, at: Span) {
-  if !modifiers.isNative {
+  if !modifiers.native {
     return
   }
   const package = packageNameOf checker, module
@@ -745,7 +745,7 @@ fn checkFunctionShape(
   if function.body.isSome() || function.name.text.isEmpty() {
     return
   }
-  if modifiers.isNative || isTraitMember || ownerIsNative {
+  if modifiers.native || isTraitMember || ownerIsNative {
     return
   }
   checker.report(
@@ -788,7 +788,7 @@ fn checkTypeShape(
   typeDeclaration: TypeDeclaration,
   isPublic: Bool,
 ) {
-  const isNative = declaration.modifiers.isNative
+  const isNative = declaration.modifiers.native
   for member in typeDeclaration.members {
     checkMemberShape checker, module, member, false, isNative
   }
@@ -800,7 +800,7 @@ fn checkTypeShape(
     repeatedTraitOf(typeDeclaration.traits),
   )
   requireOneBodyPerInstantiation checker, module, typeDeclaration
-  if declaration.modifiers.isShared {
+  if declaration.modifiers.shared {
     requireSharedTraits checker, module, typeDeclaration.name, typeDeclaration.traits
   }
   if isPublic {
@@ -815,7 +815,7 @@ fn checkTraitShape(
   traitDeclaration: TraitDeclaration,
   isPublic: Bool,
 ) {
-  const isNative = declaration.modifiers.isNative
+  const isNative = declaration.modifiers.native
   for member in traitDeclaration.members {
     checkMemberShape checker, module, member, true, isNative
   }
@@ -1024,7 +1024,7 @@ fn checkMemberShape(var checker: Checker, module: ModuleId, member: Member, isTr
 fn checkFieldModifiers(var checker: Checker, module: ModuleId, modifiers: Modifiers, field: Field) {
   const name = field.name.text
   const at = modifiers.visibilitySpan ?? field.name.span
-  if modifiers.visibility == Visibility.Protected && !field.isVar {
+  if modifiers.visibility == Visibility.Protected && !field.var {
     checker.report(
       module,
       Diagnostic.error("`protected` needs `var`: a const field is write-protected already", at)
@@ -1084,7 +1084,7 @@ fn traitSymbolOf(checker: Checker, module: ModuleId, reference: TypeReference): 
 public fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
   if const .Trait = checker.symbolAt(symbol).kind {
     const identifier = typeSignatureOf checker, symbol
-    return checker.typeSignature(identifier).isShared
+    return checker.typeSignature(identifier).shared
   }
   // A supertrait that is not a trait was reported where the name stands; nothing follows from it here
   true
@@ -1775,11 +1775,11 @@ fn isSharedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
   match checker.symbolAt(symbol).kind {
     .Type => {
       const identifier = typeSignatureOf checker, symbol
-      checker.typeSignature(identifier).isShared
+      checker.typeSignature(identifier).shared
     }
     .Trait => {
       const identifier = typeSignatureOf checker, symbol
-      checker.typeSignature(identifier).isShared
+      checker.typeSignature(identifier).shared
     }
     _ => false
   }

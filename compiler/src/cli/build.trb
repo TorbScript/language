@@ -113,7 +113,7 @@ public type BuildOptions {
    * front of its tests. One binary per file is not an option - every test file imports the harness and through it the
    * whole compiler, so it would be one C compile the size of the compiler's own per file (BACKEND 6.3).
    */
-  isTestRun: Bool = false
+  testing: Bool = false
   /**
    * Whether the path of what was written is printed. A command that **runs** what it built next says nothing about
    * it: `torb run` and `torb test` put the program's own output on the console and nothing else.
@@ -181,7 +181,7 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
     printError "{counted(reported, "problem")}, nothing was built"
     return buildFailedCode
   }
-  if options.isTestRun {
+  if options.testing {
     const modules = match entryModulesOf(checked, tree, options) {
       Some(found) => found
       None => {
@@ -371,7 +371,7 @@ type ProgramSources {
   size: Int
   /** The files compiled in parallel: the units, or `program.c` itself for a program of one unit. */
   jobs: List<CompileJob>
-  isSplit: Bool
+  split: Bool
 }
 
 /** One C file compiled into one object, and the hash of everything in the file that decides that object. */
@@ -384,7 +384,7 @@ type CompileJob {
   /** A flag this file is compiled with beyond every file's: `-flto` for a unit that is optimized across units. */
   extra: String = ""
   /** Whether this is a unit of the program's code, which is what is optimized across units where that is done. */
-  isCode: Bool = false
+  generated: Bool = false
 }
 
 /**
@@ -407,7 +407,7 @@ fn writeUnits(directory: String, source: String, text: String, units: EmittedUni
       const stem = name.withoutSuffix(".c") ?? name
       const size = unit.byteLength() + units.header.byteLength()
       // The first unit is the data (`units.trb`)
-      jobs.append CompileJob(path, stem, combineHashes(headerHash, unit.hash()), size, isCode: index > 0)
+      jobs.append CompileJob(path, stem, combineHashes(headerHash, unit.hash()), size, generated: index > 0)
     }
   } else {
     jobs.append CompileJob(source, "program", text.hash(), text.byteLength())
@@ -604,7 +604,7 @@ fn programEntriesOf(
   var entries: List<ProgramEntry> = []
   for module in modules {
     const name = entryNameOf lowering, module
-    if !options.isTestRun {
+    if !options.testing {
       entries.append ProgramEntry(name)
       continue
     }
@@ -813,7 +813,7 @@ public fn binaryNameOf(path: String): String {
 public type CCompiler {
   command: String
   /** MSVC takes `/`-flags and names its output differently, so the two shapes are told apart once. */
-  isMicrosoft: Bool
+  microsoft: Bool
   /**
    * The first line of `--version`: part of the key of every object in the cache, so a C compiler that was upgraded
    * in place compiles everything again. Empty where the compiler does not answer it.
@@ -840,7 +840,7 @@ fn findCompiler(): CCompiler? {
     }
   }
   if canRun("cl", []) {
-    return CCompiler "cl", isMicrosoft: true
+    return CCompiler "cl", microsoft: true
   }
   None
 }
@@ -1142,12 +1142,12 @@ fn compile(
     }
   }
   if usesTls {
-    const parts = tlsPartsOf(runtime, compiler.command, compiler.isMicrosoft, binary)?
+    const parts = tlsPartsOf(runtime, compiler.command, compiler.microsoft, binary)?
     flags.appendAll parts.flags
     runtimeSources.appendAll parts.sources
     objects.appendAll parts.objects
   }
-  const define = if compiler.isMicrosoft { "/D" } else { "-D" }
+  const define = if compiler.microsoft { "/D" } else { "-D" }
   // `TORB_MEMORY_LIMIT` of a binary that runs programs in the VM is the limit of those programs (runtime/memory.c)
   if hostsMachine {
     flags.append "{define}{hostsMachineMacro}"
@@ -1159,7 +1159,7 @@ fn compile(
   if pool.blocking != 0 {
     flags.append "{define}TORB_MANIFEST_BLOCKING={pool.blocking}u"
   }
-  const parallel: ProcessOutput? = if compiler.isMicrosoft {
+  const parallel: ProcessOutput? = if compiler.microsoft {
     None
   } else {
     const parts = CompileParts runtimeSources, flags, objects
@@ -1225,7 +1225,7 @@ public fn runCompiler(
 ): Result<ProcessOutput, IoError> {
   const passed = argumentsThroughFile(arguments, joinPath(parentPath(source), "c-arguments.txt"))?
   const script = joinPath parentPath(runtime), "tools/build-slot.sh"
-  if size < slottedSize || compiler.isMicrosoft || !File.exists(script) {
+  if size < slottedSize || compiler.microsoft || !File.exists(script) {
     return Process.runBlocking compiler.command, passed
   }
   const log = joinPath parentPath(source), "c-compiler.log"
@@ -1336,10 +1336,10 @@ fn compileInParallel(
   identity = combineHashes identity, runtimeHeadersHashOf(runtime)
   // A split program is optimized across its units of code when it is linked, where the C compiler can (docs/BACKEND.md
   // 4.1): without it a call from one unit into another is never inlined, and the program runs a fifth slower
-  const optimizesAcross = program.isSplit && isGnuCompiler(compiler)
+  const optimizesAcross = program.split && isGnuCompiler(compiler)
   var jobs: List<CompileJob> = []
   for job in program.jobs {
-    if optimizesAcross && job.isCode {
+    if optimizesAcross && job.generated {
       jobs.append job.copy(extra: "-flto")
     } else {
       jobs.append job
@@ -1490,7 +1490,7 @@ fn compilerArguments(
   sources: List<String>,
   profile: CompileProfile,
 ): List<String> {
-  if compiler.isMicrosoft {
+  if compiler.microsoft {
     const include = joinPath runtime, "include"
     var arguments = ["/std:c11"]
     arguments.appendAll profile.microsoftFlags()

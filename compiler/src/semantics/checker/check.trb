@@ -108,17 +108,17 @@ public fn checkBodiesOf(var checker: Checker, modules: List<ModuleId>) {
  * native call in an ordinary run.
  */
 public type Stopwatch {
-  isOn: Bool
+  enabled: Bool
   var last: Int64 = 0
 
   var fn start() {
-    if isOn {
+    if enabled {
       last = Clock.milliseconds()
     }
   }
 
   var fn taken(): Int64 {
-    if !isOn {
+    if !enabled {
       return 0
     }
     const now = Clock.milliseconds()
@@ -149,7 +149,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   const saved = checker.enterBody module, voidType, true, own: None
   // The statements of a file are the one body a top-level `var` lives in, and the dead-change rule needs to know it
   // apart from the bodies of the functions that read the same declaration
-  checker.isTopLevel = true
+  checker.topLevel = true
   checker.writesDeclarations = true
   // `await()` is allowed at the top level of an entry file and of a script (CONCEPT, "Concurrency"). In a module top
   // level code is an error of its own, so nothing is said about it twice
@@ -257,7 +257,7 @@ fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding
   if boundNamesOf(binding.pattern).isEmpty() {
     const bound = annotation ?? found
     checker.openScope()
-    checkPattern checker, binding.pattern, bound, binding.isVar
+    checkPattern checker, binding.pattern, bound, binding.var
     requireIrrefutable checker, binding.pattern, bound, "The pattern of a binding", "value"
     checker.closeScope()
   }
@@ -419,11 +419,11 @@ fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDecla
  * cause, one message.
  */
 fn checkFieldDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
-  const outer = checker.isFieldDefault
-  checker.isFieldDefault = true
+  const outer = checker.inFieldDefault
+  checker.inFieldDefault = true
   const before = checker.diagnostics[scope.module.value].length()
   checkDefault checker, scope, default, annotation
-  checker.isFieldDefault = outer
+  checker.inFieldDefault = outer
   if const Some(expression) = default {
     if checker.diagnostics[scope.module.value].length() == before {
       const empty = match annotation {

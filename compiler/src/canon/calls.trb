@@ -93,7 +93,7 @@ fn toCommand(
   arguments: List<Argument>,
   asWritten: Bool,
 ): Edit? {
-  if !site.isCommandPosition || !isCommandPath(callee) || !isWrittenAsACommandPath(tokens, callee.span) {
+  if !site.inCommandPosition || !isCommandPath(callee) || !isWrittenAsACommandPath(tokens, callee.span) {
     return None
   }
   // `f { ... }` is a call with a trailing closure and no parentheses at all: there is nothing to take away. A `(`
@@ -108,7 +108,7 @@ fn toCommand(
   const plain = arguments[0..plainArguments(tokens, arguments, close.start)]
   const first = plain.first()?
   const last = plain.last()?
-  if first.isSpread || !startsCommandArgument(source, tokens, argumentStart(first)) {
+  if first.spread || !startsCommandArgument(source, tokens, argumentStart(first)) {
     return None
   }
   if plain.any({ hasTopLevelOperator _ }) {
@@ -156,7 +156,7 @@ fn toParentheses(
   const argumentsEnd = last.value.span.end
   const overSeveralLines = source.sliceBytes(callee.span.end, argumentsEnd).contains("\n")
   const hasOperator = plain.any({ hasTopLevelOperator _ })
-  if site.isCommandPosition && !hasOperator && !overSeveralLines {
+  if site.inCommandPosition && !hasOperator && !overSeveralLines {
     return None
   }
   // Only whitespace stands between the callee and its first argument; a comment there would be lost
@@ -249,7 +249,7 @@ fn plainArguments(tokens: List<Token>, arguments: List<Argument>, after: Int): I
   match arguments.last() {
     None => 0
     Some(last) => {
-      const isClosure = last.label.isNone() && !last.isSpread && isClosureExpression(last.value)
+      const isClosure = last.label.isNone() && !last.spread && isClosureExpression(last.value)
       const start = last.value.span.start
       const afterAComma = match previousToken(tokens, start) {
         Some(token) => token.kind == TokenKind.Comma

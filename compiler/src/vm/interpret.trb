@@ -389,7 +389,7 @@ fn run(
     const chunk = program.chunks[entry]
     // An entry file that waits is the main task: the scheduler runs until it has completed. Where it ended cancelled,
     // the kernel said so (`torb_task_end_main`) and the run ends with `TORB_EXIT_CANCELLED` once the rest has stopped
-    if chunk.isTask {
+    if chunk.suspendable {
       const operands = [entry, chunk.savedWords(), scratchWords - 1]
       schedule words, kernel, registers, image, program, KernelOperation.RunMain, operands
       const answered = loadRegister(registers, scratch + scratchWords - 1)
@@ -965,7 +965,7 @@ fn imageOf(var words: ArrayList<Int>, program: BytecodeProgram): Image {
     for parameter in chunk.parameters {
       parameters.append parameter.offset
       parameters.append parameter.width
-      parameters.append(if parameter.isReference { 1 } else { 0 })
+      parameters.append(if parameter.byReference { 1 } else { 0 })
       parameters.append parameter.retainedThroughWitness
     }
     for place in chunk.places {
@@ -1079,7 +1079,7 @@ const stepWords = 6
  */
 fn appendPlace(var words: ArrayList<Int>, place: Place) {
   words.append place.base
-  words.append(if place.isThroughReference { 1 } else { 0 })
+  words.append(if place.throughReference { 1 } else { 0 })
   words.append place.width
   words.append place.steps.length()
   words.append place.narrow

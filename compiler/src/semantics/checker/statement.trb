@@ -221,7 +221,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   if checker.absorbs(bound) {
     bound = checker.deferredType
   }
-  checkPattern checker, binding.pattern, bound, binding.isVar
+  checkPattern checker, binding.pattern, bound, binding.var
   // `const id: EntityId = ...`: a message about `id` where it is used calls its type what it was declared as
   if const Some(written) = alias {
     if const .Binding(name) = binding.pattern.kind {
@@ -476,7 +476,7 @@ fn hasEffect(var checker: Checker, expression: Expression): Bool {
     .Callable(symbol, _, _) => {
       const identifier = signatureOf checker, symbol
       const signature = checker.signature identifier
-      if signature.isVarSelf {
+      if signature.takesVarSelf {
         return true
       }
       for parameter in signature.form.parameters {
@@ -570,7 +570,7 @@ public fn checkBodyOf(var checker: Checker, symbol: SymbolId) {
     signature.generics,
     signature.form.parameters,
     signature.takesSelf,
-    signature.isVarSelf,
+    signature.takesVarSelf,
     signature.form.result,
     isInferred: false,
     declared: symbol,
@@ -689,8 +689,8 @@ public fn checkInitializer(
   // top-level `var`; a field default and a parameter default are evaluated wherever the value is built and are not
   checker.awaitsTasks = awaitsTasks
   checker.writesDeclarations = awaitsTasks
-  const wasInitializer = checker.isInitializer
-  checker.isInitializer = true
+  const wasInitializer = checker.inInitializer
+  checker.inInitializer = true
   checker.openScope()
   // `static zero = Pair(Scalar.zero, Scalar.zero)` inside `extend<Scalar: Numeric> Pair<Scalar>`: the parameters of the
   // declaration around a constant are names of its initializer, exactly as they are of a body
@@ -706,7 +706,7 @@ public fn checkInitializer(
   closeInference checker
   found = resolveType checker, found
   settleChanges checker
-  checker.isInitializer = wasInitializer
+  checker.inInitializer = wasInitializer
   checker.closeScope()
   checker.leaveBody saved
   annotation ?? found
@@ -751,7 +751,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   if checker.absorbs(subject) {
     subject = checker.deferredType
   }
-  checkPattern checker, binding.pattern, subject, binding.isVar
+  checkPattern checker, binding.pattern, subject, binding.var
   requireIrrefutable checker, binding.pattern, subject, "The pattern of a binding", "value"
   closeInference checker
   resolvePatternTypes checker, module, binding.pattern
@@ -877,8 +877,8 @@ fn declareBindingsFor(
           annotation,
           isVarSelf,
           parameter.name.span,
-          isReceiver: true,
-          isParameter: true,
+          bindsReceiver: true,
+          bindsParameter: true,
         ))
         checker.setReceiver binding
       }
@@ -899,10 +899,10 @@ fn declareBindingsFor(
     const _ = checker.declareBinding(LocalBinding(
       parameter.name.text,
       annotation,
-      parameter.isVar,
+      parameter.var,
       parameter.name.span,
-      isParameter: true,
-      isLazy: isLazy,
+      bindsParameter: true,
+      lazy: isLazy,
     ))
   }
 }

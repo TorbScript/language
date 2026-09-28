@@ -144,7 +144,7 @@ fn notes(source: String): List<String> {
 fn describeSignature(checker: Checker, signature: Signature): String {
   var parts = [describeFunction(checker.types, checker.symbols, signature.form)]
   if signature.takesSelf {
-    parts.append(if signature.isVarSelf { "var self" } else { "self" })
+    parts.append(if signature.takesVarSelf { "var self" } else { "self" })
   }
   for bound in signature.bounds {
     var traits: List<String> = []
@@ -342,8 +342,8 @@ group "Signatures" {
     const signature = found.checker.typeSignature shape
     assert(signature.fields.length() == 3)
     assert(found.show(signature.fields[0].type) == "Int64")
-    assert(!signature.fields[0].isVar)
-    assert(signature.fields[1].isVar && signature.fields[1].hasDefault)
+    assert(!signature.fields[0].var)
+    assert(signature.fields[1].var && signature.fields[1].hasDefault)
     assert(signature.fields[2].name == "label")
     assert(signature.fields[2].visibility == Visibility.Private)
     assert(found.show(signature.traits[0].capability) == "Show")
@@ -357,7 +357,7 @@ group "Signatures" {
     const shape = typeSignatureOf found.checker, symbol
     const signature = found.checker.typeSignature shape
     assert(signature.traits[0].delegate == "value")
-    assert signature.isNative
+    assert signature.native
   }
 
   test "a signature is instantiated by substituting its parameters" {

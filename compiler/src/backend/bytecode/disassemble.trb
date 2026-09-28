@@ -150,7 +150,7 @@ fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List
   var lines: List<String> = []
   var parameters: List<String> = []
   for parameter in chunk.parameters {
-    const mark = if parameter.isReference { "&" } else { "" }
+    const mark = if parameter.byReference { "&" } else { "" }
     parameters.append "{mark}r{parameter.offset}"
   }
   const environment = if chunk.takesEnvironment { ", environment" } else { "" }
@@ -162,7 +162,7 @@ fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List
   for slot in chunk.slots {
     lines.append "  r{slot.offset} %{slot.slot} {slot.description}"
   }
-  if chunk.isTask {
+  if chunk.suspendable {
     var resumes: List<String> = []
     for offset in chunk.resumes {
       resumes.append "{offset}"
@@ -206,7 +206,7 @@ fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List
 }
 
 fn describePlace(place: Place, locations: List<Location>): String {
-  const base = if place.isThroughReference { "*r{place.base}" } else { "r{place.base}" }
+  const base = if place.throughReference { "*r{place.base}" } else { "r{place.base}" }
   var parts = [base]
   for step in place.steps {
     parts.append(

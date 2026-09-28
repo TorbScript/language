@@ -200,7 +200,7 @@ fn noteCapturedVariables(var lowering: Lowering, var found: Map<Span, Bool>, at:
     }
   }
   for capture in captures {
-    if !capture.isVar {
+    if !capture.var {
       continue
     }
     const declared = lowering.checker.binding(capture.binding).at
@@ -493,7 +493,7 @@ public fn lowerNamedFunctionValue(
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.Closure(target, function, [], isEscaping: false)
+  emit builder, Instruction.Closure(target, function, [], escaping: false)
   target
 }
 
@@ -523,7 +523,7 @@ fn lowerBoundMethodValue(
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  if written.isVarSelf {
+  if written.takesVarSelf {
     const what = "`{name}` used as a function value, which would change a copy of its receiver"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
@@ -714,7 +714,7 @@ public fn lowerConstructorValue(
   }
   const function = constructorFunctionOf lowering, layout, variant, shape
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.Closure(target, function, [], isEscaping: false)
+  emit builder, Instruction.Closure(target, function, [], escaping: false)
   target
 }
 
@@ -781,7 +781,7 @@ public fn lowerClosureCall(
   // is its first argument, and the written ones fill the parameters after it
   var offset = 0
   if const Some(receiver) = boundReceiverOf(lowering, callee, count) {
-    if shape.parameters[0].isReference {
+    if shape.parameters[0].byReference {
       const what = "a receiver closure in a constant whose receiver is `var`"
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
@@ -803,7 +803,7 @@ public fn lowerClosureCall(
     }
     // `commaSeparated(closer, parse: (var Parser) => Item)`: a `var` parameter of a closure type takes a place, exactly
     // as a `var` parameter of a declaration does - the closure writes through the caller's own storage
-    if shape.parameters[position].isReference {
+    if shape.parameters[position].byReference {
       const inner = shape.parameters[position].annotation
       const path = match argumentReference(lowering, builder, value, inner, "a `var` argument") {
         Some(found) => found
@@ -1105,7 +1105,7 @@ fn isReferenceParameterSlot(builder: FunctionBuilder, slot: Slot): Bool {
   }
   if const .Parameter(index) = builder.function.slots[slot.value].role {
     if const Some(parameter) = builder.function.signature.parameters.get(index) {
-      return parameter.isReference
+      return parameter.byReference
     }
   }
   false
@@ -1177,7 +1177,7 @@ fn loweredClosureBody(
   setBlockLocation inner, BlockId(0), location
   const saved = savedFrame lowering
   enterClosure lowering, name, at
-  lowering.isTaskBody = isSpawned || isTaskClosure
+  lowering.suspendable = isSpawned || isTaskClosure
   bindCaptures lowering, inner, environment, plans
   bindClosureParameters lowering, inner, at, source, environment.isSome(), shape.parameters.length()
   if lowering.isSupported {
@@ -1340,7 +1340,7 @@ fn bindClosureParameters(
   if closure.parameters.isEmpty() {
     const module = lowering.module
     if const Some(receiver) = lowering.checker.receiverAt(module, at) {
-      if receiver.isImplicit {
+      if receiver.implicit {
         const declared = lowering.checker.binding(receiver.binding).at
         if const Some(slot) = positions.first() {
           lowering.slots.set declared, slot
@@ -1392,7 +1392,7 @@ public type SavedFrame {
   closureParameters: List<Slot>
   hole: Slot?
   isDiverged: Bool
-  isTaskBody: Bool
+  suspendable: Bool
   breakTargets: List<BlockId>
   continueTargets: List<BlockId>
   loopBroke: List<Bool>
@@ -1425,7 +1425,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.closureParameters,
     lowering.hole,
     lowering.isDiverged,
-    lowering.isTaskBody,
+    lowering.suspendable,
     lowering.breakTargets,
     lowering.continueTargets,
     lowering.loopBroke,
@@ -1464,7 +1464,7 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.closureParameters = []
   lowering.hole = None
   lowering.isDiverged = false
-  lowering.isTaskBody = false
+  lowering.suspendable = false
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
@@ -1490,7 +1490,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.closureParameters = saved.closureParameters
   lowering.hole = saved.hole
   lowering.isDiverged = saved.isDiverged
-  lowering.isTaskBody = saved.isTaskBody
+  lowering.suspendable = saved.suspendable
   lowering.breakTargets = saved.breakTargets
   lowering.continueTargets = saved.continueTargets
   lowering.loopBroke = saved.loopBroke

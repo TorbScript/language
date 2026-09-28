@@ -291,7 +291,7 @@ public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
 fn movedSlotsOf(arguments: List<Argument>): List<Slot> {
   var found: List<Slot> = []
   for argument in arguments {
-    if argument.ownership == Ownership.Owned && argument.isLastUse {
+    if argument.ownership == Ownership.Owned && argument.last {
       found.append argument.slot
     }
   }
@@ -375,7 +375,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
 
 /** A `copy` whose source dies here is a `move`: the count stays where it is, and nothing is retained. */
 fn movedOrCopied(target: Slot, source: Argument): Instruction {
-  if source.ownership == Ownership.Owned && source.isLastUse {
+  if source.ownership == Ownership.Owned && source.last {
     return Instruction.Move target, source.slot
   }
   Instruction.Copy target, source.slot
@@ -411,6 +411,6 @@ fn withPlace(reference: Reference, decided: List<Argument>, first: Int): Referen
 fn decidedAt(decided: List<Argument>, index: Int): Argument {
   match decided.get(index) {
     Some(found) => found
-    None => Argument Slot(0), Ownership.Borrowed, isLastUse: false
+    None => Argument Slot(0), Ownership.Borrowed, last: false
   }
 }

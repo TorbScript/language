@@ -124,7 +124,7 @@ type Lexer {
   /** The problems of the `String` reading of every string literal, which the checker reports or drops. */
   var deferred: List<DeferredDiagnostic> = []
   /** Whether a string literal is being read, whose problems of its `String` reading go to [Lexer.pending]. */
-  var isReadingText: Bool = false
+  var readingText: Bool = false
   /** The problems of the `String` reading of the literal that is being read, until its span is known. */
   var pending: List<Diagnostic> = []
   /** Whether the verbatim reading of a literal is kept: only [writtenTextOf] asks for it. */
@@ -502,7 +502,7 @@ type Lexer {
    * checker, which knows which reading the literal gets. Inside a character literal it is an ordinary error.
    */
   var fn textError(message: String, start: Int) {
-    if !isReadingText {
+    if !readingText {
       error message, start
       return
     }
@@ -539,7 +539,7 @@ type Lexer {
   var fn textLiteral(start: Int, raw: Bool) {
     // An escape sequence a `String` does not have and an interpolation that does not parse are problems of the
     // `String` reading only, and the checker decides which reading this literal gets (`DeferredDiagnostic`)
-    isReadingText = !raw
+    readingText = !raw
     pending = []
     written = []
     const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
@@ -664,7 +664,7 @@ type Lexer {
    * literal; a literal that was never closed has no verbatim reading either, so they are reported at once.
    */
   var fn finishText(start: Int, isClosed: Bool) {
-    isReadingText = false
+    readingText = false
     if isClosed {
       const literal = spanFrom start
       for problem in pending {

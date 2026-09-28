@@ -46,7 +46,7 @@ public type Body {
   /** Whether any terminator jumps to the block. A label nothing jumps to is a warning, so it is left out. */
   usedLabels: List<Bool>
   /** The result is written through the pointer the caller passes first (BACKEND 3.2). */
-  isByPointer: Bool
+  byPointer: Bool
   /** Per slot: whether the closure a `Closure` writes into it keeps its environment on the frame ([framedClosures]). */
   framedClosures: List<Bool>
   /** The state machine of a resume function (`ir/suspension.trb`), and `None` for every other function. */
@@ -352,7 +352,7 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
     const parameter = signature.parameters[index]
     const spelling = valueTypeOf program, parameter.annotation
     const name = slotNameOf function, Slot(index)
-    if parameter.isReference {
+    if parameter.byReference {
       parameters.append declarationOf(pointerTo(spelling), name)
       continue
     }
@@ -1723,7 +1723,7 @@ fn argumentsOf(
   for index in 0..arguments.length() {
     const parameter = signature.parameters.get index
     const isReference = match parameter {
-      Some(found) => found.isReference
+      Some(found) => found.byReference
       None => false
     }
     if isReference {
@@ -1743,7 +1743,7 @@ fn argumentsOf(
 
 fn isByAddressParameter(parameter: IrParameter?): Bool {
   match parameter {
-    Some(found) => found.isByAddress
+    Some(found) => found.byAddress
     None => false
   }
 }
@@ -2057,7 +2057,7 @@ fn closureCallStatements(
   var spellings = ["torb_environment *"]
   for parameter in signature.parameters {
     const spelling = valueTypeOf program, parameter.annotation
-    spellings.append(if parameter.isReference { pointerTo spelling } else { spelling })
+    spellings.append(if parameter.byReference { pointerTo spelling } else { spelling })
   }
   const result = resultTypeOf program, signature.result
   const shape = "{result} (*)({spellings.joined(separator: ", ")})"
@@ -3190,7 +3190,7 @@ fn returnStatements(program: IrProgram, body: Body, value: Argument?): List<CSta
     return [CStatement.Return()]
   }
   const name = slotExpression body, found.slot
-  if body.isByPointer {
+  if body.byPointer {
     const into = CExpression.Dereference CExpression.Name(resultPointerName)
     return [CStatement.Assignment(into, name), CStatement.Return()]
   }
@@ -3227,7 +3227,7 @@ fn isReferenceSlot(body: Body, slot: Slot): Bool {
   }
   if const .Parameter(index) = body.function.slots[slot.value].role {
     if const Some(parameter) = body.function.signature.parameters.get(index) {
-      return parameter.isReference
+      return parameter.byReference
     }
   }
   false

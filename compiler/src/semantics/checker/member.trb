@@ -265,7 +265,7 @@ fn nominalMember(
     return memberCandidate checker, receiver, member, mapping, own, isStatic, Dispatch.Direct
   }
   // `copy` is generated for every `type`, with the shape of the constructor and every field optional
-  if !isStatic && name == "copy" && shape.cases.isEmpty() && !shape.isShared {
+  if !isStatic && name == "copy" && shape.cases.isEmpty() && !shape.shared {
     const form = constructorForm checker, receiver, shape, mapping, allOptional: true
     return Candidate CandidateKind.Copy(receiver), checker.functionType(form), form: form
   }
@@ -615,14 +615,14 @@ fn memberCandidate(
   if signature.takesSelf {
     // `Point.area` is the member itself, `p.area` is the member bound to `p`: the same one, read two ways
     if isStatic {
-      const value = withReceiver checker, receiver, form, signature.isVarSelf
+      const value = withReceiver checker, receiver, form, signature.takesVarSelf
       const annotation = checker.functionType value
       return Candidate(
         CandidateKind.Method(receiver, member),
         annotation,
         form: value,
         takesSelf: true,
-        isVarSelf: signature.isVarSelf,
+        takesVarSelf: signature.takesVarSelf,
         generics: generics,
         bounds: bounds,
         takesSelfArgument: takesSelfArgument,
@@ -635,7 +635,7 @@ fn memberCandidate(
       annotation,
       form: form,
       takesSelf: true,
-      isVarSelf: signature.isVarSelf,
+      takesVarSelf: signature.takesVarSelf,
       generics: generics,
       bounds: bounds,
       takesSelfArgument: takesSelfArgument,
@@ -654,7 +654,7 @@ fn memberCandidate(
         checker.functionType(value),
         form: value,
         takesSelf: true,
-        isVarSelf: isVarReceiver(held.parameters[0].mode),
+        takesVarSelf: isVarReceiver(held.parameters[0].mode),
         generics: generics,
         bounds: bounds,
         dispatch: dispatch,

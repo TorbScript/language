@@ -124,7 +124,7 @@ public fn checkCall(
   const openAccesses = checker.accesses.length()
   checker.callSerial = checker.callSerial + 1
   const call = checker.callSerial
-  const isVarReceiver = target.isVarSelf
+  const isVarReceiver = target.takesVarSelf
   // A call that changes something and produces nothing, and a call whose result is thrown away, are changes and nothing
   // else - the only case the dead-change rule has anything to say about (design 5.3). `cursor.next()` hands its value on
   // and is therefore never one, wherever it stands
@@ -133,10 +133,10 @@ public fn checkCall(
   const plan = matchArguments checker, target, inner, arguments, expression.span
   const calleeName = target.name
   // The closure that fills `spawn`'s parameter becomes a task, which its own type does not say: the call does
-  const savedTaskArgument = checker.isTaskArgument
-  checker.isTaskArgument = isSpawnTarget checker, target
+  const savedTaskArgument = checker.spawned
+  checker.spawned = isSpawnTarget checker, target
   checkArguments checker, inner, arguments, plan, target.resolution, calleeName, isDiscarded, call
-  checker.isTaskArgument = savedTaskArgument
+  checker.spawned = savedTaskArgument
   // `route("/orders/{id}", to: Route.Order)`: the template's variables against the case's fields, once both are known
   checkTemplateRoutes checker, arguments
   // `spawn { ... }` takes no `var` binding with it, and the captures it would take are recorded by now
@@ -173,7 +173,7 @@ fn withGeneratedConversion(var checker: Checker, target: Target, arguments: List
     return target
   }
   const argument = arguments[0]
-  if argument.isSpread || isClosureArgument(argument) || argument.label.isSome() {
+  if argument.spread || isClosureArgument(argument) || argument.label.isSome() {
     return target
   }
   const form = match target.form {
@@ -339,7 +339,7 @@ public fn instantiateTarget(var checker: Checker, target: Target, form: Function
       argument = target.arguments[index]
     } else {
       const declared = checker.types.parameter parameter
-      argument = checker.newVariable declared.name, target.name, at, isConst: declared.isConst
+      argument = checker.newVariable declared.name, target.name, at, isConst: declared.const
     }
     mapping.set parameter, argument
     solved.append argument
@@ -443,7 +443,7 @@ fn chooseOverload(
   // parameter it fills, so reading it here would decide the candidate by a guess
   var given: List<TypeId?> = []
   for argument in arguments {
-    if argument.isSpread || isClosureArgument(argument) {
+    if argument.spread || isClosureArgument(argument) {
       given.append None
       continue
     }
@@ -766,7 +766,7 @@ public fn trailingClosureAt(arguments: List<Argument>, at: Span): Int {
     return -1
   }
   const last = arguments[index]
-  if last.label.isSome() || last.isSpread || last.value.span.end != at.end {
+  if last.label.isSome() || last.spread || last.value.span.end != at.end {
     return -1
   }
   if const .Closure(_) = last.value.kind {
@@ -845,7 +845,7 @@ fn checkArgumentPass(
       continue
     }
     const parameter = parameters[position]
-    if argument.isSpread {
+    if argument.spread {
       checkSpread checker, argument, parameter
       continue
     }
@@ -1037,7 +1037,7 @@ fn requireTaskCaptures(var checker: Checker, target: Target, arguments: List<Arg
     const captures = checker.capturesAt(checker.module, at) ?? []
     for capture in captures {
       const binding = checker.bindings[capture.binding.value]
-      if capture.isVar {
+      if capture.var {
         reportTaskVariable checker, binding.name, at
         continue
       }

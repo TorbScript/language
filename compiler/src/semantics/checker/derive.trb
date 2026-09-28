@@ -146,7 +146,7 @@ fn canDerive(var checker: Checker, target: TypeId, name: String, capability: Sym
       const identifier = typeSignatureOf checker, symbol
       const shape = checker.typeSignature identifier
       // A `native` type is what the runtime provides, and a trait it does not declare it does not have
-      if shape.isNative {
+      if shape.native {
         return false
       }
       // A trait is not a type with fields: there is nothing structural to generate
@@ -154,7 +154,7 @@ fn canDerive(var checker: Checker, target: TypeId, name: String, capability: Sym
         return false
       }
       // Only `Show` is generated for a `shared type`: everything else would compare or copy an identity
-      if shape.isShared && name != "Show" {
+      if shape.shared && name != "Show" {
         return false
       }
       // A capsule: nothing outside can call the constructor, so there is no field list a caller could be handed, and
@@ -506,7 +506,7 @@ public fn capsuleNotesOf(var checker: Checker, target: TypeId, bound: TypeId): L
   }
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
-  if shape.isNative || shape.isShared || isConstructible(checker, shape.fields) {
+  if shape.native || shape.shared || isConstructible(checker, shape.fields) {
     return []
   }
   const shown = checker.describe target
@@ -614,7 +614,7 @@ fn failingFieldOf(var checker: Checker, target: TypeId, bound: TypeId): FailingF
   }
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
-  if shape.isNative || shape.isShared || !isConstructible(checker, shape.fields) {
+  if shape.native || shape.shared || !isConstructible(checker, shape.fields) {
     return None
   }
   var mapping: Map<ParameterId, TypeId> = [:]

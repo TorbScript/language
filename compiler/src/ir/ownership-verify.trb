@@ -165,7 +165,7 @@ fn checkKeptOperand(
 }
 
 fn checkMovedOperand(function: IrFunction, at: String, argument: Argument, var found: List<String>) {
-  if !argument.isLastUse {
+  if !argument.last {
     return
   }
   if !isLentParameter(function, argument.slot) {
@@ -216,7 +216,7 @@ fn isLentParameter(function: IrFunction, slot: Slot): Bool {
       return false
     }
     const parameter = parameters[index]
-    return parameter.isReference || parameter.ownership == Ownership.Borrowed
+    return parameter.byReference || parameter.ownership == Ownership.Borrowed
   }
   false
 }
@@ -460,7 +460,7 @@ fn runTerminator(
   }
   if const Some(argument) = value {
     const position = counted.positionOf argument.slot
-    if position >= 0 && argument.ownership == Ownership.Owned && argument.isLastUse {
+    if position >= 0 && argument.ownership == Ownership.Owned && argument.last {
       state.set position, emptyState
     }
   }

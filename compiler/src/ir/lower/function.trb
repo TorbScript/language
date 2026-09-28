@@ -144,7 +144,7 @@ fn lowerTaskInstance(
   setFunctionKind resume, FunctionKind.TaskResume
   setBlockLocation resume, BlockId(0), location
   declareParameterSlots lowering, symbol, declaration
-  lowering.isTaskBody = true
+  lowering.suspendable = true
   lowerBody lowering, resume, body, value
   numberSuspensions resume
   if !lowering.isSupported {
@@ -165,7 +165,7 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.slots = [:]
   lowering.entryLocals = [:]
   lowering.hole = None
-  lowering.isTaskBody = false
+  lowering.suspendable = false
   lowering.inlinedConstants = [:]
   lowering.inlinedThunks = [:]
   lowering.inlinedQuotations = [:]
@@ -302,7 +302,7 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   lowering.owner = name
   lowering.capturedVariables = capturedVariablesIn lowering, statements
   // An entry file may wait at the top level: where it does, its code becomes the resume function of the main task
-  lowering.isTaskBody = true
+  lowering.suspendable = true
   var builder = newFunction name, None, signature, "entry"
   for statement in statements {
     if isEntryStatement(statement) {

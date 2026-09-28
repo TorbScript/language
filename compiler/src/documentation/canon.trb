@@ -34,7 +34,7 @@ public type CanonProblem {
 /** Every call the walk found, with the two questions the rule `calls` asks about its place. */
 type CallSite {
   call: Expression
-  isCommandPosition: Bool
+  inCommandPosition: Bool
   /** The callee names a field or a constant of the type this call stands in: there parentheses are meaning, not style */
   calleeCouldBeAField: Bool
 }
@@ -421,7 +421,7 @@ fn shouldBeACommand(
   callee: Expression,
   arguments: List<Argument>,
 ): CanonProblem? {
-  if !site.isCommandPosition || !isCommandPath(text, callee) {
+  if !site.inCommandPosition || !isCommandPath(text, callee) {
     return None
   }
   const open = tokenStartingAt tokens, callee.span.end
@@ -449,7 +449,7 @@ fn shouldBeACommand(
   }
   const first = arguments[0]
   const last = arguments[plain - 1]
-  if first.isSpread || !startsCommandArgument(text, tokens, argumentStart(first)) {
+  if first.spread || !startsCommandArgument(text, tokens, argumentStart(first)) {
     return None
   }
   if arguments.slice(0..plain).any(hasTopLevelOperator) {
@@ -500,7 +500,7 @@ fn shouldHaveParentheses(
   const last = arguments[plain - 1]
   const overSeveralLines = text.sliceBytes(callee.span.end, last.value.span.end).contains("\n")
   const hasOperator = arguments.slice(0..plain).any(hasTopLevelOperator)
-  if !site.isCommandPosition {
+  if !site.inCommandPosition {
     // The parser only reads a command in command position, so this cannot happen from a parsed file
     return None
   }
@@ -606,7 +606,7 @@ fn plainArgumentCount(tokens: List<Token>, arguments: List<Argument>, closeAt: I
     return 0
   }
   const last = arguments[count - 1]
-  const isClosure = last.label.isNone() && !last.isSpread && isClosureExpression(last.value)
+  const isClosure = last.label.isNone() && !last.spread && isClosureExpression(last.value)
   if !isClosure {
     return count
   }

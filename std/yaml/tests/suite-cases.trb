@@ -31,7 +31,7 @@ public type SuiteCase {
   events: String
   /** The JSON of `in.json`, or empty where the suite has none. */
   json: String
-  isError: Bool
+  invalid: Bool
 }
 
 /** Every case, in the order of their names. */
@@ -59,7 +59,7 @@ fn casesPart1(): List<SuiteCase> {
       "-\n  name: Mark McGwire\n  hr:   65\n  avg:  0.278\n-\n  name: Sammy Sosa\n  hr:   63\n  avg:  0.288\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :name\n=VAL :Mark McGwire\n=VAL :hr\n=VAL :65\n=VAL :avg\n=VAL :0.278\n-MAP\n+MAP\n=VAL :name\n=VAL :Sammy Sosa\n=VAL :hr\n=VAL :63\n=VAL :avg\n=VAL :0.288\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"name\": \"Mark McGwire\",\n    \"hr\": 65,\n    \"avg\": 0.278\n  \},\n  \{\n    \"name\": \"Sammy Sosa\",\n    \"hr\": 63,\n    \"avg\": 0.288\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "236B",
@@ -67,7 +67,7 @@ fn casesPart1(): List<SuiteCase> {
       "foo:\n  bar\ninvalid\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :bar\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "26DV",
@@ -75,7 +75,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"top1\" : \n  \"key1\" : &alias1 scalar1\n'top2' : \n  'key2' : &alias2 scalar2\ntop3: &node3 \n  *alias1 : scalar3\ntop4: \n  *alias2 : scalar4\ntop5   :    \n  scalar5\ntop6: \n  &anchor6 'key6' : scalar6\n",
       "+STR\n+DOC\n+MAP\n=VAL \"top1\n+MAP\n=VAL \"key1\n=VAL &alias1 :scalar1\n-MAP\n=VAL 'top2\n+MAP\n=VAL 'key2\n=VAL &alias2 :scalar2\n-MAP\n=VAL :top3\n+MAP &node3\n=ALI *alias1\n=VAL :scalar3\n-MAP\n=VAL :top4\n+MAP\n=ALI *alias2\n=VAL :scalar4\n-MAP\n=VAL :top5\n=VAL :scalar5\n=VAL :top6\n+MAP\n=VAL &anchor6 'key6\n=VAL :scalar6\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"top1\": \{\n    \"key1\": \"scalar1\"\n  \},\n  \"top2\": \{\n    \"key2\": \"scalar2\"\n  \},\n  \"top3\": \{\n    \"scalar1\": \"scalar3\"\n  \},\n  \"top4\": \{\n    \"scalar2\": \"scalar4\"\n  \},\n  \"top5\": \"scalar5\",\n  \"top6\": \{\n    \"key6\": \"scalar6\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "27NA",
@@ -83,7 +83,7 @@ fn casesPart1(): List<SuiteCase> {
       "%YAML 1.2\n--- text\n",
       "+STR\n+DOC ---\n=VAL :text\n-DOC\n-STR\n",
       "\"text\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2AUY",
@@ -91,7 +91,7 @@ fn casesPart1(): List<SuiteCase> {
       " - !!str a\n - b\n - !!int 42\n - d\n",
       "+STR\n+DOC\n+SEQ\n=VAL <tag:yaml.org,2002:str> :a\n=VAL :b\n=VAL <tag:yaml.org,2002:int> :42\n=VAL :d\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\",\n  \"b\",\n  42,\n  \"d\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2CMS",
@@ -99,7 +99,7 @@ fn casesPart1(): List<SuiteCase> {
       "this\n is\n  invalid: x\n",
       "+STR\n+DOC\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "2EBW",
@@ -107,17 +107,17 @@ fn casesPart1(): List<SuiteCase> {
       "a!\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az\{|\}~: safe\n?foo: safe question mark\n:foo: safe colon\n-foo: safe dash\nthis is#not: a comment\n",
       "+STR\n+DOC\n+MAP\n=VAL :a!\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~\n=VAL :safe\n=VAL :?foo\n=VAL :safe question mark\n=VAL ::foo\n=VAL :safe colon\n=VAL :-foo\n=VAL :safe dash\n=VAL :this is#not\n=VAL :a comment\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a!\\\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~\": \"safe\",\n  \"?foo\": \"safe question mark\",\n  \":foo\": \"safe colon\",\n  \"-foo\": \"safe dash\",\n  \"this is#not\": \"a comment\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("2G84/00", "Literal modifers", "--- |0\n", "+STR\n+DOC ---\n", "", isError: true),
-    SuiteCase("2G84/01", "Literal modifers", "--- |10\n", "+STR\n+DOC ---\n", "", isError: true),
+    SuiteCase("2G84/00", "Literal modifers", "--- |0\n", "+STR\n+DOC ---\n", "", invalid: true),
+    SuiteCase("2G84/01", "Literal modifers", "--- |10\n", "+STR\n+DOC ---\n", "", invalid: true),
     SuiteCase(
       "2G84/02",
       "Literal modifers",
       "--- |1-",
       "+STR\n+DOC ---\n=VAL |\n-DOC\n-STR\n",
       "\"\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2G84/03",
@@ -125,7 +125,7 @@ fn casesPart1(): List<SuiteCase> {
       "--- |1+",
       "+STR\n+DOC ---\n=VAL |\n-DOC\n-STR\n",
       "\"\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2JQS",
@@ -133,7 +133,7 @@ fn casesPart1(): List<SuiteCase> {
       ": a\n: b\n",
       "+STR\n+DOC\n+MAP\n=VAL :\n=VAL :a\n=VAL :\n=VAL :b\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2LFX",
@@ -141,7 +141,7 @@ fn casesPart1(): List<SuiteCase> {
       "%FOO  bar baz # Should be ignored\n              # with a warning.\n---\n\"foo\"\n",
       "+STR\n+DOC ---\n=VAL \"foo\n-DOC\n-STR\n",
       "\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2SXE",
@@ -149,7 +149,7 @@ fn casesPart1(): List<SuiteCase> {
       "&a: key: &a value\nfoo:\n  *a:\n",
       "+STR\n+DOC\n+MAP\n=VAL &a: :key\n=VAL &a :value\n=VAL :foo\n=ALI *a:\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value\",\n  \"foo\": \"key\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "2XXW",
@@ -157,7 +157,7 @@ fn casesPart1(): List<SuiteCase> {
       "# Sets are represented as a\n# Mapping where each key is\n# associated with a null value\n--- !!set\n? Mark McGwire\n? Sammy Sosa\n? Ken Griff\n",
       "+STR\n+DOC ---\n+MAP <tag:yaml.org,2002:set>\n=VAL :Mark McGwire\n=VAL :\n=VAL :Sammy Sosa\n=VAL :\n=VAL :Ken Griff\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Mark McGwire\": null,\n  \"Sammy Sosa\": null,\n  \"Ken Griff\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "33X3",
@@ -165,7 +165,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\n- !!int 1\n- !!int -2\n- !!int 33\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL <tag:yaml.org,2002:int> :1\n=VAL <tag:yaml.org,2002:int> :-2\n=VAL <tag:yaml.org,2002:int> :33\n-SEQ\n-DOC\n-STR\n",
       "[\n  1,\n  -2,\n  33\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "35KP",
@@ -173,7 +173,7 @@ fn casesPart1(): List<SuiteCase> {
       "--- !!map\n? a\n: b\n--- !!seq\n- !!str c\n--- !!str\nd\ne\n",
       "+STR\n+DOC ---\n+MAP <tag:yaml.org,2002:map>\n=VAL :a\n=VAL :b\n-MAP\n-DOC\n+DOC ---\n+SEQ <tag:yaml.org,2002:seq>\n=VAL <tag:yaml.org,2002:str> :c\n-SEQ\n-DOC\n+DOC ---\n=VAL <tag:yaml.org,2002:str> :d e\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\"\n\}\n[\n  \"c\"\n]\n\"d e\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "36F6",
@@ -181,7 +181,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\nplain: a\n b\n\n c\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :plain\n=VAL :a b\\nc\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"plain\": \"a b\\nc\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3ALJ",
@@ -189,7 +189,7 @@ fn casesPart1(): List<SuiteCase> {
       "- - s1_i1\n  - s1_i2\n- s2\n",
       "+STR\n+DOC\n+SEQ\n+SEQ\n=VAL :s1_i1\n=VAL :s1_i2\n-SEQ\n=VAL :s2\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"s1_i1\",\n    \"s1_i2\"\n  ],\n  \"s2\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3GZX",
@@ -197,7 +197,7 @@ fn casesPart1(): List<SuiteCase> {
       "First occurrence: &anchor Foo\nSecond occurrence: *anchor\nOverride anchor: &anchor Bar\nReuse anchor: *anchor\n",
       "+STR\n+DOC\n+MAP\n=VAL :First occurrence\n=VAL &anchor :Foo\n=VAL :Second occurrence\n=ALI *anchor\n=VAL :Override anchor\n=VAL &anchor :Bar\n=VAL :Reuse anchor\n=ALI *anchor\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"First occurrence\": \"Foo\",\n  \"Second occurrence\": \"Foo\",\n  \"Override anchor\": \"Bar\",\n  \"Reuse anchor\": \"Bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3HFZ",
@@ -205,7 +205,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\nkey: value\n... invalid\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-DOC ...\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "3MYT",
@@ -213,7 +213,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\nk:#foo\n &a !t s\n",
       "+STR\n+DOC ---\n=VAL :k:#foo &a !t s\n-DOC\n-STR\n",
       "\"k:#foo &a !t s\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3R3P",
@@ -221,7 +221,7 @@ fn casesPart1(): List<SuiteCase> {
       "&sequence\n- a\n",
       "+STR\n+DOC\n+SEQ &sequence\n=VAL :a\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/00",
@@ -229,7 +229,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"1 leading\n    \\ttab\"\n",
       "+STR\n+DOC\n=VAL \"1 leading \\ttab\n-DOC\n-STR\n",
       "\"1 leading \\ttab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/01",
@@ -237,7 +237,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"2 leading\n    \\\ttab\"\n",
       "+STR\n+DOC\n=VAL \"2 leading \\ttab\n-DOC\n-STR\n",
       "\"2 leading \\ttab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/02",
@@ -245,7 +245,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"3 leading\n    \ttab\"\n",
       "+STR\n+DOC\n=VAL \"3 leading tab\n-DOC\n-STR\n",
       "\"3 leading tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/03",
@@ -253,7 +253,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"4 leading\n    \\t  tab\"\n",
       "+STR\n+DOC\n=VAL \"4 leading \\t  tab\n-DOC\n-STR\n",
       "\"4 leading \\t  tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/04",
@@ -261,7 +261,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"5 leading\n    \\\t  tab\"\n",
       "+STR\n+DOC\n=VAL \"5 leading \\t  tab\n-DOC\n-STR\n",
       "\"5 leading \\t  tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3RLN/05",
@@ -269,7 +269,7 @@ fn casesPart1(): List<SuiteCase> {
       "\"6 leading\n    \t  tab\"\n",
       "+STR\n+DOC\n=VAL \"6 leading tab\n-DOC\n-STR\n",
       "\"6 leading tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "3UYS",
@@ -277,7 +277,7 @@ fn casesPart1(): List<SuiteCase> {
       "escaped slash: \"a\\/b\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :escaped slash\n=VAL \"a/b\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"escaped slash\": \"a/b\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4ABK",
@@ -285,7 +285,7 @@ fn casesPart1(): List<SuiteCase> {
       "\{\nunquoted : \"separate\",\nhttp://foo.com,\nomitted value:,\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :unquoted\n=VAL \"separate\n=VAL :http://foo.com\n=VAL :\n=VAL :omitted value\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4CQQ",
@@ -293,7 +293,7 @@ fn casesPart1(): List<SuiteCase> {
       "plain:\n  This unquoted scalar\n  spans many lines.\n\nquoted: \"So does this\n  quoted scalar.\\n\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :plain\n=VAL :This unquoted scalar spans many lines.\n=VAL :quoted\n=VAL \"So does this quoted scalar.\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"plain\": \"This unquoted scalar spans many lines.\",\n  \"quoted\": \"So does this quoted scalar.\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4EJS",
@@ -301,7 +301,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\na:\n\tb:\n\t\tc: value\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "4FJ6",
@@ -309,7 +309,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\n[\n  [ a, [ [[b,c]]: d, e]]: 23\n]\n",
       "+STR\n+DOC ---\n+SEQ []\n+MAP \{\}\n+SEQ []\n=VAL :a\n+SEQ []\n+MAP \{\}\n+SEQ []\n+SEQ []\n=VAL :b\n=VAL :c\n-SEQ\n-SEQ\n=VAL :d\n-MAP\n=VAL :e\n-SEQ\n-SEQ\n=VAL :23\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4GC6",
@@ -317,7 +317,7 @@ fn casesPart1(): List<SuiteCase> {
       "'here''s to \"quotes\"'\n",
       "+STR\n+DOC\n=VAL 'here's to \"quotes\"\n-DOC\n-STR\n",
       "\"here's to \\\"quotes\\\"\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4H7K",
@@ -325,7 +325,7 @@ fn casesPart1(): List<SuiteCase> {
       "---\n[ a, b, c ] ]\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL :a\n=VAL :b\n=VAL :c\n-SEQ\n-DOC\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "4HVU",
@@ -333,7 +333,7 @@ fn casesPart1(): List<SuiteCase> {
       "key:\n   - ok\n   - also ok\n  - wrong\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+SEQ\n=VAL :ok\n=VAL :also ok\n-SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "4JVG",
@@ -341,7 +341,7 @@ fn casesPart1(): List<SuiteCase> {
       "top1: &node1\n  &k1 key1: val1\ntop2: &node2\n  &v2 val2\n",
       "+STR\n+DOC\n+MAP\n=VAL :top1\n+MAP &node1\n=VAL &k1 :key1\n=VAL :val1\n-MAP\n=VAL :top2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "4MUZ/00",
@@ -349,7 +349,7 @@ fn casesPart1(): List<SuiteCase> {
       "\{\"foo\"\n: \"bar\"\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL \"foo\n=VAL \"bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4MUZ/01",
@@ -357,7 +357,7 @@ fn casesPart1(): List<SuiteCase> {
       "\{\"foo\"\n: bar\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL \"foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -370,7 +370,7 @@ fn casesPart2(): List<SuiteCase> {
       "\{foo\n: bar\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4Q9F",
@@ -378,7 +378,7 @@ fn casesPart2(): List<SuiteCase> {
       "--- >\n ab\n cd\n \n ef\n\n\n gh\n",
       "+STR\n+DOC ---\n=VAL >ab cd\\nef\\n\\ngh\\n\n-DOC\n-STR\n",
       "\"ab cd\\nef\\n\\ngh\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4QFQ",
@@ -386,7 +386,7 @@ fn casesPart2(): List<SuiteCase> {
       "- |\n detected\n- >\n \n  \n  # detected\n- |1\n  explicit\n- >\n detected\n",
       "+STR\n+DOC\n+SEQ\n=VAL |detected\\n\n=VAL >\\n\\n# detected\\n\n=VAL | explicit\\n\n=VAL >detected\\n\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"detected\\n\",\n  \"\\n\\n# detected\\n\",\n  \" explicit\\n\",\n  \"detected\\n\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4RWC",
@@ -394,7 +394,7 @@ fn casesPart2(): List<SuiteCase> {
       "  [1, 2, 3]  \n  ",
       "+STR\n+DOC\n+SEQ []\n=VAL :1\n=VAL :2\n=VAL :3\n-SEQ\n-DOC\n-STR\n",
       "[\n  1,\n  2,\n  3\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4UYU",
@@ -402,7 +402,7 @@ fn casesPart2(): List<SuiteCase> {
       "\"foo: bar\\\": baz\"\n",
       "+STR\n+DOC\n=VAL \"foo: bar\": baz\n-DOC\n-STR\n",
       "\"foo: bar\\\": baz\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4V8U",
@@ -410,7 +410,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\nplain\\value\\with\\backslashes\n",
       "+STR\n+DOC ---\n=VAL :plain\\\\value\\\\with\\\\backslashes\n-DOC\n-STR\n",
       "\"plain\\\\value\\\\with\\\\backslashes\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4WA9",
@@ -418,7 +418,7 @@ fn casesPart2(): List<SuiteCase> {
       "- aaa: |2\n    xxx\n  bbb: |\n    xxx\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :aaa\n=VAL |xxx\\n\n=VAL :bbb\n=VAL |xxx\\n\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"aaa\" : \"xxx\\n\",\n    \"bbb\" : \"xxx\\n\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "4ZYM",
@@ -426,7 +426,7 @@ fn casesPart2(): List<SuiteCase> {
       "plain: text\n  lines\nquoted: \"text\n  \tlines\"\nblock: |\n  text\n   \tlines\n",
       "+STR\n+DOC\n+MAP\n=VAL :plain\n=VAL :text lines\n=VAL :quoted\n=VAL \"text lines\n=VAL :block\n=VAL |text\\n \\tlines\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"plain\": \"text lines\",\n  \"quoted\": \"text lines\",\n  \"block\": \"text\\n \\tlines\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "52DL",
@@ -434,7 +434,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n! a\n",
       "+STR\n+DOC ---\n=VAL <!> :a\n-DOC\n-STR\n",
       "\"a\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "54T7",
@@ -442,7 +442,7 @@ fn casesPart2(): List<SuiteCase> {
       "\{foo: you, bar: far\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :foo\n=VAL :you\n=VAL :bar\n=VAL :far\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"you\",\n  \"bar\": \"far\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "55WF",
@@ -450,7 +450,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n\"\\.\"\n",
       "+STR\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "565N",
@@ -458,7 +458,7 @@ fn casesPart2(): List<SuiteCase> {
       "canonical: !!binary \"\\\n R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\\\n OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\\\n +f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\\\n AgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\"\ngeneric: !!binary |\n R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\n OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\n +f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\n AgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\ndescription:\n The binary value above is a tiny arrow encoded as a gif image.\n",
       "+STR\n+DOC\n+MAP\n=VAL :canonical\n=VAL <tag:yaml.org,2002:binary> \"R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLCAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\n=VAL :generic\n=VAL <tag:yaml.org,2002:binary> |R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\\nOTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\\n+f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\\nAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\\n\n=VAL :description\n=VAL :The binary value above is a tiny arrow encoded as a gif image.\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"canonical\": \"R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLCAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\",\n  \"generic\": \"R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\\nOTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\\n+f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\\nAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\\n\",\n  \"description\": \"The binary value above is a tiny arrow encoded as a gif image.\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "57H4",
@@ -466,7 +466,7 @@ fn casesPart2(): List<SuiteCase> {
       "sequence: !!seq\n- entry\n- !!seq\n - nested\nmapping: !!map\n foo: bar\n",
       "+STR\n+DOC\n+MAP\n=VAL :sequence\n+SEQ <tag:yaml.org,2002:seq>\n=VAL :entry\n+SEQ <tag:yaml.org,2002:seq>\n=VAL :nested\n-SEQ\n-SEQ\n=VAL :mapping\n+MAP <tag:yaml.org,2002:map>\n=VAL :foo\n=VAL :bar\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"sequence\": [\n    \"entry\",\n    [\n      \"nested\"\n    ]\n  ],\n  \"mapping\": \{\n    \"foo\": \"bar\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "58MP",
@@ -474,7 +474,7 @@ fn casesPart2(): List<SuiteCase> {
       "\{x: :x\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :x\n=VAL ::x\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"x\": \":x\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5BVJ",
@@ -482,7 +482,7 @@ fn casesPart2(): List<SuiteCase> {
       "literal: |\n  some\n  text\nfolded: >\n  some\n  text\n",
       "+STR\n+DOC\n+MAP\n=VAL :literal\n=VAL |some\\ntext\\n\n=VAL :folded\n=VAL >some text\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"literal\": \"some\\ntext\\n\",\n  \"folded\": \"some text\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5C5M",
@@ -490,7 +490,7 @@ fn casesPart2(): List<SuiteCase> {
       "- \{ one : two , three: four , \}\n- \{five: six,seven : eight\}\n",
       "+STR\n+DOC\n+SEQ\n+MAP \{\}\n=VAL :one\n=VAL :two\n=VAL :three\n=VAL :four\n-MAP\n+MAP \{\}\n=VAL :five\n=VAL :six\n=VAL :seven\n=VAL :eight\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"one\": \"two\",\n    \"three\": \"four\"\n  \},\n  \{\n    \"five\": \"six\",\n    \"seven\": \"eight\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5GBF",
@@ -498,7 +498,7 @@ fn casesPart2(): List<SuiteCase> {
       "Folding:\n  \"Empty line\n   \t\n  as a line feed\"\nChomping: |\n  Clipped empty lines\n \n\n",
       "+STR\n+DOC\n+MAP\n=VAL :Folding\n=VAL \"Empty line\\nas a line feed\n=VAL :Chomping\n=VAL |Clipped empty lines\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Folding\": \"Empty line\\nas a line feed\",\n  \"Chomping\": \"Clipped empty lines\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5KJE",
@@ -506,7 +506,7 @@ fn casesPart2(): List<SuiteCase> {
       "- [ one, two, ]\n- [three ,four]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n=VAL :one\n=VAL :two\n-SEQ\n+SEQ []\n=VAL :three\n=VAL :four\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"one\",\n    \"two\"\n  ],\n  [\n    \"three\",\n    \"four\"\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5LLU",
@@ -514,7 +514,7 @@ fn casesPart2(): List<SuiteCase> {
       "block scalar: >\n \n  \n   \n invalid\n",
       "+STR\n+DOC\n+MAP\n=VAL :block scalar\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "5MUD",
@@ -522,7 +522,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n\{ \"foo\"\n  :bar \}\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL \"foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5NYZ",
@@ -530,7 +530,7 @@ fn casesPart2(): List<SuiteCase> {
       "key:    # Comment\n  value\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5T43",
@@ -538,7 +538,7 @@ fn casesPart2(): List<SuiteCase> {
       "- \{ \"key\":value \}\n- \{ \"key\"::value \}\n",
       "+STR\n+DOC\n+SEQ\n+MAP \{\}\n=VAL \"key\n=VAL :value\n-MAP\n+MAP \{\}\n=VAL \"key\n=VAL ::value\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"key\": \"value\"\n  \},\n  \{\n    \"key\": \":value\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5TRB",
@@ -546,7 +546,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n\"\n---\n\"\n",
       "+STR\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "5TYM",
@@ -554,7 +554,7 @@ fn casesPart2(): List<SuiteCase> {
       "%TAG !m! !my-\n--- # Bulb here\n!m!light fluorescent\n...\n%TAG !m! !my-\n--- # Color here\n!m!light green\n",
       "+STR\n+DOC ---\n=VAL <!my-light> :fluorescent\n-DOC ...\n+DOC ---\n=VAL <!my-light> :green\n-DOC\n-STR\n",
       "\"fluorescent\"\n\"green\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "5U3A",
@@ -562,7 +562,7 @@ fn casesPart2(): List<SuiteCase> {
       "key: - a\n     - b\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "5WE3",
@@ -570,7 +570,7 @@ fn casesPart2(): List<SuiteCase> {
       "? explicit key # Empty value\n? |\n  block key\n: - one # Explicit compact\n  - two # block value\n",
       "+STR\n+DOC\n+MAP\n=VAL :explicit key\n=VAL :\n=VAL |block key\\n\n+SEQ\n=VAL :one\n=VAL :two\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"explicit key\": null,\n  \"block key\\n\": [\n    \"one\",\n    \"two\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "62EZ",
@@ -578,7 +578,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\nx: \{ y: z \}in: valid\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :x\n+MAP \{\}\n=VAL :y\n=VAL :z\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "652Z",
@@ -586,7 +586,7 @@ fn casesPart2(): List<SuiteCase> {
       "\{ ?foo: bar,\nbar: 42\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :?foo\n=VAL :bar\n=VAL :bar\n=VAL :42\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"?foo\" : \"bar\",\n  \"bar\" : 42\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "65WH",
@@ -594,7 +594,7 @@ fn casesPart2(): List<SuiteCase> {
       "- foo\n",
       "+STR\n+DOC\n+SEQ\n=VAL :foo\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"foo\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6BCT",
@@ -602,7 +602,7 @@ fn casesPart2(): List<SuiteCase> {
       "- foo:\t bar\n- - baz\n  -\tbaz\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :foo\n=VAL :bar\n-MAP\n+SEQ\n=VAL :baz\n=VAL :baz\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"foo\": \"bar\"\n  \},\n  [\n    \"baz\",\n    \"baz\"\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6BFJ",
@@ -610,7 +610,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n&mapping\n&key [ &item a, b, c ]: value\n",
       "+STR\n+DOC ---\n+MAP &mapping\n+SEQ [] &key\n=VAL &item :a\n=VAL :b\n=VAL :c\n-SEQ\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6CA3",
@@ -618,7 +618,7 @@ fn casesPart2(): List<SuiteCase> {
       "\t[\n\t]\n",
       "+STR\n+DOC\n+SEQ []\n-SEQ\n-DOC\n-STR\n",
       "[]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6CK3",
@@ -626,7 +626,7 @@ fn casesPart2(): List<SuiteCase> {
       "%TAG !e! tag:example.com,2000:app/\n---\n- !local foo\n- !!str bar\n- !e!tag%21 baz\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL <!local> :foo\n=VAL <tag:yaml.org,2002:str> :bar\n=VAL <tag:example.com,2000:app/tag!> :baz\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"foo\",\n  \"bar\",\n  \"baz\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6FWR",
@@ -634,7 +634,7 @@ fn casesPart2(): List<SuiteCase> {
       "--- |+\n ab\n \n  \n...\n",
       "+STR\n+DOC ---\n=VAL |ab\\n\\n \\n\n-DOC ...\n-STR\n",
       "\"ab\\n\\n \\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6H3V",
@@ -642,7 +642,7 @@ fn casesPart2(): List<SuiteCase> {
       "'foo: bar\\': baz'\n",
       "+STR\n+DOC\n+MAP\n=VAL 'foo: bar\\\\\n=VAL :baz'\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo: bar\\\\\": \"baz'\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6HB6",
@@ -650,7 +650,7 @@ fn casesPart2(): List<SuiteCase> {
       "  # Leading comment line spaces are\n   # neither content nor indentation.\n    \nNot indented:\n By one space: |\n    By four\n      spaces\n Flow style: [    # Leading spaces\n   By two,        # in flow style\n  Also by two,    # are neither\n  \tStill by two   # content nor\n    ]             # indentation.\n",
       "+STR\n+DOC\n+MAP\n=VAL :Not indented\n+MAP\n=VAL :By one space\n=VAL |By four\\n  spaces\\n\n=VAL :Flow style\n+SEQ []\n=VAL :By two\n=VAL :Also by two\n=VAL :Still by two\n-SEQ\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Not indented\": \{\n    \"By one space\": \"By four\\n  spaces\\n\",\n    \"Flow style\": [\n      \"By two\",\n      \"Also by two\",\n      \"Still by two\"\n    ]\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6JQW",
@@ -658,7 +658,7 @@ fn casesPart2(): List<SuiteCase> {
       "# ASCII Art\n--- |\n  \\//||\\/||\n  // ||  ||__\n",
       "+STR\n+DOC ---\n=VAL |\\\\//||\\\\/||\\n// ||  ||__\\n\n-DOC\n-STR\n",
       "\"\\\\//||\\\\/||\\n// ||  ||__\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6JTT",
@@ -666,7 +666,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\n[ [ a, b, c ]\n",
       "+STR\n+DOC ---\n+SEQ []\n+SEQ []\n=VAL :a\n=VAL :b\n=VAL :c\n-SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "6JWB",
@@ -674,7 +674,7 @@ fn casesPart2(): List<SuiteCase> {
       "foo: !!seq\n  - !!str a\n  - !!map\n    key: !!str value\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n+SEQ <tag:yaml.org,2002:seq>\n=VAL <tag:yaml.org,2002:str> :a\n+MAP <tag:yaml.org,2002:map>\n=VAL :key\n=VAL <tag:yaml.org,2002:str> :value\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": [\n    \"a\",\n    \{\n      \"key\": \"value\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6KGN",
@@ -682,7 +682,7 @@ fn casesPart2(): List<SuiteCase> {
       "---\na: &anchor\nb: *anchor\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL &anchor :\n=VAL :b\n=ALI *anchor\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": null,\n  \"b\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -695,7 +695,7 @@ fn casesPart3(): List<SuiteCase> {
       "%FOO  bar baz # Should be ignored\n              # with a warning.\n--- \"foo\"\n",
       "+STR\n+DOC ---\n=VAL \"foo\n-DOC\n-STR\n",
       "\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6M2F",
@@ -703,7 +703,7 @@ fn casesPart3(): List<SuiteCase> {
       "? &a a\n: &b b\n: *a\n",
       "+STR\n+DOC\n+MAP\n=VAL &a :a\n=VAL &b :b\n=VAL :\n=ALI *a\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6PBE",
@@ -711,7 +711,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\n?\n- a\n- b\n:\n- c\n- d\n",
       "+STR\n+DOC ---\n+MAP\n+SEQ\n=VAL :a\n=VAL :b\n-SEQ\n+SEQ\n=VAL :c\n=VAL :d\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6S55",
@@ -719,7 +719,7 @@ fn casesPart3(): List<SuiteCase> {
       "key:\n - bar\n - baz\n invalid\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+SEQ\n=VAL :bar\n=VAL :baz\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "6SLA",
@@ -727,7 +727,7 @@ fn casesPart3(): List<SuiteCase> {
       "\"foo\\nbar:baz\\tx \\\\$%^&*()x\": 23\n'x\\ny:z\\tx $%^&*()x': 24\n",
       "+STR\n+DOC\n+MAP\n=VAL \"foo\\nbar:baz\\tx \\\\$%^&*()x\n=VAL :23\n=VAL 'x\\\\ny:z\\\\tx $%^&*()x\n=VAL :24\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\\nbar:baz\\tx \\\\$%^&*()x\": 23,\n  \"x\\\\ny:z\\\\tx $%^&*()x\": 24\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6VJK",
@@ -735,7 +735,7 @@ fn casesPart3(): List<SuiteCase> {
       ">\n Sammy Sosa completed another\n fine season with great stats.\n\n   63 Home Runs\n   0.288 Batting Average\n\n What a year!\n",
       "+STR\n+DOC\n=VAL >Sammy Sosa completed another fine season with great stats.\\n\\n  63 Home Runs\\n  0.288 Batting Average\\n\\nWhat a year!\\n\n-DOC\n-STR\n",
       "\"Sammy Sosa completed another fine season with great stats.\\n\\n  63 Home Runs\\n  0.288 Batting Average\\n\\nWhat a year!\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6WLZ",
@@ -743,7 +743,7 @@ fn casesPart3(): List<SuiteCase> {
       "# Private\n---\n!foo \"bar\"\n...\n# Global\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n",
       "+STR\n+DOC ---\n=VAL <!foo> \"bar\n-DOC ...\n+DOC ---\n=VAL <tag:example.com,2000:app/foo> \"bar\n-DOC\n-STR\n",
       "\"bar\"\n\"bar\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6WPF",
@@ -751,7 +751,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\n\"\n  foo \n \n    bar\n\n  baz\n\"\n",
       "+STR\n+DOC ---\n=VAL \" foo\\nbar\\nbaz \n-DOC\n-STR\n",
       "\" foo\\nbar\\nbaz \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6XDY",
@@ -759,7 +759,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\nnull\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "6ZKB",
@@ -767,7 +767,7 @@ fn casesPart3(): List<SuiteCase> {
       "Document\n---\n# Empty\n...\n%YAML 1.2\n---\nmatches %: 20\n",
       "+STR\n+DOC\n=VAL :Document\n-DOC\n+DOC ---\n=VAL :\n-DOC ...\n+DOC ---\n+MAP\n=VAL :matches %\n=VAL :20\n-MAP\n-DOC\n-STR\n",
       "\"Document\"\nnull\n\{\n  \"matches %\": 20\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "735Y",
@@ -775,7 +775,7 @@ fn casesPart3(): List<SuiteCase> {
       "-\n  \"flow in block\"\n- >\n Block scalar\n- !!map # Block collection\n  foo : bar\n",
       "+STR\n+DOC\n+SEQ\n=VAL \"flow in block\n=VAL >Block scalar\\n\n+MAP <tag:yaml.org,2002:map>\n=VAL :foo\n=VAL :bar\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"flow in block\",\n  \"Block scalar\\n\",\n  \{\n    \"foo\": \"bar\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "74H7",
@@ -783,7 +783,7 @@ fn casesPart3(): List<SuiteCase> {
       "!!str a: b\nc: !!int 42\ne: !!str f\ng: h\n!!str 23: !!bool false\n",
       "+STR\n+DOC\n+MAP\n=VAL <tag:yaml.org,2002:str> :a\n=VAL :b\n=VAL :c\n=VAL <tag:yaml.org,2002:int> :42\n=VAL :e\n=VAL <tag:yaml.org,2002:str> :f\n=VAL :g\n=VAL :h\n=VAL <tag:yaml.org,2002:str> :23\n=VAL <tag:yaml.org,2002:bool> :false\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\",\n  \"c\": 42,\n  \"e\": \"f\",\n  \"g\": \"h\",\n  \"23\": false\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "753E",
@@ -791,7 +791,7 @@ fn casesPart3(): List<SuiteCase> {
       "--- |-\n ab\n \n \n...\n",
       "+STR\n+DOC ---\n=VAL |ab\n-DOC ...\n-STR\n",
       "\"ab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7A4E",
@@ -799,7 +799,7 @@ fn casesPart3(): List<SuiteCase> {
       "\" 1st non-empty\n\n 2nd non-empty \n\t3rd non-empty \"\n",
       "+STR\n+DOC\n=VAL \" 1st non-empty\\n2nd non-empty 3rd non-empty \n-DOC\n-STR\n",
       "\" 1st non-empty\\n2nd non-empty 3rd non-empty \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7BMT",
@@ -807,7 +807,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\ntop1: &node1\n  &k1 key1: one\ntop2: &node2 # comment\n  key2: two\ntop3:\n  &k3 key3: three\ntop4: &node4\n  &k4 key4: four\ntop5: &node5\n  key5: five\ntop6: &val6\n  six\ntop7:\n  &val7 seven\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :top1\n+MAP &node1\n=VAL &k1 :key1\n=VAL :one\n-MAP\n=VAL :top2\n+MAP &node2\n=VAL :key2\n=VAL :two\n-MAP\n=VAL :top3\n+MAP\n=VAL &k3 :key3\n=VAL :three\n-MAP\n=VAL :top4\n+MAP &node4\n=VAL &k4 :key4\n=VAL :four\n-MAP\n=VAL :top5\n+MAP &node5\n=VAL :key5\n=VAL :five\n-MAP\n=VAL :top6\n=VAL &val6 :six\n=VAL :top7\n=VAL &val7 :seven\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"top1\": \{\n    \"key1\": \"one\"\n  \},\n  \"top2\": \{\n    \"key2\": \"two\"\n  \},\n  \"top3\": \{\n    \"key3\": \"three\"\n  \},\n  \"top4\": \{\n    \"key4\": \"four\"\n  \},\n  \"top5\": \{\n    \"key5\": \"five\"\n  \},\n  \"top6\": \"six\",\n  \"top7\": \"seven\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7BUB",
@@ -815,7 +815,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\nhr:\n  - Mark McGwire\n  # Following node labeled SS\n  - &SS Sammy Sosa\nrbi:\n  - *SS # Subsequent occurrence\n  - Ken Griffey\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :hr\n+SEQ\n=VAL :Mark McGwire\n=VAL &SS :Sammy Sosa\n-SEQ\n=VAL :rbi\n+SEQ\n=ALI *SS\n=VAL :Ken Griffey\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"hr\": [\n    \"Mark McGwire\",\n    \"Sammy Sosa\"\n  ],\n  \"rbi\": [\n    \"Sammy Sosa\",\n    \"Ken Griffey\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7FWL",
@@ -823,7 +823,7 @@ fn casesPart3(): List<SuiteCase> {
       "!<tag:yaml.org,2002:str> foo :\n  !<!bar> baz\n",
       "+STR\n+DOC\n+MAP\n=VAL <tag:yaml.org,2002:str> :foo\n=VAL <!bar> :baz\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"baz\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7LBH",
@@ -831,7 +831,7 @@ fn casesPart3(): List<SuiteCase> {
       "\"a\\nb\": 1\n\"c\n d\": 1\n",
       "+STR\n+DOC\n+MAP\n=VAL \"a\\nb\n=VAL :1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "7MNF",
@@ -839,7 +839,7 @@ fn casesPart3(): List<SuiteCase> {
       "top1:\n  key1: val1\ntop2\n",
       "+STR\n+DOC\n+MAP\n=VAL :top1\n+MAP\n=VAL :key1\n=VAL :val1\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "7T8X",
@@ -847,7 +847,7 @@ fn casesPart3(): List<SuiteCase> {
       ">\n\n folded\n line\n\n next\n line\n   * bullet\n\n   * list\n   * lines\n\n last\n line\n\n# Comment\n",
       "+STR\n+DOC\n=VAL >\\nfolded line\\nnext line\\n  * bullet\\n\\n  * list\\n  * lines\\n\\nlast line\\n\n-DOC\n-STR\n",
       "\"\\nfolded line\\nnext line\\n  * bullet\\n\\n  * list\\n  * lines\\n\\nlast line\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7TMG",
@@ -855,7 +855,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\n[ word1\n# comment\n, word2]\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :word1\n=VAL :word2\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"word1\",\n  \"word2\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7W2P",
@@ -863,7 +863,7 @@ fn casesPart3(): List<SuiteCase> {
       "? a\n? b\nc:\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL :\n=VAL :b\n=VAL :\n=VAL :c\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": null,\n  \"b\": null,\n  \"c\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7Z25",
@@ -871,7 +871,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\nscalar1\n...\nkey: value\n",
       "+STR\n+DOC ---\n=VAL :scalar1\n-DOC ...\n+DOC\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "\"scalar1\"\n\{\n  \"key\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "7ZZ5",
@@ -879,7 +879,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\nnested sequences:\n- - - []\n- - - \{\}\nkey1: []\nkey2: \{\}\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :nested sequences\n+SEQ\n+SEQ\n+SEQ\n+SEQ []\n-SEQ\n-SEQ\n-SEQ\n+SEQ\n+SEQ\n+MAP \{\}\n-MAP\n-SEQ\n-SEQ\n-SEQ\n=VAL :key1\n+SEQ []\n-SEQ\n=VAL :key2\n+MAP \{\}\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"nested sequences\": [\n    [\n      [\n        []\n      ]\n    ],\n    [\n      [\n        \{\}\n      ]\n    ]\n  ],\n  \"key1\": [],\n  \"key2\": \{\}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "82AN",
@@ -887,7 +887,7 @@ fn casesPart3(): List<SuiteCase> {
       "---word1\nword2\n",
       "+STR\n+DOC\n=VAL :---word1 word2\n-DOC\n-STR\n",
       "\"---word1 word2\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "87E4",
@@ -895,7 +895,7 @@ fn casesPart3(): List<SuiteCase> {
       "'implicit block key' : [\n  'implicit flow key' : value,\n ]\n",
       "+STR\n+DOC\n+MAP\n=VAL 'implicit block key\n+SEQ []\n+MAP \{\}\n=VAL 'implicit flow key\n=VAL :value\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"implicit block key\": [\n    \{\n      \"implicit flow key\": \"value\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "8CWC",
@@ -903,16 +903,16 @@ fn casesPart3(): List<SuiteCase> {
       "---\nkey ends with two colons::: value\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key ends with two colons::\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key ends with two colons::\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("8G76", "Spec Example 6.10. Comment Lines", "  # Comment\n   \n\n\n", "+STR\n-STR\n", "", isError: false),
+    SuiteCase("8G76", "Spec Example 6.10. Comment Lines", "  # Comment\n   \n\n\n", "+STR\n-STR\n", "", invalid: false),
     SuiteCase(
       "8KB6",
       "Multiline plain flow mapping key without value",
       "---\n- \{ single line, a: b\}\n- \{ multi\n  line, a: b\}\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP \{\}\n=VAL :single line\n=VAL :\n=VAL :a\n=VAL :b\n-MAP\n+MAP \{\}\n=VAL :multi line\n=VAL :\n=VAL :a\n=VAL :b\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"single line\": null,\n    \"a\": \"b\"\n  \},\n  \{\n    \"multi line\": null,\n    \"a\": \"b\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "8MK2",
@@ -920,7 +920,7 @@ fn casesPart3(): List<SuiteCase> {
       "! a\n",
       "+STR\n+DOC\n=VAL <!> :a\n-DOC\n-STR\n",
       "\"a\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "8QBE",
@@ -928,7 +928,7 @@ fn casesPart3(): List<SuiteCase> {
       "key:\n - item1\n - item2\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+SEQ\n=VAL :item1\n=VAL :item2\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": [\n    \"item1\",\n    \"item2\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "8UDB",
@@ -936,7 +936,7 @@ fn casesPart3(): List<SuiteCase> {
       "[\n\"double\n quoted\", 'single\n           quoted',\nplain\n text, [ nested ],\nsingle: pair,\n]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL \"double quoted\n=VAL 'single quoted\n=VAL :plain text\n+SEQ []\n=VAL :nested\n-SEQ\n+MAP \{\}\n=VAL :single\n=VAL :pair\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"double quoted\",\n  \"single quoted\",\n  \"plain text\",\n  [\n    \"nested\"\n  ],\n  \{\n    \"single\": \"pair\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "8XDJ",
@@ -944,7 +944,7 @@ fn casesPart3(): List<SuiteCase> {
       "key: word1\n#  xxx\n  word2\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL :word1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "8XYN",
@@ -952,7 +952,7 @@ fn casesPart3(): List<SuiteCase> {
       "---\n- &\u{1f601} unicode anchor\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL &\u{1f601} :unicode anchor\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"unicode anchor\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "93JH",
@@ -960,7 +960,7 @@ fn casesPart3(): List<SuiteCase> {
       " - key: value\n   key2: value2\n -\n   key3: value3\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :key\n=VAL :value\n=VAL :key2\n=VAL :value2\n-MAP\n+MAP\n=VAL :key3\n=VAL :value3\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"key\": \"value\",\n    \"key2\": \"value2\"\n  \},\n  \{\n    \"key3\": \"value3\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "93WF",
@@ -968,7 +968,7 @@ fn casesPart3(): List<SuiteCase> {
       "--- >-\n  trimmed\n  \n \n\n  as\n  space\n",
       "+STR\n+DOC ---\n=VAL >trimmed\\n\\n\\nas space\n-DOC\n-STR\n",
       "\"trimmed\\n\\n\\nas space\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "96L6",
@@ -976,7 +976,7 @@ fn casesPart3(): List<SuiteCase> {
       "--- >\n  Mark McGwire's\n  year was crippled\n  by a knee injury.\n",
       "+STR\n+DOC ---\n=VAL >Mark McGwire's year was crippled by a knee injury.\\n\n-DOC\n-STR\n",
       "\"Mark McGwire's year was crippled by a knee injury.\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "96NN/00",
@@ -984,7 +984,7 @@ fn casesPart3(): List<SuiteCase> {
       "foo: |-\n \tbar\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL |\\tbar\n-MAP\n-DOC\n-STR\n",
       "\{\"foo\":\"\\tbar\"\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "96NN/01",
@@ -992,9 +992,9 @@ fn casesPart3(): List<SuiteCase> {
       "foo: |-\n \tbar",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL |\\tbar\n-MAP\n-DOC\n-STR\n",
       "\{\"foo\":\"\\tbar\"\}\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("98YD", "Spec Example 5.5. Comment Indicator", "# Comment only.\n", "+STR\n-STR\n", "", isError: false),
+    SuiteCase("98YD", "Spec Example 5.5. Comment Indicator", "# Comment only.\n", "+STR\n-STR\n", "", invalid: false),
   ]
 }
 
@@ -1006,7 +1006,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n- \{ \"single line\", a: b\}\n- \{ \"multi\n  line\", a: b\}\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP \{\}\n=VAL \"single line\n=VAL :\n=VAL :a\n=VAL :b\n-MAP\n+MAP \{\}\n=VAL \"multi line\n=VAL :\n=VAL :a\n=VAL :b\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"single line\": null,\n    \"a\": \"b\"\n  \},\n  \{\n    \"multi line\": null,\n    \"a\": \"b\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9C9N",
@@ -1014,7 +1014,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\nflow: [a,\nb,\nc]\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :flow\n+SEQ []\n=VAL :a\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9CWY",
@@ -1022,7 +1022,7 @@ fn casesPart4(): List<SuiteCase> {
       "key:\n - item1\n - item2\ninvalid\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+SEQ\n=VAL :item1\n=VAL :item2\n-SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9DXL",
@@ -1030,7 +1030,7 @@ fn casesPart4(): List<SuiteCase> {
       "Mapping: Document\n---\n# Empty\n...\n%YAML 1.2\n---\nmatches %: 20\n",
       "+STR\n+DOC\n+MAP\n=VAL :Mapping\n=VAL :Document\n-MAP\n-DOC\n+DOC ---\n=VAL :\n-DOC ...\n+DOC ---\n+MAP\n=VAL :matches %\n=VAL :20\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Mapping\": \"Document\"\n\}\nnull\n\{\n  \"matches %\": 20\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9FMG",
@@ -1038,7 +1038,7 @@ fn casesPart4(): List<SuiteCase> {
       "a:\n  b:\n    c: d\n  e:\n    f: g\nh: i\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n+MAP\n=VAL :b\n+MAP\n=VAL :c\n=VAL :d\n-MAP\n=VAL :e\n+MAP\n=VAL :f\n=VAL :g\n-MAP\n-MAP\n=VAL :h\n=VAL :i\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \{\n    \"b\": \{\n      \"c\": \"d\"\n    \},\n    \"e\": \{\n      \"f\": \"g\"\n    \}\n  \},\n  \"h\": \"i\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9HCY",
@@ -1046,7 +1046,7 @@ fn casesPart4(): List<SuiteCase> {
       "!foo \"bar\"\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n",
       "+STR\n+DOC\n=VAL <!foo> \"bar\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9J7A",
@@ -1054,7 +1054,7 @@ fn casesPart4(): List<SuiteCase> {
       "foo:\n  bar: baz\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n+MAP\n=VAL :bar\n=VAL :baz\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \{\n    \"bar\": \"baz\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9JBA",
@@ -1062,7 +1062,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n[ a, b, c, ]#invalid\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :a\n=VAL :b\n=VAL :c\n-SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9KAX",
@@ -1070,7 +1070,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n&a1\n!!str\nscalar1\n---\n!!str\n&a2\nscalar2\n---\n&a3\n!!str scalar3\n---\n&a4 !!map\n&a5 !!str key5: value4\n---\na6: 1\n&anchor6 b6: 2\n---\n!!map\n&a8 !!str key8: value7\n---\n!!map\n!!str &a10 key10: value9\n---\n!!str &a11\nvalue11\n",
       "+STR\n+DOC ---\n=VAL &a1 <tag:yaml.org,2002:str> :scalar1\n-DOC\n+DOC ---\n=VAL &a2 <tag:yaml.org,2002:str> :scalar2\n-DOC\n+DOC ---\n=VAL &a3 <tag:yaml.org,2002:str> :scalar3\n-DOC\n+DOC ---\n+MAP &a4 <tag:yaml.org,2002:map>\n=VAL &a5 <tag:yaml.org,2002:str> :key5\n=VAL :value4\n-MAP\n-DOC\n+DOC ---\n+MAP\n=VAL :a6\n=VAL :1\n=VAL &anchor6 :b6\n=VAL :2\n-MAP\n-DOC\n+DOC ---\n+MAP <tag:yaml.org,2002:map>\n=VAL &a8 <tag:yaml.org,2002:str> :key8\n=VAL :value7\n-MAP\n-DOC\n+DOC ---\n+MAP <tag:yaml.org,2002:map>\n=VAL &a10 <tag:yaml.org,2002:str> :key10\n=VAL :value9\n-MAP\n-DOC\n+DOC ---\n=VAL &a11 <tag:yaml.org,2002:str> :value11\n-DOC\n-STR\n",
       "\"scalar1\"\n\"scalar2\"\n\"scalar3\"\n\{\n  \"key5\": \"value4\"\n\}\n\{\n  \"a6\": 1,\n  \"b6\": 2\n\}\n\{\n  \"key8\": \"value7\"\n\}\n\{\n  \"key10\": \"value9\"\n\}\n\"value11\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9KBC",
@@ -1078,7 +1078,7 @@ fn casesPart4(): List<SuiteCase> {
       "--- key1: value1\n    key2: value2\n",
       "+STR\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9MAG",
@@ -1086,16 +1086,16 @@ fn casesPart4(): List<SuiteCase> {
       "---\n[ , a, b, c ]\n",
       "+STR\n+DOC ---\n+SEQ []\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("9MMA", "Directive by itself with no document", "%YAML 1.2\n", "+STR\n", "", isError: true),
+    SuiteCase("9MMA", "Directive by itself with no document", "%YAML 1.2\n", "+STR\n", "", invalid: true),
     SuiteCase(
       "9MMW",
       "Single Pair Implicit Entries",
       "- [ YAML : separate ]\n- [ \"JSON like\":adjacent ]\n- [ \{JSON: like\}:adjacent ]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n+MAP \{\}\n=VAL :YAML\n=VAL :separate\n-MAP\n-SEQ\n+SEQ []\n+MAP \{\}\n=VAL \"JSON like\n=VAL :adjacent\n-MAP\n-SEQ\n+SEQ []\n+MAP \{\}\n+MAP \{\}\n=VAL :JSON\n=VAL :like\n-MAP\n=VAL :adjacent\n-MAP\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9MQT/00",
@@ -1103,7 +1103,7 @@ fn casesPart4(): List<SuiteCase> {
       "--- \"a\n...x\nb\"\n",
       "+STR\n+DOC ---\n=VAL \"a ...x b\n-DOC\n-STR\n",
       "\"a ...x b\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9MQT/01",
@@ -1111,7 +1111,7 @@ fn casesPart4(): List<SuiteCase> {
       "--- \"a\n... x\nb\"\n",
       "+STR\n+DOC ---\n",
       "\"a ...x b\"\n",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "9SA2",
@@ -1119,7 +1119,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n- \{ \"single line\": value\}\n- \{ \"multi\n  line\": value\}\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP \{\}\n=VAL \"single line\n=VAL :value\n-MAP\n+MAP \{\}\n=VAL \"multi line\n=VAL :value\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"single line\": \"value\"\n  \},\n  \{\n    \"multi line\": \"value\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9SHH",
@@ -1127,7 +1127,7 @@ fn casesPart4(): List<SuiteCase> {
       "single: 'text'\ndouble: \"text\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :single\n=VAL 'text\n=VAL :double\n=VAL \"text\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"single\": \"text\",\n  \"double\": \"text\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9TFX",
@@ -1135,7 +1135,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n\" 1st non-empty\n\n 2nd non-empty \n 3rd non-empty \"\n",
       "+STR\n+DOC ---\n=VAL \" 1st non-empty\\n2nd non-empty 3rd non-empty \n-DOC\n-STR\n",
       "\" 1st non-empty\\n2nd non-empty 3rd non-empty \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9U5K",
@@ -1143,7 +1143,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\n# Products purchased\n- item    : Super Hoop\n  quantity: 1\n- item    : Basketball\n  quantity: 4\n- item    : Big Shoes\n  quantity: 1\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP\n=VAL :item\n=VAL :Super Hoop\n=VAL :quantity\n=VAL :1\n-MAP\n+MAP\n=VAL :item\n=VAL :Basketball\n=VAL :quantity\n=VAL :4\n-MAP\n+MAP\n=VAL :item\n=VAL :Big Shoes\n=VAL :quantity\n=VAL :1\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"item\": \"Super Hoop\",\n    \"quantity\": 1\n  \},\n  \{\n    \"item\": \"Basketball\",\n    \"quantity\": 4\n  \},\n  \{\n    \"item\": \"Big Shoes\",\n    \"quantity\": 1\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9WXW",
@@ -1151,7 +1151,7 @@ fn casesPart4(): List<SuiteCase> {
       "# Private\n!foo \"bar\"\n...\n# Global\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n",
       "+STR\n+DOC\n=VAL <!foo> \"bar\n-DOC ...\n+DOC ---\n=VAL <tag:example.com,2000:app/foo> \"bar\n-DOC\n-STR\n",
       "\"bar\"\n\"bar\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "9YRD",
@@ -1159,7 +1159,7 @@ fn casesPart4(): List<SuiteCase> {
       "a\nb  \n  c\nd\n\ne\n",
       "+STR\n+DOC\n=VAL :a b c d\\ne\n-DOC\n-STR\n",
       "\"a b c d\\ne\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "A2M4",
@@ -1167,7 +1167,7 @@ fn casesPart4(): List<SuiteCase> {
       "? a\n: -\tb\n  -  -\tc\n     - d\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n+SEQ\n=VAL :b\n+SEQ\n=VAL :c\n=VAL :d\n-SEQ\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": [\n    \"b\",\n    [\n      \"c\",\n      \"d\"\n    ]\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "A6F9",
@@ -1175,7 +1175,7 @@ fn casesPart4(): List<SuiteCase> {
       "strip: |-\n  text\nclip: |\n  text\nkeep: |+\n  text\n",
       "+STR\n+DOC\n+MAP\n=VAL :strip\n=VAL |text\n=VAL :clip\n=VAL |text\\n\n=VAL :keep\n=VAL |text\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"strip\": \"text\",\n  \"clip\": \"text\\n\",\n  \"keep\": \"text\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "A984",
@@ -1183,7 +1183,7 @@ fn casesPart4(): List<SuiteCase> {
       "a: b\n c\nd:\n e\n  f\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL :b c\n=VAL :d\n=VAL :e f\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b c\",\n  \"d\": \"e f\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "AB8U",
@@ -1191,16 +1191,16 @@ fn casesPart4(): List<SuiteCase> {
       "- single multiline\n - sequence entry\n",
       "+STR\n+DOC\n+SEQ\n=VAL :single multiline - sequence entry\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"single multiline - sequence entry\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("AVM7", "Empty Stream", "", "+STR\n-STR\n", "", isError: false),
+    SuiteCase("AVM7", "Empty Stream", "", "+STR\n-STR\n", "", invalid: false),
     SuiteCase(
       "AZ63",
       "Sequence With Same Indentation as Parent Mapping",
       "one:\n- 2\n- 3\nfour: 5\n",
       "+STR\n+DOC\n+MAP\n=VAL :one\n+SEQ\n=VAL :2\n=VAL :3\n-SEQ\n=VAL :four\n=VAL :5\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"one\": [\n    2,\n    3\n  ],\n  \"four\": 5\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "AZW3",
@@ -1208,7 +1208,7 @@ fn casesPart4(): List<SuiteCase> {
       "- bla\"keks: foo\n- bla]keks: foo\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :bla\"keks\n=VAL :foo\n-MAP\n+MAP\n=VAL :bla]keks\n=VAL :foo\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"bla\\\"keks\": \"foo\"\n  \},\n  \{\n    \"bla]keks\": \"foo\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "B3HG",
@@ -1216,16 +1216,16 @@ fn casesPart4(): List<SuiteCase> {
       "--- >\n folded\n text\n\n\n",
       "+STR\n+DOC ---\n=VAL >folded text\\n\n-DOC\n-STR\n",
       "\"folded text\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("B63P", "Directive without document", "%YAML 1.2\n...\n", "+STR\n", "", isError: true),
+    SuiteCase("B63P", "Directive without document", "%YAML 1.2\n...\n", "+STR\n", "", invalid: true),
     SuiteCase(
       "BD7L",
       "Invalid mapping after sequence",
       "- item1\n- item2\ninvalid: x\n",
       "+STR\n+DOC\n+SEQ\n=VAL :item1\n=VAL :item2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "BEC7",
@@ -1233,7 +1233,7 @@ fn casesPart4(): List<SuiteCase> {
       "%YAML 1.3 # Attempt parsing\n          # with a warning\n---\n\"foo\"\n",
       "+STR\n+DOC ---\n=VAL \"foo\n-DOC\n-STR\n",
       "\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "BF9H",
@@ -1241,7 +1241,7 @@ fn casesPart4(): List<SuiteCase> {
       "---\nplain: a\n       b # end of scalar\n       c\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :plain\n=VAL :a b\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "BS4K",
@@ -1249,7 +1249,7 @@ fn casesPart4(): List<SuiteCase> {
       "word1  # comment\nword2\n",
       "+STR\n+DOC\n=VAL :word1\n-DOC\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "BU8L",
@@ -1257,7 +1257,7 @@ fn casesPart4(): List<SuiteCase> {
       "key: &anchor\n !!map\n  a: b\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+MAP &anchor <tag:yaml.org,2002:map>\n=VAL :a\n=VAL :b\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \{\n    \"a\": \"b\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "C2DT",
@@ -1265,7 +1265,7 @@ fn casesPart4(): List<SuiteCase> {
       "\{\n\"adjacent\":value,\n\"readable\": value,\n\"empty\":\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL \"adjacent\n=VAL :value\n=VAL \"readable\n=VAL :value\n=VAL \"empty\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"adjacent\": \"value\",\n  \"readable\": \"value\",\n  \"empty\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "C2SP",
@@ -1273,7 +1273,7 @@ fn casesPart4(): List<SuiteCase> {
       "[23\n]: 42\n",
       "+STR\n+DOC\n+SEQ []\n=VAL :23\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "C4HZ",
@@ -1281,7 +1281,7 @@ fn casesPart4(): List<SuiteCase> {
       "%TAG ! tag:clarkevans.com,2002:\n--- !shape\n  # Use the ! handle for presenting\n  # tag:clarkevans.com,2002:circle\n- !circle\n  center: &ORIGIN \{x: 73, y: 129\}\n  radius: 7\n- !line\n  start: *ORIGIN\n  finish: \{ x: 89, y: 102 \}\n- !label\n  start: *ORIGIN\n  color: 0xFFEEBB\n  text: Pretty vector drawing.\n",
       "+STR\n+DOC ---\n+SEQ <tag:clarkevans.com,2002:shape>\n+MAP <tag:clarkevans.com,2002:circle>\n=VAL :center\n+MAP \{\} &ORIGIN\n=VAL :x\n=VAL :73\n=VAL :y\n=VAL :129\n-MAP\n=VAL :radius\n=VAL :7\n-MAP\n+MAP <tag:clarkevans.com,2002:line>\n=VAL :start\n=ALI *ORIGIN\n=VAL :finish\n+MAP \{\}\n=VAL :x\n=VAL :89\n=VAL :y\n=VAL :102\n-MAP\n-MAP\n+MAP <tag:clarkevans.com,2002:label>\n=VAL :start\n=ALI *ORIGIN\n=VAL :color\n=VAL :0xFFEEBB\n=VAL :text\n=VAL :Pretty vector drawing.\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"center\": \{\n      \"x\": 73,\n      \"y\": 129\n    \},\n    \"radius\": 7\n  \},\n  \{\n    \"start\": \{\n      \"x\": 73,\n      \"y\": 129\n    \},\n    \"finish\": \{\n      \"x\": 89,\n      \"y\": 102\n    \}\n  \},\n  \{\n    \"start\": \{\n      \"x\": 73,\n      \"y\": 129\n    \},\n    \"color\": 16772795,\n    \"text\": \"Pretty vector drawing.\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CC74",
@@ -1289,7 +1289,7 @@ fn casesPart4(): List<SuiteCase> {
       "%TAG !e! tag:example.com,2000:app/\n---\n!e!foo \"bar\"\n",
       "+STR\n+DOC ---\n=VAL <tag:example.com,2000:app/foo> \"bar\n-DOC\n-STR\n",
       "\"bar\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CFD4",
@@ -1297,7 +1297,7 @@ fn casesPart4(): List<SuiteCase> {
       "- [ : empty key ]\n- [: another empty key]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n+MAP \{\}\n=VAL :\n=VAL :empty key\n-MAP\n-SEQ\n+SEQ []\n+MAP \{\}\n=VAL :\n=VAL :another empty key\n-MAP\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -1310,7 +1310,7 @@ fn casesPart5(): List<SuiteCase> {
       "key: [ word1\n#  xxx\n  word2 ]\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+SEQ []\n=VAL :word1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "CN3R",
@@ -1318,7 +1318,7 @@ fn casesPart5(): List<SuiteCase> {
       "&flowseq [\n a: b,\n &c c: d,\n \{ &e e: f \},\n &g \{ g: h \}\n]\n",
       "+STR\n+DOC\n+SEQ [] &flowseq\n+MAP \{\}\n=VAL :a\n=VAL :b\n-MAP\n+MAP \{\}\n=VAL &c :c\n=VAL :d\n-MAP\n+MAP \{\}\n=VAL &e :e\n=VAL :f\n-MAP\n+MAP \{\} &g\n=VAL :g\n=VAL :h\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"a\": \"b\"\n  \},\n  \{\n    \"c\": \"d\"\n  \},\n  \{\n    \"e\": \"f\"\n  \},\n  \{\n    \"g\": \"h\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CPZ3",
@@ -1326,7 +1326,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\ntab: \"\\tstring\"\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :tab\n=VAL \"\\tstring\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"tab\": \"\\tstring\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CQ3W",
@@ -1334,7 +1334,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\nkey: \"missing closing quote\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "CT4Q",
@@ -1342,7 +1342,7 @@ fn casesPart5(): List<SuiteCase> {
       "[\n? foo\n bar : baz\n]\n",
       "+STR\n+DOC\n+SEQ []\n+MAP \{\}\n=VAL :foo bar\n=VAL :baz\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"foo bar\": \"baz\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CTN5",
@@ -1350,7 +1350,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\n[ a, b, c, , ]\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :a\n=VAL :b\n=VAL :c\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "CUP7",
@@ -1358,7 +1358,7 @@ fn casesPart5(): List<SuiteCase> {
       "anchored: !local &anchor value\nalias: *anchor\n",
       "+STR\n+DOC\n+MAP\n=VAL :anchored\n=VAL &anchor <!local> :value\n=VAL :alias\n=ALI *anchor\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"anchored\": \"value\",\n  \"alias\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "CVW2",
@@ -1366,7 +1366,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\n[ a, b, c,#invalid\n]\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :a\n=VAL :b\n=VAL :c\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "CXX2",
@@ -1374,7 +1374,7 @@ fn casesPart5(): List<SuiteCase> {
       "--- &anchor a: b\n",
       "+STR\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "D49Q",
@@ -1382,7 +1382,7 @@ fn casesPart5(): List<SuiteCase> {
       "'a\\nb': 1\n'c\n d': 1\n",
       "+STR\n+DOC\n+MAP\n=VAL 'a\\\\nb\n=VAL :1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "D83L",
@@ -1390,7 +1390,7 @@ fn casesPart5(): List<SuiteCase> {
       "- |2-\n  explicit indent and chomp\n- |-2\n  chomp and explicit indent\n",
       "+STR\n+DOC\n+SEQ\n=VAL |explicit indent and chomp\n=VAL |chomp and explicit indent\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"explicit indent and chomp\",\n  \"chomp and explicit indent\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "D88J",
@@ -1398,7 +1398,7 @@ fn casesPart5(): List<SuiteCase> {
       "a: [b, c]\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n+SEQ []\n=VAL :b\n=VAL :c\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": [\n    \"b\",\n    \"c\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "D9TU",
@@ -1406,7 +1406,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: bar\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DBG4",
@@ -1414,7 +1414,7 @@ fn casesPart5(): List<SuiteCase> {
       "# Outside flow collection:\n- ::vector\n- \": - ()\"\n- Up, up, and away!\n- -123\n- http://example.com/foo#bar\n# Inside flow collection:\n- [ ::vector,\n  \": - ()\",\n  \"Up, up and away!\",\n  -123,\n  http://example.com/foo#bar ]\n",
       "+STR\n+DOC\n+SEQ\n=VAL :::vector\n=VAL \": - ()\n=VAL :Up, up, and away!\n=VAL :-123\n=VAL :http://example.com/foo#bar\n+SEQ []\n=VAL :::vector\n=VAL \": - ()\n=VAL \"Up, up and away!\n=VAL :-123\n=VAL :http://example.com/foo#bar\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"::vector\",\n  \": - ()\",\n  \"Up, up, and away!\",\n  -123,\n  \"http://example.com/foo#bar\",\n  [\n    \"::vector\",\n    \": - ()\",\n    \"Up, up and away!\",\n    -123,\n    \"http://example.com/foo#bar\"\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DC7X",
@@ -1422,7 +1422,7 @@ fn casesPart5(): List<SuiteCase> {
       "a: b\t\nseq:\t\n - a\t\nc: d\t#X\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL :b\n=VAL :seq\n+SEQ\n=VAL :a\n-SEQ\n=VAL :c\n=VAL :d\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\",\n  \"seq\": [\n    \"a\"\n  ],\n  \"c\": \"d\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/00",
@@ -1430,7 +1430,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"1 trailing\\t\n    tab\"\n",
       "+STR\n+DOC\n=VAL \"1 trailing\\t tab\n-DOC\n-STR\n",
       "\"1 trailing\\t tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/01",
@@ -1438,7 +1438,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"2 trailing\\t  \n    tab\"\n",
       "+STR\n+DOC\n=VAL \"2 trailing\\t tab\n-DOC\n-STR\n",
       "\"2 trailing\\t tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/02",
@@ -1446,7 +1446,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"3 trailing\\\t\n    tab\"\n",
       "+STR\n+DOC\n=VAL \"3 trailing\\t tab\n-DOC\n-STR\n",
       "\"3 trailing\\t tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/03",
@@ -1454,7 +1454,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"4 trailing\\\t  \n    tab\"\n",
       "+STR\n+DOC\n=VAL \"4 trailing\\t tab\n-DOC\n-STR\n",
       "\"4 trailing\\t tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/04",
@@ -1462,7 +1462,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"5 trailing\t\n    tab\"\n",
       "+STR\n+DOC\n=VAL \"5 trailing tab\n-DOC\n-STR\n",
       "\"5 trailing tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DE56/05",
@@ -1470,7 +1470,7 @@ fn casesPart5(): List<SuiteCase> {
       "\"6 trailing\t  \n    tab\"\n",
       "+STR\n+DOC\n=VAL \"6 trailing tab\n-DOC\n-STR\n",
       "\"6 trailing tab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DFF7",
@@ -1478,7 +1478,7 @@ fn casesPart5(): List<SuiteCase> {
       "\{\n? explicit: entry,\nimplicit: entry,\n?\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :explicit\n=VAL :entry\n=VAL :implicit\n=VAL :entry\n=VAL :\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DHP8",
@@ -1486,7 +1486,7 @@ fn casesPart5(): List<SuiteCase> {
       "[foo, bar, 42]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL :foo\n=VAL :bar\n=VAL :42\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"foo\",\n  \"bar\",\n  42\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK3J",
@@ -1494,7 +1494,7 @@ fn casesPart5(): List<SuiteCase> {
       "--- >\nline1\n# no comment\nline3\n",
       "+STR\n+DOC ---\n=VAL >line1 # no comment line3\\n\n-DOC\n-STR\n",
       "\"line1 # no comment line3\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK4H",
@@ -1502,7 +1502,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\n[ key\n  : value ]\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :key\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "DK95/00",
@@ -1510,7 +1510,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo:\n \tbar\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/01",
@@ -1518,7 +1518,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: \"bar\n\tbaz\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n",
       "\{\n  \"foo\" : \"bar\"\n\}\n",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "DK95/02",
@@ -1526,7 +1526,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: \"bar\n  \tbaz\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL \"bar baz\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : \"bar baz\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/03",
@@ -1534,7 +1534,7 @@ fn casesPart5(): List<SuiteCase> {
       " \t\nfoo: 1\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :1\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : 1\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/04",
@@ -1542,7 +1542,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: 1\n\t\nbar: 2\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :1\n=VAL :bar\n=VAL :2\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : 1,\n  \"bar\" : 2\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/05",
@@ -1550,7 +1550,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: 1\n \t\nbar: 2\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :1\n=VAL :bar\n=VAL :2\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : 1,\n  \"bar\" : 2\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/06",
@@ -1558,7 +1558,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo:\n  a: 1\n  \tb: 2\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n+MAP\n=VAL :a\n=VAL :1\n",
       "\{\n  \"foo\" : 1,\n  \"bar\" : 2\n\}\n",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "DK95/07",
@@ -1566,7 +1566,7 @@ fn casesPart5(): List<SuiteCase> {
       "%YAML 1.2\n\t\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DK95/08",
@@ -1574,7 +1574,7 @@ fn casesPart5(): List<SuiteCase> {
       "foo: \"bar\n \t \t baz \t \t \"\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL \"bar baz \\t \\t \n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : \"bar baz \\t \\t \"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "DMG6",
@@ -1582,7 +1582,7 @@ fn casesPart5(): List<SuiteCase> {
       "key:\n  ok: 1\n wrong: 2\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n+MAP\n=VAL :ok\n=VAL :1\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "DWX9",
@@ -1590,7 +1590,7 @@ fn casesPart5(): List<SuiteCase> {
       "|\n \n  \n  literal\n   \n  \n  text\n\n # Comment\n",
       "+STR\n+DOC\n=VAL |\\n\\nliteral\\n \\n\\ntext\\n\n-DOC\n-STR\n",
       "\"\\n\\nliteral\\n \\n\\ntext\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "E76Z",
@@ -1598,7 +1598,7 @@ fn casesPart5(): List<SuiteCase> {
       "&a a: &b b\n*b : *a\n",
       "+STR\n+DOC\n+MAP\n=VAL &a :a\n=VAL &b :b\n=ALI *b\n=ALI *a\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\",\n  \"b\": \"a\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "EB22",
@@ -1606,7 +1606,7 @@ fn casesPart5(): List<SuiteCase> {
       "---\nscalar1 # comment\n%YAML 1.2\n---\nscalar2\n",
       "+STR\n+DOC ---\n=VAL :scalar1\n-DOC\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "EHF6",
@@ -1614,7 +1614,7 @@ fn casesPart5(): List<SuiteCase> {
       "!!map \{\n  k: !!seq\n  [ a, !!str b]\n\}\n",
       "+STR\n+DOC\n+MAP \{\} <tag:yaml.org,2002:map>\n=VAL :k\n+SEQ [] <tag:yaml.org,2002:seq>\n=VAL :a\n=VAL <tag:yaml.org,2002:str> :b\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"k\": [\n    \"a\",\n    \"b\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "EW3V",
@@ -1622,7 +1622,7 @@ fn casesPart5(): List<SuiteCase> {
       "k1: v1\n k2: v2\n",
       "+STR\n+DOC\n+MAP\n=VAL :k1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
   ]
 }
@@ -1635,7 +1635,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\na\nb  \n  c\nd\n\ne\n",
       "+STR\n+DOC ---\n=VAL :a b c d\\ne\n-DOC\n-STR\n",
       "\"a b c d\\ne\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "EXG3",
@@ -1643,7 +1643,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\n---word1\nword2\n",
       "+STR\n+DOC ---\n=VAL :---word1 word2\n-DOC\n-STR\n",
       "\"---word1 word2\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "F2C7",
@@ -1651,7 +1651,7 @@ fn casesPart6(): List<SuiteCase> {
       " - &a !!str a\n - !!int 2\n - !!int &c 4\n - &d d\n",
       "+STR\n+DOC\n+SEQ\n=VAL &a <tag:yaml.org,2002:str> :a\n=VAL <tag:yaml.org,2002:int> :2\n=VAL &c <tag:yaml.org,2002:int> :4\n=VAL &d :d\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\",\n  2,\n  4,\n  \"d\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "F3CP",
@@ -1659,7 +1659,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\n\{ a: [b, c, \{ d: [e, f] \} ] \}\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL :a\n+SEQ []\n=VAL :b\n=VAL :c\n+MAP \{\}\n=VAL :d\n+SEQ []\n=VAL :e\n=VAL :f\n-SEQ\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": [\n    \"b\",\n    \"c\",\n    \{\n      \"d\": [\n        \"e\",\n        \"f\"\n      ]\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "F6MC",
@@ -1667,7 +1667,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\na: >2\n   more indented\n  regular\nb: >2\n\n\n   more indented\n  regular\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL > more indented\\nregular\\n\n=VAL :b\n=VAL >\\n\\n more indented\\nregular\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \" more indented\\nregular\\n\",\n  \"b\": \"\\n\\n more indented\\nregular\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "F8F9",
@@ -1675,7 +1675,7 @@ fn casesPart6(): List<SuiteCase> {
       " # Strip\n  # Comments:\nstrip: |-\n  # text\n  \n # Clip\n  # comments:\n\nclip: |\n  # text\n \n # Keep\n  # comments:\n\nkeep: |+\n  # text\n\n # Trail\n  # comments.\n",
       "+STR\n+DOC\n+MAP\n=VAL :strip\n=VAL |# text\n=VAL :clip\n=VAL |# text\\n\n=VAL :keep\n=VAL |# text\\n\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"strip\": \"# text\",\n  \"clip\": \"# text\\n\",\n  \"keep\": \"# text\\n\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FBC9",
@@ -1683,7 +1683,7 @@ fn casesPart6(): List<SuiteCase> {
       "safe: a!\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az\{|\}~\n     !\"#$%&'()*+,-./09:;<=>?@AZ[\\]^_`az\{|\}~\nsafe question mark: ?foo\nsafe colon: :foo\nsafe dash: -foo\n",
       "+STR\n+DOC\n+MAP\n=VAL :safe\n=VAL :a!\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~ !\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~\n=VAL :safe question mark\n=VAL :?foo\n=VAL :safe colon\n=VAL ::foo\n=VAL :safe dash\n=VAL :-foo\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"safe\": \"a!\\\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~ !\\\"#$%&'()*+,-./09:;<=>?@AZ[\\\\]^_`az\{|\}~\",\n  \"safe question mark\": \"?foo\",\n  \"safe colon\": \":foo\",\n  \"safe dash\": \"-foo\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FH7J",
@@ -1691,7 +1691,7 @@ fn casesPart6(): List<SuiteCase> {
       "- !!str\n-\n  !!null : a\n  b: !!str\n- !!str : !!null\n",
       "+STR\n+DOC\n+SEQ\n=VAL <tag:yaml.org,2002:str> :\n+MAP\n=VAL <tag:yaml.org,2002:null> :\n=VAL :a\n=VAL :b\n=VAL <tag:yaml.org,2002:str> :\n-MAP\n+MAP\n=VAL <tag:yaml.org,2002:str> :\n=VAL <tag:yaml.org,2002:null> :\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FP8R",
@@ -1699,7 +1699,7 @@ fn casesPart6(): List<SuiteCase> {
       "--- >\nline1\nline2\nline3\n",
       "+STR\n+DOC ---\n=VAL >line1 line2 line3\\n\n-DOC\n-STR\n",
       "\"line1 line2 line3\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FQ7F",
@@ -1707,7 +1707,7 @@ fn casesPart6(): List<SuiteCase> {
       "- Mark McGwire\n- Sammy Sosa\n- Ken Griffey\n",
       "+STR\n+DOC\n+SEQ\n=VAL :Mark McGwire\n=VAL :Sammy Sosa\n=VAL :Ken Griffey\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"Mark McGwire\",\n  \"Sammy Sosa\",\n  \"Ken Griffey\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FRK4",
@@ -1715,7 +1715,7 @@ fn casesPart6(): List<SuiteCase> {
       "\{\n  ? foo :,\n  : bar,\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :foo\n=VAL :\n=VAL :\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FTA2",
@@ -1723,7 +1723,7 @@ fn casesPart6(): List<SuiteCase> {
       "--- &sequence\n- a\n",
       "+STR\n+DOC ---\n+SEQ &sequence\n=VAL :a\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "FUP4",
@@ -1731,7 +1731,7 @@ fn casesPart6(): List<SuiteCase> {
       "[a, [b, c]]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL :a\n+SEQ []\n=VAL :b\n=VAL :c\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\",\n  [\n    \"b\",\n    \"c\"\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "G4RS",
@@ -1739,7 +1739,7 @@ fn casesPart6(): List<SuiteCase> {
       "unicode: \"Sosa did fine.\\u263A\"\ncontrol: \"\\b1998\\t1999\\t2000\\n\"\nhex esc: \"\\x0d\\x0a is \\r\\n\"\n\nsingle: '\"Howdy!\" he cried.'\nquoted: ' # Not a ''comment''.'\ntie-fighter: '|\\-*-/|'\n",
       "+STR\n+DOC\n+MAP\n=VAL :unicode\n=VAL \"Sosa did fine.\u{263a}\n=VAL :control\n=VAL \"\\b1998\\t1999\\t2000\\n\n=VAL :hex esc\n=VAL \"\\r\\n is \\r\\n\n=VAL :single\n=VAL '\"Howdy!\" he cried.\n=VAL :quoted\n=VAL ' # Not a 'comment'.\n=VAL :tie-fighter\n=VAL '|\\\\-*-/|\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"unicode\": \"Sosa did fine.\u{263a}\",\n  \"control\": \"\\b1998\\t1999\\t2000\\n\",\n  \"hex esc\": \"\\r\\n is \\r\\n\",\n  \"single\": \"\\\"Howdy!\\\" he cried.\",\n  \"quoted\": \" # Not a 'comment'.\",\n  \"tie-fighter\": \"|\\\\-*-/|\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "G5U8",
@@ -1747,7 +1747,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\n- [-, -]\n",
       "+STR\n+DOC ---\n+SEQ\n+SEQ []\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "G7JE",
@@ -1755,7 +1755,7 @@ fn casesPart6(): List<SuiteCase> {
       "a\\nb: 1\nc\n d: 1\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\\\\nb\n=VAL :1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "G992",
@@ -1763,7 +1763,7 @@ fn casesPart6(): List<SuiteCase> {
       ">\n folded\n text\n\n\n",
       "+STR\n+DOC\n=VAL >folded text\\n\n-DOC\n-STR\n",
       "\"folded text\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "G9HC",
@@ -1771,7 +1771,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\nseq:\n&anchor\n- a\n- b\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :seq\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "GDY7",
@@ -1779,7 +1779,7 @@ fn casesPart6(): List<SuiteCase> {
       "key: value\nthis is #not a: key\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL :value\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "GH63",
@@ -1787,7 +1787,7 @@ fn casesPart6(): List<SuiteCase> {
       "? a\n: 1.3\nfifteen: d\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL :1.3\n=VAL :fifteen\n=VAL :d\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": 1.3,\n  \"fifteen\": \"d\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "GT5M",
@@ -1795,7 +1795,7 @@ fn casesPart6(): List<SuiteCase> {
       "- item1\n&node\n- item2\n",
       "+STR\n+DOC\n+SEQ\n=VAL :item1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "H2RW",
@@ -1803,7 +1803,7 @@ fn casesPart6(): List<SuiteCase> {
       "foo: 1\n\nbar: 2\n    \ntext: |\n  a\n    \n  b\n\n  c\n \n  d\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :1\n=VAL :bar\n=VAL :2\n=VAL :text\n=VAL |a\\n  \\nb\\n\\nc\\n\\nd\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": 1,\n  \"bar\": 2,\n  \"text\": \"a\\n  \\nb\\n\\nc\\n\\nd\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "H3Z8",
@@ -1811,7 +1811,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\nwanted: love \u{2665} and peace \u{262e}\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :wanted\n=VAL :love \u{2665} and peace \u{262e}\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"wanted\": \"love \u{2665} and peace \u{262e}\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "H7J7",
@@ -1819,16 +1819,16 @@ fn casesPart6(): List<SuiteCase> {
       "key: &x\n!!map\n  a: b\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL &x :\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("H7TQ", "Extra words on %YAML directive", "%YAML 1.2 foo\n---\n", "+STR\n", "", isError: true),
+    SuiteCase("H7TQ", "Extra words on %YAML directive", "%YAML 1.2 foo\n---\n", "+STR\n", "", invalid: true),
     SuiteCase(
       "HM87/00",
       "Scalars in flow start with syntax char",
       "[:x]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL ::x\n-SEQ\n-DOC\n-STR\n",
       "[\n  \":x\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "HM87/01",
@@ -1836,7 +1836,7 @@ fn casesPart6(): List<SuiteCase> {
       "[?x]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL :?x\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"?x\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "HMK4",
@@ -1844,7 +1844,7 @@ fn casesPart6(): List<SuiteCase> {
       "name: Mark McGwire\naccomplishment: >\n  Mark set a major league\n  home run record in 1998.\nstats: |\n  65 Home Runs\n  0.278 Batting Average\n",
       "+STR\n+DOC\n+MAP\n=VAL :name\n=VAL :Mark McGwire\n=VAL :accomplishment\n=VAL >Mark set a major league home run record in 1998.\\n\n=VAL :stats\n=VAL |65 Home Runs\\n0.278 Batting Average\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"name\": \"Mark McGwire\",\n  \"accomplishment\": \"Mark set a major league home run record in 1998.\\n\",\n  \"stats\": \"65 Home Runs\\n0.278 Batting Average\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "HMQ5",
@@ -1852,7 +1852,7 @@ fn casesPart6(): List<SuiteCase> {
       "!!str &a1 \"foo\":\n  !!str bar\n&a2 baz : *a1\n",
       "+STR\n+DOC\n+MAP\n=VAL &a1 <tag:yaml.org,2002:str> \"foo\n=VAL <tag:yaml.org,2002:str> :bar\n=VAL &a2 :baz\n=ALI *a1\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\",\n  \"baz\": \"foo\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "HRE5",
@@ -1860,7 +1860,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\ndouble: \"quoted \\' scalar\"\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :double\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "HS5T",
@@ -1868,7 +1868,7 @@ fn casesPart6(): List<SuiteCase> {
       "1st non-empty\n\n 2nd non-empty \n\t3rd non-empty\n",
       "+STR\n+DOC\n=VAL :1st non-empty\\n2nd non-empty 3rd non-empty\n-DOC\n-STR\n",
       "\"1st non-empty\\n2nd non-empty 3rd non-empty\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "HU3P",
@@ -1876,16 +1876,16 @@ fn casesPart6(): List<SuiteCase> {
       "key:\n  word1 word2\n  no: key\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("HWV9", "Document-end marker", "...\n", "+STR\n-STR\n", "", isError: false),
+    SuiteCase("HWV9", "Document-end marker", "...\n", "+STR\n-STR\n", "", invalid: false),
     SuiteCase(
       "J3BT",
       "Spec Example 5.12. Tabs and Spaces",
       "# Tabs and spaces\nquoted: \"Quoted \t\"\nblock:\t|\n  void main() \{\n  \tprintf(\"Hello, world!\\n\");\n  \}\n",
       "+STR\n+DOC\n+MAP\n=VAL :quoted\n=VAL \"Quoted \\t\n=VAL :block\n=VAL |void main() \{\\n\\tprintf(\"Hello, world!\\\\n\");\\n\}\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"quoted\": \"Quoted \\t\",\n  \"block\": \"void main() \{\\n\\tprintf(\\\"Hello, world!\\\\n\\\");\\n\}\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "J5UC",
@@ -1893,7 +1893,7 @@ fn casesPart6(): List<SuiteCase> {
       "foo: blue\nbar: arrr\nbaz: jazz\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL :blue\n=VAL :bar\n=VAL :arrr\n=VAL :baz\n=VAL :jazz\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"blue\",\n  \"bar\": \"arrr\",\n  \"baz\": \"jazz\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "J7PZ",
@@ -1901,7 +1901,7 @@ fn casesPart6(): List<SuiteCase> {
       "# The !!omap tag is one of the optional types\n# introduced for YAML 1.1. In 1.2, it is not\n# part of the standard tags and should not be\n# enabled by default.\n# Ordered maps are represented as\n# A sequence of mappings, with\n# each mapping having one key\n--- !!omap\n- Mark McGwire: 65\n- Sammy Sosa: 63\n- Ken Griffy: 58\n",
       "+STR\n+DOC ---\n+SEQ <tag:yaml.org,2002:omap>\n+MAP\n=VAL :Mark McGwire\n=VAL :65\n-MAP\n+MAP\n=VAL :Sammy Sosa\n=VAL :63\n-MAP\n+MAP\n=VAL :Ken Griffy\n=VAL :58\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"Mark McGwire\": 65\n  \},\n  \{\n    \"Sammy Sosa\": 63\n  \},\n  \{\n    \"Ken Griffy\": 58\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "J7VC",
@@ -1909,7 +1909,7 @@ fn casesPart6(): List<SuiteCase> {
       "one: 2\n\n\nthree: 4\n",
       "+STR\n+DOC\n+MAP\n=VAL :one\n=VAL :2\n=VAL :three\n=VAL :4\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"one\": 2,\n  \"three\": 4\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "J9HZ",
@@ -1917,7 +1917,7 @@ fn casesPart6(): List<SuiteCase> {
       "---\nhr: # 1998 hr ranking\n  - Mark McGwire\n  - Sammy Sosa\nrbi:\n  # 1998 rbi ranking\n  - Sammy Sosa\n  - Ken Griffey\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :hr\n+SEQ\n=VAL :Mark McGwire\n=VAL :Sammy Sosa\n-SEQ\n=VAL :rbi\n+SEQ\n=VAL :Sammy Sosa\n=VAL :Ken Griffey\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"hr\": [\n    \"Mark McGwire\",\n    \"Sammy Sosa\"\n  ],\n  \"rbi\": [\n    \"Sammy Sosa\",\n    \"Ken Griffey\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JEF9/00",
@@ -1925,7 +1925,7 @@ fn casesPart6(): List<SuiteCase> {
       "- |+\n\n\n",
       "+STR\n+DOC\n+SEQ\n=VAL |\\n\\n\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"\\n\\n\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JEF9/01",
@@ -1933,7 +1933,7 @@ fn casesPart6(): List<SuiteCase> {
       "- |+\n   \n",
       "+STR\n+DOC\n+SEQ\n=VAL |\\n\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"\\n\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -1946,7 +1946,7 @@ fn casesPart7(): List<SuiteCase> {
       "- |+\n   ",
       "+STR\n+DOC\n+SEQ\n=VAL |\\n\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"\\n\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JHB9",
@@ -1954,7 +1954,7 @@ fn casesPart7(): List<SuiteCase> {
       "# Ranking of 1998 home runs\n---\n- Mark McGwire\n- Sammy Sosa\n- Ken Griffey\n\n# Team ranking\n---\n- Chicago Cubs\n- St Louis Cardinals\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL :Mark McGwire\n=VAL :Sammy Sosa\n=VAL :Ken Griffey\n-SEQ\n-DOC\n+DOC ---\n+SEQ\n=VAL :Chicago Cubs\n=VAL :St Louis Cardinals\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"Mark McGwire\",\n  \"Sammy Sosa\",\n  \"Ken Griffey\"\n]\n[\n  \"Chicago Cubs\",\n  \"St Louis Cardinals\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JKF3",
@@ -1962,7 +1962,7 @@ fn casesPart7(): List<SuiteCase> {
       "- - \"bar\nbar\": x\n",
       "+STR\n+DOC\n+SEQ\n+SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "JQ4R",
@@ -1970,7 +1970,7 @@ fn casesPart7(): List<SuiteCase> {
       "block sequence:\n  - one\n  - two : three\n",
       "+STR\n+DOC\n+MAP\n=VAL :block sequence\n+SEQ\n=VAL :one\n+MAP\n=VAL :two\n=VAL :three\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"block sequence\": [\n    \"one\",\n    \{\n      \"two\": \"three\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JR7V",
@@ -1978,7 +1978,7 @@ fn casesPart7(): List<SuiteCase> {
       "- a?string\n- another ? string\n- key: value?\n- [a?string]\n- [another ? string]\n- \{key: value? \}\n- \{key: value?\}\n- \{key?: value \}\n",
       "+STR\n+DOC\n+SEQ\n=VAL :a?string\n=VAL :another ? string\n+MAP\n=VAL :key\n=VAL :value?\n-MAP\n+SEQ []\n=VAL :a?string\n-SEQ\n+SEQ []\n=VAL :another ? string\n-SEQ\n+MAP \{\}\n=VAL :key\n=VAL :value?\n-MAP\n+MAP \{\}\n=VAL :key\n=VAL :value?\n-MAP\n+MAP \{\}\n=VAL :key?\n=VAL :value\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a?string\",\n  \"another ? string\",\n  \{\n    \"key\": \"value?\"\n  \},\n  [\n    \"a?string\"\n  ],\n  [\n    \"another ? string\"\n  ],\n  \{\n    \"key\": \"value?\"\n  \},\n  \{\n    \"key\": \"value?\"\n  \},\n  \{\n    \"key?\": \"value\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JS2J",
@@ -1986,7 +1986,7 @@ fn casesPart7(): List<SuiteCase> {
       "First occurrence: &anchor Value\nSecond occurrence: *anchor\n",
       "+STR\n+DOC\n+MAP\n=VAL :First occurrence\n=VAL &anchor :Value\n=VAL :Second occurrence\n=ALI *anchor\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"First occurrence\": \"Value\",\n  \"Second occurrence\": \"Value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JTV5",
@@ -1994,7 +1994,7 @@ fn casesPart7(): List<SuiteCase> {
       "? a\n  true\n: null\n  d\n? e\n  42\n",
       "+STR\n+DOC\n+MAP\n=VAL :a true\n=VAL :null d\n=VAL :e 42\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a true\": \"null d\",\n  \"e 42\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "JY7Z",
@@ -2002,7 +2002,7 @@ fn casesPart7(): List<SuiteCase> {
       "key1: \"quoted1\"\nkey2: \"quoted2\" no key: nor value\nkey3: \"quoted3\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :key1\n=VAL \"quoted1\n=VAL :key2\n=VAL \"quoted2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "K3WX",
@@ -2010,7 +2010,7 @@ fn casesPart7(): List<SuiteCase> {
       "---\n\{ \"foo\" # comment\n  :bar \}\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL \"foo\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "K4SU",
@@ -2018,7 +2018,7 @@ fn casesPart7(): List<SuiteCase> {
       "- foo\n- bar\n- 42\n",
       "+STR\n+DOC\n+SEQ\n=VAL :foo\n=VAL :bar\n=VAL :42\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"foo\",\n  \"bar\",\n  42\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "K527",
@@ -2026,7 +2026,7 @@ fn casesPart7(): List<SuiteCase> {
       ">-\n  trimmed\n  \n \n\n  as\n  space\n",
       "+STR\n+DOC\n=VAL >trimmed\\n\\n\\nas space\n-DOC\n-STR\n",
       "\"trimmed\\n\\n\\nas space\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "K54U",
@@ -2034,7 +2034,7 @@ fn casesPart7(): List<SuiteCase> {
       "---\tscalar\n",
       "+STR\n+DOC ---\n=VAL :scalar\n-DOC\n-STR\n",
       "\"scalar\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "K858",
@@ -2042,7 +2042,7 @@ fn casesPart7(): List<SuiteCase> {
       "strip: >-\n\nclip: >\n\nkeep: |+\n\n",
       "+STR\n+DOC\n+MAP\n=VAL :strip\n=VAL >\n=VAL :clip\n=VAL >\n=VAL :keep\n=VAL |\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"strip\": \"\",\n  \"clip\": \"\",\n  \"keep\": \"\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KH5V/00",
@@ -2050,7 +2050,7 @@ fn casesPart7(): List<SuiteCase> {
       "\"1 inline\\ttab\"\n",
       "+STR\n+DOC\n=VAL \"1 inline\\ttab\n-DOC\n-STR\n",
       "\"1 inline\\ttab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KH5V/01",
@@ -2058,7 +2058,7 @@ fn casesPart7(): List<SuiteCase> {
       "\"2 inline\\\ttab\"\n",
       "+STR\n+DOC\n=VAL \"2 inline\\ttab\n-DOC\n-STR\n",
       "\"2 inline\\ttab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KH5V/02",
@@ -2066,7 +2066,7 @@ fn casesPart7(): List<SuiteCase> {
       "\"3 inline\ttab\"\n",
       "+STR\n+DOC\n=VAL \"3 inline\\ttab\n-DOC\n-STR\n",
       "\"3 inline\\ttab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KK5P",
@@ -2074,7 +2074,7 @@ fn casesPart7(): List<SuiteCase> {
       "complex1:\n  ? - a\ncomplex2:\n  ? - a\n  : b\ncomplex3:\n  ? - a\n  : >\n    b\ncomplex4:\n  ? >\n    a\n  :\ncomplex5:\n  ? - a\n  : - b\n",
       "+STR\n+DOC\n+MAP\n=VAL :complex1\n+MAP\n+SEQ\n=VAL :a\n-SEQ\n=VAL :\n-MAP\n=VAL :complex2\n+MAP\n+SEQ\n=VAL :a\n-SEQ\n=VAL :b\n-MAP\n=VAL :complex3\n+MAP\n+SEQ\n=VAL :a\n-SEQ\n=VAL >b\\n\n-MAP\n=VAL :complex4\n+MAP\n=VAL >a\\n\n=VAL :\n-MAP\n=VAL :complex5\n+MAP\n+SEQ\n=VAL :a\n-SEQ\n+SEQ\n=VAL :b\n-SEQ\n-MAP\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KMK3",
@@ -2082,7 +2082,7 @@ fn casesPart7(): List<SuiteCase> {
       "foo:\n  bar: 1\nbaz: 2\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n+MAP\n=VAL :bar\n=VAL :1\n-MAP\n=VAL :baz\n=VAL :2\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \{\n    \"bar\": 1\n  \},\n  \"baz\": 2\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "KS4U",
@@ -2090,7 +2090,7 @@ fn casesPart7(): List<SuiteCase> {
       "---\n[\nsequence item\n]\ninvalid item\n",
       "+STR\n+DOC ---\n+SEQ []\n=VAL :sequence item\n-SEQ\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "KSS4",
@@ -2098,7 +2098,7 @@ fn casesPart7(): List<SuiteCase> {
       "--- \"quoted\nstring\"\n--- &node foo\n",
       "+STR\n+DOC ---\n=VAL \"quoted string\n-DOC\n+DOC ---\n=VAL &node :foo\n-DOC\n-STR\n",
       "\"quoted string\"\n\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "L24T/00",
@@ -2106,7 +2106,7 @@ fn casesPart7(): List<SuiteCase> {
       "foo: |\n  x\n   \n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL |x\\n \\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : \"x\\n \\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "L24T/01",
@@ -2114,7 +2114,7 @@ fn casesPart7(): List<SuiteCase> {
       "foo: |\n  x\n   ",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL |x\\n \\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\" : \"x\\n \\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "L383",
@@ -2122,7 +2122,7 @@ fn casesPart7(): List<SuiteCase> {
       "--- foo  # comment\n--- foo  # comment\n",
       "+STR\n+DOC ---\n=VAL :foo\n-DOC\n+DOC ---\n=VAL :foo\n-DOC\n-STR\n",
       "\"foo\"\n\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "L94M",
@@ -2130,7 +2130,7 @@ fn casesPart7(): List<SuiteCase> {
       "? !!str a\n: !!int 47\n? c\n: !!str d\n",
       "+STR\n+DOC\n+MAP\n=VAL <tag:yaml.org,2002:str> :a\n=VAL <tag:yaml.org,2002:int> :47\n=VAL :c\n=VAL <tag:yaml.org,2002:str> :d\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": 47,\n  \"c\": \"d\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "L9U5",
@@ -2138,7 +2138,7 @@ fn casesPart7(): List<SuiteCase> {
       "implicit block key : [\n  implicit flow key : value,\n ]\n",
       "+STR\n+DOC\n+MAP\n=VAL :implicit block key\n+SEQ []\n+MAP \{\}\n=VAL :implicit flow key\n=VAL :value\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"implicit block key\": [\n    \{\n      \"implicit flow key\": \"value\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "LE5A",
@@ -2146,16 +2146,16 @@ fn casesPart7(): List<SuiteCase> {
       "- !!str \"a\"\n- 'b'\n- &anchor \"c\"\n- *anchor\n- !!str\n",
       "+STR\n+DOC\n+SEQ\n=VAL <tag:yaml.org,2002:str> \"a\n=VAL 'b\n=VAL &anchor \"c\n=ALI *anchor\n=VAL <tag:yaml.org,2002:str> :\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\",\n  \"b\",\n  \"c\",\n  \"c\",\n  \"\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("LHL4", "Invalid tag", "---\n!invalid\{\}tag scalar\n", "+STR\n+DOC ---\n", "", isError: true),
+    SuiteCase("LHL4", "Invalid tag", "---\n!invalid\{\}tag scalar\n", "+STR\n+DOC ---\n", "", invalid: true),
     SuiteCase(
       "LP6E",
       "Whitespace After Scalars in Flow",
       "- [a, b , c ]\n- \{ \"a\"  : b\n   , c : 'd' ,\n   e   : \"f\"\n  \}\n- [      ]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n=VAL :a\n=VAL :b\n=VAL :c\n-SEQ\n+MAP \{\}\n=VAL \"a\n=VAL :b\n=VAL :c\n=VAL 'd\n=VAL :e\n=VAL \"f\n-MAP\n+SEQ []\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"a\",\n    \"b\",\n    \"c\"\n  ],\n  \{\n    \"a\": \"b\",\n    \"c\": \"d\",\n    \"e\": \"f\"\n  \},\n  []\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "LQZ7",
@@ -2163,7 +2163,7 @@ fn casesPart7(): List<SuiteCase> {
       "\"implicit block key\" : [\n  \"implicit flow key\" : value,\n ]\n",
       "+STR\n+DOC\n+MAP\n=VAL \"implicit block key\n+SEQ []\n+MAP \{\}\n=VAL \"implicit flow key\n=VAL :value\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"implicit block key\": [\n    \{\n      \"implicit flow key\": \"value\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "LX3P",
@@ -2171,7 +2171,7 @@ fn casesPart7(): List<SuiteCase> {
       "[flow]: block\n",
       "+STR\n+DOC\n+MAP\n+SEQ []\n=VAL :flow\n-SEQ\n=VAL :block\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M29M",
@@ -2179,7 +2179,7 @@ fn casesPart7(): List<SuiteCase> {
       "a: |\n ab\n \n cd\n ef\n \n\n...\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL |ab\\n\\ncd\\nef\\n\n-MAP\n-DOC ...\n-STR\n",
       "\{\n  \"a\": \"ab\\n\\ncd\\nef\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M2N8/00",
@@ -2187,7 +2187,7 @@ fn casesPart7(): List<SuiteCase> {
       "- ? : x\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n+MAP\n=VAL :\n=VAL :x\n-MAP\n=VAL :\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M2N8/01",
@@ -2195,7 +2195,7 @@ fn casesPart7(): List<SuiteCase> {
       "? []: x\n",
       "+STR\n+DOC\n+MAP\n+MAP\n+SEQ []\n-SEQ\n=VAL :x\n-MAP\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M5C3",
@@ -2203,7 +2203,7 @@ fn casesPart7(): List<SuiteCase> {
       "literal: |2\n  value\nfolded:\n   !foo\n  >1\n value\n",
       "+STR\n+DOC\n+MAP\n=VAL :literal\n=VAL |value\\n\n=VAL :folded\n=VAL <!foo> >value\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"literal\": \"value\\n\",\n  \"folded\": \"value\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M5DY",
@@ -2211,7 +2211,7 @@ fn casesPart7(): List<SuiteCase> {
       "? - Detroit Tigers\n  - Chicago cubs\n:\n  - 2001-07-23\n\n? [ New York Yankees,\n    Atlanta Braves ]\n: [ 2001-07-02, 2001-08-12,\n    2001-08-14 ]\n",
       "+STR\n+DOC\n+MAP\n+SEQ\n=VAL :Detroit Tigers\n=VAL :Chicago cubs\n-SEQ\n+SEQ\n=VAL :2001-07-23\n-SEQ\n+SEQ []\n=VAL :New York Yankees\n=VAL :Atlanta Braves\n-SEQ\n+SEQ []\n=VAL :2001-07-02\n=VAL :2001-08-12\n=VAL :2001-08-14\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M6YH",
@@ -2219,7 +2219,7 @@ fn casesPart7(): List<SuiteCase> {
       "- |\n x\n-\n foo: bar\n-\n - 42\n",
       "+STR\n+DOC\n+SEQ\n=VAL |x\\n\n+MAP\n=VAL :foo\n=VAL :bar\n-MAP\n+SEQ\n=VAL :42\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"x\\n\",\n  \{\n    \"foo\" : \"bar\"\n  \},\n  [\n    42\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M7A3",
@@ -2227,7 +2227,7 @@ fn casesPart7(): List<SuiteCase> {
       "Bare\ndocument\n...\n# No document\n...\n|\n%!PS-Adobe-2.0 # Not the first line\n",
       "+STR\n+DOC\n=VAL :Bare document\n-DOC ...\n+DOC\n=VAL |%!PS-Adobe-2.0 # Not the first line\\n\n-DOC\n-STR\n",
       "\"Bare document\"\n\"%!PS-Adobe-2.0 # Not the first line\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M7NX",
@@ -2235,7 +2235,7 @@ fn casesPart7(): List<SuiteCase> {
       "---\n\{\n a: [\n  b, c, \{\n   d: [e, f]\n  \}\n ]\n\}\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL :a\n+SEQ []\n=VAL :b\n=VAL :c\n+MAP \{\}\n=VAL :d\n+SEQ []\n=VAL :e\n=VAL :f\n-SEQ\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": [\n    \"b\",\n    \"c\",\n    \{\n      \"d\": [\n        \"e\",\n        \"f\"\n      ]\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "M9B4",
@@ -2243,7 +2243,7 @@ fn casesPart7(): List<SuiteCase> {
       "|\n literal\n \ttext\n\n\n",
       "+STR\n+DOC\n=VAL |literal\\n\\ttext\\n\n-DOC\n-STR\n",
       "\"literal\\n\\ttext\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MJS9",
@@ -2251,22 +2251,22 @@ fn casesPart7(): List<SuiteCase> {
       ">\n  foo \n \n  \t bar\n\n  baz\n",
       "+STR\n+DOC\n=VAL >foo \\n\\n\\t bar\\n\\nbaz\\n\n-DOC\n-STR\n",
       "\"foo \\n\\n\\t bar\\n\\nbaz\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
 
 fn casesPart8(): List<SuiteCase> {
   [
-    SuiteCase("MUS6/00", "Directive variants", "%YAML 1.1#...\n---\n", "+STR\n", "", isError: true),
-    SuiteCase("MUS6/01", "Directive variants", "%YAML 1.2\n---\n%YAML 1.2\n---\n", "+STR\n", "", isError: true),
+    SuiteCase("MUS6/00", "Directive variants", "%YAML 1.1#...\n---\n", "+STR\n", "", invalid: true),
+    SuiteCase("MUS6/01", "Directive variants", "%YAML 1.2\n---\n%YAML 1.2\n---\n", "+STR\n", "", invalid: true),
     SuiteCase(
       "MUS6/02",
       "Directive variants",
       "%YAML  1.1\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MUS6/03",
@@ -2274,7 +2274,7 @@ fn casesPart8(): List<SuiteCase> {
       "%YAML \t 1.1\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MUS6/04",
@@ -2282,7 +2282,7 @@ fn casesPart8(): List<SuiteCase> {
       "%YAML 1.1  # comment\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MUS6/05",
@@ -2290,7 +2290,7 @@ fn casesPart8(): List<SuiteCase> {
       "%YAM 1.1\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MUS6/06",
@@ -2298,7 +2298,7 @@ fn casesPart8(): List<SuiteCase> {
       "%YAMLL 1.1\n---\n",
       "+STR\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "null\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MXS3",
@@ -2306,7 +2306,7 @@ fn casesPart8(): List<SuiteCase> {
       "- \{a: b\}\n",
       "+STR\n+DOC\n+SEQ\n+MAP \{\}\n=VAL :a\n=VAL :b\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"a\": \"b\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MYW6",
@@ -2314,7 +2314,7 @@ fn casesPart8(): List<SuiteCase> {
       "|-\n ab\n \n \n...\n",
       "+STR\n+DOC\n=VAL |ab\n-DOC ...\n-STR\n",
       "\"ab\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "MZX3",
@@ -2322,7 +2322,7 @@ fn casesPart8(): List<SuiteCase> {
       "- plain\n- \"double quoted\"\n- 'single quoted'\n- >\n  block\n- plain again\n",
       "+STR\n+DOC\n+SEQ\n=VAL :plain\n=VAL \"double quoted\n=VAL 'single quoted\n=VAL >block\\n\n=VAL :plain again\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"plain\",\n  \"double quoted\",\n  \"single quoted\",\n  \"block\\n\",\n  \"plain again\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "N4JP",
@@ -2330,7 +2330,7 @@ fn casesPart8(): List<SuiteCase> {
       "map:\n  key1: \"quoted1\"\n key2: \"bad indentation\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :map\n+MAP\n=VAL :key1\n=VAL \"quoted1\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "N782",
@@ -2338,7 +2338,7 @@ fn casesPart8(): List<SuiteCase> {
       "[\n--- ,\n...\n]\n",
       "+STR\n+DOC\n+SEQ []\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "NAT4",
@@ -2346,7 +2346,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\na: '\n  '\nb: '  \n  '\nc: \"\n  \"\nd: \"  \n  \"\ne: '\n\n  '\nf: \"\n\n  \"\ng: '\n\n\n  '\nh: \"\n\n\n  \"\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL ' \n=VAL :b\n=VAL ' \n=VAL :c\n=VAL \" \n=VAL :d\n=VAL \" \n=VAL :e\n=VAL '\\n\n=VAL :f\n=VAL \"\\n\n=VAL :g\n=VAL '\\n\\n\n=VAL :h\n=VAL \"\\n\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \" \",\n  \"b\": \" \",\n  \"c\": \" \",\n  \"d\": \" \",\n  \"e\": \"\\n\",\n  \"f\": \"\\n\",\n  \"g\": \"\\n\\n\",\n  \"h\": \"\\n\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "NB6Z",
@@ -2354,7 +2354,7 @@ fn casesPart8(): List<SuiteCase> {
       "key:\n  value\n  with\n  \t\n  tabs\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL :value with\\ntabs\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value with\\ntabs\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "NHX8",
@@ -2362,7 +2362,7 @@ fn casesPart8(): List<SuiteCase> {
       ":\n\n\n",
       "+STR\n+DOC\n+MAP\n=VAL :\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "NJ66",
@@ -2370,7 +2370,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\n- \{ single line: value\}\n- \{ multi\n  line: value\}\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP \{\}\n=VAL :single line\n=VAL :value\n-MAP\n+MAP \{\}\n=VAL :multi line\n=VAL :value\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"single line\": \"value\"\n  \},\n  \{\n    \"multi line\": \"value\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "NKF9",
@@ -2378,7 +2378,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\nkey: value\n: empty key\n---\n\{\n key: value, : empty key\n\}\n---\n# empty key and value\n:\n---\n# empty key and value\n\{ : \}\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n=VAL :value\n=VAL :\n=VAL :empty key\n-MAP\n-DOC\n+DOC ---\n+MAP \{\}\n=VAL :key\n=VAL :value\n=VAL :\n=VAL :empty key\n-MAP\n-DOC\n+DOC ---\n+MAP\n=VAL :\n=VAL :\n-MAP\n-DOC\n+DOC ---\n+MAP \{\}\n=VAL :\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "NP9H",
@@ -2386,7 +2386,7 @@ fn casesPart8(): List<SuiteCase> {
       "\"folded \nto a space,\t\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
       "+STR\n+DOC\n=VAL \"folded to a space,\\nto a line feed, or \\t \\tnon-content\n-DOC\n-STR\n",
       "\"folded to a space,\\nto a line feed, or \\t \\tnon-content\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "P2AD",
@@ -2394,7 +2394,7 @@ fn casesPart8(): List<SuiteCase> {
       "- | # Empty header\u{2193}\n literal\n- >1 # Indentation indicator\u{2193}\n  folded\n- |+ # Chomping indicator\u{2193}\n keep\n\n- >1- # Both indicators\u{2193}\n  strip\n",
       "+STR\n+DOC\n+SEQ\n=VAL |literal\\n\n=VAL > folded\\n\n=VAL |keep\\n\\n\n=VAL > strip\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"literal\\n\",\n  \" folded\\n\",\n  \"keep\\n\\n\",\n  \" strip\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "P2EQ",
@@ -2402,7 +2402,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\n- \{ y: z \}- invalid\n",
       "+STR\n+DOC ---\n+SEQ\n+MAP \{\}\n=VAL :y\n=VAL :z\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "P76L",
@@ -2410,7 +2410,7 @@ fn casesPart8(): List<SuiteCase> {
       "%TAG !! tag:example.com,2000:app/\n---\n!!int 1 - 3 # Interval, not integer\n",
       "+STR\n+DOC ---\n=VAL <tag:example.com,2000:app/int> :1 - 3\n-DOC\n-STR\n",
       "\"1 - 3\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "P94K",
@@ -2418,7 +2418,7 @@ fn casesPart8(): List<SuiteCase> {
       "key:    # Comment\n        # lines\n  value\n\n\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "PBJ2",
@@ -2426,7 +2426,7 @@ fn casesPart8(): List<SuiteCase> {
       "american:\n  - Boston Red Sox\n  - Detroit Tigers\n  - New York Yankees\nnational:\n  - New York Mets\n  - Chicago Cubs\n  - Atlanta Braves\n",
       "+STR\n+DOC\n+MAP\n=VAL :american\n+SEQ\n=VAL :Boston Red Sox\n=VAL :Detroit Tigers\n=VAL :New York Yankees\n-SEQ\n=VAL :national\n+SEQ\n=VAL :New York Mets\n=VAL :Chicago Cubs\n=VAL :Atlanta Braves\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"american\": [\n    \"Boston Red Sox\",\n    \"Detroit Tigers\",\n    \"New York Yankees\"\n  ],\n  \"national\": [\n    \"New York Mets\",\n    \"Chicago Cubs\",\n    \"Atlanta Braves\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "PRH3",
@@ -2434,7 +2434,7 @@ fn casesPart8(): List<SuiteCase> {
       "' 1st non-empty\n\n 2nd non-empty \n\t3rd non-empty '\n",
       "+STR\n+DOC\n=VAL ' 1st non-empty\\n2nd non-empty 3rd non-empty \n-DOC\n-STR\n",
       "\" 1st non-empty\\n2nd non-empty 3rd non-empty \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "PUW8",
@@ -2442,7 +2442,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\na: b\n---\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL :b\n-MAP\n-DOC\n+DOC ---\n=VAL :\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\"\n\}\nnull\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "PW8X",
@@ -2450,7 +2450,7 @@ fn casesPart8(): List<SuiteCase> {
       "- &a\n- a\n-\n  &a : a\n  b: &b\n-\n  &c : &a\n-\n  ? &d\n-\n  ? &e\n  : &a\n",
       "+STR\n+DOC\n+SEQ\n=VAL &a :\n=VAL :a\n+MAP\n=VAL &a :\n=VAL :a\n=VAL :b\n=VAL &b :\n-MAP\n+MAP\n=VAL &c :\n=VAL &a :\n-MAP\n+MAP\n=VAL &d :\n=VAL :\n-MAP\n+MAP\n=VAL &e :\n=VAL &a :\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Q4CL",
@@ -2458,7 +2458,7 @@ fn casesPart8(): List<SuiteCase> {
       "key1: \"quoted1\"\nkey2: \"quoted2\" trailing content\nkey3: \"quoted3\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :key1\n=VAL \"quoted1\n=VAL :key2\n=VAL \"quoted2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "Q5MG",
@@ -2466,7 +2466,7 @@ fn casesPart8(): List<SuiteCase> {
       "\t\{\}\n",
       "+STR\n+DOC\n+MAP \{\}\n-MAP\n-DOC\n-STR\n",
       "\{\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Q88A",
@@ -2474,7 +2474,7 @@ fn casesPart8(): List<SuiteCase> {
       "- [ a, b ]\n- \{ a: b \}\n- \"a\"\n- 'b'\n- c\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n=VAL :a\n=VAL :b\n-SEQ\n+MAP \{\}\n=VAL :a\n=VAL :b\n-MAP\n=VAL \"a\n=VAL 'b\n=VAL :c\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"a\",\n    \"b\"\n  ],\n  \{\n    \"a\": \"b\"\n  \},\n  \"a\",\n  \"b\",\n  \"c\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Q8AD",
@@ -2482,7 +2482,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\n\"folded \nto a space,\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
       "+STR\n+DOC ---\n=VAL \"folded to a space,\\nto a line feed, or \\t \\tnon-content\n-DOC\n-STR\n",
       "\"folded to a space,\\nto a line feed, or \\t \\tnon-content\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Q9WF",
@@ -2490,7 +2490,7 @@ fn casesPart8(): List<SuiteCase> {
       "\{ first: Sammy, last: Sosa \}:\n# Statistics:\n  hr:  # Home runs\n     65\n  avg: # Average\n   0.278\n",
       "+STR\n+DOC\n+MAP\n+MAP \{\}\n=VAL :first\n=VAL :Sammy\n=VAL :last\n=VAL :Sosa\n-MAP\n+MAP\n=VAL :hr\n=VAL :65\n=VAL :avg\n=VAL :0.278\n-MAP\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "QB6E",
@@ -2498,7 +2498,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\nquoted: \"a\nb\nc\"\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :quoted\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "QF4Y",
@@ -2506,7 +2506,7 @@ fn casesPart8(): List<SuiteCase> {
       "[\nfoo: bar\n]\n",
       "+STR\n+DOC\n+SEQ []\n+MAP \{\}\n=VAL :foo\n=VAL :bar\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"foo\": \"bar\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "QLJ7",
@@ -2514,16 +2514,16 @@ fn casesPart8(): List<SuiteCase> {
       "%TAG !prefix! tag:example.com,2011:\n--- !prefix!A\na: b\n--- !prefix!B\nc: d\n--- !prefix!C\ne: f\n",
       "+STR\n+DOC ---\n+MAP <tag:example.com,2011:A>\n=VAL :a\n=VAL :b\n-MAP\n-DOC\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("QT73", "Comment and document-end marker", "# comment\n...\n", "+STR\n-STR\n", "", isError: false),
+    SuiteCase("QT73", "Comment and document-end marker", "# comment\n...\n", "+STR\n-STR\n", "", invalid: false),
     SuiteCase(
       "R4YG",
       "Spec Example 8.2. Block Indentation Indicator",
       "- |\n detected\n- >\n \n  \n  # detected\n- |1\n  explicit\n- >\n \t\n detected\n",
       "+STR\n+DOC\n+SEQ\n=VAL |detected\\n\n=VAL >\\n\\n# detected\\n\n=VAL | explicit\\n\n=VAL >\\t\\ndetected\\n\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"detected\\n\",\n  \"\\n\\n# detected\\n\",\n  \" explicit\\n\",\n  \"\\t\\ndetected\\n\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "R52L",
@@ -2531,7 +2531,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\n\{ top1: [item1, \{key2: value2\}, item3], top2: value2 \}\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL :top1\n+SEQ []\n=VAL :item1\n+MAP \{\}\n=VAL :key2\n=VAL :value2\n-MAP\n=VAL :item3\n-SEQ\n=VAL :top2\n=VAL :value2\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"top1\": [\n    \"item1\",\n    \{\n      \"key2\": \"value2\"\n    \},\n    \"item3\"\n  ],\n  \"top2\": \"value2\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "RHX7",
@@ -2539,7 +2539,7 @@ fn casesPart8(): List<SuiteCase> {
       "---\nkey: value\n%YAML 1.2\n---\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n=VAL :value\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "RLU9",
@@ -2547,7 +2547,7 @@ fn casesPart8(): List<SuiteCase> {
       "foo:\n- 42\nbar:\n  - 44\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n+SEQ\n=VAL :42\n-SEQ\n=VAL :bar\n+SEQ\n=VAL :44\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": [\n    42\n  ],\n  \"bar\": [\n    44\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "RR7F",
@@ -2555,7 +2555,7 @@ fn casesPart8(): List<SuiteCase> {
       "a: 4.2\n? d\n: 23\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL :4.2\n=VAL :d\n=VAL :23\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"d\": 23,\n  \"a\": 4.2\n\}\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -2568,7 +2568,7 @@ fn casesPart9(): List<SuiteCase> {
       "%YAML 1.2\n---\nDocument\n... # Suffix\n",
       "+STR\n+DOC ---\n=VAL :Document\n-DOC ...\n-STR\n",
       "\"Document\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "RXY3",
@@ -2576,7 +2576,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\n'\n...\n'\n",
       "+STR\n+DOC ---\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "RZP5",
@@ -2584,7 +2584,7 @@ fn casesPart9(): List<SuiteCase> {
       "a: \"double\n  quotes\" # lala\nb: plain\n value  # lala\nc  : #lala\n  d\n? # lala\n - seq1\n: # lala\n - #lala\n  seq2\ne: &node # lala\n - x: y\nblock: > # lala\n  abcde\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL \"double quotes\n=VAL :b\n=VAL :plain value\n=VAL :c\n=VAL :d\n+SEQ\n=VAL :seq1\n-SEQ\n+SEQ\n=VAL :seq2\n-SEQ\n=VAL :e\n+SEQ &node\n+MAP\n=VAL :x\n=VAL :y\n-MAP\n-SEQ\n=VAL :block\n=VAL >abcde\\n\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "RZT7",
@@ -2592,7 +2592,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\nTime: 2001-11-23 15:01:42 -5\nUser: ed\nWarning:\n  This is an error message\n  for the log file\n---\nTime: 2001-11-23 15:02:31 -5\nUser: ed\nWarning:\n  A slightly different error\n  message.\n---\nDate: 2001-11-23 15:03:17 -5\nUser: ed\nFatal:\n  Unknown variable \"bar\"\nStack:\n  - file: TopClass.py\n    line: 23\n    code: |\n      x = MoreObject(\"345\\n\")\n  - file: MoreClass.py\n    line: 58\n    code: |-\n      foo = bar\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :Time\n=VAL :2001-11-23 15:01:42 -5\n=VAL :User\n=VAL :ed\n=VAL :Warning\n=VAL :This is an error message for the log file\n-MAP\n-DOC\n+DOC ---\n+MAP\n=VAL :Time\n=VAL :2001-11-23 15:02:31 -5\n=VAL :User\n=VAL :ed\n=VAL :Warning\n=VAL :A slightly different error message.\n-MAP\n-DOC\n+DOC ---\n+MAP\n=VAL :Date\n=VAL :2001-11-23 15:03:17 -5\n=VAL :User\n=VAL :ed\n=VAL :Fatal\n=VAL :Unknown variable \"bar\"\n=VAL :Stack\n+SEQ\n+MAP\n=VAL :file\n=VAL :TopClass.py\n=VAL :line\n=VAL :23\n=VAL :code\n=VAL |x = MoreObject(\"345\\\\n\")\\n\n-MAP\n+MAP\n=VAL :file\n=VAL :MoreClass.py\n=VAL :line\n=VAL :58\n=VAL :code\n=VAL |foo = bar\n-MAP\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Time\": \"2001-11-23 15:01:42 -5\",\n  \"User\": \"ed\",\n  \"Warning\": \"This is an error message for the log file\"\n\}\n\{\n  \"Time\": \"2001-11-23 15:02:31 -5\",\n  \"User\": \"ed\",\n  \"Warning\": \"A slightly different error message.\"\n\}\n\{\n  \"Date\": \"2001-11-23 15:03:17 -5\",\n  \"User\": \"ed\",\n  \"Fatal\": \"Unknown variable \\\"bar\\\"\",\n  \"Stack\": [\n    \{\n      \"file\": \"TopClass.py\",\n      \"line\": 23,\n      \"code\": \"x = MoreObject(\\\"345\\\\n\\\")\\n\"\n    \},\n    \{\n      \"file\": \"MoreClass.py\",\n      \"line\": 58,\n      \"code\": \"foo = bar\"\n    \}\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "S3PD",
@@ -2600,7 +2600,7 @@ fn casesPart9(): List<SuiteCase> {
       "plain key: in-line value\n: # Both empty\n\"quoted key\":\n- entry\n",
       "+STR\n+DOC\n+MAP\n=VAL :plain key\n=VAL :in-line value\n=VAL :\n=VAL :\n=VAL \"quoted key\n+SEQ\n=VAL :entry\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "S4GJ",
@@ -2608,7 +2608,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\nfolded: > first line\n  second line\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :folded\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "S4JQ",
@@ -2616,7 +2616,7 @@ fn casesPart9(): List<SuiteCase> {
       "# Assuming conventional resolution:\n- \"12\"\n- 12\n- ! 12\n",
       "+STR\n+DOC\n+SEQ\n=VAL \"12\n=VAL :12\n=VAL <!> :12\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"12\",\n  12,\n  \"12\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "S4T7",
@@ -2624,7 +2624,7 @@ fn casesPart9(): List<SuiteCase> {
       "aaa: bbb\n...\n",
       "+STR\n+DOC\n+MAP\n=VAL :aaa\n=VAL :bbb\n-MAP\n-DOC ...\n-STR\n",
       "\{\n  \"aaa\": \"bbb\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "S7BG",
@@ -2632,7 +2632,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\n- :,\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL ::,\n-SEQ\n-DOC\n-STR\n",
       "[\n  \":,\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "S98Z",
@@ -2640,7 +2640,7 @@ fn casesPart9(): List<SuiteCase> {
       "empty block scalar: >\n \n  \n   \n # comment\n",
       "+STR\n+DOC\n+MAP\n=VAL :empty block scalar\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "S9E8",
@@ -2648,7 +2648,7 @@ fn casesPart9(): List<SuiteCase> {
       "sequence:\n- one\n- two\nmapping:\n  ? sky\n  : blue\n  sea : green\n",
       "+STR\n+DOC\n+MAP\n=VAL :sequence\n+SEQ\n=VAL :one\n=VAL :two\n-SEQ\n=VAL :mapping\n+MAP\n=VAL :sky\n=VAL :blue\n=VAL :sea\n=VAL :green\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"sequence\": [\n    \"one\",\n    \"two\"\n  ],\n  \"mapping\": \{\n    \"sky\": \"blue\",\n    \"sea\": \"green\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "SBG9",
@@ -2656,16 +2656,16 @@ fn casesPart9(): List<SuiteCase> {
       "\{a: [b, c], [d, e]: f\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :a\n+SEQ []\n=VAL :b\n=VAL :c\n-SEQ\n+SEQ []\n=VAL :d\n=VAL :e\n-SEQ\n=VAL :f\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("SF5V", "Duplicate YAML directive", "%YAML 1.2\n%YAML 1.2\n---\n", "+STR\n", "", isError: true),
+    SuiteCase("SF5V", "Duplicate YAML directive", "%YAML 1.2\n%YAML 1.2\n---\n", "+STR\n", "", invalid: true),
     SuiteCase(
       "SKE5",
       "Anchor before zero indented sequence",
       "---\nseq:\n &anchor\n- a\n- b\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :seq\n+SEQ &anchor\n=VAL :a\n=VAL :b\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"seq\": [\n    \"a\",\n    \"b\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "SM9W/00",
@@ -2673,7 +2673,7 @@ fn casesPart9(): List<SuiteCase> {
       "-",
       "+STR\n+DOC\n+SEQ\n=VAL :\n-SEQ\n-DOC\n-STR\n",
       "[null]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "SM9W/01",
@@ -2681,7 +2681,7 @@ fn casesPart9(): List<SuiteCase> {
       ":",
       "+STR\n+DOC\n+MAP\n=VAL :\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "SR86",
@@ -2689,7 +2689,7 @@ fn casesPart9(): List<SuiteCase> {
       "key1: &a value\nkey2: &b *a\n",
       "+STR\n+DOC\n+MAP\n=VAL :key1\n=VAL &a :value\n=VAL :key2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "SSW6",
@@ -2697,7 +2697,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\n'here''s to \"quotes\"'\n",
       "+STR\n+DOC ---\n=VAL 'here's to \"quotes\"\n-DOC\n-STR\n",
       "\"here's to \\\"quotes\\\"\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "SU5Z",
@@ -2705,7 +2705,7 @@ fn casesPart9(): List<SuiteCase> {
       "key: \"value\"# invalid comment\n",
       "+STR\n+DOC\n+MAP\n=VAL :key\n=VAL \"value\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "SU74",
@@ -2713,7 +2713,7 @@ fn casesPart9(): List<SuiteCase> {
       "key1: &alias value1\n&b *alias : value2\n",
       "+STR\n+DOC\n+MAP\n=VAL :key1\n=VAL &alias :value1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "SY6V",
@@ -2721,7 +2721,7 @@ fn casesPart9(): List<SuiteCase> {
       "&anchor - sequence entry\n",
       "+STR\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "SYW4",
@@ -2729,7 +2729,7 @@ fn casesPart9(): List<SuiteCase> {
       "hr:  65    # Home runs\navg: 0.278 # Batting average\nrbi: 147   # Runs Batted In\n",
       "+STR\n+DOC\n+MAP\n=VAL :hr\n=VAL :65\n=VAL :avg\n=VAL :0.278\n=VAL :rbi\n=VAL :147\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"hr\": 65,\n  \"avg\": 0.278,\n  \"rbi\": 147\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "T26H",
@@ -2737,7 +2737,7 @@ fn casesPart9(): List<SuiteCase> {
       "--- |\n \n  \n  literal\n   \n  \n  text\n\n # Comment\n",
       "+STR\n+DOC ---\n=VAL |\\n\\nliteral\\n \\n\\ntext\\n\n-DOC\n-STR\n",
       "\"\\n\\nliteral\\n \\n\\ntext\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "T4YY",
@@ -2745,7 +2745,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\n' 1st non-empty\n\n 2nd non-empty \n 3rd non-empty '\n",
       "+STR\n+DOC ---\n=VAL ' 1st non-empty\\n2nd non-empty 3rd non-empty \n-DOC\n-STR\n",
       "\" 1st non-empty\\n2nd non-empty 3rd non-empty \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "T5N4",
@@ -2753,7 +2753,7 @@ fn casesPart9(): List<SuiteCase> {
       "--- |\n literal\n \ttext\n\n\n",
       "+STR\n+DOC ---\n=VAL |literal\\n\\ttext\\n\n-DOC\n-STR\n",
       "\"literal\\n\\ttext\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "T833",
@@ -2761,7 +2761,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\n\{\n foo: 1\n bar: 2 \}\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :foo\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "TD5N",
@@ -2769,7 +2769,7 @@ fn casesPart9(): List<SuiteCase> {
       "- item1\n- item2\ninvalid\n",
       "+STR\n+DOC\n+SEQ\n=VAL :item1\n=VAL :item2\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "TE2A",
@@ -2777,7 +2777,7 @@ fn casesPart9(): List<SuiteCase> {
       "block mapping:\n key: value\n",
       "+STR\n+DOC\n+MAP\n=VAL :block mapping\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"block mapping\": \{\n    \"key\": \"value\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "TL85",
@@ -2785,7 +2785,7 @@ fn casesPart9(): List<SuiteCase> {
       "\"\n  foo \n \n  \t bar\n\n  baz\n\"\n",
       "+STR\n+DOC\n=VAL \" foo\\nbar\\nbaz \n-DOC\n-STR\n",
       "\" foo\\nbar\\nbaz \"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "TS54",
@@ -2793,7 +2793,7 @@ fn casesPart9(): List<SuiteCase> {
       ">\n ab\n cd\n \n ef\n\n\n gh\n",
       "+STR\n+DOC\n=VAL >ab cd\\nef\\n\\ngh\\n\n-DOC\n-STR\n",
       "\"ab cd\\nef\\n\\ngh\\n\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "U3C3",
@@ -2801,7 +2801,7 @@ fn casesPart9(): List<SuiteCase> {
       "%TAG !yaml! tag:yaml.org,2002:\n---\n!yaml!str \"foo\"\n",
       "+STR\n+DOC ---\n=VAL <tag:yaml.org,2002:str> \"foo\n-DOC\n-STR\n",
       "\"foo\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "U3XV",
@@ -2809,7 +2809,7 @@ fn casesPart9(): List<SuiteCase> {
       "---\ntop1: &node1\n  &k1 key1: one\ntop2: &node2 # comment\n  key2: two\ntop3:\n  &k3 key3: three\ntop4:\n  &node4\n  &k4 key4: four\ntop5:\n  &node5\n  key5: five\ntop6: &val6\n  six\ntop7:\n  &val7 seven\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :top1\n+MAP &node1\n=VAL &k1 :key1\n=VAL :one\n-MAP\n=VAL :top2\n+MAP &node2\n=VAL :key2\n=VAL :two\n-MAP\n=VAL :top3\n+MAP\n=VAL &k3 :key3\n=VAL :three\n-MAP\n=VAL :top4\n+MAP &node4\n=VAL &k4 :key4\n=VAL :four\n-MAP\n=VAL :top5\n+MAP &node5\n=VAL :key5\n=VAL :five\n-MAP\n=VAL :top6\n=VAL &val6 :six\n=VAL :top7\n=VAL &val7 :seven\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"top1\": \{\n    \"key1\": \"one\"\n  \},\n  \"top2\": \{\n    \"key2\": \"two\"\n  \},\n  \"top3\": \{\n    \"key3\": \"three\"\n  \},\n  \"top4\": \{\n    \"key4\": \"four\"\n  \},\n  \"top5\": \{\n    \"key5\": \"five\"\n  \},\n  \"top6\": \"six\",\n  \"top7\": \"seven\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "U44R",
@@ -2817,16 +2817,16 @@ fn casesPart9(): List<SuiteCase> {
       "map:\n  key1: \"quoted1\"\n   key2: \"bad indentation\"\n",
       "+STR\n+DOC\n+MAP\n=VAL :map\n+MAP\n=VAL :key1\n=VAL \"quoted1\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("U99R", "Invalid comma in tag", "- !!str, xxx\n", "+STR\n+DOC\n+SEQ\n", "", isError: true),
+    SuiteCase("U99R", "Invalid comma in tag", "- !!str, xxx\n", "+STR\n+DOC\n+SEQ\n", "", invalid: true),
     SuiteCase(
       "U9NS",
       "Spec Example 2.8. Play by Play Feed from a Game",
       "---\ntime: 20:03:20\nplayer: Sammy Sosa\naction: strike (miss)\n...\n---\ntime: 20:03:47\nplayer: Sammy Sosa\naction: grand slam\n...\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :time\n=VAL :20:03:20\n=VAL :player\n=VAL :Sammy Sosa\n=VAL :action\n=VAL :strike (miss)\n-MAP\n-DOC ...\n+DOC ---\n+MAP\n=VAL :time\n=VAL :20:03:47\n=VAL :player\n=VAL :Sammy Sosa\n=VAL :action\n=VAL :grand slam\n-MAP\n-DOC ...\n-STR\n",
       "\{\n  \"time\": \"20:03:20\",\n  \"player\": \"Sammy Sosa\",\n  \"action\": \"strike (miss)\"\n\}\n\{\n  \"time\": \"20:03:47\",\n  \"player\": \"Sammy Sosa\",\n  \"action\": \"grand slam\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UDM2",
@@ -2834,7 +2834,7 @@ fn casesPart9(): List<SuiteCase> {
       "- \{ url: http://example.org \}\n",
       "+STR\n+DOC\n+SEQ\n+MAP \{\}\n=VAL :url\n=VAL :http://example.org\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  \{\n    \"url\": \"http://example.org\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UDR7",
@@ -2842,7 +2842,7 @@ fn casesPart9(): List<SuiteCase> {
       "sequence: [ one, two, ]\nmapping: \{ sky: blue, sea: green \}\n",
       "+STR\n+DOC\n+MAP\n=VAL :sequence\n+SEQ []\n=VAL :one\n=VAL :two\n-SEQ\n=VAL :mapping\n+MAP \{\}\n=VAL :sky\n=VAL :blue\n=VAL :sea\n=VAL :green\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"sequence\": [\n    \"one\",\n    \"two\"\n  ],\n  \"mapping\": \{\n    \"sky\": \"blue\",\n    \"sea\": \"green\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UGM3",
@@ -2850,7 +2850,7 @@ fn casesPart9(): List<SuiteCase> {
       "--- !<tag:clarkevans.com,2002:invoice>\ninvoice: 34843\ndate   : 2001-01-23\nbill-to: &id001\n    given  : Chris\n    family : Dumars\n    address:\n        lines: |\n            458 Walkman Dr.\n            Suite #292\n        city    : Royal Oak\n        state   : MI\n        postal  : 48046\nship-to: *id001\nproduct:\n    - sku         : BL394D\n      quantity    : 4\n      description : Basketball\n      price       : 450.00\n    - sku         : BL4438H\n      quantity    : 1\n      description : Super Hoop\n      price       : 2392.00\ntax  : 251.42\ntotal: 4443.52\ncomments:\n    Late afternoon is best.\n    Backup contact is Nancy\n    Billsmer @ 338-4338.\n",
       "+STR\n+DOC ---\n+MAP <tag:clarkevans.com,2002:invoice>\n=VAL :invoice\n=VAL :34843\n=VAL :date\n=VAL :2001-01-23\n=VAL :bill-to\n+MAP &id001\n=VAL :given\n=VAL :Chris\n=VAL :family\n=VAL :Dumars\n=VAL :address\n+MAP\n=VAL :lines\n=VAL |458 Walkman Dr.\\nSuite #292\\n\n=VAL :city\n=VAL :Royal Oak\n=VAL :state\n=VAL :MI\n=VAL :postal\n=VAL :48046\n-MAP\n-MAP\n=VAL :ship-to\n=ALI *id001\n=VAL :product\n+SEQ\n+MAP\n=VAL :sku\n=VAL :BL394D\n=VAL :quantity\n=VAL :4\n=VAL :description\n=VAL :Basketball\n=VAL :price\n=VAL :450.00\n-MAP\n+MAP\n=VAL :sku\n=VAL :BL4438H\n=VAL :quantity\n=VAL :1\n=VAL :description\n=VAL :Super Hoop\n=VAL :price\n=VAL :2392.00\n-MAP\n-SEQ\n=VAL :tax\n=VAL :251.42\n=VAL :total\n=VAL :4443.52\n=VAL :comments\n=VAL :Late afternoon is best. Backup contact is Nancy Billsmer @ 338-4338.\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"invoice\": 34843,\n  \"date\": \"2001-01-23\",\n  \"bill-to\": \{\n    \"given\": \"Chris\",\n    \"family\": \"Dumars\",\n    \"address\": \{\n      \"lines\": \"458 Walkman Dr.\\nSuite #292\\n\",\n      \"city\": \"Royal Oak\",\n      \"state\": \"MI\",\n      \"postal\": 48046\n    \}\n  \},\n  \"ship-to\": \{\n    \"given\": \"Chris\",\n    \"family\": \"Dumars\",\n    \"address\": \{\n      \"lines\": \"458 Walkman Dr.\\nSuite #292\\n\",\n      \"city\": \"Royal Oak\",\n      \"state\": \"MI\",\n      \"postal\": 48046\n    \}\n  \},\n  \"product\": [\n    \{\n      \"sku\": \"BL394D\",\n      \"quantity\": 4,\n      \"description\": \"Basketball\",\n      \"price\": 450\n    \},\n    \{\n      \"sku\": \"BL4438H\",\n      \"quantity\": 1,\n      \"description\": \"Super Hoop\",\n      \"price\": 2392\n    \}\n  ],\n  \"tax\": 251.42,\n  \"total\": 4443.52,\n  \"comments\": \"Late afternoon is best. Backup contact is Nancy Billsmer @ 338-4338.\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UKK6/00",
@@ -2858,7 +2858,7 @@ fn casesPart9(): List<SuiteCase> {
       "- :\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :\n=VAL :\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UKK6/01",
@@ -2866,7 +2866,7 @@ fn casesPart9(): List<SuiteCase> {
       "::\n",
       "+STR\n+DOC\n+MAP\n=VAL ::\n=VAL :\n-MAP\n-DOC\n-STR\n",
       "\{\n  \":\": null\n\}\n",
-      isError: false,
+      invalid: false,
     ),
   ]
 }
@@ -2879,7 +2879,7 @@ fn casesPart10(): List<SuiteCase> {
       "!\n",
       "+STR\n+DOC\n=VAL <!> :\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UT92",
@@ -2887,7 +2887,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\n\{ matches\n% : 20 \}\n...\n---\n# Empty\n...\n",
       "+STR\n+DOC ---\n+MAP \{\}\n=VAL :matches %\n=VAL :20\n-MAP\n-DOC ...\n+DOC ---\n=VAL :\n-DOC ...\n-STR\n",
       "\{\n  \"matches %\": 20\n\}\nnull\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "UV7Q",
@@ -2895,7 +2895,7 @@ fn casesPart10(): List<SuiteCase> {
       "x:\n - x\n  \tx\n",
       "+STR\n+DOC\n+MAP\n=VAL :x\n+SEQ\n=VAL :x x\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"x\": [\n    \"x x\"\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "V55R",
@@ -2903,7 +2903,7 @@ fn casesPart10(): List<SuiteCase> {
       "- &a a\n- &b b\n- *a\n- *b\n",
       "+STR\n+DOC\n+SEQ\n=VAL &a :a\n=VAL &b :b\n=ALI *a\n=ALI *b\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"a\",\n  \"b\",\n  \"a\",\n  \"b\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "V9D5",
@@ -2911,7 +2911,7 @@ fn casesPart10(): List<SuiteCase> {
       "- sun: yellow\n- ? earth: blue\n  : moon: white\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :sun\n=VAL :yellow\n-MAP\n+MAP\n+MAP\n=VAL :earth\n=VAL :blue\n-MAP\n+MAP\n=VAL :moon\n=VAL :white\n-MAP\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "VJP3/00",
@@ -2919,7 +2919,7 @@ fn casesPart10(): List<SuiteCase> {
       "k: \{\nk\n:\nv\n\}\n",
       "+STR\n+DOC\n+MAP\n=VAL :k\n+MAP \{\}\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "VJP3/01",
@@ -2927,7 +2927,7 @@ fn casesPart10(): List<SuiteCase> {
       "k: \{\n k\n :\n v\n \}\n",
       "+STR\n+DOC\n+MAP\n=VAL :k\n+MAP \{\}\n=VAL :k\n=VAL :v\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"k\" : \{\n    \"k\" : \"v\"\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "W42U",
@@ -2935,7 +2935,7 @@ fn casesPart10(): List<SuiteCase> {
       "- # Empty\n- |\n block node\n- - one # Compact\n  - two # sequence\n- one: two # Compact mapping\n",
       "+STR\n+DOC\n+SEQ\n=VAL :\n=VAL |block node\\n\n+SEQ\n=VAL :one\n=VAL :two\n-SEQ\n+MAP\n=VAL :one\n=VAL :two\n-MAP\n-SEQ\n-DOC\n-STR\n",
       "[\n  null,\n  \"block node\\n\",\n  [\n    \"one\",\n    \"two\"\n  ],\n  \{\n    \"one\": \"two\"\n  \}\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "W4TN",
@@ -2943,7 +2943,7 @@ fn casesPart10(): List<SuiteCase> {
       "%YAML 1.2\n--- |\n%!PS-Adobe-2.0\n...\n%YAML 1.2\n---\n# Empty\n...\n",
       "+STR\n+DOC ---\n=VAL |%!PS-Adobe-2.0\\n\n-DOC ...\n+DOC ---\n=VAL :\n-DOC ...\n-STR\n",
       "\"%!PS-Adobe-2.0\\n\"\nnull\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "W5VH",
@@ -2951,7 +2951,7 @@ fn casesPart10(): List<SuiteCase> {
       "a: &:@*!$\"<foo>: scalar a\nb: *:@*!$\"<foo>:\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL &:@*!$\"<foo>: :scalar a\n=VAL :b\n=ALI *:@*!$\"<foo>:\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"scalar a\",\n  \"b\": \"scalar a\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "W9L4",
@@ -2959,7 +2959,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\nblock scalar: |\n     \n  more spaces at the beginning\n  are invalid\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :block scalar\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "WZ62",
@@ -2967,7 +2967,7 @@ fn casesPart10(): List<SuiteCase> {
       "\{\n  foo : !!str,\n  !!str : bar,\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :foo\n=VAL <tag:yaml.org,2002:str> :\n=VAL <tag:yaml.org,2002:str> :\n=VAL :bar\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"\",\n  \"\": \"bar\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "X38W",
@@ -2975,7 +2975,7 @@ fn casesPart10(): List<SuiteCase> {
       "\{ &a [a, &b b]: *b, *a : [c, *b, d]\}\n",
       "+STR\n+DOC\n+MAP \{\}\n+SEQ [] &a\n=VAL :a\n=VAL &b :b\n-SEQ\n=ALI *b\n=ALI *a\n+SEQ []\n=VAL :c\n=ALI *b\n=VAL :d\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "X4QW",
@@ -2983,7 +2983,7 @@ fn casesPart10(): List<SuiteCase> {
       "block: ># comment\n  scalar\n",
       "+STR\n+DOC\n+MAP\n=VAL :block\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "X8DW",
@@ -2991,7 +2991,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\n? key\n# comment\n: value\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "XLQ9",
@@ -2999,7 +2999,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\nscalar\n%YAML 1.2\n",
       "+STR\n+DOC ---\n=VAL :scalar %YAML 1.2\n-DOC\n-STR\n",
       "\"scalar %YAML 1.2\"\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "XV9V",
@@ -3007,7 +3007,7 @@ fn casesPart10(): List<SuiteCase> {
       "Folding:\n  \"Empty line\n\n  as a line feed\"\nChomping: |\n  Clipped empty lines\n \n\n",
       "+STR\n+DOC\n+MAP\n=VAL :Folding\n=VAL \"Empty line\\nas a line feed\n=VAL :Chomping\n=VAL |Clipped empty lines\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Folding\": \"Empty line\\nas a line feed\",\n  \"Chomping\": \"Clipped empty lines\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "XW4D",
@@ -3015,7 +3015,7 @@ fn casesPart10(): List<SuiteCase> {
       "a: \"double\n  quotes\" # lala\nb: plain\n value  # lala\nc  : #lala\n  d\n? # lala\n - seq1\n: # lala\n - #lala\n  seq2\ne:\n &node # lala\n - x: y\nblock: > # lala\n  abcde\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n=VAL \"double quotes\n=VAL :b\n=VAL :plain value\n=VAL :c\n=VAL :d\n+SEQ\n=VAL :seq1\n-SEQ\n+SEQ\n=VAL :seq2\n-SEQ\n=VAL :e\n+SEQ &node\n+MAP\n=VAL :x\n=VAL :y\n-MAP\n-SEQ\n=VAL :block\n=VAL >abcde\\n\n-MAP\n-DOC\n-STR\n",
       "",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Y2GN",
@@ -3023,7 +3023,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\nkey: &an:chor value\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :key\n=VAL &an:chor :value\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": \"value\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Y79Y/000",
@@ -3031,7 +3031,7 @@ fn casesPart10(): List<SuiteCase> {
       "foo: |\n\t\nbar: 1\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "Y79Y/001",
@@ -3039,7 +3039,7 @@ fn casesPart10(): List<SuiteCase> {
       "foo: |\n \t\nbar: 1\n",
       "+STR\n+DOC\n+MAP\n=VAL :foo\n=VAL |\\t\\n\n=VAL :bar\n=VAL :1\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"foo\": \"\\t\\n\",\n  \"bar\": 1\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Y79Y/002",
@@ -3047,7 +3047,7 @@ fn casesPart10(): List<SuiteCase> {
       "- [\n\t\n foo\n ]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n=VAL :foo\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"foo\"\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Y79Y/003",
@@ -3055,20 +3055,20 @@ fn casesPart10(): List<SuiteCase> {
       "- [\n\tfoo,\n foo\n ]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n",
       "",
-      isError: true,
+      invalid: true,
     ),
-    SuiteCase("Y79Y/004", "Tabs in various contexts", "-\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", isError: true),
-    SuiteCase("Y79Y/005", "Tabs in various contexts", "- \t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", isError: true),
-    SuiteCase("Y79Y/006", "Tabs in various contexts", "?\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", isError: true),
-    SuiteCase("Y79Y/007", "Tabs in various contexts", "? -\n:\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", isError: true),
-    SuiteCase("Y79Y/008", "Tabs in various contexts", "?\tkey:\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", isError: true),
+    SuiteCase("Y79Y/004", "Tabs in various contexts", "-\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", invalid: true),
+    SuiteCase("Y79Y/005", "Tabs in various contexts", "- \t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", invalid: true),
+    SuiteCase("Y79Y/006", "Tabs in various contexts", "?\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", invalid: true),
+    SuiteCase("Y79Y/007", "Tabs in various contexts", "? -\n:\t-\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", invalid: true),
+    SuiteCase("Y79Y/008", "Tabs in various contexts", "?\tkey:\n", "+STR\n+DOC\n+SEQ\n+SEQ []\n", "", invalid: true),
     SuiteCase(
       "Y79Y/009",
       "Tabs in various contexts",
       "? key:\n:\tkey:\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "Y79Y/010",
@@ -3076,7 +3076,7 @@ fn casesPart10(): List<SuiteCase> {
       "-\t-1\n",
       "+STR\n+DOC\n+SEQ\n=VAL :-1\n-SEQ\n-DOC\n-STR\n",
       "[\n  -1\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "YD5X",
@@ -3084,16 +3084,16 @@ fn casesPart10(): List<SuiteCase> {
       "- [name        , hr, avg  ]\n- [Mark McGwire, 65, 0.278]\n- [Sammy Sosa  , 63, 0.288]\n",
       "+STR\n+DOC\n+SEQ\n+SEQ []\n=VAL :name\n=VAL :hr\n=VAL :avg\n-SEQ\n+SEQ []\n=VAL :Mark McGwire\n=VAL :65\n=VAL :0.278\n-SEQ\n+SEQ []\n=VAL :Sammy Sosa\n=VAL :63\n=VAL :0.288\n-SEQ\n-SEQ\n-DOC\n-STR\n",
       "[\n  [\n    \"name\",\n    \"hr\",\n    \"avg\"\n  ],\n  [\n    \"Mark McGwire\",\n    65,\n    0.278\n  ],\n  [\n    \"Sammy Sosa\",\n    63,\n    0.288\n  ]\n]\n",
-      isError: false,
+      invalid: false,
     ),
-    SuiteCase("YJV2", "Dash in flow sequence", "[-]\n", "+STR\n+DOC\n+SEQ []\n", "", isError: true),
+    SuiteCase("YJV2", "Dash in flow sequence", "[-]\n", "+STR\n+DOC\n+SEQ []\n", "", invalid: true),
     SuiteCase(
       "Z67P",
       "Spec Example 8.21. Block Scalar Nodes [1.3]",
       "literal: |2\n  value\nfolded: !foo >1\n value\n",
       "+STR\n+DOC\n+MAP\n=VAL :literal\n=VAL |value\\n\n=VAL :folded\n=VAL <!foo> >value\\n\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"literal\": \"value\\n\",\n  \"folded\": \"value\\n\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "Z9M4",
@@ -3101,7 +3101,7 @@ fn casesPart10(): List<SuiteCase> {
       "%TAG !e! tag:example.com,2000:app/\n---\n- !e!foo \"bar\"\n",
       "+STR\n+DOC ---\n+SEQ\n=VAL <tag:example.com,2000:app/foo> \"bar\n-SEQ\n-DOC\n-STR\n",
       "[\n  \"bar\"\n]\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "ZCZ6",
@@ -3109,7 +3109,7 @@ fn casesPart10(): List<SuiteCase> {
       "a: b: c: d\n",
       "+STR\n+DOC\n+MAP\n=VAL :a\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "ZF4X",
@@ -3117,7 +3117,7 @@ fn casesPart10(): List<SuiteCase> {
       "Mark McGwire: \{hr: 65, avg: 0.278\}\nSammy Sosa: \{\n    hr: 63,\n    avg: 0.288\n  \}\n",
       "+STR\n+DOC\n+MAP\n=VAL :Mark McGwire\n+MAP \{\}\n=VAL :hr\n=VAL :65\n=VAL :avg\n=VAL :0.278\n-MAP\n=VAL :Sammy Sosa\n+MAP \{\}\n=VAL :hr\n=VAL :63\n=VAL :avg\n=VAL :0.288\n-MAP\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"Mark McGwire\": \{\n    \"hr\": 65,\n    \"avg\": 0.278\n  \},\n  \"Sammy Sosa\": \{\n    \"hr\": 63,\n    \"avg\": 0.288\n  \}\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "ZH7C",
@@ -3125,7 +3125,7 @@ fn casesPart10(): List<SuiteCase> {
       "&a a: b\nc: &d d\n",
       "+STR\n+DOC\n+MAP\n=VAL &a :a\n=VAL :b\n=VAL :c\n=VAL &d :d\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": \"b\",\n  \"c\": \"d\"\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "ZK9H",
@@ -3133,7 +3133,7 @@ fn casesPart10(): List<SuiteCase> {
       "\{ key: [[[\n  value\n ]]]\n\}\n",
       "+STR\n+DOC\n+MAP \{\}\n=VAL :key\n+SEQ []\n+SEQ []\n+SEQ []\n=VAL :value\n-SEQ\n-SEQ\n-SEQ\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"key\": [\n    [\n      [\n        \"value\"\n      ]\n    ]\n  ]\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "ZL4Z",
@@ -3141,7 +3141,7 @@ fn casesPart10(): List<SuiteCase> {
       "---\na: 'b': c\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL 'b\n",
       "",
-      isError: true,
+      invalid: true,
     ),
     SuiteCase(
       "ZVH3",
@@ -3149,7 +3149,7 @@ fn casesPart10(): List<SuiteCase> {
       "- key: value\n - item1\n",
       "+STR\n+DOC\n+SEQ\n+MAP\n=VAL :key\n=VAL :value\n-MAP\n",
       "",
-      isError: true,
+      invalid: true,
     ),
   ]
 }
@@ -3162,7 +3162,7 @@ fn casesPart11(): List<SuiteCase> {
       "---\na: 1\n? b\n&anchor c: 3\n",
       "+STR\n+DOC ---\n+MAP\n=VAL :a\n=VAL :1\n=VAL :b\n=VAL :\n=VAL &anchor :c\n=VAL :3\n-MAP\n-DOC\n-STR\n",
       "\{\n  \"a\": 1,\n  \"b\": null,\n  \"c\": 3\n\}\n",
-      isError: false,
+      invalid: false,
     ),
     SuiteCase(
       "ZXT5",
@@ -3170,7 +3170,7 @@ fn casesPart11(): List<SuiteCase> {
       "[ \"key\"\n  :value ]\n",
       "+STR\n+DOC\n+SEQ []\n=VAL \"key\n",
       "",
-      isError: true,
+      invalid: true,
     ),
   ]
 }

@@ -135,7 +135,7 @@ type Construct {
   /** Bracketed: the comma behind the last item */
   trailingComma: Int? = None
   /** Bracketed: the parentheses behind a callee - the arguments of a call, the parameters of a function */
-  isCall: Bool = false
+  followsCallee: Bool = false
 }
 
 /** A laid-out source, measured: its tokens, their lines and columns, and every construct the width may break. */
@@ -176,7 +176,7 @@ type Measure {
   var line: Int = 0
   var column: Int = 0
   var indent: Int = 0
-  var isLeading: Bool = true
+  var leading: Bool = true
   var comments: Int = 0
   var startLines: List<Int> = []
   var endLines: List<Int> = []
@@ -198,10 +198,10 @@ type Measure {
       return
     }
     column = column + 1
-    if isLeading && byte == 32 {
+    if leading && byte == 32 {
       indent = indent + 1
     } else {
-      isLeading = false
+      leading = false
     }
   }
 
@@ -211,7 +211,7 @@ type Measure {
     line = line + 1
     column = 0
     indent = 0
-    isLeading = true
+    leading = true
   }
 
   var fn scanTo(source: String, end: Int) {
@@ -515,7 +515,7 @@ fn bracketedAt(sheet: Sheet, opener: Int, generics: Set<Int>): Construct? {
     closer: closer,
     starts: starts,
     trailingComma: trailingComma,
-    isCall: kind == TokenKind.ParenOpen && followsOperand,
+    followsCallee: kind == TokenKind.ParenOpen && followsOperand,
   )
 }
 
@@ -610,7 +610,7 @@ fn plainArgumentsOf(sheet: Sheet, arguments: List<Argument>): List<Argument> {
     .Closure(_) => true
     _ => false
   }
-  if !isClosure || last.label.isSome() || last.isSpread {
+  if !isClosure || last.label.isSome() || last.spread {
     return arguments
   }
   const isAfterComma = match tokenAt(sheet, last.value.span.start) {
@@ -687,7 +687,7 @@ fn operatorsOf(sheet: Sheet, run: OperatorRun): Construct? {
  */
 fn huggedList(sheet: Sheet, construct: Construct): Construct? {
   const isCallList = construct.kind == ConstructKind.Command
-    || (construct.kind == ConstructKind.Bracketed && construct.isCall)
+    || (construct.kind == ConstructKind.Bracketed && construct.followsCallee)
   if !isCallList || construct.starts.length() != 1 {
     return None
   }
@@ -698,7 +698,7 @@ fn huggedList(sheet: Sheet, construct: Construct): Construct? {
     (construct.trailingComma ?? construct.closer) - 1
   }
   const inner = sheet.constructs[sheet.bracketedByCloser.get(end)?]
-  if inner.opener < start || (inner.opener > start && !inner.isCall) {
+  if inner.opener < start || (inner.opener > start && !inner.followsCallee) {
     return None
   }
   // In front of the inner bracket: a callee, which is names, dots and type arguments

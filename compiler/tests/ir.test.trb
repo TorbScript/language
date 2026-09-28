@@ -32,7 +32,7 @@ fn integerType(var program: IrProgram, width: Int): IrTypeId {
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
@@ -47,7 +47,7 @@ fn variantLayout(var program: IrProgram, name: String, cases: List<List<FieldLay
     variants.append VariantLayout(names[index], first, cases[index].length())
   }
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, built: true)
   reserved.layout
 }
 
@@ -253,7 +253,7 @@ group "The text format" {
     const innerBuilder = newFunction "t_main_inner", None, IrSignature([IrParameter("value", int64)], voidType), "body"
     const inner = finishFunction program, innerBuilder
     emit builder, Instruction.Copy(counter, counter)
-    emit builder, Instruction.Closure(made, inner, [Capture.Value(counter)], isEscaping: false)
+    emit builder, Instruction.Closure(made, inner, [Capture.Value(counter)], escaping: false)
     emit builder, Instruction.CallClosure(None, made, [borrowed(counter)])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder

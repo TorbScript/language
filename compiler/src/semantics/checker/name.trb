@@ -35,7 +35,7 @@ public type Target {
   /** For a message: "`connect` takes 2 arguments". */
   name: String = ""
   /** A call through it changes its receiver, which `place.trb` checks the place of. */
-  isVarSelf: Bool = false
+  takesVarSelf: Bool = false
   /** The name denotes a type, so a call of it is a construction: `Point(10, 20)`, `Self(text)`. */
   constructs: TypeId? = None
   /** The generic parameters the call site has to solve, in declaration order. */
@@ -136,7 +136,7 @@ fn localTarget(
       checker.noteBindingRead binding
       const local = checker.binding binding
       // `fn orElse(fallback: lazy Value)`: reading the parameter forces the cell the caller filled in
-      if local.isLazy {
+      if local.lazy {
         checker.adapted at, Adaptation.Force
       }
       const annotation = local.annotation
@@ -155,7 +155,7 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
   if checker.closureFrames.isEmpty() {
     return
   }
-  const isVar = checker.binding(binding).isVar
+  const isVar = checker.binding(binding).var
   var index = 0
   while index < checker.closureFrames.length() {
     const frame = checker.closureFrames[index]
@@ -215,7 +215,7 @@ public fn targetOfCandidate(var checker: Checker, candidate: Candidate, text: St
     candidate.annotation,
     form: formOfCandidate(checker, candidate),
     name: text,
-    isVarSelf: candidate.isVarSelf,
+    takesVarSelf: candidate.takesVarSelf,
     generics: candidate.generics,
     bounds: candidate.bounds,
     overloads: candidate.overloads,
@@ -423,7 +423,7 @@ public fn argumentsFor(
       continue
     }
     const declared = checker.types.parameter generics[index]
-    arguments.append checker.newVariable(declared.name, owner, at, isConst: declared.isConst)
+    arguments.append checker.newVariable(declared.name, owner, at, isConst: declared.const)
   }
   // So an unsolved one's "Cannot infer" can spell every parameter in its declared order, not only its own name
   for index in 0..arguments.length() {
@@ -574,7 +574,7 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
   }
   // A field default is evaluated without `self` and without the other fields, so the order the fields are declared in
   // is not observable from one. A name that is a field of the same type is that mistake and not a missing declaration
-  if checker.isFieldDefault {
+  if checker.inFieldDefault {
     if const Some(own) = checker.selfType {
       if namesAFieldOf(checker, own, text) {
         checker.reportHere(

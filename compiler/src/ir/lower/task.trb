@@ -152,7 +152,7 @@ public fn lowerChannelNew(
 public fn resumeSignatureOf(var lowering: Lowering, signature: IrSignature, value: IrTypeId, at: Span): IrSignature? {
   var parameters: List<IrParameter> = []
   for parameter in signature.parameters {
-    if parameter.isReference && !crossesByIdentity(lowering, parameter.annotation) {
+    if parameter.byReference && !crossesByIdentity(lowering, parameter.annotation) {
       reportUnsupported lowering, "a `var` parameter of a value type in a function that answers a `Task`", at
       return None
     }
@@ -175,7 +175,7 @@ public fn buildTaskConstructor(
   var arguments: List<Argument> = []
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
-    if parameter.isReference {
+    if parameter.byReference {
       const held = addTemporary builder, parameter.annotation
       emit builder, Instruction.Read(held, Reference(Slot(index), []))
       arguments.append borrowed(held)
@@ -270,7 +270,7 @@ public fn emitSuspension(
   awaited: Slot,
   at: Span,
 ): Bool {
-  if !lowering.isTaskBody {
+  if !lowering.suspendable {
     reportUnsupported lowering, "`{name}()` outside the body of a task", at
     return false
   }
@@ -303,7 +303,7 @@ public fn loweredNativeOf(var lowering: Lowering, symbol: SymbolId): String? {
  * it in front of the `stop` as it does in front of a `return`.
  */
 public fn lowerStop(var lowering: Lowering, var builder: FunctionBuilder, destination: Slot?, at: Span): Slot {
-  if !lowering.isTaskBody {
+  if !lowering.suspendable {
     return unsupportedSlot lowering, builder, destination, "`stopAsCancelled` outside the body of a task", at
   }
   endEveryScope lowering, builder

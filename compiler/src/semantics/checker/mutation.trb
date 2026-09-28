@@ -53,7 +53,7 @@ public fn noteDeclaredRead(var checker: Checker, symbol: SymbolId, at: Span) {
   if !isCountedDeclaration(checker, symbol) {
     return
   }
-  if !checker.isTopLevel {
+  if !checker.topLevel {
     checker.readDeclarations.set symbol.value, true
     return
   }
@@ -63,7 +63,7 @@ public fn noteDeclaredRead(var checker: Checker, symbol: SymbolId, at: Span) {
 /** Whether the dead-change rule has anything to say about this binding at all. */
 fn isCounted(var checker: Checker, binding: BindingId): Bool {
   const found = checker.binding binding
-  if !found.isVar || found.isParameter || found.isReceiver {
+  if !found.var || found.bindsParameter || found.bindsReceiver {
     return false
   }
   // A shared object is not a copy: what is changed through this binding is what everybody else holds as well, so
@@ -161,7 +161,7 @@ fn isCountedRoot(var checker: Checker, root: UseRoot): Bool {
      * where it is declared, which may be above every line that reads what it wrote.
      */
     .Declared(symbol) => {
-      if !checker.isTopLevel {
+      if !checker.topLevel {
         return false
       }
       isCountedDeclaration checker, symbol
@@ -185,7 +185,7 @@ public fn dropRead(var checker: Checker, place: Place) {
   var index = checker.valueUses.length() - 1
   while index >= 0 {
     const entry = checker.valueUses[index]
-    if !entry.isChange && useKey(entry.root) == key && entry.at == place.at {
+    if !entry.changing && useKey(entry.root) == key && entry.at == place.at {
       const _ = checker.valueUses.removeAt index
       return
     }
@@ -203,7 +203,7 @@ public fn settleLoop(var checker: Checker, from: Int) {
   var index = from
   while index < checker.valueUses.length() {
     const entry = checker.valueUses[index]
-    if !entry.isChange {
+    if !entry.changing {
       readers.set useKey(entry.root), true
     }
     index = index + 1
@@ -214,7 +214,7 @@ public fn settleLoop(var checker: Checker, from: Int) {
   index = from
   while index < checker.valueUses.length() {
     const entry = checker.valueUses[index]
-    if entry.isChange && !entry.isLive {
+    if entry.changing && !entry.isLive {
       if readers.containsKey(useKey(entry.root)) {
         const alive = entry.copy isLive: true
         checker.valueUses.set index, alive
@@ -233,7 +233,7 @@ public fn settleChanges(var checker: Checker) {
   var index = checker.valueUses.length() - 1
   while index >= 0 {
     const entry = checker.valueUses[index]
-    if entry.isChange {
+    if entry.changing {
       if !entry.isLive && !readAfter.containsKey(useKey(entry.root)) {
         reportDeadChange checker, entry
       }
@@ -304,8 +304,8 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
   var index = from
   while index < checker.bindings.length() {
     const found = checker.bindings[index]
-    if !found.isParameter {
-      const marked = found.copy isParameter: true
+    if !found.bindsParameter {
+      const marked = found.copy bindsParameter: true
       checker.bindings.set index, marked
     }
     index = index + 1

@@ -144,7 +144,7 @@ fn emitExports(var emission: Emission, program: IrProgram, functions: List<IrFun
         continue
       }
     }
-    if function.signature.parameters.any({ _.isReference }) {
+    if function.signature.parameters.any({ _.byReference }) {
       reportUnsupported emission, "the export `{export.name}` of a function with a `var` parameter"
       continue
     }
@@ -547,7 +547,7 @@ fn thunkHeadOf(
   var parameters = ["void *self"]
   for position in 1..signature.parameters.length() {
     const spelling = valueTypeOf program, signature.parameters[position].annotation
-    const written = if signature.parameters[position].isReference { pointerTo spelling } else { spelling }
+    const written = if signature.parameters[position].byReference { pointerTo spelling } else { spelling }
     parameters.append declarationOf(written, "a{position}")
   }
   // Every thunk takes the site of the call after the arguments, which one whose member has a copy that tracks its caller
@@ -567,7 +567,7 @@ fn isVarSelfMember(program: IrProgram, table: WitnessTable, index: Int): Bool {
   }
   const parameters = program.functionAt(member).signature.parameters
   match parameters.first() {
-    Some(first) => first.isReference
+    Some(first) => first.byReference
     None => false
   }
 }
@@ -647,7 +647,7 @@ const receiverName = "owned_self"
 fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CStatement? {
   const function = program.functionAt table.members[index]
   const parameter = function.signature.parameters.first()?
-  if parameter.isReference || parameter.ownership != Ownership.Owned {
+  if parameter.byReference || parameter.ownership != Ownership.Owned {
     return None
   }
   retainStatement program, parameter.annotation, CExpression.Name(receiverName)
@@ -660,7 +660,7 @@ fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CSta
  */
 fn retainedArgumentOf(program: IrProgram, function: IrFunction, position: Int, argument: CExpression): CStatement? {
   const parameter = function.signature.parameters[position]
-  if parameter.isReference || parameter.ownership != Ownership.Owned {
+  if parameter.byReference || parameter.ownership != Ownership.Owned {
     return None
   }
   retainStatement program, parameter.annotation, argument
@@ -825,7 +825,7 @@ fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrF
   for index in first..signature.parameters.length() {
     const parameter = signature.parameters[index]
     const spelling = valueTypeOf program, parameter.annotation
-    const shown = if parameter.isReference { pointerTo spelling } else { spelling }
+    const shown = if parameter.byReference { pointerTo spelling } else { spelling }
     parameters.append declarationOf(shown, "a{index}")
   }
   const result = resultTypeOf program, signature.result
@@ -1561,7 +1561,7 @@ fn closeStatementsOf(program: IrProgram, function: FunctionId): List<CStatement>
   var argument = CExpression.Name "value"
   if const Some(parameter) = callee.signature.parameters.first() {
     // `var fn close()` takes the receiver as a place, and the place is this local
-    if parameter.isReference {
+    if parameter.byReference {
       argument = CExpression.AddressOf argument
     }
   }
@@ -1774,7 +1774,7 @@ fn markThunkRetains(program: IrProgram, var retains: List<Bool>, table: WitnessT
       continue
     }
     for parameter in program.functionAt(member).signature.parameters {
-      if parameter.isReference || parameter.ownership != Ownership.Owned {
+      if parameter.byReference || parameter.ownership != Ownership.Owned {
         continue
       }
       markRetained program, retains, parameter.annotation

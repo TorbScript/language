@@ -122,7 +122,7 @@ public type ReadSource {
   /** Every comment line of the file, doc comments and `//` comments alike */
   comments: List<CommentLine>
   /** The diagnostics of the parser: a file that does not parse is not judged */
-  isBroken: Bool
+  broken: Bool
 }
 
 /** Reads and parses one file. */
@@ -164,7 +164,7 @@ public type CheckedSource {
  * the front end costs seconds and one run per example would cost minutes.
  */
 public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
-  if read.isBroken {
+  if read.broken {
     const note = "This file does not parse, so its comments are not judged. `torb parse` says what is wrong"
     return CheckedSource([DocumentationProblem(read.path, 1, note)], false, 0, 0, [], 0)
   }
@@ -448,7 +448,7 @@ fn hasTopLevelCode(file: SourceFile): Bool {
     match statement.kind {
       .Declare(_) => {}
       .Bind(binding) => {
-        if binding.isVar || !isSingleName(binding.pattern) {
+        if binding.var || !isSingleName(binding.pattern) {
           return true
         }
       }
@@ -647,7 +647,7 @@ public fn runSource(options: SourceOptions): Result<Int, IoError> {
     const module = normalizePath(File.absolutePath(path)?)
     const read = readSource path, module, treeFor(options, path), text
     if options.onlyPanics {
-      if !read.isBroken {
+      if !read.broken {
         problems.appendAll panicSectionProblems(read.path, read.lines, read.file, read.tree == Tree.Standard)
       }
       continue

@@ -122,9 +122,9 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
   const last = checker.closureFrames.length() - 1
   const captured = checker.closureFrames[last].captures
   const _ = checker.closureFrames.removeAt last
-  var state = QuotationWalk start, wanted, captured, [:], [:], [:], [], isBroken: false
+  var state = QuotationWalk start, wanted, captured, [:], [:], [:], [], broken: false
   quoteExpression checker, state, expression
-  if state.isBroken {
+  if state.broken {
     return wanted
   }
   const captures = encodedCaptures checker, state, owner, parameter
@@ -185,11 +185,11 @@ type QuotationWalk {
   /** The parameters of the quoted closures that are open, innermost last. */
   var open: List<List<QuotationParameter>>
   /** One root cause, one message: the first construct that cannot be quoted is the only one that is reported. */
-  var isBroken: Bool
+  var broken: Bool
 }
 
 fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: Expression) {
-  if state.isBroken {
+  if state.broken {
     return
   }
   const at = expression.span
@@ -230,7 +230,7 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
     // `{ ... }` as the `else` of an `if` or as the body of an arm: the same single expression as a closure body
     .Block(block) => quoteBlock checker, state, block
     .Match(_, _) => {
-      state.isBroken = true
+      state.broken = true
       checker.reportHere(
         Diagnostic.error("`match` cannot be quoted yet", at)
           .withNote("Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out"),
@@ -259,7 +259,7 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
 
 fn quoteArguments(var checker: Checker, var state: QuotationWalk, arguments: List<Argument>) {
   for argument in arguments {
-    if argument.isSpread {
+    if argument.spread {
       reportHasNoNode checker, state, "A spread", argument.value.span
       return
     }
@@ -366,14 +366,14 @@ fn quoteConditional(
         Diagnostic.error("An `if` without an `else` has no value, so it cannot be quoted", at)
           .withNote("A `Conditional` node has all three parts: write the `else`"),
       )
-      state.isBroken = true
+      state.broken = true
     }
   }
 }
 
 /** A block inside a quotation is one expression and nothing else: a statement has no node in an expression tree. */
 fn quoteBlock(var checker: Checker, var state: QuotationWalk, block: Block) {
-  if state.isBroken {
+  if state.broken {
     return
   }
   if block.statements.isEmpty() {
@@ -399,7 +399,7 @@ fn quoteBlock(var checker: Checker, var state: QuotationWalk, block: Block) {
 
 fn statementNameOf(statement: Statement): String {
   match statement.kind {
-    .Bind(binding) => if binding.isVar { "A `var`" } else { "A `const`" }
+    .Bind(binding) => if binding.var { "A `var`" } else { "A `const`" }
     .Assign(_, _) => "An assignment"
     .For(_, _, _) => "A `for` loop"
     .While(_, _) => "A `while` loop"
@@ -537,7 +537,7 @@ fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapt
 fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
   const wanted = state.wanted
   const shown = checker.describe wanted
-  state.isBroken = true
+  state.broken = true
   checker.reportHere(
     Diagnostic.error("{what} cannot appear in a quotation: `{shown}` holds a single expression", at)
       .withNote("A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`"),
@@ -548,7 +548,7 @@ fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: 
 fn reportHasNoNode(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
   const wanted = state.wanted
   const shown = checker.describe wanted
-  state.isBroken = true
+  state.broken = true
   checker.reportHere(
     Diagnostic.error("{what} has no node in an expression tree, so `{shown}` cannot hold it", at)
       .withNote("`ExpressionNode` is part of the language standard: a new kind of node needs a new version of it"),

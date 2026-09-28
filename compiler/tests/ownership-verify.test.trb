@@ -22,7 +22,7 @@ fn textType(var program: IrProgram): IrTypeId {
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
@@ -73,7 +73,7 @@ group "A value that is released twice, or used after it is gone" {
     var builder = newFunction "t_afterMove", None, signature, "body"
     const length = addTemporary builder, int64
     const at = someLocation program
-    emit builder, Instruction.Call(None, callee, [Argument(Slot(0), Ownership.Owned, isLastUse: true)], [])
+    emit builder, Instruction.Call(None, callee, [Argument(Slot(0), Ownership.Owned, last: true)], [])
     emit builder, Instruction.Intrinsic(length, byteLength(), [Slot(0)], at)
     terminate builder, Terminator.Return(borrowed(length))
     const identifier = finishFunction program, builder
@@ -88,7 +88,7 @@ group "A value that is released twice, or used after it is gone" {
     const kept = addTemporary builder, text
     emit builder, Instruction.Copy(kept, Slot(0))
     emit builder, Instruction.Copy(kept, Slot(1))
-    terminate builder, Terminator.Return(Argument(kept, Ownership.Owned, isLastUse: true))
+    terminate builder, Terminator.Return(Argument(kept, Ownership.Owned, last: true))
     const identifier = finishFunction program, builder
     assert(problemsOf(program, identifier) == ["t_overwritten b0: %2 is overwritten while it still owns a value"])
   }
@@ -160,7 +160,7 @@ group "A parameter the caller keeps the count of" {
     var builder = newFunction "t_stolen", None, signature, "body"
     const taken = addTemporary builder, text
     emit builder, Instruction.Move(taken, Slot(0))
-    terminate builder, Terminator.Return(Argument(taken, Ownership.Owned, isLastUse: true))
+    terminate builder, Terminator.Return(Argument(taken, Ownership.Owned, last: true))
     const identifier = finishFunction program, builder
     assert(
       problemsOf(program, identifier)
@@ -193,7 +193,7 @@ group "A position that keeps a value says so" {
     var builder = newFunction "t_field", None, signature, "body"
     const built = addTemporary builder, pairType
     emit builder, Instruction.Construct(built, pair, 0, [borrowed(Slot(0))])
-    terminate builder, Terminator.Return(Argument(built, Ownership.Owned, isLastUse: true))
+    terminate builder, Terminator.Return(Argument(built, Ownership.Owned, last: true))
     const identifier = finishFunction program, builder
     assert(problemsOf(program, identifier) == ["t_field b0: `construct` keeps %0, so the operand has to be `owned`"])
   }
@@ -207,7 +207,7 @@ group "A position that keeps a value says so" {
     const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
     var builder = newFunction "t_disagrees", None, signature, "body"
     emit builder, Instruction.Call(None, keeps, [borrowed(Slot(0))], [])
-    emit builder, Instruction.Call(None, borrows, [Argument(Slot(0), Ownership.Owned, isLastUse: true)], [])
+    emit builder, Instruction.Call(None, borrows, [Argument(Slot(0), Ownership.Owned, last: true)], [])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     assert(

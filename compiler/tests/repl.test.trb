@@ -52,7 +52,7 @@ group "An entry taken apart" {
     assert(plan.declarations[0].names == ["double"])
     assert(plan.statements.length() == 3)
     assert(plan.bindings.map({ _.name }).toList() == ["total", "low", "high"])
-    assert(plan.bindings.map({ _.isVar }).toList() == [false, true, true])
+    assert(plan.bindings.map({ _.var }).toList() == [false, true, true])
     assert plan.shown.isSome()
   }
 
@@ -70,9 +70,9 @@ group "An entry taken apart" {
   }
 
   test "a `type` declaration is marked, unlike a `fn` or a `use`" {
-    assert planEntry("type Point \{\n  x: Int\n}").declarations[0].isType
-    assert(!planEntry("fn double(value: Int): Int \{\n  value * 2\n}").declarations[0].isType)
-    assert(!planEntry("use File from \"std/fs\"").declarations[0].isType)
+    assert planEntry("type Point \{\n  x: Int\n}").declarations[0].declaresType
+    assert(!planEntry("fn double(value: Int): Int \{\n  value * 2\n}").declarations[0].declaresType)
+    assert(!planEntry("use File from \"std/fs\"").declarations[0].declaresType)
   }
 
   test "a `using` binding ends with its entry and is not kept" {
@@ -82,7 +82,7 @@ group "An entry taken apart" {
   test "a `use` declares the names it imports, under their aliases" {
     const plan = planEntry "use File, IoError as Problem from \"std/fs\""
     assert(plan.declarations[0].names == ["File", "Problem"])
-    assert plan.declarations[0].isImport
+    assert plan.declarations[0].importing
   }
 
   test "a `return` at the top level is found" {
@@ -127,7 +127,7 @@ group "The module of an entry" {
     const first = "type Point \{\n  x: Int\n}"
     const second = "Point(1)"
     const sources = [EntrySource("<repl>", first), EntrySource("<repl>", second)]
-    const kept = [KeptDeclaration(["Point"], 0, Span(0, first.byteLength()), isImport: false)]
+    const kept = [KeptDeclaration(["Point"], 0, Span(0, first.byteLength()), importing: false)]
     const synthesis = synthesize sources, kept, [], 1, planEntry(second), Form()
     assert synthesis.text.startsWith(first)
     assert(synthesis.locate(Span(5, 10)) == (0, Span(5, 10), false))

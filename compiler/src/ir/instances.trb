@@ -232,7 +232,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
       parameter = parameter.copy annotation: found
     }
     if shape.addressed.contains(index) {
-      parameters.append parameter.copy(isByAddress: true)
+      parameters.append parameter.copy(byAddress: true)
       continue
     }
     parameters.append parameter
@@ -245,7 +245,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   // tell them apart
   for index in 0..shape.outs.length() {
     const name = if index == 0 { "out" } else { "out{index}" }
-    parameters.append IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, isByAddress: false)
+    parameters.append IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, byAddress: false)
   }
   const boolean = lowering.program.internType IrType.Boolean
   IrSignature parameters, boolean
@@ -507,7 +507,7 @@ public fn irSignatureUnder(
     if const Some(owner) = signature.owner {
       const applied = substitute lowering.checker.types, owner, mapping
       const annotation = irTypeOfClosed lowering, applied
-      parameters.append IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed)
+      parameters.append IrParameter("self", annotation, signature.takesVarSelf, Ownership.Borrowed)
     }
   }
   for parameter in signature.form.parameters {
@@ -569,7 +569,7 @@ public fn isReferenceParameter(mode: ParameterMode): Bool {
 
 /** Whether a call of this declaration would need a `var` path: a `var self`, or a parameter that takes one. */
 public fn needsReference(signature: Signature): Bool {
-  if signature.isVarSelf {
+  if signature.takesVarSelf {
     return true
   }
   signature.form.parameters.any({ isReferenceParameter _.mode })

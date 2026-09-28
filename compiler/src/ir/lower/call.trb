@@ -213,7 +213,7 @@ fn lowerCallable(
   var taken: List<TakenElement> = []
   if receiverWritten && signature.takesSelf {
     const value = arguments[0].value
-    if signature.isVarSelf {
+    if signature.takesVarSelf {
       const declared = typeAtSpan(lowering, value.span) ?? voidTypeOf(lowering)
       const path = match argumentReference(lowering, builder, value, declared, "a `var` receiver") {
         Some(found) => found
@@ -230,7 +230,7 @@ fn lowerCallable(
       places.append None
     }
   } else if signature.takesSelf {
-    if signature.isVarSelf {
+    if signature.takesVarSelf {
       const path = match receiverReference(lowering, builder, callee, "a `var` receiver") {
         Some(found) => found
         None => {
@@ -356,7 +356,7 @@ public fn lowerDispatched(
     }
   }
   const operands = separatedFromPlaces builder, written, places
-  if dispatched.isDynamic {
+  if dispatched.dynamic {
     return lowerWitnessCall lowering, builder, destination, at, dispatched, operands, annotation, places
   }
   if !signature.hasBody {
@@ -1981,7 +1981,7 @@ public fn lowerOperator(
   if needsReference(signature) {
     return unsupportedSlot lowering, builder, destination, "an operator with a `var` receiver", at
   }
-  if dispatched.isDynamic {
+  if dispatched.dynamic {
     const what = "an operator on a trait-typed value, which object safety forbids"
     return unsupportedSlot lowering, builder, destination, what, at
   }

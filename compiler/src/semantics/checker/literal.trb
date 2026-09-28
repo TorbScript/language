@@ -96,7 +96,7 @@ public fn checkedTextLiteral(
   if kind.isVerbatim() {
     const source = checker.program.graph.at(checker.module).source
     const text = writtenTextOf source, at
-    checker.recordCheckedLiteral at, CheckedLiteral(text, isVerbatim: true)
+    checker.recordCheckedLiteral at, CheckedLiteral(text, verbatim: true)
     if kind == .RegexLiteral {
       checkRegex checker, text, at
     } else {
@@ -128,7 +128,7 @@ public fn checkedTextLiteral(
       if kind.isResource() {
         match resourceNameOf(checker, text, kind, at) {
           Some(name) => {
-            checker.recordCheckedLiteral at, CheckedLiteral(name, isVerbatim: false)
+            checker.recordCheckedLiteral at, CheckedLiteral(name, verbatim: false)
           }
           None => {}
         }
@@ -136,7 +136,7 @@ public fn checkedTextLiteral(
       }
     }
   }
-  checker.recordCheckedLiteral at, CheckedLiteral(text, isVerbatim: false)
+  checker.recordCheckedLiteral at, CheckedLiteral(text, verbatim: false)
   annotation
 }
 
@@ -298,7 +298,7 @@ fn checkTemplate(var checker: Checker, text: String, annotation: TypeId, at: Spa
     }
   }
   const shape = checker.typeSignature typeSignatureOf(checker, symbol)
-  if shape.isNative || !shape.cases.isEmpty() || !typeArguments.isEmpty() {
+  if shape.native || !shape.cases.isEmpty() || !typeArguments.isEmpty() {
     return
   }
   const owner = checker.symbolAt(symbol).name
@@ -329,7 +329,7 @@ fn checkVariables(
   for variable in variables {
     match fields.find({ _.name == variable.name }) {
       Some(field) => {
-        if !field.hasDefault && variable.isOptional {
+        if !field.hasDefault && variable.optional {
           checker.reportHere(
             Diagnostic.error(
               "`{variable.name}` is a query variable of `{text}`, and `{owner}.{variable.name}` has no default",
@@ -338,7 +338,7 @@ fn checkVariables(
               .withNote("A request may leave a query variable out, so its field needs a default, or it is a path variable"),
           )
         }
-        if field.hasDefault && !variable.isOptional {
+        if field.hasDefault && !variable.optional {
           checker.reportHere(
             Diagnostic.error("`{owner}.{variable.name}` has a default, so it is a query variable of `{text}`", at)
               .withNote("Write it `\{?{variable.name}\}`: a path variable is always there, and a default would never apply"),
@@ -393,7 +393,7 @@ public fn checkedCase(
     return None
   }
   const name = checker.symbolAt(variant).name
-  checker.recordCheckedLiteral expression.span, CheckedLiteral(name, isVerbatim: false)
+  checker.recordCheckedLiteral expression.span, CheckedLiteral(name, verbatim: false)
   found
 }
 

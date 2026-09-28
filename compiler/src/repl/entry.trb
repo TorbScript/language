@@ -15,7 +15,7 @@ use Declaration, Pattern, ExpressionKind from "../syntax/ast"
 /** One name the top level of an entry binds: a binding the session keeps once the entry ran. */
 public type NewBinding {
   name: String
-  isVar: Bool
+  var: Bool
   /** The name in the entry: where the checker records its type. */
   span: Span
 }
@@ -26,9 +26,9 @@ public type EntryDeclaration {
   names: List<String>
   /** The declaration, from the start of the line it begins on. */
   span: Span
-  isImport: Bool
+  importing: Bool
   /** Whether it is a `type`: what makes a redeclared name kept as `Point#1` (docs/design/REPL.md section 6). */
-  isType: Bool = false
+  declaresType: Bool = false
   /**
    * A `use` of several names as one `use` per name, `(name, text)`: what the session keeps, so that a later `use` of
    * one of the names replaces that name alone. Empty for every other declaration.
@@ -129,7 +129,7 @@ fn planOf(text: String, parsed: Parsed): EntryPlan {
         statements.append span
         if !binding.scoped {
           for (name, at) in namesBoundBy(binding.pattern) {
-            bindings.append NewBinding(name, binding.isVar, at)
+            bindings.append NewBinding(name, binding.var, at)
             if isLast {
               shownBindings.append name
             }

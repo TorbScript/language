@@ -97,7 +97,7 @@ public type PatternBinding {
   path: List<PatternStep>
   annotation: TypeId
   /** `var (a, b) = pair` and `if var Some(inner) = current` bind mutable names. */
-  isVar: Bool
+  var: Bool
 }
 
 /** One step from the subject towards a value inside of it. An empty list of steps is the subject itself. */
@@ -149,7 +149,7 @@ public fn checkExhaustive(
     const arm = arms[index]
     var state = Normalizing()
     const own = normalizedRows checker, state, arm.pattern, subject
-    if state.isBroken {
+    if state.broken {
       isBroken = true
     }
     // An arm with a guard binds and is reachable, but it covers nothing: the guard may always be false
@@ -331,7 +331,7 @@ fn alwaysMatches(pattern: Pattern): Bool {
 fn irrefutableWitnesses(var checker: Checker, pattern: Pattern, subject: TypeId, limit: Int): List<String> {
   var state = Normalizing()
   const rows = normalizedRows checker, state, pattern, subject
-  if state.isBroken {
+  if state.broken {
     return []
   }
   var shown: List<String> = []
@@ -348,7 +348,7 @@ fn irrefutableWitnesses(var checker: Checker, pattern: Pattern, subject: TypeId,
  * second message about a `match` that looks incomplete because of it.
  */
 type Normalizing {
-  var isBroken: Bool = false
+  var broken: Bool = false
 }
 
 /** One row per alternative: `1 | 2 | 3` is three rows of one column, and nested alternatives multiply out. */
@@ -380,7 +380,7 @@ fn normalizedPatterns(var checker: Checker, var state: Normalizing, pattern: Pat
       if const Some(size) = fixedLengthOf(checker, subject) {
         const fits = if rest.isSome() { items.length() <= size } else { items.length() == size }
         if !fits {
-          state.isBroken = true
+          state.broken = true
           return [Normal.Anything]
         }
       }
@@ -431,7 +431,7 @@ fn normalizedPatterns(var checker: Checker, var state: Normalizing, pattern: Pat
       found
     }
     .Invalid => {
-      state.isBroken = true
+      state.broken = true
       [Normal.Anything]
     }
   }
@@ -449,7 +449,7 @@ fn normalizedTuple(var checker: Checker, var state: Normalizing, items: List<Pat
     }
   }
   if types.length() != items.length() {
-    state.isBroken = true
+    state.broken = true
     return [Normal.Anything]
   }
   var columns: List<List<Normal>> = []
@@ -486,13 +486,13 @@ fn normalizedVariant(
     constructor = Constructor.Named shown, shown, types.length()
   } else {
     // The message about a case that does not exist was given while the pattern was checked
-    state.isBroken = true
+    state.broken = true
     return [Normal.Anything]
   }
   // `Config(host, ...)` names some of the fields, and the `...` stands for the rest: those decide nothing, so the
   // matrix gets a wildcard in each of their columns
   if types.length() != fields.length() && !(hasRest && fields.length() < types.length()) {
-    state.isBroken = true
+    state.broken = true
     return [Normal.Anything]
   }
   const anything: List<Normal> = [Normal.Anything]
@@ -727,7 +727,7 @@ fn bindingOf(var checker: Checker, name: String, path: List<PatternStep>): Patte
     }
   }
   const local = checker.binding found
-  PatternBinding name, found, path, local.annotation, local.isVar
+  PatternBinding name, found, path, local.annotation, local.var
 }
 
 fn tupleBranches(

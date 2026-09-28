@@ -98,18 +98,18 @@ public type BindingId {
 public type LocalBinding {
   name: String
   annotation: TypeId
-  isVar: Bool
+  var: Bool
   /** The span of the name, which is what a message about the declaration points at. */
   at: Span
   /** `self` and a receiver closure's parameter: the one binding whose members a bare name may mean. */
-  isReceiver: Bool = false
+  bindsReceiver: Bool = false
   /**
    * A `var` parameter and `var self` write back into the caller's place, so a change to one is never dead (design 5.3)
    * and a closure that may outlive the call may not capture one.
    */
-  isParameter: Bool = false
+  bindsParameter: Bool = false
   /** A `lazy Value` parameter: every read of it forces the cell, which records `Adaptation.Force` (design 3.4). */
-  isLazy: Bool = false
+  lazy: Bool = false
 }
 
 /** One name in the scope chain. A list instead of a map: a scope has few names, and extending it must not copy one. */
@@ -178,9 +178,9 @@ public type ReceiverClosure {
   binding: BindingId
   annotation: TypeId
   /** `(var self: T) => Void` configures its receiver in place, `(self: T) => Value` reads it. */
-  isVar: Bool
+  var: Bool
   /** Whether the closure wrote the parameter itself (`html { root => ... }`) or `self` is the implicit receiver. */
-  isImplicit: Bool
+  implicit: Bool
 }
 
 /**
@@ -209,7 +209,7 @@ public type Candidate {
   /** When the member is a function: its form, with the generic parameters of its owner substituted. */
   form: FunctionForm? = None
   takesSelf: Bool = false
-  isVarSelf: Bool = false
+  takesVarSelf: Bool = false
   /** The generic parameters the member declares itself, which a call site has to solve. */
   generics: List<ParameterId> = []
   /** The bounds of those parameters, with the arguments of the owner already filled in. */
@@ -257,7 +257,7 @@ public type VariableState {
   /** Where a message about it points: the call or the literal that created it. */
   at: Span
   /** `<const Size: Int>`: the parameter is a value, and no argument of the call can ever say what it is. */
-  isConst: Bool = false
+  const: Bool = false
   /** What it was solved with. A variable is solved by an exact type only, never by a coercion. */
   var solution: TypeId? = None
   /** One message per variable, however often it is mentioned. */
@@ -282,7 +282,7 @@ public type VariableState {
 public type Capture {
   binding: BindingId
   /** A captured `var` binding is a shared box, not a copy. */
-  isVar: Bool
+  var: Bool
 }
 
 /**
@@ -383,7 +383,7 @@ public type CheckedLiteral {
    */
   text: String
   /** Whether the literal was read verbatim, so that the problems of its `String` reading are none. */
-  isVerbatim: Bool
+  verbatim: Bool
 }
 
 /**
@@ -583,7 +583,7 @@ public type UseRoot {
  */
 public type ValueUse {
   root: UseRoot
-  isChange: Bool
+  changing: Bool
   at: Span
   /** A change a loop brings a read back around to is alive, whatever stands after it. */
   var isLive: Bool = false
@@ -805,7 +805,7 @@ public type BodyState {
   resultRule: ResultRule
   runningClosures: Int = 0
   /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in. */
-  isTopLevel: Bool = false
+  topLevel: Bool = false
   /** Whether the body may change a top-level `var`: the statements of a file and the initializers of its constants. */
   writesDeclarations: Bool = false
   /** Whether `await()` is allowed in this body (CONCEPT, "Concurrency"). */
@@ -979,7 +979,7 @@ public type Checker {
   /** Every read and every change of a `var` value of the body that is being checked, in source order. */
   var valueUses: List<ValueUse> = []
   /** Whether the body that is being checked is the statement sequence of a file. */
-  var isTopLevel: Bool = false
+  var topLevel: Bool = false
   /**
    * Whether the body that is being checked may change a top-level `var`: the statements of a file and the initializer
    * of a top-level `const` among them run in the order they are written, and a `fn` may run anywhere - also while a
@@ -990,13 +990,13 @@ public type Checker {
    * Whether the expression that is being checked is the default of a **field**. A default is evaluated without `self`
    * and without the other fields, so a name that is a field of the same type has a message of its own there.
    */
-  var isFieldDefault: Bool = false
+  var inFieldDefault: Bool = false
   /**
    * Whether the expression that is being checked is the initializer of a constant or a default - a top-level `const`,
    * a `static` one, a default of a field or a parameter. Its arithmetic is folded by the evaluator of constants, which
    * reports an overflow where it is written, so the check of certain arithmetic in a body leaves it alone.
    */
-  var isInitializer: Bool = false
+  var inInitializer: Bool = false
   /**
    * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the
    * top level of an entry file or a script, in a closure whose declared result is a `Task<...>`, and in the closure
@@ -1009,7 +1009,7 @@ public type Checker {
    * `() => Value`, so the closure that stands there cannot tell from its own type that it becomes a task: the call
    * says so, and this is how the call says it. It holds for that argument alone and not for its body.
    */
-  var isTaskArgument: Bool = false
+  var spawned: Bool = false
   /**
    * Every top-level `var` that something other than the statements of its own file reads: a function of the module, a
    * closure inside one, the initializer of a top-level `const`. A top-level `var` is a declaration and not a local, so
@@ -1586,7 +1586,7 @@ public type Checker {
    */
   fn isReadVerbatim(module: ModuleId, literal: Span): Bool {
     for (at, found) in tables[module.value].checkedLiterals {
-      if found.isVerbatim && at.start <= literal.start && literal.end <= at.end {
+      if found.verbatim && at.start <= literal.start && literal.end <= at.end {
         return true
       }
     }
@@ -1668,7 +1668,7 @@ public type Checker {
 
   /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
   var fn newVariable(name: String, owner: String, at: Span, isConst: Bool = false): TypeId {
-    variables.append VariableState(name, owner, at, isConst: isConst)
+    variables.append VariableState(name, owner, at, const: isConst)
     const identifier = VariableId(variables.length() - 1)
     hasVariables = true
     types.intern TypeForm.Variable(identifier)
@@ -1841,7 +1841,7 @@ public type Checker {
       valueUses,
       resultRule,
       runningClosures,
-      isTopLevel,
+      topLevel,
       writesDeclarations,
       awaitsTasks,
       collectsTries,
@@ -1865,7 +1865,7 @@ public type Checker {
     accesses = []
     valueUses = []
     runningClosures = 0
-    isTopLevel = false
+    topLevel = false
     writesDeclarations = false
     awaitsTasks = false
     collectsTries = false
@@ -1892,7 +1892,7 @@ public type Checker {
     accesses = saved.accesses
     valueUses = saved.valueUses
     runningClosures = saved.runningClosures
-    isTopLevel = saved.isTopLevel
+    topLevel = saved.topLevel
     writesDeclarations = saved.writesDeclarations
     awaitsTasks = saved.awaitsTasks
     collectsTries = saved.collectsTries
@@ -1996,7 +1996,7 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
     diagnostics.append([])
   }
   const broken = Signature SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, hasBody: false
-  const brokenType = TypeSignature SymbolId(0), [], invalid, [], [], [], [], [:], false, isShared: false
+  const brokenType = TypeSignature SymbolId(0), [], invalid, [], [], [], [], [:], false, shared: false
   Checker(
     program,
     resolutions,

@@ -556,7 +556,7 @@ fn freezeOptional(var frozen: List<Bool>, function: FunctionId?) {
 fn collectSignature(var peeling: Peeling, places: Locations, function: IrFunction, index: Int, isFrozen: Bool) {
   const parameters = function.signature.parameters
   for position in 0..parameters.length() {
-    if !isFrozen && !parameters[position].isOut && !parameters[position].isByAddress {
+    if !isFrozen && !parameters[position].out && !parameters[position].byAddress {
       continue
     }
     const location = slotLocation places, index, Slot(position)
@@ -747,7 +747,7 @@ fn collectCall(
       continue
     }
     const there = slotLocation places, callee.value, Slot(position)
-    if parameters[position].isReference {
+    if parameters[position].byReference {
       collectReferenceArgument peeling, places, index, argument, here, there
       continue
     }
@@ -1063,7 +1063,7 @@ fn directCallOf(
     return None
   }
   const first = signature.parameters[0]
-  if first.isOut || first.isByAddress || first.annotation != payload {
+  if first.out || first.byAddress || first.annotation != payload {
     return None
   }
   if !argumentsFit(function, signature, arguments) {
@@ -1073,7 +1073,7 @@ fn directCallOf(
     return None
   }
   var given: List<Argument> = []
-  if first.isReference {
+  if first.byReference {
     given.append referenced(Reference(place.base, []))
   } else {
     given.append borrowed(place.base)
@@ -1098,13 +1098,13 @@ fn argumentsFit(function: IrFunction, signature: IrSignature, arguments: List<Ar
   for position in 0..arguments.length() {
     const parameter = signature.parameters[position + 1]
     const argument = arguments[position]
-    if parameter.isOut || parameter.isByAddress {
+    if parameter.out || parameter.byAddress {
       return false
     }
     if !function.hasSlot(argument.slot) {
       return false
     }
-    if parameter.isReference {
+    if parameter.byReference {
       const place = match argument.place {
         Some(given) => given
         None => {

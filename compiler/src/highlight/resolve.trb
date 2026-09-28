@@ -48,7 +48,7 @@ public type LocalKind {
 public type LocalSymbol {
   name: String
   kind: LocalKind
-  isVar: Bool
+  var: Bool
 }
 
 /**
@@ -216,8 +216,8 @@ fn methodModifiers(method: MethodSymbol): List<String> {
 
 /** What a use of a field says about it, with `static` on top for a value that belongs to the type. */
 fn fieldModifiers(field: FieldSymbol): List<String> {
-  var modifiers = readonlyModifiers field.isVar
-  if field.isStatic {
+  var modifiers = readonlyModifiers field.var
+  if field.static {
     modifiers.append "static"
   }
   modifiers
@@ -286,9 +286,9 @@ fn resolveBinding(var resolver: Resolver, binding: Binding) {
   }
   // A top-level binding is already a global; only a local one needs a slot of its own
   if resolver.scopeStarts.isEmpty() {
-    patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.isVar
+    patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.var
   } else {
-    resolvePattern resolver, binding.pattern, .Variable, isVar: binding.isVar
+    resolvePattern resolver, binding.pattern, .Variable, isVar: binding.var
   }
 }
 
@@ -358,7 +358,7 @@ fn resolveConstantBinding(var resolver: Resolver, binding: Binding) {
   if const Some(annotation) = binding.type {
     resolveTypeReference resolver, annotation
   }
-  patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.isVar
+  patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.var
 }
 
 /** A `foreign` block declares functions and fields of the library, and no member has a receiver. */
@@ -366,7 +366,7 @@ fn resolveForeignMember(var resolver: Resolver, member: Member) {
   match member.kind {
     .Function(function) => resolveFunction resolver, function, isMethod: false
     .Field(field) => {
-      pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+      pushToken resolver, field.name.span, "property", declarationModifiers(field.var)
       resolveTypeReference resolver, field.type
     }
     .Constant(binding) => resolveConstantBinding resolver, binding
@@ -436,7 +436,7 @@ fn resolveMembers(var resolver: Resolver, members: List<Member>, typeName: Strin
 fn resolveMember(var resolver: Resolver, member: Member) {
   match member.kind {
     .Field(field) => {
-      pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+      pushToken resolver, field.name.span, "property", declarationModifiers(field.var)
       resolveTypeReference resolver, field.type
       if const Some(default) = field.default {
         resolveExpression resolver, default
@@ -456,7 +456,7 @@ fn resolveMember(var resolver: Resolver, member: Member) {
     .Case(caseDeclaration) => {
       pushToken resolver, caseDeclaration.name.span, "enumMember", ["declaration"]
       for field in caseDeclaration.fields {
-        pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+        pushToken resolver, field.name.span, "property", declarationModifiers(field.var)
         resolveTypeReference resolver, field.type
         if const Some(default) = field.default {
           resolveExpression resolver, default
@@ -472,7 +472,7 @@ fn resolveMember(var resolver: Resolver, member: Member) {
  */
 fn resolveFunction(var resolver: Resolver, function: FunctionDeclaration, isMethod: Bool) {
   const receiver = receiverOf function
-  const changesReceiver = receiver.map({ _.isVar }) ?? false
+  const changesReceiver = receiver.map({ _.var }) ?? false
   var modifiers = ["declaration"]
   if isMethod && receiver.isNone() {
     modifiers.append "static"
@@ -493,7 +493,7 @@ fn resolveFunction(var resolver: Resolver, function: FunctionDeclaration, isMeth
   const savedSelf = resolver.selfIsVar
   resolver.locals = []
   resolver.scopeStarts = []
-  resolver.selfIsVar = receiver.map({ _.isVar })
+  resolver.selfIsVar = receiver.map({ _.var })
   pushScope resolver
   pushGenerics resolver, function.generics
   for parameter in function.parameters {
@@ -517,9 +517,9 @@ fn resolveParameter(var resolver: Resolver, parameter: Parameter) {
   // The receiver of a method is not written: its span is the name of the function, which already carries the
   // method's own token. Only a written parameter gets one here
   if parameter.name.text != "self" {
-    pushToken resolver, parameter.name.span, "parameter", declarationModifiers(parameter.isVar)
+    pushToken resolver, parameter.name.span, "parameter", declarationModifiers(parameter.var)
   }
-  declareLocal resolver, parameter.name.text, .Parameter, isVar: parameter.isVar
+  declareLocal resolver, parameter.name.text, .Parameter, isVar: parameter.var
   if const Some(annotation) = parameter.type {
     resolveTypeReference resolver, annotation
   }
@@ -880,8 +880,8 @@ fn isImplicitParameter(text: String): Bool {
 fn pushLocalToken(var resolver: Resolver, span: Span, local: LocalSymbol) {
   match local.kind {
     .NestedFunction => pushToken resolver, span, "function", []
-    .Variable => pushToken resolver, span, "variable", readonlyModifiers(local.isVar)
-    .Parameter => pushToken resolver, span, "parameter", readonlyModifiers(local.isVar)
+    .Variable => pushToken resolver, span, "variable", readonlyModifiers(local.var)
+    .Parameter => pushToken resolver, span, "parameter", readonlyModifiers(local.var)
   }
 }
 

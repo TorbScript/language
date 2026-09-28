@@ -47,7 +47,7 @@ public fn runInMachine(
   arguments: List<String>,
   withTimings: Bool = false,
 ): Result<Int, IoError> {
-  const clock = RunClock(isOn: withTimings, last: if withTimings { Clock.milliseconds() } else { 0 })
+  const clock = RunClock(enabled: withTimings, last: if withTimings { Clock.milliseconds() } else { 0 })
   const tree = readSourceTree([path])?
   clock.lap "reading the files"
   const requested = absolutePaths([path])?
@@ -87,13 +87,13 @@ public fn runInMachine(
  * `torb check --timings` prints the passes of the checker. Off, it reads no clock at all.
  */
 public shared type RunClock {
-  isOn: Bool
+  enabled: Bool
   var last: Int
   var total: Int = 0
 
   /** The time since the last lap, as the step `what`. */
   fn lap(what: String) {
-    if !isOn {
+    if !enabled {
       return
     }
     const now = Clock.milliseconds()
@@ -104,14 +104,14 @@ public shared type RunClock {
 
   /** A time measured elsewhere, printed as it is and not added up: the passes of the checker. */
   fn note(what: String, milliseconds: Int) {
-    if isOn {
+    if enabled {
       printError "{what}: {milliseconds} ms"
     }
   }
 
   /** What every step took together, printed once the program is ready to run. */
   fn finish() {
-    if isOn {
+    if enabled {
       printError "until the first instruction: {total} ms"
     }
   }
@@ -129,14 +129,14 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   if reportChecked(checked) > 0 {
     return refusedCode
   }
-  const modules = match entryModulesOf(checked, tree, BuildOptions(paths, isTestRun: true)) {
+  const modules = match entryModulesOf(checked, tree, BuildOptions(paths, testing: true)) {
     Some(found) => found
     None => {
       printError "error: no test file (`*.test.trb`) below {paths.joined(", ")}"
       return refusedCode
     }
   }
-  runModules checked, tree, modules, [], true, "", requested, RunClock(isOn: false, last: 0)
+  runModules checked, tree, modules, [], true, "", requested, RunClock(enabled: false, last: 0)
 }
 
 /** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
@@ -178,7 +178,7 @@ public fn bytecodeOf(
   tree: SourceTree,
   modules: List<ModuleId>,
   isTestRun: Bool = false,
-  clock: RunClock = RunClock(isOn: false, last: 0),
+  clock: RunClock = RunClock(enabled: false, last: 0),
   onDemand: Bool = false,
 ): BytecodeProgram? {
   var checker = checked.checker

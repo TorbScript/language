@@ -23,14 +23,14 @@ use SymbolPath from "../src/ir/mangle"
 fn environmentLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Environment
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
@@ -41,7 +41,7 @@ fn tupleLayout(var program: IrProgram, name: String, annotations: List<IrTypeId>
   }
   const reserved = program.reserveLayout name, LayoutKind.Tuple
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, built: true)
   reserved.layout
 }
 
@@ -55,7 +55,7 @@ fn variantLayout(var program: IrProgram, name: String, names: List<String>, case
     variants.append VariantLayout(names[index], first, cases[index].length())
   }
   const layout = program.layoutAt reserved.layout
-  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true)
+  program.setLayout reserved.layout, layout.copy(fields: fields, variants: variants, built: true)
   reserved.layout
 }
 
@@ -180,7 +180,7 @@ group "A function that uses every instruction" {
         made,
         inner,
         [Capture.Value(Slot(3)), Capture.Boxed(boxed), Capture.Place(itemsPlace)],
-        isEscaping: true,
+        escaping: true,
       ),
     )
     emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(3))])
@@ -188,7 +188,7 @@ group "A function that uses every instruction" {
     emit builder, Instruction.Construct(circle, shape, 1, [owned(Slot(3))])
     emit builder, Instruction.Tag(tagValue, circle)
     emit builder, Instruction.Read(items, itemsPlace)
-    emit builder, Instruction.Write(itemsPlace, Argument(items, Ownership.Owned, isLastUse: true))
+    emit builder, Instruction.Write(itemsPlace, Argument(items, Ownership.Owned, last: true))
     emit(
       builder,
       Instruction.Read(element0, Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(int64, Slot(3), at)])),
@@ -370,7 +370,7 @@ group "What an instruction reads and writes" {
         first,
         FunctionId(0),
         [Capture.Value(second), Capture.Boxed(third), Capture.Place(place)],
-        isEscaping: false,
+        escaping: false,
       ))
         == [second, third, first, second],
     )
@@ -397,7 +397,7 @@ group "What an instruction reads and writes" {
     assert(definedSlot(Instruction.Construct(first, LayoutId(0), 0, [])) == first)
     assert(definedSlot(Instruction.Read(first, place)) == first)
     assert(definedSlot(Instruction.Tag(first, second)) == first)
-    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], isEscaping: false)) == first)
+    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], escaping: false)) == first)
     assert(definedSlot(Instruction.BoxNew(first, owned(second))) == first)
     assert(definedSlot(Instruction.TraitValue(first, owned(second), [])) == first)
     assert(definedSlot(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == first)

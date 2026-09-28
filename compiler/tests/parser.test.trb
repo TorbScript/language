@@ -59,7 +59,7 @@ fn membersOf(body: String): List<Member> {
 /** The parameters of the one function such a body declares, each with `var` in front where it carries one. */
 fn memberParameters(body: String): List<String> {
   match membersOf(body)[0].kind {
-    .Function(function) => function.parameters.map({ if _.isVar { "var {_.name.text}" } else { _.name.text } }).toList()
+    .Function(function) => function.parameters.map({ if _.var { "var {_.name.text}" } else { _.name.text } }).toList()
     other => panic "Expected a function, found {other}"
   }
 }
@@ -603,7 +603,7 @@ group "Constants at top level" {
       .Declare(declaration) => {
         assert(declaration.modifiers.visibility == Visibility.Public)
         match declaration.kind {
-          .Constant(binding) => assert(!binding.isVar)
+          .Constant(binding) => assert(!binding.var)
           other => panic "Unexpected declaration: {other}"
         }
       }
@@ -779,7 +779,7 @@ group "The members of a type" {
 
   test "`static name = value` is a constant of the type, and `static const` says the default out loud" {
     match membersOf("  static origin = Probe(0)")[0].kind {
-      .Constant(binding) => assert(!binding.isVar)
+      .Constant(binding) => assert(!binding.var)
       other => panic "Expected a constant, found {other}"
     }
     const written = "type Probe \{\n  static const origin = Probe(0)\n\}"
@@ -791,7 +791,7 @@ group "The members of a type" {
     match membersOf("  x: Int = 0")[0].kind {
       .Field(field) => {
         assert(field.name.text == "x")
-        assert(!field.isVar)
+        assert(!field.var)
       }
       other => panic "Expected a field, found {other}"
     }
@@ -801,7 +801,7 @@ group "The members of a type" {
     match parse(SourceText.of(written)).file.statements[0].kind {
       .Declare(declaration) => match declaration.kind {
         .Type(declared) => match declared.members[0].kind {
-          .Field(field) => assert(field.name.text == "x" && !field.isVar)
+          .Field(field) => assert(field.name.text == "x" && !field.var)
           other => panic "Expected a field, found {other}"
         }
         other => panic "Expected a type, found {other}"
@@ -822,7 +822,7 @@ group "The members of a type" {
     const at = member.modifiers.visibilitySpan ?? panic("Expected the span of `protected`")
     assert("type Probe \{\n  protected var count: Int = 0\n\}".sliceBytes(at.start, at.end) == "protected")
     match member.kind {
-      .Field(field) => assert(field.name.text == "count" && field.isVar)
+      .Field(field) => assert(field.name.text == "count" && field.var)
       other => panic "Expected a field, found {other}"
     }
   }
@@ -836,7 +836,7 @@ group "The members of a type" {
 
   test "`protected` in front of a `:` is the name of a field, and after a `.` or `var` a name as well" {
     match membersOf("  protected: Bool")[0].kind {
-      .Field(field) => assert(field.name.text == "protected" && !field.isVar)
+      .Field(field) => assert(field.name.text == "protected" && !field.var)
       other => panic "Expected a field, found {other}"
     }
     const named = membersOf("  var protected: Int = 0")[0]

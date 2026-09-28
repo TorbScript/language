@@ -264,14 +264,14 @@ public type Lowering {
    * because some *other* coercion might narrow through one and may therefore not blame the value that is being boxed
    * (`nestedTablesOf` in `ir/witness.trb`).
    */
-  var isSilent: Bool = false
+  var silent: Bool = false
   /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */
   var isDiverged: Bool = false
   /**
    * Whether the body being lowered is the body of a task - a function or a closure that answers a `Task`, a `spawn`
    * closure, the top-level code of an entry file - where an `await()` is a suspension point (`ir/lower/task.trb`).
    */
-  var isTaskBody: Bool = false
+  var suspendable: Bool = false
   /** Where a `break` and a `continue` of the innermost loop go, innermost last. */
   var breakTargets: List<BlockId> = []
   var continueTargets: List<BlockId> = []
@@ -489,7 +489,7 @@ public fn newLowering(checker: Checker, paths: List<String>, target: BuildTarget
  * [unsupportedMessage]'s, and the C emitter's findings go through the same one.
  */
 public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, because: String = "") {
-  if lowering.isSilent || !lowering.isSupported {
+  if lowering.silent || !lowering.isSupported {
     return
   }
   lowering.isSupported = false

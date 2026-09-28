@@ -105,11 +105,11 @@ fn printParameters(program: IrProgram, signature: IrSignature): String {
 }
 
 fn printParameter(program: IrProgram, parameter: IrParameter): String {
-  const reference = if parameter.isOut {
+  const reference = if parameter.out {
     "out "
-  } else if parameter.isReference {
+  } else if parameter.byReference {
     "var "
-  } else if parameter.isByAddress {
+  } else if parameter.byAddress {
     "byAddress "
   } else {
     ""
@@ -297,7 +297,7 @@ fn printArguments(program: IrProgram, arguments: List<Argument>): String {
  * takes the caller's storage and not a value, which is the one thing a reader of a call has to see at a glance.
  */
 fn printArgument(program: IrProgram, argument: Argument): String {
-  const last = if argument.isLastUse { " last" } else { "" }
+  const last = if argument.last { " last" } else { "" }
   const operand = match argument.place {
     Some(place) => "&{printReference(program, place)}"
     None => "%{argument.slot.value}"
@@ -592,7 +592,7 @@ public fn describeIrSignature(program: IrProgram, id: IrSignatureId): String {
   const signature = program.signatureAt id
   var parts: List<String> = []
   for parameter in signature.parameters {
-    const reference = if parameter.isReference { "var " } else { "" }
+    const reference = if parameter.byReference { "var " } else { "" }
     parts.append "{reference}{describeIrType(program, parameter.annotation)}"
   }
   for witness in signature.witnesses {

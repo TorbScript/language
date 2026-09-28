@@ -65,7 +65,7 @@ public fn declareParameters(
       parameter.name.text,
       symbol,
       owner,
-      parameter.isConst,
+      parameter.const,
       index,
       parameter.default,
       module,
@@ -530,7 +530,7 @@ fn functionSignature(
   for parameter in function.parameters {
     if parameter.name.text == "self" && parameter.type.isNone() {
       takesSelf = true
-      isVarSelf = parameter.isVar
+      isVarSelf = parameter.var
       continue
     }
     parameters.append parameterForm(checker, parameter, scope)
@@ -662,7 +662,7 @@ fn requireSharedForTaskChanges(
     if parameter.name.text == "self" && parameter.type.isNone() {
       continue
     }
-    if parameter.isVar {
+    if parameter.var {
       const annotation = match parameters.get(index) {
         Some(form) => Some form.type
         None => None
@@ -743,8 +743,8 @@ fn caseSignature(
 }
 
 fn parameterForm(var checker: Checker, parameter: Parameter, scope: TypeScope): ParameterForm {
-  var mode = if parameter.isVar { ParameterMode.Var } else { ParameterMode.Value }
-  if parameter.isVariadic {
+  var mode = if parameter.var { ParameterMode.Var } else { ParameterMode.Value }
+  if parameter.variadic {
     mode = ParameterMode.Variadic
   }
   var annotation = checker.invalidType
@@ -775,10 +775,10 @@ public fn boundsOf(
     const parameter = declared[index]
     // `<Value = Key>`: the default is a type position of the declaration, however a later use of it fills the list
     if const Some(default) = parameter.default {
-      const inner = if parameter.isConst { scope.forConstant() } else { scope.forType() }
+      const inner = if parameter.const { scope.forConstant() } else { scope.forType() }
       const _ = typeFromReference checker, default, inner
     }
-    if parameter.isConst {
+    if parameter.const {
       // `<const Size: Int>`: the single item of `bounds` is the type of the value, not a trait, and it is what
       // `Size` read as a value has
       for bound in parameter.bounds {
@@ -869,7 +869,7 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
   const declaration = match site.kind {
     .Declared(found) => found
     _ => {
-      return TypeSignature symbol, generics, own, [], [], [], [], [:], false, isShared: false
+      return TypeSignature symbol, generics, own, [], [], [], [], [:], false, shared: false
     }
   }
   match declaration.kind {
@@ -895,8 +895,8 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         body.fields,
         body.cases,
         body.members,
-        declaration.modifiers.isNative,
-        declaration.modifiers.isShared,
+        declaration.modifiers.native,
+        declaration.modifiers.shared,
       )
     }
     .Trait(traitDeclaration) => {
@@ -913,11 +913,11 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         body.fields,
         body.cases,
         body.members,
-        declaration.modifiers.isNative,
-        declaration.modifiers.isShared,
+        declaration.modifiers.native,
+        declaration.modifiers.shared,
       )
     }
-    _ => TypeSignature symbol, generics, own, [], [], [], [], [:], false, isShared: false
+    _ => TypeSignature symbol, generics, own, [], [], [], [], [:], false, shared: false
   }
 }
 
@@ -1156,7 +1156,7 @@ fn fieldSignature(
     other => other
   }
   const isPrivateVar = member.modifiers.visibility == Visibility.PrivateVar
-  FieldSignature(symbol, field.name.text, annotation, field.isVar || isPrivateVar, field.default.isSome(), visibility)
+  FieldSignature(symbol, field.name.text, annotation, field.var || isPrivateVar, field.default.isSome(), visibility)
 }
 
 /** `private` hides a member, `protected` only its writing: everything else a type has, it has in the open. */

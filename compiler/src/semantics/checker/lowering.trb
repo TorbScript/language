@@ -191,7 +191,7 @@ fn typeArguments(
   const generics = genericsOf checker, symbol
   var built: List<TypeId> = []
   for index in 0..arguments.length() {
-    const isConstant = index < generics.length() && checker.types.parameter(generics[index]).isConst
+    const isConstant = index < generics.length() && checker.types.parameter(generics[index]).const
     const inner = if isConstant { scope.forConstant() } else { scope.forType() }
     const lowered = typeFromReference checker, arguments[index], inner
     if index < generics.length() {
@@ -661,7 +661,7 @@ fn checkValueOrType(var checker: Checker, built: TypeId, reference: TypeReferenc
   }
   const isConstant = match checker.types.form(built) {
     .Constant(_, _) => true
-    .Parameter(parameter) => checker.types.parameter(parameter).isConst
+    .Parameter(parameter) => checker.types.parameter(parameter).const
     _ => false
   }
   if isConstant {
@@ -728,9 +728,9 @@ fn functionTypeParameter(var checker: Checker, parameter: FunctionTypeParameter,
   if const Some(found) = parameter.name {
     name = found.text
   }
-  var mode = if parameter.isVar { ParameterMode.Var } else { ParameterMode.Value }
+  var mode = if parameter.var { ParameterMode.Var } else { ParameterMode.Value }
   if name == "self" {
-    mode = ParameterMode.Receiver parameter.isVar
+    mode = ParameterMode.Receiver parameter.var
   }
   var annotation = checker.invalidType
   if const .Lazy(inner) = parameter.type.kind {

@@ -202,13 +202,13 @@ fn tupleType(
   }
   const name = tupleLayoutName program, annotations
   const reserved = program.reserveLayout name, LayoutKind.Tuple
-  if reserved.isFresh {
+  if reserved.fresh {
     var built: List<FieldLayout> = []
     for index in 0..annotations.length() {
       built.append FieldLayout("{index}", annotations[index], symbol: None)
     }
     const layout = program.layoutAt reserved.layout
-    program.setLayout reserved.layout, layout.copy(arguments: annotations, fields: built, isBuilt: true)
+    program.setLayout reserved.layout, layout.copy(arguments: annotations, fields: built, built: true)
   }
   program.internType IrType.Tuple(reserved.layout)
 }
@@ -342,7 +342,7 @@ fn nominalType(
   const shape = typeSignatureOf checker, symbol
   const signature = checker.typeSignature shape
   const isVariant = !signature.cases.isEmpty()
-  if signature.isNative && signature.fields.isEmpty() && !isVariant {
+  if signature.native && signature.fields.isEmpty() && !isVariant {
     const name = checker.symbolAt(symbol).name
     if const Some(kind) = runtimeObjectOf(symbolPathOf(checker, symbol), signature) {
       return program.internType IrType.Runtime(kind, [])
@@ -362,10 +362,10 @@ fn nominalType(
   const kind = if isVariant { LayoutKind.Variant } else { LayoutKind.Record }
   const reserved = program.reserveLayout name, kind
   // Not fresh while it is being built means the type contains itself: its own id is all that is needed here
-  if reserved.isFresh {
+  if reserved.fresh {
     buildNominalLayout program, checker, instantiation, reserved.layout, signature, arguments, applied
   }
-  if signature.isShared {
+  if signature.shared {
     return program.internType IrType.SharedObject(reserved.layout)
   }
   if isVariant {
@@ -420,7 +420,7 @@ fn buildNominalLayout(
       fields: fields,
       variants: variants,
       commonFieldCount: if variants.isEmpty() { 0 } else { common },
-      isBuilt: true,
+      built: true,
     ),
   )
 }
@@ -464,7 +464,7 @@ fn primitiveType(
  * it is declared, because the prelude does not export it.
  */
 fn runtimeObjectOf(path: SymbolPath, signature: TypeSignature): RuntimeKind? {
-  if signature.isShared && path.package == "std/fs" && path.owners.isEmpty() && path.name == "File" {
+  if signature.shared && path.package == "std/fs" && path.owners.isEmpty() && path.name == "File" {
     return RuntimeKind.FileHandle
   }
   None

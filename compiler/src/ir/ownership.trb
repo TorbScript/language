@@ -136,7 +136,7 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
       continue
     }
     const parameter = parameters[position]
-    if parameter.isReference || parameter.ownership == Ownership.Owned {
+    if parameter.byReference || parameter.ownership == Ownership.Owned {
       continue
     }
     // A list of numbers stores its items as bytes: there is no count to hand over, so the mode would only be noise
@@ -235,7 +235,7 @@ fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
   var isChanged = false
   for position in 0..parameters.length() {
     const parameter = parameters[position]
-    if parameter.isReference || parameter.ownership == Ownership.Owned {
+    if parameter.byReference || parameter.ownership == Ownership.Owned {
       continue
     }
     if !containsCountedType(program, parameter.annotation) {
@@ -440,7 +440,7 @@ fn conditionalOutSlotsOf(program: IrProgram, function: IrFunction): List<Bool> {
         }
         const parameters = program.functions[callee.value].signature.parameters
         for index in 0..arguments.length().min(parameters.length()) {
-          if !parameters[index].isOut {
+          if !parameters[index].out {
             continue
           }
           const slot = arguments[index].slot
@@ -595,10 +595,10 @@ fn renamedUse(program: IrProgram, facts: SlotFacts, instruction: Instruction, sl
   var decided: List<Argument> = []
   for operand in operandsOf(program, facts, instruction) {
     if operand.slot == slot {
-      decided.append Argument(saved, Ownership.Borrowed, isLastUse: false)
+      decided.append Argument(saved, Ownership.Borrowed, last: false)
       continue
     }
-    decided.append Argument(operand.slot, Ownership.Borrowed, isLastUse: false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, last: false)
   }
   withOperands instruction, decided
 }
@@ -757,7 +757,7 @@ fn rewriteInstruction(
   }
   var decided: List<Argument> = []
   for operand in operands {
-    decided.append Argument(operand.slot, Ownership.Borrowed, isLastUse: false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, last: false)
   }
   var taken: List<Instruction> = []
   var dropped: List<Instruction> = []
@@ -808,13 +808,13 @@ fn decideOperand(
 ): Argument {
   const slot = operand.slot
   if !facts.isCountedSlot(slot) {
-    return Argument slot, Ownership.Borrowed, isLastUse: false
+    return Argument slot, Ownership.Borrowed, last: false
   }
   if counted.isImmortal(slot) {
     if !operand.takesCount {
-      return Argument slot, Ownership.Borrowed, isLastUse: false
+      return Argument slot, Ownership.Borrowed, last: false
     }
-    return Argument slot, Ownership.Owned, isLastUse: false
+    return Argument slot, Ownership.Owned, last: false
   }
   const position = counted.positionOf slot
   const isLast = position >= 0 && !alive[position]
@@ -825,7 +825,7 @@ fn decideOperand(
     return Argument slot, Ownership.Borrowed, isLast
   }
   if isLast && operand.canMove {
-    return Argument slot, Ownership.Owned, isLastUse: true
+    return Argument slot, Ownership.Owned, last: true
   }
   if !operand.retainsItself {
     retains.append Instruction.Retain(slot)
@@ -833,7 +833,7 @@ fn decideOperand(
   if isLast {
     releases.append Instruction.Release(slot)
   }
-  Argument slot, Ownership.Owned, isLastUse: false
+  Argument slot, Ownership.Owned, last: false
 }
 
 fn markAlive(var alive: List<Bool>, counted: Counted, slot: Slot) {
@@ -1257,7 +1257,7 @@ fn movesOf(
         var ignoredRetains: List<Instruction> = []
         var ignoredReleases: List<Instruction> = []
         const answer = decideOperand program, facts, counted, alive, ignoredRetains, ignoredReleases, operand
-        if answer.ownership == Ownership.Owned && answer.isLastUse {
+        if answer.ownership == Ownership.Owned && answer.last {
           moved.append operand.slot
         }
         markAlive alive, counted, operand.slot

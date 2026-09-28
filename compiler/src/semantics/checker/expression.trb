@@ -655,7 +655,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
 fn requireSliceInBounds(var checker: Checker, target: Expression, index: Expression) {
   const count = match target.kind {
     .ListLiteral(items) => {
-      if items.any({ _.isSpread }) {
+      if items.any({ _.spread }) {
         return
       }
       items.length()
@@ -810,7 +810,7 @@ fn knownSizeOf(var checker: Checker, receiver: TypeId, target: Expression): (Int
   // nothing about how many items it brings, so a literal that has one is left alone
   if const .ListLiteral(items) = target.kind {
     for item in items {
-      if item.isSpread {
+      if item.spread {
         return None
       }
     }
@@ -1039,7 +1039,7 @@ fn boundImplies(var checker: Checker, annotation: TypeId, capability: String): B
   }
   // A `const` parameter is a value and not a type: `<const Size: Int>` has `Int` in its bounds, and a literal that
   // stands where `Size` is expected is an ordinary `Int64`
-  if checker.types.parameter(parameter).isConst {
+  if checker.types.parameter(parameter).const {
     return false
   }
   const wanted = match checker.wellKnown.symbolNamed(capability) {
@@ -1477,7 +1477,7 @@ fn defaultListType(
   if item.isNone() {
     // Without an expectation the first item decides, and the others are checked against it
     if const Some(first) = items.first() {
-      if !first.isSpread {
+      if !first.spread {
         item = inferExpression checker, first.value
       }
     }
@@ -1489,7 +1489,7 @@ fn defaultListType(
   const inner = expectationOf checker, element
   var index = 0
   for argument in items {
-    if argument.isSpread {
+    if argument.spread {
       const _ = inferExpression checker, argument.value
       checker.adapted argument.value.span, Adaptation.Spread
     } else if index > 0 || isWanted {
@@ -1760,7 +1760,7 @@ fn arrayLiteralType(var checker: Checker, items: List<Argument>, target: Expecte
   var count = 0
   var isCounted = true
   for argument in items {
-    if !argument.isSpread {
+    if !argument.spread {
       const _ = checkExpression checker, argument.value, inner
       count = count + 1
       continue
@@ -1850,7 +1850,7 @@ fn matchArraySize(var checker: Checker, annotation: TypeId, given: TypeId, count
 fn builtListType(var checker: Checker, items: List<Argument>, target: BuiltTarget, at: Span): TypeId {
   const inner = expectationOf checker, target.item
   for argument in items {
-    if argument.isSpread {
+    if argument.spread {
       const _ = inferExpression checker, argument.value
       checker.adapted argument.value.span, Adaptation.Spread
       continue
@@ -2694,7 +2694,7 @@ fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectat
   }
   // `count: Int = parse("1")?`: a default stands in for an argument the caller left out, and a construction has no
   // failure it could return - a closure inside the default is a function of its own and may have one
-  if checker.isFieldDefault && checker.closureFrames.isEmpty() {
+  if checker.inFieldDefault && checker.closureFrames.isEmpty() {
     checker.reportHere(
       Diagnostic.error("`?` cannot stand in a field default: building a value never fails", at)
         .withNote(
@@ -3440,7 +3440,7 @@ fn noteRedundantWrap(var checker: Checker, expression: Expression, found: TypeId
       return
     }
   }
-  if arguments.length() != 1 || arguments[0].isSpread || checker.exactValueAt == expression.span {
+  if arguments.length() != 1 || arguments[0].spread || checker.exactValueAt == expression.span {
     return
   }
   const resolution = match checker.resolutionHere(callee.span) {
@@ -3787,7 +3787,7 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
     // A **`const`** parameter is a value, not a type: `<const Size: Int>` read as a value is an `Int` that the call
     // site fills in, and `0..Rows` has to keep working. A type parameter is rigid and says exactly one thing
-    .Parameter(parameter) => checker.types.parameter(parameter).isConst
+    .Parameter(parameter) => checker.types.parameter(parameter).const
     .Variable(_) => true
     // A type that carries one of these anywhere inside of it says as little as the type itself would
     .Invalid => true

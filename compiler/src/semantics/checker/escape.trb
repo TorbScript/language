@@ -53,7 +53,7 @@ public fn declareParameterOwners(var checker: Checker, symbol: SymbolId, from: I
   var index = 0
   var position = from
   while position < checker.bindings.length() {
-    if !checker.bindings[position].isReceiver {
+    if !checker.bindings[position].bindsReceiver {
       if index < parameters.length() && isFunctionType(checker, parameters[index].type) {
         checker.parameterOwners.set position, (symbol.value, index)
       }
@@ -117,7 +117,7 @@ public fn noteClosureKind(
   }
   for capture in captures {
     const binding = checker.binding capture.binding
-    if binding.isVar {
+    if binding.var {
       held.append heldName(binding)
       if firstHeld.isNone() {
         firstHeld = binding
@@ -127,7 +127,7 @@ public fn noteClosureKind(
       parameters.append owner
       continue
     }
-    if !binding.isVar && taskProblemOf(checker, binding.annotation).isSome() {
+    if !binding.var && taskProblemOf(checker, binding.annotation).isSome() {
       const item = (binding.name, binding.annotation)
       unseen.append item
     }
@@ -418,7 +418,7 @@ fn traitMembersFound(var checker: Checker, symbol: SymbolId, bound: TypeId): Lis
       None => {
         // A `native type` provides the member through the runtime, with nothing declared: the requirement stands for
         // it, and having no body it keeps what it is handed
-        if implementation.isNative && !members.contains(symbol) {
+        if implementation.native && !members.contains(symbol) {
           members.append symbol
         }
       }
@@ -443,8 +443,8 @@ fn isNativeMember(var checker: Checker, member: SymbolId): Bool {
   match checker.siteOf(member) {
     Some(site) => {
       match site.kind {
-        .Owned(_, _, declared) => declared.modifiers.isNative
-        .Declared(declaration) => declaration.modifiers.isNative
+        .Owned(_, _, declared) => declared.modifiers.native
+        .Declared(declaration) => declaration.modifiers.native
         _ => false
       }
     }
@@ -577,7 +577,7 @@ fn isTaskNative(var checker: Checker, member: SymbolId): Bool {
 
 fn reportEscaping(var checker: Checker, binding: LocalBinding, at: Span) {
   const held = heldName binding
-  if !binding.isParameter {
+  if !binding.bindsParameter {
     checker.reportHere Diagnostic.error("This closure captures {held} and may outlive it", at).withNote(sharingNote())
     return
   }
@@ -669,10 +669,10 @@ fn sharingNote(): String {
 
 /** How a message names a captured `var` binding. */
 fn heldName(binding: LocalBinding): String {
-  if binding.isReceiver {
+  if binding.bindsReceiver {
     return "the receiver `self`"
   }
-  if binding.isParameter {
+  if binding.bindsParameter {
     return "the `var` parameter `{binding.name}`"
   }
   "the `var` binding `{binding.name}`"
