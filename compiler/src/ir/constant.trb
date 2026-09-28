@@ -331,7 +331,9 @@ fn isShiftAmount(var lowering: Lowering, amount: Int, annotation: IrTypeId): Boo
 
 /**
  * A bit pattern brought into the width of the type: the bits above it dropped, the highest one left extended for a
- * signed type. A `UInt64` above the largest `Int64` is no `Int` of the compiler, so it is not folded.
+ * signed type. A 64-bit pattern is the value as it is - a `UInt64` above the largest `Int64` is held as its bits, as
+ * its literal is (`unsignedLiteral`), which is exactly what `~`, `&`, `|`, `^` and `<<` compute: `~0` of a `UInt64` is
+ * its largest value, and `1 << 63` is two to the power of 63.
  */
 fn wrappedToKind(var lowering: Lowering, value: Int, annotation: IrTypeId): Int? {
   const (width, isSigned) = match numericKindOf(lowering.program, annotation) {
@@ -342,9 +344,6 @@ fn wrappedToKind(var lowering: Lowering, value: Int, annotation: IrTypeId): Int?
     }
   }
   if width >= 64 {
-    if !isSigned && value < 0 {
-      return None
-    }
     return value
   }
   const modulus = 1 << width

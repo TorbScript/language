@@ -2104,7 +2104,7 @@ fn storageNameOf(value: StaticValue): String {
 /** The initializer of one constant. Every part of it is a C constant expression, which a `static` needs. */
 fn staticValueOf(var emission: Emission, program: IrProgram, value: StaticValue): CExpression {
   match value.contents {
-    .Literal(literal) => literalOf value, literal
+    .Literal(literal) => literalOf program, value, literal
     .Floating(number) => floatOf emission, number
     .VoidValue => CExpression.Literal "0"
     .Aggregate(layout, variant, fields) => aggregateOf emission, program, layout, variant, fields
@@ -2118,9 +2118,16 @@ fn staticValueOf(var emission: Emission, program: IrProgram, value: StaticValue)
 /** `{ 0 }`, which is what a constant the back end could not spell stands in as. */
 const zeroInitializer = CExpression.Initializer([CExpression.Literal("0")])
 
-fn literalOf(value: StaticValue, literal: LiteralValue): CExpression {
+fn literalOf(program: IrProgram, value: StaticValue, literal: LiteralValue): CExpression {
   match literal {
-    .Integer(number) => integerOf number
+    .Integer(number) => {
+      if const .Integer(width, false) = program.typeAt(value.annotation) {
+        if width >= 64 && number < 0 {
+          return CExpression.Literal "{unsignedDigits(number)}u"
+        }
+      }
+      integerOf number
+    }
     .Boolean(flag) => if flag { CExpression.Literal "true" } else { CExpression.Literal "false" }
     .Character(character) => CExpression.Literal "0x{hexDigits(Int.from(character), 6)}"
     // A text is a slice over its own immortal storage: the pointer, the offset and the length in bytes
@@ -2141,6 +2148,22 @@ fn integerOf(number: Int): CExpression {
     return CExpression.Literal "(-9223372036854775807 - 1)"
   }
   CExpression.Literal "{number}"
+}
+
+/**
+ * The decimal digits of a `UInt64` above the largest `Int64`, which the compiler holds as its bits - the negative
+ * `bits` (`unsignedLiteral`). The literal of the C is the number the program wrote, with a `u` behind it, which gives it
+ * an unsigned type that holds it on every C compiler, so no negative number is converted on the way into a `uint64_t`.
+ *
+ * The value is `bits + 2 ** 64`, which is `rest + 2 ** 63` with `rest = bits - Int.minimum` below two to the power of
+ * 63, and two to the power of 63 is `922337203685477580 * 10 + 8`: the last digit and the digits before it are added
+ * apart, the carry of the last one included, and neither sum leaves an `Int64`.
+ */
+fn unsignedDigits(bits: Int): String {
+  const rest = bits - (0 - 9223372036854775807 - 1)
+  const last = rest % 10 + 8
+  const head = rest / 10 + 922337203685477580 + last / 10
+  "{head}{last % 10}"
 }
 
 /**

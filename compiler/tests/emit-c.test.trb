@@ -556,6 +556,43 @@ group "Static data" {
     assert text.contains("static const bool s_literal__Bool_true = true;")
     assert text.contains("static const torb_char s_literal__Char_A = 0x000041;")
   }
+
+  test "a `UInt64` above the largest `Int64` is the number it was written as, with a `u`, and never negative bits" {
+    const source = raw"""
+      fn masks(): Bool {
+        const largest: UInt64 = 18446744073709551615
+        const high: UInt64 = 0x8000000000000000
+        largest > high
+      }
+
+      const _ = masks()
+      """
+    const text = cOf source
+    assert text.contains("static const uint64_t s_literal__UInt64_minus1 = 18446744073709551615u;")
+    assert text.contains("static const uint64_t s_literal__UInt64_minus9223372036854775808 = 9223372036854775808u;")
+  }
+
+  test "a module's `UInt64` constant above the largest `Int64` is static data, through `~` and `<<` as well" {
+    const helper = raw"""
+      public const offset: UInt64 = 0xcbbb9d5dc1059ed8
+      public const largest: UInt64 = ~0
+      public const high: UInt64 = 1 << 63
+      """
+    const source = raw"""
+      use offset, largest, high from "./helper"
+
+      fn masks(): Bool {
+        offset < largest && high < offset
+      }
+
+      const _ = masks()
+      """
+    var found = lowered source, ["app/src/helper.trb": helper]
+    const text = emittedProgramText found.program, entryName
+    assert text.contains("static const uint64_t s_acme_x2f_app_helper_offset = 14680500436340154072u;")
+    assert text.contains("static const uint64_t s_acme_x2f_app_helper_largest = 18446744073709551615u;")
+    assert text.contains("static const uint64_t s_acme_x2f_app_helper_high = 9223372036854775808u;")
+  }
 }
 
 /**

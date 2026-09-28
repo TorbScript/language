@@ -217,6 +217,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `literal-union-show.trb` | A literal type is its base at run time: its `Show`, `Equals` and `Hash` are the base's |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
+| `unsigned-constants.trb` | A `UInt64` above the largest `Int64` is a compile-time constant - a module's `const` in `unsigned-constants/table.trb`, a field's default, a type's `static`, a literal or what `~`, `<<` and the other operators make of one - and both back ends print the number that was written |
 | `trait-constants.trb` | A constant a trait requires or defaults, read through a type parameter: the implementation's own, the default with `Self` bound, `Numeric.zero`/`one` of every number type, and a generic type's constants over them |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `keyword-members.trb` | A field, a method, a `var fn`, a `static fn` and a case field named after a reserved word: declared in the type body, reached after a `.`, as a label and in a pattern, `self.type` inside the type, and derived JSON that uses the name as the key |

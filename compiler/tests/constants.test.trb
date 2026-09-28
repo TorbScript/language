@@ -98,6 +98,30 @@ group "What is compile-time evaluable" {
     ]
     assert problemsOf(files).isEmpty()
   }
+
+  test "a `UInt64` above the largest `Int64`, and what the operators make of one" {
+    const files = withHelper(raw"""
+      const offset: UInt64 = 0xcbbb9d5dc1059ed8
+      const largest: UInt64 = 18446744073709551615
+      const all: UInt64 = ~0
+      const high: UInt64 = 1 << 63
+      const mixed: UInt64 = offset ^ 1
+      const sum: UInt64 = high + 1
+      const isHigh = offset > high
+      const both = isHigh && true
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+
+  test "a field default of a `UInt64` above the largest `Int64`" {
+    const files = withHelper(raw"""
+      type Hasher {
+        state: UInt64 = 0xcbbb9d5dc1059ed8
+        mask: UInt64 = ~0
+      }
+      """)
+    assert problemsOf(files).isEmpty()
+  }
 }
 
 group "What is not" {
@@ -321,5 +345,13 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
       const broken = 60 / zero
       """)
     assert(problemsOf(files) == ["This divides by zero"])
+  }
+
+  test "a `UInt64` above the largest `Int64` is still held to a divisor of zero and to the width of a shift" {
+    const files = withHelper(raw"""
+      const broken: UInt64 = 0xcbbb9d5dc1059ed8 / 0
+      const shifted: UInt64 = 0xcbbb9d5dc1059ed8 << 64
+      """)
+    assert(problemsOf(files) == ["This divides by zero", "This shifts by 64, which is not between 0 and 63"])
   }
 }

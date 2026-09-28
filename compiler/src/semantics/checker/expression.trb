@@ -718,14 +718,21 @@ fn requireKeyPresent(var checker: Checker, target: Expression, index: Expression
       return
     }
   }
-  if const .Composite = wanted {
-    return
+  // A value that nothing folds is compared with nothing: an aggregate, or a `UInt64` above the largest `Int64`
+  match wanted {
+    .Composite | .Unfolded => {
+      return
+    }
+    _ => {}
   }
   for (key, _) in entries {
     match evaluateConstant(checker, module, key, 0) {
       .Value(found) => {
-        if const .Composite = found {
-          return
+        match found {
+          .Composite | .Unfolded => {
+            return
+          }
+          _ => {}
         }
         if found == wanted {
           return
