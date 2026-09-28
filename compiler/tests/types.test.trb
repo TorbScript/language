@@ -548,7 +548,17 @@ group "The whole repository" {
     None
   }
 
-  test "every type position of `std`, `compiler` and `examples` becomes a type, and nothing is reported" {
+  /**
+   * One check of the whole repository, which both halves of this test read - a check of it is most of a minute of the
+   * suite in the dev profile, so it is made once. The first half: every type position of `std`, `compiler` and
+   * `examples` becomes a type, and nothing is reported.
+   *
+   * The second is the conformance assertion of the checker: **every** expression of the repository has a type.
+   * `Deferred` means "a later pass decides", and every expression the checker sees goes through one, so a single
+   * unchecked expression is a hole in the checker - and `checkModule` says so at the span, which is why the message list
+   * of the first half is the same assertion twice.
+   */
+  test "every type position and every expression of the repository has a type, and nothing is reported" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")
     const checked = check readSourceTree([root]).expect("the sources of the repository"), [root]
     var reported: List<String> = []
@@ -573,17 +583,6 @@ group "The whole repository" {
     assert(broken == 0)
     // Around 4900 today: a number that only says "this really walked the whole repository"
     assert(positions > 4000)
-  }
-
-  /**
-   * The conformance assertion of the checker: **every** expression of the repository has a type. `Deferred` means
-   * "a later pass decides", and every expression the checker sees goes through one, so a single unchecked expression
-   * is a hole in the checker - and `checkModule` says so at the span, which is why the message list above is the
-   * same assertion twice.
-   */
-  test "every expression of the repository has a type, and every quotation and match recorded its tables" {
-    const root = repositoryRoot().expect("the root of the repository above the working directory")
-    const checked = check readSourceTree([root]).expect("the sources of the repository"), [root]
     var typed = 0
     var deferred = 0
     var quotations = 0
