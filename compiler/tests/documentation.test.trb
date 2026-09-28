@@ -15,6 +15,7 @@ use generateIndexes from "../src/documentation/index"
 use buildSkill from "../src/documentation/skill"
 use bundleDocumentation from "../src/documentation/bundle"
 use indexBegin, indexEnd from "../src/documentation/schema"
+use contentHashOf, translatesOf from "../src/documentation/translations"
 
 /** A page that passes every check, so that a test can change one thing about it and see one problem. */
 fn referencePage(title: String): String {
@@ -957,5 +958,166 @@ group "the bundle" {
     const bundled = bundleDocumentation documentation, "TorbScript", "The documentation."
     assert bundled.full.contains("<!-- language/bindings.md -->")
     assert bundled.full.contains("## What this is not")
+  }
+}
+
+/** A lesson of Start that passes every check: an example, an exercise with its solution, and a recap. */
+fn lessonPage(): String {
+  """
+    ---
+    title: Names for values
+    summary: Give a value a name with const, and write var instead when the value has to change later.
+    kind: lesson
+    status: stable
+    ---
+
+    A name for a value.
+
+    ## Exercise
+
+    Make it print `Coins: 7`.
+
+    ```trb exercise
+    var coins = 3
+    print "Coins: \{coins}"
+    ```
+
+    <details>
+    <summary>Solution</summary>
+
+    ```trb run
+    var coins = 3
+    coins = coins + 4
+    print "Coins: \{coins}"
+    // prints Coins: 7
+    ```
+
+    </details>
+
+    ## Recap
+
+    One line.
+    """
+}
+
+fn lessonTree(): Map<String, String> {
+  var files = goodTree()
+  files.set "start/index.md", folderIndex("Learn to program")
+  files.set "start/names.md", lessonPage()
+  files
+}
+
+group "the lessons" {
+  test "a lesson with an exercise and its solution has no problems" {
+    assert check(lessonTree()).isEmpty()
+  }
+
+  test "a lesson has an exercise and a recap" {
+    var files = lessonTree()
+    files.set "start/names.md", lessonPage().replace("## Recap", "## Summary")
+    assert(check(files).any({ _.contains "A `lesson` page has a section `## Recap`" }))
+  }
+
+  test "an exercise without a solution is reported" {
+    var files = lessonTree()
+    files.set "start/names.md", lessonPage().replace("```trb run\n", "```trb\n").replace("// prints Coins: 7\n", "")
+    assert(check(files).any({ _.contains "is followed by its solution" }))
+  }
+
+  test "the starting code of an exercise is held to the canon" {
+    var files = lessonTree()
+    files.set "start/names.md", lessonPage().replace("var coins = 3\nprint", "var coins = 3\nprint(coins)\nprint")
+    assert(check(files).any({ _.contains "command" }))
+  }
+
+  test "an incomplete exercise is only lexed, so a gap is fine" {
+    var files = lessonTree()
+    const gap = lessonPage().replace("```trb exercise\n", "```trb exercise incomplete\n").replace(
+      "var coins = 3\nprint \"Coins: \{coins}\"\n```\n\n<details>",
+      "var coins =\n```\n\n<details>",
+    )
+    files.set "start/names.md", gap
+    assert check(files).isEmpty()
+  }
+
+  test "an index of beginners may say who it is for" {
+    var files = lessonTree()
+    files.set "start/index.md", folderIndex("Learn to program").replace("## What belongs here", "## Who this is for")
+    assert check(files).isEmpty()
+  }
+
+  test "a lesson is not carried by the skill" {
+    const documentation = documentationOf "docs", withGeneratedIndexes(lessonTree())
+    const skill = buildSkill documentation
+    assert(!skill.files.any({ _.path.contains "start/names" }))
+  }
+}
+
+/** The German translation of the page of the good tree, made from the page as it is. */
+fn translatedPage(hash: String): String {
+  referencePage("Bindungen").replace("status: stable", "status: stable\ntranslates: {hash}")
+}
+
+fn translatedTree(hash: String): Map<String, String> {
+  var files = goodTree()
+  files.set "translations/de/strings.json", "\{\"language\": \"Deutsch\", \"nav.start\": \"Start\"\}"
+  files.set "translations/de/language/bindings.md", translatedPage(hash)
+  files
+}
+
+group "the translations" {
+  test "a translation is not a page of the English tree" {
+    const documentation = documentationOf "docs", translatedTree("000000000000")
+    assert(documentation.translations.length() == 1)
+    assert(documentation.translations[0].original == "language/bindings.md")
+    assert(documentation.translations[0].language == "de")
+    assert(!documentation.pages.any({ _.path.startsWith "translations/" }))
+    assert documentation.strings.containsKey("de")
+  }
+
+  test "a translation made from the original as it is has no problems and is not outdated" {
+    const hash = contentHashOf referencePage("Bindings")
+    const documentation = documentationOf "docs", withGeneratedIndexes(translatedTree(hash))
+    const checked = checkDocumentation documentation, everything()
+    assert(checked.problems.map({ _.show() }).toList() == [])
+    assert checked.staleTranslations.isEmpty()
+  }
+
+  test "a translation of an original that changed since is listed, and is no problem" {
+    const documentation = documentationOf "docs", withGeneratedIndexes(translatedTree("0123456789ab"))
+    const checked = checkDocumentation documentation, everything()
+    assert checked.problems.isEmpty()
+    assert(checked.staleTranslations.length() == 1)
+    assert checked.staleTranslations[0].contains("translates: {contentHashOf(referencePage("Bindings"))}")
+  }
+
+  test "a translation without an original is reported" {
+    var files = translatedTree contentHashOf(referencePage("Bindings"))
+    files.set "translations/de/language/missing.md", translatedPage("0123456789ab")
+    assert(check(files).any({ _.contains "`language/missing.md` is none" }))
+  }
+
+  test "a translation says which version of its original it translates" {
+    var files = translatedTree "x"
+    files.set "translations/de/language/bindings.md", referencePage("Bindungen")
+    assert(check(files).any({ _.contains "translates: <the hash docs check names>" }))
+  }
+
+  test "a key of the interface that does not exist is reported" {
+    var files = translatedTree contentHashOf(referencePage("Bindings"))
+    files.set "translations/de/strings.json", "\{\"language\": \"Deutsch\", \"nav.stat\": \"Start\"\}"
+    assert(check(files).any({ _.contains "`nav.stat` is no key of the interface" }))
+  }
+
+  test "a language with pages but no words for its interface is reported" {
+    var files = translatedTree contentHashOf(referencePage("Bindings"))
+    files.remove "translations/de/strings.json"
+    assert(check(files).any({ _.contains "has the words of its interface in `strings.json`" }))
+  }
+
+  test "a hash of digits alone keeps its leading zero" {
+    const page = "---\ntitle: A\ntranslates: 012345678901\n---\n"
+    const documentation = documentationOf "docs", ["translations/de/a.md": page]
+    assert(translatesOf(documentation.translations[0].page) == "012345678901")
   }
 }

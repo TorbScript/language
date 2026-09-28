@@ -47,6 +47,22 @@ public type Folder {
   plain: List<String>
 }
 
+/**
+ * The folder below the documentation root that holds the other languages: `translations/de/start/lists.md` is the
+ * German text of `start/lists.md`, and `translations/de/strings.json` the words of the site's own interface in German.
+ */
+public const translationsFolder = "translations"
+
+/** A page in another language, which mirrors the path of the English page it translates. */
+public type Translation {
+  /** The language, as the folder below `translations/` names it: `de` */
+  language: String
+  /** The path of the English page it translates: `start/lists.md` */
+  original: String
+  /** The page itself, its `path` below the root: `translations/de/start/lists.md` */
+  page: Page
+}
+
 /** The whole documentation tree read into memory: every [Page] and every [Folder], ready for any check to run over. */
 public type Documentation {
   /** The root as it was typed on the command line, for messages */
@@ -60,6 +76,13 @@ public type Documentation {
   /** The whole text of every `.md` file that has no front matter, by path: what the site renders of it */
   plainTexts: Map<String, String>
   problems: List<DocumentationProblem>
+  /**
+   * Every page below `translations/`, sorted by path. They are not part of [pages] or [folders]: the index, the skill
+   * and the bundle are English, and a translation is checked and rendered beside the page it translates
+   */
+  translations: List<Translation> = []
+  /** The text of every `translations/<language>/strings.json`, by language */
+  strings: Map<String, String> = [:]
 
   fn pageAt(path: String): Page? {
     pages.find({ _.path == path })
@@ -131,7 +154,35 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
   var plainTitles: Map<String, String> = [:]
   var plainTexts: Map<String, String> = [:]
   var folderPaths: List<String> = [""]
+  var translations: List<Translation> = []
+  var strings: Map<String, String> = [:]
   for path in paths {
+    if const Some(translated) = path.withoutPrefix("{translationsFolder}/") {
+      const parts = translated.splitOnce "/"
+      const language = parts?.before ?? ""
+      const original = parts?.after ?? ""
+      const text = files.get(path) ?? ""
+      if original == "strings.json" {
+        strings.set language, text
+        continue
+      }
+      if language.isEmpty() || !original.endsWith(".md") {
+        continue
+      }
+      const read = readPage shownPath(root, path), text
+      match read.frontMatter {
+        Some(frontMatter) => {
+          problems.appendAll read.problems
+          const page = Page(path, folderOf(path), fileName(path) == "index.md", text, frontMatter, read)
+          translations.append Translation(language, original, page)
+        }
+        None => {
+          const note = "A translation is a page with front matter, like the page it translates"
+          problems.append DocumentationProblem(shownPath(root, path), 1, note)
+        }
+      }
+      continue
+    }
     if !path.endsWith(".md") {
       continue
     }
@@ -165,7 +216,7 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
     }
     folders.append Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
   }
-  Documentation root, pages, folders, plainTitles, plainTexts, problems
+  Documentation root, pages, folders, plainTitles, plainTexts, problems, translations, strings
 }
 
 /** The first `# ` heading of a plain Markdown file, or its file name when it has none. */
@@ -196,7 +247,10 @@ fn shownPath(root: String, path: String): String {
   "{root}/{path}"
 }
 
-/** Reads every `.md` file below the root. Hidden directories are skipped, as everywhere. */
+/**
+ * Reads every `.md` file below the root, and the `strings.json` of every language below `translations/`. Hidden
+ * directories are skipped, as everywhere.
+ */
 public fn readDocumentation(root: String): Result<Documentation, IoError> {
   if !File.isDirectory(root) {
     return Fail IoError(root, "The documentation root is not a directory")
@@ -217,7 +271,8 @@ fn readInto(var files: Map<String, String>, root: String, relative: String): Res
       }
       continue
     }
-    if entry.endsWith(".md") {
+    const isStrings = entry == "strings.json" && child.startsWith("{translationsFolder}/")
+    if entry.endsWith(".md") || isStrings {
       const text = File.readText(absolute)?
       files.set child, text
     }

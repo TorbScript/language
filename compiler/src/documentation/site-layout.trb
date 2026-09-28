@@ -1,12 +1,14 @@
 /**
- * The pages of the documentation site around their bodies: the head with its icons and its preview card, the shell of
- * docs/design/BRAND.md section 11 - the top rule, the lockup, the navigation, the search and the theme toggle - and the
- * three layouts inside it: a page of the documentation with its navigation, contents and previous and next links, the
- * front page, and a plain page of the site.
+ * The pages of the documentation site around their bodies: the head with its icons, its preview card and its other
+ * languages, the shell of docs/design/BRAND.md section 11 - the top rule, the lockup, the three doors, the search, the
+ * language and the theme - and the layouts inside it: a lesson of Start with its text beside its code, the list of
+ * lessons, a page of the Guide or the Reference with its navigation, contents and previous and next links, the front
+ * page, and a plain page of the site.
  *
  * Every function here is a pure function of a [SiteContext] and a rendered body, and every URL it writes is relative
  * to the page, so the output can be served from any directory - except the page for a missing path, which the server
- * answers at every depth and which therefore links from the root of the host.
+ * answers at every depth and which therefore links from the root of the host. Every word of the interface comes from
+ * the [SiteLanguage] of the page.
  *
  * # Related
  *
@@ -14,11 +16,13 @@
  * - [sidebarHtml] - the navigation.
  */
 
-use MarkdownBlock, BlockContent, plainText from "std/markdown"
+use MarkdownBlock, MarkdownInline, plainText from "std/markdown"
 use escapedHtml from "../reference/highlight"
 use Markdown from "std/markdown"
-use NavigationEntry, sidebarHtml from "./site-navigation"
-use ContentsEntry, SiteLinks, relativeUrl, siteRootOf, blocksHtml, codeBlockHtml from "./site-html"
+use NavigationEntry, Level, SidebarContext, sidebarHtml, levelOf, levelIndex, levelKey from "./site-navigation"
+use lessonsOf from "./site-navigation"
+use ContentsEntry, SiteLinks, relativeUrl, siteRootOf, blocksHtml, linkUrl, localized from "./site-html"
+use SiteLanguage, filled from "./site-strings"
 use headScript from "./site-style"
 
 /** The line of the front page, decided with the name of the category (docs/design/RELEASE.md section 6). */
@@ -39,7 +43,7 @@ public const installCommandPosix = "curl -fsSL https://torb.dev/install.sh | sh"
 /** The command of `tools/install.ps1`, for PowerShell on Windows. */
 public const installCommandWindows = "irm https://torb.dev/install.ps1 | iex"
 
-/** What every page of one build shares: the version, the brand's inline drawings, the navigation and the targets. */
+/** What every page of one build in one language shares: the version, the drawings, the navigation and the words. */
 public type SiteContext {
   /** The version the documentation is of: `0.2.0`, `nightly`, `latest` */
   version: String
@@ -48,10 +52,13 @@ public type SiteContext {
   /** The flat mark as inline SVG */
   mark: String
   navigation: List<NavigationEntry>
-  /** The output path of every `.md` file of the documentation, by its source path */
+  /**
+   * The output path of every `.md` file of the documentation, by its source path, within a language: the German page
+   * of a source is this path below `de/`
+   */
   targets: Map<String, String>
-  /** The pages of the site the footer links, with their output paths: the imprint and the privacy notice, when they exist */
-  footerPages: List<(title: String, target: String)>
+  /** The pages of the site the footer links, with the key of their word and their output path, where they exist */
+  footerPages: List<(key: String, target: String)>
   /** Where the red button of the front page leads: the install page, when the site has one */
   installPage: String
   /**
@@ -59,6 +66,33 @@ public type SiteContext {
    * changed, so the server may let a browser keep them for a year
    */
   assetVersion: String
+  /** The language of the pages this context writes */
+  language: SiteLanguage
+  /** Every language of the site, English first */
+  languages: List<SiteLanguage>
+  /** The languages that have a translation of a source, by source: the other versions a search engine is told of */
+  translated: Map<String, List<String>>
+  /** The title of every source in this language, where a translation gives one */
+  titles: Map<String, String>
+  /** The summary of every source in this language */
+  summaries: Map<String, String> = [:]
+  /** Whether the site has a playground page, `site/play.md`, which the header links */
+  hasPlayground: Bool = false
+
+  /** A word of the interface in the language of the pages. */
+  fn word(key: String): String {
+    language.text key
+  }
+
+  /** The output path of a source in the language of the pages. */
+  fn targetOf(source: String): String {
+    "{language.prefix}{targets.get(source) ?? ""}"
+  }
+
+  /** The title of a source in the language of the pages. */
+  fn titleOf(source: String, english: String): String {
+    titles.get(source) ?? english
+  }
 }
 
 /** The directory the documentation of this version is written to, relative to the root of the site. */
@@ -70,18 +104,16 @@ public fn docsDirectory(version: String): String {
 public type PageHead {
   title: String
   description: String
-  /** The output path of the page */
+  /** The output path of the page, with the folder of its language */
   page: String
+  /** The path of the page within its language: where the same page is in every other language, below its folder */
+  path: String
+  /** The source it is made of, or empty for the page of a missing path */
+  source: String = ""
   /** Whether the page links from the root of the host instead of relative to itself: the page for a missing path */
   absolute: Bool = false
-}
-
-/** Which part of the site a page belongs to, for the item of the header's navigation it marks. */
-public type SitePart {
-  case Front
-  case Learn
-  case Docs
-  case Other
+  /** Whether it is shown in English inside another language: its canonical page is then the English one */
+  untranslated: Bool = false
 }
 
 const menuIcon = "<svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M3 5.75h14M3 10h14M3 14.25h14\"/></svg>"
@@ -92,9 +124,13 @@ const moonIcon = "<svg class=\"icon-moon\" viewBox=\"0 0 20 20\" fill=\"none\" s
 
 const sunIcon = "<svg class=\"icon-sun\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"10\" r=\"3.5\"/><path d=\"M10 1.75v2M10 16.25v2M1.75 10h2M16.25 10h2M4.17 4.17l1.41 1.41M14.42 14.42l1.41 1.41M4.17 15.83l1.41-1.41M14.42 5.58l1.41-1.41\"/></svg>"
 
+const globeIcon = "<svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"10\" r=\"7.25\"/><path d=\"M2.75 10h14.5M10 2.75c2 2.1 3 4.5 3 7.25s-1 5.15-3 7.25c-2-2.1-3-4.5-3-7.25s1-5.15 3-7.25Z\"/></svg>"
+
 const editIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M10.5 2.5l3 3-8 8H2.5v-3z\"/></svg>"
 
 const arrowIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M2.5 8h11M9 3.5 13.5 8 9 12.5\"/></svg>"
+
+const backIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M13.5 8h-11M7 3.5 2.5 8 7 12.5\"/></svg>"
 
 const copyIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"5.25\" y=\"5.25\" width=\"8.5\" height=\"8.5\" rx=\"1\"/><path d=\"M10.75 5.25V3.25a1 1 0 0 0-1-1h-6.5a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h2\"/></svg>"
 
@@ -106,14 +142,60 @@ fn urlOf(head: PageHead, target: String): String {
   relativeUrl head.page, target
 }
 
-/** The `<head>` of every page: the icons, the manifest, the preview card, the stylesheet and the scripts. */
+/** The whole address of a page of the site, the front page of a language as its folder. */
+fn addressOf(path: String): String {
+  const folder = path.withoutSuffix("index.html") ?? path
+  if !folder.isEmpty() && !folder.endsWith("/") {
+    return "{siteAddress}/{path}"
+  }
+  "{siteAddress}/{folder}"
+}
+
+/** The words the site's script shows, as JSON inside the page, in the language of the page. */
+fn scriptWordsHtml(site: SiteContext): String {
+  const keys = [
+    "copy",
+    "copied",
+    "copy.code",
+    "search.prompt",
+    "search.loading",
+    "search.failed",
+    "search.nothing",
+    "exercise.expected",
+    "playground.run",
+    "playground.reset",
+    "playground.solution",
+    "playground.output",
+    "playground.solved",
+    "playground.running",
+  ]
+  var entries: List<String> = []
+  for key in keys {
+    entries.append "{jsonText(key)}:{jsonText(site.word(key))}"
+  }
+  "<script type=\"application/json\" id=\"site-words\">\{{entries.joined(separator: ",")}\}</script>"
+}
+
+/** A text as a JSON string that is safe inside a `<script>` element. */
+fn jsonText(text: String): String {
+  const escaped = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("<", "\\u003c")
+  "\"{escaped}\""
+}
+
+/** The `<head>` of every page: the icons, the manifest, the preview card, the other languages, the stylesheet. */
 fn headHtml(site: SiteContext, head: PageHead): String {
   const title = escapedHtml head.title
   const description = escapedHtml head.description
-  const canonical = if head.page == "index.html" { "{siteAddress}/" } else { "{siteAddress}/{head.page}" }
-  const lines = [
+  const canonical = if head.untranslated { addressOf head.path } else { addressOf head.page }
+  const root = if head.absolute { "/" } else { siteRootOf head.page }
+  const codes = site.languages.map({ _.code }).toList().joined(separator: " ")
+  var htmlAttributes = "lang=\"{escapedHtml(site.language.code)}\" data-site-root=\"{root}\" data-languages=\"{codes}\""
+  if !head.absolute {
+    htmlAttributes = "{htmlAttributes} data-path=\"{escapedHtml(head.path)}\""
+  }
+  var lines = [
     "<!doctype html>",
-    "<html lang=\"en\">",
+    "<html {htmlAttributes}>",
     "<head>",
     "<meta charset=\"utf-8\">",
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
@@ -131,6 +213,15 @@ fn headHtml(site: SiteContext, head: PageHead): String {
     "<meta property=\"og:image:height\" content=\"630\">",
     "<meta property=\"og:image:alt\" content=\"TorbScript: {siteSlogan}\">",
     "<meta name=\"twitter:card\" content=\"summary_large_image\">",
+  ]
+  if !head.absolute {
+    lines.append "<link rel=\"canonical\" href=\"{escapedHtml(canonical)}\">"
+  }
+  if head.untranslated {
+    lines.append "<meta name=\"robots\" content=\"noindex\">"
+  }
+  lines.appendAll alternatesOf(site, head)
+  lines.appendAll([
     "<link rel=\"icon\" href=\"{urlOf(head, "favicon.ico")}\" sizes=\"48x48\">",
     "<link rel=\"icon\" href=\"{urlOf(head, "favicon.svg")}\" type=\"image/svg+xml\">",
     "<link rel=\"apple-touch-icon\" href=\"{urlOf(head, "apple-touch-icon.png")}\">",
@@ -141,61 +232,117 @@ fn headHtml(site: SiteContext, head: PageHead): String {
     "<script>{headScript.replace("\n", "")}</script>",
     "<script src=\"{urlOf(head, "assets/site.js")}?v={site.assetVersion}\" defer></script>",
     "</head>",
-  ]
+  ])
   lines.joined separator: "\n"
 }
 
-/** The header: the top rule, the lockup, the navigation of the site, the search and the theme toggle. */
-fn headerHtml(site: SiteContext, head: PageHead, part: SitePart, withMenu: Bool): String {
-  const docs = docsDirectory site.version
+/**
+ * The other languages of a page, as a search engine reads them: every language that has a translation of its source,
+ * English always, and English as the default. A page shown in English inside another language names none.
+ */
+fn alternatesOf(site: SiteContext, head: PageHead): List<String> {
+  if head.absolute || head.untranslated || site.languages.length() < 2 {
+    return []
+  }
+  const translated = site.translated.get(head.source) ?? []
+  var lines: List<String> = []
+  for language in site.languages {
+    if language.prefix.isEmpty() || translated.contains(language.code) {
+      const address = escapedHtml addressOf("{language.prefix}{head.path}")
+      lines.append "<link rel=\"alternate\" hreflang=\"{escapedHtml(language.code)}\" href=\"{address}\">"
+    }
+  }
+  if lines.length() < 2 {
+    return []
+  }
+  lines.append "<link rel=\"alternate\" hreflang=\"x-default\" href=\"{escapedHtml(addressOf(head.path))}\">"
+  lines
+}
+
+/** The three doors and the playground: the items of the header's navigation, and of the bar a phone shows. */
+fn levelLinks(site: SiteContext, head: PageHead, level: Level): List<String> {
+  var links: List<String> = []
+  for (wanted, key) in [(Level.Start, "nav.start"), (Level.Guide, "nav.guide"), (Level.Reference, "nav.reference")] {
+    if !site.targets.containsKey(levelIndex(wanted)) {
+      continue
+    }
+    const url = urlOf head, site.targetOf(levelIndex(wanted))
+    const current = if level == wanted { " aria-current=\"page\"" } else { "" }
+    links.append "<a href=\"{escapedHtml(url)}\"{current}>{escapedHtml(site.word(key))}</a>"
+  }
+  if site.hasPlayground {
+    const url = urlOf head, "{site.language.prefix}play.html"
+    links.append "<a href=\"{escapedHtml(url)}\">{escapedHtml(site.word("nav.playground"))}</a>"
+  }
+  links
+}
+
+/** The header: the top rule, the lockup, the three doors, the search, the language and the theme. */
+fn headerHtml(site: SiteContext, head: PageHead, level: Level, withMenu: Bool): String {
   const menu = if withMenu {
-    "<label class=\"button button-quiet button-icon menu-button\" for=\"navigation-toggle\" aria-label=\"The navigation\">{menuIcon}</label>"
+    const label = escapedHtml site.word("menu")
+    "<label class=\"button button-quiet button-icon menu-button\" for=\"navigation-toggle\" aria-label=\"{label}\">{menuIcon}</label>"
   } else {
     ""
   }
-  const links = [
-    "<a href=\"{urlOf(head, "{docs}/guide/index.html")}\"{currentMark(part, SitePart.Learn)}>Learn</a>",
-    "<a href=\"{urlOf(head, "{docs}/index.html")}\"{currentMark(part, SitePart.Docs)}>Docs</a>",
-    "<a href=\"{urlOf(head, "{docs}/reference/index.html")}\">Reference</a>",
-    "<a href=\"{registryAddress}\">Packages</a>",
-    "<a href=\"{forgeAddress}\">Source</a>",
-  ]
-  const search = "<button type=\"button\" class=\"button button-secondary search-button\" data-search-open hidden>{searchIcon}<span class=\"search-label\">Search</span><kbd>/</kbd></button>"
-  const theme = "<button type=\"button\" class=\"button button-quiet button-icon theme-toggle\" data-theme-toggle hidden aria-label=\"Switch the theme\">{moonIcon}{sunIcon}</button>"
+  var links = levelLinks site, head, level
+  links.append "<a href=\"{registryAddress}\">{escapedHtml(site.word("nav.packages"))}</a>"
+  const searchLabel = escapedHtml site.word("search")
+  const search = "<button type=\"button\" class=\"button button-secondary search-button\" data-search-open hidden aria-label=\"{searchLabel}\">{searchIcon}<span class=\"search-label\">{searchLabel}</span><kbd>/</kbd></button>"
+  const themeLabel = escapedHtml site.word("theme")
+  const theme = "<button type=\"button\" class=\"button button-quiet button-icon theme-toggle\" data-theme-toggle hidden aria-label=\"{themeLabel}\">{moonIcon}{sunIcon}</button>"
+  const home = escapedHtml site.word("home")
   const lines = [
     "<header class=\"site-header\">",
     "<div class=\"header-inner\">",
     menu,
-    "<a class=\"brand-link\" href=\"{urlOf(head, "index.html")}\" aria-label=\"TorbScript, the front page\">{site.lockup}</a>",
-    "<nav class=\"site-nav\" aria-label=\"The site\">{links.joined(separator: "")}</nav>",
-    "<div class=\"header-actions\">{search}{theme}</div>",
+    "<a class=\"brand-link\" href=\"{urlOf(head, "{site.language.prefix}index.html")}\" aria-label=\"{home}\">{site.lockup}</a>",
+    "<nav class=\"site-nav\" aria-label=\"{escapedHtml(site.word("nav.site"))}\">{links.joined(separator: "")}</nav>",
+    "<div class=\"header-actions\">{search}{languageMenuHtml(site, head)}{theme}</div>",
     "</div>",
     "</header>",
+    "<nav class=\"level-bar\" aria-label=\"{escapedHtml(site.word("nav.levels"))}\">{levelLinks(site, head, level).joined(separator: "")}</nav>",
   ]
   lines.filter({ !_.isEmpty() }).toList().joined(separator: "\n")
 }
 
-/** The attribute that marks the item of the navigation a page belongs to. */
-fn currentMark(part: SitePart, wanted: SitePart): String {
-  if part == wanted { " aria-current=\"page\"" } else { "" }
+/**
+ * The language switcher: a menu of links to the same page in every language, each in its own name, which works
+ * without a script. The script remembers a choice made here, so an English page does not send the reader back.
+ */
+fn languageMenuHtml(site: SiteContext, head: PageHead): String {
+  if site.languages.length() < 2 {
+    return ""
+  }
+  var items: List<String> = []
+  for language in site.languages {
+    const target = if head.absolute { "{language.prefix}index.html" } else { "{language.prefix}{head.path}" }
+    const url = urlOf head, target
+    const current = if language.code == site.language.code { " aria-current=\"true\"" } else { "" }
+    const code = escapedHtml language.code
+    const attributes = "href=\"{escapedHtml(url)}\" hreflang=\"{code}\" lang=\"{code}\" data-language=\"{code}\"{current}"
+    items.append "<li><a {attributes}>{escapedHtml(language.name())}</a></li>"
+  }
+  const label = escapedHtml "{site.word("language.choose")}: {site.language.name()}"
+  const summary = "<summary class=\"button button-quiet language-button\" aria-label=\"{label}\">{globeIcon}<span class=\"language-code\">{escapedHtml(site.language.code.toUpperCase())}</span></summary>"
+  "<details class=\"language-menu\">{summary}<ul class=\"language-list\">{items.joined(separator: "")}</ul></details>"
 }
 
 /** The footer: the licence, where the source is, and the legal pages the site has. */
 fn footerHtml(site: SiteContext, head: PageHead): String {
-  const docs = docsDirectory site.version
   var links = [
-    "<li><a href=\"{urlOf(head, "{docs}/index.html")}\">Documentation</a></li>",
-    "<li><a href=\"{registryAddress}\">Packages</a></li>",
-    "<li><a href=\"{forgeAddress}\">Source</a></li>",
-    "<li><a href=\"{forgeAddress}/src/branch/main/LICENSE\">MIT License</a></li>",
+    "<li><a href=\"{urlOf(head, site.targetOf("index.md"))}\">{escapedHtml(site.word("footer.documentation"))}</a></li>",
+    "<li><a href=\"{registryAddress}\">{escapedHtml(site.word("nav.packages"))}</a></li>",
+    "<li><a href=\"{forgeAddress}\">{escapedHtml(site.word("footer.source"))}</a></li>",
+    "<li><a href=\"{forgeAddress}/src/branch/main/LICENSE\">{escapedHtml(site.word("footer.license"))}</a></li>",
   ]
-  for (title, target) in site.footerPages {
-    links.append "<li><a href=\"{urlOf(head, target)}\">{escapedHtml(title)}</a></li>"
+  for (key, target) in site.footerPages {
+    links.append "<li><a href=\"{urlOf(head, "{site.language.prefix}{target}")}\">{escapedHtml(site.word(key))}</a></li>"
   }
   const lines = [
     "<footer class=\"site-footer\">",
     "<div class=\"footer-inner\">",
-    "<div class=\"footer-mark\">{site.mark}<span>TorbScript is free software under the MIT License.</span></div>",
+    "<div class=\"footer-mark\">{site.mark}<span>{escapedHtml(site.word("footer.free"))}</span></div>",
     "<ul class=\"footer-links\">{links.joined(separator: "")}</ul>",
     "</div>",
     "</footer>",
@@ -204,28 +351,42 @@ fn footerHtml(site: SiteContext, head: PageHead): String {
 }
 
 /** The search dialog. It stays hidden without a script, which is the only thing that can search. */
-fn searchDialogHtml(): String {
-  const field = "<div class=\"search-field\">{searchIcon}<input class=\"search-input\" type=\"search\" placeholder=\"Search the documentation\" aria-label=\"Search the documentation\" autocomplete=\"off\" spellcheck=\"false\"><kbd>Esc</kbd></div>"
-  const footer = "<div class=\"search-footer\"><span><kbd>Enter</kbd> opens a result</span><span><kbd>Esc</kbd> closes</span></div>"
-  "<dialog class=\"search-dialog\" aria-label=\"Search the documentation\">{field}<ul class=\"search-results\" role=\"listbox\" aria-label=\"Results\"></ul>{footer}</dialog>"
+fn searchDialogHtml(site: SiteContext): String {
+  const placeholder = escapedHtml site.word("search.placeholder")
+  const field = "<div class=\"search-field\">{searchIcon}<input class=\"search-input\" type=\"search\" placeholder=\"{placeholder}\" aria-label=\"{placeholder}\" autocomplete=\"off\" spellcheck=\"false\"><kbd>Esc</kbd></div>"
+  const opens = escapedHtml site.word("search.opens")
+  const closes = escapedHtml site.word("search.closes")
+  const footer = "<div class=\"search-footer\"><span><kbd>Enter</kbd> {opens}</span><span><kbd>Esc</kbd> {closes}</span></div>"
+  const results = escapedHtml site.word("search.results")
+  "<dialog class=\"search-dialog\" aria-label=\"{placeholder}\">{field}<ul class=\"search-results\" role=\"listbox\" aria-label=\"{results}\"></ul>{footer}</dialog>"
 }
 
-/** A whole page: the head, the body's attributes the script reads, the shell and the main part. */
-fn pageHtml(site: SiteContext, head: PageHead, part: SitePart, main: String, docsPage: String, withMenu: Bool): String {
-  const root = if head.absolute { "/" } else { siteRootOf head.page }
-  const attributes = "data-root=\"{root}\" data-version=\"{escapedHtml(site.version)}\" data-page=\"{escapedHtml(docsPage)}\""
+/**
+ * A whole page: the head, the body's attributes the script reads, the shell and the main part, whose marks of the
+ * interface's words are filled in the language of the page.
+ */
+fn pageHtml(site: SiteContext, head: PageHead, level: Level, main: String, extra: String, withMenu: Bool): String {
+  const siteRoot = if head.absolute { "/" } else { siteRootOf head.page }
+  const root = "{siteRoot}{site.language.prefix}"
+  const docs = "{site.language.prefix}{docsDirectory(site.version)}/"
+  const docsPage = head.page.withoutPrefix(docs) ?? ""
+  var attributes = "data-root=\"{root}\" data-site-root=\"{siteRoot}\" data-version=\"{escapedHtml(site.version)}\" data-page=\"{escapedHtml(docsPage)}\""
+  if !extra.isEmpty() {
+    attributes = "{attributes} {extra}"
+  }
   var lines = [
     headHtml(site, head),
     "<body {attributes}>",
-    "<a class=\"skip-link\" href=\"#main\">Skip to the content</a>",
+    "<a class=\"skip-link\" href=\"#main\">{escapedHtml(site.word("skip"))}</a>",
   ]
   if withMenu {
     lines.append "<input type=\"checkbox\" id=\"navigation-toggle\" class=\"navigation-toggle\" aria-hidden=\"true\" tabindex=\"-1\">"
   }
-  lines.append headerHtml(site, head, part, withMenu)
-  lines.append main
+  lines.append headerHtml(site, head, level, withMenu)
+  lines.append localized(main, site.word)
   lines.append footerHtml(site, head)
-  lines.append searchDialogHtml()
+  lines.append searchDialogHtml(site)
+  lines.append scriptWordsHtml(site)
   lines.append "</body>"
   lines.append "</html>"
   lines.append ""
@@ -236,7 +397,7 @@ fn pageHtml(site: SiteContext, head: PageHead, part: SitePart, main: String, doc
 public type DocumentationPage {
   /** Its source, relative to the documentation root */
   source: String
-  /** Its output path */
+  /** Its output path within its language */
   target: String
   /** Empty for a design document, whose body starts with its own `#` heading */
   title: String
@@ -247,52 +408,120 @@ public type DocumentationPage {
   contents: List<ContentsEntry>
   previous: (title: String, target: String)?
   next: (title: String, target: String)?
+  /** The key of the word the link to the next page shows: `page.next`, or the next level's */
+  nextKey: String = "page.next"
+  /** The notice above the body: a page shown in English, or a translation that may be outdated */
+  notice: String = ""
+  /** Whether it is shown in English because it has no translation in the language of the site */
+  untranslated: Bool = false
+}
+
+/** The notice of a page shown in English inside another language, or of a translation that may be outdated. */
+public fn noticeHtml(site: SiteContext, key: String, page: String, path: String): String {
+  const url = relativeUrl page, path
+  const link = "<a href=\"{escapedHtml(url)}\" hreflang=\"en\" data-language=\"en\">{escapedHtml(site.word("notice.original"))}</a>"
+  "<div class=\"callout callout-info notice\" role=\"note\"><div class=\"callout-body\"><p>{escapedHtml(site.word(key))} {link}</p></div></div>"
 }
 
 /**
- * A page of the documentation: the navigation with the page's section open, the breadcrumbs, the title and the summary,
- * the body, the link that edits the page on the forge, the previous and next pages, and the contents beside it.
+ * A page of the documentation. A lesson of Start has its own layout, and so has the list of lessons; a page of the
+ * Guide or the Reference has the navigation of its level, its level and its way there above the title, the body,
+ * the link that edits it, the previous and next pages, and the contents beside it.
  */
 public fn documentationPageHtml(site: SiteContext, page: DocumentationPage): String {
-  const head = PageHead "{page.shownTitle} - TorbScript", page.summary, page.target
-  const part = if page.source.startsWith("guide/") { SitePart.Learn } else { SitePart.Docs }
-  const docs = docsDirectory site.version
-  const docsPage = page.target.withoutPrefix("{docs}/") ?? page.target
+  const level = levelOf page.source
+  if level == Level.Start {
+    return lessonPageHtml site, page
+  }
+  const target = site.targetOf page.source
+  const head = PageHead(
+    "{page.shownTitle} - TorbScript",
+    page.summary,
+    target,
+    page.target,
+    page.source,
+    untranslated: page.untranslated,
+  )
   var article: List<String> = ["<article class=\"article\">"]
-  article.append breadcrumbsHtml(site, page)
+  article.append levelLineHtml(site, level, page, target)
   if !page.title.isEmpty() {
     article.append "<h1 class=\"page-title\">{escapedHtml(page.title)}</h1>"
   }
   if !page.summary.isEmpty() && !page.title.isEmpty() {
     article.append "<p class=\"page-summary\">{escapedHtml(page.summary)}</p>"
   }
-  article.append "<div class=\"prose\">"
+  article.append page.notice
+  article.append "<div class=\"prose\"{englishMark(page.untranslated)}>"
   article.append page.body
   article.append "</div>"
-  article.append pageFooterHtml(site, page)
+  article.append pageFooterHtml(site, page, target)
   article.append "</article>"
   var main: List<String> = ["<div class=\"docs\">"]
-  const version = "<div class=\"version\" data-version-switch>Version <span class=\"version-label\">{escapedHtml(site.version)}</span></div>"
-  main.append "<aside class=\"sidebar\" id=\"navigation\">{version}{sidebarHtml(site.navigation, page.source, page.target, site.targets)}</aside>"
+  const version = "<div class=\"version\" data-version-switch>{escapedHtml(site.word("page.version"))} <span class=\"version-label\">{escapedHtml(site.version)}</span></div>"
+  const sidebar = SidebarContext(
+    page.source,
+    target,
+    localTargets(site),
+    site.titles,
+    site.word,
+    "{docsDirectory(site.version)}/reference/index.html",
+  )
+  main.append "<aside class=\"sidebar\" id=\"navigation\">{version}{sidebarHtml(site.navigation, level, sidebar)}</aside>"
   main.append "<main class=\"content\" id=\"main\">{article.joined(separator: "\n")}</main>"
-  main.append contentsHtml(page.contents)
+  main.append contentsHtml(site, page.contents)
   main.append "</div>"
-  pageHtml site, head, part, main.joined(separator: "\n"), docsPage, withMenu: true
+  pageHtml site, head, level, main.joined(separator: "\n"), "", withMenu: true
 }
 
-/** The way from the overview of the documentation to the section of the page, without the page itself. */
-fn breadcrumbsHtml(site: SiteContext, page: DocumentationPage): String {
-  if page.source == "index.md" {
-    return ""
+/** The targets of every source in the language of the site. */
+fn localTargets(site: SiteContext): Map<String, String> {
+  if site.language.prefix.isEmpty() {
+    return site.targets
+  }
+  var targets: Map<String, String> = [:]
+  for (source, target) in site.targets {
+    targets.set source, "{site.language.prefix}{target}"
+  }
+  targets
+}
+
+/**
+ * The line above the title of a page: the level it belongs to, and for the Reference the way from its overview to the
+ * section of the page.
+ */
+fn levelLineHtml(site: SiteContext, level: Level, page: DocumentationPage, target: String): String {
+  const name = escapedHtml site.word(levelKey(level))
+  const badge = "<span class=\"level level-{levelClass(level)}\">{name}</span>"
+  if level != Level.Reference || page.source == "index.md" {
+    return "<div class=\"page-level\">{badge}</div>"
   }
   var trail: List<NavigationEntry> = []
   trailTo trail, site.navigation, page.source
-  var items = ["<li><a href=\"{relativeUrl(page.target, site.targets.get("index.md") ?? "")}\">Docs</a></li>"]
+  var items: List<String> = []
   for entry in trail {
-    const url = relativeUrl(page.target, site.targets.get(entry.source) ?? "")
-    items.append "<li><a href=\"{escapedHtml(url)}\">{escapedHtml(entry.title)}</a></li>"
+    const url = relativeUrl target, site.targetOf(entry.source)
+    items.append "<li><a href=\"{escapedHtml(url)}\">{escapedHtml(site.titleOf(entry.source, entry.title))}</a></li>"
   }
-  "<ol class=\"breadcrumbs\" aria-label=\"Breadcrumbs\">{items.joined(separator: "")}</ol>"
+  if items.isEmpty() {
+    return "<div class=\"page-level\">{badge}</div>"
+  }
+  const label = escapedHtml site.word("page.breadcrumbs")
+  "<div class=\"page-level\">{badge}<ol class=\"breadcrumbs\" aria-label=\"{label}\">{items.joined(separator: "")}</ol></div>"
+}
+
+/** The attribute that says a body is English inside a page of another language, for a screen reader's voice. */
+fn englishMark(untranslated: Bool): String {
+  if untranslated { " lang=\"en\"" } else { "" }
+}
+
+/** The class a level's badge is drawn with. */
+public fn levelClass(level: Level): String {
+  match level {
+    .Start => "start"
+    .Guide => "guide"
+    .Reference => "reference"
+    .Site => "site"
+  }
 }
 
 /** Appends the entries above `source` to `trail`, outermost first. Answers whether `source` is below `entries`. */
@@ -309,30 +538,38 @@ fn trailTo(var trail: List<NavigationEntry>, entries: List<NavigationEntry>, sou
   false
 }
 
-fn pageFooterHtml(site: SiteContext, page: DocumentationPage): String {
+fn pageFooterHtml(site: SiteContext, page: DocumentationPage, target: String): String {
   const edit = "{forgeAddress}/src/branch/main/docs/{page.source}"
   var pieces = ["<footer class=\"page-footer\">"]
-  pieces.append "<a class=\"edit-link\" href=\"{escapedHtml(edit)}\">{editIcon}Edit this page on git.torb.dev</a>"
-  if page.previous.isSome() || page.next.isSome() {
-    pieces.append "<nav class=\"pager\" aria-label=\"Previous and next page\">"
-    if const Some(previous) = page.previous {
-      const url = relativeUrl page.target, previous.target
-      const label = "<span class=\"pager-label\">Previous</span><span class=\"pager-title\">{escapedHtml(previous.title)}</span>"
-      pieces.append "<a class=\"pager-previous\" href=\"{escapedHtml(url)}\" rel=\"prev\">{label}</a>"
-    }
-    if const Some(next) = page.next {
-      const url = relativeUrl page.target, next.target
-      const label = "<span class=\"pager-label\">Next</span><span class=\"pager-title\">{escapedHtml(next.title)}</span>"
-      pieces.append "<a class=\"pager-next\" href=\"{escapedHtml(url)}\" rel=\"next\">{label}</a>"
-    }
-    pieces.append "</nav>"
-  }
+  pieces.append "<a class=\"edit-link\" href=\"{escapedHtml(edit)}\">{editIcon}{escapedHtml(site.word("page.edit"))}</a>"
+  pieces.append pagerHtml(site, page, target)
   pieces.append "</footer>"
   pieces.joined separator: "\n"
 }
 
+/** The previous and the next page, the next one in the words of the step it is: onward, or into the next level. */
+fn pagerHtml(site: SiteContext, page: DocumentationPage, target: String): String {
+  if page.previous.isNone() && page.next.isNone() {
+    return ""
+  }
+  const label = escapedHtml site.word("page.pager")
+  var pieces = ["<nav class=\"pager\" aria-label=\"{label}\">"]
+  if const Some(previous) = page.previous {
+    const url = relativeUrl target, "{site.language.prefix}{previous.target}"
+    const text = "<span class=\"pager-label\">{escapedHtml(site.word("page.previous"))}</span><span class=\"pager-title\">{escapedHtml(previous.title)}</span>"
+    pieces.append "<a class=\"pager-previous\" href=\"{escapedHtml(url)}\" rel=\"prev\">{text}</a>"
+  }
+  if const Some(next) = page.next {
+    const url = relativeUrl target, "{site.language.prefix}{next.target}"
+    const text = "<span class=\"pager-label\">{escapedHtml(site.word(page.nextKey))}</span><span class=\"pager-title\">{escapedHtml(next.title)}</span>"
+    pieces.append "<a class=\"pager-next\" href=\"{escapedHtml(url)}\" rel=\"next\">{text}</a>"
+  }
+  pieces.append "</nav>"
+  pieces.joined separator: "\n"
+}
+
 /** The contents beside a page: its headings of level 2 and 3. A page with fewer than two has none. */
-fn contentsHtml(contents: List<ContentsEntry>): String {
+fn contentsHtml(site: SiteContext, contents: List<ContentsEntry>): String {
   if contents.length() < 2 {
     return "<aside class=\"toc\" aria-hidden=\"true\"></aside>"
   }
@@ -340,36 +577,178 @@ fn contentsHtml(contents: List<ContentsEntry>): String {
   for entry in contents {
     items.append "<li class=\"level-{entry.level}\"><a href=\"#{escapedHtml(entry.anchor)}\">{entry.html}</a></li>"
   }
-  "<aside class=\"toc\" aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><ul>{items.joined(separator: "")}</ul></aside>"
+  const title = escapedHtml site.word("page.contents")
+  "<aside class=\"toc\" aria-label=\"{title}\"><p class=\"toc-title\">{title}</p><ul>{items.joined(separator: "")}</ul></aside>"
+}
+
+/**
+ * A page of Start. The list of lessons is the index of `start/`; a lesson has its number and the number of lessons, a
+ * line that fills as the course goes on, the menu of every lesson and the arrows to its neighbours above the title,
+ * its rows of text beside code, and a large link to the next lesson at its end.
+ */
+fn lessonPageHtml(site: SiteContext, page: DocumentationPage): String {
+  const target = site.targetOf page.source
+  const head = PageHead(
+    "{page.shownTitle} - TorbScript",
+    page.summary,
+    target,
+    page.target,
+    page.source,
+    untranslated: page.untranslated,
+  )
+  const lessons = lessonsOf site.navigation
+  if page.source == levelIndex(Level.Start) {
+    return courseHtml site, page, head, lessons
+  }
+  var number = 0
+  for index in 0..lessons.length() {
+    if lessons[index].source == page.source {
+      number = index + 1
+    }
+  }
+  const total = lessons.length()
+  const counter = filled(
+    site.word("lesson.counter"),
+    [(name: "number", value: "{number}"), (name: "total", value: "{total}")],
+  )
+  const percent = if total == 0 { 0 } else { number * 100 / total }
+  const badge = "<span class=\"level level-start\">{escapedHtml(site.word("level.start"))}</span>"
+  var arrows: List<String> = []
+  if const Some(previous) = page.previous {
+    const url = relativeUrl target, "{site.language.prefix}{previous.target}"
+    arrows.append "<a class=\"button button-quiet button-icon\" href=\"{escapedHtml(url)}\" rel=\"prev\" aria-label=\"{escapedHtml(site.word("page.previous"))}: {escapedHtml(previous.title)}\">{backIcon}</a>"
+  }
+  if const Some(next) = page.next {
+    const url = relativeUrl target, "{site.language.prefix}{next.target}"
+    arrows.append "<a class=\"button button-quiet button-icon\" href=\"{escapedHtml(url)}\" rel=\"next\" aria-label=\"{escapedHtml(site.word("page.next"))}: {escapedHtml(next.title)}\">{arrowIcon}</a>"
+  }
+  const bar = [
+    "<div class=\"lesson-bar\">",
+    badge,
+    "<span class=\"lesson-counter\">{escapedHtml(counter)}</span>",
+    lessonMenuHtml(site, lessons, page.source, target),
+    "<span class=\"lesson-arrows\">{arrows.joined(separator: "")}</span>",
+    "</div>",
+    "<div class=\"lesson-progress\" aria-hidden=\"true\"><span style=\"width: {percent}%\"></span></div>",
+  ]
+  var main = ["<main class=\"lesson\" id=\"main\">", "<div class=\"lesson-head\">", bar.joined(separator: "")]
+  main.append "<h1 class=\"page-title\">{escapedHtml(page.title)}</h1>"
+  if !page.summary.isEmpty() {
+    main.append "<p class=\"page-summary\">{escapedHtml(page.summary)}</p>"
+  }
+  main.append page.notice
+  main.append "</div>"
+  main.append "<div class=\"lesson-body prose\"{englishMark(page.untranslated)}>{page.body}</div>"
+  main.append lessonFooterHtml(site, page, target)
+  main.append "</main>"
+  const extra = "data-lesson=\"{escapedHtml(page.source)}\""
+  pageHtml site, head, Level.Start, main.joined(separator: "\n"), extra, withMenu: false
+}
+
+/** The menu of every lesson, which opens without a script. The script marks the lessons read and solved. */
+fn lessonMenuHtml(site: SiteContext, lessons: List<NavigationEntry>, current: String, target: String): String {
+  var items: List<String> = []
+  for index in 0..lessons.length() {
+    const lesson = lessons[index]
+    const url = relativeUrl target, site.targetOf(lesson.source)
+    const marked = if lesson.source == current { " aria-current=\"page\"" } else { "" }
+    const title = escapedHtml site.titleOf(lesson.source, lesson.title)
+    items.append "<li><a href=\"{escapedHtml(url)}\" data-lesson-link=\"{escapedHtml(lesson.source)}\"{marked}><span class=\"lesson-number\">{index + 1}</span>{title}</a></li>"
+  }
+  const label = escapedHtml site.word("lesson.all")
+  "<details class=\"lesson-menu\"><summary>{label}</summary><ol class=\"lesson-menu-list\">{items.joined(separator: "")}</ol></details>"
+}
+
+/** The end of a lesson: the previous lesson, and the next one as the step to take - after the last, the Guide. */
+fn lessonFooterHtml(site: SiteContext, page: DocumentationPage, target: String): String {
+  var pieces = ["<footer class=\"lesson-footer\">"]
+  if const Some(previous) = page.previous {
+    const url = relativeUrl target, "{site.language.prefix}{previous.target}"
+    pieces.append "<a class=\"lesson-previous\" href=\"{escapedHtml(url)}\" rel=\"prev\">{backIcon}<span>{escapedHtml(previous.title)}</span></a>"
+  }
+  if const Some(next) = page.next {
+    const url = relativeUrl target, "{site.language.prefix}{next.target}"
+    const key = if page.nextKey == "page.next" { "lesson.next" } else { page.nextKey }
+    const label = "<span class=\"lesson-next-label\">{escapedHtml(site.word(key))}</span><span class=\"lesson-next-title\">{escapedHtml(next.title)}</span>"
+    pieces.append "<a class=\"lesson-next\" href=\"{escapedHtml(url)}\" rel=\"next\">{label}{arrowIcon}</a>"
+  }
+  pieces.append "</footer>"
+  pieces.joined separator: ""
+}
+
+/** The list of lessons: the course's line and summary, its introduction, and every lesson with its number. */
+fn courseHtml(site: SiteContext, page: DocumentationPage, head: PageHead, lessons: List<NavigationEntry>): String {
+  const target = head.page
+  var items: List<String> = []
+  for index in 0..lessons.length() {
+    const lesson = lessons[index]
+    const url = relativeUrl target, site.targetOf(lesson.source)
+    const title = escapedHtml site.titleOf(lesson.source, lesson.title)
+    const summary = escapedHtml(site.summaries.get(lesson.source) ?? "")
+    const text = "<span class=\"lesson-number\">{index + 1}</span><span class=\"lesson-name\">{title}</span><span class=\"lesson-summary\">{summary}</span>"
+    items.append "<li><a href=\"{escapedHtml(url)}\" data-lesson-link=\"{escapedHtml(lesson.source)}\">{text}</a></li>"
+  }
+  var main = ["<main class=\"course\" id=\"main\">", "<div class=\"course-head\">"]
+  main.append "<span class=\"level level-start\">{escapedHtml(site.word("level.start"))}</span>"
+  main.append "<h1 class=\"page-title\">{escapedHtml(page.title)}</h1>"
+  main.append "<p class=\"page-summary\">{escapedHtml(page.summary)}</p>"
+  if const Some(first) = lessons.first() {
+    const url = relativeUrl target, site.targetOf(first.source)
+    main.append "<div class=\"hero-actions\"><a class=\"button button-primary\" href=\"{escapedHtml(url)}\">{escapedHtml(site.word("lesson.begin"))}{arrowIcon}</a></div>"
+  }
+  main.append "</div>"
+  main.append page.notice
+  main.append "<div class=\"course-body\">"
+  main.append "<div class=\"course-intro prose\"{englishMark(page.untranslated)}>{page.body}</div>"
+  main.append "<ol class=\"lesson-list\">{items.joined(separator: "")}</ol>"
+  main.append "</div>"
+  main.append "</main>"
+  pageHtml site, head, Level.Start, main.joined(separator: "\n"), "", withMenu: false
 }
 
 /** A page of the site that is neither the front page nor documentation: the install page, the imprint, the privacy notice. */
-public fn plainPageHtml(site: SiteContext, target: String, title: String, summary: String, body: String): String {
-  const head = PageHead "{title} - TorbScript", summary, target
+public fn plainPageHtml(
+  site: SiteContext,
+  source: String,
+  target: String,
+  title: String,
+  summary: String,
+  body: String,
+  notice: String,
+  untranslated: Bool,
+): String {
+  const head = PageHead(
+    "{title} - TorbScript",
+    summary,
+    "{site.language.prefix}{target}",
+    target,
+    source,
+    untranslated: untranslated,
+  )
   var main = ["<main class=\"plain\" id=\"main\">", "<h1 class=\"page-title\">{escapedHtml(title)}</h1>"]
   if !summary.isEmpty() {
     main.append "<p class=\"page-summary\">{escapedHtml(summary)}</p>"
   }
-  main.append "<div class=\"prose\">{body}</div>"
+  main.append notice
+  main.append "<div class=\"prose\"{englishMark(untranslated)}>{body}</div>"
   main.append "</main>"
-  pageHtml site, head, SitePart.Other, main.joined(separator: "\n"), "", withMenu: false
+  pageHtml site, head, Level.Site, main.joined(separator: "\n"), "", withMenu: false
 }
 
 /** The page the server answers for a path that is not there, at any depth, so it links from the root of the host. */
 public fn missingPageHtml(site: SiteContext): String {
-  const head = PageHead "Not found - TorbScript", "This page does not exist.", "404.html", absolute: true
-  const docs = docsDirectory site.version
+  const head = PageHead "Not found - TorbScript", site.word("missing.summary"), "404.html", "404.html", absolute: true
   const main = [
     "<main class=\"plain\" id=\"main\">",
-    "<h1 class=\"page-title\">This page does not exist</h1>",
-    "<p class=\"page-summary\">The address may have changed with a version of the documentation, or it was never there.</p>",
+    "<h1 class=\"page-title\">{escapedHtml(site.word("missing.title"))}</h1>",
+    "<p class=\"page-summary\">{escapedHtml(site.word("missing.summary"))}</p>",
     "<div class=\"hero-actions\">",
-    "<a class=\"button button-primary\" href=\"/{docs}/index.html\">The documentation</a>",
-    "<a class=\"button button-secondary\" href=\"/\">The front page</a>",
+    "<a class=\"button button-primary\" href=\"/{site.targetOf("index.md")}\">{escapedHtml(site.word("missing.documentation"))}</a>",
+    "<a class=\"button button-secondary\" href=\"/\">{escapedHtml(site.word("missing.front"))}</a>",
     "</div>",
     "</main>",
   ]
-  pageHtml site, head, SitePart.Other, main.joined(separator: "\n"), "", withMenu: false
+  pageHtml site, head, Level.Site, main.joined(separator: "\n"), "", withMenu: false
 }
 
 /**
@@ -386,30 +765,54 @@ public fn heroMarkHtml(): String {
 }
 
 /**
- * The front page: a band of ink with the mark, the line, the category, the two install commands and the one red
- * button; then the tour, one panel per `##` section of `site/home.md` with its prose beside its code; then where to go
- * next. `summary` is the category line and the description a search engine shows.
+ * The front page: a band of ink with the mark, the line, what the language is in plain words, the two install commands
+ * and the one red button; then the sections of `site/home.md`. A section whose body is one list of links is the row of
+ * doors - each item a link and one sentence, labelled with the level it leads to - and every other section is a panel,
+ * its prose beside its code. `summary` is the line under the title and the description a search engine shows.
  */
-public fn frontPageHtml(site: SiteContext, summary: String, body: String, links: SiteLinks): String {
-  const head = PageHead "TorbScript - {siteSlogan}", summary, "index.html"
-  const docs = docsDirectory site.version
-  const installTarget = site.installPage
+public fn frontPageHtml(
+  site: SiteContext,
+  summary: String,
+  body: String,
+  links: SiteLinks,
+  untranslated: Bool,
+): String {
+  const path = "index.html"
+  const head = PageHead(
+    "TorbScript - {site.word("slogan")}",
+    summary,
+    "{site.language.prefix}{path}",
+    path,
+    "site/home.md",
+    untranslated: untranslated,
+  )
   const isRelease = (site.version.chars().first() ?? 'x').isDigit()
-  const label = if isRelease { "Install TorbScript {site.version}" } else { "Install TorbScript" }
+  const label = if isRelease {
+    filled site.word("install.version"), [(name: "version", value: site.version)]
+  } else {
+    site.word "install"
+  }
   const rows = [
-    installRowHtml("Linux, macOS", "$", installCommandPosix),
-    installRowHtml("Windows", "&gt;", installCommandWindows),
+    installRowHtml(site, site.word("install.posix"), "$", installCommandPosix),
+    installRowHtml(site, site.word("install.windows"), "&gt;", installCommandWindows),
   ]
+  const installUrl = relativeUrl head.page, "{site.language.prefix}{site.installPage}"
+  const learn = if site.targets.containsKey(levelIndex(Level.Start)) {
+    const url = relativeUrl head.page, site.targetOf(levelIndex(Level.Start))
+    "<a class=\"button button-secondary\" href=\"{escapedHtml(url)}\">{escapedHtml(site.word("front.learn"))}</a>"
+  } else {
+    ""
+  }
   const hero = [
     "<section class=\"hero on-ink\" aria-labelledby=\"hero-title\">",
     "<div class=\"hero-inner\">",
     "<div class=\"hero-text\">",
-    "<h1 class=\"hero-title\" id=\"hero-title\">{siteSlogan}</h1>",
+    "<h1 class=\"hero-title\" id=\"hero-title\">{escapedHtml(site.word("slogan"))}</h1>",
     "<p class=\"hero-category\">{escapedHtml(summary)}</p>",
-    "<div class=\"install\" aria-label=\"Install TorbScript\">{rows.joined(separator: "")}</div>",
+    "<div class=\"install\" aria-label=\"{escapedHtml(site.word("install"))}\">{rows.joined(separator: "")}</div>",
     "<div class=\"hero-actions\">",
-    "<a class=\"button button-cta\" href=\"{relativeUrl("index.html", installTarget)}\">{escapedHtml(label)}</a>",
-    "<a class=\"button button-secondary\" href=\"{docs}/guide/index.html\">Read the guide</a>",
+    "<a class=\"button button-cta\" href=\"{escapedHtml(installUrl)}\">{escapedHtml(label)}</a>",
+    learn,
     "</div>",
     "</div>",
     heroMarkHtml(),
@@ -417,101 +820,134 @@ public fn frontPageHtml(site: SiteContext, summary: String, body: String, links:
     "<div class=\"strata\" aria-hidden=\"true\"></div>",
     "</section>",
   ]
-  const destinations = [
-    destinationHtml(
-      "Documentation",
-      "The guide, the language reference, the toolchain, and why the language is the way it is.",
-      "{docs}/index.html",
-      "torb.dev/docs",
-    ),
-    destinationHtml(
-      "Reference",
-      "Every package of the standard library: its signatures, its doc comments and its examples.",
-      "{docs}/reference/index.html",
-      "torb.dev/docs/reference",
-    ),
-    destinationHtml(
-      "Packages",
-      "The registry: publish with torb publish, depend with torb add.",
-      registryAddress,
-      "packages.torb.dev",
-    ),
-    destinationHtml(
-      "Source",
-      "The compiler, the standard library and these pages, under the MIT License.",
-      forgeAddress,
-      "git.torb.dev",
-    ),
-  ]
-  const main = [
-    "<main id=\"main\">",
-    hero.joined(separator: "\n"),
-    "<div class=\"tour\">{tourHtml(body, links)}</div>",
-    "<nav class=\"destinations\" aria-label=\"Where to go next\">{destinations.joined(separator: "")}</nav>",
-    "</main>",
-  ]
-  pageHtml site, head, SitePart.Front, main.joined(separator: "\n"), "", withMenu: false
+  const main = ["<main id=\"main\">", hero.joined(separator: "\n"), frontSectionsHtml(site, body, links), "</main>"]
+  pageHtml site, head, Level.Site, main.joined(separator: "\n"), "", withMenu: false
 }
 
-fn installRowHtml(platform: String, prompt: String, command: String): String {
+fn installRowHtml(site: SiteContext, platform: String, prompt: String, command: String): String {
   const code = "<pre class=\"install-command\"><code><span class=\"prompt\">{prompt} </span>{escapedHtml(command)}</code></pre>"
-  const copy = "<button type=\"button\" class=\"copy-button\" data-copy=\"{escapedHtml(command)}\" hidden aria-label=\"Copy the command\">{copyIcon}<span>Copy</span></button>"
-  "<div class=\"install-row\"><span class=\"install-platform\">{platform}</span>{code}{copy}</div>"
-}
-
-fn destinationHtml(title: String, text: String, target: String, host: String): String {
-  const isExternal = target.startsWith "https://"
-  const url = if isExternal { target } else { relativeUrl "index.html", target }
-  const heading = "<span class=\"destination-title\">{escapedHtml(title)}{arrowIcon}</span>"
-  const parts = "{heading}<span class=\"destination-text\">{escapedHtml(text)}</span><span class=\"destination-host\">{host}</span>"
-  "<a class=\"destination\" href=\"{escapedHtml(url)}\">{parts}</a>"
+  const copy = "<button type=\"button\" class=\"copy-button\" data-copy=\"{escapedHtml(command)}\" hidden aria-label=\"{escapedHtml(site.word("copy.command"))}\">{copyIcon}<span>{escapedHtml(site.word("copy"))}</span></button>"
+  "<div class=\"install-row\"><span class=\"install-platform\">{escapedHtml(platform)}</span>{code}{copy}</div>"
 }
 
 /**
- * The tour of the front page: the body of `site/home.md` cut at its `##` headings into panels, the prose of a section
- * on one side and its code blocks on the other. What stands before the first heading is an introduction above them.
+ * The body of `site/home.md` below the hero, cut at its `##` headings: the section that is one list of links becomes
+ * the doors, every other one a panel. What stands before the first heading is an introduction above them.
  */
-fn tourHtml(body: String, links: SiteLinks): String {
+fn frontSectionsHtml(site: SiteContext, body: String, links: SiteLinks): String {
   const document = Markdown(frontMatter: false).parse(body)
-  var panels: List<String> = []
-  var text: List<MarkdownBlock> = []
-  var code: List<MarkdownBlock> = []
-  var hasHeading = false
+  var sections: List<List<MarkdownBlock>> = [[]]
   for block in document.blocks {
     const isSection = match block.content {
       .Heading(level, _) => level == 2
       _ => false
     }
     if isSection {
-      panels.append panelHtml(text, code, links, hasHeading)
-      text = [block]
-      code = []
-      hasHeading = true
+      sections.append([block])
       continue
     }
+    const last = sections.length() - 1
+    sections[last] = sections[last].appended(block)
+  }
+  var doors: List<String> = []
+  var panels: List<String> = []
+  for index in 0..sections.length() {
+    const blocks = sections[index]
+    if blocks.isEmpty() {
+      continue
+    }
+    match doorsOf(blocks) {
+      Some(found) => doors.append doorsHtml(site, found.heading, found.items, links)
+      None => panels.append panelHtml(blocks, links, index > 0)
+    }
+  }
+  var parts: List<String> = []
+  parts.appendAll doors
+  const shown = panels.filter({ !_.isEmpty() }).toList()
+  if !shown.isEmpty() {
+    parts.append "<div class=\"tour\">{shown.joined(separator: "\n")}</div>"
+  }
+  parts.joined separator: "\n"
+}
+
+/** A section that is a heading and one list whose every item starts with a link: the doors, with their heading. */
+fn doorsOf(blocks: List<MarkdownBlock>): (heading: List<MarkdownInline>, items: List<List<MarkdownInline>>)? {
+  if blocks.length() != 2 {
+    return None
+  }
+  const heading = match blocks[0].content {
+    .Heading(level, inlines) => if level == 2 { inlines } else { return None }
+    _ => {
+      return None
+    }
+  }
+  const list = match blocks[1].content {
+    .ItemList(found) => found
+    _ => {
+      return None
+    }
+  }
+  var items: List<List<MarkdownInline>> = []
+  for item in list.items {
+    const inlines = match item.blocks.first()?.content {
+      Some(.Paragraph(found)) => found
+      _ => {
+        return None
+      }
+    }
+    if const Some(.Link(_, _, _, _)) = inlines.first() {
+      items.append inlines
+    } else {
+      return None
+    }
+  }
+  (heading: heading, items: items)
+}
+
+/** The doors: a card per item, its link the title, the rest of the item the sentence, labelled with its level. */
+fn doorsHtml(
+  site: SiteContext,
+  heading: List<MarkdownInline>,
+  items: List<List<MarkdownInline>>,
+  links: SiteLinks,
+): String {
+  var cards: List<String> = []
+  for inlines in items {
+    if const Some(.Link(destination, _, children, _)) = inlines.first() {
+      const url = linkUrl links, destination
+      const source = destination.substringBefore("#") ?? destination
+      const level = levelOf(source.withoutPrefix("../") ?? source)
+      var rest: List<MarkdownInline> = []
+      for index in 1..inlines.length() {
+        rest.append inlines[index]
+      }
+      const text = plainText(rest).trim()
+      const badge = "<span class=\"level level-{levelClass(level)}\">{escapedHtml(site.word(levelKey(level)))}</span>"
+      const parts = "{badge}<span class=\"door-title\">{escapedHtml(plainText(children))}{arrowIcon}</span><span class=\"door-text\">{escapedHtml(text)}</span>"
+      cards.append "<a class=\"door door-{levelClass(level)}\" href=\"{escapedHtml(url)}\">{parts}</a>"
+    }
+  }
+  const title = escapedHtml plainText(heading)
+  "<section class=\"doors\" aria-labelledby=\"doors-title\"><h2 class=\"doors-title\" id=\"doors-title\">{title}</h2><div class=\"door-grid\">{cards.joined(separator: "")}</div></section>"
+}
+
+fn panelHtml(blocks: List<MarkdownBlock>, links: SiteLinks, isSection: Bool): String {
+  var text: List<MarkdownBlock> = []
+  var code: List<MarkdownBlock> = []
+  for block in blocks {
     if const .CodeBlock(_, _, _) = block.content {
       code.append block
     } else {
       text.append block
     }
   }
-  panels.append panelHtml(text, code, links, hasHeading)
-  panels.filter({ !_.isEmpty() }).toList().joined(separator: "\n")
-}
-
-fn panelHtml(text: List<MarkdownBlock>, code: List<MarkdownBlock>, links: SiteLinks, isSection: Bool): String {
   if text.isEmpty() && code.isEmpty() {
     return ""
   }
-  var codeHtml: List<String> = []
-  for block in code {
-    if const .CodeBlock(info, content, _) = block.content {
-      codeHtml.append codeBlockHtml(info, content)
-    }
-  }
   const prose = blocksHtml text, links
+  const codeHtml = blocksHtml code, links
   if !isSection {
-    return "<div class=\"tour-introduction prose\">{prose}{codeHtml.joined(separator: "")}</div>"
+    return "<div class=\"tour-introduction prose\">{prose}{codeHtml}</div>"
   }
-  "<section class=\"panel\"><div class=\"panel-text prose\">{prose}</div><div class=\"panel-code\">{codeHtml.joined(separator: "")}</div></section>"
+  "<section class=\"panel\"><div class=\"panel-text prose\">{prose}</div><div class=\"panel-code\">{codeHtml}</div></section>"
 }

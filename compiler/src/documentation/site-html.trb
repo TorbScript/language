@@ -18,6 +18,7 @@ use normalizePath from "../project/path"
 use highlightedCode, escapedHtml from "../reference/highlight"
 use Heading, anchorOf, words from "./markdown"
 use joinDocumentationPath, folderOf from "./tree"
+use expectedOutputOf from "./snippets"
 
 /**
  * What a page's links are resolved against: where the page is written, where its source is, and where every other
@@ -42,6 +43,47 @@ public type ContentsEntry {
   anchor: String
 }
 
+/**
+ * How a body is rendered beyond its links: the name a reader saves its runnable blocks as, whether a mount says how to
+ * run it locally, and whether the page is cut into rows of text beside code, which the lessons of Start are.
+ */
+public type BodyOptions {
+  /** What `data-file` of a mount holds: the page's file name with `.trb` */
+  file: String = "example.trb"
+  /** Whether a mount carries the line that runs it locally: the pages of Start */
+  showsLocalRun: Bool = false
+  /** Whether every `##` section is a row, its prose on one side and its code on the other */
+  inRows: Bool = false
+}
+
+/**
+ * The mark a rendered body writes where a word of the interface stands - the label of a block that does not compile, the
+ * expected output of an exercise - so one rendering serves every language: [localized] replaces each mark with the
+ * word of the language of the page.
+ */
+public fn labelMark(key: String): String {
+  "<!--label:{key}-->"
+}
+
+/** A text with every [labelMark] replaced by what `word` answers for its key. */
+public fn localized(html: String, word: (key: String) => String): String {
+  if !html.contains("<!--label:") {
+    return html
+  }
+  const pieces = html.split "<!--label:"
+  var parts = [pieces[0]]
+  for index in 1..pieces.length() {
+    match pieces[index].splitOnce("-->") {
+      Some(found) => {
+        parts.append escapedHtml(word(found.before))
+        parts.append found.after
+      }
+      None => parts.append pieces[index]
+    }
+  }
+  parts.joined separator: ""
+}
+
 /** A body as HTML, with the headings a table of contents lists and the text a search indexes. */
 public type RenderedBody {
   html: String
@@ -61,21 +103,156 @@ public type RenderedBody {
  *     const links = SiteLinks "docs/latest/index.html", "", [:], forge
  *     print renderedBody("Some *text*.", [], links).html
  */
-public fn renderedBody(body: String, headings: List<Heading>, links: SiteLinks): RenderedBody {
+public fn renderedBody(
+  body: String,
+  headings: List<Heading>,
+  links: SiteLinks,
+  options: BodyOptions = BodyOptions(),
+): RenderedBody {
   const document = Markdown(frontMatter: false).parse(body)
-  var renderer = SiteRenderer links, headings
-  renderer.blocks document.blocks, tight: false, topLevel: true
-  RenderedBody renderer.pieces.joined(separator: ""), renderer.contents, renderer.text.joined(separator: " ")
+  var renderer = SiteRenderer links, headings, options
+  renderer.exercises = exercisesOf document.blocks
+  renderer.topLevel document.blocks
+  const html = if options.inRows { rowsHtml renderer.rendered } else { renderer.pieces.joined separator: "" }
+  RenderedBody html, renderer.contents, renderer.text.joined(separator: " ")
 }
 
 /**
  * Blocks of a page as HTML, each heading with the anchor of its text: a part of a page, like a panel of the front
  * page, whose headings the page reader has not seen.
  */
-public fn blocksHtml(blocks: List<MarkdownBlock>, links: SiteLinks): String {
-  var renderer = SiteRenderer links, []
-  renderer.blocks blocks, tight: false, topLevel: true
+public fn blocksHtml(blocks: List<MarkdownBlock>, links: SiteLinks, options: BodyOptions = BodyOptions()): String {
+  var renderer = SiteRenderer links, [], options
+  renderer.exercises = exercisesOf blocks
+  renderer.topLevel blocks
   renderer.pieces.joined separator: ""
+}
+
+/** An exercise of a page: the position of its solution among the blocks, the solution's code and its output. */
+type ExerciseOf {
+  solution: Int
+  code: String
+  expected: List<String>
+}
+
+/**
+ * The exercises of a page by the position of their starting code among its blocks: each one's solution is the first
+ * `trb run` block after it and before the next exercise, which is what `docs check` holds a page to.
+ */
+fn exercisesOf(blocks: List<MarkdownBlock>): Map<Int, ExerciseOf> {
+  var found: Map<Int, ExerciseOf> = [:]
+  var open: Int? = None
+  for index in 0..blocks.length() {
+    if const .CodeBlock(info, code, _) = blocks[index].content {
+      const parts = words info
+      if parts.get(0) != "trb" {
+        continue
+      }
+      const marker = parts.get(1) ?? ""
+      if marker == "exercise" {
+        open = index
+        continue
+      }
+      if marker == "run" {
+        if const Some(start) = open {
+          const text = code.withoutSuffix("\n") ?? code
+          found.set start, ExerciseOf(index, text, expectedOutputOf(text))
+          open = None
+        }
+      }
+    }
+  }
+  found
+}
+
+/** One block of the top level as HTML, and what a row of a lesson needs to know about it. */
+type RenderedBlock {
+  html: String
+  /** A code block outside a folded `<details>`: the side of a row that holds code */
+  beside: Bool
+  /** A heading of level 2: the start of a row */
+  startsRow: Bool
+  /** Part of a folded `<details>`, or its fence: what stands below the text, and on a phone below the code */
+  folded: Bool
+}
+
+/**
+ * The blocks of a lesson cut into rows at their `##` headings: in every row the prose stands on one side and the code
+ * on the other, which puts the editor beside the text it belongs to, and what is folded - a hint, a solution - stands
+ * below the prose, which on a narrow screen is below the code. A row without code is prose alone.
+ */
+fn rowsHtml(blocks: List<RenderedBlock>): String {
+  var rows: List<String> = []
+  var text: List<String> = []
+  var folded: List<String> = []
+  var code: List<String> = []
+  for block in blocks {
+    if block.startsRow {
+      rows.append rowHtml(text, folded, code)
+      text = []
+      folded = []
+      code = []
+    }
+    if block.beside {
+      code.append block.html
+    } else if block.folded {
+      folded.append block.html
+    } else {
+      text.append block.html
+    }
+  }
+  rows.append rowHtml(text, folded, code)
+  rows.filter({ !_.isEmpty() }).toList().joined(separator: "\n")
+}
+
+fn rowHtml(text: List<String>, folded: List<String>, code: List<String>): String {
+  if text.isEmpty() && folded.isEmpty() && code.isEmpty() {
+    return ""
+  }
+  var parts = ["<div class=\"lesson-text\">{text.joined(separator: "")}</div>"]
+  if !code.isEmpty() {
+    parts.append "<div class=\"lesson-code\">{code.joined(separator: "")}</div>"
+  }
+  if !folded.isEmpty() {
+    parts.append "<div class=\"lesson-folded\">{folded.joined(separator: "")}</div>"
+  }
+  const kind = if code.isEmpty() { "lesson-row lesson-row-text" } else { "lesson-row" }
+  "<section class=\"{kind}\">{parts.joined(separator: "")}</section>"
+}
+
+/**
+ * A runnable block as the mount the playground takes over (docs/tooling/torb-docs-site.md, "Runnable blocks and
+ * exercises"): the highlighted code, which is all a reader sees without the playground, and the code itself in the
+ * attributes the playground reads. An exercise adds its expected output and its solution.
+ */
+fn mountHtml(code: String, options: BodyOptions, exercise: ExerciseOf?): String {
+  const file = escapedHtml options.file
+  const pre = "<div class=\"code-block\"><pre class=\"code language-trb\"><code>{highlightedCode(code)}</code></pre></div>"
+  const local = if options.showsLocalRun && exercise.isSome() {
+    "<p class=\"playground-local\">{labelMark("lesson.local")} <code>torb run {file}</code></p>"
+  } else {
+    ""
+  }
+  match exercise {
+    Some(found) => {
+      const expected = found.expected.joined separator: "\n"
+      const attributes = [
+        "data-playground=\"exercise\"",
+        "data-file=\"{file}\"",
+        "data-source=\"{escapedHtml(code)}\"",
+        "data-expected-output=\"{escapedHtml(expected)}\"",
+        "data-solution=\"{escapedHtml(found.code)}\"",
+      ]
+      const label = "<span class=\"playground-expected-label\">{labelMark("exercise.expected")}</span>"
+      const output = "<pre class=\"code\"><code>{escapedHtml(expected)}</code></pre>"
+      const shown = "<div class=\"playground-expected\">{label}{output}</div>"
+      "<div class=\"playground playground-exercise\" {attributes.joined(separator: " ")}>{pre}{shown}{local}</div>\n"
+    }
+    None => {
+      const attributes = "data-playground=\"run\" data-file=\"{file}\" data-source=\"{escapedHtml(code)}\""
+      "<div class=\"playground\" {attributes}>{pre}{local}</div>\n"
+    }
+  }
 }
 
 /**
@@ -171,7 +348,7 @@ fn calloutOf(label: String): String? {
   }
 }
 
-/** Whether a code block is a drawing: its lines are made of box-drawing characters and arrows, which Chivo Mono has not. */
+/** Whether a code block is a drawing: its lines are made of box-drawing characters and arrows, which Geist Mono has not. */
 fn isDrawing(text: String): Bool {
   for character in text.chars() {
     const code = Int.from character
@@ -187,14 +364,70 @@ type SiteRenderer {
   links: SiteLinks
   /** The headings of the top level, as the page reader found them */
   headings: List<Heading>
+  options: BodyOptions
   /** How many of them are written */
   var written: Int = 0
   var pieces: List<String> = []
   var contents: List<ContentsEntry> = []
   var text: List<String> = []
+  /** The exercises of the top level, by the position of their starting code */
+  var exercises: Map<Int, ExerciseOf> = [:]
+  /** The blocks of the top level, each as HTML, for the rows of a lesson */
+  var rendered: List<RenderedBlock> = []
 
   var fn write(piece: String) {
     pieces.append piece
+  }
+
+  /**
+   * The blocks of the top level, one by one: an exercise with its solution, a solution as the plain block it is inside
+   * its `<details>`, and every block remembered as HTML for the rows of a lesson.
+   */
+  var fn topLevel(blocks: List<MarkdownBlock>) {
+    var solutions: Set<Int> = []
+    for (_, exercise) in exercises {
+      solutions.insert exercise.solution
+    }
+    var folded = 0
+    for index in 0..blocks.length() {
+      const block = blocks[index]
+      const before = pieces.length()
+      const wasFolded = folded > 0
+      var beside = false
+      var isFence = false
+      match block.content {
+        .CodeBlock(info, code, _) => {
+          beside = folded == 0
+          const text = code.withoutSuffix("\n") ?? code
+          const parts = words info
+          const isTrb = parts.get(0) == "trb"
+          const marker = parts.get(1) ?? ""
+          if isTrb && marker == "exercise" {
+            write mountHtml(text, options, exercises.get(index))
+          } else if isTrb && marker == "run" && !solutions.contains(index) {
+            write mountHtml(text, options, exercise: None)
+          } else {
+            write codeBlockHtml(info, code)
+          }
+        }
+        .HtmlBlock(html) => {
+          isFence = html.contains("<details") || html.contains("</details")
+          folded = (folded + html.split("<details").length() - html.split("</details").length()).max(0)
+          self.block block, tight: false, topLevel: true
+        }
+        _ => self.block block, tight: false, topLevel: true
+      }
+      var written: List<String> = []
+      for at in before..pieces.length() {
+        written.append pieces[at]
+      }
+      const html = written.joined separator: ""
+      const startsRow = match block.content {
+        .Heading(level, _) => level == 2
+        _ => false
+      }
+      rendered.append RenderedBlock(html, beside, startsRow, wasFolded || isFence)
+    }
   }
 
   var fn blocks(blocks: List<MarkdownBlock>, tight: Bool, topLevel: Bool) {
@@ -215,7 +448,14 @@ type SiteRenderer {
       }
       .Heading(level, inlines) => heading level, inlines, topLevel
       .ThematicBreak => write "<hr>\n"
-      .CodeBlock(info, code, _) => write codeBlockHtml(info, code)
+      .CodeBlock(info, code, _) => {
+        const parts = words info
+        if parts.get(0) == "trb" && parts.get(1) == "run" {
+          write mountHtml(code.withoutSuffix("\n") ?? code, options, exercise: None)
+        } else {
+          write codeBlockHtml(info, code)
+        }
+      }
       .HtmlBlock(html) => write "{html}\n"
       .BlockQuote(children) => quote children
       .ItemList(list) => {
@@ -392,7 +632,7 @@ public fn codeBlockHtml(info: String, code: String): String {
   }
   const pre = "<pre class=\"{classes.joined(separator: " ")}\"><code>{inner}</code></pre>"
   if language == "trb" && marker == "error" {
-    const label = "<div class=\"code-label\">{calloutIcon("error")}<span>Does not compile</span></div>"
+    const label = "<div class=\"code-label\">{calloutIcon("error")}<span>{labelMark("code.error")}</span></div>"
     return "<div class=\"code-block code-block-error\">{label}{pre}</div>\n"
   }
   "<div class=\"code-block\">{pre}</div>\n"

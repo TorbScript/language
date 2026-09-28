@@ -7,6 +7,11 @@
  * [navigationOf] is the tree, [readingOrder] the order the previous and next links of a page follow, and [sidebarHtml]
  * the sidebar of one page, with the section of that page open and every other one closed.
  *
+ * Every page belongs to one of three levels, and each level has one door in the header (docs/tooling/torb-docs-site.md,
+ * "Three levels"): Start, the course for somebody who has never programmed, is `start/`; the Guide, for somebody who
+ * programs already, is `guide/`; the Reference is everything else. A page's sidebar and its previous and next links
+ * stay inside its level, and the last page of a level leads to the first of the next one.
+ *
  * # Related
  *
  * - `generateIndexes` of `index.trb` - the same order, written into the indexes.
@@ -25,6 +30,97 @@ public const projectSections: List<String> = ["design", "internals", "contributi
 
 /** The folder of the website's own pages: the site writes them at its root, and the navigation leaves them out. */
 public const siteFolder = "site"
+
+/** The folder of Start, the course for beginners. */
+public const startFolder = "start"
+
+/** The folder of the Guide, for programmers. */
+public const guideFolder = "guide"
+
+/** The level a page belongs to, which its label, its sidebar and its next step follow. */
+public type Level {
+  /** The course for somebody who has never programmed: `start/` */
+  case Start
+  /** The guide for somebody who programs already: `guide/` */
+  case Guide
+  /** Everything else: the language, the standard library, the toolchain, the reasons and the records */
+  case Reference
+  /** The pages of the website itself: the front page, the install page */
+  case Site
+}
+
+/** The level of a page, by the folder its source is in. */
+public fn levelOf(path: String): Level {
+  const top = path.split("/").first() ?? ""
+  const isFolder = path.contains "/"
+  if isFolder && top == startFolder {
+    return Level.Start
+  }
+  if isFolder && top == guideFolder {
+    return Level.Guide
+  }
+  if isFolder && top == siteFolder {
+    return Level.Site
+  }
+  Level.Reference
+}
+
+/** The index a level starts at: its door. */
+public fn levelIndex(level: Level): String {
+  match level {
+    .Start => "{startFolder}/index.md"
+    .Guide => "{guideFolder}/index.md"
+    .Reference => "index.md"
+    .Site => ""
+  }
+}
+
+/** The key of the level's name in the words of the interface. */
+public fn levelKey(level: Level): String {
+  match level {
+    .Start => "level.start"
+    .Guide => "level.guide"
+    .Reference => "level.reference"
+    .Site => ""
+  }
+}
+
+/** The lessons of Start in their order: the pages below `start/index.md`. */
+public fn lessonsOf(entries: List<NavigationEntry>): List<NavigationEntry> {
+  match entries.find({ _.source == levelIndex(Level.Start) }) {
+    Some(start) => start.children
+    None => []
+  }
+}
+
+/**
+ * Every source of one level in the order a reader goes through it: its index, then its pages. The Reference is the
+ * overview and every section that is neither Start nor the Guide, then the pages of the root.
+ */
+public fn levelOrder(entries: List<NavigationEntry>, level: Level): List<String> {
+  var order: List<String> = []
+  match level {
+    .Start => {
+      order.append levelIndex(level)
+      for entry in entries.filter({ _.source == levelIndex(Level.Start) }) {
+        appendInOrder order, entry.children
+      }
+    }
+    .Guide => {
+      order.append levelIndex(level)
+      for entry in entries.filter({ _.source == levelIndex(Level.Guide) }) {
+        appendInOrder order, entry.children
+      }
+    }
+    .Reference => {
+      order.append levelIndex(level)
+      const others = entries.filter({ levelOf(_.source) == Level.Reference }).toList()
+      appendInOrder order, others
+    }
+    .Site => {}
+  }
+  order
+}
 
 /** One entry of the navigation: a page, a section or a design document, with the entries below it. */
 public type NavigationEntry {
@@ -145,57 +241,99 @@ fn addSections(var sections: Map<String, String>, entries: List<NavigationEntry>
   }
 }
 
+/** What the sidebar of one page is drawn from besides the navigation: where it stands, and the words it shows. */
+public type SidebarContext {
+  /** The source of the current page */
+  current: String
+  /** Its output path, which every link is relative to */
+  page: String
+  targets: Map<String, String>
+  /** The title of every entry in the language of the page, by its source, where it differs from the English one */
+  titles: Map<String, String>
+  /** The words of the interface in the language of the page */
+  word: (key: String) => String
+  /** Where the generated reference of the standard library is, relative to the root of the site */
+  standardLibrary: String
+}
+
 /**
- * The sidebar of one page: the overview, the sections of the language and its tools, then the sections of the project.
- * The entries on the way to the current page are open, and the page itself is marked `aria-current`, which the
- * stylesheet draws as a bar in ink.
+ * The sidebar of one page, which shows only the page's level. The Guide is its index and its pages; the Reference is
+ * the overview, the sections of the language and its tools with the generated reference of the standard library after
+ * them, then the sections of the project. The entries on the way to the current page are open, and the page itself is
+ * marked `aria-current`, which the stylesheet draws as a bar in ink.
  */
-public fn sidebarHtml(
-  entries: List<NavigationEntry>,
-  current: String,
-  page: String,
-  targets: Map<String, String>,
-): String {
-  var main: List<NavigationEntry> = []
-  var project: List<NavigationEntry> = []
-  for entry in entries {
-    if projectSections.contains(entry.section) {
-      project.append entry
-    } else {
-      main.append entry
+public fn sidebarHtml(entries: List<NavigationEntry>, level: Level, context: SidebarContext): String {
+  var pieces: List<String> = [
+    "<nav class=\"navigation\" aria-label=\"{escapedHtml(context.word("page.navigation"))}\">",
+    "<ul>",
+  ]
+  match level {
+    .Start => {
+      for entry in entries.filter({ _.source == levelIndex(Level.Start) }) {
+        pieces.append entryHtml(entry.copy(children: []), context)
+        for child in entry.children {
+          pieces.append entryHtml(child, context)
+        }
+      }
     }
-  }
-  var pieces: List<String> = ["<nav class=\"navigation\" aria-label=\"Documentation\">", "<ul>"]
-  const overview = NavigationEntry "Overview", "index.md", "", []
-  pieces.append entryHtml(overview, current, page, targets)
-  for entry in main {
-    pieces.append entryHtml(entry, current, page, targets)
+    .Guide => {
+      for entry in entries.filter({ _.source == levelIndex(Level.Guide) }) {
+        pieces.append entryHtml(entry.copy(children: []), context)
+        for child in entry.children {
+          pieces.append entryHtml(child, context)
+        }
+      }
+    }
+    _ => {
+      var main: List<NavigationEntry> = []
+      var project: List<NavigationEntry> = []
+      for entry in entries {
+        if levelOf(entry.source) != Level.Reference {
+          continue
+        }
+        if projectSections.contains(entry.section) {
+          project.append entry
+        } else {
+          main.append entry
+        }
+      }
+      const overview = NavigationEntry context.word("page.overview"), "index.md", "", []
+      pieces.append entryHtml(overview, context)
+      for entry in main {
+        pieces.append entryHtml(entry, context)
+        if entry.source == "standard-library/index.md" {
+          const url = relativeUrl context.page, context.standardLibrary
+          pieces.append "<li><a href=\"{escapedHtml(url)}\">{escapedHtml(context.word("page.standardLibrary"))}</a></li>"
+        }
+      }
+      if !project.isEmpty() {
+        pieces.append "</ul>"
+        pieces.append "<p class=\"navigation-heading\">{escapedHtml(context.word("page.project"))}</p>"
+        pieces.append "<ul>"
+        for entry in project {
+          pieces.append entryHtml(entry, context)
+        }
+      }
+    }
   }
   pieces.append "</ul>"
-  if !project.isEmpty() {
-    pieces.append "<p class=\"navigation-heading\">The project</p>"
-    pieces.append "<ul>"
-    for entry in project {
-      pieces.append entryHtml(entry, current, page, targets)
-    }
-    pieces.append "</ul>"
-  }
   pieces.append "</nav>"
   pieces.joined separator: "\n"
 }
 
-fn entryHtml(entry: NavigationEntry, current: String, page: String, targets: Map<String, String>): String {
-  const target = targets.get(entry.source) ?? ""
-  const url = relativeUrl page, target
-  const isCurrent = entry.source == current
+fn entryHtml(entry: NavigationEntry, context: SidebarContext): String {
+  const target = context.targets.get(entry.source) ?? ""
+  const url = relativeUrl context.page, target
+  const isCurrent = entry.source == context.current
   const marked = if isCurrent { " aria-current=\"page\"" } else { "" }
-  const isOpen = !entry.children.isEmpty() && entry.leadsTo(current)
+  const isOpen = !entry.children.isEmpty() && entry.leadsTo(context.current)
   const classes = if entry.children.isEmpty() { "" } else if isOpen { " class=\"open\"" } else { " class=\"closed\"" }
-  var pieces = ["<li{classes}><a href=\"{escapedHtml(url)}\"{marked}>{escapedHtml(entry.title)}</a>"]
+  const title = context.titles.get(entry.source) ?? entry.title
+  var pieces = ["<li{classes}><a href=\"{escapedHtml(url)}\"{marked}>{escapedHtml(title)}</a>"]
   if isOpen {
     pieces.append "<ul>"
     for child in entry.children {
-      pieces.append entryHtml(child, current, page, targets)
+      pieces.append entryHtml(child, context)
     }
     pieces.append "</ul>"
   }

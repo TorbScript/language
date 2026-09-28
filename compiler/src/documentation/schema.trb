@@ -13,7 +13,7 @@
  */
 
 use DocumentationProblem, FrontMatter, Heading, anchorOf from "./markdown"
-use Page, Documentation, fileName from "./tree"
+use Page, Documentation, Translation, fileName from "./tree"
 
 /** Every field a page may carry. A field that is not in here is a typo, and a typo is silence. */
 public const knownFields: List<String> = [
@@ -27,6 +27,7 @@ public const knownFields: List<String> = [
   "prerequisites",
   "documents",
   "skill",
+  "translates",
 ]
 
 /** Every field a page has to carry, whatever its `kind`. */
@@ -47,6 +48,7 @@ public const kinds: List<String> = [
   "package",
   "glossary",
   "site",
+  "lesson",
 ]
 
 /** How far a page can be trusted. A `planned` page must never read like an available feature. */
@@ -98,6 +100,7 @@ public fn requiredSections(kind: String): List<String> {
     "tooling" => ["Synopsis", "What it does", "Examples", "Related"]
     "package" => ["Import", "Declarations", "Related"]
     "glossary" => ["Terms"]
+    "lesson" => ["Exercise", "Recap"]
     _ => []
   }
 }
@@ -123,11 +126,49 @@ public fn schemaProblems(documentation: Documentation, page: Page): List<Documen
   const shown = page.shown documentation.root
   var problems: List<DocumentationProblem> = []
   problems.appendAll fieldProblems(shown, page)
+  if page.frontMatter.has("translates") {
+    const note = "Only a translation below `translations/` says which version of its original it `translates`"
+    problems.append DocumentationProblem(shown, page.frontMatter.lineOf("translates"), note)
+  }
   const kind = page.frontMatter.text("kind") ?? ""
   const status = page.frontMatter.text("status") ?? ""
   problems.appendAll headingProblems(shown, page, kind)
   problems.appendAll bannerProblems(shown, page, status)
   problems.appendAll proseProblems(shown, page)
+  problems
+}
+
+/**
+ * What the schema asks of a translation: the fields of any page, the kind of its original, and headings that follow the
+ * rules of every heading. Its sections are not held to the English names a kind requires, its prose not to the English
+ * list of words that say nothing, and its banner is written in its own language.
+ */
+public fn translationSchemaProblems(
+  documentation: Documentation,
+  translation: Translation,
+): List<DocumentationProblem> {
+  const page = translation.page
+  const shown = page.shown documentation.root
+  var problems = fieldProblems shown, page
+  if !page.frontMatter.has("translates") {
+    const note = "A translation names the version of its original it translates: `translates: <the hash docs check names>`"
+    problems.append DocumentationProblem(shown, 1, note)
+  }
+  match documentation.pageAt(translation.original) {
+    Some(original) => {
+      const kind = page.frontMatter.text("kind") ?? ""
+      const originalKind = original.frontMatter.text("kind") ?? ""
+      if kind != originalKind {
+        const note = "A translation has the kind of its original, `{originalKind}`"
+        problems.append DocumentationProblem(shown, page.frontMatter.lineOf("kind"), note)
+      }
+    }
+    None => {
+      const note = "A translation mirrors the path of an English page, and `{translation.original}` is none"
+      problems.append DocumentationProblem(shown, 1, note)
+    }
+  }
+  problems.appendAll headingProblems(shown, page, "")
   problems
 }
 
@@ -378,10 +419,11 @@ fn indexSectionProblems(shown: String, page: Page, kind: String): List<Documenta
       titles.append heading.text
     }
   }
-  if titles.contains("What belongs here") {
+  if titles.contains("What belongs here") || titles.contains("Who this is for") {
     return []
   }
-  [DocumentationProblem(shown, 1, "An index of a folder has a section `## What belongs here`")]
+  const note = "An index of a folder has a section `## What belongs here`, or `## Who this is for` for beginners"
+  [DocumentationProblem(shown, 1, note)]
 }
 
 fn bannerProblems(shown: String, page: Page, status: String): List<DocumentationProblem> {

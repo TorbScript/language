@@ -1,7 +1,8 @@
 /**
  * The tests of `torb docs site`: the Markdown of a page as the site's HTML, the anchors of its headings, the links
- * between pages rewritten to the files they became, the search index, and the whole site of a documentation tree held
- * in a `Map` - the command is a pure function of it, so nothing here writes a file.
+ * between pages rewritten to the files they became, the search index, the three levels, the lessons with their mounts,
+ * the languages, and the whole site of a documentation tree held in a `Map` - the command is a pure function of it,
+ * so nothing here writes a file.
  */
 
 use test, group from "std/test"
@@ -9,8 +10,9 @@ use File from "std/fs"
 use normalizePath, parentPath, joinPath, pathDepth from "../src/project/path"
 use readPage from "../src/documentation/markdown"
 use documentationOf from "../src/documentation/tree"
-use SiteLinks, renderedBody, linkUrl, relativeUrl, codeBlockHtml from "../src/documentation/site-html"
-use navigationOf, readingOrder from "../src/documentation/site-navigation"
+use SiteLinks, renderedBody, linkUrl, relativeUrl, codeBlockHtml, localized from "../src/documentation/site-html"
+use Level, navigationOf, readingOrder, levelOf from "../src/documentation/site-navigation"
+use englishWords from "../src/documentation/site-strings"
 use SearchPage, IndexedPage, searchIndexOf, termsOf from "../src/documentation/site-search"
 use SiteSettings, buildSite, targetOf, brokenLinks from "../src/documentation/site"
 use brandTokens from "../src/documentation/site-tokens"
@@ -92,7 +94,8 @@ group "the body of a page" {
   test "a trb error block says that it does not compile" {
     const html = codeBlockHtml "trb error", "fixed.append 3\n// error: `append` needs a `var`\n"
     assert html.contains("code-block-error")
-    assert html.contains("Does not compile")
+    const words = englishWords()
+    assert localized(html, { words.get(_) ?? _ }).contains("Does not compile")
   }
 
   test "a var binding is marked as one that can be changed" {
@@ -227,6 +230,183 @@ group "the site" {
     assert first.contains("href=\"second.html\" rel=\"next\"")
     assert first.contains("{forge}/docs/guide/first.md")
     assert first.contains("<a href=\"second.html\">the second</a>")
+  }
+}
+
+/** The tree of [tree] with a course of two lessons, a page of the reference, and a German translation of one page. */
+fn levelTree(): Map<String, String> {
+  var files = tree()
+  files.set(
+    "start/index.md",
+    "---\ntitle: Learn to program\nsummary: The course.\nkind: index\nstatus: stable\norder: 5\n---\n\nThe course.\n",
+  )
+  files.set "start/first.md", lesson("First lesson", 1)
+  files.set "start/second.md", lesson("Second lesson", 2)
+  files.set "language/index.md", "---\ntitle: The language\nsummary: Every construct.\nkind: index\nstatus: stable\norder: 20\n---\n\nThe language.\n"
+  files.set "language/bindings.md", page("Bindings", "## Rules\n\nOne rule.\n")
+  files.set "translations/de/strings.json", "\{\"language\": \"Deutsch\", \"nav.reference\": \"Referenz\"\}"
+  files.set(
+    "translations/de/guide/first.md",
+    "---\ntitle: Erstens\nsummary: Der erste Schritt.\nkind: guide\nstatus: stable\ntranslates: 000000000000\n---\n\n## Ziel\n\nSiehe [den zweiten](second.md).\n",
+  )
+  files
+}
+
+/** A lesson: an example, an exercise with its solution folded, and a recap. */
+fn lesson(title: String, order: Int): String {
+  const body = [
+    "A value has a name.",
+    "",
+    "```trb run",
+    "print 1",
+    "// prints 1",
+    "```",
+    "",
+    "## Exercise",
+    "",
+    "Print 2.",
+    "",
+    "```trb exercise",
+    "print 0",
+    "```",
+    "",
+    "<details>",
+    "<summary>Solution</summary>",
+    "",
+    "```trb run",
+    "print 2",
+    "// prints 2",
+    "```",
+    "",
+    "</details>",
+    "",
+    "## Recap",
+    "",
+    "One line.",
+    "",
+  ]
+  "---\ntitle: {title}\nsummary: What this lesson teaches.\nkind: lesson\nstatus: stable\norder: {order}\n---\n\n{body.joined(separator: "\n")}"
+}
+
+group "the levels" {
+  test "a page belongs to the level of its folder" {
+    assert(levelOf("start/first.md") == Level.Start)
+    assert(levelOf("guide/first.md") == Level.Guide)
+    assert(levelOf("language/bindings.md") == Level.Reference)
+    assert(levelOf("index.md") == Level.Reference)
+    assert(levelOf("site/home.md") == Level.Site)
+  }
+
+  test "the header has one door per level, and marks the level of the page" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const guide = site.texts.get("docs/latest/guide/first.html") ?? ""
+    assert guide.contains("<a href=\"../start/index.html\">Start</a>")
+    assert guide.contains("<a href=\"index.html\" aria-current=\"page\">Guide</a>")
+    assert guide.contains("<a href=\"../index.html\">Reference</a>")
+    assert guide.contains("<span class=\"level level-guide\">Guide</span>")
+  }
+
+  test "the sidebar of a page shows only its level" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const guide = site.texts.get("docs/latest/guide/first.html") ?? ""
+    const sidebar = guide.substringAfter("<aside class=\"sidebar\"").expect("a sidebar").substringBefore("</aside>")
+      ?? ""
+    assert sidebar.contains("Second")
+    assert(!sidebar.contains("Bindings"))
+    const reference = site.texts.get("docs/latest/language/bindings.html") ?? ""
+    const other = reference.substringAfter("<aside class=\"sidebar\"").expect("a sidebar").substringBefore("</aside>")
+      ?? ""
+    assert other.contains("Bindings")
+    assert(!other.contains("Second"))
+  }
+
+  test "the last lesson leads to the guide, and the last page of the guide to the reference" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const last = site.texts.get("docs/latest/start/second.html") ?? ""
+    assert last.contains("Continue with the guide")
+    assert last.contains("href=\"../guide/index.html\" rel=\"next\"")
+    const guide = site.texts.get("docs/latest/guide/second.html") ?? ""
+    assert guide.contains("Go deep: the reference")
+  }
+}
+
+group "the lessons" {
+  test "a lesson shows its number, and its rows put the code beside the text" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const first = site.texts.get("docs/latest/start/first.html") ?? ""
+    assert first.contains("Lesson 1 of 2")
+    assert first.contains("<section class=\"lesson-row\"><div class=\"lesson-text\">")
+    assert first.contains("<div class=\"lesson-code\"><div class=\"playground\" data-playground=\"run\"")
+    assert first.contains("data-lesson=\"start/first.md\"")
+  }
+
+  test "an exercise is a mount with its expected output and its solution, and the solution stays folded" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const first = site.texts.get("docs/latest/start/first.html") ?? ""
+    assert first.contains("data-playground=\"exercise\" data-file=\"first.trb\" data-source=\"print 0\"")
+    assert first.contains("data-expected-output=\"2\" data-solution=\"print 2\n// prints 2\"")
+    assert first.contains("Expected output")
+    assert first.contains("<div class=\"lesson-folded\">")
+    assert(first.split("data-playground=").length() == 3)
+  }
+
+  test "a run block of any page is a mount, and runs locally only in a lesson" {
+    const links = SiteLinks "docs/0.2/guide/a.html", "guide", [:], forge
+    const html = renderedBody("```trb run\nprint 1\n// prints 1\n```\n", [], links).html
+    assert html.contains("<div class=\"playground\" data-playground=\"run\" data-file=\"example.trb\"")
+    assert html.contains("data-source=\"print 1\n// prints 1\"")
+    assert(!html.contains("playground-local"))
+  }
+
+  test "the list of lessons numbers every lesson" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const course = site.texts.get("docs/latest/start/index.html") ?? ""
+    assert course.contains("<span class=\"lesson-number\">2</span><span class=\"lesson-name\">Second lesson</span>")
+    assert course.contains("Start with lesson 1")
+  }
+}
+
+group "the languages" {
+  test "every page is written in every language, and one without a translation says so" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    assert site.texts.containsKey("de/index.html")
+    assert site.texts.containsKey("de/docs/latest/search-index.json")
+    const untranslated = site.texts.get("de/docs/latest/guide/second.html") ?? ""
+    assert untranslated.contains("<html lang=\"de\"")
+    assert untranslated.contains("This page is not translated yet")
+    assert untranslated.contains("<meta name=\"robots\" content=\"noindex\">")
+    assert untranslated.contains(">Referenz</a>")
+    assert(site.problems.map({ _.show() }).toList() == [])
+  }
+
+  test "a translated page is in its language, names its other versions, and is found by the search" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const translated = site.texts.get("de/docs/latest/guide/first.html") ?? ""
+    assert translated.contains("<h1 class=\"page-title\">Erstens</h1>")
+    assert translated.contains("<a href=\"second.html\">den zweiten</a>")
+    assert translated.contains("hreflang=\"de\" href=\"https://torb.dev/de/docs/latest/guide/first.html\"")
+    assert translated.contains("hreflang=\"x-default\" href=\"https://torb.dev/docs/latest/guide/first.html\"")
+    assert translated.contains("parts of it may be outdated")
+    const english = site.texts.get("docs/latest/guide/first.html") ?? ""
+    assert english.contains("hreflang=\"de\"")
+    const search = site.texts.get("de/docs/latest/search-index.json") ?? ""
+    assert search.contains("Erstens")
+  }
+
+  test "the switcher links the same page in every language" {
+    const site = buildSite documentationOf("docs", levelTree()), settings()
+    const english = site.texts.get("docs/latest/guide/first.html") ?? ""
+    assert english.contains("href=\"../../../de/docs/latest/guide/first.html\" hreflang=\"de\" lang=\"de\" data-language=\"de\"")
+    assert english.contains(">Deutsch</a>")
+    const german = site.texts.get("de/docs/latest/guide/first.html") ?? ""
+    assert german.contains("href=\"../../../../docs/latest/guide/first.html\" hreflang=\"en\" lang=\"en\" data-language=\"en\"")
+  }
+
+  test "a site in one language has no switcher" {
+    const site = buildSite documentationOf("docs", tree()), settings()
+    const front = site.texts.get("index.html") ?? ""
+    assert(!front.contains("language-menu"))
+    assert(!site.texts.containsKey("de/index.html"))
   }
 }
 

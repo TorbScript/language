@@ -21,6 +21,7 @@ use IoError from "std/fs"
 use Snippet, SnippetKind, collectSnippets, verifySyntax, verifyTypes, typeCheckSnippets from "./snippets"
 use NativeOptions, nativeSnippetProblems from "./native"
 use generateIndexes, staleIndexes from "./index"
+use translationProblems, staleTranslations from "./translations"
 
 /** What one run of `torb docs check` found and counted: the problems, and the numbers a green run prints. */
 public type CheckedDocumentation {
@@ -31,6 +32,8 @@ public type CheckedDocumentation {
   snippets: Int
   /** Every `trb skip` with its reason, so a skip is visible without reading the sources */
   skipped: List<String>
+  /** Every translation whose original changed since it was made: a note, not a problem */
+  staleTranslations: List<String> = []
 }
 
 /**
@@ -46,6 +49,7 @@ public fn checkDocumentation(documentation: Documentation, exists: PathExists): 
     problems.appendAll schemaProblems(documentation, page)
   }
   problems.appendAll linkProblems(documentation, exists)
+  problems.appendAll translationProblems(documentation)
   const indexes = generateIndexes documentation
   problems.appendAll indexes.problems
   problems.appendAll staleIndexes(documentation, indexes)
@@ -64,6 +68,7 @@ public fn checkDocumentation(documentation: Documentation, exists: PathExists): 
     documentation.folders.length(),
     collected.snippets.length(),
     skipped,
+    staleTranslations(documentation),
   )
 }
 

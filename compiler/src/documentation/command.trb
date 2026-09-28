@@ -144,6 +144,9 @@ public fn runCheck(options: DocumentationOptions): Result<Int, IoError> {
     problems.appendAll(checkSnippets(documentation, standardLibrary, nativeOptions)?)
   }
   const count = reportProblems problems
+  for stale in checked.staleTranslations {
+    printError "outdated: {stale}"
+  }
   if count > 0 {
     printError ""
     printError "{counted(count, "problem")} in {counted(checked.pages, "page")}"
@@ -262,12 +265,13 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   if count > 0 {
     return count
   }
+  const pages = "{counted(site.pages / site.languages.max(1), "page")} of {version} in {counted(site.languages, "language")}"
   if options.onlyCheck {
-    print "{counted(site.pages, "page")} of {version}, {counted(site.texts.length() + site.copies.length(), "file")}, no broken link"
+    print "{pages}, {counted(site.texts.length() + site.copies.length(), "file")}, no broken link"
     return 0
   }
   const written = writeBuiltSite(options.out, brand, site)?
-  print "{counted(site.pages, "page")} of {version}: wrote {counted(written, "file")} to {options.out}"
+  print "{pages}: wrote {counted(written, "file")} to {options.out}"
   0
 }
 

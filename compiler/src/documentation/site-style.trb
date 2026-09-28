@@ -17,7 +17,7 @@
  */
 
 /**
- * The `@font-face` rules of Chivo and Chivo Mono, self-hosted: `prefix` is where the two `.woff2` files are, relative
+ * The `@font-face` rules of Chivo and Geist Mono, self-hosted: `prefix` is where the two `.woff2` files are, relative
  * to the stylesheet or from the root of the host. Both are variable fonts, so one file carries every weight.
  *
  * # Examples
@@ -35,8 +35,8 @@ public fn fontFaces(prefix: String): String {
     \}
 
     @font-face \{
-      font-family: "Chivo Mono";
-      src: url("{prefix}chivo-mono.woff2") format("woff2");
+      font-family: "Geist Mono";
+      src: url("{prefix}GeistMono-Variable.woff2") format("woff2");
       font-weight: 100 900;
       font-style: normal;
       font-display: swap;
@@ -45,10 +45,14 @@ public fn fontFaces(prefix: String): String {
 }
 
 /**
- * What runs before the page is painted, inline in its head: the theme somebody chose last time with the toggle, and
- * whether the reader comes from another page of the site, who has seen the logo of the front page assemble already.
- * Nothing is stored for the second: the page it came from says so, so the site keeps nothing on a reader's device that
- * the reader did not ask for. Without storage the theme follows the system.
+ * What runs before the page is painted, inline in its head: the theme somebody chose last time with the toggle,
+ * whether the reader comes from another page of the site, who has seen the logo of the front page assemble already,
+ * and the language. Nothing is stored for the second: the page it came from says so, so the site keeps nothing on a
+ * reader's device that the reader did not ask for. Without storage the theme follows the system.
+ *
+ * A reader who arrives at an English page from elsewhere, has never picked a language with the switcher, and whose
+ * browser prefers a language of the site over English, is sent to the same page in that language. A page in another
+ * language never sends anybody anywhere, and a reader who came from the site itself is not sent either.
  */
 public const headScript = raw"""
   try {
@@ -62,6 +66,31 @@ public const headScript = raw"""
       document.documentElement.classList.add("assembled");
     }
   } catch (error) {}
+  (function () {
+    var page = document.documentElement;
+    var path = page.getAttribute("data-path");
+    var languages = (page.getAttribute("data-languages") || "").split(" ");
+    var chosen = null;
+    var fromSite = false;
+    try {
+      chosen = localStorage.getItem("torb-language");
+    } catch (error) {}
+    try {
+      fromSite = Boolean(document.referrer) && new URL(document.referrer).origin === location.origin;
+    } catch (error) {}
+    if (path !== null && page.lang === "en" && languages.length > 1 && !chosen && !fromSite && navigator.languages) {
+      for (var at = 0; at < navigator.languages.length; at++) {
+        var wanted = navigator.languages[at].toLowerCase().split("-")[0];
+        if (wanted === "en") {
+          break;
+        }
+        if (languages.indexOf(wanted) > 0) {
+          location.replace(page.getAttribute("data-site-root") + wanted + "/" + path);
+          break;
+        }
+      }
+    }
+  })();
   """
 
 /** The type, the shell, the buttons, the code and the tables: what the documentation site and the reference share. */
@@ -167,6 +196,7 @@ public const baseStylesheet = raw"""
   pre,
   samp {
     font-family: var(--torb-font-mono);
+    font-variant-ligatures: var(--torb-font-mono-ligatures);
     font-feature-settings: var(--torb-font-mono-features);
   }
 
@@ -1257,7 +1287,7 @@ public const siteStylesheet = raw"""
     gap: 64px;
     max-width: 1160px;
     margin: 0 auto;
-    padding: 96px 24px 104px;
+    padding: 64px 24px 72px;
   }
 
   .hero-title {
@@ -1335,7 +1365,7 @@ public const siteStylesheet = raw"""
   }
 
   .install {
-    max-width: 640px;
+    max-width: 700px;
     margin: 0 0 28px;
     background: var(--torb-code);
     border: 1px solid var(--torb-border);
@@ -1344,7 +1374,7 @@ public const siteStylesheet = raw"""
 
   .install-row {
     display: grid;
-    grid-template-columns: 136px minmax(0, 1fr) auto;
+    grid-template-columns: 124px minmax(0, 1fr) auto;
     align-items: center;
     min-height: 50px;
     padding-right: 7px;
@@ -1443,46 +1473,674 @@ public const siteStylesheet = raw"""
     padding: 18px 20px;
   }
 
-  .destinations {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 16px;
-    max-width: 1160px;
-    margin: 0 auto;
-    padding: 40px 24px 112px;
+  /* The three doors on a phone: a row of their own below the header, which scrolls away with the page. */
+
+  .level-bar {
+    display: none;
   }
 
-  .destination {
+  /* The language: a menu of links in their own names, which opens without a script. */
+
+  .language-menu {
+    position: relative;
+  }
+
+  .language-button {
+    gap: 6px;
+    padding: 0 10px;
+    list-style: none;
+  }
+
+  .language-button::-webkit-details-marker {
+    display: none;
+  }
+
+  .language-code {
+    font-size: var(--torb-type-small-size);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .language-list {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 35;
+    min-width: 168px;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--torb-surface-raised);
+    border: 1px solid var(--torb-border-strong);
+    border-radius: var(--torb-radius-medium);
+    box-shadow: var(--torb-shadow-overlay);
+  }
+
+  .language-menu[open] .language-list {
+    animation: drop-in var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .language-list a {
+    display: block;
+    padding: 8px 10px;
+    font-size: var(--torb-type-ui-size);
+    color: var(--torb-text-muted);
+    text-decoration: none;
+    border-radius: var(--torb-radius-small);
+  }
+
+  .language-list a:hover {
+    color: var(--torb-text);
+    background: var(--torb-surface-hover);
+  }
+
+  .language-list a[aria-current] {
+    font-weight: 600;
+    color: var(--torb-text);
+    box-shadow: inset 2px 0 0 var(--torb-text);
+  }
+
+  @keyframes drop-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .language-menu[open] .language-list,
+    .lesson-menu[open] .lesson-menu-list {
+      animation: none;
+    }
+  }
+
+  /* The level of a page: a label with a square in the colour of its level - Start, Guide, Reference. */
+
+  .level {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 8px 3px 7px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--torb-text);
+    border: 1px solid var(--torb-border-strong);
+    border-radius: var(--torb-radius-small);
+  }
+
+  .level::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    background: var(--torb-text);
+  }
+
+  .level-start::before {
+    background: var(--torb-success-accent);
+  }
+
+  .level-guide::before {
+    background: var(--torb-info-accent);
+  }
+
+  .page-level {
     display: flex;
-    flex-direction: column;
-    padding: 20px 20px 18px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    margin-bottom: 18px;
+  }
+
+  .page-level .breadcrumbs {
+    margin: 0;
+  }
+
+  .notice {
+    margin: 0 0 28px;
+  }
+
+  /* A runnable block: code the playground takes over, and without it, code with a way to run it locally. */
+
+  .playground {
+    margin: 0 0 20px;
+  }
+
+  .playground .code-block {
+    margin-bottom: 0;
+  }
+
+  .playground-local {
+    margin: 8px 0 0;
+    font-size: var(--torb-type-small-size);
+    color: var(--torb-text-muted);
+  }
+
+  .playground-expected {
+    margin-top: -1px;
+    background: var(--torb-surface);
+    border: 1px solid var(--torb-border);
+    border-radius: 0 0 var(--torb-radius-small) var(--torb-radius-small);
+  }
+
+  .playground-exercise .code-block pre.code {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .playground-expected-label {
+    display: block;
+    padding: 8px 14px 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--torb-text-subtle);
+  }
+
+  .playground-expected pre.code {
+    margin: 0;
+    padding: 4px 14px 10px;
+    background: transparent;
+    border: 0;
+  }
+
+  .playground,
+  .playground pre,
+  .playground code,
+  .playground textarea {
+    font-variant-ligatures: var(--torb-font-mono-ligatures);
+    font-feature-settings: var(--torb-font-mono-features);
+  }
+
+  /* Folded details - a hint, a solution: a hairline box whose triangle turns quickly. */
+
+  .prose details {
+    margin: 0 0 12px;
+    border: 1px solid var(--torb-border);
+    border-radius: var(--torb-radius-small);
+    transition: border-color var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .prose details[open] {
+    border-color: var(--torb-border-strong);
+  }
+
+  .prose summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    border-radius: var(--torb-radius-small);
+  }
+
+  .prose summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .prose summary::before {
+    content: "";
+    width: 0;
+    height: 0;
+    border-left: 6px solid var(--torb-text-muted);
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    transition: transform var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .prose details[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
+  .prose summary:hover {
+    background: var(--torb-surface-hover);
+  }
+
+  .prose details > :not(summary) {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .prose details > :last-child {
+    margin-bottom: 14px;
+  }
+
+  /* A lesson of Start: its place in the course above the title, then rows of text beside code. */
+
+  .lesson {
+    width: 100%;
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 28px 32px 88px;
+  }
+
+  .lesson-head {
+    margin-bottom: 36px;
+  }
+
+  .lesson-head .page-title,
+  .lesson-head .page-summary,
+  .lesson-head .notice {
+    max-width: 760px;
+  }
+
+  .lesson-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    margin-bottom: 12px;
+  }
+
+  .lesson-counter {
+    font-size: var(--torb-type-small-size);
+    font-weight: 500;
+    color: var(--torb-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .lesson-arrows {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: auto;
+  }
+
+  .lesson-progress {
+    height: 2px;
+    margin-bottom: 28px;
+    background: var(--torb-border);
+  }
+
+  .lesson-progress span {
+    display: block;
+    height: 100%;
+    background: var(--torb-text);
+    transition: width var(--torb-duration-standard) var(--torb-easing-exact);
+  }
+
+  .lesson-menu {
+    position: relative;
+  }
+
+  .lesson-menu summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 10px;
+    font-size: var(--torb-type-small-size);
+    font-weight: 500;
+    color: var(--torb-text);
+    cursor: pointer;
+    list-style: none;
+    border: 1px solid var(--torb-border-control);
+    border-radius: var(--torb-radius-small);
+    transition: background-color var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-menu summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .lesson-menu summary::after {
+    content: "";
+    width: 0;
+    height: 0;
+    border-top: 5px solid var(--torb-text-muted);
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    transition: transform var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-menu[open] summary::after {
+    transform: rotate(180deg);
+  }
+
+  .lesson-menu summary:hover {
+    background: var(--torb-surface-hover);
+  }
+
+  .lesson-menu-list {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    z-index: 25;
+    width: 320px;
+    max-height: 70vh;
+    overflow-y: auto;
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--torb-surface-raised);
+    border: 1px solid var(--torb-border-strong);
+    border-radius: var(--torb-radius-medium);
+    box-shadow: var(--torb-shadow-overlay);
+  }
+
+  .lesson-menu[open] .lesson-menu-list {
+    animation: drop-in var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-menu-list a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    font-size: var(--torb-type-ui-size);
+    color: var(--torb-text-muted);
+    text-decoration: none;
+    border-radius: var(--torb-radius-small);
+  }
+
+  .lesson-menu-list a:hover {
+    color: var(--torb-text);
+    background: var(--torb-surface-hover);
+  }
+
+  .lesson-menu-list a[aria-current] {
+    font-weight: 600;
+    color: var(--torb-text);
+    box-shadow: inset 2px 0 0 var(--torb-text);
+  }
+
+  .lesson-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 24px;
+    height: 24px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--torb-text-muted);
+    border: 1px solid var(--torb-border-strong);
+    border-radius: 50%;
+    transition:
+      background-color var(--torb-duration-quick) var(--torb-easing-exact),
+      color var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .seen .lesson-number {
+    color: var(--torb-text);
+    border-color: var(--torb-text);
+  }
+
+  .solved .lesson-number {
+    color: var(--torb-background);
+    background: var(--torb-success-accent);
+    border-color: var(--torb-success-accent);
+  }
+
+  .lesson-body {
+    max-width: none;
+  }
+
+  .lesson-row {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas:
+      "text code"
+      "folded code";
+    align-items: start;
+    column-gap: 48px;
+    padding: 32px 0;
+    border-top: 1px solid var(--torb-border);
+  }
+
+  .lesson-text {
+    grid-area: text;
+  }
+
+  .lesson-code {
+    grid-area: code;
+  }
+
+  .lesson-folded {
+    grid-area: folded;
+    margin-top: 8px;
+  }
+
+  .lesson-row:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .lesson-row-text {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas:
+      "text"
+      "folded";
+  }
+
+  .lesson-row-text .lesson-text,
+  .lesson-row-text .lesson-folded {
+    max-width: 760px;
+  }
+
+  .lesson-text > :first-child,
+  .lesson-code > :first-child {
+    margin-top: 0;
+  }
+
+  .lesson-text > :last-child,
+  .lesson-code > :last-child,
+  .lesson-folded > :last-child {
+    margin-bottom: 0;
+  }
+
+  .lesson-text h2 {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+    font-size: var(--torb-type-heading-3-size);
+  }
+
+  .lesson-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 40px;
+    padding-top: 28px;
+    border-top: 1px solid var(--torb-border);
+  }
+
+  .lesson-previous {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--torb-type-ui-size);
+    color: var(--torb-text-muted);
+    text-decoration: none;
+  }
+
+  .lesson-previous:hover {
+    color: var(--torb-text);
+  }
+
+  .lesson-previous svg,
+  .lesson-next svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+
+  .lesson-next {
+    display: inline-grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 18px;
+    margin-left: auto;
+    padding: 12px 18px 12px 20px;
+    color: var(--torb-button-primary-text);
+    text-decoration: none;
+    background: var(--torb-button-primary-background);
+    border: 1px solid var(--torb-button-primary-border);
+    border-radius: var(--torb-radius-small);
+    transition: background-color var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-next:hover {
+    background: var(--torb-button-primary-background-hover);
+  }
+
+  .lesson-next svg {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    transition: transform var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-next:hover svg {
+    transform: translateX(3px);
+  }
+
+  .lesson-next-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.72;
+  }
+
+  .lesson-next-title {
+    font-size: 1.0625rem;
+    font-weight: 700;
+  }
+
+  /* The list of lessons: the course's head, its introduction, and every lesson as a numbered line. */
+
+  .course {
+    width: 100%;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 48px 24px 96px;
+  }
+
+  .course-head {
+    margin-bottom: 36px;
+  }
+
+  .course-head .level {
+    margin-bottom: 18px;
+  }
+
+  .course-head .page-summary {
+    margin-bottom: 28px;
+  }
+
+  .course-intro {
+    margin-bottom: 32px;
+  }
+
+  .lesson-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--torb-border);
+  }
+
+  .lesson-list a {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: 16px;
+    row-gap: 2px;
+    align-items: center;
+    padding: 14px 12px;
     color: var(--torb-text);
     text-decoration: none;
-    border: 1px solid var(--torb-border);
+    border-bottom: 1px solid var(--torb-border);
+    transition: background-color var(--torb-duration-quick) var(--torb-easing-exact);
+  }
+
+  .lesson-list a:hover {
+    background: var(--torb-surface);
+  }
+
+  .lesson-list .lesson-number {
+    grid-row: 1 / span 2;
+    width: 30px;
+    height: 30px;
+    font-size: 0.8125rem;
+  }
+
+  .lesson-name {
+    font-weight: 700;
+  }
+
+  .lesson-summary {
+    grid-column: 2;
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    color: var(--torb-text-muted);
+  }
+
+  /* The doors of the front page: one card per level, each with its label and one sentence. */
+
+  .doors {
+    max-width: 1160px;
+    margin: 0 auto;
+    padding: 48px 24px 16px;
+  }
+
+  .doors-title {
+    margin: 0 0 24px;
+    font-size: var(--torb-type-heading-2-size);
+  }
+
+  .door-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .door {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 22px 22px 24px;
+    color: var(--torb-text);
+    text-decoration: none;
+    border: 1px solid var(--torb-border-strong);
     border-radius: var(--torb-radius-medium);
     transition:
       border-color var(--torb-duration-quick) var(--torb-easing-exact),
       background-color var(--torb-duration-quick) var(--torb-easing-exact);
   }
 
-  .destination:hover {
+  .door:hover {
     background: var(--torb-surface);
-    border-color: var(--torb-border-strong);
+    border-color: var(--torb-text);
   }
 
-  .destination-title {
+  .door-title {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 6px;
-    font-size: 1.0625rem;
+    width: 100%;
+    font-size: 1.375rem;
     font-weight: 700;
+    line-height: 1.25;
   }
 
-  .destination-title svg {
-    width: 16px;
-    height: 16px;
+  .door-title svg {
+    width: 18px;
+    height: 18px;
     flex: none;
     color: var(--torb-text-subtle);
     transition:
@@ -1490,23 +2148,15 @@ public const siteStylesheet = raw"""
       color var(--torb-duration-quick) var(--torb-easing-exact);
   }
 
-  .destination:hover .destination-title svg {
+  .door:hover .door-title svg {
     color: var(--torb-text);
-    transform: translateX(2px);
+    transform: translateX(3px);
   }
 
-  .destination-text {
-    font-size: 0.9375rem;
-    line-height: 1.5;
+  .door-text {
+    font-size: 1rem;
+    line-height: 1.55;
     color: var(--torb-text-muted);
-  }
-
-  .destination-host {
-    margin-top: auto;
-    padding-top: 14px;
-    font-family: var(--torb-font-mono);
-    font-size: var(--torb-type-small-size);
-    color: var(--torb-text-subtle);
   }
 
   /* A page of the site that is neither documentation nor the front page: the install page, the legal pages, 404. */
@@ -1660,9 +2310,68 @@ public const siteStylesheet = raw"""
       font-size: 1.75rem;
     }
 
-    .destinations {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      padding: 24px 16px 72px;
+    .level-bar {
+      display: flex;
+      gap: 2px;
+      padding: 4px 8px;
+      overflow-x: auto;
+      background: var(--torb-background);
+      border-bottom: 1px solid var(--torb-border);
+    }
+
+    .level-bar a {
+      flex: none;
+      padding: 10px 10px;
+      font-size: var(--torb-type-ui-size);
+      font-weight: var(--torb-type-ui-weight);
+      line-height: 1;
+      color: var(--torb-text-muted);
+      text-decoration: none;
+    }
+
+    .level-bar a[aria-current] {
+      color: var(--torb-text);
+      box-shadow: inset 0 -2px 0 var(--torb-text);
+    }
+
+    .lesson {
+      padding: 20px 16px 72px;
+    }
+
+    .lesson-row {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto;
+      grid-template-areas:
+        "text"
+        "code"
+        "folded";
+      row-gap: 20px;
+      padding: 28px 0;
+    }
+
+    .lesson-folded {
+      margin-top: 0;
+    }
+
+    .lesson-menu-list {
+      width: min(320px, calc(100vw - 32px));
+    }
+
+    .doors {
+      padding: 44px 16px 8px;
+    }
+
+    .door-grid {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    .door-title {
+      font-size: 1.25rem;
+    }
+
+    .course {
+      padding: 32px 16px 72px;
     }
 
     .plain {
@@ -1720,8 +2429,16 @@ public const siteStylesheet = raw"""
       grid-area: copy;
     }
 
-    .destinations {
-      grid-template-columns: minmax(0, 1fr);
+    .language-button {
+      padding: 0 8px;
+    }
+
+    .lesson-arrows {
+      display: none;
+    }
+
+    .lesson-next {
+      width: 100%;
     }
 
     .pager {
@@ -1770,9 +2487,9 @@ public const themeScript = raw"""
 
 /**
  * The site's script: the header's shadow after scrolling, the menu of a narrow window for a keyboard, the copy
- * buttons, the search, the version switcher, and the contents that follow the reader. Each part checks that its
- * element is there and does nothing otherwise. It stores nothing; only the theme toggle stores the choice it is asked
- * to remember.
+ * buttons, the playground, the language switcher, the search, the version switcher, and the contents that follow the
+ * reader. Each part checks that its element is there and does nothing otherwise. It stores only what a reader asks it
+ * to: the language picked with the switcher, and an exercise solved in the playground.
  */
 public const siteScript = raw"""
   "use strict";
@@ -1780,8 +2497,22 @@ public const siteScript = raw"""
     var root = document.documentElement;
     var body = document.body;
     var siteRoot = body.getAttribute("data-root") || "";
+    var siteBase = body.getAttribute("data-site-root") || siteRoot;
     var version = body.getAttribute("data-version") || "";
     var page = body.getAttribute("data-page") || "";
+    var lesson = body.getAttribute("data-lesson");
+
+    var words = {};
+    try {
+      var wordsElement = document.getElementById("site-words");
+      if (wordsElement) {
+        words = JSON.parse(wordsElement.textContent) || {};
+      }
+    } catch (error) {}
+
+    function word(key, fallback) {
+      return typeof words[key] === "string" ? words[key] : fallback;
+    }
 
     var header = document.querySelector(".site-header");
     if (header) {
@@ -1824,13 +2555,13 @@ public const siteScript = raw"""
         button.classList.add("copied");
         button.querySelector("svg").outerHTML = checkIcon;
         if (label) {
-          label.textContent = "Copied";
+          label.textContent = word("copied", "Copied");
         }
         window.setTimeout(function () {
           button.classList.remove("copied");
           button.querySelector("svg").outerHTML = copyIcon;
           if (label) {
-            label.textContent = "Copy";
+            label.textContent = word("copy", "Copy");
           }
         }, 1200);
       };
@@ -1874,8 +2605,9 @@ public const siteScript = raw"""
       var button = document.createElement("button");
       button.type = "button";
       button.className = "copy-button";
-      button.innerHTML = copyIcon + "<span>Copy</span>";
-      button.setAttribute("aria-label", "Copy the code");
+      button.innerHTML = copyIcon + "<span></span>";
+      button.querySelector("span").textContent = word("copy", "Copy");
+      button.setAttribute("aria-label", word("copy.code", "Copy the code"));
       button.addEventListener("click", function () {
         copyText(codeOf(pre), button);
       });
@@ -1889,9 +2621,114 @@ public const siteScript = raw"""
       });
     });
 
+    var progressKey = "torb-progress";
+
+    function readProgress() {
+      try {
+        var stored = JSON.parse(localStorage.getItem(progressKey) || "{}");
+        return stored && typeof stored === "object" ? stored : {};
+      } catch (error) {
+        return {};
+      }
+    }
+
+    function showProgress() {
+      var progress = readProgress();
+      Array.prototype.forEach.call(document.querySelectorAll("[data-lesson-link]"), function (link) {
+        link.classList.toggle("solved", progress[link.getAttribute("data-lesson-link")] === "solved");
+      });
+    }
+
+    function solved() {
+      if (!lesson) {
+        return;
+      }
+      var progress = readProgress();
+      progress[lesson] = "solved";
+      try {
+        localStorage.setItem(progressKey, JSON.stringify(progress));
+      } catch (error) {}
+      showProgress();
+    }
+
+    showProgress();
+
+    var mounts = document.querySelectorAll("[data-playground]");
+    if (mounts.length > 0) {
+      var loader = document.createElement("script");
+      loader.src = siteBase + "assets/playground.js";
+      loader.async = true;
+      loader.addEventListener("load", function () {
+        var playground = window.TorbPlayground;
+        if (!playground || typeof playground.mount !== "function") {
+          return;
+        }
+        var labels = {
+          run: word("playground.run", "Run"),
+          reset: word("playground.reset", "Reset"),
+          solution: word("playground.solution", "Solution"),
+          output: word("playground.output", "Output"),
+          expected: word("exercise.expected", "Expected output"),
+          solved: word("playground.solved", "Solved"),
+          running: word("playground.running", "Running...")
+        };
+        Array.prototype.forEach.call(mounts, function (element) {
+          var expected = element.getAttribute("data-expected-output");
+          try {
+            playground.mount(element, {
+              source: element.getAttribute("data-source") || "",
+              file: element.getAttribute("data-file") || "example.trb",
+              expectedOutput: expected === null ? undefined : expected,
+              solution: element.getAttribute("data-solution") || undefined,
+              labels: labels,
+              onResult: function (result) {
+                if (expected !== null && result && result.passed) {
+                  solved();
+                }
+              }
+            });
+          } catch (error) {}
+        });
+      });
+      document.head.appendChild(loader);
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll("a[data-language]"), function (link) {
+      link.addEventListener("click", function () {
+        try {
+          localStorage.setItem("torb-language", link.getAttribute("data-language"));
+        } catch (error) {}
+      });
+    });
+
+    var menus = document.querySelectorAll("details.language-menu, details.lesson-menu");
+    if (menus.length > 0) {
+      var closeMenus = function (except) {
+        Array.prototype.forEach.call(menus, function (menu) {
+          if (menu !== except && menu.open) {
+            menu.open = false;
+          }
+        });
+      };
+      document.addEventListener("click", function (event) {
+        var inside = null;
+        Array.prototype.forEach.call(menus, function (menu) {
+          if (menu.contains(event.target)) {
+            inside = menu;
+          }
+        });
+        closeMenus(inside);
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          closeMenus(null);
+        }
+      });
+    }
+
     var switcher = document.querySelector("[data-version-switch]");
     if (switcher && version && window.fetch) {
-      fetch(siteRoot + "docs/versions.json")
+      fetch(siteBase + "docs/versions.json")
         .then(function (response) {
           return response.ok ? response.json() : Promise.reject(response.status);
         })
@@ -2129,13 +2966,13 @@ public const siteScript = raw"""
     function show() {
       var query = input.value.trim();
       if (query === "") {
-        message("Type to search the documentation of " + version + ".");
+        message(word("search.prompt", "Type to search the documentation of {version}.").replace("{version}", version));
         return;
       }
       if (!index) {
-        message("Loading the index...");
+        message(word("search.loading", "Loading the index..."));
         load().then(show, function () {
-          message("The search index could not be loaded.");
+          message(word("search.failed", "The search index could not be loaded."));
         });
         return;
       }
@@ -2143,7 +2980,7 @@ public const siteScript = raw"""
       list.textContent = "";
       selected = -1;
       if (results.length === 0) {
-        message("Nothing found for “" + query + "”.");
+        message(word("search.nothing", "Nothing found for “{query}”.").replace("{query}", query));
         return;
       }
       results.forEach(function (result) {

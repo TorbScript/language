@@ -22,11 +22,19 @@ public type PathExists {
   probe: (path: String) => Bool
 }
 
-/** Every link problem of the whole tree: every page, checked against every other page and the paths outside it. */
+/**
+ * Every link problem of the whole tree: every page, checked against every other page and the paths outside it. A
+ * translation keeps the links of its original, so they are resolved from the folder of the original, in the English
+ * tree: the site shows the translation of the page a link leads to where there is one, and the page itself where not.
+ */
 public fn linkProblems(documentation: Documentation, exists: PathExists): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   for page in documentation.pages {
     problems.appendAll pageLinkProblems(documentation, exists, page)
+  }
+  for translation in documentation.translations {
+    const seen = translation.page.copy folder: folderOf(translation.original)
+    problems.appendAll pageLinkProblems(documentation, exists, seen)
   }
   problems
 }

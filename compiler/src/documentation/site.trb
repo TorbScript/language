@@ -9,7 +9,7 @@
  *   of the same name in `site/`, each only where that page exists; `404.html` for a path that is not there.
  * - `docs/<version>/`, every page and design document of the documentation as HTML, with the navigation of the index
  *   tree, and `docs/<version>/search-index.json`, the index the search reads.
- * - `assets/site.css` and `assets/site.js`, one stylesheet and one script; `assets/fonts/`, Chivo and Chivo Mono.
+ * - `assets/site.css` and `assets/site.js`, one stylesheet and one script; `assets/fonts/`, Chivo and Geist Mono.
  * - The icons, the web manifest and the preview card, copied from `brand/`.
  *
  * [buildSite] is the whole site as a pure function of the [Documentation]; [writeBuiltSite] writes it and copies the
@@ -26,13 +26,17 @@
 use File, IoError from "std/fs"
 use Sha256 from "std/digest"
 use normalizePath from "../project/path"
-use DocumentationProblem, readPage from "./markdown"
-use Page, Documentation, folderOf, fileName, joinDocumentationPath from "./tree"
-use SiteLinks, ContentsEntry, renderedBody, relativeUrl from "./site-html"
-use NavigationEntry, navigationOf, readingOrder, titlesOf, sectionsOf, siteFolder from "./site-navigation"
+use DocumentationProblem, ReadPage, readPage from "./markdown"
+use Page, Documentation, Translation, folderOf, fileName, joinDocumentationPath from "./tree"
+use SiteLinks, ContentsEntry, RenderedBody, BodyOptions, renderedBody, relativeUrl from "./site-html"
+use NavigationEntry, Level, navigationOf, titlesOf, sectionsOf, siteFolder, levelOrder, levelOf from "./site-navigation"
+use levelIndex from "./site-navigation"
 use SearchPage, SearchHeading, IndexedPage, searchIndexOf, searchIndexJson from "./site-search"
 use SiteContext, DocumentationPage, docsDirectory, documentationPageHtml, plainPageHtml, missingPageHtml from "./site-layout"
-use frontPageHtml, forgeAddress, siteSlogan from "./site-layout"
+use frontPageHtml, noticeHtml, forgeAddress, siteSlogan from "./site-layout"
+use sourceLanguage, siteLanguagesOf, filled from "./site-strings"
+use isStale from "./translations"
+use indexBegin from "./schema"
 use fontFaces, baseStylesheet, siteStylesheet, themeScript, siteScript from "./site-style"
 use brandTokens from "./site-tokens"
 
@@ -53,8 +57,10 @@ public type BuiltSite {
   /** `(target, source)`: a path below the output directory, and one below the brand directory */
   copies: List<(target: String, source: String)>
   problems: List<DocumentationProblem>
-  /** How many pages of the documentation were written */
+  /** How many pages of the documentation were written, in every language together */
   pages: Int
+  /** How many languages the site is written in */
+  languages: Int = 1
 }
 
 /**
@@ -63,8 +69,9 @@ public type BuiltSite {
  */
 public const brandCopies: List<(target: String, source: String)> = [
   (target: "assets/fonts/chivo.woff2", source: "fonts/chivo.woff2"),
-  (target: "assets/fonts/chivo-mono.woff2", source: "fonts/chivo-mono.woff2"),
+  (target: "assets/fonts/GeistMono-Variable.woff2", source: "fonts/GeistMono-Variable.woff2"),
   (target: "assets/fonts/OFL.txt", source: "fonts/OFL.txt"),
+  (target: "assets/fonts/GeistMono-OFL.txt", source: "fonts/GeistMono-OFL.txt"),
   (target: "favicon.svg", source: "logo/favicon.svg"),
   (target: "mask-icon.svg", source: "logo/favicon-mono.svg"),
   (target: "favicon.ico", source: "icons/favicon.ico"),
@@ -76,10 +83,13 @@ public const brandCopies: List<(target: String, source: String)> = [
   (target: "social-card.png", source: "icons/social-card.png"),
 ]
 
-/** The pages of `site/` the footer links when they exist, with the word it shows: the legal pages of a German site. */
-public const footerPageNames: List<(name: String, title: String)> = [
-  (name: "imprint", title: "Imprint"),
-  (name: "privacy", title: "Privacy"),
+/**
+ * The pages of `site/` the footer links when they exist, with the key of the word it shows: the legal pages of a
+ * German site.
+ */
+public const footerPageNames: List<(name: String, key: String)> = [
+  (name: "imprint", key: "footer.imprint"),
+  (name: "privacy", key: "footer.privacy"),
 ]
 
 /**
@@ -103,7 +113,10 @@ public fn targetOf(path: String, version: String): String {
   "{docsDirectory(version)}/{html}"
 }
 
-/** The whole site of a documentation tree, without touching a disk. */
+/**
+ * The whole site of a documentation tree, without touching a disk: every page in English at the root and in every
+ * other language below its folder, a page without a translation in English inside the other language's interface.
+ */
 public fn buildSite(documentation: Documentation, settings: SiteSettings): BuiltSite {
   const version = settings.version
   var targets: Map<String, String> = [:]
@@ -114,107 +127,192 @@ public fn buildSite(documentation: Documentation, settings: SiteSettings): Built
     targets.set path, targetOf(path, version)
   }
   const navigation = navigationOf documentation
-  const order = readingOrder navigation
   var titles = titlesOf navigation
   const sections = sectionsOf navigation
-  titles.set "index.md", "Overview"
-  var footerPages: List<(title: String, target: String)> = []
-  for (name, title) in footerPageNames {
+  var summaries: Map<String, String> = [:]
+  for page in documentation.pages {
+    const title = page.frontMatter.text("title") ?? page.path
+    if !titles.containsKey(page.path) {
+      titles.set page.path, title
+    }
+    summaries.set(page.path, page.frontMatter.text("summary") ?? "")
+  }
+  const orders = [
+    (level: Level.Start, order: levelOrder(navigation, Level.Start)),
+    (level: Level.Guide, order: levelOrder(navigation, Level.Guide)),
+    (level: Level.Reference, order: levelOrder(navigation, Level.Reference)),
+  ]
+  var footerPages: List<(key: String, target: String)> = []
+  for (name, key) in footerPageNames {
     if documentation.pageAt("{siteFolder}/{name}.md").isSome() {
-      footerPages.append((title: title, target: "{name}.html"))
+      footerPages.append((key: key, target: "{name}.html"))
     }
   }
   const installPage = installPageOf documentation, targets, version
   const css = siteCss()
   const script = "{themeScript}\n{siteScript}"
   const assetVersion = Sha256.of("{css}{script}".bytes()).hex().prefix(characters: 12)
-  const site = SiteContext(
-    version,
-    settings.lockup,
-    settings.mark,
-    navigation,
-    targets,
-    footerPages,
-    installPage,
-    assetVersion,
-  )
-  var texts: Map<String, String> = [:]
-  var indexed: List<IndexedPage> = []
-  var pages = 0
+  const forge = "{forgeAddress}/src/branch/main"
+  // Every body is rendered once: its links are relative, and every language has the same tree of pages
+  var bodies: Map<String, RenderedBody> = [:]
   for page in documentation.pages {
     const target = targets.get(page.path) ?? ""
-    const links = SiteLinks target, page.folder, targets, "{forgeAddress}/src/branch/main"
-    const title = page.frontMatter.text("title") ?? page.path
-    const summary = page.frontMatter.text("summary") ?? ""
-    if page.folder == siteFolder && !page.indexesFolder {
-      if fileName(page.path) == "home.md" {
-        texts.set target, frontPageHtml(site, summary, page.read.body, links)
-      } else {
-        const body = renderedBody(page.read.body, page.read.headings, links).html
-        texts.set target, plainPageHtml(site, target, title, summary, body)
-      }
-      continue
-    }
-    const rendered = renderedBody page.read.body, page.read.headings, links
-    const neighbours = neighboursOf order, page.path, titles, targets
-    const body = "{referenceLinkOf(page, target, version)}{rendered.html}"
-    const shown = DocumentationPage(
-      page.path,
-      target,
-      title,
-      summary,
-      title,
-      body,
-      rendered.contents,
-      neighbours.previous,
-      neighbours.next,
-    )
-    texts.set target, documentationPageHtml(site, shown)
-    pages = pages + 1
-    if page.folder != siteFolder {
-      const entry = SearchPage(
-        title,
-        summary,
-        target.withoutPrefix("{docsDirectory(version)}/") ?? target,
-        sectionTitleOf(documentation, sections, page.path),
-        page.frontMatter.items("keywords"),
-        headingsOf(rendered.contents),
-      )
-      indexed.append IndexedPage(entry, rendered.text)
-    }
+    const links = SiteLinks target, page.folder, targets, forge
+    bodies.set page.path, renderedBody(bodyOf(page), page.read.headings, links, bodyOptionsOf(page.path))
   }
+  var plainBodies: Map<String, (read: ReadPage, rendered: RenderedBody)> = [:]
   for (path, text) in documentation.plainTexts {
     const target = targets.get(path) ?? ""
     const read = readPage path, text
-    const links = SiteLinks target, folderOf(path), targets, "{forgeAddress}/src/branch/main"
-    const rendered = renderedBody text, read.headings, links
-    const title = documentation.plainTitles.get(path) ?? path
-    const neighbours = neighboursOf order, path, titles, targets
-    const shown = DocumentationPage(
-      path,
-      target,
-      "",
-      "",
-      title,
-      rendered.html,
-      rendered.contents,
-      neighbours.previous,
-      neighbours.next,
-    )
-    texts.set target, documentationPageHtml(site, shown)
-    pages = pages + 1
-    const entry = SearchPage(
-      title,
-      "",
-      target.withoutPrefix("{docsDirectory(version)}/") ?? target,
-      sectionTitleOf(documentation, sections, path),
-      [],
-      headingsOf(rendered.contents),
-    )
-    indexed.append IndexedPage(entry, rendered.text)
+    const links = SiteLinks target, folderOf(path), targets, forge
+    plainBodies.set path, (read: read, rendered: renderedBody(text, read.headings, links))
   }
-  texts.set "404.html", missingPageHtml(site)
-  texts.set "{docsDirectory(version)}/search-index.json", searchIndexJson(searchIndexOf(version, indexed))
+  var translations: Map<String, Translation> = [:]
+  var translatedBodies: Map<String, RenderedBody> = [:]
+  var translated: Map<String, List<String>> = [:]
+  for translation in documentation.translations {
+    if documentation.pageAt(translation.original).isNone() {
+      continue
+    }
+    const key = "{translation.language}:{translation.original}"
+    translations.set key, translation
+    const target = targets.get(translation.original) ?? ""
+    const links = SiteLinks target, folderOf(translation.original), targets, forge
+    const page = translation.page
+    translatedBodies.set key, renderedBody(bodyOf(page), page.read.headings, links, bodyOptionsOf(translation.original))
+    const codes = translated.get(translation.original) ?? [sourceLanguage]
+    translated.set translation.original, codes.appended(translation.language)
+  }
+  const languages = siteLanguagesOf documentation
+  var texts: Map<String, String> = [:]
+  var pages = 0
+  for language in languages {
+    var localTitles: Map<String, String> = [:]
+    var localSummaries = summaries
+    for (key, translation) in translations {
+      if !key.startsWith("{language.code}:") {
+        continue
+      }
+      if const Some(title) = translation.page.frontMatter.text("title") {
+        localTitles.set translation.original, title
+      }
+      if const Some(summary) = translation.page.frontMatter.text("summary") {
+        localSummaries.set translation.original, summary
+      }
+    }
+    const site = SiteContext(
+      version,
+      settings.lockup,
+      settings.mark,
+      navigation,
+      targets,
+      footerPages,
+      installPage,
+      assetVersion,
+      language,
+      languages,
+      translated,
+      localTitles,
+      localSummaries,
+      hasPlayground: documentation.pageAt("{siteFolder}/play.md").isSome(),
+    )
+    var shownTitles = titles
+    for (source, title) in localTitles {
+      shownTitles.set source, title
+    }
+    var indexed: List<IndexedPage> = []
+    for page in documentation.pages {
+      const target = targets.get(page.path) ?? ""
+      const own = translations.get "{language.code}:{page.path}"
+      const shownPage = match own {
+        Some(translation) => translation.page
+        None => page
+      }
+      const rendered = match own {
+        Some(_) => translatedBodies.get("{language.code}:{page.path}") ?? RenderedBody("", [], "")
+        None => bodies.get(page.path) ?? RenderedBody("", [], "")
+      }
+      const title = shownPage.frontMatter.text("title") ?? page.path
+      const summary = shownPage.frontMatter.text("summary") ?? ""
+      const untranslated = !language.prefix.isEmpty() && own.isNone()
+      const notice = noticeOf documentation, site, untranslated, target, own
+      if page.folder == siteFolder && !page.indexesFolder {
+        const links = SiteLinks target, page.folder, targets, forge
+        if fileName(page.path) == "home.md" {
+          texts.set "{language.prefix}{target}", frontPageHtml(site, summary, shownPage.read.body, links, untranslated)
+        } else {
+          const html = plainPageHtml site, page.path, target, title, summary, rendered.html, notice, untranslated
+          texts.set "{language.prefix}{target}", html
+        }
+        continue
+      }
+      const neighbours = neighboursOf orders, page.path, shownTitles, targets
+      const body = "{referenceLinkOf(page, target, version, site)}{rendered.html}"
+      const shown = DocumentationPage(
+        page.path,
+        target,
+        title,
+        summary,
+        title,
+        body,
+        rendered.contents,
+        neighbours.previous,
+        neighbours.next,
+        neighbours.nextKey,
+        notice,
+        untranslated,
+      )
+      texts.set "{language.prefix}{target}", documentationPageHtml(site, shown)
+      pages = pages + 1
+      if page.folder != siteFolder {
+        const entry = SearchPage(
+          title,
+          summary,
+          target.withoutPrefix("{docsDirectory(version)}/") ?? target,
+          sectionTitleOf(documentation, sections, page.path, localTitles),
+          page.frontMatter.items("keywords"),
+          headingsOf(rendered.contents),
+        )
+        indexed.append IndexedPage(entry, rendered.text)
+      }
+    }
+    for (path, plain) in plainBodies {
+      const target = targets.get(path) ?? ""
+      const title = documentation.plainTitles.get(path) ?? path
+      const neighbours = neighboursOf orders, path, shownTitles, targets
+      const untranslated = !language.prefix.isEmpty()
+      const shown = DocumentationPage(
+        path,
+        target,
+        "",
+        "",
+        title,
+        plain.rendered.html,
+        plain.rendered.contents,
+        neighbours.previous,
+        neighbours.next,
+        neighbours.nextKey,
+        noticeOf(documentation, site, untranslated, target, own: None),
+        untranslated,
+      )
+      texts.set "{language.prefix}{target}", documentationPageHtml(site, shown)
+      pages = pages + 1
+      const entry = SearchPage(
+        title,
+        "",
+        target.withoutPrefix("{docsDirectory(version)}/") ?? target,
+        sectionTitleOf(documentation, sections, path, localTitles),
+        [],
+        headingsOf(plain.rendered.contents),
+      )
+      indexed.append IndexedPage(entry, plain.rendered.text)
+    }
+    const index = "{language.prefix}{docsDirectory(version)}/search-index.json"
+    texts.set index, searchIndexJson(searchIndexOf(version, indexed))
+    if language.prefix.isEmpty() {
+      texts.set "404.html", missingPageHtml(site)
+    }
+  }
   texts.set "assets/site.css", css
   texts.set "assets/site.js", script
   texts.set "manifest.webmanifest", manifestOf(documentation)
@@ -227,7 +325,48 @@ public fn buildSite(documentation: Documentation, settings: SiteSettings): Built
     ))
   }
   problems.appendAll brokenLinks(texts, brandCopies, version)
-  BuiltSite texts, brandCopies, problems, pages
+  BuiltSite texts, brandCopies, problems, pages, languages.length()
+}
+
+/** The body of a page as the site renders it: an index of Start without the list `docs index` writes into it. */
+fn bodyOf(page: Page): String {
+  if page.path == levelIndex(Level.Start) {
+    return page.read.body.substringBefore(indexBegin) ?? page.read.body
+  }
+  page.read.body
+}
+
+/** How the body of a source is rendered: a lesson in rows of text beside code, and its runnable blocks runnable locally. */
+fn bodyOptionsOf(path: String): BodyOptions {
+  const name = fileName(path).withoutSuffix(".md") ?? fileName(path)
+  const isStart = levelOf(path) == Level.Start
+  BodyOptions("{name}.trb", isStart, isStart && fileName(path) != "index.md")
+}
+
+/**
+ * The notice above a page in another language: that it is shown in English, which links the English page, or that the
+ * English page changed since the translation was made.
+ */
+fn noticeOf(
+  documentation: Documentation,
+  site: SiteContext,
+  untranslated: Bool,
+  target: String,
+  own: Translation?,
+): String {
+  const page = "{site.language.prefix}{target}"
+  if untranslated {
+    return noticeHtml site, "notice.untranslated", page, target
+  }
+  match own {
+    Some(translation) => {
+      if isStale(documentation, translation) {
+        return noticeHtml site, "notice.outdated", page, target
+      }
+      ""
+    }
+    None => ""
+  }
 }
 
 /**
@@ -246,26 +385,45 @@ public fn siteCss(): String {
   "{fontFaces("fonts/")}\n{brandTokens}\n{baseStylesheet}\n{siteStylesheet}"
 }
 
-/** The previous and the next page of a page, in the order of the navigation. */
+/** The previous and the next page of a page, and the word the link to the next one shows. */
+type Neighbours {
+  previous: (title: String, target: String)?
+  next: (title: String, target: String)?
+  nextKey: String
+}
+
+/**
+ * The previous and the next page of a page, in the order of its level. The last page of Start leads to the Guide and
+ * the last page of the Guide to the Reference, each with the words of that step.
+ */
 fn neighboursOf(
-  order: List<String>,
+  orders: List<(level: Level, order: List<String>)>,
   path: String,
   titles: Map<String, String>,
   targets: Map<String, String>,
-): (previous: (title: String, target: String)?, next: (title: String, target: String)?) {
-  var at = -1
-  for index in 0..order.length() {
-    if order[index] == path {
-      at = index
-      break
+): Neighbours {
+  for (level, order) in orders {
+    var at = -1
+    for index in 0..order.length() {
+      if order[index] == path {
+        at = index
+        break
+      }
+    }
+    if at < 0 {
+      continue
+    }
+    const previous = if at > 0 { neighbourAt order[at - 1], titles, targets } else { None }
+    if at + 1 < order.length() {
+      return Neighbours previous, neighbourAt(order[at + 1], titles, targets), "page.next"
+    }
+    return match level {
+      .Start => Neighbours previous, neighbourAt(levelIndex(Level.Guide), titles, targets), "next.guide"
+      .Guide => Neighbours previous, neighbourAt(levelIndex(Level.Reference), titles, targets), "next.reference"
+      _ => Neighbours previous, next: None, nextKey: "page.next"
     }
   }
-  if at < 0 {
-    return (previous: None, next: None)
-  }
-  const previous = if at > 0 { neighbourAt order[at - 1], titles, targets } else { None }
-  const next = if at + 1 < order.length() { neighbourAt order[at + 1], titles, targets } else { None }
-  (previous: previous, next: next)
+  Neighbours previous: None, next: None, nextKey: "page.next"
 }
 
 fn neighbourAt(
@@ -284,14 +442,19 @@ fn neighbourAt(
  * The title of the section a page belongs to - the index of the top-level folder whose navigation lists it, or of the
  * folder it is in - for a result of the search.
  */
-fn sectionTitleOf(documentation: Documentation, sections: Map<String, String>, path: String): String {
+fn sectionTitleOf(
+  documentation: Documentation,
+  sections: Map<String, String>,
+  path: String,
+  titles: Map<String, String>,
+): String {
   const folder = folderOf path
   const top = sections.get(path) ?? (folder.split("/").first() ?? folder)
   if top.isEmpty() {
     return ""
   }
   match documentation.indexOf(top) {
-    Some(index) => index.frontMatter.text("title") ?? top
+    Some(index) => titles.get(index.path) ?? (index.frontMatter.text("title") ?? top)
     None => top
   }
 }
@@ -309,15 +472,17 @@ fn headingsOf(contents: List<ContentsEntry>): List<SearchHeading> {
  * `docs/<version>/reference/` (docs/design/RELEASE.md section 6): the generator writes it, from the package name the
  * page is titled with, so no page of `docs/` links into generated output.
  */
-fn referenceLinkOf(page: Page, target: String, version: String): String {
+fn referenceLinkOf(page: Page, target: String, version: String, site: SiteContext): String {
   const kind = page.frontMatter.text("kind") ?? ""
   const title = page.frontMatter.text("title") ?? ""
   if kind != "package" || !title.startsWith("std/") {
     return ""
   }
   const reference = "{docsDirectory(version)}/reference/{title}/index.html"
-  const url = relativeUrl target, reference
-  "<p class=\"page-reference\">The generated reference of <a href=\"{url}\"><code>{title}</code></a> has every public construct with its signature, its doc comment and its examples.</p>\n"
+  const url = relativeUrl "{site.language.prefix}{target}", reference
+  const link = "<a href=\"{url}\"><code>{title}</code></a>"
+  const text = filled site.word("page.reference").replace("<", "&lt;"), [(name: "package", value: link)]
+  "<p class=\"page-reference\">{text}</p>\n"
 }
 
 /** The web manifest: the name, the colours of the two themes' grounds, and the icons with the maskable one. */

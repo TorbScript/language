@@ -1,0 +1,237 @@
+/**
+ * The words of the site's own interface - the navigation, the buttons, the notices, the search, the labels of the
+ * playground - in English, and the languages the site is written in besides (docs/tooling/torb-docs-site.md,
+ * "Languages"). English is the table below; every other language is `translations/<language>/strings.json` of the
+ * documentation, a flat JSON object with some of the same keys, and a key it leaves out is said in English.
+ *
+ * A text may hold a placeholder in braces, `{number}`, which [filled] replaces.
+ *
+ * # Related
+ *
+ * - [SiteLanguage] - one language of a build, with its words.
+ */
+
+use Json, JsonValue from "std/json"
+use DocumentationProblem from "./markdown"
+use Documentation, translationsFolder from "./tree"
+
+/** The language every page is written in first, and the one at the root of the site. */
+public const sourceLanguage = "en"
+
+/** Every key of the interface with its English text. A `strings.json` may only use these keys. */
+public const englishStrings: List<(key: String, text: String)> = [
+  (key: "language", text: "English"),
+  (key: "slogan", text: "One language, every layer."),
+  (key: "skip", text: "Skip to the content"),
+  (key: "home", text: "TorbScript, the front page"),
+  (key: "menu", text: "The navigation"),
+  (key: "nav.start", text: "Start"),
+  (key: "nav.guide", text: "Guide"),
+  (key: "nav.reference", text: "Reference"),
+  (key: "nav.playground", text: "Playground"),
+  (key: "nav.packages", text: "Packages"),
+  (key: "nav.site", text: "The site"),
+  (key: "nav.levels", text: "Where to start"),
+  (key: "level.start", text: "Start"),
+  (key: "level.guide", text: "Guide"),
+  (key: "level.reference", text: "Reference"),
+  (key: "search", text: "Search"),
+  (key: "search.placeholder", text: "Search the documentation"),
+  (key: "search.results", text: "Results"),
+  (key: "search.opens", text: "opens a result"),
+  (key: "search.closes", text: "closes"),
+  (key: "search.prompt", text: "Type to search the documentation of \{version}."),
+  (key: "search.loading", text: "Loading the index..."),
+  (key: "search.failed", text: "The search index could not be loaded."),
+  (key: "search.nothing", text: "Nothing found for “\{query}”."),
+  (key: "theme", text: "Switch the theme"),
+  (key: "language.choose", text: "Language"),
+  (key: "copy", text: "Copy"),
+  (key: "copied", text: "Copied"),
+  (key: "copy.code", text: "Copy the code"),
+  (key: "copy.command", text: "Copy the command"),
+  (key: "code.error", text: "Does not compile"),
+  (key: "page.navigation", text: "Documentation"),
+  (key: "page.overview", text: "Overview"),
+  (key: "page.project", text: "The project"),
+  (key: "page.standardLibrary", text: "Every package of std"),
+  (key: "page.version", text: "Version"),
+  (key: "page.breadcrumbs", text: "Breadcrumbs"),
+  (key: "page.contents", text: "On this page"),
+  (key: "page.edit", text: "Edit this page on git.torb.dev"),
+  (key: "page.pager", text: "Previous and next page"),
+  (key: "page.previous", text: "Previous"),
+  (key: "page.next", text: "Next"),
+  (key: "page.nextStep", text: "Next step"),
+  (key: "page.reference", text: "The generated reference of \{package} has every public construct with its signature, its doc comment and its examples."),
+  (key: "lesson.counter", text: "Lesson \{number} of \{total}"),
+  (key: "lesson.all", text: "All lessons"),
+  (key: "lesson.begin", text: "Start with lesson 1"),
+  (key: "lesson.next", text: "Next lesson"),
+  (key: "lesson.done", text: "You finished the course"),
+  (key: "lesson.local", text: "Run it on your computer:"),
+  (key: "next.guide", text: "Continue with the guide"),
+  (key: "next.reference", text: "Go deep: the reference"),
+  (key: "exercise.expected", text: "Expected output"),
+  (key: "playground.run", text: "Run"),
+  (key: "playground.reset", text: "Reset"),
+  (key: "playground.solution", text: "Solution"),
+  (key: "playground.output", text: "Output"),
+  (key: "playground.solved", text: "Solved"),
+  (key: "playground.running", text: "Running..."),
+  (key: "notice.untranslated", text: "This page is not translated yet, so it is shown in English."),
+  (
+    key: "notice.outdated",
+    text: "The English page changed after this translation was made, so parts of it may be outdated.",
+  ),
+  (key: "notice.original", text: "Read the English page"),
+  (key: "install", text: "Install TorbScript"),
+  (key: "install.version", text: "Install TorbScript \{version}"),
+  (key: "install.posix", text: "Linux, macOS"),
+  (key: "install.windows", text: "Windows"),
+  (key: "front.learn", text: "Start learning"),
+  (key: "footer.free", text: "TorbScript is free software under the MIT License."),
+  (key: "footer.documentation", text: "Documentation"),
+  (key: "footer.source", text: "Source"),
+  (key: "footer.license", text: "MIT License"),
+  (key: "footer.imprint", text: "Imprint"),
+  (key: "footer.privacy", text: "Privacy"),
+  (key: "missing.title", text: "This page does not exist"),
+  (
+    key: "missing.summary",
+    text: "The address may have changed with a version of the documentation, or it was never there.",
+  ),
+  (key: "missing.documentation", text: "The documentation"),
+  (key: "missing.front", text: "The front page"),
+]
+
+/** One language of a build of the site: its code, its folder below the root of the site, and its words. */
+public type SiteLanguage {
+  /** `en`, `de` */
+  code: String
+  /** Where its pages are written, relative to the root of the site: empty for English, `de/` for German */
+  prefix: String
+  /** Every key of [englishStrings], in this language or, where it has none, in English */
+  words: Map<String, String>
+
+  /** The text of a key in this language. */
+  fn text(key: String): String {
+    words.get(key) ?? key
+  }
+
+  /** The name of the language in itself: `Deutsch`. */
+  fn name(): String {
+    text "language"
+  }
+}
+
+/** The English words by key. */
+public fn englishWords(): Map<String, String> {
+  var words: Map<String, String> = [:]
+  for (key, text) in englishStrings {
+    words.set key, text
+  }
+  words
+}
+
+/**
+ * Every language of the site, English first and then the others by their code. A language is one whose
+ * `translations/<language>/strings.json` is there; a `strings.json` that cannot be read leaves the words English, and
+ * `docs check` says why.
+ */
+public fn siteLanguagesOf(documentation: Documentation): List<SiteLanguage> {
+  const english = englishWords()
+  var languages = [SiteLanguage(sourceLanguage, "", english)]
+  var codes = documentation.strings.keys().toList()
+  codes.sort({ _ })
+  for code in codes {
+    var words = english
+    const read = stringsOf(documentation.strings.get(code) ?? "")
+    for (key, text) in read.words {
+      if english.containsKey(key) {
+        words.set key, text
+      }
+    }
+    languages.append SiteLanguage(code, "{code}/", words)
+  }
+  languages
+}
+
+/** What a `strings.json` holds, and what is wrong with it. */
+public type ReadStrings {
+  words: Map<String, String>
+  problems: List<String>
+}
+
+/** The words of a `strings.json`: a flat object of texts. */
+public fn stringsOf(text: String): ReadStrings {
+  const parsed = match Json().parse(text) {
+    Ok(value) => value
+    Fail(error) => {
+      return ReadStrings([:], ["It is not JSON: {error}"])
+    }
+  }
+  const entries = match parsed {
+    .Object(entries) => entries
+    _ => {
+      return ReadStrings([:], ["It is one JSON object of texts, by key"])
+    }
+  }
+  var words: Map<String, String> = [:]
+  var problems: List<String> = []
+  const english = englishWords()
+  var keys = entries.keys().toList()
+  keys.sort({ _ })
+  for key in keys {
+    match entries.get(key) {
+      Some(.String(value)) => {
+        if !english.containsKey(key) {
+          problems.append "`{key}` is no key of the interface. The keys are the ones of `englishStrings` in site-strings.trb"
+        }
+        words.set key, value
+      }
+      _ => problems.append "The value of `{key}` is a text"
+    }
+  }
+  if !words.containsKey("language") {
+    problems.append "It names the language in itself, as `language`: \"Deutsch\""
+  }
+  ReadStrings words, problems
+}
+
+/** What `docs check` says about every `strings.json`, and about a language that has pages but none. */
+public fn stringsProblems(documentation: Documentation): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for (code, text) in documentation.strings {
+    const shown = "{documentation.root}/{translationsFolder}/{code}/strings.json"
+    for problem in stringsOf(text).problems {
+      problems.append DocumentationProblem(shown, 0, problem)
+    }
+  }
+  var reported: Set<String> = []
+  for translation in documentation.translations {
+    if documentation.strings.containsKey(translation.language) || reported.contains(translation.language) {
+      continue
+    }
+    reported.insert translation.language
+    const shown = "{documentation.root}/{translationsFolder}/{translation.language}"
+    const note = "A language of the site has the words of its interface in `strings.json`, and this one has none"
+    problems.append DocumentationProblem(shown, 0, note)
+  }
+  problems
+}
+
+/**
+ * A text with its placeholders filled: every `{name}` of `values` replaced by its value.
+ *
+ * # Examples
+ *
+ *     print filled("Lesson \{number\} of \{total\}", [(name: "number", value: "3"), (name: "total", value: "13")])
+ */
+public fn filled(text: String, values: List<(name: String, value: String)>): String {
+  var result = text
+  for (name, value) in values {
+    result = result.replace "\{{name}}", value
+  }
+  result
+}

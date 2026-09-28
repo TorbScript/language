@@ -11,6 +11,8 @@
  * | `trb run`             | ...and is built natively and run: its output is what its `// prints` say     |
  * | `trb fragment`        | Lexes without a diagnostic. For a signature or a shape that is not a program |
  * | `trb error`           | Produces exactly the diagnostics the block declares with `// error:` lines   |
+ * | `trb exercise`        | Parses, is in the canon and type checks; its output is the solution's       |
+ * | `trb exercise incomplete` | Lexes: the starting code of an exercise, with a gap on purpose          |
  * | `trb skip <reason>`   | Nothing. The reason is required and every skip is counted in the report      |
  *
  * The type check of every `trb check`, `trb run` and `trb error` block of the whole documentation happens in **one**
@@ -49,6 +51,10 @@ public type SnippetKind {
   case Fragment
   /** `trb error` */
   case Failing
+  /** `trb exercise`: the starting code of an exercise, a whole program that does not do the task yet */
+  case Exercise
+  /** `trb exercise incomplete`: the starting code of an exercise with a gap the reader fills in */
+  case Incomplete
   /** `trb skip <reason>` */
   case Skipped
 }
@@ -86,7 +92,7 @@ public type Snippet {
 public const knownLanguages: List<String> = ["trb", "text", "console", "json", "md", "yaml", "diff"]
 
 /** The markers of a `trb` fence. */
-public const knownMarkers: List<String> = ["check", "run", "fragment", "error", "skip"]
+public const knownMarkers: List<String> = ["check", "run", "fragment", "error", "exercise", "skip"]
 
 /** Every snippet of the tree, plus the problems found in an info string along the way. */
 public type CollectedSnippets {
@@ -94,24 +100,52 @@ public type CollectedSnippets {
   problems: List<DocumentationProblem>
 }
 
-/** Every `trb` block of every page, with the info strings judged. */
+/** Every `trb` block of every page and every translation, with the info strings judged. */
 public fn collectSnippets(documentation: Documentation): CollectedSnippets {
   var snippets: List<Snippet> = []
   var problems: List<DocumentationProblem> = []
-  for page in documentation.pages {
+  var pages = documentation.pages
+  for translation in documentation.translations {
+    pages.append translation.page
+  }
+  for page in pages {
     const shown = page.shown documentation.root
     var index = 0
+    var openExercise: Int? = None
     for block in page.read.blocks {
       const collected = snippetOf shown, page, block, index
       problems.appendAll collected.problems
       match collected.snippet {
-        Some(found) => snippets.append found
+        Some(found) => {
+          if const Some(line) = openExercise {
+            if found.kind == SnippetKind.Running {
+              openExercise = None
+            } else if isExercise(found.kind) {
+              problems.append DocumentationProblem(shown, line, unsolvedExercise)
+            }
+          }
+          if isExercise(found.kind) {
+            openExercise = found.line
+          }
+          snippets.append found
+        }
         None => {}
       }
       index = index + 1
     }
+    if const Some(line) = openExercise {
+      problems.append DocumentationProblem(shown, line, unsolvedExercise)
+    }
   }
   CollectedSnippets snippets, problems
+}
+
+/** What a page is told whose exercise has no solution: the solution is where the expected output comes from. */
+const unsolvedExercise = "A `trb exercise` block is followed by its solution, a `trb run` block, before the next exercise"
+
+/** Whether a kind of block is the starting code of an exercise. */
+public fn isExercise(kind: SnippetKind): Bool {
+  kind == SnippetKind.Exercise || kind == SnippetKind.Incomplete
 }
 
 type CollectedSnippet {
@@ -148,13 +182,14 @@ fn snippetOf(shown: String, page: Page, block: CodeBlock, index: Int): Collected
     "run" => SnippetKind.Running
     "fragment" => SnippetKind.Fragment
     "error" => SnippetKind.Failing
+    "exercise" => if block.reason == "incomplete" { SnippetKind.Incomplete } else { SnippetKind.Exercise }
     _ => SnippetKind.Skipped
   }
   if kind == SnippetKind.Skipped && block.reason.byteLength() < 10 {
     const note = "`trb skip` needs a reason of its own behind it, so that a skip cannot hide"
     problems.append DocumentationProblem(shown, block.line, note)
   }
-  if kind != SnippetKind.Skipped && !block.reason.isEmpty() {
+  if kind != SnippetKind.Skipped && kind != SnippetKind.Incomplete && !block.reason.isEmpty() {
     const note = "`{block.info}` says more than a language and a marker"
     problems.append DocumentationProblem(shown, block.line, note)
   }
@@ -273,8 +308,9 @@ fn syntaxProblemsOf(snippet: Snippet): List<DocumentationProblem> {
   }
   const source = SourceText.of snippet.text
   var problems: List<DocumentationProblem> = []
-  // A fragment is a signature or a shape, not a file, so only the lexer can say anything about it
-  if snippet.kind == SnippetKind.Fragment {
+  // A fragment is a signature or a shape, not a file, and an incomplete exercise has a gap on purpose, so only the
+  // lexer can say anything about either
+  if snippet.kind == SnippetKind.Fragment || snippet.kind == SnippetKind.Incomplete {
     for diagnostic in lex(source).diagnostics {
       const at = snippet.contentLine + lineOfOffset(snippet.text, diagnostic.span.start) - 1
       problems.append DocumentationProblem(snippet.path, at, diagnostic.message)
@@ -367,9 +403,10 @@ fn rootManifest(): String {
     """
 }
 
-/** Does this kind of block ask for the type checker? `trb check`, `trb run` and `trb error` do. */
+/** Does this kind of block ask for the type checker? `trb check`, `trb run`, `trb error` and `trb exercise` do. */
 public fn needsTypeCheck(kind: SnippetKind): Bool {
-  kind == SnippetKind.Checked || kind == SnippetKind.Running || kind == SnippetKind.Failing
+  const isChecked = kind == SnippetKind.Checked || kind == SnippetKind.Running
+  isChecked || kind == SnippetKind.Failing || kind == SnippetKind.Exercise
 }
 
 /** The file of the synthetic workspace a block becomes. */

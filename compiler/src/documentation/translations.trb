@@ -1,0 +1,103 @@
+/**
+ * The pages of the documentation in other languages (docs/tooling/torb-docs-site.md, "Languages"). A translation
+ * mirrors the path of its English original below `translations/<language>/`, and says in its front matter which
+ * version of the original it was made from: `translates` holds the [contentHashOf] the original had then. When the
+ * original changes, the hash no longer matches, the site marks the translation as possibly outdated, and `docs check`
+ * lists it - as a note, not as a problem, because an English change must not wait for every language.
+ *
+ * # Related
+ *
+ * - [translationSchemaProblems] - the front matter of a translation.
+ * - [stringsProblems] - the words of a language's interface.
+ */
+
+use Sha256 from "std/digest"
+use DocumentationProblem from "./markdown"
+use Page, Documentation, Translation from "./tree"
+use translationSchemaProblems from "./schema"
+use stringsProblems from "./site-strings"
+
+/** How many hexadecimal digits of the SHA-256 a `translates` field holds: enough to notice a change. */
+public const hashLength = 12
+
+/**
+ * The version of a page as a translation names it: the first twelve hexadecimal digits of the SHA-256 of its text,
+ * with its line endings as a line feed, so a checkout with carriage returns has the same hash.
+ *
+ * # Examples
+ *
+ *     print contentHashOf("---\ntitle: A page\n---\n")
+ */
+public fn contentHashOf(text: String): String {
+  Sha256.of(text.replace("\r\n", "\n").bytes()).hex().prefix(characters: hashLength)
+}
+
+/**
+ * The hash a translation names in `translates`, read from its line as it is written: a hash of decimal digits alone
+ * would be read as a number by the front matter, which drops a leading zero.
+ */
+public fn translatesOf(page: Page): String {
+  var fences = 0
+  for line in page.text.split("\n") {
+    const trimmed = line.trim()
+    if trimmed == "---" {
+      fences = fences + 1
+      if fences == 2 {
+        break
+      }
+      continue
+    }
+    if const Some(rest) = trimmed.withoutPrefix("translates:") {
+      return rest.trim().replace("\"", "")
+    }
+  }
+  ""
+}
+
+/** Whether a translation was made from the original as it is now. A translation without an original is not stale. */
+public fn isStale(documentation: Documentation, translation: Translation): Bool {
+  match documentation.pageAt(translation.original) {
+    Some(original) => translatesOf(translation.page) != contentHashOf(original.text)
+    None => false
+  }
+}
+
+/** Every problem of the translations: their front matter, their `translates`, and the words of every language. */
+public fn translationProblems(documentation: Documentation): List<DocumentationProblem> {
+  var problems = stringsProblems documentation
+  for translation in documentation.translations {
+    problems.appendAll translationSchemaProblems(documentation, translation)
+    const page = translation.page
+    const given = translatesOf page
+    const isHash = given.byteLength() == hashLength && given.chars().all({ _.isDigit() || "abcdef".contains("{_}") })
+    if !given.isEmpty() && !isHash {
+      const shown = page.shown documentation.root
+      const note = "`translates` holds the {hashLength} hexadecimal digits `docs check` names for the original"
+      problems.append DocumentationProblem(shown, page.frontMatter.lineOf("translates"), note)
+    }
+  }
+  problems
+}
+
+/**
+ * One line per translation whose original changed since it was made, with the hash to write once it is brought up to
+ * date, and one per translation that does not say yet which version it translates.
+ */
+public fn staleTranslations(documentation: Documentation): List<String> {
+  var lines: List<String> = []
+  for translation in documentation.translations {
+    const original = match documentation.pageAt(translation.original) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const shown = translation.page.shown documentation.root
+    const now = contentHashOf original.text
+    const given = translatesOf translation.page
+    if given != now {
+      lines.append "{shown}: {translation.original} changed since this translation; once it is updated: translates: {now}"
+    }
+  }
+  lines
+}
