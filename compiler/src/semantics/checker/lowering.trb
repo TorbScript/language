@@ -597,6 +597,28 @@ public fn unsignedLiteral(text: String): LiteralValue? {
   LiteralValue.Integer bits
 }
 
+/**
+ * The `UInt64` whose 64 bits an `Int64` holds, the way [unsignedLiteral] hands a literal above the largest `Int64` over
+ * and the back end holds every `UInt64`: a negative number is two to the power of 64 more than itself.
+ */
+public fn unsignedOfBits(bits: Int): UInt64 {
+  if bits >= 0 {
+    return UInt64.tryFrom(bits).ok() ?? 0
+  }
+  const highBit: UInt64 = 9223372036854775808
+  // `bits - Int.minimum` is the value without its highest bit, which an `Int64` holds
+  (UInt64.tryFrom(bits - Int.minimum).ok() ?? 0) + highBit
+}
+
+/** The 64 bits of a `UInt64` as an `Int64` holds them: [unsignedOfBits] the other way round. */
+public fn bitsOfUnsigned(value: UInt64): Int {
+  if const Some(small) = Int.tryFrom(value).ok() {
+    return small
+  }
+  const highBit: UInt64 = 9223372036854775808
+  (Int.tryFrom(value - highBit).ok() ?? 0) + Int.minimum
+}
+
 /** `Show & Encode`: a value that implements all of these. Only traits can be combined. */
 fn intersectionType(
   var checker: Checker,

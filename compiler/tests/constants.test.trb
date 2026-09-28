@@ -113,6 +113,22 @@ group "What is compile-time evaluable" {
     assert problemsOf(files).isEmpty()
   }
 
+  test "a `UInt64` folds in its own range, across the largest `Int64` and back" {
+    const files = withHelper(raw"""
+      const top: UInt64 = 9223372036854775807 + 1
+      const largest: UInt64 = 18446744073709551615
+      const below: UInt64 = largest - 1
+      const half: UInt64 = largest / 2 + 1
+      const rest: UInt64 = largest % 10
+      const power: UInt64 = 2 ** 63 + (2 ** 63 - 1)
+      const product: UInt64 = 4294967296 * 4294967295
+      const logical: UInt64 = largest >> 60
+      const isLarger = largest > top
+      const isSame = half == top
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+
   test "a field default of a `UInt64` above the largest `Int64`" {
     const files = withHelper(raw"""
       type Hasher {
@@ -345,6 +361,38 @@ group "Overflow and a division by zero are caught where they are written (BACKEN
       const broken = 60 / zero
       """)
     assert(problemsOf(files) == ["This divides by zero"])
+  }
+
+  test "a `UInt64` that leaves its range above the largest `Int64` is caught here, not at run time" {
+    const files = withHelper(raw"""
+      const past: UInt64 = 18446744073709551615 + 1
+      """)
+    assert(problemsOf(files) == ["This does not fit into a `UInt64`"])
+    assert(
+      notesOf(files)
+        == [
+          "A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is"
+            + " caught here",
+        ],
+    )
+  }
+
+  test "every operator of a `UInt64` is held to its range, below zero as well" {
+    const files = withHelper(raw"""
+      const doubled: UInt64 = 9223372036854775808 * 2
+      const both: UInt64 = 9223372036854775808 + 9223372036854775808
+      const tooHigh: UInt64 = 2 ** 64
+      const belowZero: UInt64 = 1 - 2
+      """)
+    assert(
+      problemsOf(files)
+        == [
+          "This does not fit into a `UInt64`",
+          "This does not fit into a `UInt64`",
+          "This does not fit into a `UInt64`",
+          "This does not fit into a `UInt64`",
+        ],
+    )
   }
 
   test "a `UInt64` above the largest `Int64` is still held to a divisor of zero and to the width of a shift" {

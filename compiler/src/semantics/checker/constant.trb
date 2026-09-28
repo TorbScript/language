@@ -14,7 +14,7 @@ use Expression, Argument, TextSegment, InfixOperator, PrefixOperator from "../..
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Checker from "./context"
-use integerLiteral, unsignedLiteral from "./lowering"
+use integerLiteral, unsignedLiteral, unsignedOfBits from "./lowering"
 use bindingOfSite, resultOf, signatureOf, isTraitConstant from "./signature"
 use targetDimensionNamed from "../../backend/c/natives"
 use isSharedType from "./declaration"
@@ -32,12 +32,12 @@ public type ConstantValue {
   /** A tuple, a list, a map, a range, a constructor or a case: evaluable, and nothing folds it. */
   case Composite
   /**
-   * A number or a `Bool` that is known at compile time and that the checker's own integers do not hold: a `UInt64`
-   * above the largest `Int64`, and what an operator makes of one. It is evaluable and nothing here folds it - the back
-   * end holds the literal as its bits and folds or computes the rest (`ir/constant.trb`), so an overflow in such an
-   * expression is the run time's to report, as it is for every `UInt64` operation [requireCertainArithmetic] skips.
+   * A `UInt64` above the largest `Int64`, which an [ConstantValue.Integer] does not hold. A `UInt64` that fits an
+   * `Int64` is an `Integer`, so every value has one spelling, and an operation of a `UInt64` folds in the unsigned
+   * range whichever of the two its operands are: `const top: UInt64 = 9223372036854775807 + 1` is a value, and
+   * `18446744073709551615 + 1` an overflow the checker reports where it is written instead of a run time that panics.
    */
-  case Unfolded
+  case Unsigned(value: UInt64)
 }
 
 /** What evaluating an initializer produced. */
@@ -317,13 +317,32 @@ public fn evaluateConstant(var checker: Checker, module: ModuleId, expression: E
 fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
   match integerLiteral(text, isNegative) {
     Some(.Integer(value)) => ConstantResult.Value ConstantValue.Integer(value)
-    // A `UInt64` above the largest `Int64` has no value of the checker's own integers, as `wrappedToWidth` says
+    // A `UInt64` above the largest `Int64`: `unsignedLiteral` reads it as its bits
     _ => {
-      if !isNegative && unsignedLiteral(text).isSome() {
-        return ConstantResult.Value ConstantValue.Unfolded
+      if !isNegative {
+        if const Some(.Integer(bits)) = unsignedLiteral(text) {
+          return ConstantResult.Value ConstantValue.Unsigned(unsignedOfBits(bits))
+        }
       }
       ConstantResult.Broken
     }
+  }
+}
+
+/** A value of a `UInt64` expression as a `UInt64`. `None` for a negative one, which no `UInt64` is. */
+fn unsignedOf(value: ConstantValue): UInt64? {
+  match value {
+    .Integer(number) => UInt64.tryFrom(number).ok()
+    .Unsigned(number) => number
+    _ => None
+  }
+}
+
+/** A `UInt64` as the constant it is: an `Integer` where an `Int64` holds it, which keeps every value one spelling. */
+fn unsignedConstant(number: UInt64): ConstantValue {
+  match Int.tryFrom(number).ok() {
+    Some(small) => ConstantValue.Integer small
+    None => ConstantValue.Unsigned number
   }
 }
 
@@ -529,19 +548,18 @@ fn unaryConstant(
       return inner
     }
   }
-  if const .Unfolded = value {
-    return inner
-  }
   match operator {
     .Negate => {
       match value {
         .Integer(number) => {
           if number == Int.minimum {
-            return reportOverflow checker, module, at
+            return reportOverflow checker, module, at, "Int64"
           }
           ConstantResult.Value ConstantValue.Integer(0 - number)
         }
         .Floating(number) => ConstantResult.Value ConstantValue.Floating(0.0 - number)
+        // Only zero has a negation in the unsigned range, and zero is an `Integer`
+        .Unsigned(_) => reportOverflow checker, module, at, "UInt64"
         _ => ConstantResult.NotConstant at
       }
     }
@@ -553,22 +571,31 @@ fn unaryConstant(
     }
     // `~0` is `-1` in an `Int8` and `255` in a `UInt8`: the answer is the width's, so the width is asked for
     .BitwiseNot => {
-      const number = match value {
-        .Integer(found) => found
-        _ => {
-          return ConstantResult.NotConstant at
-        }
-      }
       const (width, isSigned) = match integerWidthAt(checker, module, at) {
         Some(found) => found
         None => {
           return ConstantResult.NotConstant at
         }
       }
+      // `~0` of a `UInt64` is its largest value, which no `Int64` holds
+      if width == 64 && !isSigned {
+        const bits = match unsignedOf(value) {
+          Some(found) => found
+          None => {
+            return ConstantResult.NotConstant at
+          }
+        }
+        return ConstantResult.Value unsignedConstant(~bits)
+      }
+      const number = match value {
+        .Integer(found) => found
+        _ => {
+          return ConstantResult.NotConstant at
+        }
+      }
       match wrappedToWidth(~number, width, isSigned) {
         Some(found) => ConstantResult.Value ConstantValue.Integer(found)
-        // `~0` of a `UInt64` is its largest value, which no `Int64` holds
-        None => ConstantResult.Value ConstantValue.Unfolded
+        None => ConstantResult.NotConstant at
       }
     }
   }
@@ -608,8 +635,9 @@ fn bitsConstant(
       return ConstantResult.Broken
     }
   }
-  if isUnfoldedInteger(a, b) {
-    return ConstantResult.Value ConstantValue.Unfolded
+  // `1 << 63` of a `UInt64` is above the largest `Int64`: the bits of a `UInt64` are computed as one
+  if width == 64 && !isSigned {
+    return unsignedBits operator, a, b, at
   }
   const left = match a {
     .Integer(found) => found
@@ -632,28 +660,57 @@ fn bitsConstant(
   }
   match wrappedToWidth(raw, width, isSigned) {
     Some(found) => ConstantResult.Value ConstantValue.Integer(found)
-    // `1 << 63` of a `UInt64` is above the largest `Int64`
-    None => ConstantResult.Value ConstantValue.Unfolded
+    None => ConstantResult.NotConstant at
   }
 }
 
-/**
- * Whether an operator of two integers meets a value the checker does not hold, which makes its result one as well: the
- * other operand is an integer or another such value, or the operator would be a call of its trait.
- */
-fn isUnfoldedInteger(a: ConstantValue, b: ConstantValue): Bool {
-  match (a, b) {
-    (.Unfolded, .Unfolded) | (.Unfolded, .Integer(_)) | (.Integer(_), .Unfolded) => true
-    _ => false
+/** `&`, `|`, `^` and the shifts of a `UInt64`, whose shift is logical and whose amount is an `Int64` checked already. */
+fn unsignedBits(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
+  const left = match unsignedOf(a) {
+    Some(found) => found
+    None => {
+      return ConstantResult.NotConstant at
+    }
   }
+  const raw = match operator {
+    .ShiftLeft | .ShiftRight => {
+      const amount = match b {
+        .Integer(found) => found
+        _ => {
+          return ConstantResult.NotConstant at
+        }
+      }
+      match operator {
+        .ShiftLeft => left << amount
+        _ => left >> amount
+      }
+    }
+    _ => {
+      const right = match unsignedOf(b) {
+        Some(found) => found
+        None => {
+          return ConstantResult.NotConstant at
+        }
+      }
+      match operator {
+        .BitwiseAnd => left & right
+        .BitwiseOr => left | right
+        _ => left ^ right
+      }
+    }
+  }
+  ConstantResult.Value unsignedConstant(raw)
 }
 
-/** The same for `&&`, `||` and the equality of a `Bool`: a comparison of a value the checker does not hold is one. */
-fn isUnfoldedBoolean(a: ConstantValue, b: ConstantValue): Bool {
-  match (a, b) {
-    (.Unfolded, .Unfolded) | (.Unfolded, .Boolean(_)) | (.Boolean(_), .Unfolded) => true
-    _ => false
+/** Whether the checker gave the expression at `at` the type `UInt64`, whose operations fold in the unsigned range. */
+fn isUnsigned64At(checker: Checker, module: ModuleId, at: Span): Bool {
+  const (width, isSigned) = match integerWidthAt(checker, module, at) {
+    Some(found) => found
+    None => {
+      return false
+    }
   }
+  width == 64 && !isSigned
 }
 
 /**
@@ -686,8 +743,8 @@ fn widthOfInteger(name: String): (Int, Bool)? {
 
 /**
  * A value brought into a width: the bits above it dropped, and for a signed type the highest one that is left
- * extended. A `UInt64` above the largest `Int64` has no value of the checker's own integers, so it is `None` - such a
- * constant is not folded here.
+ * extended. A `UInt64` above the largest `Int64` has no value of the checker's own integers, so it is `None`: the bits
+ * of a `UInt64` are [unsignedBits]'s.
  */
 fn wrappedToWidth(value: Int, width: Int, isSigned: Bool): Int? {
   if width == 64 {
@@ -760,6 +817,10 @@ fn arithmeticConstant(
   b: ConstantValue,
   at: Span,
 ): ConstantResult {
+  // A `UInt64` folds in its own range: `9223372036854775807 + 1` is one, `1 - 2` is not
+  if isUnsignedOperation(checker, module, a, b, at) {
+    return unsignedArithmetic checker, module, operator, a, b, at
+  }
   if const .Integer(left) = a {
     if const .Integer(right) = b {
       return integerArithmetic checker, module, operator, left, right, at
@@ -770,19 +831,87 @@ fn arithmeticConstant(
       return floatArithmetic checker, module, operator, left, right, at
     }
   }
-  if isUnfoldedInteger(a, b) {
-    // Whatever it divides, a divisor that is known to be zero is one
-    if const .Integer(0) = b {
-      match operator {
-        .Divide | .Remainder => {
-          return reportDivisionByZero checker, module, at
-        }
-        _ => {}
+  ConstantResult.NotConstant at
+}
+
+/** Whether an operator of two integers is one of a `UInt64`: an operand above the largest `Int64`, or the type says so. */
+fn isUnsignedOperation(checker: Checker, module: ModuleId, a: ConstantValue, b: ConstantValue, at: Span): Bool {
+  match (a, b) {
+    (.Unsigned(_), .Unsigned(_)) | (.Unsigned(_), .Integer(_)) | (.Integer(_), .Unsigned(_)) => true
+    (.Integer(_), .Integer(_)) => isUnsigned64At checker, module, at
+    _ => false
+  }
+}
+
+/**
+ * `+`, `-`, `*`, `/`, `%` and `**` of a `UInt64`, in the range from zero to two to the power of 64 less one. What
+ * leaves it is an overflow, exactly as the run time's `+` panics on one, and the exponent of `**` is not negative.
+ */
+fn unsignedArithmetic(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  a: ConstantValue,
+  b: ConstantValue,
+  at: Span,
+): ConstantResult {
+  if const .Power = operator {
+    if const .Integer(exponent) = b {
+      if exponent < 0 {
+        return reportNegativeExponent checker, module, at
       }
     }
-    return ConstantResult.Value ConstantValue.Unfolded
   }
-  ConstantResult.NotConstant at
+  const right = match unsignedOf(b) {
+    Some(found) => found
+    None => {
+      return ConstantResult.NotConstant at
+    }
+  }
+  // Whatever it divides, a divisor that is known to be zero is one
+  const isDivision = match operator {
+    .Divide | .Remainder => true
+    _ => false
+  }
+  if isDivision && right == 0 {
+    return reportDivisionByZero checker, module, at
+  }
+  const left = match unsignedOf(a) {
+    Some(found) => found
+    None => {
+      return ConstantResult.NotConstant at
+    }
+  }
+  const folded = match operator {
+    .Add => left.addedChecked right
+    .Subtract => left.subtractedChecked right
+    .Multiply => left.multipliedChecked right
+    .Divide => left.dividedChecked right
+    .Remainder => left.remainderChecked right
+    .Power => poweredUnsigned left, right
+    _ => None
+  }
+  match folded {
+    Some(value) => ConstantResult.Value unsignedConstant(value)
+    None => reportOverflow checker, module, at, "UInt64"
+  }
+}
+
+/** `base ** exponent` of a `UInt64` by squaring, or `None` where it does not fit: [poweredIntegers] in its range. */
+fn poweredUnsigned(base: UInt64, exponent: UInt64): UInt64? {
+  var result: UInt64 = 1
+  var factor = base
+  var left = exponent
+  while left > 0 {
+    if left % 2 == 1 {
+      result = result.multipliedChecked(factor)?
+    }
+    left = left / 2
+    if left > 0 {
+      factor = factor.multipliedChecked(factor)?
+    }
+  }
+  result
 }
 
 fn integerArithmetic(
@@ -803,7 +932,7 @@ fn integerArithmetic(
       }
       // `Int.minimum / -1` is the one division whose result does not fit
       if left == Int.minimum && right == -1 {
-        return reportOverflow checker, module, at
+        return reportOverflow checker, module, at, "Int64"
       }
       Some(left / right)
     }
@@ -828,7 +957,7 @@ fn integerArithmetic(
   }
   match folded {
     Some(value) => ConstantResult.Value ConstantValue.Integer(value)
-    None => reportOverflow checker, module, at
+    None => reportOverflow checker, module, at, "Int64"
   }
 }
 
@@ -946,18 +1075,16 @@ fn poweredIntegers(base: Int, exponent: Int): Int? {
   result
 }
 
-/** `==` and `!=` on the number types and on `Bool`. Everything else is `Equals.equals` and therefore a call. */
+/**
+ * `==` and `!=` on the number types and on `Bool`. Everything else is `Equals.equals` and therefore a call. A `UInt64`
+ * above the largest `Int64` is never an `Integer`, so two integers are equal exactly where their constants are.
+ */
 fn equalityConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
-  if isUnfoldedInteger(a, b) || isUnfoldedBoolean(a, b) {
-    return ConstantResult.Value ConstantValue.Unfolded
-  }
   var isEqual = false
   var isKnown = false
-  if const .Integer(left) = a {
-    if const .Integer(right) = b {
-      isEqual = left == right
-      isKnown = true
-    }
+  if isInteger(a) && isInteger(b) {
+    isEqual = a == b
+    isKnown = true
   }
   if const .Floating(left) = a {
     if const .Floating(right) = b {
@@ -983,15 +1110,21 @@ fn equalityConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue,
 
 /** `<`, `<=`, `>`, `>=` on the number types: `Compare.compare` is a call for everything else. */
 fn orderConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
-  if isUnfoldedInteger(a, b) {
-    return ConstantResult.Value ConstantValue.Unfolded
-  }
   var order = 0
   var isKnown = false
   if const .Integer(left) = a {
     if const .Integer(right) = b {
       order = if left < right { -1 } else if left > right { 1 } else { 0 }
       isKnown = true
+    }
+  }
+  // A `UInt64` above the largest `Int64` against another one, or against an `Integer` of the same `UInt64` type
+  if !isKnown && isInteger(a) && isInteger(b) {
+    if const Some(left) = unsignedOf(a) {
+      if const Some(right) = unsignedOf(b) {
+        order = if left < right { -1 } else if left > right { 1 } else { 0 }
+        isKnown = true
+      }
     }
   }
   if const .Floating(left) = a {
@@ -1013,10 +1146,15 @@ fn orderConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at
   ConstantResult.Value ConstantValue.Boolean(found)
 }
 
-fn logicalConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
-  if isUnfoldedBoolean(a, b) {
-    return ConstantResult.Value ConstantValue.Unfolded
+/** Whether a constant is a whole number: an `Integer`, or a `UInt64` above the largest `Int64`. */
+fn isInteger(value: ConstantValue): Bool {
+  match value {
+    .Integer(_) | .Unsigned(_) => true
+    _ => false
   }
+}
+
+fn logicalConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
   const left = match a {
     .Boolean(found) => found
     _ => {
@@ -1068,21 +1206,27 @@ public fn requireCertainArithmetic(
       return
     }
   }
-  const divisor = match evaluateConstant(checker, module, right, 0) {
-    .Value(.Integer(found)) => found
+  const second = match evaluateConstant(checker, module, right, 0) {
+    .Value(found) => found
     _ => {
       return
     }
+  }
+  if !isInteger(second) {
+    return
   }
   const isDivision = match operator {
     .Divide | .Remainder => true
     _ => false
   }
-  const dividend = match evaluateConstant(checker, module, left, 0) {
-    .Value(.Integer(found)) => found
-    _ => {
-      // Whatever it divides, a divisor that is known to be zero panics
-      if isDivision && divisor == 0 {
+  const first = match evaluateConstant(checker, module, left, 0) {
+    .Value(found) => found
+    _ => ConstantValue.Composite
+  }
+  if !isInteger(first) {
+    // Whatever it divides, a divisor that is known to be zero panics
+    if const .Integer(0) = second {
+      if isDivision {
         const spelling = operatorSpelling operator
         checker.report(
           module,
@@ -1090,12 +1234,25 @@ public fn requireCertainArithmetic(
             .withNote("`dividedChecked` and `remainderChecked` answer an `Option` for a divisor that may be zero"),
         )
       }
+    }
+    return
+  }
+  // A `UInt64` folds in its own range, which reports what leaves it
+  if name == "UInt64" {
+    const _ = unsignedArithmetic checker, module, operator, first, second, at
+    return
+  }
+  const dividend = match first {
+    .Integer(found) => found
+    _ => {
       return
     }
   }
-  // The checker folds in an `Int64`, which holds no `UInt64` above its own largest value: those are not folded
-  if name == "UInt64" {
-    return
+  const divisor = match second {
+    .Integer(found) => found
+    _ => {
+      return
+    }
   }
   const folded = match integerArithmetic(checker, module, operator, dividend, divisor, at) {
     .Value(.Integer(found)) => found
@@ -1112,10 +1269,12 @@ public fn requireCertainArithmetic(
   }
 }
 
-fn reportOverflow(var checker: Checker, module: ModuleId, at: Span): ConstantResult {
+/** `name` is `Int64` or `UInt64`, the two types whose range the checker folds in. */
+fn reportOverflow(var checker: Checker, module: ModuleId, at: Span, name: String): ConstantResult {
+  const article = if name.startsWith("U") { "a" } else { "an" }
   checker.report(
     module,
-    Diagnostic.error("This does not fit into an `Int64`", at)
+    Diagnostic.error("This does not fit into {article} `{name}`", at)
       .withNote("A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is caught here"),
   )
   ConstantResult.Broken

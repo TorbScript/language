@@ -517,6 +517,14 @@ group "Operators through their traits" {
     assert problems(inBody("  print(9223372036854775806 + 1)")).isEmpty()
   }
 
+  test "the arithmetic of a `UInt64` is held to its own range, above the largest `Int64` too" {
+    const limits = "type Limits \{\n  static largest: UInt64 = 18446744073709551615\n  static smallest: UInt64 = 0\n\}\n\n"
+    assert(problems(limits + inBody("  print(Limits.largest + 1)")) == ["This does not fit into a `UInt64`"])
+    assert(problems(limits + inBody("  print(Limits.smallest - 1)")) == ["This does not fit into a `UInt64`"])
+    assert problems(limits + inBody("  print(Limits.largest - 1)")).isEmpty()
+    assert problems(inBody("  const top: UInt64 = 9223372036854775807 + 1\n  print top")).isEmpty()
+  }
+
   test "a comparison asks for its trait like every other operator" {
     // 4.3 recorded the witness and said nothing where it found none, because the prelude had no `Equals` for its
     // collections; `std/collections` carries `Equals`, `Hash` and `Show` for `List`, `Set` and `Map` now

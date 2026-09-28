@@ -22,7 +22,7 @@ use LiteralValue, TypeId, ParameterId, ImplementationId from "../semantics/check
 use bindingOfSite, resultOf, signatureOf, typeSignatureOf, isTraitConstant from "../semantics/checker/signature"
 use matchTypePattern, witnessFor, traitArgumentsOf from "../semantics/checker/implementation"
 use substitute from "../semantics/checker/unify"
-use integerLiteral, unsignedLiteral from "../semantics/checker/lowering"
+use integerLiteral, unsignedLiteral, unsignedOfBits, bitsOfUnsigned from "../semantics/checker/lowering"
 use IrTypeId, LayoutId, StaticId, StaticContents, Instance from "./ir"
 use instanceKeyOf, isClosedType from "./instances"
 use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
@@ -133,6 +133,11 @@ fn unaryConstant(
 
 fn negatedConstant(var lowering: Lowering, inner: ConstantValue, annotation: IrTypeId, at: Span): ConstantValue? {
   if const Some(value) = integerOf(inner) {
+    // Only zero has a negation in the range of a `UInt64`, whose bits above the largest `Int64` read as negative
+    if value != 0 && isUnsigned64(lowering, annotation) {
+      reportOverflow lowering, "-", annotation, at
+      return None
+    }
     if value == smallestInteger {
       reportOverflow lowering, "-", annotation, at
       return None
@@ -259,10 +264,10 @@ fn integerOperation(
   annotation: IrTypeId,
   at: Span,
 ): ConstantValue? {
-  // A `UInt64` above the largest `Int64` is its bits, which signed arithmetic would read as a negative number: such an
-  // operation is left to the run time, where it is unsigned
-  if (first < 0 || second < 0) && isUnsigned64(lowering, operands) {
-    return None
+  // A `UInt64` is held as its bits, which signed arithmetic would read as a negative number above the largest `Int64`:
+  // its operations fold in its own range, as the checker's do (`semantics/checker/constant.trb`)
+  if isUnsigned64(lowering, operands) {
+    return unsignedOperation lowering, operator, first, second, annotation, at
   }
   match operator {
     .Equal => comparisonValue(first == second, annotation)
@@ -310,6 +315,105 @@ fn integerOperation(
     }
     _ => None
   }
+}
+
+/**
+ * Every operation of two `UInt64`s, which the compiler holds as their bits: the arithmetic in the range from zero to two
+ * to the power of 64 less one, an unsigned comparison, and a logical shift. The amount of a shift is an `Int64`
+ * whatever it shifts, so it is read as one.
+ */
+fn unsignedOperation(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: Int,
+  second: Int,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  const left = unsignedOfBits first
+  const isShift = match operator {
+    .ShiftLeft | .ShiftRight => true
+    _ => false
+  }
+  if isShift {
+    if !isShiftAmount(lowering, second, annotation) {
+      return None
+    }
+    const shifted = match operator {
+      .ShiftLeft => left << second
+      _ => left >> second
+    }
+    return unsignedValue shifted, annotation
+  }
+  const right = unsignedOfBits second
+  match operator {
+    .Equal => comparisonValue(left == right, annotation)
+    .NotEqual => comparisonValue(left != right, annotation)
+    .Less => comparisonValue(left < right, annotation)
+    .LessOrEqual => comparisonValue(left <= right, annotation)
+    .Greater => comparisonValue(left > right, annotation)
+    .GreaterOrEqual => comparisonValue(left >= right, annotation)
+    .Add => unsignedResult lowering, left.addedChecked(right), annotation, "+", at
+    .Subtract => unsignedResult lowering, left.subtractedChecked(right), annotation, "-", at
+    .Multiply => unsignedResult lowering, left.multipliedChecked(right), annotation, "*", at
+    .Divide => {
+      if right == 0 {
+        reportDivisionByZero lowering, "/", at
+        return None
+      }
+      unsignedValue(left / right, annotation)
+    }
+    .Remainder => {
+      if right == 0 {
+        reportDivisionByZero lowering, "%", at
+        return None
+      }
+      unsignedValue(left % right, annotation)
+    }
+    .Power => unsignedResult lowering, poweredUnsigned(left, right), annotation, "**", at
+    .BitwiseAnd => unsignedValue(left & right, annotation)
+    .BitwiseOr => unsignedValue(left | right, annotation)
+    .BitwiseExclusiveOr => unsignedValue(left ^ right, annotation)
+    _ => None
+  }
+}
+
+/** A `UInt64` as the literal the back end holds it as: its bits. */
+fn unsignedValue(value: UInt64, annotation: IrTypeId): ConstantValue {
+  ConstantValue StaticContents.Literal(LiteralValue.Integer(bitsOfUnsigned(value))), annotation
+}
+
+fn unsignedResult(
+  var lowering: Lowering,
+  found: UInt64?,
+  annotation: IrTypeId,
+  operator: String,
+  at: Span,
+): ConstantValue? {
+  match found {
+    Some(value) => unsignedValue value, annotation
+    None => {
+      reportOverflow lowering, operator, annotation, at
+      None
+    }
+  }
+}
+
+/** `base ** exponent` of a `UInt64` by squaring, or `None` where it leaves the range: [poweredChecked] unsigned. */
+fn poweredUnsigned(base: UInt64, exponent: UInt64): UInt64? {
+  var result: UInt64 = 1
+  var factor = base
+  var left = exponent
+  while left > 0 {
+    if left % 2 == 1 {
+      result = result.multipliedChecked(factor)?
+    }
+    left = left / 2
+    if left > 0 {
+      factor = factor.multipliedChecked(factor)?
+    }
+  }
+  result
 }
 
 fn bitsValue(var lowering: Lowering, value: Int, annotation: IrTypeId): ConstantValue? {
