@@ -13,7 +13,8 @@
 # `manifest --check` over every `project.trb`, `test --native compiler/tests`, `test` of the std/example packages in
 # both back ends (one that waits for a back-end gap is named in docs/RUST-EXIT.md section 2.4 and skipped here), the
 # programs of `tests/language/` against their `.expected` in both back ends, the sessions of `tests/repl/` piped into
-# `torb repl` (`tools/repl.sh`), the sessions of `tests/lsp/` piped into `torb lsp` (`tools/lsp.sh`), the package
+# `torb repl` (`tools/repl.sh`), the sessions of `tests/lsp/` piped into `torb lsp` (`tools/lsp.sh`), the reports of
+# `torb test --filter` and `--report json` in both back ends (`tools/test-report.sh`), the package
 # manager against a `file:` registry (`tools/packages.sh`), `lock --check`
 # over every `project.lock.trb`, the four docs
 # gates, `doc --check --no-run std` (the links of std's doc comments and its examples, type checked), and
@@ -427,6 +428,8 @@ lane_sessions() {
   gate "tests/repl against .expected (torb repl)" env TORB_REPL_JOBS="$repl_jobs" sh tools/repl.sh
   # docs/tooling/torb-lsp.md: sessions of the language server over standard input and output, framed as an editor does
   gate "tests/lsp against .expected (torb lsp)" sh tools/lsp.sh
+  # docs/tooling/torb-test.md: `--filter` and `--report json` over one suite, in the VM and natively, against .expected
+  gate "tests/test-report against .expected (torb test --filter, --report json)" sh tools/test-report.sh
   gate "format --check" "$torb" format --check .
 }
 

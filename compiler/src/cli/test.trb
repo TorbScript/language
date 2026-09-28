@@ -16,7 +16,9 @@
  * ([TestShard], `--shard 2/4`).
  *
  * The report itself is not written here at all - `runtime/test.c` writes every line of it, including the counts and
- * the summary.
+ * the summary, and chooses the tests a `--filter` names and the lines `--report json` writes in place of the human ones:
+ * it reads all three options off the command line of the process, which for a native run is handed to the binary here
+ * and for a run in the VM is `torb`'s own.
  */
 
 use File, IoError from "std/fs"
@@ -52,6 +54,24 @@ public type TestOptions {
    * (`tools/test-shards.sh`), whose reports come one after the other once all of them have ended. 1 is one process.
    */
   shards: Int = 1
+  /**
+   * `--filter <name>`, any number: the tests whose full name (`Outer > Inner > name`) is one of these or lies below one
+   * of them run, and no other. Empty for every test.
+   */
+  filters: List<String> = []
+  /** `--report json`: what the run writes on standard output. */
+  report: TestReport = TestReport.Human
+}
+
+/** What `runtime/test.c` writes on standard output while the suite runs. */
+public type TestReport {
+  /** A line per file and per test, the message and the site of a failure, and the summary: for a person */
+  case Human
+  /**
+   * `--report json`: JSON Lines, an object per event of the run - a file, the start of a test, its outcome and how long
+   * it took, the summary - for an editor that shows the tests while they run (docs/tooling/torb-test.md)
+   */
+  case Json
 }
 
 /**
@@ -135,6 +155,15 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
     output = joinPath directory, "build/{profile}/shard-{shard.index}-of-{shard.count}/tests"
     arguments = ["--shard", shard.written()]
   }
+  // What every shard of the run is handed besides its own `--shard`
+  var selection: List<String> = []
+  for filter in options.filters {
+    selection.appendAll(["--filter", filter])
+  }
+  if options.report == TestReport.Json {
+    selection.appendAll(["--report", "json"])
+  }
+  arguments.appendAll selection
   const built = build(BuildOptions(
     options.paths,
     output: output,
@@ -152,7 +181,7 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
     const logs = joinPath directory, "build/{profile}/shards"
     // Without `sh` or the script the suite runs in one process, which is what the shards add up to
     if File.exists(script) {
-      if const Ok(code) = Process.runPassingThrough("sh", [script, binary, "{options.shards}", logs]) {
+      if const Ok(code) = Process.runPassingThrough("sh", [script, binary, "{options.shards}", logs, ...selection]) {
         return code
       }
     }

@@ -90,16 +90,6 @@ torb_list torb_process_arguments(void) {
   return arguments;
 }
 
-const char *torb_process_option(const char *name) {
-  int index;
-  for (index = 1; index + 1 < torb_argument_count; index += 1) {
-    if (strcmp(torb_argument_values[index], name) == 0) {
-      return torb_argument_values[index + 1];
-    }
-  }
-  return NULL;
-}
-
 /** A NUL-terminated copy of a text. Owned; free with `torb_raw_free(buffer, *capacity)`. */
 static char *torb_argument_bytes(torb_text text, size_t *capacity) {
   *capacity = (size_t)text.length + 1u;

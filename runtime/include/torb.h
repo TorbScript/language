@@ -1272,21 +1272,24 @@ void torb_test_group(torb_text name, torb_closure body);
  * `N passed, M failed (K files)` and answers the exit code of the run: 0 where nothing failed and 1 otherwise.
  * `path` borrowed.
  *
- * `--shard <k>/<n>` on the command line of the process runs a part of the files: the k-th of every n, counted from 1
- * in the order the files come - `torb test --shard 2/4` hands it to the binary, and the VM inside `torb` reads it off
- * `torb`'s own. A file of another shard prints nothing, counts for nothing, and its tests and groups do not run.
+ * The command line of the process says how, read once through `torb_process_arguments` (so a name is UTF-8 on every
+ * platform): `torb test` hands a native binary what it was given, and the VM inside `torb` reads `torb`'s own.
+ *
+ * - `--shard <k>/<n>` runs a part of the files: the k-th of every n, counted from 1 in the order the files come. A
+ *   file of another shard prints nothing, counts for nothing, and its tests and groups do not run.
+ * - `--filter <name>`, any number of them, runs a test whose full name (`Outer > Inner > name`) is one of the names or
+ *   starts with one of them and ` > `; a group on the way to none of them does not run its body. Files still print
+ *   their line, and the counts are those of the tests that ran.
+ * - `--report json` writes JSON Lines in place of the human report: `{"event":"file",...}` for each file,
+ *   `{"event":"start",...}` and `{"event":"test",...}` around each test - its outcome, its duration in milliseconds,
+ *   and for a failure the message, the site and the frames - and `{"event":"summary",...}` at the end, each flushed as
+ *   it is written (docs/tooling/torb-test.md has every key). A test's own output stays plain lines between them.
  */
 void torb_test_file(const char *path, size_t length);
 int torb_test_finish(void);
 
 /** Called by the generated `main` before anything else. `argument_values` borrowed for the whole run. */
 void torb_process_start(int argument_count, char **argument_values);
-/**
- * The argument behind `name` on the command line of the process (`--shard 2/4`), or NULL where `name` is not among the
- * arguments or is the last one. The runtime reads its own options with it (`runtime/test.c`); the program reads its
- * arguments through `torb_process_arguments`. Borrowed.
- */
-const char *torb_process_option(const char *name);
 /**
  * Called where the program ends normally, and by `torb_process_exit`. With `TORB_REPORT_LEAKS=1` in the environment it
  * writes the live block count to stderr, which is the leak gate of the conformance suite.
@@ -1298,7 +1301,10 @@ void torb_process_finish(void);
  * `main`'s own call of. `NULL` runs nothing.
  */
 void torb_process_on_exit(void (*release)(void));
-/** `Process.arguments()`: the program's own name is not in it. Result owned. */
+/**
+ * `Process.arguments()`: the program's own name is not in it, and every argument is UTF-8 - the platform layer's where
+ * the `argv` of `main` is not. The runtime reads its own options with it too (`runtime/test.c`). Result owned.
+ */
 torb_list torb_process_arguments(void);
 TORB_NORETURN void torb_process_exit(int64_t code);
 /**

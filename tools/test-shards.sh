@@ -6,7 +6,9 @@
 # has ended the reports are printed in the order of the shards, and then one line with the counts of all of them,
 # `N passed, M failed (K files, n shards)`. The exit code is the highest one a shard left with: 0 where nothing failed.
 #
-#   sh tools/test-shards.sh <binary> <count> <directory>
+#   sh tools/test-shards.sh <binary> <count> <directory> [argument]...
+#
+# The arguments after the directory are handed to every shard behind its `--shard`: the `--filter`s of the run.
 #
 # One build and several processes of it, rather than one `torb test --shard k/n` per shard: every one of those checks
 # and lowers the whole suite before its C is known to be the one the others build, which costs the front end once per
@@ -18,14 +20,16 @@ set -u
 # A summary is split into words below, and a word of a panic's message is no pattern of file names
 set -f
 
-if [ $# -ne 3 ]; then
-  printf '%s\n' "usage: sh tools/test-shards.sh <binary> <count> <directory>" >&2
+if [ $# -lt 3 ]; then
+  printf '%s\n' "usage: sh tools/test-shards.sh <binary> <count> <directory> [argument]..." >&2
   exit 2
 fi
 
 binary=$1
 count=$2
 directory=$3
+# What is left in "$@" goes to every shard; the summaries below take "$@" over only once every shard has started
+shift 3
 case "$count" in
   '' | *[!0-9]* | 0)
     printf '%s\n' "tools/test-shards.sh: the count is a whole number above zero, and it is \`$count\`" >&2
@@ -37,7 +41,7 @@ mkdir -p "$directory"
 pids=""
 index=1
 while [ "$index" -le "$count" ]; do
-  "$binary" --shard "$index/$count" >"$directory/shard-$index.log" 2>&1 &
+  "$binary" --shard "$index/$count" "$@" >"$directory/shard-$index.log" 2>&1 &
   pids="$pids $!"
   index=$((index + 1))
 done

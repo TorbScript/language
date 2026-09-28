@@ -27,7 +27,7 @@ use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
-use TestOptions, TestShard, testShardNamed, runTests, defaultTestPath from "./cli/test"
+use TestOptions, TestShard, TestReport, testShardNamed, runTests, defaultTestPath from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
@@ -86,6 +86,8 @@ fn printUsage() {
   printError "                         --profile dev|release, --release: build them natively with that profile"
   printError "                         --shard k/n: only the k-th of every n files, so n processes run one suite"
   printError "                         --shards n: with --native, build once and run all n shards at the same time"
+  printError "                         --filter <name>: a test's full name (`Group > test`) or a group's; repeatable"
+  printError "                         --report json: JSON Lines instead of the report a person reads, for an editor"
   printError "                         --jobs N: accepted and ignored - one program is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
@@ -521,11 +523,16 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
 }
 
 /**
- * `torb test [path]... [--native] [--profile dev|release] [--shard k/n | --shards n] [--jobs N]`: in the VM unless told
- * otherwise, and a profile says to build natively, because only a binary has one. `--jobs` means nothing here: one
- * program holds every test file, so there is one process whatever the number says. It is accepted and ignored.
- * `--shard 2/4` runs the second of every four files, so several processes can run one suite at once ([TestShard]), and
- * `--shards 4` builds the binary once and runs all four of them at the same time.
+ * `torb test [path]... [--native] [--profile dev|release] [--shard k/n | --shards n] [--filter <name>]...
+ * [--report json] [--jobs N]`: in the VM unless told otherwise, and a profile says to build natively, because only a
+ * binary has one. `--jobs` means nothing here: one program holds every test file, so there is one process whatever the
+ * number says. It is accepted and ignored. `--shard 2/4` runs the second of every four files, so several processes can
+ * run one suite at once ([TestShard]), and `--shards 4` builds the binary once and runs all four of them at the same
+ * time. `--filter` runs the tests of one full name or below it, and `--report json` writes JSON Lines ([TestReport]).
+ *
+ * The runtime reads `--shard`, `--filter` and `--report` off the command line of the process, each as two arguments -
+ * the binary's, and in the VM `torb`'s own - so none of them is taken in the spelling with `=`, and a value is checked
+ * here, before anything is built.
  */
 fn testOptionsOf(arguments: List<String>): TestOptions? {
   const choice = profileChoiceOf(arguments, Profile.Dev)?
@@ -533,10 +540,44 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
   var wantsJobs = false
   var wantsShard = false
   var wantsShards = false
+  var wantsFilter = false
+  var wantsReport = false
   var shard: TestShard? = None
   var shards = 1
+  var filters: List<String> = []
+  var report = TestReport.Human
   var usesMachine = choice.rest.length() == arguments.length()
   for argument in choice.rest {
+    if wantsFilter {
+      wantsFilter = false
+      filters.append argument
+      continue
+    }
+    if wantsReport {
+      wantsReport = false
+      if argument != "json" {
+        printError "error: `--report` takes `json`, the one report besides the human one: `--report json`"
+        return None
+      }
+      report = TestReport.Json
+      continue
+    }
+    if argument == "--filter" {
+      wantsFilter = true
+      continue
+    }
+    if argument.startsWith("--filter=") {
+      printError "error: the name of a filter is an argument of its own: `--filter \"Group > test\"`"
+      return None
+    }
+    if argument == "--report" {
+      wantsReport = true
+      continue
+    }
+    if argument.startsWith("--report=") {
+      printError "error: the report is an argument of its own: `--report json`"
+      return None
+    }
     if wantsJobs {
       wantsJobs = false
       continue
@@ -601,6 +642,19 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     printError "error: `--shards` needs how many processes run the suite: `--shards 4`"
     return None
   }
+  if wantsFilter {
+    printError "error: `--filter` needs the full name of a test or of a group: `--filter \"Group > test\"`"
+    return None
+  }
+  if wantsReport {
+    printError "error: `--report` needs what to write: `--report json`"
+    return None
+  }
+  // One stream of events and one summary: the reports of several processes, one after the other, are neither
+  if report == TestReport.Json && shards > 1 {
+    printError "error: `--report json` runs one process, and `--shards` several: give each process its `--shard k/n`"
+    return None
+  }
   if shards > 1 && shard.isSome() {
     printError "error: `--shard` runs one shard and `--shards` all of them: give one of the two"
     return None
@@ -611,7 +665,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     return None
   }
   const given = if paths.isEmpty() { [defaultTestPath()] } else { paths }
-  TestOptions given, choice.profile, usesMachine, shard, shards
+  TestOptions given, choice.profile, usesMachine, shard, shards, filters: filters, report: report
 }
 
 /**
