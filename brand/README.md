@@ -39,7 +39,23 @@ mark is for small sizes, one-colour work and print.
 | `file-icon.svg` | The icon of a `.trb` file: a page with a straight corner cut, a hairline, and the flat mark (drawn on the 48 px grid) |
 | `file-icon-16.png` ... `file-icon-256.png` | The file icon at 16, 24, 32, 48, 64, 128 and 256 px, each drawn on its own pixel grid |
 | `file-icon.ico` | The file icon for Windows' `DefaultIcon` of `.trb`: 16, 24, 32 and 48 px as bitmaps, 256 px as PNG |
+| `favicon.ico` | The website's `favicon.ico`: the pixel art of 16, 32 and 48 px |
+| `apple-touch-icon.png` | The website's icon on iOS, 180 px and opaque: the paper mark on a full-bleed depth gradient |
+| `app-icon-maskable.svg`, `app-icon-maskable-192.png`, `app-icon-maskable-512.png` | The maskable icon of the web manifest: a full-bleed depth gradient with the paper mark at 62.5%, inside the safe zone of every mask |
 | `social-card.svg`, `social-card.png` | The Open Graph and social preview card, 1200 x 630 |
+
+## `fonts/`
+
+| File | What it is for |
+|------|----------------|
+| `chivo.woff2` | Chivo, variable from 100 to 900: prose, headings and the UI of the website and the docs |
+| `chivo-mono.woff2` | Chivo Mono, variable from 100 to 900: code, identifiers and commands |
+| `OFL.txt` | The SIL Open Font License 1.1 both are published under, with their copyright line |
+
+Both are subset to Basic Latin, Latin-1, Latin Extended-A, the general punctuation, the arrows and the mathematical
+operators the fonts carry, with every OpenType feature kept (the slashed zero is `"zero" 1`), and compressed as WOFF2 -
+by `pyftsubset` of fontTools from the fonts of github.com/Omnibus-Type/Chivo and Omnibus-Type/ChivoMono. The website
+serves them itself, from `/assets/fonts/`: no page asks a font service for anything.
 
 ## Tokens
 
