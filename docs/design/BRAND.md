@@ -3,8 +3,9 @@
 **Status: decided, assets in `brand/`** — the owner's decisions of 2026-09-28: the Orb as the mark, with a cut heavier
 than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Chivo Mono; the depth gradient as
 the primary form of the mark; a red button only for the main call to action. The logo files, the icons, the social card
-and the tokens are in `brand/` (`brand/README.md` lists every file). Nothing applies them yet: the website, the
-registry, the forge's theme, the colours of `torb`'s output and the VS Code extension are the slices of section 13.
+and the tokens are in `brand/` (`brand/README.md` lists every file). The VS Code extension carries the icons and the
+walkthrough (section 11); its two colour themes, the website, the registry, the forge's theme and the colours of
+`torb`'s output are the slices of section 13 still to come.
 
 **One mark, one red, one type family, and every value a named token.** The identity has to look like the language it
 stands for: one clear shape instead of several, exact about where things change, confident without effects.
@@ -626,14 +627,18 @@ white are ground colours in the light scheme, black in the dark one.
 
 ### VS Code
 
-- **Marketplace icon:** `brand/icons/app-icon-256.png`.
-- **Language icon:** `contributes.languages[].icon` with `brand/logo/favicon.svg` for light and dark, so `.trb` files
-  carry the mark in the explorer and on tabs at the 16 px they are shown at.
-- **Walkthrough:** a `contributes.walkthroughs` entry ("Get started with TorbScript") of four steps: install `torb`,
-  open a folder with a `project.trb`, run a program, read the tour. Each step's media is an SVG drawn with the tokens,
-  given as `{ "light": ..., "dark": ... }` so it follows the editor's theme: flat shapes, hairlines, Chivo outlined,
-  the mark flat, no screenshots of a particular theme. The walkthrough's buttons are VS Code's own; the brand adds no
-  red button there.
+- **Marketplace icon:** `brand/icons/app-icon-256.png`, as `editors/vscode/images/icon.png`; the gallery banner is ink
+  (`#14110F`) with the dark theme.
+- **Language icon:** `contributes.languages[].icon` with the file icon, `brand/icons/file-icon.svg`, drawn on the 16 px
+  grid it is shown at and once per ground: the paper page with its `#A9A3A1` hairline for light themes, a `#292422` page
+  with a `#857E7C` hairline for dark ones, the flat mark on both. So `.trb` files carry the mark in the explorer and on
+  tabs wherever the file icon theme has no icon of its own.
+- **Walkthrough:** a `contributes.walkthroughs` entry ("Get started with TorbScript"): install `torb` (one step per
+  system), create a program, run it, where to go next. Each step's media is an SVG drawn with the tokens, given as
+  `{ "light": ..., "dark": ..., "hc": ..., "hcLight": ... }` so it follows the editor's theme: flat shapes, hairlines,
+  Chivo outlined, the mark flat, at most one red per image, no screenshots of a particular theme. The walkthrough's
+  buttons are VS Code's own; the brand adds no red button there. `editors/vscode/CONTRIBUTING.md` ("The brand") says
+  where each file plugs in.
 - **Two colour themes,** "TorbScript Light" and "TorbScript Dark": the theme roles, the syntax colours of section 9,
   the underline for `mutable`, and `terminal.scheme` for the integrated terminal. The semantic colours the extension
   forces on every theme today move into these two themes.
@@ -675,7 +680,7 @@ from it, never one SVG edited alone.
 3. **The forge's theme:** the two CSS files, `app.ini`, logo and favicon on git.torb.dev.
 4. **`torb`'s colours:** the rules of section 10, in `compiler/src/cli/render.trb` and the summary lines, with a
    `--color` flag; `torb.ico` as a resource of `torb.exe`.
-5. **The VS Code extension:** the icons, the walkthrough, the two themes.
+5. **The VS Code extension:** the icons and the walkthrough (done), the two themes.
 
 ## 14. Open
 

@@ -16,5 +16,7 @@ The first version in the stores.
 - The walkthrough "Get Started with TorbScript", which installs the toolchain with the official installer in a terminal,
   creates a first program with `torb new`, runs it and points at the documentation; a status bar item and a
   notification while `torb` is missing, and "TorbScript: Install or Update Toolchain".
+- TorbScript's brand: the Orb as the extension's icon, the file icon of `.trb` files in a light and a dark version,
+  and the walkthrough's images drawn for light and dark themes.
 - The TextMate grammar for `.trb` files and for ` ```trb ` blocks in Markdown, highlighting in the Markdown preview,
   semantic highlighting from `torb highlight` where the language server does not run, and snippets.

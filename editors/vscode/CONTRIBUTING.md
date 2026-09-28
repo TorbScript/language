@@ -39,19 +39,40 @@ anything else, so it runs the compiler of this checkout.
 | `syntaxes/trb.markdown.tmLanguage.json` | Injects `source.trb` into fenced code blocks in Markdown |
 | `language-configuration.json` | Comments, brackets, indentation, doc comment continuation |
 | `snippets/trb.json` | The snippets |
-| `walkthrough/*.svg` | The images of the walkthrough's steps - **placeholders**, see "The brand" |
-| `images/icon.png`, `images/icon.svg` | The icon - **a placeholder**, see "The brand" |
+| `walkthrough/*-light.svg`, `walkthrough/*-dark.svg` | The images of the walkthrough's steps, one per theme - see "The brand" |
+| `images/icon.png`, `images/icon.svg` | The icon of the stores and of the Extensions view - see "The brand" |
+| `images/file-icon-light.svg`, `images/file-icon-dark.svg` | The icon of a `.trb` file in the explorer and on tabs - see "The brand" |
 | `samples/tokens.trb` | Every semantic token kind in one file, to see the palette in place; checked and formatted by the gates like any other file |
 
 ## The brand
 
-The icon, the gallery banner and the walkthrough's images are placeholders until the brand round delivers them:
+Every image of the extension is TorbScript's brand (`docs/design/BRAND.md`, section 11 "VS Code"), taken from `brand/`
+or drawn with its tokens. None is edited by hand: a change starts in BRAND.md or `brand/tokens.json`, and the images
+are generated again, like the files of `brand/` themselves, by the brand's script outside the repository (it needs
+Node, the Chivo fonts and a rasteriser).
 
-- `images/icon.svg` is the source and `images/icon.png` the 256 x 256 PNG that `package.json`'s `icon` names (the
-  stores take a PNG only). Replace both.
-- `galleryBanner` in `package.json` (`color`, `theme`) is the band behind the icon on the store page.
-- `walkthrough/install.svg`, `create.svg`, `run.svg` and `next.svg` are the `media.image` of the four steps; a step
-  takes `{ "light": ..., "dark": ..., "hc": ... }` in place of one path where the image needs a version per theme.
+- **The icon.** `images/icon.png` is `brand/icons/app-icon-256.png` - the Orb in its depth gradient, 256 x 256 - and
+  is what `package.json`'s `icon` names, because the stores take a PNG of at least 128 x 128 only. `images/icon.svg` is
+  `brand/icons/app-icon.svg`, kept beside it as the source and left out of the `.vsix` (`.vscodeignore`). Copy both
+  again when the brand changes; nothing else points at them.
+- **The gallery banner.** `galleryBanner` in `package.json` is the band behind the icon on the store page: ink
+  (`#14110F`, the dark ground of the brand) with `"theme": "dark"`, so the store writes the name and the buttons in
+  light text. Never Torb Red: a red band would put the mark on red, which the brand rules out.
+- **The file icon.** `contributes.languages[].icon` names `images/file-icon-light.svg` and `images/file-icon-dark.svg`:
+  `brand/icons/file-icon.svg` - a page with a straight corner cut, a hairline and the flat mark - drawn on the 16 px grid
+  VS Code shows it at, once per ground. On light the page is paper with a `#A9A3A1` hairline, on dark it is `#292422`
+  with a `#857E7C` hairline; the mark is Torb Red on both. VS Code shows it for `.trb` files wherever the file icon
+  theme has no icon of its own for the language.
+- **The walkthrough.** Every step's `media.image` is an object of four paths - `light`, `dark`, `hc` and `hcLight`, all
+  four required by VS Code - and each image exists as `<name>-light.svg` and `<name>-dark.svg`; the high-contrast
+  themes take the dark and the light one. `install-windows` and `install-posix` belong to the two steps that install
+  the toolchain, `create`, `run` and `next` to the other three. Each is 640 x 400, flat, split by 1 px hairlines, with
+  its text outlined (the webview has neither Chivo nor Chivo Mono, and an SVG image loads no font), the syntax colours
+  of BRAND.md section 9, and at most one red: the flat mark in `install-*`, the error in `run` (tint, leading border,
+  icon and the word, BRAND.md section 4.6), the top rule of torb.dev in `next`, none in `create`. No screenshot of a
+  particular theme, and no red button: the walkthrough's buttons are VS Code's own.
+- **The colours of the code.** The extension pins no colour (see "Semantic tokens"); the two colour themes of
+  BRAND.md section 11, "TorbScript Light" and "TorbScript Dark", are still to come.
 
 ## The grammar
 
