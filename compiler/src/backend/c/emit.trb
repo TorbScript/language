@@ -1696,6 +1696,12 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
         collectHelperDemand program, function, instruction, retains, drops
       }
     }
+    // An entry cell has no blocks: its read retains what it hands out
+    if const .EntryCell(_, access) = function.kind {
+      if const .Read = access {
+        markRetained program, retains, function.signature.result
+      }
+    }
     // A stop path releases what is live where the task stops, which may be a value the body itself only ever moves
     if function.kind == FunctionKind.TaskResume {
       const machine = taskMachineOf program, function
