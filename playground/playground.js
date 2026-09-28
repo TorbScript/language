@@ -514,6 +514,10 @@
       shown.scrollLeft = input.scrollLeft;
     });
     input.addEventListener("keydown", function (event) {
+      // An input method's Enter confirms what it composed, and is none of the editor's business
+      if (event.isComposing) {
+        return;
+      }
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         onRun();
