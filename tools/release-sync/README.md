@@ -144,14 +144,15 @@ either, placing a stable release fails with `Operation not permitted` and is und
 
 ## Deployment
 
-The image `cr.torb.dev/torbscript/release-sync` is built from each release's own assets by
+The image `torbscript/release-sync` of the forge's container registry is built from each release's own assets by
 `tools/deploy/Dockerfile.release-sync` (`.forgejo/workflows/images.yml`), with exactly the tools the program calls:
-`curl`, `openssl` and a pinned `cosign`.
-`tools/deploy/compose.example.yml` runs it behind the Traefik of the machine, as user 1000, with `<TORB_DATA>/download`
-mounted read-write at `/srv/torb/download` - it is the only writer there, and the site mounts the same directory
-read-only - and the public key mounted at `/etc/release-sync/cosign.pub`, never baked in. Its router claims
-`torb.dev/webhook` with an explicit priority: Traefik ranks routers by the length of their rule otherwise, and the
-site's rule for `torb.dev` is the longer one.
+`curl`, `openssl` and a pinned `cosign`. `tools/deploy/compose.example.yml` runs it behind the Traefik of the
+machine, as user 1000, with `<TORB_DATA>/download` mounted read-write at `/srv/torb/download` - it is the only writer
+there, and the site mounts the same directory read-only - and the public key mounted at
+`/etc/release-sync/cosign.pub`, never baked in. Its router claims `torb.dev/webhook` with an explicit priority:
+Traefik ranks routers by the length of their rule otherwise, and the site's rule for `torb.dev` is the longer one.
+While the container is down - or not healthy yet, where a deployment gives it a health check - Traefik has no route to
+it and a delivery of the webhook is lost; the check at the start places what it missed.
 
 How the server is set up once - DNS, `.env`, the webhook, the first sync - is `docs/contributing/releasing.md`, "The
 root server"; why it is built this way is
