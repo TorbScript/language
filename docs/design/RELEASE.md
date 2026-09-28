@@ -62,7 +62,7 @@ that does not block core work can be built now, in the order of section 10.
 | 13 | Nothing in `std/` or `runtime/` computes SHA-256, reads or writes a `tar` or `gzip` archive, or speaks TLS | `grep` |
 | 14 | `docs/` has 221 pages with `status: stable`, 6 `planned` and 2 `draft`. `torb docs bundle` writes `llms.txt` and `llms-full.txt`, `torb docs skill` the Agent Skill; nothing writes HTML | `grep`, `compiler/src/documentation/command.trb` |
 | 15 | The documentation tool reads a page through `std/markdown` (CommonMark 0.31.2 with GitHub's tables) and its front matter through `std/yaml` (`compiler/src/documentation/markdown.trb`, `docs/design/TEXT-FORMATS.md` section 3a); nothing renders HTML from it yet | the file's module comment |
-| 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.1.0) and has no language server | `package.json`, `docs/ROADMAP.md` |
+| 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.2.0) and starts `torb lsp`; it is not published | `package.json`, `docs/design/LANGUAGE-SERVER.md` |
 | 17 | The repository's remote is `github.com/TorbScript/language` | `git remote -v` |
 | 18 | `OperatingSystem` has four cases (`Windows`, `Linux`, `MacOs`, `FreeBsd`) and `Architecture` two (`X64`, `Arm64`); adding a case is a breaking change of `std/core` (OS.md, "Adding an operating system") | `std/core/src/target.trb` |
 

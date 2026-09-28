@@ -24,6 +24,7 @@ which are in [`language/`](../language/index.md); and an argument, which is in
 
 ## Pages
 
+- **[Set up your editor](set-up-your-editor.md)** - Install the VS Code extension of the repository, which starts torb lsp for diagnostics, hover, go to definition, completion, semantic tokens and quick fixes - or point any editor with a language server client at torb lsp.
 - **[Read a file](read-a-file.md)** - Read a whole file or its lines, hand the failure to the caller with the question mark operator, and turn an IoError into your own error type.
 - **[Write a configuration file](write-a-configuration-file.md)** - Declare a type for the configuration, write the file as TorbScript against it, and load it through the sandbox with the capabilities you grant.
 - **[Define an error type](define-an-error-type.md)** - Declare a type with one case per distinct failure, add Show and Error where a layer above needs to hand it further up, and let the generated From do the conversion at every ?.

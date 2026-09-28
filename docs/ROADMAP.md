@@ -53,9 +53,14 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   `--rule`/`--skip` today), the rules named and not built (a closure that only passes its parameter on, a case the
   expected type names, a `deprecated` field) and the findings of `labeled-literal` that need a call reordered
   ([tooling/torb-lint.md](tooling/torb-lint.md)).
-- **The language server is the compiler**: `check` incremental per file, and the checker's tables answer hover,
-  go to definition, completion and diagnostics. Its semantic tokens replace `torb highlight`, and a lint fix is its
-  quick fix. The VS Code extension in `.vscode/extensions/torbscript` gets the client.
+- **The language server is the compiler** - **the first round is built (2026-09-28)**: `torb lsp` over standard
+  input and output, the diagnostics of `check` with their ranges, hover, go to definition, completion, semantic tokens
+  from the highlighter sharpened by the checker, and the lint fixes as quick fixes; a keystroke redoes the front of the
+  one file that changed and checks its bodies and those of the open files that import it. The VS Code extension in
+  `.vscode/extensions/torbscript` is its client ([tooling/torb-lsp.md](tooling/torb-lsp.md),
+  [design/LANGUAGE-SERVER.md](design/LANGUAGE-SERVER.md)). **Left** (LANGUAGE-SERVER.md section 11): checking one body
+  instead of the file it is in, hover from the model of `torb doc`, signature help, references, rename, symbols and
+  formatting, and the published extension.
 - **The package manager**: the manifest that is evaluated, the lock file, `add`, `remove`, `update`, `publish`, and
   the registry at packages.torb.dev ([design/PROJECT.md](design/PROJECT.md) section 12,
   [design/RELEASE.md](design/RELEASE.md) section 7). **The client is built (2026-09-26)**: `torb add`, `remove`,

@@ -1,14 +1,17 @@
 # TorbScript for VS Code
 
-Syntax highlighting for
+The language server of `torb lsp` - the compiler itself - for `.trb` files: the problems `torb check` reports, as you
+type; hover with the signature and the doc comment of a declaration or the type of an expression; go to definition,
+into the standard library as well; completion of members after `.` and of the names in scope; semantic tokens; and the
+fixes of `torb lint` as quick fixes (see "Language server" below). Next to it, syntax highlighting for
 
 - `.trb` files
 - ` ```trb ` (or ` ```torbscript `) code blocks in Markdown, in the editor **and** in the preview
 
 plus comment toggling, bracket matching, auto-closing pairs, doc comment continuation, and **semantic
-highlighting**: fields, locals, parameters, cases, methods, functions and generics each in their own color, driven
-by `torb highlight` (see "Semantic highlighting" below) - a TextMate grammar alone cannot tell them apart, since it
-never sees the syntax tree.
+highlighting**: fields, locals, parameters, cases, methods, functions and generics each in their own color, from the
+language server or, where it does not run, from `torb highlight` (see "Semantic highlighting" below) - a TextMate
+grammar alone cannot tell them apart, since it never sees the syntax tree.
 
 ## Install
 
@@ -32,9 +35,30 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
 |-----------------------------------------|------------------------------------------------------------------------------|
 | `syntaxes/trb.tmLanguage.json`          | TextMate grammar for the editor (`source.trb`)                               |
 | `syntaxes/trb.markdown.tmLanguage.json` | Injects `source.trb` into fenced code blocks in Markdown                     |
-| `extension.js`                          | Highlights `trb` blocks in the Markdown preview (highlight.js classes, not TextMate), and runs `torb highlight` for semantic highlighting in the editor |
+| `extension.js`                          | Highlights `trb` blocks in the Markdown preview (highlight.js classes, not TextMate), starts the language server, and runs `torb highlight` for semantic highlighting where the language server does not run |
+| `lsp-client.js`                         | The client of `torb lsp`: the Language Server Protocol over the server's standard input and output, with no dependency and no build step |
 | `language-configuration.json`           | Comments, brackets, indentation, doc comment continuation                    |
 | `samples/tokens.trb`                    | One file exercising every semantic token kind and modifier - open it to see the palette below in place |
+
+## Language server
+
+Opening a `.trb` file starts `torb lsp` ([docs/tooling/torb-lsp.md](../../../docs/tooling/torb-lsp.md)) from
+`torbscript.executablePath`, or `build/release/torb[.exe]` under a workspace folder, or `torb` on `PATH`. It reads the
+workspace of the first folder the way `torb check` does and answers from the checker's tables:
+
+- **Problems** as you type: every error of `torb check`, and every finding of `torb lint` as a hint with its rule
+  (a binding nothing reads is faded).
+- **Quick fixes** (Ctrl+.): the fix `torb lint --fix` would write, one finding at a time.
+- **Hover**: a declaration as the source writes it, with its doc comment; a local or a constant with its type.
+- **Go to definition** (F12): locals, functions, types, fields, cases and constants, in any file of the program.
+- **Completion**: after `value.` its fields and methods, after `Type.` its cases and `static` members, and the names in
+  scope everywhere else.
+- **Semantic tokens**: the ones of `torb highlight`, with every member behind a `.` classified by the checker.
+
+A keystroke re-checks the file that changed and the open files that import it, never the whole workspace; the
+"TorbScript" output channel shows one line per run with what each pass cost. "TorbScript: Restart Language Server" in
+the command palette starts a newly built `torb`. Where the server cannot be started, or crashed three times within
+three minutes, the extension says so once in that channel and the grammar and `torb highlight` color the code alone.
 
 ## What the grammar knows
 
@@ -83,7 +107,8 @@ reasonable) is what shows.
 
 | Setting                                       | Default | Meaning |
 |------------------------------------------------|---------|---------|
-| `torbscript.executablePath`                    | `""`    | Path to `torb`. Empty searches `build/release/torb[.exe]` under every open workspace folder, then falls back to `torb` on `PATH`. |
+| `torbscript.executablePath`                    | `""`    | Path to `torb`, for the language server and for `torb highlight`. Empty searches `build/release/torb[.exe]` under every open workspace folder, then falls back to `torb` on `PATH`. |
+| `torbscript.languageServer.enabled`            | `true`  | Start `torb lsp`. Read when the window loads. |
 | `torbscript.semanticHighlighting.enabled`      | `true`  | Turn semantic highlighting off entirely (only the TextMate grammar's colors show). Also what happens automatically if `torb` cannot be found or run - never an error popup, only one line in the "TorbScript" output channel (View > Output). |
 
 ### The legend

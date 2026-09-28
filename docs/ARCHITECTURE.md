@@ -64,7 +64,8 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `backend/c/`             | Typed IR to C                                                         | started: see the table in section 6 of BACKEND.md for what is done |
 | `backend/bytecode/`, `vm/` | Bytecode and the VM that runs it (`torb run`, sandbox, REPL)        | started: [docs/design/VM.md](design/VM.md) |
 | `repl/`                  | `torb repl`: an entry as a module, the session's bindings ([docs/design/REPL.md](design/REPL.md)) | started  |
-| `tools/`                 | Formatter, test runner, package manager, language server              | planned  |
+| `language-server/`       | `torb lsp`: the checker's tables over the Language Server Protocol ([docs/design/LANGUAGE-SERVER.md](design/LANGUAGE-SERVER.md)) | started  |
+| `tools/`                 | Formatter, test runner, package manager                               | planned  |
 
 ### Front End
 
