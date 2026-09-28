@@ -157,6 +157,63 @@ TORB_TEST(a_line_to_standard_error_writes_standard_output_out_first) {
   TORB_CHECK_INTEGER(written, 6);
 }
 
+/**
+ * **A line is out when the call that wrote it returns** (the policy at the top of `console.c`). Standard output points
+ * at a file for the length of the test - C buffers a file in blocks, exactly as it buffers the pipe of `docker logs` -
+ * and the size of the file is read right after each call, before anything else flushes: every line of `print`, and
+ * every line the runtime writes itself (the test report), is already in it. Without the flush at the end of a line the
+ * file would still be empty.
+ *
+ * Where the tests run in a live Windows console, `console.c` decided once for the whole process that standard output
+ * is that console and writes it with `WriteConsoleW`, past the stream this test points away - there is nothing to
+ * observe then, and the test has nothing to say.
+ */
+TORB_TEST(a_printed_line_reaches_a_file_before_print_returns) {
+  const char *output_path = "torb-runtime-test-console-line-output.bin";
+  FILE *captured_output;
+  torb_text parts[2];
+  int saved_output;
+  long after_print;
+  long after_second;
+  long after_report;
+  char read_back[32];
+  size_t read_length;
+#if defined(_WIN32)
+  if (torb_is_terminal()) {
+    return;
+  }
+#endif
+  captured_output = fopen(output_path, "w+b");
+  TORB_CHECK(captured_output != NULL);
+  parts[0] = torb_text_from_cstring("ready");
+  parts[1] = torb_text_from_cstring("now");
+  fflush(stdout);
+  saved_output = TORB_TEST_DUP(TORB_TEST_FILENO(stdout));
+  TORB_TEST_DUP2(TORB_TEST_FILENO(captured_output), TORB_TEST_FILENO(stdout));
+
+  torb_print_parts(parts, 2u);
+  after_print = (long)TORB_TEST_LSEEK(TORB_TEST_FILENO(captured_output), 0, SEEK_END);
+  torb_print(parts[1]);
+  after_second = (long)TORB_TEST_LSEEK(TORB_TEST_FILENO(captured_output), 0, SEEK_END);
+  torb_write_line_out("done", 4u);
+  after_report = (long)TORB_TEST_LSEEK(TORB_TEST_FILENO(captured_output), 0, SEEK_END);
+
+  fflush(stdout);
+  TORB_TEST_DUP2(saved_output, TORB_TEST_FILENO(stdout));
+  TORB_TEST_CLOSE(saved_output);
+  rewind(captured_output);
+  read_length = fread(read_back, 1u, sizeof read_back - 1u, captured_output);
+  read_back[read_length] = '\0';
+  fclose(captured_output);
+  remove(output_path);
+  torb_text_release(parts[0]);
+  torb_text_release(parts[1]);
+  TORB_CHECK_INTEGER(after_print, 10);
+  TORB_CHECK_INTEGER(after_second, 14);
+  TORB_CHECK_INTEGER(after_report, 19);
+  TORB_CHECK(strcmp(read_back, "ready now\nnow\ndone\n") == 0);
+}
+
 /*
  * torb_install_interrupt_handler/torb_take_interrupt (docs/design/REPL.md section 2 - Ctrl+C for `torb repl`).
  * Raising a real signal against this process would risk the test binary itself if anything about the harness does
@@ -269,6 +326,7 @@ void torb_register_console_tests(void) {
   TORB_ADD(a_file_receives_the_raw_bytes_of_the_join);
   TORB_ADD(a_file_receives_the_raw_bytes_of_a_line);
   TORB_ADD(a_line_to_standard_error_writes_standard_output_out_first);
+  TORB_ADD(a_printed_line_reaches_a_file_before_print_returns);
   TORB_ADD(the_interrupt_flag_starts_and_stays_clear_without_a_signal);
   TORB_ADD(installing_the_interrupt_handler_more_than_once_is_harmless);
 #if defined(_WIN32)

@@ -59,7 +59,8 @@ Standard input as a stream of byte chunks. `standardOutput()` is not buffered - 
 so `standardOutput().buffered(capacity: 4096)` is the form for a program that writes a lot of small pieces, and it says
 where the flush is. `standardError()` stays unbuffered for the reason it always is: a diagnostic that is lost is worse
 than a slow one. What a sink of standard output takes and what `print` writes go through one lock, so the two appear in
-the order they were written. A read of standard input and a write to a console or a pipe run on a thread of the
+the order they were written - and neither waits in a buffer: `print` hands each line to the operating system before it
+returns, into a pipe or a file as into a terminal ([std/console](console.md)). A read of standard input and a write to a console or a pipe run on a thread of the
 blocking pool - no platform lets a poller wait for a console - so the worker that awaits it goes on meanwhile.
 
 ### `lines`

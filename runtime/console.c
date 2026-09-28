@@ -18,6 +18,17 @@
  * test - which are rendered as plain bytes and not as a `torb_text`, so that a panic still works when the heap is
  * exhausted. Its console path converts on the **stack** for the same reason, and a line too long for that buffer falls
  * back to the raw bytes exactly as invalid UTF-8 does.
+ *
+ * **Every line is out when the call that wrote it returns** - to a terminal, a pipe and a file alike, on standard
+ * output as on standard error. C's own policy is to buffer a pipe or a file in blocks, so a service whose standard
+ * output is `docker logs`, the journal or `| tee` showed its lines minutes late, and lost them where it was killed;
+ * standard output is therefore flushed at the end of every line (Rust's `LineWriter` promise; `setvbuf(_IOLBF)` would
+ * not do, because the Windows C runtime treats it as full buffering), and standard error, which C leaves unbuffered,
+ * is written without waiting as before. A line is joined into one piece before it is written, so it reaches a pipe in
+ * one write of the system wherever it fits the buffer - two programs writing into one pipe interleave whole lines,
+ * never the halves of one. Nothing of a line is ever left behind in a buffer, so there is nothing for a program to
+ * flush. What it costs, measured, is in `runtime/README.md`, "Standard output"; both back ends call these functions,
+ * so the VM and a native binary cannot differ in it.
  */
 
 /* The POSIX half calls POSIX 2008 (`sigaction`, `fileno`), which a strict `-std=c11` hides - the portable seed
@@ -308,27 +319,52 @@ static bool torb_read_line_console(HANDLE handle, torb_text *out) {
 
 /* ================================================================================ the same on both platforms === */
 
+/**
+ * How long a line may be and still be joined on the stack: longer ones take a buffer of the heap, and nothing a
+ * program prints line by line comes near this often enough for that to matter.
+ */
+#define TORB_LINE_STACK_LIMIT 1024u
+
 /** `parts` joined by one space and a trailing `\n`, written as the raw UTF-8 bytes they are. The only path on POSIX,
- *  and the path a pipe, a file or invalid UTF-8 always takes on Windows too - a byte-for-byte copy of what this file
- *  wrote before a console ever needed different treatment. `parts` borrowed. Not `static`: `console_test.c` calls it
- *  directly against a `FILE *` of its own (never `stdout` or `stderr`) to prove a pipe or a file still gets exactly
- *  these bytes, without needing a real console to prove the dispatch around it is not taken. */
+ *  and the path a pipe, a file or invalid UTF-8 always takes on Windows too. The line is joined first and handed to
+ *  one `fwrite`, so standard error, which is not buffered, gets it in one write of the system too, rather than one per
+ *  part, space and line break. `parts` borrowed. Not `static`: `console_test.c` calls it directly against a `FILE *`
+ *  of its own (never `stdout` or `stderr`) to prove a pipe or a file still gets exactly these bytes, without needing a
+ *  real console to prove the dispatch around it is not taken. */
 void torb_write_parts(FILE *stream, const torb_text *parts, size_t count) {
+  char small[TORB_LINE_STACK_LIMIT];
+  char *line = small;
+  size_t total = 1u; /* the trailing '\n' */
+  size_t filled = 0u;
   size_t index;
   for (index = 0u; index < count; index += 1u) {
+    total += (index > 0u ? 1u : 0u) + (size_t)parts[index].length;
+  }
+  if (total > sizeof small) {
+    line = (char *)torb_raw_allocate(total);
+  }
+  for (index = 0u; index < count; index += 1u) {
     if (index > 0u) {
-      fputc(' ', stream);
+      line[filled] = ' ';
+      filled += 1u;
     }
     if (parts[index].length > 0u && parts[index].storage != NULL) {
-      fwrite(parts[index].storage->data + parts[index].offset, 1u, (size_t)parts[index].length, stream);
+      memcpy(line + filled, parts[index].storage->data + parts[index].offset, (size_t)parts[index].length);
+      filled += (size_t)parts[index].length;
     }
   }
-  fputc('\n', stream);
+  line[filled] = '\n';
+  filled += 1u;
+  fwrite(line, 1u, filled, stream);
+  if (line != small) {
+    torb_raw_free(line, total);
+  }
 }
 
 /** Dispatches to the console path when `stream` is `stdout` or `stderr` and that standard handle is a live console,
  *  flushing the stream first so anything already buffered for it keeps appearing before this call; the raw bytes of
- *  `torb_write_parts` otherwise, and again where the console path answers that the text was not convertible. */
+ *  `torb_write_parts` otherwise, and again where the console path answers that the text was not convertible - flushed
+ *  at once, because a line is out when `print` returns (the policy at the top of this file). */
 static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
   torb_console_lock();
 #if defined(_WIN32)
@@ -344,6 +380,7 @@ static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
   }
 #endif
   torb_write_parts(stream, parts, count);
+  fflush(stream);
   torb_console_unlock();
 }
 
@@ -352,7 +389,8 @@ static void torb_print_to(FILE *stream, const torb_text *parts, size_t count) {
  * live console, the bytes themselves everywhere else. This is what the runtime's own two reports use - the panic
  * report of `panic.c` and the lines of `test.c` - so that a message with a non-ASCII character in it reads correctly
  * on a console while a pipe keeps exactly the bytes the conformance suite compares. `bytes` may hold `\n` of its own:
- * the whole line goes out in one call, and the one `\n` this appends is the end of it.
+ * the whole line goes out in one call, and the one `\n` this appends is the end of it. Joined on the stack where it
+ * fits and flushed at once, like a line of `print`; nothing here allocates, because a panic writes through it.
  */
 void torb_write_line(FILE *stream, const char *bytes, size_t length) {
   torb_console_lock();
@@ -368,10 +406,21 @@ void torb_write_line(FILE *stream, const char *bytes, size_t length) {
     }
   }
 #endif
-  if (length > 0u && bytes != NULL) {
-    fwrite(bytes, 1u, length, stream);
+  if (bytes == NULL) {
+    length = 0u;
   }
-  fputc('\n', stream);
+  if (length < TORB_LINE_STACK_LIMIT) {
+    char line[TORB_LINE_STACK_LIMIT];
+    if (length > 0u) {
+      memcpy(line, bytes, length);
+    }
+    line[length] = '\n';
+    fwrite(line, 1u, length + 1u, stream);
+  } else {
+    fwrite(bytes, 1u, length, stream);
+    fputc('\n', stream);
+  }
+  fflush(stream);
   torb_console_unlock();
 }
 
@@ -398,13 +447,12 @@ void torb_print(torb_text text) {
   torb_print_to(stdout, &text, 1u);
 }
 
-/* Standard output is buffered when it is a pipe or a file and standard error is not, so a line to stderr flushes stdout
-   first: the two streams of a program that reports a failure then arrive in the order the program wrote them, the way
-   they do for a panic (panic.c). */
+/* A line of `print` never waits in the buffer of standard output, but C code of the runtime may have left something
+   there, so a line to stderr flushes stdout first: the two streams of a program that reports a failure then arrive in
+   the order the program wrote them, the way they do for a panic (panic.c). */
 void torb_print_error(torb_text text) {
   fflush(stdout);
   torb_print_to(stderr, &text, 1u);
-  fflush(stderr);
 }
 
 void torb_print_parts(const torb_text *parts, size_t count) {
@@ -414,7 +462,6 @@ void torb_print_parts(const torb_text *parts, size_t count) {
 void torb_print_error_parts(const torb_text *parts, size_t count) {
   fflush(stdout);
   torb_print_to(stderr, parts, count);
-  fflush(stderr);
 }
 
 /*

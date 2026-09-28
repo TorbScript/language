@@ -1222,12 +1222,16 @@ bool torb_set_next(torb_set set, uint32_t *cursor, const void **item);
 
 /* --------------------------------------------------------------------------------------- console and process --- */
 
-/** `text` borrowed. Writes the bytes and a `\n` to stdout. */
+/**
+ * `text` borrowed. Writes the bytes and a `\n` to stdout, and the line is out when this returns: standard output is
+ * flushed at the end of every line, into a pipe or a file as into a terminal (console.c, and runtime/README.md,
+ * "Standard output").
+ */
 void torb_print(torb_text text);
 void torb_print_error(torb_text text);
 /**
- * `print(...values: Show)`: the shown parts joined by one space, then a `\n`. The join lives here so the two back
- * ends cannot disagree about it. `parts` borrowed.
+ * `print(...values: Show)`: the shown parts joined by one space, then a `\n`, written in one piece and flushed at once.
+ * The join lives here so the two back ends cannot disagree about it. `parts` borrowed.
  */
 void torb_print_parts(const torb_text *parts, size_t count);
 void torb_print_error_parts(const torb_text *parts, size_t count);

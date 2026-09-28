@@ -1,0 +1,111 @@
+/**
+ * **A line a program prints reaches a pipe while the program still runs**, not when it ends: `print` and `printError`
+ * hand every line to the operating system before they return, into a pipe as into a terminal or a file
+ * (runtime/console.c). C's own policy buffers a pipe in blocks, and under it a service whose output is `docker logs`,
+ * the journal or `| tee` showed its lines late - and never, where it was killed.
+ *
+ * The program starts itself as a child, whose standard output and standard error are pipes, and the two talk in turns.
+ * The child prints `ready` and waits for a line of its standard input, which the parent writes only once `ready` has
+ * arrived; then the child writes `waiting` to standard error and waits for the end of its input, which the parent sends
+ * only once `waiting` has arrived. A line of `printError` lets no line of `print` wait behind it, so the two turns are
+ * what keep one stream from covering for the other. Each turn waits a minute at most: a line kept in a buffer comes
+ * only after the parent gave up on it, and the program says so instead of hanging.
+ *
+ * The child is this program's own binary, or, where the VM runs this file, the same file in the VM of the `torb` the
+ * conformance runner names in `CONFORMANCE_TORB` - so each back end prints through its own runtime here.
+ */
+use Process, Child from "std/process"
+use Environment from "std/os"
+use IoError from "std/fs"
+use Source, Bytes, textOf from "std/stream"
+use sleep from "std/time"
+use readLine from "std/io"
+
+/** What has arrived from the child so far, read by the parent while two tasks fill it. */
+shared type Arrived {
+  var output: String = ""
+  var errors: String = ""
+}
+
+const arrived = Arrived()
+
+/** The child: a line to each stream, each followed by a wait for the parent. */
+fn child(): Int {
+  print "ready"
+  const answer = match readLine() {
+    Ok(Some(line)) => line.trim()
+    Ok(None) => "the end of the input"
+    Fail(problem) => problem.message
+  }
+  printError "waiting"
+  var lines = 0
+  while const Ok(Some(_)) = readLine() {
+    lines = lines + 1
+  }
+  print "{answer}, then {lines} more lines"
+  0
+}
+
+/** This program again, with `child` as its argument: its binary, or its file in the VM that runs it. */
+fn startChild(): Result<Child, IoError> {
+  const path = Process.executablePath() ?? ""
+  if path.endsWith(".trb") {
+    const torb = Environment.get("CONFORMANCE_TORB") ?? "torb"
+    return Process.start torb, ["run", "--vm", path, "child"]
+  }
+  Process.start path, ["child"]
+}
+
+/** Everything `source` delivers, appended to the output or the errors of [arrived] as it arrives. */
+fn collect(var source: Source<Bytes, IoError>, errors: Bool): Task<Result<Void, IoError>> {
+  while const Some(chunk) = source.next().await()? {
+    const text = textOf(chunk).ok() ?? ""
+    if errors {
+      arrived.errors = arrived.errors + text
+    } else {
+      arrived.output = arrived.output + text
+    }
+  }
+  Ok void
+}
+
+/** Waits until `line` has arrived on the output or on the errors, for a minute at most; whether it did. */
+fn arrivedInTime(line: String, errors: Bool): Task<Bool> {
+  var waited = 0
+  while waited < 1200 {
+    const seen = if errors { arrived.errors } else { arrived.output }
+    if seen.contains(line) {
+      return true
+    }
+    sleep(0.05).await()
+    waited = waited + 1
+  }
+  false
+}
+
+fn parent(): Task<Result<Void, IoError>> {
+  using started = startChild()?
+  const output = collect started.output(), errors: false
+  const errors = collect started.errors(), errors: true
+  var input = started.input()
+  const ready = arrivedInTime("ready", errors: false).await()
+  input.addLine("go").await()?
+  const waiting = arrivedInTime("waiting", errors: true).await()
+  input.end().await()?
+  output.await()?
+  errors.await()?
+  const code = started.wait().await()?
+  print "ready arrived on standard output while the child waited for an answer: {ready}"
+  print "waiting arrived on standard error while the child waited for the end: {waiting}"
+  const lines = arrived.output.replace("\r", "").trim().replace("\n", ", then ")
+  print "the child wrote {lines}, and left with {code}"
+  Ok void
+}
+
+if Process.arguments().first() == "child" {
+  Process.exit child()
+}
+if const Fail(problem) = parent().await() {
+  print "error: {problem}"
+  Process.exit 1
+}

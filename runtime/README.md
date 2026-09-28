@@ -202,6 +202,36 @@ process - is what a byte-for-byte write would otherwise be at the mercy of (`doc
 the operating system decided"). A pipe or a file is never a console, so the conformance suite's byte comparison never
 takes this path.
 
+**Standard output: every line is out when the call that wrote it returns.** C buffers standard output in blocks when
+it is a pipe or a file, which is where a service's output goes - `docker logs`, the journal, `| tee` - so its lines
+showed up late, or never when it was stopped (a `release-sync` in production logged "synced" long after the fact).
+`console.c` therefore flushes standard output at the end of every line of `print` and of `torb_write_line` (the panic
+and the test report), into a terminal, a pipe and a file alike - Rust's `LineWriter` promise, done by hand because the
+Windows C runtime treats `setvbuf(_IOLBF)` as full buffering. Standard error stays unbuffered, as C leaves it. A line
+is joined into one piece first (on the stack up to 1 KiB) and handed to one `fwrite`, so it reaches a pipe in one
+write of the system wherever it fits: two processes writing into one pipe interleave whole lines, and a line of
+`printError` is one write instead of one per part. There is nothing for a program to flush, and `print` and
+`printError` keep the order they were called in (`printError` flushes standard output first, for what C code of the
+runtime may have written there). The VM calls the same functions, so it and a native binary cannot differ
+(`tests/conformance/print-reaches-a-pipe.trb` runs in both; `tests/console_test.c` checks a line is in a file before
+`print` returns).
+
+What it costs, measured with a release binary printing a million lines of about thirty bytes, best of five (2026-09-28):
+
+| Where standard output goes | Buffered in blocks (before) | A write per line (now) |
+|---|---|---|
+| Linux, a pipe (`\| cat > /dev/null`) | 0.24 s | 0.87 s |
+| Linux, a file (overlay file system of a container) | 0.17 s | 1.1 to 1.3 s |
+| Windows, a pipe to MSYS `cat` | 6.3 s | 2.7 s |
+| Windows, a file on NTFS | 0.6 to 0.7 s | 4.5 s |
+
+About a microsecond per line on Linux, three to four on Windows into a file: invisible next to a program that computes
+what it prints, and the price of a log that is never behind. Line buffering only where standard output is not a regular
+file was considered and not taken - a service redirected into a log file (`> service.log`, `StandardOutput=append:`)
+is watched with `tail -f` and killed like any other, and one rule for every target is one less thing to know. A program
+that prints a great many lines joins them and prints the text once, which is one write for all of them. (Why the
+Windows pipe got faster was not looked into; the reader on the other end, MSYS `cat`, is most of both times.)
+
 **Overflow.** Checked in every profile, because it is semantics and not a diagnostic. The 64 bit operations use
 `__builtin_*_overflow` where it exists and a portable bit test otherwise, selected by `TORB_HAS_OVERFLOW_BUILTINS`,
 so MSVC works. The narrow widths compute in 64 bits and check the range, which is exact and needs no builtin.
