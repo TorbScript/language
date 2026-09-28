@@ -16,6 +16,9 @@ use FrameReader, framed from "../src/language-server/protocol"
 use LineMap, Position from "../src/language-server/position"
 use Locations, absolutePathOf, fileUriOf from "../src/language-server/uri"
 use completionContextOf, CompletionContext, withoutMemberAccess from "../src/language-server/completion"
+use outlineOf from "../src/language-server/analysis"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
 
 const root = "file:///workspace"
 const mainUri = "file:///workspace/app/src/main.trb"
@@ -301,6 +304,41 @@ group "Diagnostics" {
     assert(integerAt(diagnostics[0], ["severity"]) == Some(4))
     assert(textAt(diagnostics[0], ["code"]) == Some("self-name"))
     assert(textAt(diagnostics[0], ["source"]) == Some("torb lint"))
+  }
+}
+
+group "A change redoes the front of its file" {
+  test "the outline of a file is its declarations and imports, without positions" {
+    const before = parse(SourceText.of("use Show from \"std/core\"\n\nfn run() \{\n  print 1\n\}\n")).file
+    const moved = parse(SourceText.of("\n\nuse Show from \"std/core\"\n\nfn run() \{\n  print 2\n  print 3\n\}\n")).file
+    const renamed = parse(SourceText.of("use Show from \"std/core\"\n\nfn walk() \{\n  print 1\n\}\n")).file
+    const outline = outlineOf before
+    assert(outline == ["use  Show from std/core", "fn  run"])
+    assert(outlineOf(moved) == outline)
+    assert(outlineOf(renamed) != outline)
+  }
+
+  test "what stands at a position moved by a change is found where it is now" {
+    var server = started()
+    const _first = send server, [opened(mainUri, "const total = 1\nprint total\n")]
+    const _second = send server, [replaced(mainUri, 2, "// the sum\n\nconst total = 1\nprint total\n")]
+    const answer = only server, [at("textDocument/definition", 20, mainUri, 3, 7)]
+    expectText(
+      encoded(memberAt(answer, ["result", "range"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":2,\"character\":6\},\"end\":\{\"line\":2,\"character\":11\}\}",
+    )
+  }
+
+  test "a declaration added by a change is known to the file at once" {
+    var server = started()
+    const _first = send server, [opened(mainUri, "print 1\n")]
+    const answers = send(
+      server,
+      [replaced(mainUri, 2, "fn double(value: Int): Int \{\n  value * 2\n\}\n\nprint double(1)\n")],
+    )
+    assert(published(answers).get(mainUri) == Some([]))
+    const answer = only server, [at("textDocument/hover", 21, mainUri, 4, 7)]
+    expectText(textAt(answer, ["result", "contents", "value"]) ?? "", "```trb\nfn double(value: Int): Int\n```")
   }
 }
 

@@ -64,6 +64,41 @@ public fn check(
   onlyReached: Bool = false,
   onlyNamed: Bool = false,
 ): Checked {
+  const front = frontOf tree, paths, withTimings, scripts, onlyReached
+  checkFront tree, front, paths, withTimings, checksEveryBody, scripts, onlyNamed
+}
+
+/**
+ * Everything a check knows before the type checker runs, which depends on the declarations and imports of the files
+ * and not on their bodies: the workspace, the module graph, the names of every module, and every name in a type
+ * position. A language server keeps it between two checks and redoes the part of the one file that changed.
+ */
+public type Front {
+  workspace: Workspace
+  /** The packages the paths belong to, which is where a `project.trb` that is no module is looked for */
+  packages: List<Package>
+  /** With the symbols the names in type positions declared: what the type checker starts from */
+  program: Program
+  /** Every name in a type position, one entry per module of `program.graph`, by the span of the name */
+  resolutions: List<Map<Span, SymbolId>>
+  /** What was wrong with a name in a type position, one entry per module */
+  unresolved: List<List<Diagnostic>>
+  problems: List<String>
+  /** What the passes cost, when they were timed */
+  timings: List<Timing>
+}
+
+/**
+ * The [Front] of the program of the paths: the packages they belong to, parsed and resolved. `onlyReached` parses
+ * the packages the program of the paths reaches and nothing else (`buildGraph`).
+ */
+public fn frontOf(
+  tree: SourceTree,
+  paths: List<String>,
+  withTimings: Bool = false,
+  scripts: List<RuntimeScript> = [],
+  onlyReached: Bool = false,
+): Front {
   var clock = Stopwatch withTimings
   clock.start()
   var before: List<Timing> = []
@@ -91,18 +126,43 @@ public fn check(
   var symbols = program.symbols
   var resolutions: List<Map<Span, SymbolId>> = []
   var unresolved: List<List<Diagnostic>> = []
-  var requested: List<ModuleId> = []
   for module in graph.modules {
     const resolved = resolveTypes symbols, program, module.id
     resolutions.append resolved.names
     unresolved.append resolved.diagnostics
+  }
+  before.append Timing("names in type positions", clock.taken())
+  Front workspace, packages, program.copy(symbols: symbols), resolutions, unresolved, problems, before
+}
+
+/**
+ * The type checker over a [Front], for the modules the paths point at: their bodies are checked and their files
+ * reported. `onlyNamed` checks and reports the files the paths name and not the files they import through a relative
+ * path.
+ */
+public fn checkFront(
+  tree: SourceTree,
+  front: Front,
+  paths: List<String>,
+  withTimings: Bool = false,
+  checksEveryBody: Bool = false,
+  scripts: List<RuntimeScript> = [],
+  onlyNamed: Bool = false,
+): Checked {
+  const targets = paths.map(normalizePath).toList()
+  const workspace = front.workspace
+  const graph = front.program.graph
+  const resolutions = front.resolutions
+  const unresolved = front.unresolved
+  const problems = front.problems
+  const resolvedProgram = front.program
+  var requested: List<ModuleId> = []
+  for module in graph.modules {
     if isRequested(targets, module.path) || scripts.any({ _.path == module.path }) {
       requested.append module.id
     }
   }
-  before.append Timing("names in type positions", clock.taken())
   const reported = if onlyNamed { requested } else { withRelativeImports graph, workspace, requested }
-  const resolvedProgram = program.copy symbols: symbols
   // A lowering may reach the body of any module of the program - a default member of a trait of `std/prelude`, a
   // generic function of another package - and a body whose tables were never filled cannot be lowered at all. The
   // program is the packages the lowering itself closes the world over (`programPackagesOf`), never more: a scratch file
@@ -112,7 +172,7 @@ public fn check(
   var checked = checkTypes resolvedProgram, resolutions, bodies, withTimings
   // The passes before the checker existed cannot be recorded on it as they run, so they are put in front here
   if withTimings {
-    checked.timings = before.appendedAll checked.timings
+    checked.timings = front.timings.appendedAll checked.timings
   }
 
   var isReported: Set<Int> = Set.of()
@@ -139,7 +199,7 @@ public fn check(
   }
   // A `project.trb` that is a receiver script is a module and was reported above; without `std/project` there is no
   // type to check it against, and then only what the parser found about it is reported
-  for package in packages {
+  for package in front.packages {
     const manifest = joinPath package.directory, "project.trb"
     if isRequested(targets, manifest) && graph.moduleAt(manifest).isNone() {
       if const Some(text) = tree.text(manifest) {

@@ -55,6 +55,20 @@ fn isNarrower(span: Span, best: Found?): Bool {
   }
 }
 
+/** Whether the text holds `name` at `span`, which may lie anywhere: past the end, or inside of a character. */
+fn isNamedAt(text: String, span: Span, name: String): Bool {
+  if span.start < 0 || span.end > text.byteLength() || span.end - span.start != name.byteLength() {
+    return false
+  }
+  // A name is ASCII, so each of its bytes is a character of its own
+  for (index, byte) in name.bytes().indexed() {
+    if text.byteAt(span.start + index) != Some(byte) {
+      return false
+    }
+  }
+  true
+}
+
 /** What stands at `offset` in `module`: the narrowest thing the tables know there. */
 public fn foundAt(checked: Checked, module: ModuleId, offset: Int): Found? {
   const checker = checked.checker
@@ -72,16 +86,19 @@ public fn foundAt(checked: Checked, module: ModuleId, offset: Int): Found? {
       }
     }
   }
+  const text = checked.program.graph.at(module).source.text
   for (index, symbol) in checker.symbols.all.indexed() {
     if symbol.module == Some(module) && holds(symbol.span, offset) && isNarrower(symbol.span, best) {
-      best = Found.Declared symbol.span, SymbolId(index)
+      // A language server's run keeps the symbols of an earlier text of the file: a name that is not there any more
+      if isNamedAt(text, symbol.span, symbol.name) {
+        best = Found.Declared symbol.span, SymbolId(index)
+      }
     }
   }
-  const text = checked.program.graph.at(module).source.text
   for (index, binding) in checker.bindings.indexed() {
-    if holds(binding.at, offset) && isNarrower(binding.at, best) && binding.at.end <= text.byteLength() {
+    if holds(binding.at, offset) && isNarrower(binding.at, best) {
       // The bindings of every body checked share one list; the name at the span says which module it belongs to
-      if text.sliceBytes(binding.at.start, binding.at.end) == binding.name {
+      if isNamedAt(text, binding.at, binding.name) {
         best = Found.Bound binding.at, BindingId(index)
       }
     }

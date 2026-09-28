@@ -15,7 +15,7 @@ use Name, SourceFile, Statement, Declaration, Member, Block, Expression, Conditi
 use Argument from "../syntax/ast"
 use boundNamesOf, SymbolId, SymbolKind from "../semantics/symbols"
 
-use Checker, CandidateKind from "../semantics/checker/context"
+use Checker, Candidate, CandidateKind from "../semantics/checker/context"
 use TypeId from "../semantics/checker/type"
 use lookupMember, lookupStaticMember, memberNames, caseNamesOf from "../semantics/checker/member"
 use Analysis from "./analysis"
@@ -36,9 +36,9 @@ public fn completionContextOf(source: String, offset: Int): CompletionContext {
   while start > 0 && isNameByte(source.byteAt(start - 1) ?? 0) {
     start = start - 1
   }
-  if start > 0 && source.sliceBytes(start - 1, start) == "." {
+  if start > 0 && source.byteAt(start - 1) == Some(46) {
     const dot = start - 1
-    if dot > 0 && source.sliceBytes(dot - 1, dot) == "?" {
+    if dot > 0 && source.byteAt(dot - 1) == Some(63) {
       return CompletionContext.Member(dot - 1, dot, true)
     }
     return CompletionContext.Member dot, dot, false
@@ -82,6 +82,9 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, i
       names.appendAll memberNames(checker, owner)
       for name in unique(names) {
         if const Some(candidate) = lookupStaticMember(checker, owner, name) {
+          if isInstanceMember(candidate) {
+            continue
+          }
           items.append memberItem(name, candidate.kind, checker.describe(candidate.annotation))
         }
       }
@@ -95,6 +98,9 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, i
       const subject = if isOptional { optionalInner(checker, annotation) ?? annotation } else { annotation }
       for name in unique(memberNames(checker, subject)) {
         if const Some(candidate) = lookupMember(checker, subject, name) {
+          if !isInstanceMember(candidate) {
+            continue
+          }
           items.append memberItem(name, candidate.kind, checker.describe(candidate.annotation))
         }
       }
@@ -189,6 +195,18 @@ fn memberItem(name: String, kind: CandidateKind, detail: String): JsonValue {
     .TupleField(_, _) => 5
   }
   item name, itemKind, detail, "0"
+}
+
+/**
+ * Whether a member belongs to a value rather than to its type: a field, `copy`, and a method that takes its receiver.
+ * Behind `value.` only these are offered and behind `Type.` only the others, though the lookup finds both.
+ */
+fn isInstanceMember(candidate: Candidate): Bool {
+  match candidate.kind {
+    .Field(_, _) | .TupleField(_, _) | .Copy(_) => true
+    .Method(_, _) => candidate.takesSelf
+    .Constant(_, _) | .CaseConstructor(_, _) | .Construct(_) => false
+  }
 }
 
 /** The kind of a completion item of the protocol for a kind of declaration. */

@@ -2,26 +2,41 @@
  * One run of the checker for the language server, and what makes the next one cheap.
  *
  * The server holds one [SourceTree] of the workspace for as long as it runs, with the text of every open document in
- * place of what the disk holds. Every run parses only what changed: the parses of a run are kept in the tree
- * ([parsesOf], `SourceTree.withParsed`), and `SourceTree.withFile` forgets the parse of the one file whose text it
- * replaces. A run checks the bodies of the documents it is asked about and of nothing else - the checker's on-demand
- * bodies of `torb run` - and parses only the packages their program reaches (`check`'s `onlyReached`).
+ * place of what the disk holds. A run has two halves, the ones of `check` (`../semantics/check.trb`): the [Front] -
+ * the workspace, the module graph, the names of every module and the names in every type position - and the type
+ * checker over it, which checks the bodies of the documents the run is about and of nothing else (`onlyNamed`, the
+ * on-demand bodies of `torb run`).
+ *
+ * **A keystroke redoes the front of one file.** Where a document changed and its declarations and imports did not -
+ * the same names, of the same kinds, in the same order, the same `use`s ([outlineOf]) - nothing another module sees of
+ * it changed, so the front of the last run stays and only the part of that file is redone ([refreshedFront]): its
+ * parse, the positions of its symbols, and its names in type positions. Every other change - a declaration added or
+ * renamed, an import, a file of the watched workspace - builds the front from scratch, and even that parses only what
+ * changed: the parses of every run are kept in the tree ([parsesOf], `SourceTree.withParsed`).
  */
 
+use Clock from "std/time"
 use SourceText from "../syntax/source"
+use SourceFile, Pattern, UseDeclaration from "../syntax/ast"
 use Parsed from "../syntax/parser/parser"
 use SourceTree from "../project/source-tree"
 use normalizePath from "../project/path"
-use check, Checked, CheckedFile from "../semantics/check"
+use Checked, CheckedFile, Front, frontOf, checkFront from "../semantics/check"
 use ModuleId from "../semantics/module"
+use Graph, resolveImport from "../semantics/graph"
 use Program from "../semantics/scope"
-use resolveImport from "../semantics/graph"
+use Symbols, Definition, declareModule, boundNamesOf from "../semantics/symbols"
+use resolveTypes from "../semantics/resolve-types"
+use scriptLoadsOf from "../semantics/scripts"
+use Timing from "../semantics/checker/context"
 
 /** What one run of the checker found, and which documents it was asked about. */
 public type Analysis {
   checked: Checked
   /** The normalized paths of the documents the run checked the bodies of */
   paths: List<String>
+  /** What the checker started from, which the next run starts from where it can */
+  front: Front
 
   /** The module a path became in this run, if the run reached it at all. */
   fn moduleOf(path: String): ModuleId? {
@@ -43,12 +58,158 @@ public type Analysis {
 }
 
 /**
- * Checks the documents at `paths`, which are normalized: their bodies, the signatures of everything their program
- * reaches, and nothing else.
+ * A run from scratch: the front of the program of every path of `reach` - every open document, so that the next
+ * change of any of them finds its module there - and the bodies of the documents at `paths`, which are normalized.
  */
-public fn analyze(tree: SourceTree, paths: List<String>): Analysis {
-  const checked = check tree, paths, withTimings: true, onlyReached: true, onlyNamed: true
-  Analysis checked, paths
+public fn analyze(tree: SourceTree, reach: List<String>, paths: List<String>): Analysis {
+  const front = frontOf tree, reach, withTimings: true, onlyReached: true
+  const checked = checkFront tree, front, paths, withTimings: true, onlyNamed: true
+  Analysis checked, paths, front
+}
+
+/**
+ * A run over the front of an earlier one, with the files at `changed` read again from the tree: `None` where one of
+ * them is no module of that front or changed its declarations or imports, and only a run from scratch is right.
+ */
+public fn reanalyze(tree: SourceTree, front: Front, changed: List<String>, paths: List<String>): Analysis? {
+  const started = Clock.milliseconds()
+  var current = front
+  for path in changed {
+    current = refreshedFront(current, tree, path)?
+  }
+  for path in paths {
+    if current.program.graph.moduleAt(path).isNone() {
+      return None
+    }
+  }
+  const spent = Clock.milliseconds() - started
+  current = current.copy timings: [Timing("the changed files of the last front", spent)]
+  const checked = checkFront tree, current, paths, withTimings: true, onlyNamed: true
+  Analysis checked, paths, current
+}
+
+/**
+ * The front with the file at `path` read again: its parse, the positions of the symbols it declares - the same
+ * symbols, so every other module's names still lead to them - and its names in type positions. `None` where the file
+ * is no module of the front, or where what other modules see of it changed.
+ */
+fn refreshedFront(front: Front, tree: SourceTree, path: String): Front? {
+  const module = front.program.graph.moduleAt(path)?
+  const previous = front.program.graph.at module
+  const (source, parsed) = tree.parsedAt path
+  if outlineOf(parsed.file) != outlineOf(previous.file) {
+    return None
+  }
+  const fresh = previous.copy(
+    source: source,
+    file: parsed.file,
+    diagnostics: parsed.diagnostics,
+    deferred: parsed.deferred,
+  )
+  var modules = front.program.graph.modules
+  modules.set module.value, fresh
+  // The symbols the file declares, declared once more on the side, to read their new positions off
+  var scratch = Symbols()
+  const declared = declareModule scratch, fresh
+  const before = front.program.definitions[module.value]
+  if declared.length() != before.length() {
+    return None
+  }
+  var symbols = front.program.symbols
+  var definitions: List<Definition> = []
+  for (index, definition) in declared.indexed() {
+    const id = before[index].symbol
+    const now = scratch.at definition.symbol
+    const kept = symbols.at id
+    if kept.cases.length() != now.cases.length() {
+      return None
+    }
+    symbols.all.set id.value, kept.copy(span: now.span)
+    for (position, variant) in kept.cases.indexed() {
+      symbols.all.set variant.value, symbols.at(variant).copy(span: scratch.at(now.cases[position]).span)
+    }
+    definitions.append Definition(definition.name, definition.span, id)
+  }
+  var everyDefinition = front.program.definitions
+  everyDefinition.set module.value, definitions
+  const program = front.program.copy graph: Graph.of(modules), symbols: symbols, definitions: everyDefinition
+  var extended = symbols
+  const resolved = resolveTypes extended, program, module
+  var resolutions = front.resolutions
+  resolutions.set module.value, resolved.names
+  var unresolved = front.unresolved
+  unresolved.set module.value, resolved.diagnostics
+  front.copy program: program.copy(symbols: extended), resolutions: resolutions, unresolved: unresolved
+}
+
+/**
+ * What the rest of the program sees of a file: every name it declares, with its kind and whether it is public, the
+ * cases of its types, every `use`, and every script it loads - in order, without a position. Two parses with the same
+ * outline declare the same symbols in the same order and import the same names.
+ */
+public fn outlineOf(file: SourceFile): List<String> {
+  var outline: List<String> = []
+  for statement in file.statements {
+    match statement.kind {
+      .Declare(declaration) => {
+        const visibility = declaration.modifiers.visibility.written()
+        match declaration.kind {
+          .Use(usage) => outline.append "use {visibility} {useText(usage)}"
+          .Function(function) => outline.append "fn {visibility} {function.name.text}"
+          .Type(written) => {
+            outline.append "type {visibility} {written.name.text}"
+            for member in written.members {
+              if const .Case(variant) = member.kind {
+                outline.append "case {variant.name.text}"
+              }
+            }
+          }
+          .Alias(written) => outline.append "alias {visibility} {written.name.text}"
+          .Trait(written) => outline.append "trait {visibility} {written.name.text}"
+          .Foreign(written) => {
+            for member in written.members {
+              if const .Function(function) = member.kind {
+                outline.append "fn {visibility} {function.name.text}"
+              }
+            }
+          }
+          .Constant(binding) => outline.append "const {visibility} {namesOf(binding.pattern)}"
+          .Extend(_) => {}
+        }
+      }
+      .Bind(binding) => outline.append "const {namesOf(binding.pattern)}"
+      _ => {}
+    }
+  }
+  for load in scriptLoadsOf(file) {
+    outline.append "load {load.path}"
+  }
+  outline
+}
+
+/** A `use` as its items and its source, without the positions of its names. */
+fn useText(usage: UseDeclaration): String {
+  const source = match usage.source {
+    .Module(path) => path
+    .Local => ""
+  }
+  const items = match usage.items {
+    .Names(listed) => {
+      var texts: List<String> = []
+      for item in listed {
+        const path = item.path.map({ _.text }).joined(separator: ".")
+        const alias = item.alias.map({ " as {_.text}" }) ?? ""
+        texts.append "{path}{alias}"
+      }
+      texts.joined separator: ", "
+    }
+    .All(alias) => "* as {alias.text}"
+  }
+  "{items} from {source}"
+}
+
+fn namesOf(pattern: Pattern): String {
+  boundNamesOf(pattern).map({ _.text }).joined(separator: ",")
 }
 
 /** Every parse the run made or reused, by path: what the tree keeps for the next run. */

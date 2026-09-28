@@ -18,7 +18,8 @@ use JsonValue from "std/json"
 use SourceTree from "../project/source-tree"
 use readSourceTree from "../project/read"
 use Finding from "../lint/finding"
-use Analysis, analyze, parsesOf, dependentsOf from "./analysis"
+use Analysis, analyze, reanalyze, parsesOf, dependentsOf from "./analysis"
+use Front from "../semantics/check"
 use memberAt, textAt, integerAt, itemsAt, object, integer, text, array, decoded from "./json"
 use LineMap, Position, Range from "./position"
 use Locations, absolutePathOf from "./uri"
@@ -66,6 +67,10 @@ public type LanguageServer {
   var log: List<String> = []
   /** Whether the tree is read from disk at `initialize`, or was handed in (a test) */
   private readsDisk: Bool = true
+  /** What the last run of the checker started from: the next one redoes the part of the files that changed */
+  private var front: Front? = None
+  /** How many runs the front has served since it was built from scratch */
+  private var frontRuns: Int = 0
   /** The messages the batch that is being handled sends */
   private var outgoing: List<JsonValue> = []
 
@@ -291,6 +296,8 @@ public type LanguageServer {
     const _document = documents.remove path
     const _analysis = analyses.remove path
     const _findings = findings.remove path
+    // The front holds the text of the document, and the disk holds the text everybody else sees now
+    front = None
     changed = changed.filter({ _ != path }).toList()
     // What the disk holds is what everybody else sees again
     if readsDisk {
@@ -324,6 +331,7 @@ public type LanguageServer {
     }
     // Every open document may import what changed; the next run asks all of them again
     if any {
+      front = None
       for (path, _) in documents {
         markChanged path
       }
@@ -371,12 +379,34 @@ public type LanguageServer {
         paths.append wanted
       }
     }
+    var changedPaths: List<String> = []
+    for path in changed {
+      if documents.containsKey(path) {
+        changedPaths.append path
+      }
+    }
     changed = []
     if paths.isEmpty() {
       return
     }
     const started = Clock.milliseconds()
-    const analysis = analyze current, paths
+    // The front of the last run, with the changed documents read again - or, where that is not right or it has served
+    // long enough (each such run adds the symbols of a file's type parameters once more), a front from scratch
+    const incremental = match front {
+      Some(last) => if frontRuns < frontRunLimit { reanalyze current, last, changedPaths, paths } else { None }
+      None => None
+    }
+    const analysis = match incremental {
+      Some(found) => {
+        frontRuns = frontRuns + 1
+        found
+      }
+      None => {
+        frontRuns = 0
+        analyze current, openPaths, paths
+      }
+    }
+    front = Some analysis.front
     tree = Some current.withParsed(parsesOf(analysis.checked))
     const checkedAt = Clock.milliseconds()
     for path in paths {
@@ -432,7 +462,12 @@ public type LanguageServer {
           }
         }
         const patched = withoutMemberAccess document.text, dot, offset, isOptional
-        const retried = analyze current.withFile(document.path, patched), [document.path]
+        const patchedTree = current.withFile document.path, patched
+        const incremental = match front {
+          Some(last) => reanalyze patchedTree, last, [document.path], [document.path]
+          None => None
+        }
+        const retried = incremental ?? analyze(patchedTree, [document.path], [document.path])
         memberCompletion(retried, document.path, receiverEnd, isOptional) ?? JsonValue.Null
       }
     }
@@ -489,6 +524,12 @@ public type LanguageServer {
     ]))
   }
 }
+
+/**
+ * How many runs one front serves before it is built from scratch again. Each run over it declares the type parameters
+ * of the changed files once more, so the symbols of the program grow by a few per keystroke until then.
+ */
+const frontRunLimit = 200
 
 /** The first workspace folder, for a client that sends those instead of `rootUri`; empty where there is none. */
 fn rootUriOfFolders(params: JsonValue): String {
