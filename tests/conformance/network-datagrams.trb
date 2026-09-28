@@ -16,14 +16,14 @@ fn answer(socket: UdpSocket, count: Int): Task<Result<List<String>, NetworkError
     const (bytes, sender) = socket.receive().await()?
     const text = textOf(bytes).ok() ?? "not UTF-8"
     heard.append "{text.byteLength()} bytes"
-    socket.send(text.toUpperCase().bytes().toList(), to: sender).await()?
+    socket.send(text.toUpperCase().bytes(), to: sender).await()?
   }
   heard
 }
 
 /** Sends `text` to `server` and answers the reply's text and whether it came from `server`. */
 fn ask(socket: UdpSocket, server: SocketAddress, text: String): Task<Result<String, NetworkError>> {
-  socket.send(text.bytes().toList(), to: server).await()?
+  socket.send(text.bytes(), to: server).await()?
   const (bytes, sender) = socket.receive().await()?
   "{textOf(bytes).ok() ?? "not UTF-8"} (from the server: {sender == server})"
 }
@@ -45,7 +45,7 @@ fn run(): Task<Result<Void, NetworkError>> {
   // Connected: the peer is the one address it sends to and hears from
   client.connect(address)?
   print "peer: {client.peerAddress() == address}"
-  client.sendToPeer("to the peer".bytes().toList()).await()?
+  client.sendToPeer("to the peer".bytes()).await()?
   const (reply, _) = client.receive().await()?
   print "reply: {textOf(reply).ok() ?? "not UTF-8"}"
   print ask(client, address, "last").await()
@@ -56,7 +56,7 @@ fn run(): Task<Result<Void, NetworkError>> {
   const goneAddress = closedAddress()?
   const lonely = UdpSocket.bind(SocketAddress(IpAddress.loopback, 0))?
   lonely.connect(goneAddress)?
-  lonely.sendToPeer("anybody?".bytes().toList()).await()?
+  lonely.sendToPeer("anybody?".bytes()).await()?
   match lonely.receive().await() {
     Ok(_) => print "an answer from nowhere"
     Fail(problem) => print "refused: {problem.isConnectionRefused()}"

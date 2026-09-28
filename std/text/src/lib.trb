@@ -136,9 +136,23 @@ public native type String
     Characters self
   }
 
-  /** The bytes of the UTF-8, in order. */
-  fn bytes(): Iterate<UInt8> {
-    TextBytes self
+  /**
+   * The bytes of the UTF-8, in order, as a list of their own: `Bytes`, which is what a sink, a socket, a file and a
+   * digest take. One allocation and one copy of the storage, never a byte at a time; changing the list changes
+   * nothing of the text.
+   *
+   * It is a list and not a lazy view like [String.chars], because almost every caller wants the list. A loop that only
+   * reads and must not allocate walks [String.byteAt] up to [String.byteLength] instead.
+   *
+   * # Examples
+   *
+   *     const bytes = "hé".bytes()
+   *     print bytes
+   */
+  fn bytes(): Bytes {
+    var result: ArrayList<UInt8> = ArrayList.withCapacity byteLength()
+    copyBytes result
+    result
   }
 
   /** The character that begins at `at`, or `None` at the end. A position is never inside of a character. */
@@ -203,6 +217,14 @@ public native type String
 
   /** The byte at this offset, or `None` at and past the end. A byte is never inside anything, so this never panics. */
   native fn byteAt(offset: Int): UInt8?
+
+  /**
+   * Appends the bytes of the UTF-8 to `into` in one copy: what [String.bytes] answers its list with. A native because it
+   * reads raw storage, and because a loop over [String.byteAt] would pay a call and an `Option` per byte. The storage
+   * itself cannot become the list's: a text's and a list's are laid out differently (`torb_bytes` has neither the
+   * element descriptor nor the length a list's storage starts with).
+   */
+  private native fn copyBytes(var into: ArrayList<UInt8>)
 
   /** How many bytes the text takes up in UTF-8. There is no shortcut for the number of characters: that means decoding. */
   native fn byteLength(): Int
@@ -559,29 +581,6 @@ type IndexedCharacterIterator with Iterator<(index: TextIndex, character: Char)>
       const at = TextIndex offset
       offset = offset + character.byteLength()
       return (at, character)
-    }
-    None
-  }
-}
-
-/** The same for the bytes of the UTF-8. `Bytes` is the prelude's name for a chunk of them, so this one says `Text`. */
-type TextBytes with Iterate<UInt8> {
-  text: String
-
-  fn iterate(): Iterator<UInt8> {
-    TextByteIterator text
-  }
-}
-
-type TextByteIterator with Iterator<UInt8> {
-  text: String
-  var offset: Int = 0
-
-  var fn next(): UInt8? {
-    const found = text.byteAt offset
-    if const Some(byte) = found {
-      offset = offset + 1
-      return byte
     }
     None
   }

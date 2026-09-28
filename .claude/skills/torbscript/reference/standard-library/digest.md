@@ -31,7 +31,7 @@ use Sha256, Sha512, Digest from "std/digest"
 ```trb check
 use Sha256 from "std/digest"
 
-print Sha256.of("abc".bytes().toList()).hex()
+print Sha256.of("abc".bytes()).hex()
 ```
 
 ## Declarations
@@ -54,9 +54,9 @@ hasher**, so a hasher can be read, fed more, and read again. Pieces of any size 
 use Sha256 from "std/digest"
 
 var hasher = Sha256()
-hasher.add "ab".bytes().toList()
-hasher.add "c".bytes().toList()
-print(hasher.finished() == Sha256.of("abc".bytes().toList()))
+hasher.add "ab".bytes()
+hasher.add "c".bytes()
+print(hasher.finished() == Sha256.of("abc".bytes()))
 ```
 
 ### `Sha512`
@@ -75,7 +75,7 @@ The same shape as `Sha256`, over 128-byte blocks, answering a digest of 64 bytes
 ```trb check
 use Sha512 from "std/digest"
 
-print Sha512.of("abc".bytes().toList()).hex()
+print Sha512.of("abc".bytes()).hex()
 ```
 
 ### `Digest`

@@ -979,7 +979,7 @@ bool torb_text_next_char(torb_text text, uint32_t *offset, torb_char *character)
 bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
 
 /**
- * The byte at an offset, or false at (and past) the end: what `bytes()` iterates. The same reason as above - a `String`
+ * The byte at an offset, or false at (and past) the end: what a scanner reads. The same reason as above - a `String`
  * has no index - and a byte is never inside anything, so nothing about this one can panic. `text` borrowed.
  */
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);

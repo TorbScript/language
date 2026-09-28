@@ -43,7 +43,7 @@ use TarEntry, TarKind, tarred, untarred from "std/archive"
 
 const entries = [
   TarEntry.directory("tool"),
-  TarEntry("tool/run", "#!/bin/sh\n".bytes().toList(), TarKind.File, 0b111_101_101),
+  TarEntry("tool/run", "#!/bin/sh\n".bytes(), TarKind.File, 0b111_101_101),
   TarEntry.symbolicLink("tool/latest", "run"),
 ]
 match tarred(entries) {

@@ -121,7 +121,7 @@ fn sorted(words: List<String>): Task<Result<Int, IoError>> {
   using child = Process.start("sort", [])?
   var input = child.input()
   for word in words {
-    input.add("{word}\n".bytes().toList()).await()?
+    input.add("{word}\n".bytes()).await()?
   }
   input.end().await()?
   var output = child.output()

@@ -42,7 +42,7 @@ use textOf from "std/stream"
 fn frontPage(host: String): Task<Result<String, NetworkError>> {
   const tcp = TcpStream.connectTo(host, 443).await()?
   var stream = TlsStream.connect(tcp, host).await()?
-  stream.send("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".bytes().toList()).await()?
+  stream.send("GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".bytes()).await()?
   const chunk = stream.receive().await()? ?? []
   textOf(chunk).ok() ?? ""
 }

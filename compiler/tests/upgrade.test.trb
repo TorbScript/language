@@ -175,9 +175,9 @@ group "unpacking and placing a toolchain" {
     const entries = [
       TarEntry.directory("torb-9.9.9-test"),
       TarEntry.directory("torb-9.9.9-test/bin"),
-      TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList(), TarKind.File, 0b111_101_101),
-      TarEntry("torb-9.9.9-test/std/prelude/project.trb", "name = \"std/prelude\"\n".bytes().toList()),
-      TarEntry("torb-9.9.9-test/{header}", "#define LONG 1\n".bytes().toList()),
+      TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes(), TarKind.File, 0b111_101_101),
+      TarEntry("torb-9.9.9-test/std/prelude/project.trb", "name = \"std/prelude\"\n".bytes()),
+      TarEntry("torb-9.9.9-test/{header}", "#define LONG 1\n".bytes()),
     ]
     File.writeBytes("{directory}/archive.tar.gz", gzipped(tarred(entries).expect("an archive"))).expect("the archive")
     unpack("{directory}/archive.tar.gz", "{directory}/unpacked").expect("the archive unpacked")
@@ -198,7 +198,7 @@ group "unpacking and placing a toolchain" {
 
   test "an entry that would land outside of the toolchain is refused, and nothing is unpacked" {
     const directory = scratch()
-    const entries = [TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList()), TarEntry("../evil", [])]
+    const entries = [TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes()), TarEntry("../evil", [])]
     File.writeBytes("{directory}/archive.tar.gz", gzipped(tarred(entries).expect("an archive"))).expect("the archive")
     match unpack("{directory}/archive.tar.gz", "{directory}/unpacked") {
       Ok(_) => panic "unpacked an entry outside"

@@ -73,12 +73,12 @@ public fn keyMessage(key: Ed25519PublicKey): String {
 
 /** The signature a registry's `key` writes into a record of `package`'s file at `position` - its `ed25519:` text. */
 public fn recordSignature(key: Ed25519PrivateKey, package: String, position: Int, record: IndexRecord): String {
-  signatureText key.signature(recordMessage(package, position, record).bytes().toList())
+  signatureText key.signature(recordMessage(package, position, record).bytes())
 }
 
 /** `key` endorsed by `predecessor`: the line `index/config.trb` lists a successor with. */
 public fn endorsed(key: Ed25519PublicKey, predecessor: Ed25519PrivateKey): RegistryKey {
-  RegistryKey key, endorsement: predecessor.signature(keyMessage(key).bytes().toList())
+  RegistryKey key, endorsement: predecessor.signature(keyMessage(key).bytes())
 }
 
 /**
@@ -146,7 +146,7 @@ public fn trustedKeys(
           return Fail "the key {keyText(entry.key)} follows a trusted key and is not endorsed by it"
         }
       }
-      if !predecessor.verifies(keyMessage(entry.key).bytes().toList(), signature) {
+      if !predecessor.verifies(keyMessage(entry.key).bytes(), signature) {
         return Fail "the endorsement of the key {keyText(entry.key)} does not verify with the key before it"
       }
       trusted.append entry.key
@@ -180,7 +180,7 @@ public fn verifyIndex(text: String, package: String, keys: List<Ed25519PublicKey
       return Fail "{what} is not signed, and the registry signs every record"
     }
     const signature = signatureOfText(written).mapError({ "the signature of {what}: {_}" })?
-    const message = recordMessage(package, position, record).bytes().toList()
+    const message = recordMessage(package, position, record).bytes()
     if !keys.any({ _.verifies message, signature }) {
       return Fail "the signature of {what} does not verify with a key of the registry"
     }

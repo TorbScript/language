@@ -128,7 +128,7 @@ group "The base protocol" {
   test "a message split across chunks is handed out once it is whole" {
     var reader = FrameReader.empty()
     const whole = framed "\{\"jsonrpc\":\"2.0\",\"method\":\"exit\"\}"
-    const bytes: List<UInt8> = whole.bytes().toList()
+    const bytes: List<UInt8> = whole.bytes()
     reader.add bytes[0..10].toList()
     expectText nextOf(reader), "nothing yet"
     reader.add bytes[10..bytes.length()].toList()
@@ -140,7 +140,7 @@ group "The base protocol" {
     var reader = FrameReader.empty()
     const first = "\{\"text\":\"Grüße\"\}"
     const both = framed(first) + framed("[]")
-    reader.add both.bytes().toList()
+    reader.add both.bytes()
     expectText nextOf(reader), first
     expectText nextOf(reader), "[]"
     const pending = reader.isPending()
@@ -150,7 +150,7 @@ group "The base protocol" {
   test "a header without a length is dropped, and the message after it read" {
     var reader = FrameReader.empty()
     const both = "Content-Type: x\r\n\r\n" + framed("1")
-    reader.add both.bytes().toList()
+    reader.add both.bytes()
     expectText nextOf(reader), "a problem: a header without a `Content-Length`: Content-Type: x"
     expectText nextOf(reader), "1"
   }

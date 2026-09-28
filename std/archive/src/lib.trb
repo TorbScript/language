@@ -11,7 +11,7 @@
  *
  * # Examples
  *
- *     const entry = TarEntry "src/lib.trb", "public fn one(): Int \{\n  1\n\}\n".bytes().toList()
+ *     const entry = TarEntry "src/lib.trb", "public fn one(): Int \{\n  1\n\}\n".bytes()
  *     const archive = tarred(List.of(entry)).expect("a path ustar can hold")
  *     print untarred(archive).map({ found => found.map({ _.path }).toList() })
  */
@@ -266,7 +266,7 @@ fn writeEntry(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveErro
     return Fail ArchiveError("`{entry.path}` is no file and holds {entry.bytes.length()} bytes", at)
   }
   const path = if kind == 53 && !entry.path.endsWith("/") { "{entry.path}/" } else { entry.path }
-  const pathBytes = path.bytes().toList()
+  const pathBytes = path.bytes()
   var records: List<(String, String)> = []
   var name = pathBytes
   var prefix: List<UInt8> = []
@@ -280,7 +280,7 @@ fn writeEntry(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveErro
       name = truncated pathBytes, 100
     }
   }
-  var link = linkTarget.bytes().toList()
+  var link = linkTarget.bytes()
   if link.length() > 100 {
     records.append(("linkpath", linkTarget))
     link = truncated link, 100
@@ -297,7 +297,7 @@ fn writeEntry(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveErro
     for (key, value) in records {
       data.appendAll paxRecord(key, value)
     }
-    const fields = HeaderFields paxHeaderName.bytes().toList(), [], data.length(), 0b110_100_100, 0, 120, []
+    const fields = HeaderFields paxHeaderName.bytes(), [], data.length(), 0b110_100_100, 0, 120, []
     writer.append headerOf(fields)
     writer.append data
     padded(writer, [], (512 - data.length() % 512) % 512)
@@ -348,7 +348,7 @@ fn paxRecord(key: String, value: String): Bytes {
   if "{length}".byteLength() > "{rest}".byteLength() {
     length = length + 1
   }
-  "{length} {key}={value}\n".bytes().toList()
+  "{length} {key}={value}\n".bytes()
 }
 
 /** What a header says, in the order of its fields. */
@@ -367,7 +367,7 @@ type HeaderFields {
  * its own field as eight spaces, then written as six digits, a NUL and a space.
  */
 fn headerOf(fields: HeaderFields): Bytes {
-  const blank = headerWith fields, "        ".bytes().toList()
+  const blank = headerWith fields, "        ".bytes()
   var sum = 0
   for byte in blank {
     sum = sum + Int.from(byte)
@@ -390,7 +390,7 @@ fn headerWith(fields: HeaderFields, checksum: Bytes): Bytes {
   writer.append checksum
   writer.uint8(UInt8.tryFrom(fields.kind).ok() ?? 48)
   padded writer, fields.link, 100
-  padded writer, "ustar".bytes().toList(), 6
+  padded writer, "ustar".bytes(), 6
   writer.text "00"
   // The names of the owner and the group, and the two device numbers
   padded writer, [], 80

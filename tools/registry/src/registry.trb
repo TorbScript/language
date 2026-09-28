@@ -216,7 +216,7 @@ public shared type Registry {
     const chain = keyChainOf(listed, signer, successor).mapError({ Refusal.of 500, _ })?
     const text = renderRegistryKeys chain.keys
     if existing != text {
-      written(uri, text.bytes().toList()).await()?
+      written(uri, text.bytes()).await()?
       mirrored("config", text, "the keys of the index").await()
     }
     chain
@@ -484,7 +484,7 @@ public shared type Registry {
     const position = positionIn(existing, package)?
     const signature = recordSignature signer, package, position, IndexRecord.Release(upload.release)
     const text = existing + renderRelease(upload.release.copy(signature: signature))
-    written(indexUri, text.bytes().toList()).await()?
+    written(indexUri, text.bytes()).await()?
     recordRelease(package, version, hash, grant.map({ _.account }) ?? caller.actor()).await()?
     logged(caller, "publish", package, "{version} {hash}").await()?
     mirrored(package, text, "{package} {version}").await()
@@ -541,7 +541,7 @@ public shared type Registry {
       renderYank yanked.copy(signature: recordSignature(signer, package, position, IndexRecord.Yank(yanked)))
     }
     const text = existing + line
-    written(indexUri, text.bytes().toList()).await()?
+    written(indexUri, text.bytes()).await()?
     const flag = if undo { 0 } else { 1 }
     executed(
       "UPDATE releases SET yanked = {flag}, reason = {sqlText(if undo { "" } else { reason.trim() })} WHERE package = {sqlText(package)} AND version = {sqlText(version)};",

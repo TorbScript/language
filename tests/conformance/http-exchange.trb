@@ -31,7 +31,7 @@ fn handle(request: Request): Task<Result<Response, HttpError>> {
       Ok Response.jsonOf(Greeting("{greeting.text}, back", greeting.count + 1))
     }
     "/stream" => {
-      const parts: List<Bytes> = ["one ".bytes().toList(), "two ".bytes().toList(), "three".bytes().toList()]
+      const parts: List<Bytes> = ["one ".bytes(), "two ".bytes(), "three".bytes()]
       Response Status.ok, Headers(), Body.of(Source.from(parts))
     }
     "/fail" => Fail HttpError.connectionFailed("a secret the client must not see")
@@ -71,7 +71,7 @@ match Server.listen(SocketAddress(IpAddress.loopback, 0), handle) {
     var serving = server.serve()
     print fetch(base, Method.Get, "/hello?name=ada", Body.empty()).await()
     print fetch(base, Method.Post, "/echo", Body.from("a body of known length")).await()
-    const streamed: List<Bytes> = ["streamed ".bytes().toList(), "in ".bytes().toList(), "chunks".bytes().toList()]
+    const streamed: List<Bytes> = ["streamed ".bytes(), "in ".bytes(), "chunks".bytes()]
     print fetch(base, Method.Post, "/echo", Body.of(Source.from(streamed))).await()
     print fetch(base, Method.Post, "/json", Body.jsonOf(Greeting("hi", 1))).await()
     print fetch(base, Method.Get, "/stream", Body.empty()).await()

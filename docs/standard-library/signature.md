@@ -41,7 +41,7 @@ use Ed25519PrivateKey from "std/signature"
 
 const seed: List<UInt8> = List.filled 32, 1
 const key = Ed25519PrivateKey.fromSeed(seed).expect("32 bytes")
-const message = "a release record".bytes().toList()
+const message = "a release record".bytes()
 const signature = key.signature message
 print key.publicKey().verifies(message, signature)
 ```
@@ -98,9 +98,9 @@ use Ed25519PrivateKey, Ed25519PublicKey from "std/signature"
 const key = Ed25519PrivateKey.fromSeed(List.filled(32, 2)).expect("32 bytes")
 const published = String.from key.publicKey()
 const reader = Ed25519PublicKey.tryFrom(published).expect("the key just written")
-const message = "index/acme/http.trb".bytes().toList()
+const message = "index/acme/http.trb".bytes()
 print reader.verifies(message, key.signature(message))
-print reader.verifies("another message".bytes().toList(), key.signature(message))
+print reader.verifies("another message".bytes(), key.signature(message))
 ```
 
 ### `Ed25519Signature`

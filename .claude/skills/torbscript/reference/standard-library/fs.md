@@ -255,7 +255,7 @@ fn copyLines(from: String, into: String): Task<Result<Int, IoError>> {
   var count = 0
   var lines = source.lines()
   while const Some(line) = lines.next().await()? {
-    target.add("{line}\n".bytes().toList()).await()?
+    target.add("{line}\n".bytes()).await()?
     count = count + 1
   }
   target.end().await()?

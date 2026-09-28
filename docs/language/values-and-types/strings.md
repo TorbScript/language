@@ -44,7 +44,7 @@ off a text.
 
 ```text
 text.chars()                             an Iterate<Char>: Unicode scalar values
-text.bytes()                             an Iterate<UInt8>: the raw UTF-8 bytes
+text.bytes()                             the raw UTF-8 bytes, copied into Bytes (a List<UInt8>)
 text.byteLength()                        the byte count, O(1)
 text.indexOf(part)                       Some(position) or None: a TextIndex, from searching
 text.lastIndexOf(part)                   the same for the last occurrence
@@ -73,7 +73,9 @@ text.suffix(characters: n)               the last n characters; total
    `byteAt`, `sliceBytes`, `byteOffsetOf`, `charAtByte` - are for a format that counts bytes.
 
 2. **`chars()` is an `Iterate<Char>` of Unicode scalar values, and counting it is O(n).** `text.chars().count()` is
-   how a caller asks for "how many characters", explicitly paying for the answer it wants.
+   how a caller asks for "how many characters", explicitly paying for the answer it wants. `bytes()` is not a view:
+   it copies the UTF-8 into a `Bytes` of its own in one allocation, because that list is what a sink, a digest and a
+   socket take.
 
 3. **`byteLength()` is O(1) and `isEmpty()` follows from it.** These are the only two size questions a `String`
    answers without a caller choosing what to count.

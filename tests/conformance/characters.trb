@@ -1,12 +1,13 @@
 use Process from "std/process"
 
 /**
- * `chars()`, `bytes()` and `String.from(Iterate<Char>)`, all three ordinary TorbScript now.
+ * `chars()`, `bytes()` and `String.from(Iterate<Char>)`, all three ordinary TorbScript.
  *
  * The one thing the language cannot express about a text is reading its raw storage - a `String` has no index - so
- * `charAt` and `byteAt` are the two natives, and the cursors over them are `Characters` and `TextBytes` in `std/text`.
+ * `charAt`, `byteAt` and `copyBytes` are natives, and the cursor over the first is `Characters` in `std/text`.
  * Walking a text is therefore O(1) per character: `charAt` decodes at an offset and `Char.byteLength()` says how far to
- * move, and nothing re-scans what it has already walked.
+ * move, and nothing re-scans what it has already walked. `bytes()` is a list of its own, which `copyBytes` fills in
+ * one copy.
  *
  * Every character shape of UTF-8 is here (one, two, three and four bytes), because an offset that moves by the wrong
  * width would come out as a different character or as a panic and not as a slower loop.
@@ -72,5 +73,12 @@ for byte in "AB".bytes() {
   sum = sum + Int.from(byte)
 }
 print sum
+
+// A list of its own: changing it changes nothing of the text, and a slice is copied from its own offset
+var written = "hé".bytes()
+written[0] = 72
+written.append 33
+print written
+print mixed.sliceBytes(1, 3).bytes()
 
 Process.exit((countCharacters(mixed) + countBytes(mixed)) % 251)

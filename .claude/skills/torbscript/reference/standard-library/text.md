@@ -70,7 +70,7 @@ public native type String
   with Equals, Compare, Hash, Show, Add, Slice<TextIndex>
 {
   fn chars(): Iterate<Char>
-  fn bytes(): Iterate<UInt8>
+  fn bytes(): Bytes
   fn charAt(at: TextIndex): Char?
   fn charAtByte(offset: Int): Char?
   fn start(): TextIndex
@@ -130,6 +130,17 @@ would answer one, and `None` where it would panic.
 `byteAt(offset)` (a byte is never inside anything, so it never panics), `sliceBytes(from, to)`, `byteOffsetOf(part)`,
 `lastByteOffsetOf(part)` and `charAtByte(offset)`. Their offsets are `Int`s the program computed, so an offset inside
 of a character panics there, with the offset and the length in the message: the name says what is counted.
+
+**`bytes()` answers `Bytes`**, the prelude's `List<UInt8>`, like every other `bytes()` of the standard library: a
+copy of the UTF-8 in one allocation, which is what a sink, a socket, a file and a digest take. It is not a view like
+`chars()`, because nearly every caller wants the list, and the storage itself cannot be shared, because a text's and a
+list's are laid out differently. A loop that only reads and must not allocate walks `byteAt(offset)` up to
+`byteLength()` instead.
+
+```trb run
+const bytes = "hé".bytes()
+print bytes    // prints [104, 195, 169]
+```
 
 **The total vocabulary** cuts a text without an offset, and none of it can panic. `withoutPrefix(part)` and
 `withoutSuffix(part)` answer the rest, or `None` where the text does not start or end with `part`. `splitOnce(separator)`
