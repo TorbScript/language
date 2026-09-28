@@ -1745,14 +1745,14 @@ which is why the design's `native fn offload` became TorbScript), and nothing is
 **Not built here, and why:** `runtime/io.c` and the poller (slice G), and with them the cancellation of a read that
 waits (gap 15), because there was no read that waits then - the streams of files and child processes came later, on
 this pool (`runtime/stream.c`), and a read of theirs that runs is not interrupted either. The `blocking` line of the manifest waits with
-`workers` for the project model's `tasks`.
+`workers` for the project model's `tasks`. **The pipes of a child left this pool on POSIX (2026-09-28)**: epoll and
+kqueue take a pipe like a socket, so `Process.start` hands its three pipes to the poller of `runtime/io.c`, and a read
+of a child that waits is cancelled at once, as one of a socket is (STREAMS.md section 14). The streams of files and of
+the standard streams, the wait for a child, and every pipe of a Windows child stay here; the whole-file calls of
+`std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
 
 **Not built, and why each waits:**
 
-- **The poller for the pipes of a POSIX child** (slice G): the streams of files, of the standard streams and of child
-  processes wait on the blocking pool (STREAMS.md section 14), which every platform allows; a pipe of a POSIX child is
-  the one of them epoll and kqueue could take, and the second code path waits until it is measured. The whole-file
-  calls of `std/fs` stay synchronous, and `offload` is what a program wraps one in, as `Process.run` does.
 - **`Plain`, `Window`, `windows`** (slice F), and `flatMap` on `Parallel`.
 - **An accumulator that runs on the workers**: `collect` accumulates on the caller's worker, chunk by chunk, because an
   `Accumulator` is a trait-typed value, whose payload is erased and which the copy at the crossing does not walk.

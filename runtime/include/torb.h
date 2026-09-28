@@ -1611,6 +1611,11 @@ int64_t torb_platform_pipe_read(void *pipe, uint8_t *buffer, size_t maximum);
 /** All of `bytes`: their number, or minus the system's code. */
 int64_t torb_platform_pipe_write(void *pipe, const uint8_t *bytes, size_t length);
 void torb_platform_pipe_close(void *pipe);
+/**
+ * The file descriptor of a pipe of a child, for the poller of the IO core (runtime/io.c, `torb_io_pipe_adopt`); -1 on
+ * Windows, whose pipes are handles no poller takes.
+ */
+int64_t torb_platform_pipe_descriptor(void *pipe);
 /** Waits for the child to end: its exit code, or false and the system's code in `*failure`. */
 bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure);
 /** Lets go of the child's handle without waiting for it; the child runs on. */

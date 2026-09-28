@@ -1,6 +1,7 @@
 /*
- * posix_io.c - the socket calls of the IO core that Linux, macOS and FreeBSD make alike, and the logic both readiness
- * pollers share (docs/design/NETWORK.md section 2, runtime/include/torb_posix_io.h). The pollers - epoll in `epoll.c`,
+ * posix_io.c - the socket calls of the IO core that Linux, macOS and FreeBSD make alike, the reads and writes of the
+ * pipes of a child (which the pollers watch like sockets), and the logic both readiness pollers share
+ * (docs/design/NETWORK.md section 2, runtime/include/torb_posix_io.h). The pollers - epoll in `epoll.c`,
  * kqueue in `kqueue.c` - decide *when* a call is made; this file makes it. The natives of `std/os` that every POSIX
  * system shares are `posix.c`'s.
  *
@@ -8,8 +9,8 @@
  * file of `runtime/os/` without choosing, and no function has an `#ifdef` inside it - except the two spellings of
  * "no `SIGPIPE`", which are one macro each at the top.
  *
- * **Every socket is non-blocking**, and a call that would block answers `TORB_IO_POSIX_AGAIN`: the poller registers the
- * operation and makes the call again once the socket is ready. Readiness is level-triggered, so a socket that became
+ * **Every socket and every pipe of the core is non-blocking**, and a call that would block answers `TORB_IO_POSIX_AGAIN`:
+ * the poller registers the operation and makes the call again once the socket is ready. Readiness is level-triggered, so a socket that became
  * ready between the call and the registration is reported at once.
  */
 
@@ -233,6 +234,14 @@ int64_t torb_io_system_connect_datagram(torb_io_socket *socket, const torb_io_ad
   return 0;
 }
 
+int64_t torb_io_system_pipe(int64_t descriptor) {
+  int flags = fcntl((int)descriptor, F_GETFL, 0);
+  if (flags < 0 || fcntl((int)descriptor, F_SETFL, flags | O_NONBLOCK) != 0) {
+    return torb_io_posix_failed(errno);
+  }
+  return 0;
+}
+
 int64_t torb_io_system_shutdown(torb_io_socket *socket) {
   if (shutdown((int)socket->system, SHUT_WR) != 0) {
     return torb_io_posix_failed(errno);
@@ -421,18 +430,24 @@ static int64_t torb_posix_accepted(torb_io_operation *operation, int descriptor)
 
 int64_t torb_io_posix_perform(torb_io_operation *operation) {
   int descriptor = (int)operation->socket->system;
+  /* A pipe of a child is read and written like a stream, with the calls of a file: `recv` and `send` want a socket */
+  bool of_pipe = operation->socket->kind == (uint8_t)TORB_IO_PIPE;
   for (;;) {
     switch ((torb_io_operation_kind)operation->kind) {
       case TORB_IO_RECEIVE: {
-        ssize_t received = recv(descriptor, operation->buffer, operation->capacity, 0);
+        ssize_t received = of_pipe ? read(descriptor, operation->buffer, operation->capacity)
+                                   : recv(descriptor, operation->buffer, operation->capacity, 0);
         if (received >= 0) {
           return (int64_t)received;
         }
         break;
       }
       case TORB_IO_SEND: {
-        ssize_t sent = send(descriptor, operation->buffer + operation->offset, operation->length - operation->offset,
-                            TORB_POSIX_SEND_FLAGS);
+        /* A pipe whose reader is gone fails with `EPIPE`: the first child ignored `SIGPIPE` for the process */
+        ssize_t sent = of_pipe ? write(descriptor, operation->buffer + operation->offset,
+                                       operation->length - operation->offset)
+                               : send(descriptor, operation->buffer + operation->offset,
+                                      operation->length - operation->offset, TORB_POSIX_SEND_FLAGS);
         if (sent >= 0) {
           operation->offset += (size_t)sent;
           if (operation->offset >= operation->length) {

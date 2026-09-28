@@ -323,5 +323,6 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `process-non-ascii-argument.trb` | An argument of a child process that is not ASCII arrives as the text that was passed, which the child answers in its exit code |
 | `process-run-input.trb` | `Process.run` is a task: `input:` is all the child reads, an empty input ends at once, and a program that is nowhere is a failure |
 | `process-start.trb` | `Process.start` hands back a running child: what its `input()` sink takes the child reads until `end()`, its `output()` and `errors()` are sources read while it runs, `wait()` answers the exit code, and a program that is nowhere cannot be started |
+| `process-pipes.trb` | The pipes of a child carry more than a pipe holds both ways: 220 KB into `sort` a thousand lines per write, each write waiting until the child has read enough, and back through its output in several chunks, every line in its place - on the poller of the IO core on POSIX, on the blocking pool on Windows |
 | `file-streams.trb` | A file written through its `Sink` (`add`, `end`) reads back the same bytes through its `Source` in chunks of a given size, and as lines |
 | `standard-streams.trb` | What `standardOutput()` takes appears in order with what `print` writes, and `standardInput()`, through `lines()`, reads the program's whole standard input (its `.input`) |

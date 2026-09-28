@@ -1,0 +1,58 @@
+/**
+ * **The pipes of a child carry more than a pipe holds, both ways.** Twenty thousand numbered lines, 220 KB, go into
+ * `sort` in reverse order, a thousand lines per write, and come back in order through its standard output. Neither
+ * direction fits the 64 KB of a pipe: a write waits until `sort` has read enough, and the output is read in as many
+ * chunks as it arrives in. On Linux, macOS and FreeBSD both directions wait on the poller of the IO core, on Windows on
+ * the blocking pool (runtime/stream.c); the answer is the same. What the Windows `sort` writes ends its lines in
+ * `\r\n`, so the carriage returns are taken out before anything is counted.
+ */
+use Process from "std/process"
+use IoError from "std/fs"
+use textOf from "std/stream"
+
+/** `line 00042`: the number padded to five digits, so that the order of the text is the order of the numbers. */
+fn numbered(number: Int): String {
+  const digits = "{number}"
+  "line {"0".repeat(5 - digits.byteLength())}{digits}"
+}
+
+fn sorted(count: Int): Task<Result<Void, IoError>> {
+  using child = Process.start("sort", [])?
+  var input = child.input()
+  var number = count
+  while number > 0 {
+    var block = ""
+    for _ in 0..1000 {
+      block = block + numbered(number) + "\n"
+      number = number - 1
+    }
+    input.addText(block).await()?
+  }
+  input.end().await()?
+  var output = child.output()
+  var bytes: List<UInt8> = []
+  var chunks = 0
+  while const Some(chunk) = output.next().await()? {
+    bytes.appendAll chunk
+    chunks = chunks + 1
+  }
+  const code = child.wait().await()?
+  const text = (textOf(bytes).ok() ?? "not UTF-8").replace("\r", "")
+  const lines = text.trim().split("\n")
+  print "{lines.length()} lines came back, in more than one chunk: {chunks > 1}"
+  print "the first: {lines.first() ?? "none"}, the last: {lines.last() ?? "none"}"
+  var ordered = true
+  for index in 0..lines.length() {
+    if lines[index] != numbered(index + 1) {
+      ordered = false
+    }
+  }
+  print "every line in its place: {ordered}"
+  print "sort left with {code}"
+  Ok void
+}
+
+match sorted(20000).await() {
+  Ok(_) => print "sorted"
+  Fail(problem) => print "error: {problem}"
+}

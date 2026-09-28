@@ -2377,6 +2377,12 @@ void torb_platform_pipe_close(void *pipe) {
   CloseHandle((HANDLE)pipe);
 }
 
+/* An anonymous pipe is a handle and no descriptor any poller of the IO core takes. */
+int64_t torb_platform_pipe_descriptor(void *pipe) {
+  (void)pipe;
+  return -1;
+}
+
 bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure) {
   DWORD status = 0u;
   if (WaitForSingleObject((HANDLE)process, INFINITE) != WAIT_OBJECT_0 || !GetExitCodeProcess((HANDLE)process, &status)) {
@@ -2888,6 +2894,10 @@ int64_t torb_platform_pipe_write(void *pipe, const uint8_t *bytes, size_t length
 
 void torb_platform_pipe_close(void *pipe) {
   close(torb_pointer_descriptor(pipe));
+}
+
+int64_t torb_platform_pipe_descriptor(void *pipe) {
+  return (int64_t)torb_pointer_descriptor(pipe);
 }
 
 bool torb_platform_child_wait(void *process, int64_t *code, int64_t *failure) {

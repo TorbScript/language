@@ -629,14 +629,24 @@ _Decision:_ no read-ahead in v1. Milestone 7 may add it natively where the platf
 
    **As built, for all three:** every operation that may wait - a read, a write, a flush, the wait for a child - is a
    task of the runtime that turns to the **blocking pool** first (CONCURRENCY.md section 16) and makes the one call of
-   the operating system there, so the worker that awaits it runs its other tasks meanwhile. None goes through the IO
-   poller of `runtime/io.c`, because no platform lets one for all three: a regular file is always ready to epoll and
-   kqueue (epoll refuses it outright), a console is no handle IOCP takes, and the pipes of a child on Windows are
-   anonymous pipes without overlapped IO. The pipes of a POSIX child could go to the poller; that is the one place a
-   second code path would pay, and it waits until it is measured. A task answers one `Int64` - a count, 0 at the end, a
-   negative failure the natives render in the platform's own words - and the bytes a read got wait in a buffer of the
-   stream until the reader takes them, so no block of the program is touched on a thread of the pool. A task that is
-   cancelled before its call ran stops without it; one whose call runs finishes it (section 7 of CONCURRENCY.md).
+   the operating system there, so the worker that awaits it runs its other tasks meanwhile. Files and the standard
+   streams never go through the IO poller of `runtime/io.c`, because no platform lets one: a regular file is always
+   ready to epoll and kqueue (epoll refuses it outright), and a console is no handle IOCP takes. A task answers one
+   `Int64` - a count, 0 at the end, a negative failure the natives render in the platform's own words - and the bytes a
+   read got wait in a buffer of the stream until the reader takes them, so no block of the program is touched on a
+   thread of the pool. A task that is cancelled before its call ran stops without it; one whose call runs finishes it
+   (section 7 of CONCURRENCY.md).
+
+   **The pipes of a child go to the poller where it takes them (2026-09-28).** On Linux, macOS and FreeBSD a pipe is a
+   descriptor epoll and kqueue watch like a socket, so `Process.start` hands its three pipes to the IO core
+   (`torb_io_pipe_adopt`): non-blocking, a record of the poller with a handle of io.c's table, read and written with
+   `read` and `write` where a socket takes `recv` and `send`. What that changes is the socket paths' semantics: a read
+   that waits holds no thread of the pool, a cancelled one stops at once and what the child wrote afterwards goes to the
+   next read, closing the child ends a read or a write that waits with `EBADF`, and the end of the program closes the
+   pipes with every socket. The answers are the stream layer's - a count, 0 at the end, minus `errno` - so `std/process`
+   did not change. On Windows the pipes of a child are anonymous pipes without overlapped IO, which no completion port
+   takes, and they stay on the blocking pool; the wait for a child stays there on every system
+   (`runtime/tests/io_test.c`, the three tests of a child; `tests/conformance/process-pipes.trb`).
 6. **The back-end item of section 4:** a generic member reached through a trait-typed value (`Stage.onto<Final>`) needs a
    witness/vtable entry that the C back end does not have yet. **Done**: one slot of the table per list of arguments
    the program calls it with (`tests/conformance/generic-trait-members.trb`). `Decoder.sequence<Output>`, `Decoder.record<Output>` and

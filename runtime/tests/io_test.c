@@ -1,7 +1,8 @@
 /*
  * io_test.c - the IO core over loopback (docs/design/NETWORK.md section 2): listen, accept, connect, send, receive, the
- * end of a stream, a refused connection, a name resolution, datagrams (bound, connected, refused), and the cancellation
- * of each kind of wait - with what the kernel delivered afterwards kept for the next operation, never lost.
+ * end of a stream, a refused connection, a name resolution, datagrams (bound, connected, refused), the pipes of a POSIX
+ * child, and the cancellation of each kind of wait - with what the kernel delivered afterwards kept for the next
+ * operation, never lost.
  *
  * The natives answer tasks of the runtime, and the tests run the scheduler until the one they need has completed
  * (`torb_scheduler_run`). Every test ends with `torb_scheduler_finish()`, which stops the IO core, and then asserts that
@@ -9,7 +10,9 @@
  */
 
 #include "harness.h"
+#include "torb_natives.h"
 
+#include <errno.h>
 #include <stdlib.h>
 
 #define LOOPBACK4 ((int64_t)0x7F000001)
@@ -622,6 +625,116 @@ TORB_TEST(test_io_randomness_differs) {
   TORB_CHECK(!(first == second && second == third));
 }
 
+#if !defined(_WIN32)
+/*
+ * The pipes of a child process on POSIX are records of the poller (runtime/stream.c, `torb_io_pipe_adopt`): a read
+ * that waits is an operation of the core, a cancelled one stops at once and loses nothing, and closing the child ends
+ * one that waits. The child is `cat`, which answers what it reads and ends where its input does.
+ */
+
+/* `cat`, started with its three pipes; its handle. */
+static int64_t started_cat(void) {
+  torb_text command = torb_text_from_cstring("cat");
+  torb_list arguments = torb_list_new(&torb_element_text);
+  torb_text failure = torb_text_empty();
+  int64_t child = torb_child_start(command, arguments, &failure);
+  torb_text_release(failure);
+  torb_list_release(arguments);
+  torb_text_release(command);
+  return child;
+}
+
+/* Reads the child's output until `expected` bytes arrived or it ended. Answers the bytes; owned. */
+static torb_list read_from_child(int64_t child, size_t expected) {
+  torb_list into = torb_list_new(&element_byte);
+  while ((size_t)torb_list_length(into) < expected) {
+    int64_t count = answer_of(torb_child_read(child, 1, 65536));
+    if (count <= 0) {
+      break;
+    }
+    torb_child_take_read(child, 1, &into);
+  }
+  return into;
+}
+
+TORB_TEST(test_io_a_child_answers_more_than_a_pipe_holds) {
+  int64_t child = started_cat();
+  torb_list large = torb_list_new(&element_byte);
+  torb_list answer;
+  torb_task *writing;
+  uint8_t chunk[1024];
+  size_t index;
+  bool same = true;
+  TORB_CHECK(child > 0);
+  for (index = 0u; index < sizeof chunk; index += 1u) {
+    chunk[index] = (uint8_t)(index * 13u);
+  }
+  for (index = 0u; index < 1024u; index += 1u) {
+    torb_list_add_plain(&large, chunk, sizeof chunk);
+  }
+  /* A mebibyte fits no pipe: the write waits on the poller for `cat` to read, which waits for its output to be read */
+  writing = torb_child_write(child, large, 0);
+  answer = read_from_child(child, 1024u * 1024u);
+  TORB_CHECK_INTEGER(answer_of(writing), 1024 * 1024);
+  TORB_CHECK_INTEGER(torb_list_length(answer), 1024 * 1024);
+  for (index = 0u; index < 1024u * 1024u; index += 1u) {
+    if (*(const uint8_t *)torb_list_at(answer, (int64_t)index, torb_location_unknown) != (uint8_t)(index * 13u)) {
+      same = false;
+      break;
+    }
+  }
+  TORB_CHECK(same);
+  TORB_CHECK_INTEGER(torb_child_end_input(child), 0);
+  /* The end of the input is the end of the output, and a write after it is a broken pipe */
+  TORB_CHECK_INTEGER(answer_of(torb_child_read(child, 1, 4096)), 0);
+  TORB_CHECK_INTEGER(answer_of(torb_child_write(child, large, 0)), -(int64_t)EPIPE);
+  TORB_CHECK_INTEGER(answer_of(torb_child_wait(child)), 0);
+  torb_list_release(answer);
+  torb_list_release(large);
+  torb_child_close(child);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+TORB_TEST(test_io_a_cancelled_read_of_a_child_loses_nothing) {
+  int64_t child = started_cat();
+  torb_list message = bytes_of("after the cancel");
+  torb_list answer;
+  torb_task *waiting;
+  TORB_CHECK(child > 0);
+  /* Nothing was written, so the read waits - on the poller, as an operation of the core, and no thread with it */
+  waiting = torb_child_read(child, 1, 4096);
+  let_them_start();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 1);
+  torb_task_cancel(waiting);
+  TORB_CHECK_INTEGER(answer_of(waiting), CANCELLED);
+  TORB_CHECK_INTEGER(answer_of(torb_child_write(child, message, 0)), 16);
+  answer = read_from_child(child, 16u);
+  TORB_CHECK(bytes_are(answer, "after the cancel"));
+  TORB_CHECK_INTEGER(torb_child_end_input(child), 0);
+  TORB_CHECK_INTEGER(answer_of(torb_child_wait(child)), 0);
+  torb_list_release(answer);
+  torb_list_release(message);
+  torb_child_close(child);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+TORB_TEST(test_io_closing_a_child_ends_a_read_that_waits) {
+  int64_t child = started_cat();
+  torb_task *waiting;
+  TORB_CHECK(child > 0);
+  waiting = torb_child_read(child, 2, 4096);
+  let_them_start();
+  /* The pipes close with the child, and the read that waited on standard error answers that its pipe is gone */
+  torb_child_close(child);
+  TORB_CHECK_INTEGER(answer_of(waiting), -(int64_t)EBADF);
+  TORB_CHECK_INTEGER(answer_of(torb_child_read(child, 1, 4096)), -(int64_t)EBADF);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+#endif
+
 void torb_register_io_tests(void) {
   TORB_ADD(test_io_resolving_before_any_socket);
   TORB_ADD(test_io_echo_over_loopback);
@@ -643,4 +756,9 @@ void torb_register_io_tests(void) {
   TORB_ADD(test_io_a_cancelled_datagram_receive_loses_nothing);
   TORB_ADD(test_io_the_system_names_its_name_servers);
   TORB_ADD(test_io_randomness_differs);
+#if !defined(_WIN32)
+  TORB_ADD(test_io_a_child_answers_more_than_a_pipe_holds);
+  TORB_ADD(test_io_a_cancelled_read_of_a_child_loses_nothing);
+  TORB_ADD(test_io_closing_a_child_ends_a_read_that_waits);
+#endif
 }

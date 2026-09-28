@@ -5,10 +5,13 @@
  *
  * Every operation that may wait is a task of the runtime that turns to the blocking pool first (`torb_blocking_turn`,
  * docs/design/CONCURRENCY.md section 16) and does the one call of the operating system there, so the worker it was
- * started on goes on with its other tasks. The poller of runtime/io.c takes sockets; a regular file is always ready to
- * every poller there is, a console is no handle a poller takes on Windows, and the pipes of a child are read the same
- * way on every system, which keeps the three kinds one code path. A task answers an `Int64`: the bytes a read got (0
- * at the end), the bytes a write wrote, the exit code a wait got - or a negative failure, which
+ * started on goes on with its other tasks. The poller of runtime/io.c takes sockets, and a regular file is always ready
+ * to every poller there is and a console is no handle a poller takes on Windows. **The pipes of a child go to the poller
+ * where it takes them** - epoll and kqueue watch a pipe like a socket - so on Linux, macOS and FreeBSD a read of a
+ * child's output that waits holds no thread of the pool, a cancelled one stops at once, and closing the child ends one
+ * that waits with `EBADF`, as the socket paths do (`torb_io_pipe_adopt`). On Windows they are anonymous pipes without
+ * overlapped IO and stay on the pool; the wait for a child stays there everywhere. A task answers an `Int64`: the bytes
+ * a read got (0 at the end), the bytes a write wrote, the exit code a wait got - or a negative failure, which
  * `torb_stream_failure_text` renders.
  *
  * What a read got waits in a buffer of its stream until the reader takes it into a list (`..._take_read`), because a
@@ -18,6 +21,7 @@
  */
 
 #include "torb.h"
+#include "torb_io.h"
 #include "torb_natives.h"
 #include "torb_pool.h"
 
@@ -96,12 +100,18 @@ static int64_t torb_stream_errno(void) {
  * A child process started with three pipes. The table hands its handle to the program, an index plus one, and a
  * record lives while the program holds the handle or an operation still uses it: `users` counts both, so closing
  * the handle while a read still runs on the blocking pool frees nothing that read still reads.
+ *
+ * A pipe the poller of the IO core took is a handle of io.c in `input_polled`, `output_polled` or `errors_polled`, and
+ * its pointer of the platform is `NULL`: the descriptor is the core's, and closing the handle closes it.
  */
 typedef struct torb_child_record {
   void *process;
   void *input;
   void *output;
   void *errors;
+  int64_t input_polled;
+  int64_t output_polled;
+  int64_t errors_polled;
   torb_stream_pending pending_output;
   torb_stream_pending pending_errors;
   uint32_t users;
@@ -169,6 +179,9 @@ static void torb_child_done(torb_child_record *record) {
   if (record->errors != NULL) {
     torb_platform_pipe_close(record->errors);
   }
+  torb_io_pipe_close(record->input_polled);
+  torb_io_pipe_close(record->output_polled);
+  torb_io_pipe_close(record->errors_polled);
   if (record->process != NULL) {
     torb_platform_child_forget(record->process);
   }
@@ -479,6 +492,17 @@ torb_task *torb_standard_write(int64_t stream, torb_list bytes, int64_t from) {
 
 /* ------------------------------------------------------------------------------------------ child processes --- */
 
+/* Hands a pipe of a new child to the poller of the IO core where it takes one: its handle, and the platform's pointer gone. */
+static void torb_child_adopt(void **pipe, int64_t *polled) {
+  if (*pipe == NULL) {
+    return;
+  }
+  *polled = torb_io_pipe_adopt(torb_platform_pipe_descriptor(*pipe));
+  if (*polled != 0) {
+    *pipe = NULL;
+  }
+}
+
 int64_t torb_child_start(torb_text command, torb_list arguments, torb_text *failure) {
   const int64_t count = torb_list_length(arguments);
   torb_child_record record;
@@ -521,6 +545,9 @@ int64_t torb_child_start(torb_text command, torb_list arguments, torb_text *fail
     *failure = torb_text_from_cstring(message == NULL ? "the program could not be started" : message);
     return -1;
   }
+  torb_child_adopt(&record.input, &record.input_polled);
+  torb_child_adopt(&record.output, &record.output_polled);
+  torb_child_adopt(&record.errors, &record.errors_polled);
   kept = (torb_child_record *)malloc(sizeof *kept);
   if (kept == NULL) {
     torb_panic_out_of_memory(sizeof *kept);
@@ -534,8 +561,15 @@ int64_t torb_child_start(torb_text command, torb_list arguments, torb_text *fail
 torb_task *torb_child_read(int64_t child, int64_t which, int64_t maximum) {
   torb_stream_frame frame;
   torb_child_record *record = torb_child_use(child);
+  int64_t polled;
   if (record == NULL) {
     return torb_stream_answered(-(int64_t)EBADF);
+  }
+  polled = which == 2 ? record->errors_polled : record->output_polled;
+  if (polled != 0) {
+    torb_task *task = torb_io_pipe_read(polled, maximum <= 0 ? 65536 : maximum);
+    torb_child_done(record);
+    return task;
   }
   memset(&frame, 0, sizeof frame);
   frame.kind = TORB_STREAM_CHILD_READ;
@@ -547,18 +581,39 @@ torb_task *torb_child_read(int64_t child, int64_t which, int64_t maximum) {
 
 void torb_child_take_read(int64_t child, int64_t which, torb_list *into) {
   torb_child_record *record = torb_child_use(child);
+  int64_t polled;
   if (record == NULL) {
     return;
   }
-  torb_stream_take(which == 2 ? &record->pending_errors : &record->pending_output, into);
+  polled = which == 2 ? record->errors_polled : record->output_polled;
+  if (polled != 0) {
+    torb_io_pipe_take_read(polled, into);
+  } else {
+    torb_stream_take(which == 2 ? &record->pending_errors : &record->pending_output, into);
+  }
   torb_child_done(record);
 }
 
 torb_task *torb_child_write(int64_t child, torb_list bytes, int64_t from) {
   torb_stream_frame frame;
   torb_child_record *record = torb_child_use(child);
+  int64_t polled;
+  bool ended;
   if (record == NULL) {
     return torb_stream_answered(-(int64_t)EBADF);
+  }
+  torb_mutex_lock(&torb_child_lock);
+  polled = record->input_polled;
+  ended = record->input_ended != 0u;
+  torb_mutex_unlock(&torb_child_lock);
+  if (ended) {
+    torb_child_done(record);
+    return torb_stream_answered(-(int64_t)EPIPE);
+  }
+  if (polled != 0) {
+    torb_task *task = torb_io_pipe_write(polled, bytes, from);
+    torb_child_done(record);
+    return task;
   }
   memset(&frame, 0, sizeof frame);
   frame.kind = TORB_STREAM_CHILD_WRITE;
@@ -573,17 +628,21 @@ torb_task *torb_child_write(int64_t child, torb_list bytes, int64_t from) {
 int64_t torb_child_end_input(int64_t child) {
   torb_child_record *record = torb_child_use(child);
   void *input;
+  int64_t polled;
   if (record == NULL) {
     return -(int64_t)EBADF;
   }
   torb_mutex_lock(&torb_child_lock);
   input = record->input_ended == 0u ? record->input : NULL;
+  polled = record->input_polled;
   record->input_ended = 1u;
   record->input = NULL;
+  record->input_polled = 0;
   torb_mutex_unlock(&torb_child_lock);
   if (input != NULL) {
     torb_platform_pipe_close(input);
   }
+  torb_io_pipe_close(polled);
   torb_child_done(record);
   return 0;
 }

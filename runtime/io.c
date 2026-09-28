@@ -1,10 +1,12 @@
 /*
- * io.c - the IO core: handles, operations, the tasks of `std/network`, and the resolver threads (docs/design/NETWORK.md
- * section 2; runtime/include/torb_io.h is the contract with the pollers of runtime/os/).
+ * io.c - the IO core: handles, operations, the tasks of `std/network` and of the pipes of a POSIX child, and the
+ * resolver threads (docs/design/NETWORK.md section 2; runtime/include/torb_io.h is the contract with the pollers of
+ * runtime/os/ and with runtime/stream.c).
  *
  * # Handles
  *
- * A program holds a socket, a listener or the answer of a name resolution through a handle: `(generation << 32) |
+ * A program holds a socket, a listener or the answer of a name resolution through a handle, and runtime/stream.c holds
+ * the pipes of a child that way: `(generation << 32) |
  * (index + 1)` into one table of the process, behind one mutex. A handle whose slot was freed has another generation,
  * so using it after its close answers `TORB_IO_CLOSED` instead of touching a record that is gone. The table holds one
  * reference of the record; an operation in flight holds another.
@@ -29,6 +31,7 @@
 #include "torb.h"
 #include "torb_io.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -563,10 +566,26 @@ static void torb_io_start(torb_io_operation *operation) {
   torb_io_system_submit(operation);
 }
 
+/*
+ * A failure of a pipe as the stream layer answers one (runtime/stream.c): minus the system's code, which
+ * `torb_stream_failure_text` renders - and a pipe that was closed is `EBADF`, as the closed handle of a child is there.
+ */
+static int64_t torb_io_pipe_failure(int64_t failure) {
+  uint64_t packed = (uint64_t)(-failure);
+  uint32_t code = (uint32_t)(packed & 0xFFFFFFFFu);
+  if (code != 0u) {
+    return -(int64_t)code;
+  }
+  return (torb_io_failure)(packed >> 32) == TORB_IO_CLOSED ? -(int64_t)EBADF : -(int64_t)EIO;
+}
+
 /* What the task answers, on its worker, once the operation completed. */
 static int64_t torb_io_answer(torb_io_operation *operation) {
   int64_t result = operation->result;
   if (result < 0) {
+    if (operation->socket != NULL && operation->socket->kind == (uint8_t)TORB_IO_PIPE) {
+      return torb_io_pipe_failure(result);
+    }
     return result;
   }
   switch ((torb_io_operation_kind)operation->kind) {
@@ -773,13 +792,10 @@ torb_task *torb_network_receive(int64_t stream, int64_t maximum) {
   return torb_io_task(operation);
 }
 
-void torb_network_take_received(int64_t stream, torb_list *into) {
-  torb_io_socket *socket = torb_io_lookup(stream, TORB_IO_STREAM);
+/* Everything the receives of `socket` kept and nobody took, appended to `into`; the socket's reference released. */
+static void torb_io_take_pending(torb_io_socket *socket, torb_list *into) {
   uint8_t *bytes;
   size_t length;
-  if (socket == NULL) {
-    return;
-  }
   torb_spin_lock(&socket->lock);
   bytes = socket->pending;
   length = socket->pending_length;
@@ -790,6 +806,13 @@ void torb_network_take_received(int64_t stream, torb_list *into) {
   torb_list_add_plain(into, bytes, length);
   free(bytes);
   torb_io_socket_release(socket);
+}
+
+void torb_network_take_received(int64_t stream, torb_list *into) {
+  torb_io_socket *socket = torb_io_lookup(stream, TORB_IO_STREAM);
+  if (socket != NULL) {
+    torb_io_take_pending(socket, into);
+  }
 }
 
 torb_task *torb_network_send(int64_t stream, torb_list bytes, int64_t from) {
@@ -1068,6 +1091,68 @@ torb_text torb_network_error_text(int64_t failure) {
     snprintf(buffer, sizeof buffer, "%s", words);
   }
   return torb_text_from_cstring(buffer);
+}
+
+/* ------------------------------------------------------------------------------------ the pipes of a child --- */
+
+int64_t torb_io_pipe_adopt(int64_t descriptor) {
+  if (descriptor < 0) {
+    return 0;
+  }
+  /* The core first: a descriptor made non-blocking for a poller that then did not start could not be read at all */
+  if (torb_io_ensure_running() != 0 || torb_io_system_pipe(descriptor) != 0) {
+    return 0;
+  }
+  return torb_io_register(torb_io_socket_new(TORB_IO_PIPE, 0, descriptor));
+}
+
+torb_task *torb_io_pipe_read(int64_t pipe, int64_t maximum) {
+  torb_io_socket *socket = torb_io_lookup(pipe, TORB_IO_PIPE);
+  torb_io_operation *operation;
+  if (socket == NULL) {
+    return torb_io_answered(-(int64_t)EBADF);
+  }
+  if (maximum < 1 || maximum > 0x7FFFFFFF) {
+    torb_io_socket_release(socket);
+    return torb_io_answered(-(int64_t)EINVAL);
+  }
+  operation = torb_io_operation_new(TORB_IO_RECEIVE, socket);
+  operation->buffer = (uint8_t *)torb_io_allocate((size_t)maximum);
+  operation->capacity = (size_t)maximum;
+  return torb_io_task(operation);
+}
+
+void torb_io_pipe_take_read(int64_t pipe, torb_list *into) {
+  torb_io_socket *socket = torb_io_lookup(pipe, TORB_IO_PIPE);
+  if (socket != NULL) {
+    torb_io_take_pending(socket, into);
+  }
+}
+
+torb_task *torb_io_pipe_write(int64_t pipe, torb_list bytes, int64_t from) {
+  torb_io_socket *socket = torb_io_lookup(pipe, TORB_IO_PIPE);
+  torb_io_operation *operation;
+  int64_t length = torb_list_length(bytes);
+  if (socket == NULL) {
+    return torb_io_answered(-(int64_t)EBADF);
+  }
+  if (from < 0 || from > length || (length > 0 && torb_list_element(bytes)->size != 1u)) {
+    torb_io_socket_release(socket);
+    return torb_io_answered(-(int64_t)EINVAL);
+  }
+  if (length == from) {
+    torb_io_socket_release(socket);
+    return torb_io_answered(0);
+  }
+  operation = torb_io_operation_new(TORB_IO_SEND, socket);
+  operation->length = (size_t)(length - from);
+  operation->buffer = (uint8_t *)torb_io_allocate(operation->length);
+  memcpy(operation->buffer, torb_list_at(bytes, from, torb_location_unknown), operation->length);
+  return torb_io_task(operation);
+}
+
+void torb_io_pipe_close(int64_t pipe) {
+  torb_network_close(pipe);
 }
 
 /* ---------------------------------------------------------------------------------------------- the stop --- */

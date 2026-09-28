@@ -607,6 +607,13 @@ void torb_io_system_cancel(torb_io_operation *operation) {
   }
 }
 
+/* The pipes of a child are anonymous pipes without overlapped IO, which no completion port takes: runtime/stream.c reads
+   them on the blocking pool. */
+int64_t torb_io_system_pipe(int64_t descriptor) {
+  (void)descriptor;
+  return torb_io_failed(TORB_IO_INVALID, 0u);
+}
+
 int64_t torb_io_system_shutdown(torb_io_socket *socket) {
   if (torb_ws.shutdown((SOCKET)socket->system, SD_SEND) != 0) {
     return torb_ws_last_failure();

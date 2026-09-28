@@ -74,7 +74,12 @@ typedef enum torb_io_record_kind {
   TORB_IO_LISTENER = 2,
   TORB_IO_RESOLUTION = 3,
   /** A UDP socket: bound, maybe connected to one peer, its received datagrams queued whole. */
-  TORB_IO_DATAGRAM = 4
+  TORB_IO_DATAGRAM = 4,
+  /**
+   * A pipe of a child process, on a system whose poller takes one (epoll and kqueue): read and written like a stream,
+   * with `read` and `write` instead of `recv` and `send`. runtime/stream.c holds its handle.
+   */
+  TORB_IO_PIPE = 5
 } torb_io_record_kind;
 
 typedef struct torb_io_operation torb_io_operation;
@@ -198,6 +203,31 @@ void torb_io_socket_free(torb_io_socket *socket);
 /** How many operations are alive, for the stop of the core and the tests. */
 int64_t torb_io_operations_alive(void);
 
+/* ----------------------------------------------------------------- what io.c gives the stream layer (stream.c) --- */
+
+/*
+ * The pipes of a child process (`Process.start`), where the system's poller takes them: on Linux, macOS and FreeBSD a
+ * pipe is a descriptor epoll and kqueue watch like a socket, so a read that waits holds no thread and a cancelled one
+ * stops at once. On Windows the pipes of a child are anonymous pipes without overlapped IO, which no completion port
+ * takes, and the stream layer reads them on the blocking pool as before. A task of a pipe answers what the stream
+ * layer's tasks answer: a count, 0 at the end, or minus the system's code (`EBADF` for a pipe that was closed).
+ */
+
+/**
+ * The pipe `descriptor` of a child, made non-blocking and a record of the poller: its handle, which the stop of the core
+ * closes with every other, or 0 where the poller takes no pipes or refused this one - the caller keeps the descriptor
+ * then. A pipe it answers a handle for is the core's: closing the handle closes the descriptor.
+ */
+int64_t torb_io_pipe_adopt(int64_t descriptor);
+/** A task that reads at most `maximum` bytes of the pipe, as soon as any arrived, into the pipe's own buffer. */
+torb_task *torb_io_pipe_read(int64_t pipe, int64_t maximum);
+/** What the reads of the pipe got and nobody took yet, appended to a list of bytes. */
+void torb_io_pipe_take_read(int64_t pipe, torb_list *into);
+/** A task that writes all the bytes of `bytes` from `from` on into the pipe, and answers their count. */
+torb_task *torb_io_pipe_write(int64_t pipe, torb_list bytes, int64_t from);
+/** Closes the pipe: an operation that waits on it answers `EBADF`. A handle that is closed already is nothing. */
+void torb_io_pipe_close(int64_t pipe);
+
 /* ------------------------------------------------------------------------------ what a poller gives io.c --- */
 
 /**
@@ -231,6 +261,12 @@ void torb_io_system_submit(torb_io_operation *operation);
 void torb_io_system_cancel(torb_io_operation *operation);
 /** No more sending on `socket` (`shutdown` for writing). 0, or a packed failure. */
 int64_t torb_io_system_shutdown(torb_io_socket *socket);
+/**
+ * Readies the pipe `descriptor` of a child for the poller: non-blocking, so a read or a write that would wait is
+ * registered like one of a socket. 0, or a packed failure - always on Windows, whose completion port takes no anonymous
+ * pipe.
+ */
+int64_t torb_io_system_pipe(int64_t descriptor);
 /** Closes the descriptor. Every operation in flight on it completes, failed. Called once, with the record alive. */
 void torb_io_system_close(torb_io_socket *socket);
 /** The record's last reference went: freed at once, or once the IO thread holds no event that could name it. */
