@@ -80,10 +80,21 @@ public fn unpacked(archive: List<UInt8>, expected: String): Result<List<TarEntry
   if bytes.length() > unpackedLimit + 1024 * 1024 {
     return Fail "the archive unpacks to {bytes.length()} bytes, more than the {unpackedLimit} a package may have"
   }
-  const entries = match untarred(bytes) {
+  const read = match untarred(bytes) {
     Ok(found) => found
     Fail(problem) => {
       return Fail "the archive is not a tar the registry writes: {problem}"
+    }
+  }
+  // A package is files: a directory entry says nothing its files do not, and a link is how an archive writes outside
+  var entries: List<TarEntry> = []
+  for entry in read {
+    match entry.kind {
+      .File => entries.append entry
+      .Directory => {}
+      .SymbolicLink(_) | .HardLink(_) => {
+        return Fail "the archive is not a tar the registry writes: `{entry.path}` is a link, and a package holds files"
+      }
     }
   }
   if entries.length() > fileLimit {
@@ -120,7 +131,7 @@ public fn pathProblem(path: String): String? {
  */
 public fn capabilityOf(package: String): String? {
   match package {
-    "std/fs" => "files"
+    "std/fs" | "std/archive/extract" => "files"
     "std/network" | "std/http" | "std/tls" => "network"
     "std/process" => "processes"
     "std/os/environment" => "environment"

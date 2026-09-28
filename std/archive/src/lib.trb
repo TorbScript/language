@@ -1,11 +1,13 @@
 /**
- * `tar` archives (POSIX ustar): [tarred] writes the entries as an archive that depends on nothing but the entries, and
- * [untarred] reads one back. A package of the registry is a `tar` inside gzip (`std/compression`,
- * docs/design/RELEASE.md section 7.2).
+ * `tar` archives: [untarred] reads what the `tar` programs in use write - POSIX ustar, pax (POSIX.1-2001) and GNU tar
+ * - and [tarred] writes ustar, with a pax header in front of an entry whose path or link does not fit ustar's fields.
+ * A package of the registry is a `tar` inside gzip (`std/compression`, docs/design/RELEASE.md section 7.2), and so is a
+ * release of the toolchain.
  *
- * Only regular files are written and read: a directory entry is skipped, and a link, a device or an extended header is
- * refused, because a package has no use for one and a link is how an archive writes outside of where it is unpacked.
- * A path is kept as the archive says it; whoever writes the files out checks it (no `..`, not absolute).
+ * An entry is a regular file, a directory, a symbolic link or a hard link ([TarKind]), with the permission bits and the
+ * time of modification the archive gives it; a device and a pipe are refused. A path is kept as the archive writes it,
+ * `../x` and `/etc/x` included: writing entries out is `extract` of `std/archive/extract`, which refuses every entry
+ * that would land outside of its directory.
  *
  * # Examples
  *
@@ -18,10 +20,39 @@ use ByteReader, ByteWriter, ReadError from "std/binary"
 use Bytes from "std/stream"
 use textOf from "std/stream"
 
-/** One file of an archive: its path, with `/` between the directories, and its bytes. */
+/** What an entry of an archive is. */
+public type TarKind with Show, Equals, Hash {
+  /** A regular file: the bytes of the entry. */
+  case File
+  /** A directory. Its entry has no bytes. */
+  case Directory
+  /** A symbolic link to `target`, which the system reads from the directory of the link. Its entry has no bytes. */
+  case SymbolicLink(target: String)
+  /** A second name of the file `target`, a path of the same archive. Its entry has no bytes. */
+  case HardLink(target: String)
+}
+
+/**
+ * One entry of an archive: its path, with `/` between the directories and without one at the end, its bytes, what it
+ * is, its permission bits the way POSIX writes them (`0b111_101_101` is `0755`, a program) and the time it was last
+ * written, in seconds since 1970. A file that is only a path and bytes is `TarEntry(path, bytes)`: `0644`, time 0.
+ */
 public type TarEntry {
   path: String
   bytes: Bytes
+  kind: TarKind = TarKind.File
+  mode: Int = 0b110_100_100
+  modified: Int = 0
+
+  /** A directory, `0755` unless `mode` says otherwise. */
+  static fn directory(path: String, mode: Int = 0b111_101_101): Self {
+    Self path, [], TarKind.Directory, mode
+  }
+
+  /** A symbolic link at `path` to `target`, `0777` as every system shows one. */
+  static fn symbolicLink(path: String, target: String): Self {
+    Self path, [], TarKind.SymbolicLink(target), 0b111_111_111
+  }
 }
 
 /** A path an archive cannot hold, or an archive that breaks the format: what, and the byte where it was found. */
@@ -41,83 +72,158 @@ extend ArchiveError with From<ReadError> {
   }
 }
 
+/** The name of the pax header [tarred] writes, the one Python's `tarfile` writes too: fixed, so the bytes are. */
+const paxHeaderName = "././@PaxHeader"
+
+/** `8 ** 11`: the first number the eleven octal digits of a size or a time cannot hold. */
+const octalLimit = 8589934592
+
 /**
- * The entries as a ustar archive, sorted by path, with nothing of the machine in it: every mode `0644`, every time 0, no
- * owner, no group. The same entries give the same bytes everywhere.
+ * The entries as a ustar archive, sorted by path - the hard links after the rest, so that what each names is unpacked
+ * before it - with nothing of the machine in it but what the entries say: no owner, no group, and every mode and time
+ * the entry's own. The same entries give the same bytes everywhere.
+ *
+ * A path that fits ustar's fields - at most 100 bytes, or a prefix of 155 and a name of 100 split at a `/` - is written
+ * in them alone, so an archive of such paths is plain ustar that every `tar` reads. A longer path, a link target of
+ * more than 100 bytes, a size of 8 GiB or more and a time before 1970 or after 2242 go into a pax header (`x`) in
+ * front of the entry instead: pax is POSIX, every `tar` of the last twenty years reads it, and it has no limit of
+ * length - where GNU's own long names are GNU's alone.
  *
  * # Errors
  *
- * - [ArchiveError] for a path that is empty, has more than 255 bytes, or cannot be split into ustar's prefix of 155
- *   and name of 100 bytes at a `/`, and for two entries of one path.
+ * - [ArchiveError] for an empty path, two entries of one path, and a directory or a link with bytes.
  */
 public fn tarred(entries: List<TarEntry>): Result<Bytes, ArchiveError> {
-  var sorted = entries
+  // A hard link names a file that has to be there when a `tar` unpacks it, so the links come after everything else
+  var sorted = entries.filter({ !isHardLink(_) }).toList()
   sorted.sort by: { _.path }
+  sorted.appendAll entries.filter(isHardLink).toList().sorted(by: { _.path })
   var writer = ByteWriter()
-  var previous = ""
+  var paths: Set<String> = []
   for entry in sorted {
-    if entry.path == previous {
+    if paths.contains(entry.path) {
       return Fail ArchiveError("two entries of the path `{entry.path}`", writer.length())
     }
-    previous = entry.path
-    writeHeader(writer, entry)?
-    writer.append entry.bytes
-    padded(writer, [], (512 - entry.bytes.length() % 512) % 512)
+    paths.insert entry.path
+    writeEntry(writer, entry)?
   }
   padded writer, [], 1024
   writer.bytes()
 }
 
 /**
- * The regular files of an archive, in the order it holds them.
+ * The entries of an archive, in the order it holds them: regular files, directories, symbolic links and hard links,
+ * each with its mode and its time. What the formats add around an entry is read into it - a path of GNU's long names
+ * (`L`, `K`), of ustar's prefix, or of a pax header (`x` for the next entry, `g` for every one after it: `path`,
+ * `linkpath`, `size` and `mtime`, every other key ignored) - and is no entry of its own. A trailing `/` of a directory
+ * is dropped.
  *
  * # Errors
  *
- * - [ArchiveError] for a header whose checksum does not match, a size that is no octal number, an archive that ends
- *   inside an entry, and an entry that is neither a regular file nor a directory.
+ * - [ArchiveError] for a header whose checksum does not match, a number that is none, a pax record that is not
+ *   `<length> <key>=<value>`, a path that is not UTF-8, an archive that ends inside an entry or without its blocks of
+ *   zeros, and an entry that is a device, a pipe, a sparse file or of a type this reader does not know.
  */
 public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
   var entries: List<TarEntry> = []
   var reader = ByteReader bytes
+  // The records of a `g` header count for every entry after it; those of an `x` header, `L` and `K` for the next one
+  var global: Map<String, String> = [:]
+  var local: Map<String, String> = [:]
   while reader.remaining() >= 512 {
     const at = reader.position()
     const block = reader.bytes(512)?
     if block.all({ _ == 0 }) {
       return entries
     }
-    var sum = 0
-    for index in 0..512 {
-      sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from block[index] }
-    }
-    if octalAt(block, 148, 8) != sum {
+    if !checksumMatches(block) {
       return Fail ArchiveError("a header whose checksum does not match", at)
     }
-    const size = match octalAt(block, 124, 12) {
-      Some(found) => found
-      None => {
-        return Fail ArchiveError("a size that is not an octal number", at + 124)
+    const kind = block[156]
+    const headerOnly = kind == 49 || kind == 50 || kind == 51 || kind == 52 || kind == 53 || kind == 54
+    var size = 0
+    if !headerOnly {
+      size = match numberAt(block, 124, 12) {
+        Some(found) => found
+        None => {
+          return Fail ArchiveError("a size that is not a number", at + 124)
+        }
       }
     }
-    const kind = block[156]
-    const name = fieldText(block, 0, 100, at)?
-    const prefix = fieldText(block, 345, 155, at)?
-    const path = if prefix.isEmpty() { name } else { "{prefix}/{name}" }
-    if size > reader.remaining() {
-      return Fail ArchiveError("the archive ends inside `{path}`", at)
+    const extended = kind == 120 || kind == 103 || kind == 76 || kind == 75
+    if !extended && !headerOnly {
+      if const Some(text) = recordOf("size", local, global) {
+        size = match Int.tryFrom(text) {
+          Ok(found) => found
+          Fail(_) => {
+            return Fail ArchiveError("a pax size that is not a number: `{text}`", at)
+          }
+        }
+      }
     }
-    // `0` and the NUL of old archives are a regular file, `5` a directory
-    if kind == 48 || kind == 0 {
-      entries.append TarEntry(path, reader.bytes(size)?)
-    } else if kind == 53 {
-      reader.skip(size)?
-    } else {
-      return Fail ArchiveError("`{path}` is not a regular file or a directory (type {kind})", at + 156)
+    if size < 0 || size > reader.remaining() {
+      return Fail ArchiveError("the archive ends inside an entry", at)
     }
+    const data = reader.bytes(size)?
     // The last block of an entry is filled up with zeros; an archive that ends inside them has no end blocks either
     const padding = (512 - size % 512) % 512
     if reader.skip(padding).isError() {
       return Fail ArchiveError("the archive ends without its two blocks of zeros", reader.position() + padding)
     }
+    if kind == 120 {
+      local = withRecords(local, data, at + 512, global: false)?
+      continue
+    }
+    if kind == 103 {
+      global = withRecords(global, data, at + 512, global: true)?
+      continue
+    }
+    if kind == 76 || kind == 75 {
+      const text = terminatedText(data, at + 512)?
+      if kind == 76 {
+        local["path"] = text
+      } else {
+        local["linkpath"] = text
+      }
+      continue
+    }
+    const path = pathOf(block, at, local, global)?
+    // GNU's sparse files in pax: the bytes are a map of holes, which read as the file would be the wrong file
+    for key in ["GNU.sparse.major", "GNU.sparse.map", "GNU.sparse.size"] {
+      if recordOf(key, local, global).isSome() {
+        return Fail ArchiveError("`{path}` is a sparse file, which this reader does not read", at)
+      }
+    }
+    const mode = (numberAt(block, 100, 8) ?? 0) & 0b111_111_111_111
+    const modified = match recordOf("mtime", local, global) {
+      Some(text) => {
+        match secondsOf(text) {
+          Some(seconds) => seconds
+          None => {
+            return Fail ArchiveError("a pax mtime that is not a number: `{text}`", at)
+          }
+        }
+      }
+      None => numberAt(block, 136, 12) ?? 0
+    }
+    // `0`, the NUL of old archives and `7` (contiguous) are a regular file - a directory where old archives end the
+    // name with `/` - `1` a hard link, `2` a symbolic link, `5` a directory, GNU's `D` the listing of one, `V` a label
+    if kind == 48 || kind == 0 || kind == 55 {
+      if path.endsWith("/") {
+        entries.append TarEntry(withoutSlash(path), [], TarKind.Directory, mode, modified)
+      } else {
+        entries.append TarEntry(path, data, TarKind.File, mode, modified)
+      }
+    } else if kind == 53 || kind == 68 {
+      entries.append TarEntry(withoutSlash(path), [], TarKind.Directory, mode, modified)
+    } else if kind == 49 || kind == 50 {
+      const target = linkTargetOf(block, at, local, global)?
+      const linked = if kind == 50 { TarKind.SymbolicLink target } else { TarKind.HardLink target }
+      entries.append TarEntry(path, [], linked, mode, modified)
+    } else if kind != 86 {
+      return Fail ArchiveError("`{path}` is a device, a pipe, or a type this reader does not know ({kind})", at + 156)
+    }
+    local = [:]
   }
   if bytes.isEmpty() {
     return entries
@@ -125,32 +231,143 @@ public fn untarred(bytes: Bytes): Result<List<TarEntry>, ArchiveError> {
   Fail ArchiveError("the archive ends without its two blocks of zeros", reader.position())
 }
 
-/** The 512 bytes in front of an entry. */
-fn writeHeader(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveError> {
-  const at = writer.length()
-  const pathBytes = entry.path.bytes().toList()
-  if pathBytes.isEmpty() || pathBytes.length() > 255 {
-    return Fail ArchiveError("the path `{entry.path}` has {pathBytes.length()} bytes, and ustar holds 1 to 255", at)
+// -------------------------------------------------------------------------------------------------------- writing
+
+fn isHardLink(entry: TarEntry): Bool {
+  match entry.kind {
+    .HardLink(_) => true
+    .File | .Directory | .SymbolicLink(_) => false
   }
+}
+
+/** One entry: a pax header where ustar's fields do not hold it, its own header, its bytes, and zeros to a block. */
+fn writeEntry(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveError> {
+  const at = writer.length()
+  if entry.path.isEmpty() {
+    return Fail ArchiveError("an entry without a path", at)
+  }
+  var linkTarget = ""
+  var kind = 48
+  match entry.kind {
+    .File => {}
+    .Directory => {
+      kind = 53
+    }
+    .SymbolicLink(target) => {
+      kind = 50
+      linkTarget = target
+    }
+    .HardLink(target) => {
+      kind = 49
+      linkTarget = target
+    }
+  }
+  if kind != 48 && !entry.bytes.isEmpty() {
+    return Fail ArchiveError("`{entry.path}` is no file and holds {entry.bytes.length()} bytes", at)
+  }
+  const path = if kind == 53 && !entry.path.endsWith("/") { "{entry.path}/" } else { entry.path }
+  const pathBytes = path.bytes().toList()
+  var records: List<(String, String)> = []
   var name = pathBytes
   var prefix: List<UInt8> = []
-  if pathBytes.length() > 100 {
-    // The first `/` that leaves at most 100 bytes behind it, if it has at most 155 in front of it
-    var split = 0 - 1
-    for index in 0..pathBytes.length() {
-      if pathBytes[index] == 47 && pathBytes.length() - index - 1 <= 100 && index <= 155 {
-        split = index
-        break
-      }
+  match ustarSplit(pathBytes) {
+    Some((front, back)) => {
+      prefix = front
+      name = back
     }
-    if split < 0 {
-      return Fail ArchiveError("the path `{entry.path}` cannot be split into ustar's prefix and name", at)
+    None => {
+      records.append(("path", path))
+      name = truncated pathBytes, 100
     }
-    prefix = pathBytes[0..split]
-    name = pathBytes[(split + 1)..pathBytes.length()]
   }
-  // The checksum is taken with its own field as eight spaces, then written as six digits, a NUL and a space
-  const blank = headerOf name, prefix, entry.bytes.length(), "        ".bytes().toList()
+  var link = linkTarget.bytes().toList()
+  if link.length() > 100 {
+    records.append(("linkpath", linkTarget))
+    link = truncated link, 100
+  }
+  const size = entry.bytes.length()
+  if size >= octalLimit {
+    records.append(("size", "{size}"))
+  }
+  if entry.modified < 0 || entry.modified >= octalLimit {
+    records.append(("mtime", "{entry.modified}"))
+  }
+  if !records.isEmpty() {
+    var data: List<UInt8> = []
+    for (key, value) in records {
+      data.appendAll paxRecord(key, value)
+    }
+    const fields = HeaderFields paxHeaderName.bytes().toList(), [], data.length(), 0b110_100_100, 0, 120, []
+    writer.append headerOf(fields)
+    writer.append data
+    padded(writer, [], (512 - data.length() % 512) % 512)
+  }
+  const sizeField = if size >= octalLimit { 0 } else { size }
+  const timeField = if entry.modified < 0 || entry.modified >= octalLimit { 0 } else { entry.modified }
+  const mode = entry.mode & 0b111_111_111_111
+  writer.append headerOf(HeaderFields(name, prefix, sizeField, mode, timeField, kind, link))
+  writer.append entry.bytes
+  padded(writer, [], (512 - size % 512) % 512)
+  Ok void
+}
+
+/**
+ * ustar's prefix and name of `path`: the path itself where it has at most 100 bytes, split at the first `/` that
+ * leaves at most 100 bytes behind it and at most 155 in front of it otherwise, and `None` where there is no such `/`.
+ */
+fn ustarSplit(path: Bytes): (Bytes, Bytes)? {
+  if path.length() <= 100 {
+    const empty: List<UInt8> = []
+    return (empty, path)
+  }
+  for index in 0..path.length() {
+    if path[index] == 47 && path.length() - index - 1 <= 100 && index <= 155 {
+      return (path[0..index], path[(index + 1)..path.length()])
+    }
+  }
+  None
+}
+
+/** The first `width` bytes of `text` at most, cut in front of a character rather than inside one. */
+fn truncated(text: Bytes, width: Int): Bytes {
+  if text.length() <= width {
+    return text
+  }
+  var end = width
+  // A byte `10xxxxxx` continues a character of UTF-8
+  while end > 0 && text[end] & 0b1100_0000 == 0b1000_0000 {
+    end = end - 1
+  }
+  text[0..end]
+}
+
+/** One record of a pax header: `<length> <key>=<value>\n`, the length counting every byte of it, its own digits too. */
+fn paxRecord(key: String, value: String): Bytes {
+  const rest = key.byteLength() + value.byteLength() + 3
+  var length = rest + "{rest}".byteLength()
+  if "{length}".byteLength() > "{rest}".byteLength() {
+    length = length + 1
+  }
+  "{length} {key}={value}\n".bytes().toList()
+}
+
+/** What a header says, in the order of its fields. */
+type HeaderFields {
+  name: Bytes
+  prefix: Bytes
+  size: Int
+  mode: Int
+  modified: Int
+  kind: Int
+  link: Bytes
+}
+
+/**
+ * The 512 bytes of a ustar header, every field filled up with zeros to its width, and the checksum over them: taken with
+ * its own field as eight spaces, then written as six digits, a NUL and a space.
+ */
+fn headerOf(fields: HeaderFields): Bytes {
+  const blank = headerWith fields, "        ".bytes().toList()
   var sum = 0
   for byte in blank {
     sum = sum + Int.from(byte)
@@ -158,33 +375,26 @@ fn writeHeader(var writer: ByteWriter, entry: TarEntry): Result<Void, ArchiveErr
   var digits = octal sum, 6
   digits.append 0
   digits.append 32
-  writer.append headerOf(name, prefix, entry.bytes.length(), digits)
-  Ok void
+  headerWith fields, digits
 }
 
-/**
- * The fields of a ustar header in their order, every one filled up with zeros to its width: nothing of the machine, a
- * regular file of `size` bytes, and `checksum` as the eight bytes of its field.
- */
-fn headerOf(name: Bytes, prefix: Bytes, size: Int, checksum: Bytes): Bytes {
+fn headerWith(fields: HeaderFields, checksum: Bytes): Bytes {
   var writer = ByteWriter()
-  padded writer, name, 100
-  // The mode 0644, in decimal, then the owner and the group
-  padded writer, octal(420, 7), 8
+  padded writer, fields.name, 100
+  padded writer, octal(fields.mode, 7), 8
+  // The owner and the group
   padded writer, octal(0, 7), 8
   padded writer, octal(0, 7), 8
-  padded writer, octal(size, 11), 12
-  // The time of modification
-  padded writer, octal(0, 11), 12
+  padded writer, octal(fields.size, 11), 12
+  padded writer, octal(fields.modified, 11), 12
   writer.append checksum
-  // A regular file, and the name it links to, which it has none of
-  writer.uint8 48
-  padded writer, [], 100
+  writer.uint8(UInt8.tryFrom(fields.kind).ok() ?? 48)
+  padded writer, fields.link, 100
   padded writer, "ustar".bytes().toList(), 6
   writer.text "00"
   // The names of the owner and the group, and the two device numbers
   padded writer, [], 80
-  padded writer, prefix, 155
+  padded writer, fields.prefix, 155
   padded writer, [], 12
   writer.bytes()
 }
@@ -200,8 +410,160 @@ fn octal(value: Int, width: Int): List<UInt8> {
   digits.reversed()
 }
 
-/** The octal number of a field, up to its first NUL or space; `None` where it holds anything else. */
-fn octalAt(block: Bytes, start: Int, width: Int): Int? {
+/** `bytes`, and zeros after them up to `width`. */
+fn padded(var writer: ByteWriter, bytes: Bytes, width: Int) {
+  writer.append bytes
+  for _ in bytes.length()..width {
+    writer.uint8 0
+  }
+}
+
+// -------------------------------------------------------------------------------------------------------- reading
+
+/**
+ * Whether the checksum field holds the sum of the header's bytes, taken with the field itself as eight spaces - as
+ * unsigned bytes, or as the signed ones some old `tar` programs added.
+ */
+fn checksumMatches(block: Bytes): Bool {
+  var unsigned = 0
+  var signed = 0
+  for index in 0..512 {
+    const byte = if index >= 148 && index < 156 { 32 } else { Int.from block[index] }
+    unsigned = unsigned + byte
+    signed = signed + if byte >= 128 { byte - 256 } else { byte }
+  }
+  const written = numberAt block, 148, 8
+  written == unsigned || written == signed
+}
+
+/** Whether a header is POSIX ustar (`ustar` and a NUL), whose prefix field GNU's own format uses for something else. */
+fn isUstar(block: Bytes): Bool {
+  const magic: List<UInt8> = [117, 115, 116, 97, 114, 0]
+  block[257..263] == magic
+}
+
+/** The path of an entry: a pax or GNU record, else ustar's prefix and name. */
+fn pathOf(
+  block: Bytes,
+  at: Int,
+  local: Map<String, String>,
+  global: Map<String, String>,
+): Result<String, ArchiveError> {
+  if const Some(path) = recordOf("path", local, global) {
+    return path
+  }
+  const name = fieldText(block, 0, 100, at)?
+  if !isUstar(block) {
+    return name
+  }
+  const prefix = fieldText(block, 345, 155, at)?
+  if prefix.isEmpty() { name } else { "{prefix}/{name}" }
+}
+
+/** The target of a link: a pax or GNU record, else the header's field. */
+fn linkTargetOf(
+  block: Bytes,
+  at: Int,
+  local: Map<String, String>,
+  global: Map<String, String>,
+): Result<String, ArchiveError> {
+  match recordOf("linkpath", local, global) {
+    Some(target) => target
+    None => fieldText block, 157, 100, at
+  }
+}
+
+/** The value of `key` for the next entry: its own record, else the global one. An empty own record cancels both. */
+fn recordOf(key: String, local: Map<String, String>, global: Map<String, String>): String? {
+  match local.get(key) {
+    Some(value) => {
+      if value.isEmpty() {
+        return None
+      }
+      value
+    }
+    None => global.get key
+  }
+}
+
+/**
+ * `records` with the records of a pax header added, each `<length> <key>=<value>\n`. In a global header an empty value
+ * removes the key; in an entry's own it stays, and cancels the global one.
+ */
+fn withRecords(
+  records: Map<String, String>,
+  data: Bytes,
+  at: Int,
+  global: Bool,
+): Result<Map<String, String>, ArchiveError> {
+  var result = records
+  var position = 0
+  while position < data.length() && data[position] != 0 {
+    var length = 0
+    var cursor = position
+    while cursor < data.length() && data[cursor] >= 48 && data[cursor] <= 57 {
+      length = length * 10 + Int.from(data[cursor]) - 48
+      cursor = cursor + 1
+    }
+    const end = position + length
+    if cursor == position || cursor >= data.length() || data[cursor] != 32 || end <= cursor + 1 || end > data.length() {
+      return Fail ArchiveError("a pax record that is not `<length> <key>=<value>`", at + position)
+    }
+    if data[end - 1] != 10 {
+      return Fail ArchiveError("a pax record that does not end its line", at + position)
+    }
+    const record = data[(cursor + 1)..(end - 1)]
+    const equals = match record.indexOf(61) {
+      Some(found) => found
+      None => {
+        return Fail ArchiveError("a pax record without `=`", at + position)
+      }
+    }
+    const key = textAt(record[0..equals], at + cursor + 1)?
+    const value = textAt(record[(equals + 1)..record.length()], at + cursor + 2 + equals)?
+    if global && value.isEmpty() {
+      result.remove key
+    } else {
+      result[key] = value
+    }
+    position = end
+  }
+  result
+}
+
+/** The whole seconds of a pax time, `<seconds>[.<fraction>]` - rounded down, before 1970 as well. */
+fn secondsOf(text: String): Int? {
+  const parts = text.split "."
+  const whole = Int.tryFrom(parts[0]).ok()?
+  if parts.length() > 2 {
+    return None
+  }
+  if parts.length() == 2 {
+    const fraction = parts[1]
+    if fraction.isEmpty() || !fraction.bytes().all({ byte => byte >= 48 && byte <= 57 }) {
+      return None
+    }
+    if text.startsWith("-") && fraction != "0".repeat(fraction.byteLength()) {
+      return whole - 1
+    }
+  }
+  whole
+}
+
+/**
+ * The number of a field: octal digits up to the first NUL or space, or - GNU's base-256, for what octal cannot hold -
+ * the bytes after a first byte of `0x80`, big-endian, a first byte of `0xFF` making it negative. `None` where the field
+ * holds neither.
+ */
+fn numberAt(block: Bytes, start: Int, width: Int): Int? {
+  const first = Int.from block[start]
+  if first >= 128 {
+    var value = if first == 255 { -1 } else { first & 0b0111_1111 }
+    for index in (start + 1)..(start + width) {
+      value = value * 256 + Int.from(block[index])
+    }
+    return value
+  }
   var value = 0
   var digits = 0
   for index in start..(start + width) {
@@ -230,16 +592,27 @@ fn fieldText(block: Bytes, start: Int, width: Int, at: Int): Result<String, Arch
   while end < start + width && block[end] != 0 {
     end = end + 1
   }
-  match textOf(block[start..end]) {
+  textAt(block[start..end], at + start)
+}
+
+/** The text of GNU's `L` or `K` entry: its bytes up to the first NUL. */
+fn terminatedText(data: Bytes, at: Int): Result<String, ArchiveError> {
+  const end = data.indexOf(0) ?? data.length()
+  textAt data[0..end], at
+}
+
+fn textAt(bytes: Bytes, at: Int): Result<String, ArchiveError> {
+  match textOf(bytes) {
     Ok(text) => text
-    Fail(_) => Fail ArchiveError("a path that is not UTF-8", at + start)
+    Fail(_) => Fail ArchiveError("a path or a record that is not UTF-8", at)
   }
 }
 
-/** `bytes`, and zeros after them up to `width`. */
-fn padded(var writer: ByteWriter, bytes: Bytes, width: Int) {
-  writer.append bytes
-  for _ in bytes.length()..width {
-    writer.uint8 0
+/** `path` without the `/` a directory's path ends in. */
+fn withoutSlash(path: String): String {
+  var result = path
+  while result.byteLength() > 1 && result.endsWith("/") {
+    result = result.sliceBytes(0, result.byteLength() - 1)
   }
+  result
 }

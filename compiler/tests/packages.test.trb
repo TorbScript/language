@@ -19,6 +19,9 @@ use Manifest from "../src/project/manifest"
 use withRequirement, withoutRequirement from "../src/package/manifest-edit"
 use SourceTree from "../src/project/source-tree"
 use findWorkspace from "../src/project/workspace"
+use TarEntry, tarred from "std/archive"
+use gzipped from "std/compression"
+use unpacked, treeHash from "../src/package/archive"
 
 fn parsedVersion(text: String): Version {
   Version.tryFrom(text).expect("a version")
@@ -581,5 +584,19 @@ group "Editing project.trb" {
   test "a block that computes anything is refused rather than rewritten" {
     const text = "const version = \"^1.0.0\"\n\ndependencies \{\n  runtime \"acme/a:\{version\}\"\n\}\n"
     assert withRequirement(text, "runtime", "acme/b", "acme/b").isError()
+  }
+}
+
+group "The archive of a package" {
+  test "a directory entry is skipped, and a link is refused" {
+    const files = [TarEntry("project.trb", "name = \"acme/one\"\n".bytes().toList())]
+    const hash = treeHash files
+    const withDirectory = files.appended TarEntry.directory("src")
+    assert(unpacked(gzipped(tarred(withDirectory).expect("an archive")), hash).map({ _.length() }) == 1)
+    const withLink = files.appended TarEntry.symbolicLink("src", "/etc")
+    match unpacked(gzipped(tarred(withLink).expect("an archive")), hash) {
+      Ok(_) => panic "unpacked a link"
+      Fail(message) => assert message.contains("`src` is a link")
+    }
   }
 }

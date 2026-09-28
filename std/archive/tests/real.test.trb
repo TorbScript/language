@@ -1,0 +1,77 @@
+/**
+ * What the `tar` programs in use write, read back: GNU tar's own format, its pax, and bsdtar's (tests/archives.trb has
+ * the archives and how each was made). All three hold the same tree, so all three read to the same entries.
+ */
+
+use test, group from "std/test"
+use gunzipped from "std/compression"
+use TarEntry, TarKind, tarred, untarred from "../src/lib"
+use gnuArchive, paxArchive, bsdArchive from "./archives"
+
+const time = 1700000000
+const directoryMode = 0b111_101_101
+const longHeader = "{"x".repeat(58)}.h"
+const headerDirectory = "torb-9.9.9/runtime/vendor/mbedtls/include/mbedtls"
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes().toList()
+}
+
+fn directory(path: String): TarEntry {
+  TarEntry path, [], TarKind.Directory, directoryMode, time
+}
+
+/** The tree every one of the archives holds, in the order `--sort=name` wrote it. */
+fn tree(): List<TarEntry> {
+  [
+    directory("torb-9.9.9"),
+    TarEntry("torb-9.9.9/README.md", bytesOf("# TorbScript\n"), TarKind.File, 0b110_100_100, time),
+    directory("torb-9.9.9/bin"),
+    TarEntry("torb-9.9.9/bin/current", [], TarKind.SymbolicLink("torb"), 0b111_111_111, time),
+    TarEntry("torb-9.9.9/bin/torb", bytesOf("#!/bin/sh\necho torb\n"), TarKind.File, 0b111_101_101, time),
+    TarEntry("torb-9.9.9/bin/torb-copy", [], TarKind.HardLink("torb-9.9.9/bin/torb"), 0b111_101_101, time),
+    directory("torb-9.9.9/lib"),
+    TarEntry(
+      "torb-9.9.9/lib/long.h",
+      [],
+      TarKind.SymbolicLink("../runtime/vendor/mbedtls/include/mbedtls/{longHeader}"),
+      0b111_111_111,
+      time,
+    ),
+    directory("torb-9.9.9/runtime"),
+    directory("torb-9.9.9/runtime/vendor"),
+    directory("torb-9.9.9/runtime/vendor/mbedtls"),
+    directory("torb-9.9.9/runtime/vendor/mbedtls/include"),
+    directory(headerDirectory),
+    TarEntry("{headerDirectory}/{longHeader}", bytesOf("#define LONG 1\n"), TarKind.File, 0b110_100_100, time),
+  ]
+}
+
+fn entriesOf(archive: List<UInt8>): List<TarEntry> {
+  untarred(gunzipped(archive).expect("gzip")).expect("the entries")
+}
+
+group "archives other programs wrote" {
+  test "the path of 110 bytes and the link target of 102 are as long as the tree needs them" {
+    assert("{headerDirectory}/{longHeader}".byteLength() == 110)
+    assert("../runtime/vendor/mbedtls/include/mbedtls/{longHeader}".byteLength() == 102)
+  }
+
+  test "GNU tar's own format: long names in `L` and `K` entries" {
+    assert(entriesOf(gnuArchive) == tree())
+  }
+
+  test "GNU tar's pax: a global header and `x` headers" {
+    assert(entriesOf(paxArchive) == tree())
+  }
+
+  test "bsdtar: an `x` header with a key nobody reads in front of every entry, and ustar's prefix" {
+    assert(entriesOf(bsdArchive) == tree())
+  }
+
+  test "what tarred writes of the tree reads back to the tree, the hard link last" {
+    const read = untarred(tarred(tree()).expect("an archive")).expect("the entries")
+    assert(read.last()?.path == "torb-9.9.9/bin/torb-copy")
+    assert(read.sorted(by: { _.path }) == tree().sorted(by: { _.path }))
+  }
+}

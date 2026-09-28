@@ -1,0 +1,223 @@
+/**
+ * `extract` against the disk: the archives other programs wrote unpacked with their modes, links and long paths, and
+ * every archive made to write outside of its directory refused before anything is written. Whether a program may
+ * create a symbolic link is asked once: Windows allows one only in developer mode or with the privilege to, and there
+ * the tests that need one check what is refused, which happens before any link is made, and leave the links out.
+ */
+
+use test, group from "std/test"
+use OperatingSystem from "std/core"
+use File, Permissions from "std/fs"
+use gunzipped from "std/compression"
+use TarEntry, TarKind, untarred from "../src/lib"
+use extract, ExtractError from "../src/extract"
+use gnuArchive, paxArchive, bsdArchive from "./archives"
+use climbingArchive, absoluteArchive, escapingArchive, throughLinkArchive from "./archives"
+
+const root = File.createTemporaryDirectory(prefix: "torb-archive-test-").expect("a temporary directory")
+
+/** Whether this process may create a symbolic link, tried once in the root. */
+const linksWork = File.createSymbolicLink("{root}/probe", "nothing").isOk()
+
+const longHeader = "{"x".repeat(58)}.h"
+
+/** A new, empty directory below the root of this file, for one test. */
+fn place(name: String): String {
+  const directory = "{root}/{name}"
+  File.createDirectory(directory).expect("the directory of a test")
+  directory
+}
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes().toList()
+}
+
+fn entriesOf(archive: List<UInt8>): List<TarEntry> {
+  const all = untarred(gunzipped(archive).expect("gzip")).expect("the entries")
+  if linksWork { all } else { all.filter({ !isSymbolicLink(_) }).toList() }
+}
+
+fn isSymbolicLink(entry: TarEntry): Bool {
+  match entry.kind {
+    .SymbolicLink(_) => true
+    .File | .Directory | .HardLink(_) => false
+  }
+}
+
+/** Whether `outcome` is a refusal of the entry `path`. */
+fn refused(outcome: Result<Void, ExtractError>, path: String): Bool {
+  match outcome {
+    Fail(.Refused(found, _)) => found == path
+    _ => false
+  }
+}
+
+/** The permission bits of `path`, which POSIX keeps as written and Windows makes up from the name and read-only. */
+fn modeOf(path: String): Int {
+  File.metadata(path).expect("the metadata of {path}").permissions.mode
+}
+
+group "unpacking what other programs wrote" {
+  test "every archive unpacks to the tree, its top directory stripped, with its modes and links" {
+    for (name, archive) in [("gnu", gnuArchive), ("pax", paxArchive), ("bsd", bsdArchive)] {
+      const directory = "{place(name)}/toolchain"
+      extract(entriesOf(archive), into: directory, stripComponents: 1).expect("the archive unpacked")
+      const header = "runtime/vendor/mbedtls/include/mbedtls/{longHeader}"
+      var expected = ["README.md", "bin", "bin/torb", "bin/torb-copy", "lib", "runtime", "runtime/vendor"]
+      expected.appendAll(["runtime/vendor/mbedtls", "runtime/vendor/mbedtls/include"])
+      expected.appendAll(["runtime/vendor/mbedtls/include/mbedtls", header])
+      if linksWork {
+        expected.appendAll(["bin/current", "lib/long.h"])
+      }
+      expected.sort by: { _ }
+      assert(File.walk(directory).map({ found => found.sorted(by: { _ }) }) == expected)
+      assert(File.readText("{directory}/README.md") == "# TorbScript\n")
+      assert(File.readText("{directory}/bin/torb-copy") == "#!/bin/sh\necho torb\n")
+      assert(File.readText("{directory}/{header}") == "#define LONG 1\n")
+      if linksWork {
+        assert(File.symbolicLinkTarget("{directory}/bin/current") == "torb")
+        assert(File.readText("{directory}/lib/long.h") == "#define LONG 1\n")
+      }
+      match OperatingSystem.current {
+        .Windows => assert Permissions(modeOf("{directory}/bin/torb")).writable()
+        _ => {
+          assert(modeOf("{directory}/bin/torb") == 0b111_101_101)
+          assert(modeOf("{directory}/bin/torb-copy") == 0b111_101_101)
+          assert(modeOf("{directory}/README.md") == 0b110_100_100)
+          assert(modeOf("{directory}/bin") == 0b111_101_101)
+        }
+      }
+    }
+  }
+}
+
+group "refusing what would land outside" {
+  test "a path that climbs out, and an absolute one, as GNU tar wrote them" {
+    const directory = place "climb"
+    assert refused(extract(entriesOf(climbingArchive), into: "{directory}/out"), "../../evil.txt")
+    assert refused(extract(entriesOf(absoluteArchive), into: "{directory}/out"), "/tmp/evil.txt")
+    // Nothing is written before every entry is checked, not even the directory
+    assert(!File.exists("{directory}/out"))
+  }
+
+  test "a symbolic link that points out, as GNU tar wrote it" {
+    const directory = place "escape"
+    const entries = untarred(gunzipped(escapingArchive).expect("gzip")).expect("the entries")
+    assert refused(extract(entries, into: "{directory}/out"), "escape")
+    assert(!File.exists("{directory}/out"))
+  }
+
+  test "a file written through a symbolic link of the archive, as GNU tar wrote it" {
+    const directory = place "through"
+    const entries = untarred(gunzipped(throughLinkArchive).expect("gzip")).expect("the entries")
+    assert refused(extract(entries, into: "{directory}/out"), "inner/evil.txt")
+    assert(!File.exists("{directory}/out"))
+  }
+
+  test "a drive, a backslash that climbs, and a `..` in the middle" {
+    const directory = place "paths"
+    for path in ["C:/evil.txt", "C:evil.txt", "a\\..\\..\\evil.txt", "a/../evil.txt", "\\evil.txt", "a/b:stream"] {
+      assert refused(extract([TarEntry(path, bytesOf("evil"))], into: "{directory}/out"), path)
+    }
+  }
+
+  test "a link that stays inside by its words but leads out through another link" {
+    const directory = place "chain"
+    // `d/up` leads to the top, which is inside; `d/far` counts its way down through `up` and then up once too often
+    const far = [TarEntry.symbolicLink("d/up", ".."), TarEntry.symbolicLink("d/far", "up/d/up/d/up/..")]
+    assert refused(extract(far, into: "{directory}/out"), "d/far")
+    // On a system that ignores case, `UP` is the link `up`
+    const spelled = [TarEntry.symbolicLink("d/up", ".."), TarEntry.symbolicLink("d/far", "UP/d/UP/d/UP/..")]
+    assert refused(extract(spelled, into: "{directory}/out"), "d/far")
+    assert refused(extract([TarEntry.symbolicLink("top", "../x")], into: "{directory}/out"), "top")
+    assert refused(extract([TarEntry.symbolicLink("abs", "/etc/passwd")], into: "{directory}/out"), "abs")
+    assert refused(extract([TarEntry.symbolicLink("drive", "C:/Windows")], into: "{directory}/out"), "drive")
+    assert(!File.exists("{directory}/out"))
+  }
+
+  test "a link that climbs first and then descends, to the top at most, is made" {
+    const directory = place "climbing"
+    const entries = [
+      TarEntry("a/file", bytesOf("file")),
+      TarEntry.symbolicLink("a/b/up", "../../a/file"),
+      TarEntry.symbolicLink("a/b/same", "./../file"),
+    ]
+    if linksWork {
+      extract(entries, into: "{directory}/out").expect("unpacked")
+      assert(File.readText("{directory}/out/a/b/up") == "file")
+      assert(File.readText("{directory}/out/a/b/same") == "file")
+    }
+  }
+
+  test "a hard link to what the archive did not write before it" {
+    const directory = place "hard"
+    const outside = [TarEntry("copy", [], TarKind.HardLink("../../etc/passwd"))]
+    assert refused(extract(outside, into: "{directory}/out"), "copy")
+    const later = [TarEntry("copy", [], TarKind.HardLink("file")), TarEntry("file", bytesOf("x"))]
+    assert refused(extract(later, into: "{directory}/out"), "copy")
+  }
+
+  test "a symbolic link already in the directory is not followed" {
+    const directory = place "on-disk"
+    if linksWork {
+      File.createDirectory("{directory}/elsewhere").expect("a directory outside")
+      File.createDirectory("{directory}/out").expect("the directory")
+      File.createSymbolicLink("{directory}/out/sub", "../elsewhere").expect("a link out")
+      assert refused(extract([TarEntry("sub/evil.txt", bytesOf("evil"))], into: "{directory}/out"), "sub/evil.txt")
+      assert(File.list("{directory}/elsewhere") == [])
+      // A link where a file goes is replaced by the file, and what it pointed at stays as it was
+      File.writeText("{directory}/elsewhere/kept.txt", "kept").expect("a file outside")
+      File.createSymbolicLink("{directory}/out/kept.txt", "../elsewhere/kept.txt").expect("a link out")
+      extract([TarEntry("kept.txt", bytesOf("new"))], into: "{directory}/out").expect("the file written")
+      assert(File.readText("{directory}/elsewhere/kept.txt") == "kept")
+      assert(File.readText("{directory}/out/kept.txt") == "new")
+      assert(!File.linkMetadata("{directory}/out/kept.txt").expect("the file").isSymbolicLink())
+    }
+  }
+}
+
+group "what extract writes" {
+  test "the entries with fewer directories than are stripped are skipped" {
+    const directory = place "strip"
+    const entries = [
+      TarEntry("top", bytesOf("top")),
+      TarEntry.directory("top-directory"),
+      TarEntry("a/b/c", bytesOf("c")),
+    ]
+    extract(entries, into: "{directory}/out", stripComponents: 2).expect("unpacked")
+    assert(File.walk("{directory}/out") == ["c"])
+  }
+
+  test "the set-id bits and the write bits of group and others are dropped, and a read-only directory is filled" {
+    const directory = place "modes"
+    const entries = [
+      TarEntry("wide", bytesOf("x"), TarKind.File, 0b111_111_111_111),
+      TarEntry.directory("sealed", 0b101_101_101),
+      TarEntry("sealed/inside", bytesOf("y")),
+    ]
+    extract(entries, into: "{directory}/out").expect("unpacked")
+    assert(File.readText("{directory}/out/sealed/inside") == "y")
+    match OperatingSystem.current {
+      .Windows => {}
+      _ => {
+        assert(modeOf("{directory}/out/wide") == 0b111_101_101)
+        assert(modeOf("{directory}/out/sealed") == 0b101_101_101)
+      }
+    }
+    File.setPermissions("{directory}/out/sealed", Permissions(0b111_101_101)).expect("writable again")
+  }
+
+  test "a later entry of the same path replaces the earlier one" {
+    const directory = place "twice"
+    extract(
+      [TarEntry("a", bytesOf("first")), TarEntry("a", bytesOf("second"))],
+      into: "{directory}/out",
+    ).expect("unpacked")
+    assert(File.readText("{directory}/out/a") == "second")
+  }
+
+  test "the last test removes the root" {
+    File.removeDirectory(root).expect("the root removed")
+    assert(!File.exists(root))
+  }
+}

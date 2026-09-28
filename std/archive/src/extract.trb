@@ -1,0 +1,267 @@
+/**
+ * The entries of an archive written out below a directory: [extract], which refuses every entry that would land outside
+ * of it. A module of its own because it reaches the file system - `std/archive` itself stays pure, and a package that
+ * imports this module reaches the capability "files" (docs/design/RELEASE.md section 7.8).
+ *
+ * # Examples
+ *
+ *     use untarred from "std/archive"
+ *     use gunzipped from "std/compression"
+ *
+ *     fn unpack(archive: String, directory: String): Result<Void, String> {
+ *       const compressed = File.readBytes(archive).mapError({ _.show() })?
+ *       const entries = untarred(gunzipped(compressed).mapError({ _.show() })?).mapError({ _.show() })?
+ *       extract(entries, into: directory, stripComponents: 1).mapError({ _.show() })
+ *     }
+ */
+
+use File, IoError, Permissions from "std/fs"
+use TarEntry from "./lib"
+
+/** Why [extract] stopped: an entry it refused, or the file system. */
+public type ExtractError with Show, Error {
+  /** An entry that would be written, or would point, outside of the directory: its path in the archive, and why. */
+  case Refused(path: String, reason: String)
+  /** Writing a file, a directory or a link failed. */
+  case Failed(problem: IoError)
+
+  fn show(): String {
+    match self {
+      .Refused(path, reason) => "the entry `{path}` is refused: {reason}"
+      .Failed(problem) => problem.show()
+    }
+  }
+}
+
+/** A failure of the file system, as the failure of the extraction it stopped. */
+extend ExtractError with From<IoError> {
+  static fn from(value: IoError): Self {
+    Self.Failed value
+  }
+}
+
+/** The permission bits an entry keeps: the read, write and execute bits, less the write bits of group and others. */
+const keptMode = 0b111_101_101
+
+/**
+ * Writes `entries` out below the directory `into`, creating it: every directory, every file with its bytes and its
+ * permission bits, every hard link as a copy of the file it names, and the symbolic links last. `stripComponents`
+ * drops that many leading directories from every path and from the target of every hard link, the way
+ * `tar --strip-components` does; an entry left with no path is skipped. A later entry of the same path replaces an
+ * earlier one, as `tar` does.
+ *
+ * **Safe by default.** Every entry is checked before the first byte is written, and one that fails stops the whole
+ * extraction: a path that is absolute, names a drive (any `:`) or climbs with `..` - `\` counts as a separator as well,
+ * as Windows reads it - and a path that leads through a symbolic link, one of the archive or one already below `into`.
+ * A symbolic link is refused where its target is absolute, climbs higher than the link's own directory, or climbs with
+ * a `..` after a name: that `..` would follow whatever the name is, and a name may be another link - under another
+ * spelling too, on a system that ignores case - so only a target that climbs first and then descends is sure to stay
+ * inside. A hard link is refused where it does not name a file of the archive written before it. A link already where
+ * an entry goes is replaced, not followed. The permission bits lose the set-id and sticky bits and the write bits of
+ * group and others - what the usual umask `022` does - and a directory gets its own last, so a read-only one is filled
+ * first.
+ *
+ * # Errors
+ *
+ * - [ExtractError.Refused] for an entry that fails a check, [ExtractError.Failed] for the file system. What was written
+ *   before a failure of the file system stays written.
+ *
+ * # Pitfalls
+ *
+ * - Windows lets a program create a symbolic link only in developer mode or with the privilege to; there an archive
+ *   with one fails with `Operation not permitted`, after everything else is written.
+ * - On Windows the mode sets nothing but the read-only attribute, where the owner's write bit is clear.
+ */
+public fn extract(entries: List<TarEntry>, into: String, stripComponents: Int = 0): Result<Void, ExtractError> {
+  const strip = if stripComponents < 0 { 0 } else { stripComponents }
+  var planned: List<(entry: TarEntry, segments: List<String>)> = []
+  var links: Set<String> = []
+  for entry in entries {
+    const segments = match segmentsOf(entry.path) {
+      Some(found) => found
+      None => {
+        return Fail ExtractError.Refused(entry.path, "its path is absolute, names a drive or climbs out with `..`")
+      }
+    }
+    if segments.length() <= strip {
+      continue
+    }
+    const kept = segments[strip..segments.length()]
+    if const .SymbolicLink(_) = entry.kind {
+      links.insert kept.joined(separator: "/")
+    }
+    planned.append((entry, kept))
+  }
+  for (entry, segments) in planned {
+    if const Some(link) = linkAbove(segments, links) {
+      return Fail ExtractError.Refused(entry.path, "it leads through the symbolic link `{link}` of the archive")
+    }
+    if const .SymbolicLink(target) = entry.kind {
+      if const Some(reason) = targetProblem(target, segments.length() - 1) {
+        return Fail ExtractError.Refused(entry.path, reason)
+      }
+    }
+  }
+  File.createDirectory(into)?
+  var written: Set<String> = []
+  var directories: List<(path: String, mode: Int)> = []
+  // Directories that are known not to be links: every one this extraction created or checked
+  var checked: Set<String> = []
+  for (entry, segments) in planned {
+    const relative = segments.joined separator: "/"
+    const path = "{into}/{relative}"
+    if const Some(link) = linkOnDisk(into, segments, checked)? {
+      return Fail ExtractError.Refused(entry.path, "it leads through the symbolic link `{link}`")
+    }
+    match entry.kind {
+      .Directory => {
+        removeLink(path)?
+        File.createDirectory(path)?
+        checked.insert relative
+        directories.append((path, entry.mode))
+      }
+      .File => {
+        createParent(into, segments)?
+        removeLink(path)?
+        File.writeBytes(path, entry.bytes)?
+        File.setPermissions(path, Permissions(entry.mode & keptMode))?
+        written.insert relative
+      }
+      .HardLink(target) => {
+        // A path of the archive, stripped like every other: the target of a hard link is not read from its place
+        const source = match segmentsOf(target) {
+          Some(found) => if found.length() <= strip { "" } else { found[strip..found.length()].joined(separator: "/") }
+          None => ""
+        }
+        if !written.contains(source) {
+          return Fail ExtractError.Refused(entry.path, "it links to `{target}`, which is no file written before it")
+        }
+        createParent(into, segments)?
+        removeLink(path)?
+        File.copy("{into}/{source}", path)?
+        File.setPermissions(path, Permissions(entry.mode & keptMode))?
+        written.insert relative
+      }
+      .SymbolicLink(_) => {}
+    }
+  }
+  for (entry, segments) in planned {
+    if const .SymbolicLink(target) = entry.kind {
+      const path = "{into}/{segments.joined(separator: "/")}"
+      createParent(into, segments)?
+      // Asked again of the disk as it is made: a link made before it may be one of its directories by another spelling
+      var fresh: Set<String> = []
+      if const Some(link) = linkOnDisk(into, segments, fresh)? {
+        return Fail ExtractError.Refused(entry.path, "it leads through the symbolic link `{link}`")
+      }
+      if const Ok(found) = File.linkMetadata(path) {
+        if !found.isDirectory() {
+          File.remove(path)?
+        }
+      }
+      File.createSymbolicLink(path, target)?
+    }
+  }
+  for (path, mode) in directories.reversed() {
+    File.setPermissions(path, Permissions(mode & keptMode))?
+  }
+  Ok void
+}
+
+/**
+ * The names of a path, split at `/` and at `\`, without the empty ones and `.`; `None` where the path is absolute,
+ * names a drive or holds `..`.
+ */
+fn segmentsOf(path: String): List<String>? {
+  if path.startsWith("/") || path.startsWith("\\") || path.contains(":") {
+    return None
+  }
+  var segments: List<String> = []
+  for segment in path.replace("\\", "/").split("/") {
+    if segment == ".." {
+      return None
+    }
+    if !segment.isEmpty() && segment != "." {
+      segments.append segment
+    }
+  }
+  segments
+}
+
+/** The first directory above `segments` that is a symbolic link of the archive, or `None`. */
+fn linkAbove(segments: List<String>, links: Set<String>): String? {
+  for count in 1..segments.length() {
+    const above = segments[0..count].joined separator: "/"
+    if links.contains(above) {
+      return above
+    }
+  }
+  None
+}
+
+/**
+ * The first directory above `segments` below `into` that is a symbolic link already there, or `None`. What it finds
+ * not to be one goes into `checked`, which nothing of this extraction turns into a link before the end.
+ */
+fn linkOnDisk(into: String, segments: List<String>, var checked: Set<String>): Result<String?, IoError> {
+  for count in 1..segments.length() {
+    const above = segments[0..count].joined separator: "/"
+    if checked.contains(above) {
+      continue
+    }
+    if const Ok(found) = File.linkMetadata("{into}/{above}") {
+      if found.isSymbolicLink() {
+        return Ok Some(above)
+      }
+    }
+    checked.insert above
+  }
+  Ok None
+}
+
+/**
+ * Why the target of a symbolic link `depth` directories below the destination could lead outside of it, or `None`.
+ *
+ * A target that climbs only at its start, no higher than the link's own directory, and then descends stays inside:
+ * the directories above the link are no links (checked as it is made), so its `..` climb exactly where the words say,
+ * and every link it descends through is held to the same rule. A `..` after a name follows whatever the name is.
+ */
+fn targetProblem(target: String, depth: Int): String? {
+  if target.startsWith("/") || target.startsWith("\\") || target.contains(":") {
+    return "its target `{target}` is absolute or names a drive"
+  }
+  var climbed = 0
+  var named = false
+  for segment in target.replace("\\", "/").split("/") {
+    if segment == ".." {
+      if named {
+        return "its target `{target}` climbs with `..` after a name, which may be another link"
+      }
+      climbed = climbed + 1
+    } else if !segment.isEmpty() && segment != "." {
+      named = true
+    }
+  }
+  if climbed > depth {
+    return "its target `{target}` leads outside of the directory"
+  }
+  None
+}
+
+/** Creates the directory an entry is written into, where the archive has no entry of its own for it. */
+fn createParent(into: String, segments: List<String>): Result<Void, IoError> {
+  if segments.length() > 1 {
+    File.createDirectory("{into}/{segments[0..(segments.length() - 1)].joined(separator: "/")}")?
+  }
+  Ok void
+}
+
+/** Removes a symbolic link at `path`, so that what is written there replaces it rather than following it. */
+fn removeLink(path: String): Result<Void, IoError> {
+  if const Ok(found) = File.linkMetadata(path) {
+    if found.isSymbolicLink() {
+      File.remove(path)?
+    }
+  }
+  Ok void
+}

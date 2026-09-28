@@ -1,10 +1,11 @@
 /**
- * ustar written and read back: the order, the padding, a path long enough to need the prefix field, the checksum, and
- * the entries that are refused.
+ * ustar written and read back: the order, the padding, a path long enough to need the prefix field or a pax header,
+ * the kinds of entries with their modes and times, the checksum, the numbers of GNU's base-256, and the archives that
+ * are refused.
  */
 
 use test, group from "std/test"
-use TarEntry, tarred, untarred from "../src/lib"
+use TarEntry, TarKind, tarred, untarred from "../src/lib"
 
 fn bytesOf(text: String): List<UInt8> {
   text.bytes().toList()
@@ -14,17 +15,26 @@ fn pathsOf(entries: List<TarEntry>): List<String> {
   entries.map({ _.path }).toList()
 }
 
-/** The header of the first entry with its checksum written again, the way a tool that changed the header would. */
-fn resummed(archive: List<UInt8>): List<UInt8> {
+/** The header at `start` with its checksum written again, the way a tool that changed the header would. */
+fn resummed(archive: List<UInt8>, start: Int = 0): List<UInt8> {
   var changed = archive
   var sum = 0
   for index in 0..512 {
-    sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from changed[index] }
+    sum = sum + if index >= 148 && index < 156 { 32 } else { Int.from changed[start + index] }
   }
   var rest = sum
   for position in 0..6 {
-    changed[153 - position] = UInt8.tryFrom(48 + rest % 8).ok() ?? 48
+    changed[start + 153 - position] = UInt8.tryFrom(48 + rest % 8).ok() ?? 48
     rest = rest / 8
+  }
+  changed
+}
+
+/** `bytes` written over `archive` from `start` on. */
+fn overwritten(archive: List<UInt8>, start: Int, bytes: List<UInt8>): List<UInt8> {
+  var changed = archive
+  for index in 0..bytes.length() {
+    changed[start + index] = bytes[index]
   }
   changed
 }
@@ -50,16 +60,51 @@ group "tar" {
     assert(tarred(first) == tarred(second))
   }
 
-  test "a path of more than 100 bytes is split into the prefix and the name" {
+  test "a path of more than 100 bytes is split into the prefix and the name, and needs no pax header" {
     const long = "{"directory/".repeat(12)}file.trb"
-    const read = untarred(tarred([TarEntry(long, bytesOf("x"))]).expect("an archive")).expect("the entries")
+    const archive = tarred([TarEntry(long, bytesOf("x"))]).expect("an archive")
+    // One header, one block of bytes, two blocks of zeros
+    assert(archive.length() == 4 * 512)
+    const read = untarred(archive).expect("the entries")
     assert(pathsOf(read) == [long])
   }
 
-  test "a path that ustar cannot hold, and two entries of one path, are refused" {
-    assert tarred([TarEntry("x".repeat(101), [])]).isError()
+  test "a path ustar cannot hold goes into a pax header, and comes back whole" {
+    const long = "{"directory/".repeat(30)}file.trb"
+    const unsplittable = "x".repeat(101)
+    const accented = "{"\u{e9}".repeat(60)}/file"
+    const entries = [TarEntry(long, bytesOf("long")), TarEntry(unsplittable, []), TarEntry(accented, bytesOf("\u{e9}"))]
+    const read = untarred(tarred(entries).expect("an archive")).expect("the entries")
+    assert(pathsOf(read) == [long, unsplittable, accented])
+    assert(read[0].bytes == bytesOf("long"))
+  }
+
+  test "an empty path, two entries of one path and a directory with bytes are refused" {
     assert tarred([TarEntry("", [])]).isError()
     assert tarred([TarEntry("a", []), TarEntry("a", [])]).isError()
+    assert tarred([TarEntry("a", bytesOf("x"), TarKind.Directory)]).isError()
+  }
+
+  test "every kind comes back with its mode and its time" {
+    const entries = [
+      TarEntry.directory("tool"),
+      TarEntry("tool/run", bytesOf("#!/bin/sh\n"), TarKind.File, 0b111_101_101, 1700000000),
+      TarEntry.symbolicLink("tool/latest", "run"),
+      TarEntry("tool/again", [], TarKind.HardLink("tool/run"), 0b111_101_101),
+      TarEntry("tool/old", bytesOf("1969"), modified: -86400),
+      TarEntry("tool/far", [], TarKind.SymbolicLink("../{"far/".repeat(40)}away")),
+    ]
+    const read = untarred(tarred(entries).expect("an archive")).expect("the entries")
+    // Sorted by path, and the hard link, which sorts first, after the file it names
+    assert(pathsOf(read) == ["tool", "tool/far", "tool/latest", "tool/old", "tool/run", "tool/again"])
+    assert(read.sorted(by: { _.path }) == entries.sorted(by: { _.path }))
+  }
+
+  test "a directory is written with its slash, and read without it" {
+    const archive = tarred([TarEntry.directory("tool")]).expect("an archive")
+    assert(archive[0..5] == bytesOf("tool/"))
+    assert(archive[156] == 53)
+    assert(untarred(archive).map(pathsOf) == ["tool"])
   }
 
   test "a changed header fails its checksum, and a cut archive is refused" {
@@ -71,9 +116,38 @@ group "tar" {
     assert(untarred(resummed(archive)).map(pathsOf) == ["b.txt"])
   }
 
-  test "a symbolic link is refused, with its checksum in order" {
-    var archive = tarred([TarEntry("link", [])]).expect("an archive")
-    archive[156] = 50
-    assert untarred(resummed(archive)).isError()
+  test "a device and a pipe are refused, with their checksums in order" {
+    const archive = tarred([TarEntry("device", [])]).expect("an archive")
+    for kind in [51, 52, 54] {
+      const changed = overwritten archive, 156, [UInt8.tryFrom(kind).expect("a type")]
+      assert untarred(resummed(changed)).isError()
+    }
+  }
+
+  test "a size in GNU's base-256 is read" {
+    const archive = tarred([TarEntry("a.txt", bytesOf("hello"))]).expect("an archive")
+    const binary = overwritten archive, 124, [128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5]
+    assert(untarred(resummed(binary)).map({ found => found[0].bytes }) == bytesOf("hello"))
+  }
+
+  test "the old header of a directory, a file whose name ends in a slash, is a directory" {
+    const archive = tarred([TarEntry("old/", [])]).expect("an archive")
+    const read = untarred(archive).expect("the entries")
+    assert(read[0].kind == TarKind.Directory)
+    assert(read[0].path == "old")
+  }
+
+  test "a sparse file of GNU's pax is refused" {
+    const archive = tarred([TarEntry("x".repeat(101), [])]).expect("an archive")
+    assert untarred(archive).isOk()
+    // `111 path=xxxxxxxxxx...` becomes `111 GNU.sparse.map=...`, a record of the same length
+    assert untarred(overwritten(archive, 516, bytesOf("GNU.sparse.map="))).isError()
+  }
+
+  test "a pax record that breaks its format is refused" {
+    const archive = tarred([TarEntry("x".repeat(101), [])]).expect("an archive")
+    // The length of the first record, `111 path=...`, written as `999`
+    assert untarred(overwritten(archive, 512, bytesOf("999"))).isError()
+    assert untarred(overwritten(archive, 512, bytesOf("abc"))).isError()
   }
 }
