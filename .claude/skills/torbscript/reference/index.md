@@ -9,6 +9,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - design
 - explanation
 - guide
+- guide/coming-from
 - how-to
 - language
 - language/collections-and-iteration
@@ -71,14 +72,24 @@ that answers the question. A page marked (planned) describes a feature that does
 - `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
 - `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
 - `guide/idiomatic-torbscript.md` - **Idiomatic TorbScript** (guide): The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
-- `guide/index.md` - **Learn TorbScript** (index): The learning path from nothing to a working program, in order, one step per page.
+- `guide/index.md` - **Learn TorbScript** (index): A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
 - `guide/installing-and-running.md` - **Run your first program** (guide): Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
 - `guide/modules-and-packages.md` - **Modules and packages** (guide): How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
 - `guide/tests-and-tooling.md` - **Tests and the toolchain** (guide): How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
 - `guide/the-language-in-sixty-seconds.md` - **The language in sixty seconds** (guide): The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
+- `guide/torbscript-in-15-minutes.md` - **TorbScript in 15 minutes** (guide): The fastest honest tour of TorbScript for a working programmer, one short example and a few sentences per idea.
 - `guide/traits.md` - **Traits** (guide): How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
 - `guide/types-and-methods.md` - **Types and methods** (guide): How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
 - `guide/values-and-bindings.md` - **Values and bindings** (guide): Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
+
+## guide/coming-from
+
+- `guide/coming-from/go.md` - **Coming from Go** (contrast): The 15 things that map directly from Go, the 5 that will surprise you, and the concurrency primitives that are not built yet.
+- `guide/coming-from/index.md` - **Coming from another language** (index): One page per language - a table of the 10 to 15 things that map directly, the 5 that will surprise you, and what is deliberately missing.
+- `guide/coming-from/kotlin-swift.md` - **Coming from Kotlin and Swift** (contrast): The 15 things that map directly from Kotlin or Swift, the 5 that will surprise you, and the property and coroutine machinery neither one keeps.
+- `guide/coming-from/python.md` - **Coming from Python** (contrast): The 15 things that map directly from Python, the 5 that will surprise you, and what static, value-typed code gives up on dynamism.
+- `guide/coming-from/rust.md` - **Coming from Rust** (contrast): The 15 things that map directly from Rust, the 5 that will surprise you, and what Rust has that TorbScript deliberately does not.
+- `guide/coming-from/typescript-javascript.md` - **Coming from TypeScript and JavaScript** (contrast): The 15 things that map directly from TypeScript and JavaScript, the 5 that will surprise you, and the type-level tricks that have no counterpart.
 
 ## how-to
 

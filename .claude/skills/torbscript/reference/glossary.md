@@ -532,6 +532,12 @@ dispatched through a [witness table](#witness-table). Never called a trait objec
 A name standing for a type, filled in at each use of a `fn`, `type`, `trait` or `extend`, written out like a type
 (`Item`, `Value`) rather than a single letter. See [Type parameters](language/generics/type-parameters.md).
 
+### Value semantics
+
+The rule that assigning, passing or capturing a value always copies it, so two bindings never share one mutable
+thing and a change is visible only through the path that made it. The one exception is a [shared type](#shared-type).
+See [Why values instead of references](explanation/why-values-instead-of-references.md).
+
 ### Var path
 
 A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or a `var fn` receiver, then

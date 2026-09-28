@@ -19,7 +19,7 @@ one page that answers a question. Every page is written to be understandable on 
 
 ## Sections
 
-- **[Learn TorbScript](guide/index.md)** - The learning path from nothing to a working program, in order, one step per page.
+- **[Learn TorbScript](guide/index.md)** - A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
 - **[The language reference](language/index.md)** - One page per construct of TorbScript, grouped by area, with the exact rules and the mistakes each construct invites.
 - **[The standard library](standard-library/index.md)** - One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - **[Task recipes](how-to/index.md)** - One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.

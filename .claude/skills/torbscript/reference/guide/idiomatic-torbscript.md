@@ -19,9 +19,10 @@ source:
   - CONCEPT.md#decision-log
 ---
 
-A program can compile and still not read like TorbScript. This page collects the habits the standard library and the
-compiler follow, one rule per section: the rule in bold, the smallest program that shows it, and one sentence of why.
-Every rule links the reference page that has it in full.
+**A program can compile and still not read like TorbScript.** This page collects the habits the standard library and
+the compiler follow, one rule per section: the rule in bold, the smallest program that shows it, and one sentence of
+why. The first half is what you reach for daily; the rest is folded into `<details>` and worth skimming once. Every
+rule links the reference page that has it in full.
 
 The mistakes a programmer brings from Rust, Swift, Kotlin or TypeScript are not repeated here - they are on
 [What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md), each with the wrong line
@@ -44,16 +45,18 @@ the calls, the types and the error handling all in the one form the language pic
 - [A member does not list `self`](#members)
 - [A type is a value unless it needs an identity](#values)
 - [An invariant lives in a capsule](#capsules)
-- [A field default is a constant](#field-defaults)
+- [A capsule's field is named `value`](#capsule-field-naming) (folded)
+- [A field default is a constant](#field-defaults) (folded)
 - [An expected failure is a `Result`](#errors)
+- [The success is the value](#wrapping) (folded)
 - [A type with cases is taken apart with `match`](#match)
 - [A closure is short, and trails its call](#closures)
-- [A closure over a `var` does not escape](#closures-over-var)
-- [A closure parameter names its shape](#closure-types)
+- [A closure over a `var` does not escape](#closures-over-var) (folded)
+- [A closure parameter names its shape](#closure-types) (folded)
 - [A resource is bound with `using`](#resources)
-- [`await()` answers the value, and a cancellation stops the waiter](#tasks)
-- [`Into` comes from `From`](#conversions)
-- [An operating system branch is a `match`](#operating-system)
+- [`await()` answers the value, and a cancellation stops the waiter](#tasks) (folded)
+- [`Into` comes from `From`](#conversions) (folded)
+- [An operating system branch is a `match`](#operating-system) (folded)
 - [A collection is walked with `for` or a pipeline](#loops-and-pipelines)
 - [`torb format` decides the layout](#format)
 - [Habits from other languages](#habits)
@@ -307,6 +310,9 @@ around. See [Data or capsule](../language/types/data-or-capsule.md).
 
 ## A capsule's field is named `value` {#capsule-field-naming}
 
+<details>
+<summary>The rule, an example, and why</summary>
+
 **A capsule's one stored field is named `value`; several are named for the method each answers, plus `Value`, or
 `Values` for a plural.** A field and a method never share a name, so the field never borrows the accessor's word.
 
@@ -326,7 +332,12 @@ Why: `value` cannot collide with any accessor, and `rootValue` next to `fn root(
 `fn components()` reads at a glance which of the two is the storage. See
 [Naming](../language/syntax/naming.md) and [Data or capsule](../language/types/data-or-capsule.md).
 
+</details>
+
 ## A field default is a constant {#field-defaults}
+
+<details>
+<summary>The rule, an example, and why</summary>
 
 **A field default is a literal, a constant, a constructor of constants or an empty collection literal. Anything that
 has to be computed goes into a `static fn`.**
@@ -355,6 +366,8 @@ type Buffer {
 Why: the generated constructor has no body to run code in, and building a value never fails. See
 [Construction](../language/types/construction.md), rule 4.
 
+</details>
+
 ## An expected failure is a `Result` {#errors}
 
 **A function that can fail answers `Result<Value, Failure>`. A caller hands the failure on with `?`, replaces it with
@@ -379,6 +392,9 @@ Why: a failure in the signature cannot be forgotten, and one `?` is all the cere
 
 ## The success is the value {#wrapping}
 
+<details>
+<summary>The rule, an example, and why</summary>
+
 **A body that answers an `Option` or a `Result` ends in its value, never in `Some(value)` or `Ok(value)`: a value where
 one of the two is expected wraps itself. `None` and `Fail` are written; `Some` and `Ok` only where the value is an
 `Option` inside an `Option`, or where its type is not decided yet.** `torb lint --rule redundant-wrap` finds the rest,
@@ -401,6 +417,8 @@ print fallback                         // prints Some(0)
 
 Why: one spelling per meaning - the type already says that the value is the success, so the `Some` said it twice. See
 [Conversions](../language/types/conversions.md), rule 8.
+
+</details>
 
 ## A type with cases is taken apart with `match` {#match}
 
@@ -450,6 +468,9 @@ Why: one closure form and one call form cover what currying, method references a
 
 ## A closure over a `var` does not escape {#closures-over-var}
 
+<details>
+<summary>The rule, an example, and why</summary>
+
 **A closure that reads or writes a `var` binding is handed straight to a call that only runs it - `forEach`, `unless`,
 a DSL block - and is never stored or returned.** To carry a value out, return it.
 
@@ -477,7 +498,12 @@ fn counter(): () => Int {
 Why: a `var` is the one variable the language shares, and a closure that outlived it would share it with nobody's
 knowledge. See [Closures](../language/functions/closures.md), rule 8.
 
+</details>
+
 ## A closure parameter names its shape {#closure-types}
+
+<details>
+<summary>The rule, an example, and why</summary>
 
 **A parameter that takes a question about one value is a `Predicate<Item>`, one called for its effect is an
 `Action<Item>`, and one that turns a value into another is a `Transform<Item, Output>`.** The three are aliases in
@@ -503,6 +529,8 @@ print shown    // prints ["#3", "#8", "#5"]
 Why: `filter`, `forEach` and `map` of the standard library are written this way, and a signature that reads like
 theirs needs no second look. A closure without parameters stays `() => Value`, which is already as short as a name.
 See [Predicate, Action and Transform](../standard-library/function-types.md).
+
+</details>
 
 ## A resource is bound with `using` {#resources}
 
@@ -537,6 +565,9 @@ Why: the line where a resource is released is the end of the block, so no path t
 
 ## `await()` answers the value, and a cancellation stops the waiter {#tasks}
 
+<details>
+<summary>The rule, an example, and why</summary>
+
 **A function that waits returns `Task<Value>`. `await()` answers the value, so a task whose value is a `Result` is one
 `.await()?` per line - the `?` is the work's own failure. A cancellation is passed on, never answered: `cancel()` asks a
 task to stop, and whoever awaits it stops at that `await()` too. `result()` is for the code that has to observe one.**
@@ -561,7 +592,12 @@ cancellation as a value nested a second `Result` into every line of IO for nothi
 `task.result()`, which answers `Fail(Cancelled)`. See [Tasks](../language/concurrency-and-streams/tasks.md) and
 [std/task](../standard-library/task.md).
 
+</details>
+
 ## `Into` comes from `From` {#conversions}
+
+<details>
+<summary>The rule, an example, and why</summary>
 
 **Implement `From<Source>` on the target and `into()` exists for free. `Into` is never implemented by hand, and there
 are no casts.**
@@ -588,7 +624,12 @@ print boiling.degrees    // prints 100.0
 Why: one direction written by hand means one place to change, and `?` finds the same `From` when it converts a
 failure. See [Conversions](../language/types/conversions.md).
 
+</details>
+
 ## An operating system branch is a `match` {#operating-system}
+
+<details>
+<summary>The rule, an example, and why</summary>
 
 **Code that differs per operating system is a `match OperatingSystem.current` in the function where it differs.** The
 compiler checks every arm on every machine and builds only the one the target takes.
@@ -607,6 +648,8 @@ fn searchPathSeparator(): String {
 
 Why: a new operating system then becomes a compile error at every place that has to learn about it, instead of a
 branch hidden in C or a build file.
+
+</details>
 
 ## A collection is walked with `for` or a pipeline {#loops-and-pipelines}
 
