@@ -281,7 +281,8 @@ type Guard {
 fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes): List<List<Interval>> {
   const blockCount = function.blocks.length()
   const order = reverseOfPostorder function
-  const headers = loopWritesOf function, order
+  const predecessors = predecessorListsOf function
+  const headers = loopWritesOf function, order, predecessors
   var entries: List<List<Interval>> = []
   var exits: List<List<Interval>> = []
   var visited = filledFlags blockCount, false
@@ -295,11 +296,11 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
     isChanged = false
     round = round + 1
     for block in order {
-      const proposed = entryOf function, universes, exits, visited, block
+      const proposed = entryOf function, universes, exits, visited, predecessors[block], block
       var settled = proposed
       if visited[block] {
         settled = widened universes, headers[block], entries[block], proposed
-        if settled == entries[block] {
+        if isSameFacts(settled, entries[block]) {
           continue
         }
       }
@@ -324,8 +325,8 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
       if !visited[block] {
         continue
       }
-      const proposed = entryOf function, universes, exits, visited, block
-      if proposed == entries[block] {
+      const proposed = entryOf function, universes, exits, visited, predecessors[block], block
+      if isSameFacts(proposed, entries[block]) {
         continue
       }
       entries.set block, proposed
@@ -340,6 +341,24 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
     }
   }
   entries
+}
+
+/**
+ * Whether two blocks' facts are the same, slot by slot: what `==` of the two lists answers, without the iterator and the
+ * closure per slot that `List.equals` takes - it was a tenth of finishing the lowering of the compiler's own program.
+ */
+fn isSameFacts(left: List<Interval>, right: List<Interval>): Bool {
+  if left.length() != right.length() {
+    return false
+  }
+  for index in 0..left.length() {
+    const one = left[index]
+    const other = right[index]
+    if one.low != other.low || one.high != other.high {
+      return false
+    }
+  }
+  true
 }
 
 fn filledEntries(universes: Universes, blockCount: Int): List<List<Interval>> {
@@ -363,7 +382,7 @@ fn filledEntries(universes: Universes, blockCount: Int): List<List<Interval>> {
  * head plus every block that reaches the edge's source without passing the head. Source is structured, so every graph
  * here is reducible and that is the whole loop (BACKEND 2.2).
  */
-fn loopWritesOf(function: IrFunction, order: List<Int>): List<List<Bool>> {
+fn loopWritesOf(function: IrFunction, order: List<Int>, predecessors: List<List<Int>>): List<List<Bool>> {
   const blockCount = function.blocks.length()
   const slotCount = function.slots.length()
   var position: List<Int> = []
@@ -380,7 +399,7 @@ fn loopWritesOf(function: IrFunction, order: List<Int>): List<List<Bool>> {
       if target < 0 || target >= blockCount || position[target] > position[block] {
         continue
       }
-      const body = naturalLoopOf function, target, block
+      const body = naturalLoopOf function, predecessors, target, block
       var mask = written[target]
       for member in 0..blockCount {
         if body[member] {
@@ -394,7 +413,7 @@ fn loopWritesOf(function: IrFunction, order: List<Int>): List<List<Bool>> {
 }
 
 /** The head plus every block that reaches the source of the back edge without passing the head. */
-fn naturalLoopOf(function: IrFunction, head: Int, source: Int): List<Bool> {
+fn naturalLoopOf(function: IrFunction, predecessors: List<List<Int>>, head: Int, source: Int): List<Bool> {
   const blockCount = function.blocks.length()
   var body = filledFlags blockCount, false
   body.set head, true
@@ -406,23 +425,35 @@ fn naturalLoopOf(function: IrFunction, head: Int, source: Int): List<Bool> {
   while !stack.isEmpty() {
     const block = stack[stack.length() - 1]
     stack.removeAt(stack.length() - 1)
-    for candidate in 0..blockCount {
-      if body[candidate] {
-        continue
-      }
-      var reaches = false
-      for target in successorsOf(function.blocks[candidate]) {
-        if target == block {
-          reaches = true
-        }
-      }
-      if reaches {
+    for candidate in predecessors[block] {
+      if !body[candidate] {
         body.set candidate, true
         stack.append candidate
       }
     }
   }
   body
+}
+
+/**
+ * Per block, the blocks with an edge to it, each once and in ascending order - the order `entryOf` joins them in. Asking
+ * every block whether it has an edge to the one at hand was quadratic in the blocks of a function, for every block of
+ * every round of the fixpoint.
+ */
+fn predecessorListsOf(function: IrFunction): List<List<Int>> {
+  const blockCount = function.blocks.length()
+  var predecessors: List<List<Int>> = []
+  for _ in 0..blockCount {
+    predecessors.append([])
+  }
+  for block in 0..blockCount {
+    for target in successorsOf(function.blocks[block]) {
+      if target >= 0 && target < blockCount && predecessors[target].last() != block {
+        predecessors[target].append block
+      }
+    }
+  }
+  predecessors
 }
 
 /** Every slot one block writes, by the same two questions `resetWritten` asks of an instruction. */
@@ -462,14 +493,15 @@ fn entryOf(
   universes: Universes,
   exits: List<List<Interval>>,
   visited: List<Bool>,
+  predecessors: List<Int>,
   block: Int,
 ): List<Interval> {
   if block == 0 {
     return universes.range
   }
   var found: List<Interval>? = None
-  for predecessor in 0..function.blocks.length() {
-    if !visited[predecessor] || !reaches(function, predecessor, block) {
+  for predecessor in predecessors {
+    if !visited[predecessor] {
       continue
     }
     const given = narrowedByGuard function, universes, exits[predecessor], predecessor, block
@@ -486,15 +518,6 @@ fn entryOf(
     Some(settled) => settled
     None => universes.range
   }
-}
-
-fn reaches(function: IrFunction, predecessor: Int, block: Int): Bool {
-  for target in successorsOf(function.blocks[predecessor]) {
-    if target == block {
-      return true
-    }
-  }
-  false
 }
 
 fn joinedFacts(left: List<Interval>, right: List<Interval>): List<Interval> {
