@@ -75,6 +75,7 @@ check --color purple
 check --color
 --color=never check --frobnicate
 test --color always --frobnicate
+debug --frobnicate
 EOF
 status=0
 "$torb" --help >/dev/null 2>&1 || status=$?

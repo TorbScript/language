@@ -47,6 +47,8 @@ use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format
 use lintUsage, lintOptionsOf, runLint from "./lint/command"
 use renameUsage, renameOptionsOf, runRename from "./lint/rename-command"
 use languageServerUsage, isLanguageServerArguments, startLanguageServer from "./language-server/command"
+use debugAdapterUsage, startDebugAdapter from "./debugger/adapter"
+use runDebuggee, isDebuggeeArguments from "./debugger/debuggee"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 use packageOptionsOf, runPackageCommand from "./cli/packages"
 use languageVersion from "./package/version"
@@ -145,6 +147,7 @@ fn printUsage() {
   printError "                         --fix: write the fixes, then lint again"
   printError "  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"
   printError "  torb lsp               The language server, over standard input and output, for an editor"
+  printError "  torb debug             The debugger, over standard input and output (`torb debug --help`)"
   printError "  torb --version         `torb <version>`: the one number of the toolchain, the language and std"
   printDocUsage()
   printDocumentationUsage()
@@ -1042,6 +1045,24 @@ match arguments {
         Process.exit 2
       }
     }
+  }
+  ["debug", "--help"] | ["debug", "help"] => print debugAdapterUsage()
+  // The program's own process, which the adapter starts: `--filter` and `--report` are read by the test runner
+  ["debug", "--debuggee", ...more] => {
+    if !isDebuggeeArguments(more) {
+      printError "error: `torb debug --debuggee` takes `--filter <name>` and `--report json`, see `torb debug --help`"
+      Process.exit 2
+    }
+    exitWith runDebuggee()
+  }
+  // The adapter runs as tasks once this top level is done, and ends the process itself (`./debugger/adapter`)
+  ["debug", ...more] => {
+    refuseUnknownFlag more, []
+    if !more.isEmpty() {
+      printError "error: `torb debug` takes no arguments: a `launch` of the editor names what runs, see `torb debug --help`"
+      Process.exit 2
+    }
+    startDebugAdapter()
   }
   ["lsp", "--help"] | ["lsp", "help"] => print languageServerUsage()
   // The server runs as a task once this top level is done, and ends the process itself (`./language-server/command`)

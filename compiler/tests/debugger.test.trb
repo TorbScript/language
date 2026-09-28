@@ -1,0 +1,290 @@
+/**
+ * The debugger (docs/design/DEBUGGER.md): what a program lowered for it carries - a `statement` in front of every
+ * statement with the bindings in sight, a `keepAlive` where a scope ends - the line table and the variables table the
+ * bytecode keeps of it, the expressions `evaluate` answers, and whole runs of small programs in the VM with a
+ * [Debugger] that stops at a breakpoint, steps in, over and out, and reads the locals of every frame.
+ */
+
+use test, group from "std/test"
+use workspaceWith from "./harness"
+use ownedIrOf from "./lower-harness"
+use check from "../src/semantics/check"
+use hostTarget from "../src/project/target"
+use lowerWorkspace, pathsOfModules from "../src/ir/lower/lower"
+use insertOwnership from "../src/ir/ownership"
+use printFunction from "../src/ir/print"
+use IrProgram from "../src/ir/ir"
+use emitBytecode from "../src/backend/bytecode/emit"
+use disassembleChunk from "../src/backend/bytecode/disassemble"
+use BytecodeProgram from "../src/backend/bytecode/format"
+use Registers, runProgram from "../src/vm/interpret"
+use Debugger, Stepping, StopEvent, beginStep, framesOf, codeStartsOf, registerWord from "../src/vm/debug"
+use Inspector, Value, inspectorOf, showValue from "../src/debugger/values"
+use parseWatch, WatchStep from "../src/debugger/evaluate"
+
+/** The entry function of `app/src/main.trb`. */
+const entryName = "t_acme_x2f_app_main"
+
+/** A function called from two lines of the top level, which ends in a statement so that it is an entry. */
+const squares = raw"""
+  fn square(value: Int): Int {
+    const result = value * value
+    result
+  }
+
+  const first = square(3)
+  const second = square(4)
+  if first > second {
+    panic "impossible"
+  }
+  """
+
+/** A program lowered for the VM and for the debugger, owned and encoded, with its final IR. */
+type Debugged {
+  program: BytecodeProgram
+  ir: IrProgram
+  /** By `SymbolId.value`: the names of the declarations, which a value's line starts with. */
+  names: Map<Int, String>
+}
+
+fn debuggedOf(source: String): Debugged {
+  const tree = workspaceWith(["app/src/main.trb": source])
+  const checked = check tree, ["app"], false, checksEveryBody: true
+  for file in checked.files {
+    assert file.diagnostics.isEmpty()
+  }
+  const paths = pathsOfModules checked
+  var lowering = lowerWorkspace(
+    checked.checker,
+    paths,
+    checked.requested,
+    false,
+    hostTarget(),
+    forMachine: true,
+    debugging: true,
+  )
+  insertOwnership lowering.program
+  const emission = emitBytecode lowering.program, [entryName]
+  assert(emission.unsupported == [])
+  var names: Map<Int, String> = [:]
+  const symbols = checked.checker.program.symbols
+  for index in 0..symbols.all.length() {
+    names.set index, symbols.all[index].name
+  }
+  Debugged emission.program, lowering.program, names
+}
+
+/** One function of a debugged program, by the end of its mangled name, as `torb ir` prints it. */
+fn debuggedIrOf(source: String, suffix: String): String {
+  const debugged = debuggedOf source
+  match debugged.ir.functions.find({ _.name.endsWith suffix }) {
+    Some(found) => printFunction debugged.ir, found
+    None => "there is no function `...{suffix}`"
+  }
+}
+
+/** One chunk of a debugged program, by the end of its mangled name, disassembled. */
+fn debuggedChunkOf(source: String, suffix: String): String {
+  const debugged = debuggedOf source
+  match debugged.program.chunks.find({ _.name.endsWith suffix }) {
+    Some(found) => disassembleChunk(debugged.program, found.name) + "\n"
+    None => "there is no chunk `...{suffix}`"
+  }
+}
+
+group "A program lowered for the debugger" {
+  test "marks every statement with the bindings in sight, and keeps each binding alive to the end of its block" {
+    const text = debuggedIrOf squares, "_square"
+    assert text.contains("statement at acme/app/src/main.trb:2:3 visible()")
+    assert text.contains("statement at acme/app/src/main.trb:3:3 visible(%1)")
+    assert text.contains("keepAlive %1")
+    // The parameter is kept alive to the end of the body as well: a debugger shows it in every frame
+    assert text.contains("keepAlive %0")
+  }
+
+  test "a program that is not debugged carries neither" {
+    const text = ownedIrOf squares, "t_acme_x2f_app_main"
+    assert(!text.contains("statement"))
+    assert(!text.contains("keepAlive"))
+  }
+
+  test "the top-level code of an entry file is marked statement by statement" {
+    const text = debuggedIrOf squares, entryName
+    assert text.contains("statement at acme/app/src/main.trb:6:1 visible()")
+    assert text.contains("statement at acme/app/src/main.trb:7:1 visible(%0)")
+    assert text.contains("statement at acme/app/src/main.trb:8:1 visible(%0, %2)")
+  }
+
+  test "the chunk keeps the line table and the variables table: each statement's offset, line and bindings" {
+    const text = debuggedChunkOf squares, "_square"
+    assert text.contains("statement 0: 0 at acme/app/src/main.trb:2:3, visible []")
+    assert text.contains("at acme/app/src/main.trb:3:3, visible [%1]")
+    assert text.contains("  0: statement 0")
+  }
+}
+
+group "Evaluate" {
+  test "a name with fields, tuple fields, items and entries below it" {
+    const watch = parseWatch("shapes[0].radius").expect("an expression")
+    assert(watch.name == "shapes")
+    assert(watch.steps == [WatchStep.Index(0), WatchStep.Field("radius")])
+    const pair = parseWatch("pair.0").expect("an expression")
+    assert(pair.steps == [WatchStep.Field("0")])
+    const entry = parseWatch("ages[\"Ada\"]").expect("an expression")
+    assert(entry.steps == [WatchStep.Key("Ada")])
+  }
+
+  test "anything else is refused with what is answered" {
+    const message = "an expression of the debugger is a name with fields and items below it: `point.x`, `names[2]`"
+    assert(parseWatch("a + b") == Fail(message))
+    assert(parseWatch("list.length()") == Fail(message))
+    assert(parseWatch("") == Fail(message))
+  }
+}
+
+// --- Whole runs -----------------------------------------------------------------------------------------------------
+
+/** What the stops of a run saw: one line per stop, and the steps still to take. */
+shared type Recorder {
+  var registers: Registers? = None
+  var debugger: Debugger? = None
+  var stops: List<String> = []
+  /** The steps to take at the stops, in order; the program goes on once they are used up. */
+  var steps: List<Stepping> = []
+}
+
+/** The code offset of the first statement at `line` of the chunk whose name ends in `suffix`. */
+fn breakpointAt(program: BytecodeProgram, suffix: String, line: Int): Int {
+  const starts = codeStartsOf program
+  for chunk in 0..program.chunks.length() {
+    if !program.chunks[chunk].name.endsWith(suffix) {
+      continue
+    }
+    for entry in program.chunks[chunk].statements {
+      if program.locations[entry.location].line == line {
+        return starts[chunk] + entry.offset
+      }
+    }
+  }
+  0 - 1
+}
+
+/**
+ * A stop as a line: the reason, then every frame innermost first by its line - and for the innermost frame the
+ * bindings of its statement with their values.
+ */
+fn describeStop(
+  debugged: Debugged,
+  inspector: Inspector,
+  debugger: Debugger,
+  registers: Registers,
+  stopped: StopEvent,
+): String {
+  var frames: List<String> = []
+  var isInnermost = true
+  for frame in framesOf(debugger, registers) {
+    if frame.statement < 0 {
+      continue
+    }
+    const chunk = debugged.program.chunks[frame.chunk]
+    const entry = chunk.statements[frame.statement]
+    const line = debugged.program.locations[entry.location].line
+    if !isInnermost {
+      frames.append "{line}"
+      continue
+    }
+    isInnermost = false
+    const function = debugged.ir.functions.find({ _.name == chunk.name }).expect("the function of the chunk")
+    var shown: List<String> = []
+    for slot in entry.visible {
+      const place = chunk.slots[slot]
+      var words: List<Int> = []
+      for offset in 0..place.width {
+        words.append registerWord(registers, frame.base + place.offset + offset)
+      }
+      const declared = function.slots[slot]
+      shown.append "{declared.name} = {showValue(inspector, Value(declared.annotation, words))}"
+    }
+    frames.append "{line} [{shown.joined(separator: ", ")}]"
+  }
+  "{stopped.reason} at {frames.joined(separator: " < ")}"
+}
+
+/** A run of `source` in the VM, stopping at the breakpoints on `lines` of the chunk that ends in `suffix`. */
+fn stopsOf(source: String, suffix: String, lines: List<Int>, steps: List<Stepping>): String {
+  const debugged = debuggedOf source
+  const inspector = inspectorOf debugged.ir, debugged.names
+  const recorder = Recorder steps: steps
+  const debugger = Debugger(
+    stop: { stopped =>
+      const registers = recorder.registers.expect "the registers of the run"
+      const running = recorder.debugger.expect "the debugger of the run"
+      recorder.stops.append describeStop(debugged, inspector, running, registers, stopped)
+      if const Some(step) = recorder.steps.first() {
+        const _ = recorder.steps.removeAt 0
+        beginStep running, debugged.program, registers, step
+      }
+    },
+    poll: { void },
+    panicked: { void },
+  )
+  recorder.debugger = debugger
+  var breakpoints: Set<Int> = []
+  for line in lines {
+    breakpoints.insert breakpointAt(debugged.program, suffix, line)
+  }
+  debugger.breakpoints = breakpoints
+  const _ = runProgram(
+    debugged.program,
+    [],
+    debugger: debugger,
+    onStart: { registers => recorder.registers = registers },
+  )
+  recorder.stops.joined separator: " | "
+}
+
+group "A debugged run" {
+  test "stops at a breakpoint, with the bindings of its line and their values" {
+    const stops = stopsOf squares, entryName, [7], []
+    assert(stops == "breakpoint at 7 [first = 9]")
+  }
+
+  test "steps into a call, over a line, and out to the caller's next line" {
+    const stops = stopsOf squares, entryName, [7], [Stepping.In, Stepping.Over, Stepping.Out]
+    const expected = [
+      "breakpoint at 7 [first = 9]",
+      "step at 2 [] < 7",
+      "step at 3 [result = 16] < 7",
+      "step at 8 [first = 9, second = 16]",
+    ]
+    assert(stops == expected.joined(separator: " | "))
+  }
+
+  test "a step over a call runs the whole call" {
+    const stops = stopsOf squares, entryName, [6], [Stepping.Over]
+    assert(stops == "breakpoint at 6 [] | step at 7 [first = 9]")
+  }
+
+  test "a breakpoint in a function stops every time the function runs" {
+    const stops = stopsOf squares, "_square", [3], []
+    assert(stops == "breakpoint at 3 [result = 9] < 6 | breakpoint at 3 [result = 16] < 7")
+  }
+
+  test "a record, a text and a float read back as the source writes them" {
+    const source = raw"""
+      type Point {
+        x: Int
+        y: Int
+      }
+
+      const origin = Point(1, 2)
+      const label = "origin"
+      const unit = 1.5
+      if origin.x > 5 {
+        panic "impossible"
+      }
+      """
+    const stops = stopsOf source, entryName, [9], []
+    assert(stops == "breakpoint at 9 [origin = Point(x: 1, y: 2), label = \"origin\", unit = 1.5]")
+  }
+}

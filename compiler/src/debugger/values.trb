@@ -1,0 +1,731 @@
+/**
+ * The values of a stopped program, as a debugger shows them (docs/design/DEBUGGER.md section 11): a [Value] is the
+ * words the VM holds and the IR type that says what they are, [showValue] is its line, and [childrenOf] its fields, its
+ * items or its entries, read when somebody expands it.
+ *
+ * A value in the VM is the runtime's own bytes spread over words (docs/design/VM.md section 2): a number is one word,
+ * a `String` two, a boxed record the pointer to a counted block whose contents begin sixteen bytes in, an inline record
+ * its fields one after the other. `backend/bytecode/words.trb` says where each field lies, the kernel takes a text
+ * apart and looks into a list, a map or a set - on words of the debugger's own ([DebugKernel]), never on the
+ * program's registers - and a null pointer is shown as `<none>`, never followed.
+ *
+ * # Related
+ *
+ * - [Inspector] - what reads the values: the final IR, its word tables and the names of its types.
+ */
+
+use Machine from "std/machine"
+use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind, TraitId from "../ir/ir"
+use Layout, LayoutKind, Representation from "../ir/layout"
+use WordTables, wordTablesOf from "../backend/bytecode/words"
+use KernelOperation, narrowCode from "../backend/bytecode/format"
+use DebugKernel, debugKernel, ensureDebugWords, debugOperate from "../vm/debug"
+
+/** What a debugger reads the program's values with. */
+public type Inspector {
+  ir: IrProgram
+  tables: WordTables
+  /** By `SymbolId.value`: the name of the declaration a layout or a trait came from. */
+  names: Map<Int, String>
+  /** Where the witness tables of the IR begin among the bytecode's: a trait-typed value names a table by the latter. */
+  tableBase: Int = 0
+  kernel: DebugKernel
+}
+
+/** An inspector over the final IR of a program; `names` are the names of its declarations by symbol. */
+public fn inspectorOf(ir: IrProgram, names: Map<Int, String>): Inspector {
+  Inspector ir, wordTablesOf(ir), names, kernel: debugKernel()
+}
+
+/** A value of the program: its IR type and its words, copied out of the registers or out of a block. */
+public type Value {
+  annotation: IrTypeId
+  words: List<Int>
+}
+
+/** How many characters of a `String` a line shows. */
+const shownCharacters = 1000
+
+/** How many items of a list a line shows before it only says how many there are. */
+const shownItems = 10
+
+/** Where the contents of a counted block begin: its header and its shape word. */
+const contentsOffset = 16
+
+// --- Words ----------------------------------------------------------------------------------------------------------
+
+/** `count` words of memory from `address` on. */
+public fn wordsAt(address: Int, count: Int): List<Int> {
+  var words: List<Int> = []
+  for index in 0..count {
+    words.append Machine.load(address + 8 * index)
+  }
+  words
+}
+
+fn wordOf(value: Value, index: Int): Int {
+  value.words.get(index) ?? 0
+}
+
+/** The words of a value of this type that begins `offset` words into `words`. */
+fn sliceOf(inspector: Inspector, words: List<Int>, offset: Int, annotation: IrTypeId): Value {
+  const width = inspector.tables.widthOf annotation
+  var taken: List<Int> = []
+  for index in offset..offset + width {
+    taken.append(words.get(index) ?? 0)
+  }
+  Value annotation, taken
+}
+
+/** The contents of a layout's value: the block a boxed value points at, the words of an inline one. */
+fn contentsOf(inspector: Inspector, layout: LayoutId, value: Value): List<Int>? {
+  const shape = inspector.ir.layoutAt layout
+  match shape.representation {
+    .Boxed => {
+      const pointer = wordOf value, 0
+      if pointer == 0 {
+        return None
+      }
+      wordsAt(pointer + contentsOffset, inspector.tables.wordsOf(layout).width)
+    }
+    _ => value.words
+  }
+}
+
+/**
+ * The [narrowCode] of an element of a container of this type, 0 for one stored in words: an integer narrower than a
+ * word, a `Bool` and a `Char` are stored in their own width (docs/design/VM.md section 2).
+ */
+fn narrowOf(inspector: Inspector, annotation: IrTypeId): Int {
+  match inspector.ir.typeAt(annotation) {
+    .Integer(width, signed) => if width < 64 { narrowCode(width / 8, signed) } else { 0 }
+    .Boolean => narrowCode 1, false
+    .Character => narrowCode 4, false
+    _ => 0
+  }
+}
+
+/** An element of a container at `address`: read in its own width where it is narrow, as words otherwise. */
+fn elementAt(inspector: Inspector, annotation: IrTypeId, address: Int): Value {
+  if address == 0 {
+    return Value annotation, []
+  }
+  const narrow = narrowOf inspector, annotation
+  if narrow != 0 {
+    ensureDebugWords inspector.kernel, 4
+    const _ = debugOperate inspector.kernel, KernelOperation.NarrowLoad, [0, address, narrow]
+    return Value annotation, [inspector.kernel.words[0]]
+  }
+  Value annotation, wordsAt(address, inspector.tables.widthOf(annotation))
+}
+
+/** The text of the two words of a `String`, at most `limit` characters of it. */
+public fn textOf(inspector: Inspector, first: Int, second: Int, limit: Int = shownCharacters): String {
+  if first == 0 {
+    return ""
+  }
+  ensureDebugWords inspector.kernel, 4
+  inspector.kernel.words.set 0, first
+  inspector.kernel.words.set 1, second
+  const _ = debugOperate inspector.kernel, KernelOperation.TextByteLength, [2, 0]
+  const bytes = inspector.kernel.words[2]
+  if bytes <= 0 {
+    return ""
+  }
+  if bytes > 4_000_000 {
+    return "<{bytes} bytes>"
+  }
+  ensureDebugWords(inspector.kernel, bytes + 4)
+  const count = debugOperate inspector.kernel, KernelOperation.TextOut, [3, 0]
+  var characters: List<Char> = []
+  for index in 0..count.min(limit) {
+    if const Ok(character) = Char.tryFrom(inspector.kernel.words[3 + index]) {
+      characters.append character
+    }
+  }
+  const text = String.from characters
+  if count > limit {
+    return "{text}..."
+  }
+  text
+}
+
+/** A list (0), a map (1) or a set (2): its length, and where `index` is inside it the addresses of the item or key and value. */
+fn containerAt(inspector: Inspector, kind: Int, value: Value, index: Int): (Int, Int, Int) {
+  const width = value.words.length()
+  ensureDebugWords(inspector.kernel, width + 4)
+  for position in 0..width {
+    inspector.kernel.words.set position, value.words[position]
+  }
+  const target = width
+  inspector.kernel.words.set target, 0
+  const found = debugOperate inspector.kernel, KernelOperation.DebugContainer, [kind, 0, index, target]
+  const length = inspector.kernel.words[target]
+  if found != 1 {
+    return (length, 0, 0)
+  }
+  (length, inspector.kernel.words[target + 1], inspector.kernel.words[target + 2])
+}
+
+fn containerKindOf(kind: RuntimeKind): Int {
+  match kind {
+    .ListStorage => 0
+    .MapStorage => 1
+    _ => 2
+  }
+}
+
+// --- Names of types -------------------------------------------------------------------------------------------------
+
+/** A type as the program spells it: `Int`, `List<String>`, `Point`, `Option<Int>`, `(Int, String)`. */
+public fn typeNameOf(inspector: Inspector, annotation: IrTypeId): String {
+  if !inspector.ir.hasType(annotation) {
+    return ""
+  }
+  match inspector.ir.typeAt(annotation) {
+    .Integer(width, signed) => {
+      if signed && width == 64 {
+        return "Int"
+      }
+      if signed { "Int{width}" } else { "UInt{width}" }
+    }
+    .Floating(width) => if width == 64 { "Float" } else { "Float{width}" }
+    .Boolean => "Bool"
+    .Character => "Char"
+    .VoidType => "Void"
+    .NeverType => "Never"
+    .Text => "String"
+    .Record(layout) => layoutNameOf inspector, layout
+    .Variant(layout) => layoutNameOf inspector, layout
+    .Tuple(layout) => {
+      var parts: List<String> = []
+      for field in inspector.ir.layoutAt(layout).fields {
+        parts.append typeNameOf(inspector, field.annotation)
+      }
+      "({parts.joined(separator: ", ")})"
+    }
+    .SharedObject(layout) => layoutNameOf inspector, layout
+    .FixedArray(item, size) => "Array<{typeNameOf(inspector, item)}, {size}>"
+    .Closure(_) => "closure"
+    .Object(bounds) => {
+      var parts: List<String> = []
+      for bound in bounds {
+        parts.append traitNameOf(inspector, bound)
+      }
+      parts.joined separator: " & "
+    }
+    .Box(item) => typeNameOf inspector, item
+    .Lazy(item) => "lazy {typeNameOf(inspector, item)}"
+    .Runtime(kind, arguments) => {
+      const head = match kind {
+        .ListStorage => "List"
+        .MapStorage => "Map"
+        .SetStorage => "Set"
+        .TaskObject => "Task"
+        .ChannelObject => "Channel"
+        .FileHandle => "File"
+        .ExpressionTree => "Expression"
+        .DecimalNumber => "Decimal"
+      }
+      if arguments.isEmpty() {
+        return head
+      }
+      var parts: List<String> = []
+      for argument in arguments {
+        parts.append typeNameOf(inspector, argument)
+      }
+      "{head}<{parts.joined(separator: ", ")}>"
+    }
+    .ConstantValue(_, _) => ""
+  }
+}
+
+/** The name of the declaration a layout came from, with its type arguments. */
+fn layoutNameOf(inspector: Inspector, layout: LayoutId): String {
+  const shape = inspector.ir.layoutAt layout
+  const name = match shape.origin {
+    Some(symbol) => inspector.names.get(symbol.value) ?? shape.name
+    None => shape.name
+  }
+  if shape.arguments.isEmpty() {
+    return name
+  }
+  var parts: List<String> = []
+  for argument in shape.arguments {
+    const spelled = typeNameOf inspector, argument
+    if !spelled.isEmpty() {
+      parts.append spelled
+    }
+  }
+  if parts.isEmpty() {
+    return name
+  }
+  "{name}<{parts.joined(separator: ", ")}>"
+}
+
+fn traitNameOf(inspector: Inspector, bound: TraitId): String {
+  const applied = inspector.ir.traitAt bound
+  inspector.names.get(applied.symbol.value) ?? "trait"
+}
+
+/** The plain name of a layout's declaration, without type arguments: what a value's line starts with. */
+fn declarationNameOf(inspector: Inspector, layout: LayoutId): String {
+  const shape = inspector.ir.layoutAt layout
+  match shape.origin {
+    Some(symbol) => inspector.names.get(symbol.value) ?? ""
+    None => ""
+  }
+}
+
+// --- The line of a value --------------------------------------------------------------------------------------------
+
+/**
+ * A value on one line: `42`, `"text"`, `Point(x: 1, y: 2)`, `Some(3)`, `[1, 2, 3]`. Below `depth` 2 a nested value
+ * is shortened to its type's name, so a line stays a line.
+ */
+public fn showValue(inspector: Inspector, value: Value, depth: Int = 0): String {
+  const annotation = value.annotation
+  if !inspector.ir.hasType(annotation) {
+    return "?"
+  }
+  match inspector.ir.typeAt(annotation) {
+    .Integer(width, signed) => showInteger wordOf(value, 0), width, signed
+    .Floating(_) => "{floatOfPattern(wordOf(value, 0))}"
+    .Boolean => if wordOf(value, 0) != 0 { "true" } else { "false" }
+    .Character => showCharacter wordOf(value, 0)
+    .VoidType => "void"
+    .NeverType => ""
+    .Text => quoted textOf(inspector, wordOf(value, 0), wordOf(value, 1))
+    .Record(layout) => showLayout inspector, layout, value, depth
+    .Variant(layout) => showLayout inspector, layout, value, depth
+    .Tuple(layout) => showLayout inspector, layout, value, depth
+    .SharedObject(layout) => showLayout inspector, layout, value, depth
+    .FixedArray(_, _) => showItems inspector, value, depth
+    .Closure(_) => "closure"
+    .Object(_) => {
+      match payloadOf(inspector, value) {
+        Some(inner) => showValue inspector, inner, depth
+        None => "<none>"
+      }
+    }
+    .Box(item) => {
+      const pointer = wordOf value, 0
+      if pointer == 0 {
+        return "<none>"
+      }
+      showValue inspector, Value(item, wordsAt(pointer + contentsOffset, inspector.tables.widthOf(item))), depth
+    }
+    .Lazy(_) => "lazy"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => showItems inspector, value, depth
+        .MapStorage => showItems inspector, value, depth
+        .SetStorage => showItems inspector, value, depth
+        .TaskObject => "Task"
+        .ChannelObject => "Channel"
+        .FileHandle => "File"
+        .ExpressionTree => "Expression"
+        .DecimalNumber => "Decimal"
+      }
+    }
+    .ConstantValue(_, _) => ""
+  }
+}
+
+fn showInteger(word: Int, width: Int, signed: Bool): String {
+  if signed || word >= 0 {
+    return "{word}"
+  }
+  // An unsigned integer of 64 bits above the largest `Int64`: the word read as the unsigned number it is
+  const high = (word >> 1) & 0x7FFFFFFFFFFFFFFF
+  const quotient = high / 5
+  const remainder = (high % 5) * 2 + (word & 1)
+  "{quotient + remainder / 10}{remainder % 10}"
+}
+
+fn showCharacter(word: Int): String {
+  match Char.tryFrom(word) {
+    Ok(character) => {
+      if character == '\'' {
+        return "'\\''"
+      }
+      if character == '\\' {
+        return "'\\\\'"
+      }
+      if character == '\n' {
+        return "'\\n'"
+      }
+      if character == '\t' {
+        return "'\\t'"
+      }
+      "'{character}'"
+    }
+    Fail(_) => "'?'"
+  }
+}
+
+/** A text in quotes, the way it is written in the source. */
+public fn quoted(text: String): String {
+  var pieces: List<String> = ["\""]
+  for character in text.chars() {
+    pieces.append(
+      match character {
+        '"' => "\\\""
+        '\\' => "\\\\"
+        '\n' => "\\n"
+        '\t' => "\\t"
+        '\r' => "\\r"
+        '{' => "\\\{"
+        _ => "{character}"
+      },
+    )
+  }
+  pieces.append "\""
+  pieces.joined separator: ""
+}
+
+/** A record, a tuple, a case or a shared object: its name and its fields. */
+fn showLayout(inspector: Inspector, layout: LayoutId, value: Value, depth: Int): String {
+  const shape = inspector.ir.layoutAt layout
+  const (name, fields) = match partsOf(inspector, layout, value) {
+    Some(found) => found
+    None => {
+      return "<none>"
+    }
+  }
+  if depth >= 2 && !fields.isEmpty() {
+    return "{name}(...)"
+  }
+  var parts: List<String> = []
+  const positional = shape.kind == LayoutKind.Tuple || (!shape.variants.isEmpty() && fields.length() == 1)
+  for (label, field) in fields {
+    const shown = showValue(inspector, field, depth + 1)
+    if positional {
+      parts.append shown
+    } else {
+      parts.append "{label}: {shown}"
+    }
+  }
+  if fields.isEmpty() && !shape.variants.isEmpty() {
+    return name
+  }
+  "{name}({parts.joined(separator: ", ")})"
+}
+
+/**
+ * What a line of a layout's value names and the fields under it: `(name, fields)`, the case's name and its fields for a
+ * variant, or `None` for a boxed value that is not there.
+ */
+fn partsOf(inspector: Inspector, layout: LayoutId, value: Value): (String, List<(String, Value)>)? {
+  const shape = inspector.ir.layoutAt layout
+  // A niche holds the payload's words alone; a zero first word is the other case
+  if const .Niche(payload, field) = shape.representation {
+    if wordOf(value, 0) == 0 {
+      const empty = if payload == 0 { 1 } else { 0 }
+      return (caseNameOf(inspector, layout, empty), [])
+    }
+    const inner = shape.fields[field]
+    return (caseNameOf(inspector, layout, payload), [(inner.name, Value(inner.annotation, value.words))])
+  }
+  const contents = contentsOf(inspector, layout, value)?
+  const words = inspector.tables.wordsOf layout
+  if shape.variants.isEmpty() {
+    var fields: List<(String, Value)> = []
+    for index in 0..shape.fields.length() {
+      const field = shape.fields[index]
+      const label = if shape.kind == LayoutKind.Tuple { "{index}" } else { field.name }
+      fields.append((label, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+    }
+    const name = if shape.kind == LayoutKind.Tuple { "" } else { declarationNameOf inspector, layout }
+    return (name, fields)
+  }
+  const tag = contents.get(words.tag) ?? 0
+  if tag < 0 || tag >= shape.variants.length() {
+    return ("<{declarationNameOf(inspector, layout)} case {tag}>", [])
+  }
+  var fields: List<(String, Value)> = []
+  for index in 0..shape.commonFieldCount {
+    const field = shape.fields[index]
+    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+  }
+  const variant = shape.variants[tag]
+  for index in variant.first..variant.first + variant.count {
+    const field = shape.fields[index]
+    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+  }
+  (caseNameOf(inspector, layout, tag), fields)
+}
+
+/** A case as a value's line names it: `Some`, `None`, `Ok` and `Fail` bare, as the prelude imports them, others `Shape.Circle`. */
+fn caseNameOf(inspector: Inspector, layout: LayoutId, variant: Int): String {
+  const shape = inspector.ir.layoutAt layout
+  const name = match shape.variants.get(variant) {
+    Some(found) => found.name
+    None => "case {variant}"
+  }
+  if ["Some", "None", "Ok", "Fail"].contains(name) {
+    return name
+  }
+  const owner = declarationNameOf inspector, layout
+  if owner.isEmpty() {
+    return ".{name}"
+  }
+  "{owner}.{name}"
+}
+
+/** The value a trait-typed value holds, as the type its witness table is for; `None` where it holds nothing. */
+fn payloadOf(inspector: Inspector, value: Value): Value? {
+  const pointer = wordOf value, 0
+  const table = wordOf(value, 1) - 1 - inspector.tableBase
+  if pointer == 0 || table < 0 || table >= inspector.ir.witnessTables.length() {
+    return None
+  }
+  const target = inspector.ir.witnessTables[table].target
+  // The payload block holds the value as the words a register would hold it in
+  Value target, wordsAt(pointer + contentsOffset, inspector.tables.widthOf(target))
+}
+
+/** A list, an array, a map or a set on one line: its first items, or how many there are. */
+fn showItems(inspector: Inspector, value: Value, depth: Int): String {
+  const count = childCountOf inspector, value
+  const name = typeNameOf inspector, value.annotation
+  if count == 0 {
+    return if isMap(inspector, value) { "[:]" } else { "[]" }
+  }
+  if depth >= 2 || count > shownItems {
+    return "{name}({count})"
+  }
+  const children = childrenOf inspector, value, 0, count
+  var parts: List<String> = []
+  for (label, child) in children {
+    const shown = showValue(inspector, child, depth + 1)
+    if isMap(inspector, value) {
+      parts.append "{label}: {shown}"
+    } else {
+      parts.append shown
+    }
+  }
+  "[{parts.joined(separator: ", ")}]"
+}
+
+fn isMap(inspector: Inspector, value: Value): Bool {
+  if const .Runtime(.MapStorage, _) = inspector.ir.typeAt(value.annotation) {
+    return true
+  }
+  false
+}
+
+// --- The children of a value ----------------------------------------------------------------------------------------
+
+/** Whether a value has children to expand: fields, items, entries. */
+public fn hasChildren(inspector: Inspector, value: Value): Bool {
+  childCountOf(inspector, value) > 0
+}
+
+/** Whether a value's children are items counted from 0, which an editor shows in pages. */
+public fn isIndexed(inspector: Inspector, value: Value): Bool {
+  match inspector.ir.typeAt(value.annotation) {
+    .FixedArray(_, _) => true
+    .Runtime(kind, _) => kind == RuntimeKind.ListStorage || kind == RuntimeKind.SetStorage
+    .Box(item) => isIndexed inspector, Value(item, [])
+    _ => false
+  }
+}
+
+/** How many children a value has. */
+public fn childCountOf(inspector: Inspector, value: Value): Int {
+  if !inspector.ir.hasType(value.annotation) {
+    return 0
+  }
+  match inspector.ir.typeAt(value.annotation) {
+    .Record(layout) => layoutChildCount inspector, layout, value
+    .Variant(layout) => layoutChildCount inspector, layout, value
+    .Tuple(layout) => layoutChildCount inspector, layout, value
+    .SharedObject(layout) => layoutChildCount inspector, layout, value
+    .FixedArray(_, size) => size
+    .Object(_) => {
+      match payloadOf(inspector, value) {
+        Some(inner) => childCountOf inspector, inner
+        None => 0
+      }
+    }
+    .Box(item) => {
+      const pointer = wordOf value, 0
+      if pointer == 0 {
+        return 0
+      }
+      childCountOf inspector, Value(item, wordsAt(pointer + contentsOffset, inspector.tables.widthOf(item)))
+    }
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => containerAt(inspector, 0, value, 0 - 1).0
+        .MapStorage => containerAt(inspector, 1, value, 0 - 1).0
+        .SetStorage => containerAt(inspector, 2, value, 0 - 1).0
+        _ => 0
+      }
+    }
+    _ => 0
+  }
+}
+
+fn layoutChildCount(inspector: Inspector, layout: LayoutId, value: Value): Int {
+  match partsOf(inspector, layout, value) {
+    Some((_, fields)) => fields.length()
+    None => 0
+  }
+}
+
+/**
+ * The children of a value from `start` on, at most `count` of them, each with the name a debugger shows it under: a
+ * field's name, `0` and `1` for a tuple, `[3]` for an item, the key's own line for an entry of a map.
+ */
+public fn childrenOf(inspector: Inspector, value: Value, start: Int, count: Int): List<(String, Value)> {
+  if !inspector.ir.hasType(value.annotation) {
+    return []
+  }
+  const end = start + count
+  match inspector.ir.typeAt(value.annotation) {
+    .Record(layout) => layoutChildren inspector, layout, value, start, end
+    .Variant(layout) => layoutChildren inspector, layout, value, start, end
+    .Tuple(layout) => layoutChildren inspector, layout, value, start, end
+    .SharedObject(layout) => layoutChildren inspector, layout, value, start, end
+    .FixedArray(item, size) => {
+      const width = inspector.tables.widthOf item
+      var found: List<(String, Value)> = []
+      for index in start..end.min(size) {
+        found.append(("[{index}]", sliceOf(inspector, value.words, index * width, item)))
+      }
+      found
+    }
+    .Object(_) => {
+      match payloadOf(inspector, value) {
+        Some(inner) => childrenOf inspector, inner, start, count
+        None => []
+      }
+    }
+    .Box(item) => {
+      const pointer = wordOf value, 0
+      if pointer == 0 {
+        return []
+      }
+      const inner = Value item, wordsAt(pointer + contentsOffset, inspector.tables.widthOf(item))
+      childrenOf inspector, inner, start, count
+    }
+    .Runtime(kind, arguments) => {
+      match kind {
+        .ListStorage => itemsOf inspector, 0, value, arguments, start, end
+        .SetStorage => itemsOf inspector, 2, value, arguments, start, end
+        .MapStorage => entriesOf inspector, value, arguments, start, end
+        _ => []
+      }
+    }
+    _ => []
+  }
+}
+
+fn layoutChildren(inspector: Inspector, layout: LayoutId, value: Value, start: Int, end: Int): List<(String, Value)> {
+  const fields = match partsOf(inspector, layout, value) {
+    Some((_, found)) => found
+    None => {
+      return []
+    }
+  }
+  var found: List<(String, Value)> = []
+  for index in start..end.min(fields.length()) {
+    found.append fields[index]
+  }
+  found
+}
+
+fn itemsOf(
+  inspector: Inspector,
+  kind: Int,
+  value: Value,
+  arguments: List<IrTypeId>,
+  start: Int,
+  end: Int,
+): List<(String, Value)> {
+  const item = match arguments.first() {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  var found: List<(String, Value)> = []
+  var index = start
+  while index < end {
+    const (length, address, _) = containerAt inspector, kind, value, index
+    if index >= length {
+      break
+    }
+    found.append(("[{index}]", elementAt(inspector, item, address)))
+    index = index + 1
+  }
+  found
+}
+
+fn entriesOf(
+  inspector: Inspector,
+  value: Value,
+  arguments: List<IrTypeId>,
+  start: Int,
+  end: Int,
+): List<(String, Value)> {
+  if arguments.length() < 2 {
+    return []
+  }
+  var found: List<(String, Value)> = []
+  var index = start
+  while index < end {
+    const (length, key, entry) = containerAt inspector, 1, value, index
+    if index >= length {
+      break
+    }
+    const shownKey = showValue inspector, elementAt(inspector, arguments[0], key), 1
+    found.append((shownKey, elementAt(inspector, arguments[1], entry)))
+    index = index + 1
+  }
+  found
+}
+
+// --- Floats ---------------------------------------------------------------------------------------------------------
+
+/** The `Float64` of the bits of a register, which holds a float as the bits of its `double` (docs/design/VM.md section 2). */
+public fn floatOfPattern(pattern: Int): Float64 {
+  const exponent = (pattern >> 52) & 0x7FF
+  const mantissa = pattern & 0xFFFFFFFFFFFFF
+  const magnitude = if exponent == 0x7FF {
+    if mantissa == 0 { Float64.infinity } else { Float64.nan }
+  } else if exponent == 0 {
+    scaled(Float64.from(mantissa), -1074)
+  } else {
+    scaled(Float64.from(mantissa | 0x10000000000000), exponent - 1075)
+  }
+  if pattern < 0 { -magnitude } else { magnitude }
+}
+
+/** 2 to the power of `exponent`, from -1022 to 1023, exactly: powers of two multiplied together. */
+fn powerOfTwo(exponent: Int): Float64 {
+  var base = if exponent < 0 { 0.5 } else { 2.0 }
+  var rest = if exponent < 0 { -exponent } else { exponent }
+  var result = 1.0
+  while rest > 0 {
+    if rest & 1 == 1 {
+      result = result * base
+    }
+    rest = rest >> 1
+    if rest > 0 {
+      base = base * base
+    }
+  }
+  result
+}
+
+/** `value` times 2 to the power of `exponent`, from -2044 to 2046, exact wherever the product is a `Float64`. */
+fn scaled(value: Float64, exponent: Int): Float64 {
+  if exponent < -1022 || exponent > 1023 {
+    const half = exponent / 2
+    return value * powerOfTwo(half) * powerOfTwo(exponent - half)
+  }
+  value * powerOfTwo(exponent)
+}

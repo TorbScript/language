@@ -1,0 +1,919 @@
+/**
+ * `torb debug --debuggee`: the process a debug session's program runs in (docs/design/DEBUGGER.md sections 2 and 3). The
+ * adapter starts it, hands it the requests of the Debug Adapter Protocol one JSON text per line on standard input, and
+ * reads its answers on standard output, each one behind U+001E, between what the program itself prints.
+ *
+ * It answers every request that needs the program: `launch` checks, lowers and encodes it for the debugger, and after
+ * `configurationDone` it runs in the VM with a [Debugger] - `setBreakpoints` against the line table, `stackTrace`,
+ * `scopes`, `variables` and `evaluate` over the registers of the stopped program, the steps and a pause through the
+ * VM's hooks (`vm/debug.trb`). The process ends as the program does, with its exit code; a panic ends it as it would
+ * any run, after the debugger stopped at it.
+ *
+ * **A request waits for a stop where it needs one.** While the program runs, the debuggee reads what arrived every
+ * thousand statements: a pause, breakpoints and `threads` are answered at once, and the first request that needs a
+ * stopped program - `stackTrace`, `continue` - waits with everything after it until the program stops. A client never
+ * sends one while it runs; a session written down in advance (`tests/debug/`) does, and is answered in its order.
+ */
+
+use JsonValue from "std/json"
+use Machine from "std/machine"
+use Process from "std/process"
+use textOf from "std/stream"
+use ArrayList from "std/collections"
+use IrProgram, IrFunction, IrType, IrTypeId, SlotRole from "../ir/ir"
+use LayoutKind from "../ir/layout"
+use emittedFunctionsOf from "../backend/c/emit"
+use BytecodeProgram, Chunk, KernelOperation from "../backend/bytecode/format"
+use normalizePath, pathName from "../project/path"
+use memberAt, textAt, integerAt, booleanAt, itemsAt, object, integer, text, array, encoded, decoded from "../language-server/json"
+use Registers, runProgram from "../vm/interpret"
+use Debugger, StopEvent, Stepping, StackFrame, beginStep, framesOf, codeStartsOf, registerWord, lineKeysOf from "../vm/debug"
+use DebugKernel, debugKernel, ensureDebugWords, debugOperate from "../vm/debug"
+use PreparedRun, prepareRun from "../vm/run"
+use Inspector, Value, inspectorOf, showValue, typeNameOf, hasChildren, childrenOf, childCountOf, isIndexed from "./values"
+use wordsAt from "./values"
+use parseWatch, evaluateWatch from "./evaluate"
+
+/** What the adapter hands on once its own input has ended: nothing more comes. */
+const endOfInput = "torbscript/endOfInput"
+
+/** The exit code of a debuggee whose program could not be launched: what `torb run` answers for a refused program. */
+const refusedCode = 1
+
+/**
+ * Whether the arguments behind `torb debug --debuggee` are ones it takes: pairs of `--filter <name>` and `--report
+ * json`, which the test runner of `runtime/test.c` reads off the process's command line (docs/design/DEBUGGER.md
+ * section 16).
+ */
+public fn isDebuggeeArguments(arguments: List<String>): Bool {
+  var index = 0
+  while index < arguments.length() {
+    const option = arguments[index]
+    const value = arguments.get(index + 1)
+    if option == "--filter" && value.isSome() {
+      index = index + 2
+    } else if option == "--report" && value == Some("json") {
+      index = index + 2
+    } else {
+      return false
+    }
+  }
+  true
+}
+
+// --- The channel ----------------------------------------------------------------------------------------------------
+
+/** The next request of the adapter, waiting for it; `None` where standard input ended - the adapter is gone. */
+fn receive(kernel: DebugKernel): JsonValue? {
+  loop {
+    const length = debugOperate kernel, KernelOperation.DebugRead, []
+    if length < 0 {
+      return None
+    }
+    ensureDebugWords(kernel, length + 4)
+    const count = debugOperate kernel, KernelOperation.DebugTake, [0]
+    var bytes: List<UInt8> = []
+    for index in 0..count {
+      bytes.append(UInt8.tryFrom(kernel.words[index]).ok() ?? 63)
+    }
+    if const Ok(line) = textOf(bytes) {
+      if const Some(request) = decoded(line) {
+        return request
+      }
+    }
+  }
+}
+
+/** Whether a request arrived, or standard input ended, without waiting. */
+fn hasPending(kernel: DebugKernel): Bool {
+  debugOperate(kernel, KernelOperation.DebugPending, []) != 0
+}
+
+/** One answer to the adapter, after everything the program printed: U+001E, the JSON, a line feed, flushed. */
+fn send(kernel: DebugKernel, message: JsonValue) {
+  print "\u{1E}{encoded(message)}"
+  const _ = debugOperate kernel, KernelOperation.DebugFlush, []
+}
+
+/** The response to `request`: `success` and its `body`. The adapter numbers every message it sends on. */
+fn response(request: JsonValue, body: JsonValue): JsonValue {
+  object([
+    ("seq", integer(0)),
+    ("type", text("response")),
+    ("request_seq", integer(integerAt(request, ["seq"]) ?? 0)),
+    ("success", JsonValue.Bool(true)),
+    ("command", text(textAt(request, ["command"]) ?? "")),
+    ("body", body),
+  ])
+}
+
+/** A response that refuses `request`, with the message a person reads. */
+fn refusal(request: JsonValue, message: String): JsonValue {
+  object([
+    ("seq", integer(0)),
+    ("type", text("response")),
+    ("request_seq", integer(integerAt(request, ["seq"]) ?? 0)),
+    ("success", JsonValue.Bool(false)),
+    ("command", text(textAt(request, ["command"]) ?? "")),
+    ("message", text(message)),
+    ("body", object([("error", object([("id", integer(1)), ("format", text(message))]))])),
+  ])
+}
+
+/** An event of the protocol. */
+fn event(name: String, body: JsonValue): JsonValue {
+  object([("seq", integer(0)), ("type", text("event")), ("event", text(name)), ("body", body)])
+}
+
+fn emptyBody(): JsonValue {
+  object([])
+}
+
+// --- The session ----------------------------------------------------------------------------------------------------
+
+/** What `variables` answers for a reference: the locals of a frame, or the children of a value. */
+type Referenced {
+  case Locals(frame: Int)
+  case Children(value: Value)
+}
+
+/** One file of the program: its path on this machine, and the path a location of the IR names it by. */
+type SourceFile {
+  absolute: String
+  stable: String
+}
+
+/** The state of one debugged run: the program, its debugger, and what the last stop answered. */
+shared type Session {
+  kernel: DebugKernel
+  program: BytecodeProgram
+  ir: IrProgram
+  /** By chunk: the function it was emitted from, where it has one. */
+  functions: List<IrFunction>
+  /** By chunk: the name a frame of it is shown with. */
+  frameNames: List<String>
+  /** The files of the program, by the path a location names; the spelling of a path the client sent, by its key. */
+  files: Map<String, SourceFile>
+  var spellings: Map<String, String> = [:]
+  /** The stable path of a file by its key: its absolute path in lower case with forward slashes. */
+  byKey: Map<String, String>
+  codeStarts: List<Int>
+  inspector: Inspector
+  var debugger: Debugger? = None
+  var registers: Registers? = None
+  /** The code offsets of the breakpoints of each file, by its stable path. */
+  var breakpoints: Map<String, Set<Int>> = [:]
+  var frames: List<StackFrame> = []
+  var references: List<Referenced> = []
+  /** The requests that wait for the program to stop, in the order they came. */
+  var deferred: List<JsonValue> = []
+  var stopsOnPanics: Bool = true
+  var justMyCode: Bool = true
+  var panicMessage: String = ""
+  /** The adapter said that nothing more comes (`torbscript/endOfInput`): the program runs to its end without stopping. */
+  var inputEnded: Bool = false
+}
+
+/** The key two spellings of one path share: forward slashes, lower case. */
+fn keyOf(path: String): String {
+  normalizePath(path.replace("\\", "/")).toLowerCase()
+}
+
+/**
+ * The debuggee, from its first request to its program's end. Answers the exit code: the program's, or [refusedCode]
+ * where it could not be launched.
+ */
+public fn runDebuggee(): Int {
+  const kernel = debugKernel()
+  // Nothing but `launch` makes sense before the program exists
+  var launch = object([])
+  loop {
+    const request = match receive(kernel) {
+      Some(found) => found
+      None => {
+        return 0
+      }
+    }
+    const command = textAt(request, ["command"]) ?? ""
+    if command == "launch" {
+      launch = request
+      break
+    }
+    if command == "disconnect" || command == "terminate" {
+      send kernel, response(request, emptyBody())
+      return 0
+    }
+    send kernel, refusal(request, "`{command}` needs a program: `launch` first")
+  }
+  const arguments = memberAt(launch, ["arguments"]) ?? object([])
+  if const Some(directory) = textAt(arguments, ["cwd"]) {
+    if !directory.isEmpty() && !changeDirectory(kernel, directory) {
+      send kernel, refusal(launch, "The working directory `{directory}` cannot be entered")
+      return refusedCode
+    }
+  }
+  if const Some(.Object(variables)) = memberAt(arguments, ["env"]) {
+    for (name, value) in variables {
+      if const .String(written) = value {
+        setVariable kernel, name, written
+      }
+    }
+  }
+  const test = textAt(arguments, ["test"]) ?? ""
+  const isTestRun = !test.isEmpty()
+  const path = if isTestRun { test } else { textAt(arguments, ["program"]) ?? "" }
+  if path.isEmpty() {
+    send kernel, refusal(launch, "A launch names a `program` to run or a `test` file or directory")
+    return refusedCode
+  }
+  const debugging = !(booleanAt(arguments, ["noDebug"]) ?? false)
+  const prepared = match prepareRun(path, "", isTestRun, debugging) {
+    Ok(Some(found)) => found
+    Ok(None) => {
+      send kernel, refusal(launch, "`{path}` could not be run: what is wrong with it is in the output")
+      return refusedCode
+    }
+    Fail(problem) => {
+      printError "error: {problem}"
+      send kernel, refusal(launch, "`{path}` could not be read: {problem}")
+      return refusedCode
+    }
+  }
+  var programArguments: List<String> = []
+  for item in itemsAt(arguments, ["args"]) {
+    if const .String(written) = item {
+      programArguments.append written
+    }
+  }
+  send kernel, response(launch, emptyBody())
+  send kernel, event("initialized", emptyBody())
+  const session = sessionOf kernel, prepared
+  session.justMyCode = booleanAt(arguments, ["justMyCode"]) ?? true
+  if !debugging {
+    configure session
+    return runProgram prepared.lowered.program, programArguments, prepared.executable, prepared.loader, prepared.pool
+  }
+  const debugger = Debugger(
+    stop: { stopped => stopAt session, stopped },
+    poll: { pollChannel session },
+    panicked: { stopAtPanic session },
+  )
+  debugger.stopsOnEntry = booleanAt(arguments, ["stopOnEntry"]) ?? false
+  debugger.lineKeys = lineKeysOf prepared.lowered.program
+  debugger.skipped = skippedOf session, prepared.lowered.program
+  session.debugger = debugger
+  configure session
+  applyBreakpoints session
+  panicsWanted session
+  const ended = runProgram(
+    prepared.lowered.program,
+    programArguments,
+    prepared.executable,
+    prepared.loader,
+    prepared.pool,
+    debugger: debugger,
+    onStart: { registers => session.registers = registers },
+  )
+  for request in session.deferred {
+    if textAt(request, ["command"]) != Some(endOfInput) {
+      send session.kernel, refusal(request, "The program ended")
+    }
+  }
+  ended
+}
+
+/** The working directory of the program: `DebugDirectory`. */
+fn changeDirectory(kernel: DebugKernel, directory: String): Bool {
+  ensureDebugWords kernel, 4
+  Machine.placeText kernel.words, 0, directory
+  debugOperate(kernel, KernelOperation.DebugDirectory, [0]) == 0
+}
+
+/** An environment variable of the program: `DebugVariable`. */
+fn setVariable(kernel: DebugKernel, name: String, value: String) {
+  ensureDebugWords kernel, 6
+  Machine.placeText kernel.words, 0, name
+  Machine.placeText kernel.words, 2, value
+  const _ = debugOperate kernel, KernelOperation.DebugVariable, [0, 2]
+}
+
+/** A session over a prepared program: its functions by chunk, the names of its frames and its files. */
+fn sessionOf(kernel: DebugKernel, prepared: PreparedRun): Session {
+  const ir = prepared.lowered.ir
+  const program = prepared.lowered.program
+  const functions = emittedFunctionsOf ir
+  var names: Map<Int, String> = [:]
+  const symbols = prepared.checked.checker.program.symbols
+  for index in 0..symbols.all.length() {
+    names.set index, symbols.all[index].name
+  }
+  var files: Map<String, SourceFile> = [:]
+  var byKey: Map<String, String> = [:]
+  for (absolute, stable) in prepared.files {
+    files.set stable, SourceFile(absolute, stable)
+    byKey.set keyOf(absolute), stable
+  }
+  const inspector = inspectorOf ir, names
+  var frameNames: List<String> = []
+  for index in 0..program.chunks.length() {
+    frameNames.append frameNameOf(inspector, functions, names, program, index)
+  }
+  Session(
+    kernel: kernel,
+    program: program,
+    ir: ir,
+    functions: functions,
+    frameNames: frameNames,
+    files: files,
+    byKey: byKey,
+    codeStarts: codeStartsOf(program),
+    inspector: inspector,
+  )
+}
+
+/**
+ * The name a frame of a chunk is shown with: its declaration's, a method's with its type in front (`Point.area`),
+ * `closure` for a closure's body and the file's name for the top-level code of an entry or a test file.
+ */
+fn frameNameOf(
+  inspector: Inspector,
+  functions: List<IrFunction>,
+  names: Map<Int, String>,
+  program: BytecodeProgram,
+  chunk: Int,
+): String {
+  const function = match functions.get(chunk) {
+    Some(found) => found
+    None => {
+      return program.chunks[chunk].name
+    }
+  }
+  if const Some(symbol) = function.origin {
+    const name = names.get(symbol.value) ?? function.name
+    if const Some(first) = function.signature.parameters.first() {
+      if first.name == "self" {
+        return "{typeNameOf(inspector, first.annotation)}.{name}"
+      }
+    }
+    return name
+  }
+  const label = function.blocks.first()?.label ?? ""
+  if label == "entry" {
+    const location = program.chunks[chunk].location
+    return match program.locations.get(location) {
+      Some(found) => pathName found.path
+      None => "top level"
+    }
+  }
+  if label.isEmpty() { "closure" } else { label }
+}
+
+/** By location: whether a step passes over it without stopping - with `justMyCode`, a file of the standard library. */
+fn skippedOf(session: Session, program: BytecodeProgram): List<Bool> {
+  var found: List<Bool> = []
+  for location in program.locations {
+    found.append(session.justMyCode && isLibrary(location.path))
+  }
+  found
+}
+
+/** Whether a file, by the path a location names it by, is one of the standard library's. */
+fn isLibrary(stable: String): Bool {
+  stable.startsWith "std/"
+}
+
+// --- Before the run -------------------------------------------------------------------------------------------------
+
+/** The requests between `launch` and `configurationDone`: breakpoints, the exception filter, `threads`. */
+fn configure(session: Session) {
+  loop {
+    const request = match receive(session.kernel) {
+      Some(found) => found
+      None => Process.exit 0
+    }
+    const command = textAt(request, ["command"]) ?? ""
+    if command == "configurationDone" {
+      send session.kernel, response(request, emptyBody())
+      return
+    }
+    if command == endOfInput {
+      Process.exit 0
+    }
+    if !answerAnyTime(session, request) {
+      send session.kernel, refusal(request, "`{command}` needs a stopped program, and it has not started yet")
+    }
+  }
+}
+
+/**
+ * A request that is answered whether the program runs or stands: `threads`, `setBreakpoints`,
+ * `setExceptionBreakpoints`, `pause`, `disconnect` and `terminate`. False for every other one.
+ */
+fn answerAnyTime(session: Session, request: JsonValue): Bool {
+  const command = textAt(request, ["command"]) ?? ""
+  match command {
+    "threads" => {
+      const thread = object([("id", integer(1)), ("name", text("main"))])
+      send session.kernel, response(request, object([("threads", array([thread]))]))
+      true
+    }
+    "setBreakpoints" => {
+      const answered = setBreakpoints session, request
+      send session.kernel, response(request, object([("breakpoints", array(answered))]))
+      true
+    }
+    "setExceptionBreakpoints" => {
+      var wanted = false
+      for filter in itemsAt(request, ["arguments", "filters"]) {
+        if const .String(name) = filter {
+          wanted = wanted || name == "panic"
+        }
+      }
+      session.stopsOnPanics = wanted
+      panicsWanted session
+      send session.kernel, response(request, emptyBody())
+      true
+    }
+    "pause" => {
+      if const Some(debugger) = session.debugger {
+        debugger.pauseRequested = true
+      }
+      send session.kernel, response(request, emptyBody())
+      true
+    }
+    "disconnect" => {
+      send session.kernel, response(request, emptyBody())
+      Process.exit 0
+    }
+    "terminate" => {
+      send session.kernel, response(request, emptyBody())
+      Process.exit 0
+    }
+    "configurationDone" => {
+      send session.kernel, response(request, emptyBody())
+      true
+    }
+    _ => false
+  }
+}
+
+/** Whether a run stops before a panic: the kernel's hook, installed or removed (`DebugPanics`). */
+fn panicsWanted(session: Session) {
+  if session.debugger.isNone() {
+    return
+  }
+  const flag = if session.stopsOnPanics { 1 } else { 0 }
+  const _ = debugOperate session.kernel, KernelOperation.DebugPanics, [flag]
+}
+
+// --- Breakpoints ----------------------------------------------------------------------------------------------------
+
+/**
+ * `setBreakpoints`: every line of the file bound to the first statement of it in each chunk that has one, or of the next
+ * line that has one (docs/design/DEBUGGER.md section 7). Answers the breakpoints as the protocol says them: verified
+ * with the line they bound to, or not, with why.
+ */
+fn setBreakpoints(session: Session, request: JsonValue): List<JsonValue> {
+  const written = textAt(request, ["arguments", "source", "path"]) ?? ""
+  const key = keyOf written
+  session.spellings.set key, written
+  var lines: List<Int> = []
+  for breakpoint in itemsAt(request, ["arguments", "breakpoints"]) {
+    lines.append(integerAt(breakpoint, ["line"]) ?? 0)
+  }
+  const stable = match session.byKey.get(key) {
+    Some(found) => found
+    None => {
+      var refused: List<JsonValue> = []
+      for line in lines {
+        const message = text "This file is not part of the program that runs"
+        refused.append object([("verified", JsonValue.Bool(false)), ("line", integer(line)), ("message", message)])
+      }
+      return refused
+    }
+  }
+  // Every statement of the file: its line, its chunk and its offset
+  var statements: List<(Int, Int, Int)> = []
+  for chunk in 0..session.program.chunks.length() {
+    const entries = session.program.chunks[chunk].statements
+    for entry in entries {
+      if const Some(location) = session.program.locations.get(entry.location) {
+        if location.path == stable {
+          statements.append((location.line, chunk, entry.offset))
+        }
+      }
+    }
+  }
+  var offsets: Set<Int> = []
+  var answered: List<JsonValue> = []
+  for line in lines {
+    // The line itself, or the first line after it that has a statement
+    var bound = 0 - 1
+    for (at, _, _) in statements {
+      if at >= line && (bound < 0 || at < bound) {
+        bound = at
+      }
+    }
+    if bound < 0 {
+      const message = text "There is no statement on this line or after it"
+      answered.append object([("verified", JsonValue.Bool(false)), ("line", integer(line)), ("message", message)])
+      continue
+    }
+    // The first statement of the line in each chunk
+    var firsts: Map<Int, Int> = [:]
+    for (at, chunk, offset) in statements {
+      if at == bound {
+        const known = firsts.get(chunk) ?? offset
+        firsts.set chunk, known.min(offset)
+      }
+    }
+    for (chunk, offset) in firsts {
+      offsets.insert(session.codeStarts[chunk] + offset)
+    }
+    answered.append object([("verified", JsonValue.Bool(true)), ("line", integer(bound))])
+  }
+  session.breakpoints.set stable, offsets
+  applyBreakpoints session
+  answered
+}
+
+/** The breakpoints of every file, as the one set of code offsets the VM tests a statement against. */
+fn applyBreakpoints(session: Session) {
+  const debugger = match session.debugger {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  var all: Set<Int> = []
+  for (_, offsets) in session.breakpoints {
+    for offset in offsets {
+      all.insert offset
+    }
+  }
+  debugger.breakpoints = all
+}
+
+// --- While the program runs -----------------------------------------------------------------------------------------
+
+/**
+ * What arrived while the program ran, every thousand statements: answered in order, until the first request that needs
+ * a stopped program - it waits, with everything after it, but a pause, `disconnect` and `terminate` are acted on.
+ */
+fn pollChannel(session: Session) {
+  while hasPending(session.kernel) {
+    const request = match receive(session.kernel) {
+      Some(found) => found
+      None => Process.exit 0
+    }
+    const command = textAt(request, ["command"]) ?? ""
+    const jumpsTheQueue = command == "pause" || command == "disconnect" || command == "terminate"
+    if !session.deferred.isEmpty() && !jumpsTheQueue {
+      session.deferred.append request
+      continue
+    }
+    if command == endOfInput {
+      runToTheEnd session
+      return
+    }
+    if !answerAnyTime(session, request) {
+      session.deferred.append request
+    }
+  }
+}
+
+/**
+ * Nothing more comes from the adapter: the breakpoints are gone, a panic no longer stops, and the program runs to its
+ * end as if nobody debugged it.
+ */
+fn runToTheEnd(session: Session) {
+  session.inputEnded = true
+  session.stopsOnPanics = false
+  panicsWanted session
+  if const Some(debugger) = session.debugger {
+    debugger.breakpoints = []
+    debugger.stepping = Stepping.Running
+    debugger.pauseRequested = false
+  }
+}
+
+// --- A stop ---------------------------------------------------------------------------------------------------------
+
+/** A panic is about to end the program or its test: the program stops with its message. */
+fn stopAtPanic(session: Session) {
+  ensureDebugWords session.kernel, 1500
+  const count = debugOperate session.kernel, KernelOperation.DebugPanicMessage, [0]
+  var bytes: List<UInt8> = []
+  for index in 0..count {
+    bytes.append(UInt8.tryFrom(session.kernel.words[index]).ok() ?? 63)
+  }
+  session.panicMessage = textOf(bytes).ok() ?? "a panic"
+  stopAt session, StopEvent("exception", session.panicMessage)
+}
+
+/**
+ * The program stopped: the frames are read, the `stopped` event goes out, and requests are answered - the ones that
+ * waited first - until one of them lets the program go on.
+ */
+fn stopAt(session: Session, stopped: StopEvent) {
+  const debugger = match session.debugger {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const registers = match session.registers {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if session.inputEnded {
+    return
+  }
+  var frames: List<StackFrame> = []
+  for frame in framesOf(debugger, registers) {
+    if frame.statement >= 0 {
+      frames.append frame
+    }
+  }
+  session.frames = frames
+  session.references = []
+  var body = [("reason", text(stopped.reason)), ("threadId", integer(1)), ("allThreadsStopped", JsonValue.Bool(true))]
+  if !stopped.description.isEmpty() {
+    body.append(("description", text(if stopped.reason == "exception" { "Panic" } else { stopped.description })))
+    body.append(("text", text(stopped.description)))
+  }
+  send session.kernel, event("stopped", object(body))
+  var waiting = session.deferred
+  session.deferred = []
+  loop {
+    const request = if !waiting.isEmpty() {
+      waiting.removeAt(0) ?? object([])
+    } else {
+      match receive(session.kernel) {
+        Some(found) => found
+        None => Process.exit 0
+      }
+    }
+    if textAt(request, ["command"]) == Some(endOfInput) {
+      runToTheEnd session
+      return
+    }
+    if answerStopped(session, debugger, registers, request) {
+      session.deferred = waiting
+      return
+    }
+  }
+}
+
+/** One request while the program stands. Answers whether it goes on. */
+fn answerStopped(session: Session, debugger: Debugger, registers: Registers, request: JsonValue): Bool {
+  const command = textAt(request, ["command"]) ?? ""
+  match command {
+    "continue" => {
+      send session.kernel, response(request, object([("allThreadsContinued", JsonValue.Bool(true))]))
+      debugger.stepping = Stepping.Running
+      true
+    }
+    "next" => {
+      send session.kernel, response(request, emptyBody())
+      beginStep debugger, session.program, registers, Stepping.Over
+      true
+    }
+    "stepIn" => {
+      send session.kernel, response(request, emptyBody())
+      beginStep debugger, session.program, registers, Stepping.In
+      true
+    }
+    "stepOut" => {
+      send session.kernel, response(request, emptyBody())
+      beginStep debugger, session.program, registers, Stepping.Out
+      true
+    }
+    "stackTrace" => {
+      send session.kernel, response(request, stackTraceOf(session, request))
+      false
+    }
+    "scopes" => {
+      const frame = (integerAt(request, ["arguments", "frameId"]) ?? 1) - 1
+      if frame < 0 || frame >= session.frames.length() {
+        send session.kernel, refusal(request, "There is no frame {frame + 1}")
+        return false
+      }
+      session.references.append Referenced.Locals(frame)
+      const locals = object([
+        ("name", text("Locals")),
+        ("presentationHint", text("locals")),
+        ("variablesReference", integer(session.references.length())),
+        ("expensive", JsonValue.Bool(false)),
+      ])
+      send session.kernel, response(request, object([("scopes", array([locals]))]))
+      false
+    }
+    "variables" => {
+      send session.kernel, response(request, variablesOf(session, registers, request))
+      false
+    }
+    "evaluate" => {
+      match evaluationOf(session, registers, request) {
+        Ok(body) => send session.kernel, response(request, body)
+        Fail(message) => send session.kernel, refusal(request, message)
+      }
+      false
+    }
+    "exceptionInfo" => {
+      const body = object([
+        ("exceptionId", text("panic")),
+        ("description", text(session.panicMessage)),
+        ("breakMode", text("always")),
+      ])
+      send session.kernel, response(request, body)
+      false
+    }
+    _ => {
+      if !answerAnyTime(session, request) {
+        send session.kernel, refusal(request, "`{command}` is not answered by the TorbScript debugger")
+      }
+      false
+    }
+  }
+}
+
+// --- Frames and variables -------------------------------------------------------------------------------------------
+
+/** `stackTrace`: the frames of the stop, innermost first, from `startFrame` on, at most `levels` of them. */
+fn stackTraceOf(session: Session, request: JsonValue): JsonValue {
+  const start = integerAt(request, ["arguments", "startFrame"]) ?? 0
+  const levels = integerAt(request, ["arguments", "levels"]) ?? 0
+  const end = if levels > 0 { (start + levels).min(session.frames.length()) } else { session.frames.length() }
+  var shown: List<JsonValue> = []
+  for index in start..end {
+    const frame = session.frames[index]
+    const entry = session.program.chunks[frame.chunk].statements[frame.statement]
+    var fields = [("id", integer(index + 1)), ("name", text(session.frameNames.get(frame.chunk) ?? "?"))]
+    var line = 0
+    var column = 0
+    if const Some(location) = session.program.locations.get(entry.location) {
+      line = location.line
+      column = location.column
+      fields.append(("source", sourceOf(session, location.path)))
+      if isLibrary(location.path) {
+        fields.append(("presentationHint", text("subtle")))
+      }
+    }
+    fields.append(("line", integer(line)))
+    fields.append(("column", integer(column)))
+    shown.append object(fields)
+  }
+  object([("stackFrames", array(shown)), ("totalFrames", integer(session.frames.length()))])
+}
+
+/** The `source` of a frame: the file's name, and its path as the client spells it where it sent one. */
+fn sourceOf(session: Session, stable: String): JsonValue {
+  const absolute = match session.files.get(stable) {
+    Some(found) => found.absolute
+    None => stable
+  }
+  const path = session.spellings.get(keyOf(absolute)) ?? absolute
+  var fields = [("name", text(pathName(stable))), ("path", text(path))]
+  if isLibrary(stable) {
+    fields.append(("presentationHint", text("deemphasize")))
+  }
+  object fields
+}
+
+/**
+ * The bindings a frame shows, in declaration order: its parameters, then the captures and bindings of its statement's
+ * `visible` list (docs/design/DEBUGGER.md section 10). A later binding of a name hides an earlier one.
+ */
+fn localsOf(session: Session, registers: Registers, frame: StackFrame): List<(String, Value)> {
+  const function = match session.functions.get(frame.chunk) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const chunk = session.program.chunks[frame.chunk]
+  var slots: List<Int> = []
+  for index in 0..function.slots.length() {
+    if const .Parameter(_) = function.slots[index].role {
+      slots.append index
+    }
+  }
+  if const Some(entry) = chunk.statements.get(frame.statement) {
+    slots.appendAll entry.visible
+  }
+  var found: List<(String, Value)> = []
+  for slot in slots {
+    const declared = match function.slots.get(slot) {
+      Some(known) => known
+      None => {
+        continue
+      }
+    }
+    if declared.name.isEmpty() || isEnvironment(session.ir, declared.annotation) {
+      continue
+    }
+    const place = match chunk.slots.get(slot) {
+      Some(known) => known
+      None => {
+        continue
+      }
+    }
+    var words: List<Int> = []
+    if place.description.startsWith("&") {
+      // A `var` parameter holds the address of what it names
+      const address = registerWord(registers, frame.base + place.offset)
+      words = if address == 0 { [] } else { wordsAt address, session.inspector.tables.widthOf(declared.annotation) }
+    } else {
+      for offset in 0..place.width {
+        words.append registerWord(registers, frame.base + place.offset + offset)
+      }
+    }
+    const value = Value declared.annotation, words
+    var replaced = false
+    for index in 0..found.length() {
+      if found[index].0 == declared.name {
+        found.set index, (declared.name, value)
+        replaced = true
+      }
+    }
+    if !replaced {
+      found.append((declared.name, value))
+    }
+  }
+  found
+}
+
+/** Whether a type is a closure's environment, which the body reads its captures out of and a person never sees. */
+fn isEnvironment(ir: IrProgram, annotation: IrTypeId): Bool {
+  if const .Record(layout) = ir.typeAt(annotation) {
+    return ir.layoutAt(layout).kind == LayoutKind.Environment
+  }
+  false
+}
+
+/** One variable as the protocol shows it, with a reference of its own where it has children. */
+fn variableOf(session: Session, name: String, value: Value): JsonValue {
+  const inspector = session.inspector
+  const shown = showValue inspector, value
+  var fields = [("name", text(name)), ("value", text(shown)), ("type", text(typeNameOf(inspector, value.annotation)))]
+  var reference = 0
+  if hasChildren(inspector, value) {
+    session.references.append Referenced.Children(value)
+    reference = session.references.length()
+    if isIndexed(inspector, value) {
+      fields.append(("indexedVariables", integer(childCountOf(inspector, value))))
+    }
+  }
+  fields.append(("variablesReference", integer(reference)))
+  object fields
+}
+
+/** `variables`: the locals of a frame, or the children of a value from `start` on, at most `count` of them. */
+fn variablesOf(session: Session, registers: Registers, request: JsonValue): JsonValue {
+  const reference = (integerAt(request, ["arguments", "variablesReference"]) ?? 0) - 1
+  const start = integerAt(request, ["arguments", "start"]) ?? 0
+  const count = integerAt(request, ["arguments", "count"]) ?? 0
+  var shown: List<JsonValue> = []
+  match session.references.get(reference) {
+    Some(.Locals(frame)) => {
+      for (name, value) in localsOf(session, registers, session.frames[frame]) {
+        shown.append variableOf(session, name, value)
+      }
+    }
+    Some(.Children(value)) => {
+      const inspector = session.inspector
+      // A list's items are indexed, and an editor that pages them asks for its named children apart: there are none
+      if textAt(request, ["arguments", "filter"]) == Some("named") && isIndexed(inspector, value) {
+        return object([("variables", array([]))])
+      }
+      const total = childCountOf inspector, value
+      const taken = if count > 0 { count } else { total - start }
+      const children = childrenOf inspector, value, start, taken
+      for (name, child) in children {
+        shown.append variableOf(session, name, child)
+      }
+    }
+    None => {}
+  }
+  object([("variables", array(shown))])
+}
+
+/** `evaluate`: an expression over the frame it names (docs/design/DEBUGGER.md section 12), or why it is not answered. */
+fn evaluationOf(session: Session, registers: Registers, request: JsonValue): Result<JsonValue, String> {
+  const expression = textAt(request, ["arguments", "expression"]) ?? ""
+  const frame = (integerAt(request, ["arguments", "frameId"]) ?? 1) - 1
+  if frame < 0 || frame >= session.frames.length() {
+    return Fail "There is no frame to evaluate `{expression}` in"
+  }
+  const watch = parseWatch(expression)?
+  const locals = localsOf session, registers, session.frames[frame]
+  const found = evaluateWatch(session.inspector, locals, watch)?
+  const variable = variableOf session, expression, found
+  const result = textAt(variable, ["value"]) ?? ""
+  const shownType = textAt(variable, ["type"]) ?? ""
+  const reference = integerAt(variable, ["variablesReference"]) ?? 0
+  Ok object([("result", text(result)), ("type", text(shownType)), ("variablesReference", integer(reference))])
+}

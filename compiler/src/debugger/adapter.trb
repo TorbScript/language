@@ -1,0 +1,516 @@
+/**
+ * `torb debug`: the debug adapter of docs/design/DEBUGGER.md, over standard input and standard output, the transport of
+ * every editor that speaks the Debug Adapter Protocol - VS Code, Neovim, Emacs, Helix, Zed, the JetBrains IDEs.
+ *
+ * ```text
+ * torb debug
+ * ```
+ *
+ * **It is a relay.** It answers `initialize` itself, starts the program's process on `launch` - `torb debug
+ * --debuggee`, the debuggee of `./debuggee.trb`, with the program's own standard output and error as pipes - and hands
+ * every request to it as one line of JSON. What the debuggee writes to its standard output is the program's output and
+ * the debuggee's answers, each one behind U+001E: an answer goes on to the editor, renumbered, and everything else
+ * becomes an `output` event, as does all of standard error. When the debuggee ends, the editor hears `exited` with its
+ * exit code and `terminated`.
+ *
+ * **It is a task**, as `torb lsp` is (docs/design/LANGUAGE-SERVER.md section 2): standard input, the pipes and the wait
+ * for the debuggee are reads of the blocking pool, so every one of them is a task of its own, and one writer task owns
+ * standard output, so two messages never interleave. The top level of `torb` does not wait for any of them; the writer
+ * ends the process.
+ */
+
+use standardInput, standardOutput from "std/io"
+use Process, Child from "std/process"
+use Environment from "std/os"
+use Channel, ChannelSink from "std/task"
+use JsonValue from "std/json"
+use textOf from "std/stream"
+use ArrayList from "std/collections"
+use FrameReader, framed from "../language-server/protocol"
+use memberAt, textAt, integerAt, itemsAt, object, integer, text, array, encoded, decoded from "../language-server/json"
+
+/** `torb debug --help` */
+public fn debugAdapterUsage(): String {
+  const lines = [
+    "torb debug - the debugger, over standard input and standard output (the Debug Adapter Protocol)",
+    "",
+    "Usage:",
+    "  torb debug",
+    "",
+    "An editor starts it and speaks the Debug Adapter Protocol to it. A `launch` names what runs:",
+    "  program      a file or a directory, as `torb run` takes it; `args` are its arguments",
+    "  test         a test file or a directory, as `torb test` takes it; `filter` names tests",
+    "  cwd, env     the working directory and environment variables of the program",
+    "  stopOnEntry  stop at the first statement; justMyCode: steps skip the standard library",
+    "",
+    "The program runs in the VM, in a process of its own (`torb debug --debuggee`); what it prints arrives as output.",
+  ]
+  lines.joined separator: "\n"
+}
+
+/** The state of the adapter, shared by the task that reads the editor and the tasks that read the debuggee. */
+shared type Adapter {
+  outgoing: Channel<JsonValue>
+  /**
+   * The one writing end of `outgoing`, made once: a `ChannelSink` is a `Close` object whose `close()` ends the stream, so
+   * a sink made per message would end it after the first one.
+   */
+  var sink: ChannelSink<JsonValue>
+  var child: Child? = None
+  /** A launch with `report: "json"`: lines of the test report are events, not output. */
+  var reportsTests: Bool = false
+  /** The editor asked to end the session: once the debuggee has ended, so does the adapter. */
+  var disconnecting: Bool = false
+  var terminated: Bool = false
+  /** `TORB_DEBUG_TRACE`: what the adapter does goes to standard error, a line per message and per step. */
+  tracing: Bool = false
+}
+
+/** One line of the trace, where `TORB_DEBUG_TRACE` asked for it. */
+fn trace(adapter: Adapter, what: String) {
+  if adapter.tracing {
+    printError "torb debug: {what}"
+  }
+}
+
+/**
+ * Starts the adapter. It runs as tasks once `torb`'s top level has finished, and it ends the process itself: when the
+ * editor ends the session, or its standard input ends.
+ */
+public fn startDebugAdapter() {
+  const _session = serveAdapter()
+}
+
+/** Reads the editor's messages until the session ends, and answers or forwards each one. */
+fn serveAdapter(): Task<Void> {
+  const tracing = Environment.get("TORB_DEBUG_TRACE").isSome()
+  const outgoing = Channel<JsonValue>(capacity: 4096)
+  const adapter = Adapter outgoing, outgoing.sink(), tracing: tracing
+  const _writer = writeMessages outgoing
+  var reader = FrameReader.empty()
+  var input = standardInput()
+  loop {
+    var bodies: List<String> = []
+    loop {
+      match reader.next() {
+        Ok(Some(body)) => bodies.append body
+        Ok(None) => {
+          break
+        }
+        Fail(problem) => printError "torb debug: {problem.message}"
+      }
+    }
+    for body in bodies {
+      if const Some(request) = decoded(body) {
+        handle(adapter, request).await()
+      }
+    }
+    match input.next().await() {
+      Ok(Some(chunk)) => reader.add chunk
+      _ => {
+        // Nothing more comes: the debuggee hears it after every request before it, lets its program run to its end,
+        // and the adapter ends once it has
+        if const Some(child) = adapter.child {
+          adapter.disconnecting = true
+          var forwarded = child.input()
+          const ended = object([("command", text("torbscript/endOfInput"))])
+          if const Ok(_) = forwarded.addLine(encoded(ended)).await() {
+            if !adapter.terminated {
+              return
+            }
+          }
+        }
+        send(adapter, JsonValue.Null).await()
+        return
+      }
+    }
+  }
+}
+
+/** One message to the editor, in order; `JsonValue.Null` ends the process once everything before it is written. */
+fn send(adapter: Adapter, message: JsonValue): Task<Void> {
+  const _ = adapter.sink.add(message).await()
+}
+
+/** The one writer of standard output: every message numbered and framed, until the one that ends the process. */
+fn writeMessages(outgoing: Channel<JsonValue>): Task<Void> {
+  var source = outgoing.source()
+  var output = standardOutput()
+  var sequence = 0
+  loop {
+    const message = match source.next().await() {
+      Ok(Some(found)) => found
+      _ => Process.exit 0
+    }
+    if const .Object(entries) = message {
+      sequence = sequence + 1
+      var numbered = entries
+      numbered.set "seq", integer(sequence)
+      if const Fail(problem) = output.addText(framed(encoded(JsonValue.Object(numbered)))).await() {
+        printError "torb debug: standard output failed: {problem}"
+        Process.exit 1
+      }
+    } else {
+      Process.exit 0
+    }
+  }
+}
+
+/** The response to a request the adapter answers itself. */
+fn response(request: JsonValue, body: JsonValue): JsonValue {
+  object([
+    ("seq", integer(0)),
+    ("type", text("response")),
+    ("request_seq", integer(integerAt(request, ["seq"]) ?? 0)),
+    ("success", JsonValue.Bool(true)),
+    ("command", text(textAt(request, ["command"]) ?? "")),
+    ("body", body),
+  ])
+}
+
+fn refusal(request: JsonValue, message: String): JsonValue {
+  object([
+    ("seq", integer(0)),
+    ("type", text("response")),
+    ("request_seq", integer(integerAt(request, ["seq"]) ?? 0)),
+    ("success", JsonValue.Bool(false)),
+    ("command", text(textAt(request, ["command"]) ?? "")),
+    ("message", text(message)),
+  ])
+}
+
+fn event(name: String, body: JsonValue): JsonValue {
+  object([("seq", integer(0)), ("type", text("event")), ("event", text(name)), ("body", body)])
+}
+
+/** What the debugger can do, as `initialize` answers it. */
+fn capabilities(): JsonValue {
+  const panics = object([
+    ("filter", text("panic")),
+    ("label", text("Panics")),
+    (
+      "description",
+      text("Stop where a panic begins - a failing `assert` too - before it ends the program or its test"),
+    ),
+    ("default", JsonValue.Bool(true)),
+  ])
+  object([
+    ("supportsConfigurationDoneRequest", JsonValue.Bool(true)),
+    ("supportsEvaluateForHovers", JsonValue.Bool(true)),
+    ("supportsTerminateRequest", JsonValue.Bool(true)),
+    ("supportsExceptionInfoRequest", JsonValue.Bool(true)),
+    ("exceptionBreakpointFilters", array([panics])),
+    ("supportsConditionalBreakpoints", JsonValue.Bool(false)),
+    ("supportsSetVariable", JsonValue.Bool(false)),
+    ("supportsStepBack", JsonValue.Bool(false)),
+    ("supportsLoadedSourcesRequest", JsonValue.Bool(false)),
+  ])
+}
+
+/** One message of the editor: answered here, or handed to the debuggee. */
+fn handle(adapter: Adapter, request: JsonValue): Task<Void> {
+  const command = textAt(request, ["command"]) ?? ""
+  trace adapter, "<- {command}"
+  if command == "initialize" {
+    send(adapter, response(request, capabilities())).await()
+    return
+  }
+  if command == "launch" {
+    launch(adapter, request).await()
+    return
+  }
+  const child = match adapter.child {
+    Some(found) => found
+    None => {
+      if command == "disconnect" || command == "terminate" {
+        send(adapter, response(request, object([]))).await()
+        send(adapter, JsonValue.Null).await()
+        return
+      }
+      send(adapter, refusal(request, "`{command}` needs a program: `launch` first")).await()
+      return
+    }
+  }
+  if command == "disconnect" || command == "terminate" {
+    adapter.disconnecting = true
+    if adapter.terminated {
+      send(adapter, response(request, object([]))).await()
+      send(adapter, JsonValue.Null).await()
+      return
+    }
+  }
+  var input = child.input()
+  if const Fail(_) = input.addLine(encoded(request)).await() {
+    // The debuggee has ended: what is left to answer, the adapter answers
+    if command == "disconnect" || command == "terminate" {
+      send(adapter, response(request, object([]))).await()
+      return
+    }
+    send(adapter, refusal(request, "The program has ended")).await()
+  }
+}
+
+/**
+ * `launch`: the debuggee started - `torb debug --debuggee`, with the filters and the report of a test run on its own
+ * command line, where `runtime/test.c` reads them - its three streams read, and the request handed to it.
+ */
+fn launch(adapter: Adapter, request: JsonValue): Task<Void> {
+  if adapter.child.isSome() {
+    send(adapter, refusal(request, "A session launches one program")).await()
+    return
+  }
+  const arguments = memberAt(request, ["arguments"]) ?? object([])
+  var commandLine = ["debug", "--debuggee"]
+  match memberAt(arguments, ["filter"]) {
+    Some(.String(name)) => commandLine.appendAll(["--filter", name])
+    Some(.Array(names)) => {
+      for name in names {
+        if const .String(written) = name {
+          commandLine.appendAll(["--filter", written])
+        }
+      }
+    }
+    _ => {}
+  }
+  if textAt(arguments, ["report"]) == Some("json") {
+    commandLine.appendAll(["--report", "json"])
+    adapter.reportsTests = true
+  }
+  const executable = Process.executablePath() ?? "torb"
+  trace adapter, "starting {executable} {commandLine.joined(separator: " ")}"
+  const child = match Process.start(executable, commandLine) {
+    Ok(found) => found
+    Fail(problem) => {
+      send(adapter, refusal(request, "The debuggee could not be started: {problem.message}")).await()
+      return
+    }
+  }
+  adapter.child = child
+  trace adapter, "started the debuggee"
+  const reportsTests = adapter.reportsTests
+  const outputs = readOutput adapter, child, reportsTests
+  const errors = readErrors adapter, child
+  const _exit = watchExit adapter, child, outputs, errors
+  var input = child.input()
+  if const Fail(problem) = input.addLine(encoded(request)).await() {
+    send(adapter, refusal(request, "The debuggee could not be reached: {problem.message}")).await()
+  }
+  trace adapter, "handed `launch` to the debuggee"
+}
+
+// --- What the debuggee writes ---------------------------------------------------------------------------------------
+
+/** The record separator in front of every answer of the debuggee. */
+const separator = 30
+
+const lineFeed = 10
+
+/** The debuggee's standard output: its answers go on to the editor, everything else is output of the program. */
+fn readOutput(adapter: Adapter, child: Child, reportsTests: Bool): Task<Void> {
+  var pending: ArrayList<UInt8> = ArrayList.withCapacity 65536
+  var source = child.output()
+  loop {
+    match source.next().await() {
+      Ok(Some(chunk)) => {
+        trace adapter, "the debuggee wrote {chunk.length()} bytes"
+        pending.appendAll chunk
+        pending = drain(adapter, pending, reportsTests, isEnd: false).await()
+      }
+      _ => {
+        const _ = drain(adapter, pending, reportsTests, isEnd: true).await()
+        return
+      }
+    }
+  }
+}
+
+/**
+ * What of `pending` is complete, sent on and taken off: a message from its separator to its line feed, and the output
+ * before it - up to the last whole character, or in a test run with a report the last whole line. `isEnd` sends the
+ * rest as it is. Answers what is left of it.
+ */
+fn drain(adapter: Adapter, pending: ArrayList<UInt8>, reportsTests: Bool, isEnd: Bool): Task<ArrayList<UInt8>> {
+  var start = 0
+  loop {
+    const marker = indexOf pending, start, separator
+    const outputEnd = if marker >= 0 { marker } else { pending.length() }
+    if outputEnd > start {
+      const cut = if marker >= 0 || isEnd {
+        outputEnd
+      } else if reportsTests {
+        lastLineEnd pending, start, outputEnd
+      } else {
+        wholeCharactersEnd pending, start, outputEnd
+      }
+      if cut > start {
+        sendOutput(adapter, bytesBetween(pending, start, cut), "stdout", reportsTests).await()
+        start = cut
+      }
+    }
+    if marker < 0 {
+      break
+    }
+    const end = indexOf(pending, marker + 1, lineFeed)
+    if end < 0 {
+      if isEnd {
+        sendOutput(adapter, bytesBetween(pending, marker, pending.length()), "stdout", reportsTests).await()
+        start = pending.length()
+      }
+      break
+    }
+    const body = bytesBetween(pending, marker + 1, end)
+    const message = match textOf(body) {
+      Ok(found) => decoded found
+      Fail(_) => None
+    }
+    match message {
+      Some(found) => send(adapter, found).await()
+      None => sendOutput(adapter, bytesBetween(pending, marker, end + 1), "stdout", reportsTests).await()
+    }
+    start = end + 1
+  }
+  var rest: ArrayList<UInt8> = ArrayList.withCapacity 65536
+  for index in start..pending.length() {
+    rest.append pending[index]
+  }
+  rest
+}
+
+/** The debuggee's standard error, which is the program's alone: every piece of it output. */
+fn readErrors(adapter: Adapter, child: Child): Task<Void> {
+  var pending: ArrayList<UInt8> = ArrayList.withCapacity 4096
+  var source = child.errors()
+  loop {
+    match source.next().await() {
+      Ok(Some(chunk)) => {
+        pending.appendAll chunk
+        const cut = wholeCharactersEnd pending, 0, pending.length()
+        if cut > 0 {
+          sendOutput(adapter, bytesBetween(pending, 0, cut), "stderr", reportsTests: false).await()
+          var rest: ArrayList<UInt8> = ArrayList.withCapacity 4096
+          for index in cut..pending.length() {
+            rest.append pending[index]
+          }
+          pending = rest
+        }
+      }
+      _ => {
+        if pending.length() > 0 {
+          sendOutput(adapter, bytesBetween(pending, 0, pending.length()), "stderr", reportsTests: false).await()
+        }
+        return
+      }
+    }
+  }
+}
+
+/**
+ * Output of the program as an `output` event. In a test run with a report, a whole line of the report is the event
+ * `torbscript/testReport` instead, which the Test Explorer reads (docs/design/DEBUGGER.md section 17).
+ */
+fn sendOutput(adapter: Adapter, bytes: List<UInt8>, category: String, reportsTests: Bool): Task<Void> {
+  const written = textOf(bytes).ok() ?? ""
+  if written.isEmpty() {
+    return
+  }
+  if !reportsTests {
+    send(adapter, event("output", object([("category", text(category)), ("output", text(written))]))).await()
+    return
+  }
+  var plain: List<String> = []
+  for line in written.split("\n") {
+    if line.startsWith("\{\"event\":") {
+      if const Some(report) = decoded(line) {
+        if !plain.isEmpty() {
+          const joined = plain.joined(separator: "\n") + "\n"
+          send(adapter, event("output", object([("category", text(category)), ("output", text(joined))]))).await()
+          plain = []
+        }
+        send(adapter, event("torbscript/testReport", report)).await()
+        continue
+      }
+    }
+    plain.append line
+  }
+  // `split` leaves an empty last piece behind the last line feed
+  if plain.last() == Some("") {
+    const _ = plain.removeAt(plain.length() - 1)
+    if !plain.isEmpty() {
+      const joined = plain.joined(separator: "\n") + "\n"
+      send(adapter, event("output", object([("category", text(category)), ("output", text(joined))]))).await()
+    }
+    return
+  }
+  if !plain.isEmpty() {
+    const joined = plain.joined separator: "\n"
+    send(adapter, event("output", object([("category", text(category)), ("output", text(joined))]))).await()
+  }
+}
+
+/** Once both pipes have ended, the debuggee's exit code: `exited` and `terminated`, and the end where it was asked for. */
+fn watchExit(adapter: Adapter, child: Child, outputs: Task<Void>, errors: Task<Void>): Task<Void> {
+  outputs.await()
+  errors.await()
+  const code = match child.wait().await() {
+    Ok(found) => found
+    Fail(_) => 1
+  }
+  trace adapter, "the debuggee ended with {code}"
+  send(adapter, event("exited", object([("exitCode", integer(code))]))).await()
+  send(adapter, event("terminated", object([]))).await()
+  adapter.terminated = true
+  if adapter.disconnecting {
+    send(adapter, JsonValue.Null).await()
+  }
+}
+
+// --- Bytes ----------------------------------------------------------------------------------------------------------
+
+fn indexOf(bytes: ArrayList<UInt8>, from: Int, byte: Int): Int {
+  for index in from..bytes.length() {
+    if Int.from(bytes[index]) == byte {
+      return index
+    }
+  }
+  0 - 1
+}
+
+fn bytesBetween(bytes: ArrayList<UInt8>, from: Int, to: Int): List<UInt8> {
+  var found: List<UInt8> = []
+  for index in from..to {
+    found.append bytes[index]
+  }
+  found
+}
+
+/** Where the last line feed between `from` and `to` ends, `from` where there is none. */
+fn lastLineEnd(bytes: ArrayList<UInt8>, from: Int, to: Int): Int {
+  var index = to - 1
+  while index >= from {
+    if Int.from(bytes[index]) == lineFeed {
+      return index + 1
+    }
+    index = index - 1
+  }
+  from
+}
+
+/** Where the last whole UTF-8 character between `from` and `to` ends: a character a read cut in two waits for its rest. */
+fn wholeCharactersEnd(bytes: ArrayList<UInt8>, from: Int, to: Int): Int {
+  var index = to - 1
+  var back = 0
+  while index >= from && back < 4 {
+    const byte = Int.from bytes[index]
+    if byte < 128 {
+      return to
+    }
+    if byte >= 192 {
+      // The first byte of a character says how long it is
+      const length = if byte >= 240 { 4 } else if byte >= 224 { 3 } else { 2 }
+      return if to - index >= length { to } else { index }
+    }
+    index = index - 1
+    back = back + 1
+  }
+  to
+}
