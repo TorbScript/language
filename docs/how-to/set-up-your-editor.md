@@ -60,11 +60,16 @@ the Visual Studio Marketplace and to Open VSX; every other editor with a client 
    [`torb new`](../tooling/torb-new.md) there and opens the new package with `src/main.trb` in the editor. The play
    button of the editor ("TorbScript: Run File") runs the file with `torb run` in a terminal.
 
-4. **Use the language server.** Problems appear as you type; a hint with a lightbulb is a finding of `torb lint`
-   whose fix is one click (Ctrl+. or Cmd+.); hover a name for its signature and doc comment; F12 goes to its
-   declaration, in the standard library as well; `.` offers the members of what stands in front of it. The
-   "TorbScript" output channel (View > Output) shows one line per run of the checker, and why the server did not start
-   where it did not. "TorbScript: Restart Language Server" starts it again after a new `torb` was built.
+4. **Use the language server.** Problems appear as you type, and the problems of the files you have not opened are in
+   the Problems view once the server has checked the workspace in the background; a hint with a lightbulb is a finding
+   of `torb lint` whose fix is one click (Ctrl+. or Cmd+.). Hover a name for its signature and its documentation as
+   `torb doc` renders it; F12 goes to its declaration, in the standard library as well, Shift+F12 finds every place
+   that names it, and F2 renames it in every file - a rename that would make a name mean something else is refused with
+   the reason. `.` offers the members of what stands in front of it, each with its documentation, and inside the
+   arguments of a call the signature of what it calls shows. The Outline view and "Go to Symbol in Workspace" (Ctrl+T
+   or Cmd+T) list the declarations. The "TorbScript" output channel (View > Output) shows one line per run of the
+   checker, and why the server did not start where it did not. "TorbScript: Restart Language Server" starts it again
+   after a new `torb` was built.
 
 5. **Run the tests from the Testing view.** Every `*.test.trb` of the workspace is listed with its `group` and `test`
    calls, which the language server finds (`torbscript/tests`), and each has a run button in the editor's gutter. A
@@ -84,8 +89,10 @@ the Visual Studio Marketplace and to Open VSX; every other editor with a client 
    Console, and a test's pass or failure in the Testing view, as for a run. A `launch.json` names `program` or `test`
    (with `filter`), `args`, `cwd`, `env`, `stopOnEntry` and `justMyCode`; "Add Configuration..." writes one.
 
-7. **Format with Shift+Alt+F** (Shift+Option+F): "Format Document" runs [`torb format`](../tooling/torb-format.md)
-   over the text in the editor.
+7. **Format with Shift+Alt+F** (Shift+Option+F): "Format Document" writes the layout of
+   [`torb format`](../tooling/torb-format.md) into the text in the editor, and "Format Selection" the part of it that
+   touches the selected lines - through the language server, or with `torb format` over a copy of the whole text where
+   the server does not run.
 
 8. **In another editor, register `torb lsp` for `.trb` files, and `torb debug` as the debug adapter.** `torb lsp` needs
    no argument (`--stdio` is accepted), speaks over standard input and output, and takes the root of the workspace from
@@ -98,6 +105,8 @@ the Visual Studio Marketplace and to Open VSX; every other editor with a client 
 |---------|---------|---------|
 | `torbscript.executablePath` | `""` | The `torb` to run. Empty searches the places of step 2, in that order |
 | `torbscript.languageServer.enabled` | `true` | Whether `torb lsp` is started at all, read when the window loads |
+| `torbscript.languageServer.workspaceDiagnostics` | `true` | Whether the files that are not open are checked in the background and their problems shown |
+| `torbscript.languageServer.workspaceDiagnosticsDelay` | `1000` | How long after the start, or after the last change on disk, that check begins, in milliseconds |
 | `torbscript.semanticHighlighting.enabled` | `true` | Semantic tokens: from the language server while it runs, from `torb highlight` where it does not |
 | `torbscript.toolchain.offerInstall` | `true` | The notification that offers the installer when `torb` is not found; the status bar item shows either way |
 
@@ -111,8 +120,9 @@ as a whole.
   the output channel shows. One without `torb test --report json` still runs the tests: the extension notices once,
   reads the plain report instead - a single test runs its whole file, and there are no durations - and offers
   `torb upgrade`. In a checkout of this repository, build the compiler again.
-- **The workspace folder decides what the server reads.** It reads the workspace below the folder VS Code has open, the
-  way `torb check` reads it; a file outside of it is checked as a script against the toolchain's own standard library.
+- **The workspace folders decide what the server reads.** It reads the workspace below each folder VS Code has open,
+  the way `torb check` reads it, and every folder of a multi-root workspace is a project of its own; a file outside of
+  them is checked as a script against the toolchain's own standard library.
 - **A file changed on disk by something else is read again only when the editor says so.** An open document is the
   editor's text; any other file changed by a `git checkout` or a formatter is read again once the client reports it
   (`workspace/didChangeWatchedFiles`), which the extension does for every `.trb` of the workspace. A client of another

@@ -1,6 +1,6 @@
 ---
 title: torb lsp
-summary: torb lsp is the language server - the compiler over the Language Server Protocol on standard input and output - with the diagnostics of torb check, hover, go to definition, completion, semantic tokens and lint fixes as quick fixes.
+summary: torb lsp is the language server - the compiler over the Language Server Protocol - with the diagnostics of torb check for the whole workspace, hover from torb doc, references, a checked rename, completion, formatting and lint fixes.
 kind: tooling
 status: stable
 order: 47
@@ -12,19 +12,28 @@ keywords:
   - hover
   - completion
   - semantic tokens
+  - references
+  - rename
+  - signature help
+  - workspace diagnostics
 source:
   - compiler/src/language-server/command.trb
   - compiler/src/language-server/server.trb
   - compiler/src/language-server/analysis.trb
+  - compiler/src/language-server/view.trb
+  - compiler/src/language-server/workspace.trb
+  - compiler/src/language-server/references.trb
   - compiler/src/language-server/test-tree.trb
   - docs/design/LANGUAGE-SERVER.md
 ---
 
 `torb lsp` is what an editor starts to understand TorbScript. It speaks the Language Server Protocol over standard input
-and output, and it is the compiler: the diagnostics are the ones [`torb check`](torb-check.md) prints, the types a hover
-shows are the checker's, and the quick fixes are what [`torb lint --fix`](torb-lint.md) writes. Nobody runs it by hand;
-the VS Code extension of this repository starts it, and so can any editor with a client of the protocol ([Set up your
-editor](../how-to/set-up-your-editor.md)).
+and output, and it is the compiler: the diagnostics are the ones [`torb check`](torb-check.md) prints - for the open
+documents as they are typed, and for every other file of the workspace in the background - a hover is what
+[`torb doc`](torb-doc.md) says about a declaration, the references and a rename are what the checker resolved, the
+formatting is [`torb format`](torb-format.md)'s, and the quick fixes are what [`torb lint --fix`](torb-lint.md) writes.
+Nobody runs it by hand; the VS Code extension of this repository starts it, and so can any editor with a client of the
+protocol ([Set up your editor](../how-to/set-up-your-editor.md)).
 
 ## Synopsis
 
@@ -45,20 +54,40 @@ checker, with what each pass cost - goes to standard error, which an editor show
 
 | Message | What the server does |
 |---------|----------------------|
-| `initialize` | Reads the workspace below `rootUri` (or the first of `workspaceFolders`) the way `torb check` reads it, and answers what it does |
-| `initialized`, `$/cancelRequest`, `$/setTrace` | Nothing |
+| `initialize` | Reads every folder of `workspaceFolders` - or the one `rootUri` names - the way `torb check` reads it, each a project of its own, takes the settings of its `initializationOptions` (below), and answers what it does |
+| `initialized` | Begins the check of the workspace, a while later |
 | `textDocument/didOpen`, `didChange`, `didClose` | Holds the text of the document in place of the disk's; a change is a range and its new text, or the whole text |
-| `textDocument/publishDiagnostics` | Sent after every run of the checker, for every document it checked |
-| `textDocument/hover` | The declaration under the cursor with its signature and doc comment, a local with its type, or the type of the expression |
+| `textDocument/publishDiagnostics` | Sent after every run of the checker for every document it checked, and by the check of the workspace for the files nobody opened |
+| `textDocument/hover` | The declaration under the cursor as `torb doc` shows it - its signature, its doc comment with links, its parameters and sections - and at a call of a generic function what its type parameters are there; a local with its type, or the type of the expression |
 | `textDocument/definition` | Where the name under the cursor is declared, in any file of the program, the standard library included |
+| `textDocument/references` | Every place the checker resolved to what the name under the cursor is about, in every file of the project; the files nobody opened are checked for it |
+| `textDocument/prepareRename`, `rename` | The name under the cursor and its range; then the edits of every place that names it, once a check before and after them found that every name still means what it meant (below) |
 | `textDocument/completion` | Behind `value.` the fields and methods of its type, behind `Type.` its cases and `static` members, behind `module.` its exports; anywhere else the locals, the names of the file, its prelude and the keywords |
+| `completionItem/resolve` | The item with the signature and the documentation of its declaration |
+| `textDocument/signatureHelp` | Inside the arguments of a call, the signature of what it calls and the parameter at the cursor |
+| `textDocument/documentSymbol`, `workspace/symbol` | The declarations of a document, nested; the declarations of every file of the workspace whose name holds the query |
+| `textDocument/formatting`, `rangeFormatting` | The edits of `torb format`, one per run of lines that changes; of a range, those that touch its lines |
 | `textDocument/semanticTokens/full` | The tokens of `torb highlight`, with every member behind a `.` classified by the member the checker resolved |
 | `textDocument/codeAction` | The fix of every finding of `torb lint`'s rules that touches the range, as a quick fix |
 | `torbscript/tests` | The tests and groups of a file, from its syntax tree alone (below) |
-| `workspace/didChangeWatchedFiles` | Reads the changed files again, unless they are open |
-| `shutdown`, then `exit` | Ends with exit code 0; `exit` without `shutdown` ends with 1 |
+| `workspace/didChangeWatchedFiles` | Reads the changed files again, unless they are open, forgets a deleted one, and checks them and their importers a while later |
+| `workspace/didChangeConfiguration` | Takes the settings below `settings.torbscript.languageServer` |
+| `$/cancelRequest` | Drops a request that is still waiting for its steps and answers it with `-32800` |
+| `$/setTrace`, `textDocument/didSave` | Nothing |
+| `shutdown`, then `exit` | Answers the requests that wait first, then `shutdown`; `exit` ends with exit code 0, and without `shutdown` with 1 |
 
-A request before `initialize` is answered with the error `-32002`, a request the server does not know with `-32601`.
+A request before `initialize` is answered with the error `-32002`, a request the server does not know with `-32601`, a
+rename that is refused with `-32803` and the reason as its message.
+
+### Settings
+
+The settings of the check of the workspace come in the `initializationOptions` of `initialize`, and again below
+`settings.torbscript.languageServer` of `workspace/didChangeConfiguration`:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `workspaceDiagnostics` | `true` | Whether the files nobody opened are checked and their problems published |
+| `workspaceDiagnosticsDelay` | `1000` | How long after `initialized`, or after the last change on disk, a check of the workspace begins, in milliseconds |
 
 ### Diagnostics
 
@@ -66,6 +95,12 @@ Every problem `torb check` reports for a document is an error with the range of 
 message on lines of their own. Every finding of the rules of `torb lint` is a hint that names its rule as the code and
 `torb lint` as the source; a binding nothing reads is marked as unneeded, which an editor fades. The rules that read the
 checker's tables only run on a document the checker found no problem in, as `torb lint` does.
+
+The files nobody opened are checked in the background: every module of the project a while after `initialized`, and
+after files change on disk the ones that changed and every module that imports one of them. The server answers the
+messages that arrive while it checks - the check takes one module per step - and publishes the problems of each file
+where they are not what it published before; a file that never had one is not published at all. The lint rules are
+left to the open documents. Closing a document publishes what the check of the workspace found about it again.
 
 ### The tests of a file
 
@@ -118,19 +153,30 @@ the request and its answer are these (`tests/lsp/tests.lsp` is this session):
 <-- {"jsonrpc":"2.0","id":2,"result":[{"kind":"group","name":"Größe","range":{"start":{"line":2,"character":0},"end":{"line":8,"character":1}},"selectionRange":{"start":{"line":2,"character":6},"end":{"line":2,"character":13}},"children":[{"kind":"test","name":"zählt 😀","range":{"start":{"line":3,"character":2},"end":{"line":5,"character":3}},"selectionRange":{"start":{"line":3,"character":7},"end":{"line":3,"character":17}},"children":[]},{"kind":"test","name":"in parentheses","range":{"start":{"line":7,"character":2},"end":{"line":7,"character":41}},"selectionRange":{"start":{"line":7,"character":7},"end":{"line":7,"character":23}},"children":[]}]},{"kind":"test","name":"top level","range":{"start":{"line":10,"character":0},"end":{"line":12,"character":1}},"selectionRange":{"start":{"line":10,"character":5},"end":{"line":10,"character":16}},"children":[]}]}
 ```
 
+### A rename is checked
+
+A rename edits every place that names the declaration - the places the references are - and only after a check of every
+file whose text has the old name or the new one as a word, before the edits and after them, found that every name there
+resolves to what it resolved to before and no file has a problem it did not have. Where that is not so, the rename is
+refused and the reason names the file and the line: a local the new name shadows, a declaration it collides with, a
+problem it brings. A file that has the old name and a problem before the rename refuses it as well, because a use in it
+might go unseen. A new name has to be a name of the language, no keyword, and start with the letter its kind is spelled
+with - an uppercase one for a type, a trait, an alias and a case, a lowercase one for everything else; a declaration
+outside of the folders of the workspace is not renamed.
+
 ### What a keystroke costs
 
 A change marks its document; the checker runs once the messages that arrived together are handled, or earlier where a
 request among them needs the answer, so a client that sends a change per keystroke while the checker is busy has them
-checked together. A run checks the documents that changed and every open document that imports one of them - their
-bodies, and the bodies of nothing else.
+checked together.
 
-Where a change leaves the declarations and the imports of a document alone - the usual keystroke - the server keeps
-everything of the last run that does not depend on bodies and redoes the part of that one document. A change that adds,
-renames or removes a declaration or a `use` builds that part from scratch, and parses only what changed even then.
-Measured on the machine of PERFORMANCE.md, from the change to its diagnostics: about 100 ms in a
-file of `std`, 170 to 230 ms in a typical file of the compiler, and 1.5 s in the largest one, whose bodies alone take
-1.35 s to check.
+A keystroke inside of a function - the usual one - checks that function again and keeps what the last run found about
+every other body of the file; the documents that import it are not checked again. A change of a declaration, a
+signature or a `use`, or of a body that now infers another result, checks the document as a whole and every open
+document that imports it, and parses only what changed even then. Measured on the machine of
+PERFORMANCE.md, from the change to its diagnostics: 90 to 250 ms in the largest files of the
+compiler, where a check of the whole file took up to 1.5 s (the design record, section
+7).
 
 ### Exit codes
 

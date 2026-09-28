@@ -217,9 +217,10 @@ the VS Code extension asks `highlight` where the language server does not run.
 
 The language server: the Language Server Protocol over standard input and output, which is what an editor starts. It
 holds the workspace between two requests and answers from the checker's tables - the diagnostics of `check` with their
-ranges, hover, go to definition, completion, semantic tokens, and the fixes of `lint` as quick fixes - and a keystroke
-checks the file that changed and the open files that import it, not the workspace ([torb lsp](torb-lsp.md),
-[Set up your editor](../how-to/set-up-your-editor.md)).
+ranges, for the open files and in the background for the whole workspace, hover from the model of `doc`, go to
+definition, the references, a checked rename, completion, signature help, symbols, the formatting of `format`, semantic
+tokens, and the fixes of `lint` as quick fixes - and a keystroke inside of a function checks that function, not the
+file ([torb lsp](torb-lsp.md), [Set up your editor](../how-to/set-up-your-editor.md)).
 
 ### `debug`
 
