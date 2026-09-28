@@ -901,6 +901,16 @@ static int64_t *torb_machine_contents(void *block) {
   return (int64_t *)((uint8_t *)block + sizeof(torb_header));
 }
 
+/*
+ * The bytes of a counted block of the VM whose contents are `width` words: the header, the shape word, and room for one
+ * word of contents at least. A value takes one word of a register however narrow it is, and the interpreter moves the
+ * payload of a trait-typed value into the receiver of a member by the receiver's width - a type of no fields (`Cancelled`
+ * as an `Error`) had a block of no contents, and that move read the word after it.
+ */
+static size_t torb_machine_block_size(int64_t width) {
+  return sizeof(torb_header) + 8u + 8u * (size_t)(width < 1 ? 1 : width);
+}
+
 /* ------------------------------------------------------------------------------------------------ retaining --- */
 
 static void torb_machine_retain_value(int64_t *value, const torb_machine_shape *shape);
@@ -1177,7 +1187,7 @@ static void torb_machine_block_unique(int64_t *words, int64_t reference) {
     return;
   }
   shape = torb_machine_shape_at(torb_machine_contents(header)[0]);
-  size = sizeof(torb_header) + 8u + 8u * (size_t)shape->width;
+  size = torb_machine_block_size(shape->width);
   copy = (torb_header *)torb_allocate(size, (torb_block_kind)header->kind);
   memcpy(torb_machine_contents(copy), torb_machine_contents(header), size - sizeof(torb_header));
   torb_machine_retain_value(torb_machine_contents(copy) + 1, shape);
@@ -1426,7 +1436,7 @@ static bool torb_machine_privatize_environment(int64_t *place) {
   if (header->count == 1u) {
     return torb_machine_privatize_value(contents + 1, shape);
   }
-  made = torb_allocate_zeroed(sizeof(torb_header) + 8u + 8u * (size_t)shape->width, (torb_block_kind)header->kind);
+  made = torb_allocate_zeroed(torb_machine_block_size(shape->width), (torb_block_kind)header->kind);
   memcpy(torb_machine_contents(made), contents, 8u + 8u * (size_t)shape->width);
   torb_machine_retain_value(torb_machine_contents(made) + 1, shape);
   if (!torb_machine_privatize_value(torb_machine_contents(made) + 1, shape)) {
@@ -1979,8 +1989,7 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       return 0;
     case TORB_OPERATION_BLOCK_NEW: {
       /* target, shape, kind, words, count, then (offset, register, width) per field */
-      size_t width = (size_t)o[3];
-      void *block = torb_allocate_zeroed(sizeof(torb_header) + 8u + 8u * width, (torb_block_kind)o[2]);
+      void *block = torb_allocate_zeroed(torb_machine_block_size(o[3]), (torb_block_kind)o[2]);
       int64_t *contents = torb_machine_contents(block);
       contents[0] = o[1];
       for (int64_t field = 0; field < o[4]; field++) {
