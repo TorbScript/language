@@ -33,6 +33,7 @@ sh runtime/build.sh                                     # The C runtime and its 
 torb format --check .                                   # Is every file in the layout of the formatter?
 torb format .                                           # ...write it (a minute)
 torb lint std compiler/src                              # The rules of style the checker leaves alone
+torb rename Door.isOpen=open .                          # A field renamed at its declaration and every checked use
 torb docs source std compiler examples                  # The doc comments (not a gate yet)
 torb docs source --panics std                           # ...except its `# Panics` rule, which is one
 torb docs check docs                                    # The documentation: schema, links, every snippet

@@ -58,7 +58,7 @@ public type LintRule {
   fn summary(): String {
     match self {
       .SelfName => "Inside a `type` or an `extend`, its own name is written `Self` (fix)"
-      .QuestionField => "A `Bool` field is an adjective or a participle, not a question that starts with `is`"
+      .QuestionField => "A `Bool` field is an adjective or a participle, not a question that starts with `is` (fix; runs the checker)"
       .UnreadBinding => "A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)"
       .LabeledLiteral => "`true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)"
       .RedundantWrap => "No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)"
@@ -68,10 +68,14 @@ public type LintRule {
 
   /**
    * Whether the rule reads the checker's tables, so that a run with it checks the projects of the paths first:
-   * `labeled-literal` and `redundant-wrap` for all they find, `unread-binding` for which of its findings may be fixed.
+   * `labeled-literal` and `redundant-wrap` for all they find, `unread-binding` for which of its findings may be fixed,
+   * `question-field` for the uses its rename reaches.
    */
   fn needsTheChecker(): Bool {
-    self == Self.LabeledLiteral || self == Self.UnreadBinding || self == Self.RedundantWrap
+    self == Self.LabeledLiteral
+      || self == Self.UnreadBinding
+      || self == Self.RedundantWrap
+      || self == Self.QuestionField
   }
 
   static fn named(id: String): Self? {

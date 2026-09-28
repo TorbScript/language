@@ -45,6 +45,7 @@ design, which is in internals. A page here is about what you type and what comes
 - **[torb doc](torb-doc.md)** - torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
 - **[torb format](torb-format.md)** - torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces, blank lines and a width of 120 columns - and --check fails on every file that is not in it.
 - **[torb lint](torb-lint.md)** - torb lint reports the style rules the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a redundant Some or Ok, private(var) - each with its id and, where certain, a fix.
+- **[torb rename](torb-rename.md)** - torb rename renames fields at their declaration and at every use the type checker resolves to them - members, bare names, labels, patterns and doc links - or refuses and writes nothing.
 
 <!-- torb:index:end -->
 

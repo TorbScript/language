@@ -1,0 +1,723 @@
+/**
+ * A checked rename of fields: every place the checker resolved to one of the fields is edited, and nothing else - the
+ * declaration, a member read or written through `.`, a bare name inside the type, the label of a constructor, of a
+ * case, of `copy` and of a pattern, the field a `with ... by` delegates to, and a link of a doc comment
+ * (`[Type.field]`).
+ *
+ * It is the fix of the rule `question-field` and the whole of `torb rename`. A replacement of text cannot do this:
+ * `isVar` is a field of a dozen types, a parameter, the label of a call and a local, and only the checker knows which
+ * of them a name means.
+ *
+ * A rename is refused rather than half made ([renameProblems]). Every module whose text has the old name as a word has
+ * to be one the checker checked without a problem, so that no use goes unseen, and the new name has to be free in the
+ * type: no other field or member of that name, and no bare name inside the type that means something else by it
+ * today. A bare use of the field is written `self.name` where the new name is a keyword, and where the body it stands
+ * in binds the new name itself.
+ */
+
+use Span from "../syntax/source"
+use Keyword from "../syntax/token"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind, TypeKind from "../syntax/ast"
+use Expression, ExpressionKind, Pattern, PatternKind, FieldPattern, Argument from "../syntax/ast"
+use Checked from "../semantics/check"
+use Checker, Resolution from "../semantics/checker/context"
+use TypeId, TypeForm, TypeSignature, FieldSignature, SignatureState from "../semantics/checker/type"
+use lookupMember from "../semantics/checker/member"
+use SymbolId, SymbolKind from "../semantics/symbols"
+use ModuleId from "../semantics/module"
+use Graph from "../semantics/graph"
+use TextEdit from "./finding"
+use Nodes, nodesOfFile, nodesOfMember from "./nodes"
+
+/** One field and the name it gets. */
+public type FieldRename {
+  field: SymbolId
+  /** The type the field belongs to, for a field of a case as well. */
+  owner: SymbolId
+  currentName: String
+  newName: String
+  /** The case, where the field is one of a case. */
+  variant: SymbolId? = None
+}
+
+/** The field a symbol names, with the name it gets. `None` where the symbol is not a field. */
+public fn fieldRenameOf(checker: Checker, field: SymbolId, newName: String): FieldRename? {
+  const symbol = checker.symbolAt field
+  const holder = match symbol.kind {
+    .Field(found) => found
+    _ => {
+      return None
+    }
+  }
+  match checker.symbolAt(holder).kind {
+    .Case(owner) => FieldRename field, owner, symbol.name, newName, variant: holder
+    _ => FieldRename field, holder, symbol.name, newName
+  }
+}
+
+/** How a message names the field of a rename: `Parameter.isVar`, `ExpressionKind.If.otherwise`. */
+public fn describedField(checker: Checker, rename: FieldRename): String {
+  "{ownerPath(checker, rename)}.{rename.currentName}"
+}
+
+/** `Parameter` for a field of a type, `ExpressionKind.If` for a field of a case. */
+fn ownerPath(checker: Checker, rename: FieldRename): String {
+  const owner = checker.symbolAt(rename.owner).name
+  match rename.variant {
+    Some(variant) => "{owner}.{checker.symbolAt(variant).name}"
+    None => owner
+  }
+}
+
+/**
+ * What a rename may read and change: the checker's tables, the modules of the program, the names in type positions
+ * (which is where an `extend` says which type it extends), and the modules a rename may edit - those the paths
+ * reached and the checker checked without a problem.
+ */
+public type RenameScope {
+  checker: Checker
+  graph: Graph
+  typeNames: List<Map<Span, SymbolId>>
+  modules: List<ModuleId>
+  /** The symbol of every type and every field, by `"<module>:<start of its name>"`. */
+  declared: Map<String, SymbolId>
+}
+
+/** The scope of a rename over what `check` found: its requested modules, less those with a problem. */
+public fn renameScopeOf(checked: Checked): RenameScope {
+  var broken: Set<String> = Set.of()
+  for file in checked.files {
+    if !file.diagnostics.isEmpty() {
+      broken.insert file.path
+    }
+  }
+  var modules: List<ModuleId> = []
+  for module in checked.requested {
+    const shape = checked.program.graph.at module
+    if !broken.contains(shape.shownPath) && shape.diagnostics.isEmpty() {
+      modules.append module
+    }
+  }
+  var declared: Map<String, SymbolId> = [:]
+  for (index, symbol) in checked.checker.symbols.all.indexed() {
+    const module = match symbol.module {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    match symbol.kind {
+      .Type | .Field(_) => declared.set keyOf(module, symbol.span), SymbolId(index)
+      _ => {}
+    }
+  }
+  RenameScope checked.checker, checked.program.graph, checked.resolutions, modules, declared
+}
+
+fn keyOf(module: ModuleId, at: Span): String {
+  "{module.value}:{at.start}"
+}
+
+/** The symbol of the field declared with its name at this span, if the checker gave it one. */
+public fn fieldSymbolAt(scope: RenameScope, module: ModuleId, at: Span): SymbolId? {
+  scope.declared.get keyOf(module, at)
+}
+
+/**
+ * What stands in the way of each rename, in the order of the renames, as a sentence a message can end with; `None`
+ * where nothing does. `keywords` says whether a new name may be a keyword: `torb rename` takes one, because a field
+ * may be named after one, while the fix of `question-field` does not choose one by itself.
+ */
+public fn renameProblems(
+  var checker: Checker,
+  scope: RenameScope,
+  renames: List<FieldRename>,
+  keywords: Bool,
+): List<String?> {
+  const captured = capturedNames scope, renames
+  var problems: List<String?> = []
+  for (index, rename) in renames.indexed() {
+    const clash = renames.find({ _.owner == rename.owner && _.variant == rename.variant && _.newName == rename.newName && _.field != rename.field })
+    const problem = if clash.isSome() {
+      Some "another field of it is renamed to `{rename.newName}` as well"
+    } else if captured.contains(index) {
+      Some "inside `{checker.symbolAt(rename.owner).name}`, the bare name `{rename.newName}` means something else already"
+    } else {
+      problemOf checker, scope, rename, keywords
+    }
+    problems.append problem
+  }
+  problems
+}
+
+fn problemOf(var checker: Checker, scope: RenameScope, rename: FieldRename, keywords: Bool): String? {
+  const newName = rename.newName
+  if newName == rename.currentName {
+    return "the field has that name already"
+  }
+  if !isName(newName) {
+    return "`{newName}` is not the name of a field: a lowercase letter or `_`, then letters, digits and `_`"
+  }
+  if Keyword.fromText(newName).isSome() && !keywords {
+    return "`{newName}` is a keyword"
+  }
+  const declared = checker.symbolAt rename.field
+  match declared.module {
+    Some(module) if scope.modules.contains(module) => {}
+    _ => {
+      return "it is declared in a file the paths do not reach, or one with a problem"
+    }
+  }
+  const signature = match signatureOfSymbol(checker, rename.owner) {
+    Some(found) => found
+    None => {
+      return "the checker built no shape of its type"
+    }
+  }
+  const owner = checker.symbolAt(rename.owner).name
+  match rename.variant {
+    Some(variant) => {
+      if fieldsOfCase(signature, variant).any({ _.name == newName }) {
+        return "the case has a field `{newName}` already"
+      }
+    }
+    None => {
+      if signature.fields.any({ _.name == newName }) {
+        return "`{owner}` has a field `{newName}` already"
+      }
+      if signature.members.get(newName).isSome() || lookupMember(checker, signature.own, newName).isSome() {
+        return "`{owner}` has a member `{newName}`, and a field and a member never share a name"
+      }
+    }
+  }
+  if const Some(path) = unseenMention(scope, rename.currentName) {
+    return "`{path}` has the word `{rename.currentName}` and was not checked without a problem: name its project too"
+  }
+  None
+}
+
+/** A name a field can have: a lowercase ASCII letter or `_`, then ASCII letters, digits and `_`. */
+fn isName(text: String): Bool {
+  var first = true
+  for character in text.chars() {
+    const lower = character >= 'a' && character <= 'z'
+    const allowed = if first {
+      lower || character == '_'
+    } else {
+      lower || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '_'
+    }
+    if !allowed {
+      return false
+    }
+    first = false
+  }
+  !first
+}
+
+/**
+ * The first module whose text has the word and that a rename may not edit, by its path: a module the paths do not
+ * reach, or one with a problem, may hold a use nobody resolved.
+ */
+fn unseenMention(scope: RenameScope, word: String): String? {
+  for module in scope.graph.modules {
+    if scope.modules.contains(module.id) {
+      continue
+    }
+    if !wordOffsets(module.source.text, word).isEmpty() {
+      return module.shownPath
+    }
+  }
+  None
+}
+
+/** The byte offset of every occurrence of the word in the text, with no letter, digit or `_` directly around it. */
+public fn wordOffsets(text: String, word: String): List<Int> {
+  var offsets: List<Int> = []
+  if !text.contains(word) {
+    return offsets
+  }
+  const parts = text.split word
+  var offset = 0
+  for (index, part) in parts.indexed() {
+    if index == parts.length() - 1 {
+      break
+    }
+    const start = offset + part.byteLength()
+    const end = start + word.byteLength()
+    if !isWordByte(text, start - 1) && !isWordByte(text, end) {
+      offsets.append start
+    }
+    offset = end
+  }
+  offsets
+}
+
+fn isWordByte(text: String, offset: Int): Bool {
+  if offset < 0 {
+    return false
+  }
+  match text.charAtByte(offset) {
+    Some(character) => character.isLetter() || character.isDigit() || character == '_'
+    None => false
+  }
+}
+
+/**
+ * The renames whose new name is already a bare name inside the type - in one of its members, or of an `extend` of it -
+ * that means something other than a local: a function or a constant of the file, an import. The renamed field would
+ * take it over, because a member of the receiver is found before the names of the file.
+ */
+fn capturedNames(scope: RenameScope, renames: List<FieldRename>): Set<Int> {
+  var captured: Set<Int> = Set.of()
+  for module in scope.modules {
+    for unit in unitsOfFile(scope, module, scope.graph.at(module).file) {
+      const owner = match unit.owner {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      for (index, rename) in renames.indexed() {
+        if rename.owner != owner || rename.variant.isSome() || captured.contains(index) {
+          continue
+        }
+        for expression in unit.nodes.expressions {
+          if const .Name(text) = expression.kind {
+            if text != rename.newName {
+              continue
+            }
+            match scope.checker.resolutionAt(module, expression.span) {
+              Some(.Local(_)) | None => {}
+              _ => captured.insert index
+            }
+          }
+        }
+      }
+    }
+  }
+  captured
+}
+
+/**
+ * Every edit of the renames, in every module of the scope, sorted by module and position. The renames are assumed to
+ * have no problem ([renameProblems]).
+ */
+public fn renameSites(scope: RenameScope, renames: List<FieldRename>): List<RenameSite> {
+  var byField: Map<Int, FieldRename> = [:]
+  var currentNames: Set<String> = Set.of()
+  for rename in renames {
+    byField.set rename.field.value, rename
+    currentNames.insert rename.currentName
+  }
+  var sites: List<RenameSite> = []
+  for module in scope.modules {
+    const shape = scope.graph.at module
+    var found: List<RenameSite> = []
+    for rename in renames {
+      const symbol = scope.checker.symbolAt rename.field
+      if symbol.module == module {
+        found.append RenameSite(module, TextEdit(symbol.span.start, symbol.span.end, rename.newName), rename.field)
+      }
+    }
+    if !currentNames.any({ shape.source.text.contains _ }) {
+      sites.appendAll found
+      continue
+    }
+    for unit in unitsOfFile(scope, module, shape.file) {
+      sitesOfUnit found, scope, module, unit, byField, currentNames
+    }
+    sitesOfDelegates found, scope, module, shape.file, byField
+    sitesOfLinks found, scope, module, shape.source.text, renames
+    found.sort({ _.edit.start })
+    var end = -1
+    for site in found {
+      // A node the walk reached twice is edited once
+      if site.edit.start < end {
+        continue
+      }
+      sites.append site
+      end = site.edit.end
+    }
+  }
+  sites
+}
+
+/** One edit of a rename, in the module it belongs to, and the field it renames. */
+public type RenameSite {
+  module: ModuleId
+  edit: TextEdit
+  field: SymbolId
+}
+
+/**
+ * One scope of bare names: the top level of a file, or one member of a type or an `extend`, with every node in it,
+ * the names it binds, and the type whose members it belongs to.
+ */
+type RenameUnit {
+  nodes: Nodes
+  bound: Set<String>
+  owner: SymbolId?
+}
+
+/** The top level of a file and every member of every declaration in it, however deep. */
+fn unitsOfFile(scope: RenameScope, module: ModuleId, file: SourceFile): List<RenameUnit> {
+  const top = nodesOfFile file
+  var units = [RenameUnit(top, boundNamesOf(scope, module, top, topLevelParameters(file.statements)), owner: None)]
+  var declarations = top.declarations
+  var index = 0
+  while index < declarations.length() {
+    const declaration = declarations[index]
+    index = index + 1
+    const owner = ownerOfDeclaration scope, module, declaration
+    for member in membersOf(declaration) {
+      const nodes = nodesOfMember member
+      var parameters: List<String> = []
+      if const .Function(function) = member.kind {
+        for parameter in function.parameters {
+          parameters.append parameter.name.text
+        }
+      }
+      units.append RenameUnit(nodes, boundNamesOf(scope, module, nodes, parameters), owner)
+      declarations.appendAll nodes.declarations
+    }
+  }
+  units
+}
+
+fn membersOf(declaration: Declaration): List<Member> {
+  match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    _ => []
+  }
+}
+
+/** The parameters of every function at the top level of a file: a receiver closure inside one sees them. */
+fn topLevelParameters(statements: List<Statement>): List<String> {
+  var names: List<String> = []
+  for statement in statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Function(function) = declaration.kind {
+        for parameter in function.parameters {
+          names.append parameter.name.text
+        }
+      }
+    }
+  }
+  names
+}
+
+/**
+ * Every name a unit binds: its parameters, every name a pattern in it binds, and every name the checker resolved to
+ * a local in it - which is how a parameter of a function nested in a body is counted.
+ */
+fn boundNamesOf(scope: RenameScope, module: ModuleId, nodes: Nodes, parameters: List<String>): Set<String> {
+  var bound: Set<String> = Set.of()
+  for name in parameters {
+    bound.insert name
+  }
+  for pattern in nodes.patterns {
+    if const .Binding(name) = pattern.kind {
+      bound.insert name
+    }
+  }
+  for expression in nodes.expressions {
+    if const .Name(text) = expression.kind {
+      if const Some(.Local(_)) = scope.checker.resolutionAt(module, expression.span) {
+        bound.insert text
+      }
+    }
+  }
+  bound
+}
+
+/** The type whose members a declaration holds: the type it declares, or the one an `extend` names. */
+fn ownerOfDeclaration(scope: RenameScope, module: ModuleId, declaration: Declaration): SymbolId? {
+  match declaration.kind {
+    .Type(inner) => scope.declared.get keyOf(module, inner.name.span)
+    .Extend(inner) => {
+      match inner.target.kind {
+        .Named(path, _) => {
+          const last = path.last()?
+          scope.typeNames[module.value].get last.span
+        }
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+/** The edits of one unit: the members, the bare names, the labels of calls and of patterns. */
+fn sitesOfUnit(
+  var found: List<RenameSite>,
+  scope: RenameScope,
+  module: ModuleId,
+  unit: RenameUnit,
+  byField: Map<Int, FieldRename>,
+  currentNames: Set<String>,
+) {
+  const checker = scope.checker
+  for expression in unit.nodes.expressions {
+    match expression.kind {
+      .Member(_, name, _) => {
+        if !currentNames.contains(name.text) {
+          continue
+        }
+        if const Some(rename) = renamedAt(checker, module, expression.span, byField) {
+          found.append RenameSite(module, TextEdit(name.span.start, name.span.end, rename.newName), rename.field)
+        }
+      }
+      .Name(text) => {
+        if !currentNames.contains(text) {
+          continue
+        }
+        if const Some(rename) = renamedAt(checker, module, expression.span, byField) {
+          const needsSelf = Keyword.fromText(rename.newName).isSome() || unit.bound.contains(rename.newName)
+          const written = if needsSelf { "self.{rename.newName}" } else { rename.newName }
+          found.append RenameSite(module, TextEdit(expression.span.start, expression.span.end, written), rename.field)
+        }
+      }
+      .Call(callee, arguments, _) => {
+        if !arguments.any({ labelIn _, currentNames }) {
+          continue
+        }
+        const fields = constructedFields checker, module, expression, callee
+        for argument in arguments {
+          if const Some(label) = argument.label {
+            if const Some(rename) = renamedField(fields, label.text, byField) {
+              found.append RenameSite(module, TextEdit(label.span.start, label.span.end, rename.newName), rename.field)
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+  for pattern in unit.nodes.patterns {
+    const (name, fields) = match pattern.kind {
+      .Variant(path, fields, _) => {
+        match path.last() {
+          Some(last) => (last.text, fields)
+          None => {
+            continue
+          }
+        }
+      }
+      .ImplicitVariant(name, fields, _) => (name.text, fields)
+      _ => {
+        continue
+      }
+    }
+    if !fields.any({ patternLabelIn _, currentNames }) {
+      continue
+    }
+    const shape = patternFields checker, module, pattern.span, name
+    for field in fields {
+      if const Some(label) = field.label {
+        if const Some(rename) = renamedField(shape, label.text, byField) {
+          found.append RenameSite(module, TextEdit(label.span.start, label.span.end, rename.newName), rename.field)
+        }
+      }
+    }
+  }
+}
+
+fn labelIn(argument: Argument, names: Set<String>): Bool {
+  match argument.label {
+    Some(label) => names.contains label.text
+    None => false
+  }
+}
+
+fn patternLabelIn(field: FieldPattern, names: Set<String>): Bool {
+  match field.label {
+    Some(label) => names.contains label.text
+    None => false
+  }
+}
+
+/** The rename of the field the checker resolved a member or a name at this span to, if it is one of them. */
+fn renamedAt(checker: Checker, module: ModuleId, at: Span, byField: Map<Int, FieldRename>): FieldRename? {
+  const field = match checker.resolutionAt(module, at)? {
+    .Field(_, found) | .PropertyWrite(_, found) => found
+    .Callable(found, _, _) => found
+    _ => {
+      return None
+    }
+  }
+  byField.get field.value
+}
+
+/** The rename of the field of this name among the fields a label can name. */
+fn renamedField(fields: List<FieldSignature>, label: String, byField: Map<Int, FieldRename>): FieldRename? {
+  const field = fields.find({ _.name == label })?
+  byField.get field.symbol.value
+}
+
+/**
+ * The fields the labels of a call name: those of a type for its constructor and for its `copy`, those of a case for
+ * the case. Empty for every other call, whose labels name parameters.
+ */
+fn constructedFields(checker: Checker, module: ModuleId, call: Expression, callee: Expression): List<FieldSignature> {
+  const resolution = match checker.resolutionAt(module, call.span) {
+    Some(.Deferred) | None => checker.resolutionAt module, callee.span
+    found => found
+  }
+  match resolution {
+    Some(.Construct(owner)) | Some(.CopyOf(owner)) => {
+      match signatureOfType(checker, owner) {
+        Some(signature) => signature.fields
+        None => []
+      }
+    }
+    Some(.CaseOf(owner, variant)) => {
+      match signatureOfType(checker, owner) {
+        Some(signature) => fieldsOfCase signature, variant
+        None => []
+      }
+    }
+    _ => []
+  }
+}
+
+/**
+ * The fields the labels of a pattern name: those of the case the pattern names, or those of the type itself for a
+ * pattern of its constructor (`Point(x: 0)`).
+ */
+fn patternFields(checker: Checker, module: ModuleId, at: Span, name: String): List<FieldSignature> {
+  const matched = match checker.patternType(module, at) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const signature = match signatureOfType(checker, matched) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  match signature.cases.find({ _.name == name }) {
+    Some(variant) => variant.fields
+    None => signature.fields
+  }
+}
+
+fn fieldsOfCase(signature: TypeSignature, variant: SymbolId): List<FieldSignature> {
+  match signature.cases.find({ _.symbol == variant }) {
+    Some(found) => found.fields
+    None => []
+  }
+}
+
+fn signatureOfType(checker: Checker, owner: TypeId): TypeSignature? {
+  match checker.types.form(owner) {
+    .Nominal(symbol, _) => signatureOfSymbol checker, symbol
+    _ => None
+  }
+}
+
+fn signatureOfSymbol(checker: Checker, symbol: SymbolId): TypeSignature? {
+  match checker.typeSignatureStates.get(symbol) {
+    Some(.Ready(index)) => checker.typeSignatures[index]
+    _ => None
+  }
+}
+
+/** `with Compare by value`: a delegate names a field of the type it is written in. */
+fn sitesOfDelegates(
+  var found: List<RenameSite>,
+  scope: RenameScope,
+  module: ModuleId,
+  file: SourceFile,
+  byField: Map<Int, FieldRename>,
+) {
+  var declarations = nodesOfFile(file).declarations
+  var index = 0
+  while index < declarations.length() {
+    const declaration = declarations[index]
+    index = index + 1
+    for member in membersOf(declaration) {
+      declarations.appendAll nodesOfMember(member).declarations
+    }
+    const inner = match declaration.kind {
+      .Type(found) => found
+      _ => {
+        continue
+      }
+    }
+    const owner = match scope.declared.get(keyOf(module, inner.name.span)) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    for clause in inner.traits {
+      const delegate = match clause.delegate {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      for (_, rename) in byField {
+        if rename.owner == owner && rename.variant.isNone() && rename.currentName == delegate.text {
+          found.append(RenameSite(
+            module,
+            TextEdit(delegate.span.start, delegate.span.end, rename.newName),
+            rename.field,
+          ))
+        }
+      }
+    }
+  }
+}
+
+/**
+ * `[Type.field]` in a comment: a link of a doc comment names the field through its type, so it is renamed with it.
+ * Only a line that is a comment, or has `//` in front of the link, is looked at.
+ */
+fn sitesOfLinks(
+  var found: List<RenameSite>,
+  scope: RenameScope,
+  module: ModuleId,
+  text: String,
+  renames: List<FieldRename>,
+) {
+  for rename in renames {
+    const path = ownerPath scope.checker, rename
+    const link = "[{path}.{rename.currentName}]"
+    if !text.contains(link) {
+      continue
+    }
+    const parts = text.split link
+    var offset = 0
+    for (index, part) in parts.indexed() {
+      if index == parts.length() - 1 {
+        break
+      }
+      const start = offset + part.byteLength()
+      offset = start + link.byteLength()
+      if !isInComment(text, start) {
+        continue
+      }
+      // Only the name of the field inside the brackets changes
+      const nameStart = start + 1 + path.byteLength() + 1
+      const edit = TextEdit(nameStart, nameStart + rename.currentName.byteLength(), rename.newName)
+      found.append RenameSite(module, edit, rename.field)
+    }
+  }
+}
+
+/** Whether the offset stands in a comment: its line starts with `*`, `/*` or `//`, or has `//` in front of it. */
+fn isInComment(text: String, offset: Int): Bool {
+  const before = text.sliceBytes 0, offset
+  const lineStart = match before.lastByteOffsetOf("\n") {
+    Some(found) => found + 1
+    None => 0
+  }
+  const line = text.sliceBytes lineStart, offset
+  const trimmed = line.trim()
+  trimmed.startsWith("*") || trimmed.startsWith("/*") || line.contains("//")
+}

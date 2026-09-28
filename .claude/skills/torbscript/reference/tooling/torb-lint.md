@@ -16,6 +16,7 @@ keywords:
 source:
   - compiler/src/lint/command.trb
   - compiler/src/lint/finding.trb
+  - compiler/src/lint/question-field.trb
   - compiler/CONTRIBUTING.md
 ---
 
@@ -30,7 +31,7 @@ torb lint [--fix] [--rule <id>]... [--skip <id>]... [path]...
 
 Rules (every one runs unless --rule picks some):
   self-name        Inside a `type` or an `extend`, its own name is written `Self` (fix)
-  question-field   A `Bool` field is an adjective or a participle, not a question that starts with `is`
+  question-field   A `Bool` field is an adjective or a participle, not a question that starts with `is` (fix; runs the checker)
   unread-binding   A name that `const`, `for` or a closure binds and nothing reads is written `_` (fix; runs the checker)
   labeled-literal  `true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)
   redundant-wrap   No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)
@@ -76,8 +77,16 @@ own is left alone, and a `trait` is not looked into.
 
 **`question-field`**: a `Bool` field is an adjective or a participle (`inclusive`, `shared`, `exported`), and a
 question that is computed is a method (`isEmpty()`) - see [Naming](../language/syntax/naming.md). A field of a type or
-of a case whose type is `Bool` and whose name is `is` followed by a capital letter is found. It has no fix: the better
-word is a person's choice, and a rename has to reach every use.
+of a case whose type is `Bool` and whose name is `is` followed by a capital letter is found.
+
+Its fix is the rename [`torb rename`](torb-rename.md) makes: the field gets the word after `is` (`isShared` becomes
+`shared`) at its declaration and at every use the checker resolves to it, so the rule runs the checker. It offers the
+fix only where it is certain of that word - the last word after `is` ends like a participle or an adjective (`-ed`,
+`-able`, `-ible`, `-ive`, `-ous`, `-ful`, `-less`, but not `-eed`) - and where nothing stands in its way: the word is
+not a keyword, the type has no field or member of that name, and every file that mentions the field was checked
+without a problem. A noun (`isCall`), a preposition (`isOn`) and a keyword (`isVar`) need a person's word, and the
+finding names the `torb rename` that takes it. `--fix` writes the edit of every use as well; a plain run reports the
+declaration alone.
 
 **`unread-binding`**: a name that an irrefutable pattern binds and that nothing reads is written `_` - a `const` inside
 a body, what `for` binds, and the parameters of a closure. The refutable positions are the checker's, where the same
@@ -172,14 +181,19 @@ does not recognize.
 
 ## Examples
 
-The standard library and the compiler, where three rules are not migrated yet: `self-name` (the decision of
-2026-09-26 is swept separately), `question-field` (about 60 of the compiler's fields are named after keywords, and each
-needs its own word) and `labeled-literal` (773 of its findings have a fix, the others need a call reordered):
+One rule over one package, with its fix:
 
 ```console
-$ torb lint std compiler/src
-...
-2135 findings in 188 of 380 files (self-name 973, question-field 100, labeled-literal 1062)
+$ torb lint --fix --rule self-name std/geometry
+fixed 11 files; what is left:
+15 files, no findings
+```
+
+The fix of `question-field` reaches every use, so it runs over every project that uses the fields - for the
+repository that is all of it:
+
+```console
+$ torb lint --fix --rule question-field .
 ```
 
 Every fix of the repository applied at once still type checks: `torb lint --fix` over a copy of the whole checkout,
@@ -190,6 +204,7 @@ then `torb check .`, answers `no problems`.
 - [Naming](../language/syntax/naming.md) - which rules of a name the parser and the checker enforce, and which are
   conventions `torb lint` reports.
 - [torb format](torb-format.md) - the other milestone 8 tool, for layout instead of naming.
+- [torb rename](torb-rename.md) - the rename `question-field` makes, with the word a person chose.
 - [torb check](torb-check.md) - the errors, in the same format.
 - [The torb command](the-torb-command.md) - every subcommand.
 

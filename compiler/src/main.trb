@@ -45,6 +45,7 @@ use sourceOptionsOf, runSource from "./documentation/source"
 use docOptionsOf, runDoc, printDocUsage from "./reference/command"
 use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format/command"
 use lintUsage, lintOptionsOf, runLint from "./lint/command"
+use renameUsage, renameOptionsOf, runRename from "./lint/rename-command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 use packageOptionsOf, runPackageCommand from "./cli/packages"
 
@@ -120,6 +121,7 @@ fn printUsage() {
   printError "                         --check: write nothing, list the files that would change, fail if one would"
   printError "  torb lint [path]...    The style rules the checker leaves alone (`torb lint --help`)"
   printError "                         --fix: write the fixes, then lint again"
+  printError "  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"
   printDocUsage()
   printDocumentationUsage()
 }
@@ -932,6 +934,16 @@ match Process.arguments() {
       Some(options) => exitWith(runLint(options)?)
       None => {
         printError lintUsage()
+        Process.exit 2
+      }
+    }
+  }
+  ["rename", "--help"] | ["rename", "help"] => print renameUsage()
+  ["rename", ...more] => {
+    match renameOptionsOf(more) {
+      Some(options) => exitWith(runRename(options)?)
+      None => {
+        printError renameUsage()
         Process.exit 2
       }
     }

@@ -3,24 +3,46 @@
  * question that is computed is a method (`isEmpty()`). A field of a `type` or of a `case` whose type is `Bool` and whose
  * name is `is` followed by a capital letter is reported.
  *
- * It has no fix: the better name is a word only a person can choose, and a rename has to reach every use, which is a
- * checked rename and not a text replacement.
+ * Its fix is a checked rename ([renameSites]): the field and every use the checker resolved to it get the word after
+ * `is` (`isShared` becomes `shared`). The rule offers it only where it is certain of that word - the word ends like a
+ * participle or an adjective ([adjectiveOf]) - and where nothing stands in its way ([renameProblems]): not a keyword,
+ * not a name the type has already, and every module that mentions the field checked. Everywhere else the finding names
+ * `torb rename`, which takes the word a person chose.
+ *
+ * Without the checker - a file with a problem - the finding at the declaration comes without a fix.
  */
 
+use Span from "../syntax/source"
 use SourceFile, Declaration, DeclarationKind, Member, MemberKind, Field, TypeKind from "../syntax/ast"
-use Finding, LintRule from "./finding"
+use Checker from "../semantics/checker/context"
+use ModuleId from "../semantics/module"
+use Finding, LintRule, TextEdit from "./finding"
 use nodesOfFile, nodesOfMembers from "./nodes"
+use RenameScope, FieldRename, fieldRenameOf, fieldSymbolAt, describedField, renameProblems, renameSites from "./rename"
 
 public fn questionFieldFindings(file: SourceFile): List<Finding> {
   var findings: List<Finding> = []
-  for declaration in nodesOfFile(file).declarations {
-    findingsOfDeclaration findings, declaration
+  for field in questionFieldsOf(file) {
+    findings.append Finding(LintRule.QuestionField, questionMessage(field.name.text), field.name.span)
   }
   findings.sort({ _.span.start })
   findings
 }
 
-fn findingsOfDeclaration(var findings: List<Finding>, declaration: Declaration) {
+fn questionMessage(name: String): String {
+  "`{name}` is a `Bool` field named as a question: name it with an adjective or a participle, and keep `is...` for a method that computes the answer"
+}
+
+/** Every field of a type or of a case in the file that is a `Bool` named as a question, however deep. */
+fn questionFieldsOf(file: SourceFile): List<Field> {
+  var fields: List<Field> = []
+  for declaration in nodesOfFile(file).declarations {
+    fieldsOfDeclaration fields, declaration
+  }
+  fields
+}
+
+fn fieldsOfDeclaration(var fields: List<Field>, declaration: Declaration) {
   const members = match declaration.kind {
     .Type(inner) => inner.members
     .Trait(inner) => inner.members
@@ -31,34 +53,32 @@ fn findingsOfDeclaration(var findings: List<Finding>, declaration: Declaration) 
   }
   for member in members {
     match member.kind {
-      .Field(field) => findingOfField findings, field
+      .Field(field) => {
+        if isQuestionField(field) {
+          fields.append field
+        }
+      }
       .Case(declaration) => {
         for field in declaration.fields {
-          findingOfField findings, field
+          if isQuestionField(field) {
+            fields.append field
+          }
         }
       }
       _ => {}
     }
   }
   for nested in nodesOfMembers(members).declarations {
-    findingsOfDeclaration findings, nested
+    fieldsOfDeclaration fields, nested
   }
 }
 
-fn findingOfField(var findings: List<Finding>, field: Field) {
+fn isQuestionField(field: Field): Bool {
   const isBool = match field.annotation.kind {
     .Named(path, arguments) => path.length() == 1 && path[0].text == "Bool" && arguments.isEmpty()
     _ => false
   }
-  if !isBool || !isQuestion(field.name.text) {
-    return
-  }
-  const name = field.name.text
-  findings.append(Finding(
-    LintRule.QuestionField,
-    "`{name}` is a `Bool` field named as a question: name it with an adjective or a participle, and keep `is...` for a method that computes the answer",
-    field.name.span,
-  ))
+  isBool && isQuestion(field.name.text)
 }
 
 /** `is` followed by a capital letter: `isShared`, not `island`. */
@@ -73,4 +93,120 @@ fn isQuestion(name: String): Bool {
     Some(first) => first >= 'A' && first <= 'Z'
     None => false
   }
+}
+
+/** The endings of a word the rule takes for a participle or an adjective. */
+const adjectiveEndings = ["ed", "able", "ible", "ive", "ous", "ful", "less"]
+
+/**
+ * The name a field `isShared` gets, `shared`, where the rule is certain of it: the last word after `is` ends like a
+ * participle or an adjective (`-ed`, `-able`, `-ible`, `-ive`, `-ous`, `-ful`, `-less`, but not `-eed`). A noun
+ * (`isCall`), a preposition (`isOn`), a word that ends otherwise (`isStatic`, `isBroken`) has no certain adjective.
+ */
+public fn adjectiveOf(name: String): String? {
+  if !isQuestion(name) {
+    return None
+  }
+  const rest = name.sliceBytes 2, name.byteLength()
+  const last = lastWordOf rest
+  if last.endsWith("eed") || !adjectiveEndings.any({ last.endsWith _ }) {
+    return None
+  }
+  const first = rest.sliceBytes 0, 1
+  first.toLowerCase() + rest.sliceBytes(1, rest.byteLength())
+}
+
+/** The last word of a name in camel case: `Inferred` of `ResultInferred`. */
+fn lastWordOf(name: String): String {
+  var start = 0
+  var offset = 0
+  for character in name.chars() {
+    if character >= 'A' && character <= 'Z' {
+      start = offset
+    }
+    offset = offset + 1
+  }
+  name.sliceBytes start, name.byteLength()
+}
+
+/**
+ * The findings of the rule with the checker's tables, by the module they are in: one at every declaration, with the
+ * rename as its fix where the rule is certain of the word and nothing stands in its way, and - where `fixing` - one at
+ * every use of such a field, which carries the edit of that use. A plain run reports the declarations alone.
+ */
+public fn questionFieldRenames(var checker: Checker, scope: RenameScope, fixing: Bool): Map<Int, List<Finding>> {
+  var found: Map<Int, List<Finding>> = [:]
+  var fields: List<(module: ModuleId, field: Field)> = []
+  var renames: List<FieldRename> = []
+  var renamed: List<Int> = []
+  for module in scope.modules {
+    for field in questionFieldsOf(scope.graph.at(module).file) {
+      const symbol = match fieldSymbolAt(scope, module, field.name.span) {
+        Some(known) => known
+        None => {
+          continue
+        }
+      }
+      const word = match adjectiveOf(field.name.text) {
+        Some(known) => known
+        None => {
+          if const Some(rename) = fieldRenameOf(checker, symbol, "") {
+            const message = "{questionMessage(field.name.text)} (`torb rename {describedField(checker, rename)}=<word>` renames it everywhere)"
+            addFinding found, module, Finding(LintRule.QuestionField, message, field.name.span)
+          }
+          continue
+        }
+      }
+      if const Some(rename) = fieldRenameOf(checker, symbol, word) {
+        fields.append((module, field))
+        renames.append rename
+      }
+    }
+  }
+  const problems = renameProblems checker, scope, renames, keywords: false
+  var certain: List<FieldRename> = []
+  for (index, rename) in renames.indexed() {
+    const (module, field) = fields[index]
+    const described = describedField checker, rename
+    match problems[index] {
+      Some(problem) => {
+        const message = "`{field.name.text}` is a `Bool` field named as a question, and `{rename.newName}` cannot replace it: {problem} (`torb rename {described}=<word>` renames it everywhere)"
+        addFinding found, module, Finding(LintRule.QuestionField, message, field.name.span)
+      }
+      None => {
+        certain.append rename
+        renamed.append index
+      }
+    }
+  }
+  var edits: Map<Int, List<(module: ModuleId, edit: TextEdit)>> = [:]
+  const sites = if fixing {
+    renameSites scope, certain
+  } else {
+    []
+  }
+  for site in sites {
+    const known = edits.get(site.field.value) ?? []
+    edits.set site.field.value, known.appended((site.module, site.edit))
+  }
+  for index in renamed {
+    const (module, field) = fields[index]
+    const rename = renames[index]
+    const declaration = TextEdit field.name.span.start, field.name.span.end, rename.newName
+    const message = "`{field.name.text}` is a `Bool` field named as a question: its adjective is `{rename.newName}`, which `torb lint --fix` renames it to everywhere"
+    addFinding found, module, Finding(LintRule.QuestionField, message, field.name.span, [declaration])
+    for (at, edit) in edits.get(rename.field.value) ?? [] {
+      if at == module && edit.start == declaration.start {
+        continue
+      }
+      const message = "`{rename.currentName}` is the field `{describedField(checker, rename)}`, renamed to `{rename.newName}` with it"
+      addFinding found, at, Finding(LintRule.QuestionField, message, Span(edit.start, edit.end), [edit])
+    }
+  }
+  found
+}
+
+fn addFinding(var found: Map<Int, List<Finding>>, module: ModuleId, finding: Finding) {
+  const known = found.get(module.value) ?? []
+  found.set module.value, known.appended(finding)
 }

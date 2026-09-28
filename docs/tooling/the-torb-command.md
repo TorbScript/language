@@ -13,6 +13,7 @@ keywords:
   - test
   - format
   - lint
+  - rename
   - canon
   - highlight
 source:
@@ -22,6 +23,7 @@ source:
   - compiler/src/cli/repl.trb
   - compiler/src/format/command.trb
   - compiler/src/lint/command.trb
+  - compiler/src/lint/rename-command.trb
   - CONCEPT.md#toolchain
 ---
 
@@ -46,6 +48,7 @@ torb docs <command>    Check, index, and derive the documentation
 torb doc [path]...     The reference of a package: its public API and doc comments as a static site
 torb format [path]...  Write sources in the layout of the language; --check only reports
 torb lint [path]...    The rules of style the checker leaves alone; --fix writes their fixes
+torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them
 torb canon [path]...   Deprecated: runs torb format
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
 torb add <package>...  Add a dependency to project.trb, resolve, lock and install it
@@ -157,7 +160,7 @@ erased, so a run cannot change what a program means ([torb format](torb-format.m
 
 Reports the rules of style the type checker leaves alone, each finding in the format of `check` with `warning` in
 front and the id of its rule under it: the own name of a type where `Self` means the same (`self-name`), a `Bool` field
-named as a question (`question-field`), a binding of an irrefutable pattern that nothing reads (`unread-binding`),
+named as a question (`question-field`, which runs the checker for the rename it fixes with), a binding of an irrefutable pattern that nothing reads (`unread-binding`),
 `true`, `false` or `None` for a `Bool` or an optional without its label (`labeled-literal`, which runs the checker),
 a written `Some` or `Ok` the value would become on its own (`redundant-wrap`, which runs the checker), and a
 `private(var)` field, which is spelled `protected var` (`protected-field`) ([torb lint](torb-lint.md)).
@@ -167,6 +170,13 @@ a written `Some` or `Ok` the value would become on its own (`redundant-wrap`, wh
 | `--fix` | Write every fix a rule is certain of, then lint again and report what is left |
 | `--rule <id>` | Run this rule; without it every rule runs |
 | `--skip <id>` | Leave this rule out |
+
+### `rename`
+
+Renames fields at their declaration and at every use the checker resolves to them - a member, a bare name inside the
+type, the label of a constructor, a `copy`, a case or a pattern, a `with ... by` delegate, a doc link - and nothing
+else: a parameter or a local of the same name keeps it. A rename that cannot be made is printed and nothing is written
+([torb rename](torb-rename.md)).
 
 ### `canon`
 

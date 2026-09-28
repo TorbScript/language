@@ -28,7 +28,8 @@ use normalizePath from "../project/path"
 use check from "../semantics/check"
 use Finding, LintRule, TextEdit, everyLintRule from "./finding"
 use selfNameFindings from "./self-name"
-use questionFieldFindings from "./question-field"
+use questionFieldFindings, questionFieldRenames from "./question-field"
+use renameScopeOf from "./rename"
 use unreadBindingFindings from "./unread-binding"
 use labeledLiteralFindings from "./labeled-literal"
 use redundantWrapFindings from "./redundant-wrap"
@@ -142,25 +143,25 @@ type TypedFacts {
  * What the checker's tables say, by the absolute path of the file. The projects of the paths are checked the way
  * `torb check` checks them; a file the checker has a problem with gets nothing, because its tables are not whole, and
  * neither does a file that belongs to no project the paths reach.
+ *
+ * `fixing` asks for the findings a fix needs beyond the ones a report shows: a rename of `question-field` edits every
+ * use of the field, and each of those edits is a finding of the file it is in.
  */
-fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, TypedFacts>, IoError> {
+fn typedFactsOf(paths: List<String>, rules: List<LintRule>, fixing: Bool): Result<Map<String, TypedFacts>, IoError> {
   var found: Map<String, TypedFacts> = [:]
   if !rules.any({ _.needsTheChecker() }) {
     return found
   }
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?)
-  var broken: List<String> = []
-  for file in checked.files {
-    if !file.diagnostics.isEmpty() {
-      broken.append file.path
-    }
+  const scope = renameScopeOf checked
+  var renames: Map<Int, List<Finding>> = [:]
+  if rules.contains(LintRule.QuestionField) {
+    var checker = checked.checker
+    renames = questionFieldRenames checker, scope, fixing
   }
-  for module in checked.requested {
+  for module in scope.modules {
     const shape = checked.program.graph.at module
-    if broken.contains(shape.shownPath) || !shape.diagnostics.isEmpty() {
-      continue
-    }
     var findings = if rules.contains(LintRule.LabeledLiteral) {
       labeledLiteralFindings checked.checker, module, shape.file
     } else {
@@ -169,12 +170,17 @@ fn typedFactsOf(paths: List<String>, rules: List<LintRule>): Result<Map<String, 
     if rules.contains(LintRule.RedundantWrap) {
       findings.appendAll redundantWrapFindings(checked.checker, module, shape.source.text, shape.file)
     }
+    findings.appendAll(renames.get(module.value) ?? [])
     found.set shape.path, TypedFacts(findings, plainBindingStarts(checked.checker, module))
   }
   found
 }
 
-/** Every finding of one file: those of the syntax tree, and those the checker's tables gave. `None` if it does not parse. */
+/**
+ * Every finding of one file: those of the syntax tree, and those the checker's tables gave. A finding of the tables
+ * takes the place of one of the syntax tree with the same rule at the same span - the declaration `question-field`
+ * finds either way, with a fix only where the checker is there. `None` if it does not parse.
+ */
 fn findingsOfFile(
   file: String,
   source: String,
@@ -189,7 +195,13 @@ fn findingsOfFile(
     }
   }
   if const Some(known) = facts {
-    findings.appendAll known.findings
+    var kept: List<Finding> = []
+    for finding in findings {
+      if !known.findings.any({ _.rule == finding.rule && _.span == finding.span }) {
+        kept.append finding
+      }
+    }
+    findings = kept.appendedAll known.findings
     findings.sort({ _.span.start })
   }
   Ok Some(findings)
@@ -256,7 +268,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
   }
   files.sort({ _ })
   if options.fix {
-    const typedBefore = typedFactsOf(options.paths, options.rules)?
+    const typedBefore = typedFactsOf(options.paths, options.rules, fixing: true)?
     var changed = 0
     for file in files {
       const source = File.readText(file)?
@@ -274,7 +286,7 @@ public fn runLint(options: LintOptions): Result<Int, IoError> {
     }
     print "fixed {counted(changed, "file")}; what is left:"
   }
-  const typed = typedFactsOf(options.paths, options.rules)?
+  const typed = typedFactsOf(options.paths, options.rules, fixing: false)?
   var total = 0
   var filesWithFindings = 0
   var perRule: List<Int> = []

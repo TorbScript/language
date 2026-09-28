@@ -1,0 +1,241 @@
+/**
+ * `torb rename`: renames fields at their declaration and at every use the checker resolved to them.
+ *
+ * ```text
+ * torb rename [<file>:]<Type>.<field>=<name>... [path]...
+ * torb rename [<file>:]<Type>.<Case>.<field>=<name>... [path]...
+ * ```
+ *
+ * The paths are checked the way `torb check` checks them, and the renames are made in one go ([renameSites]) - or not
+ * at all: when one of them cannot be made ([renameProblems]), every problem is printed, nothing is written, and the
+ * command leaves with 1. A new name may be a keyword, because a field may be named after one; a bare use of it inside
+ * its type becomes `self.type`.
+ *
+ * It is the migration a person drives: `torb lint --fix --rule question-field` renames the fields whose word the rule
+ * is certain of, and this command takes the word somebody chose for the others.
+ */
+
+use File, IoError from "std/fs"
+use readSourceTree, absolutePaths from "../project/read"
+use check from "../semantics/check"
+use SymbolId from "../semantics/symbols"
+use ModuleId from "../semantics/module"
+use Checker from "../semantics/checker/context"
+use counted from "../cli/render"
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use TextEdit from "./finding"
+use RenameScope, FieldRename, fieldRenameOf, describedField, renameScopeOf, renameProblems, renameSites from "./rename"
+
+/** `torb rename --help` */
+public fn renameUsage(): String {
+  const lines = [
+    "torb rename - rename fields at their declaration and every use the checker resolves",
+    "",
+    "Usage:",
+    "  torb rename [<file>:]<Type>.<field>=<name>... [path]...",
+    "  torb rename [<file>:]<Type>.<Case>.<field>=<name>... [path]...",
+    "",
+    "  <file>        The end of the path of the file the type is declared in, where two types share its name",
+    "  [path]...     What is checked and changed (default: the current directory); name every project that uses the fields",
+    "",
+    "Nothing is written when one of the renames cannot be made: each problem is printed, and the command exits with 1.",
+  ]
+  lines.joined separator: "\n"
+}
+
+/** What the command line asked for. */
+public type RenameOptions {
+  requests: List<RenameRequest>
+  paths: List<String>
+}
+
+/** One rename as it was written: `syntax/ast.trb:Parameter.annotation=type`. */
+public type RenameRequest {
+  /** The end of the path of the file the type is declared in; empty for any file. */
+  file: String
+  /** The type, and the case where the field is one of a case. */
+  owner: List<String>
+  field: String
+  newName: String
+  written: String
+}
+
+/** Parses `torb rename`'s arguments. `None` for an unknown flag, a rename that is not written right, or no rename. */
+public fn renameOptionsOf(arguments: List<String>): RenameOptions? {
+  var requests: List<RenameRequest> = []
+  var paths: List<String> = []
+  for argument in arguments {
+    if argument.startsWith("-") {
+      return None
+    }
+    if !argument.contains("=") {
+      paths.append argument
+      continue
+    }
+    requests.append(requestOf(argument)?)
+  }
+  if requests.isEmpty() {
+    return None
+  }
+  if paths.isEmpty() {
+    paths.append "."
+  }
+  RenameOptions requests, paths
+}
+
+fn requestOf(argument: String): RenameRequest? {
+  const (target, newName) = argument.splitOnce("=")?
+  var file = ""
+  var dotted = target
+  if const Some(at) = target.lastByteOffsetOf(":") {
+    file = target.sliceBytes 0, at
+    dotted = target.sliceBytes(at + 1, target.byteLength())
+  }
+  const parts = dotted.split "."
+  if parts.length() < 2 || parts.length() > 3 || newName.isEmpty() || parts.any({ _.isEmpty() }) {
+    return None
+  }
+  const field = parts[parts.length() - 1]
+  RenameRequest file, parts[0..parts.length() - 1], field, newName, argument
+}
+
+/** `torb rename [<file>:]<Type>.<field>=<name>... [path]...`. Returns the exit code. */
+public fn runRename(options: RenameOptions): Result<Int, IoError> {
+  const tree = readSourceTree(options.paths)?
+  const checked = check(tree, absolutePaths(options.paths)?)
+  const scope = renameScopeOf checked
+  var checker = checked.checker
+  var renames: List<FieldRename> = []
+  var problems: List<String> = []
+  for request in options.requests {
+    match fieldOf(checker, scope, request) {
+      Ok(field) => {
+        if const Some(rename) = fieldRenameOf(checker, field, request.newName) {
+          renames.append rename
+        }
+      }
+      Fail(problem) => problems.append "`{request.written}`: {problem}"
+    }
+  }
+  if problems.isEmpty() {
+    for (index, problem) in renameProblems(checker, scope, renames, keywords: true).indexed() {
+      if const Some(text) = problem {
+        problems.append "`{describedField(checker, renames[index])}`: {text}"
+      }
+    }
+  }
+  if !problems.isEmpty() {
+    for problem in problems {
+      printError "torb rename: {problem}"
+    }
+    printError "nothing was written"
+    return 1
+  }
+  const sites = renameSites scope, renames
+  var byModule: Map<Int, List<TextEdit>> = [:]
+  var modules: List<ModuleId> = []
+  for site in sites {
+    if byModule.get(site.module.value).isNone() {
+      modules.append site.module
+    }
+    const known = byModule.get(site.module.value) ?? []
+    byModule.set site.module.value, known.appended(site.edit)
+  }
+  // Every file is edited and parsed again before the first one is written: a name the parser takes for something
+  // else where it stands refuses the whole rename, as a problem of the checker does
+  var texts: List<(path: String, text: String)> = []
+  for module in modules {
+    const shape = scope.graph.at module
+    const source = File.readText(shape.path)?
+    if source != shape.source.text {
+      printError "torb rename: {shape.shownPath} changed while it was checked"
+      printError "nothing was written"
+      return 1
+    }
+    const text = edited(source, byModule.get(module.value) ?? [])
+    const diagnostics = parse(SourceText.of(text)).diagnostics
+    if diagnostics.length() > shape.diagnostics.length() {
+      printError "torb rename: {shape.shownPath} does not parse with the new names: {diagnostics[0].message}"
+      printError "nothing was written"
+      return 1
+    }
+    texts.append((shape.path, text))
+  }
+  for (path, text) in texts {
+    File.writeText(path, text)?
+  }
+  for rename in renames {
+    const places = sites.filter({ _.field == rename.field }).toList().length()
+    print "{describedField(checker, rename)} -> {rename.newName}: {counted(places, "place")}"
+  }
+  print "renamed {counted(renames.length(), "field")} at {counted(sites.length(), "place")} in {counted(modules.length(), "file")}"
+  0
+}
+
+/**
+ * The field a request names, among the modules of the scope: the one field of that name of a type (and case) of that
+ * name, in a file whose path ends with the request's file. A message where there is none or more than one.
+ */
+fn fieldOf(checker: Checker, scope: RenameScope, request: RenameRequest): Result<SymbolId, String> {
+  var found: List<SymbolId> = []
+  var places: List<String> = []
+  for (index, symbol) in checker.symbols.all.indexed() {
+    const isType = match symbol.kind {
+      .Type => true
+      _ => false
+    }
+    if symbol.name != request.owner[0] || !isType {
+      continue
+    }
+    const module = match symbol.module {
+      Some(known) if scope.modules.contains(known) => known
+      _ => {
+        continue
+      }
+    }
+    const shape = scope.graph.at module
+    if !request.file.isEmpty() && !shape.path.endsWith(request.file) {
+      continue
+    }
+    const holder = if request.owner.length() == 2 {
+      match checker.symbols.caseNamed(SymbolId(index), request.owner[1]) {
+        Some(variant) => variant
+        None => {
+          continue
+        }
+      }
+    } else {
+      SymbolId index
+    }
+    for (candidate, field) in checker.symbols.all.indexed() {
+      if field.name != request.field || field.module != module {
+        continue
+      }
+      if const .Field(owner) = field.kind {
+        if owner == holder {
+          found.append SymbolId(candidate)
+          places.append shape.shownPath
+        }
+      }
+    }
+  }
+  if found.isEmpty() {
+    return Fail "the paths declare no such field, in a file that checks without a problem"
+  }
+  if found.length() > 1 {
+    return Fail "{found.length()} fields have that name ({places.joined(separator: ", ")}): put the end of the path of one in front, `<file>:{request.owner.joined(separator: ".")}.{request.field}`"
+  }
+  found[0]
+}
+
+/** The edits applied from the last to the first, so that every offset still means the original source. */
+fn edited(source: String, edits: List<TextEdit>): String {
+  var sorted = edits
+  sorted.sort({ _.start })
+  var text = source
+  for edit in sorted.reversed() {
+    text = text.sliceBytes(0, edit.start) + edit.text + text.sliceBytes(edit.end, text.byteLength())
+  }
+  text
+}

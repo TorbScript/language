@@ -8,9 +8,17 @@ use Finding, LintRule from "../src/lint/finding"
 use labeledLiteralFindings from "../src/lint/labeled-literal"
 use redundantWrapFindings from "../src/lint/redundant-wrap"
 use plainBindingStarts from "../src/lint/plain-values"
+use adjectiveOf, questionFieldRenames from "../src/lint/question-field"
+use FieldRename, RenameScope, fieldRenameOf, fieldSymbolAt, renameScopeOf, renameProblems, renameSites from "../src/lint/rename"
+use renameOptionsOf from "../src/lint/rename-command"
+use TextEdit from "../src/lint/finding"
+use Span from "../src/syntax/source"
+use check from "../src/semantics/check"
+use Checker from "../src/semantics/checker/context"
+use ModuleId from "../src/semantics/module"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
-use probe from "./harness"
+use probe, workspaceWith from "./harness"
 
 fn findingsOf(source: String, rule: LintRule): List<Finding> {
   lintFindings(source, [rule]).expect("the source parses")
@@ -118,7 +126,7 @@ group "question-field" {
     assert(foundTexts(source, LintRule.QuestionField) == ["isVisible", "isOpen"])
   }
 
-  test "it has no fix" {
+  test "without the checker it has no fix" {
     const source = "type Flags \{\n  isVisible: Bool\n\}\n"
     assert(!findingsOf(source, LintRule.QuestionField)[0].hasFix())
     assert(fixed(source, findingsOf(source, LintRule.QuestionField)) == source)
@@ -131,6 +139,252 @@ group "question-field" {
         LintRule.QuestionField,
       ).isEmpty(),
     )
+  }
+
+  test "the fix is the participle or the adjective after `is`, and only where the rule is certain of it" {
+    assert(adjectiveOf("isShared") == "shared")
+    assert(adjectiveOf("isResultInferred") == "resultInferred")
+    assert(adjectiveOf("isReachable") == "reachable")
+    assert(adjectiveOf("isRecursive") == "recursive")
+    assert adjectiveOf("isCall").isNone()
+    assert adjectiveOf("isStatic").isNone()
+    assert adjectiveOf("isFreed").isNone()
+    assert adjectiveOf("island").isNone()
+  }
+
+  test "with the checker, the fix renames the field and every use of it" {
+    const source = [
+      "type Door \{",
+      "  isLocked: Bool",
+      "  isOpen: Bool",
+      "",
+      "  fn describe(): String \{",
+      "    if isLocked \{ \"locked\" \} else \{ \"free\" \}",
+      "  \}",
+      "\}",
+      "",
+      "const door = Door(isLocked: true, isOpen: false)",
+      "print door.isLocked",
+      "",
+    ].joined(separator: "\n")
+    const expected = [
+      "type Door \{",
+      "  locked: Bool",
+      "  isOpen: Bool",
+      "",
+      "  fn describe(): String \{",
+      "    if locked \{ \"locked\" \} else \{ \"free\" \}",
+      "  \}",
+      "\}",
+      "",
+      "const door = Door(locked: true, isOpen: false)",
+      "print door.locked",
+      "",
+    ].joined(separator: "\n")
+    const checked = check workspaceWith(["app/src/main.trb": source]), ["app"]
+    var checker = checked.checker
+    const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+    const found = questionFieldRenames(checker, renameScopeOf(checked), fixing: true).get(module.value) ?? []
+    expectText fixed(source, found), expected
+    const fixes = found.filter({ _.hasFix() }).toList()
+    assert(fixes.length() == 4)
+    assert(found.length() == 5)
+  }
+}
+
+/** The program of one file, checked, with the scope a rename of it has. */
+type Renaming {
+  source: String
+  checker: Checker
+  scope: RenameScope
+  module: ModuleId
+}
+
+fn renamingOf(source: String): Renaming {
+  const checked = check workspaceWith(["app/src/main.trb": source]), ["app"]
+  const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+  Renaming source, checked.checker, renameScopeOf(checked), module
+}
+
+/** The rename of the field declared at the first `written` of the source. */
+fn renameOf(renaming: Renaming, written: String, newName: String): FieldRename {
+  const start = renaming.source.byteOffsetOf(written).expect("the field in the source")
+  const name = written.substringBefore(":") ?? written
+  const field = fieldSymbolAt(renaming.scope, renaming.module, Span(start, start + name.byteLength())).expect("a field")
+  fieldRenameOf(renaming.checker, field, newName).expect("a field")
+}
+
+/** The source with the renames made, which have to have no problem. */
+fn renamedText(renaming: Renaming, renames: List<FieldRename>, keywords: Bool = true): String {
+  var checker = renaming.checker
+  for problem in renameProblems(checker, renaming.scope, renames, keywords) {
+    if const Some(text) = problem {
+      print text
+    }
+    assert problem.isNone()
+  }
+  var edits: List<TextEdit> = []
+  for site in renameSites(renaming.scope, renames) {
+    edits.append site.edit
+  }
+  edits.sort({ _.start })
+  var text = renaming.source
+  for edit in edits.reversed() {
+    text = text.sliceBytes(0, edit.start) + edit.text + text.sliceBytes(edit.end, text.byteLength())
+  }
+  text
+}
+
+fn problemOf(renaming: Renaming, rename: FieldRename, keywords: Bool): String? {
+  var checker = renaming.checker
+  renameProblems(checker, renaming.scope, [rename], keywords)[0]
+}
+
+group "rename" {
+  test "a member, a bare name, the labels of a constructor, of `copy` and of a pattern, and a link" {
+    const source = [
+      "/** A door. [Door.isOpen] says whether it is open. */",
+      "type Door \{",
+      "  isOpen: Bool",
+      "  width: Int",
+      "",
+      "  fn describe(): String \{",
+      "    if isOpen \{ \"open\" \} else \{ \"closed\" \}",
+      "  \}",
+      "\}",
+      "",
+      "const door = Door(isOpen: true, width: 2)",
+      "const closed = door.copy(isOpen: false)",
+      "print closed.isOpen",
+      "match door \{",
+      "  Door(isOpen: true, ...) => print(\"open\")",
+      "  _ => print(\"closed\")",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    const renaming = renamingOf source
+    expectText renamedText(renaming, [renameOf(renaming, "isOpen: Bool", "open")]), source.replace("isOpen", "open")
+  }
+
+  test "a keyword, and a name the body binds itself, are reached through `self`" {
+    const source = [
+      "type Door \{",
+      "  var isLocked: Bool = false",
+      "  isOpen: Bool",
+      "",
+      "  var fn lock() \{",
+      "    isLocked = true",
+      "  \}",
+      "",
+      "  fn passable(open: Bool): Bool \{",
+      "    isOpen && open",
+      "  \}",
+      "\}",
+      "",
+      "var door = Door(isOpen: true)",
+      "door.lock()",
+      "print door.isLocked",
+      "",
+    ].joined(separator: "\n")
+    const renaming = renamingOf source
+    const renames = [renameOf(renaming, "isLocked: Bool", "shared"), renameOf(renaming, "isOpen: Bool", "open")]
+    const expected = [
+      "type Door \{",
+      "  var shared: Bool = false",
+      "  open: Bool",
+      "",
+      "  var fn lock() \{",
+      "    self.shared = true",
+      "  \}",
+      "",
+      "  fn passable(open: Bool): Bool \{",
+      "    self.open && open",
+      "  \}",
+      "\}",
+      "",
+      "var door = Door(open: true)",
+      "door.lock()",
+      "print door.shared",
+      "",
+    ].joined(separator: "\n")
+    expectText renamedText(renaming, renames), expected
+  }
+
+  test "a field of a case, in a constructor and in a pattern" {
+    const source = [
+      "type Shape \{",
+      "  case Circle(radius: Float)",
+      "  case Square(side: Float)",
+      "\}",
+      "",
+      "const shape = Shape.Circle(radius: 1.0)",
+      "match shape \{",
+      "  .Circle(radius: size) => print(size)",
+      "  .Square(side) => print(side)",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    const renaming = renamingOf source
+    expectText renamedText(renaming, [renameOf(renaming, "radius: Float", "size")]), source.replace("radius:", "size:")
+  }
+
+  test "a label of a function's parameter and a local of the same name stay" {
+    const source = [
+      "type Door \{",
+      "  isOpen: Bool",
+      "\}",
+      "",
+      "fn opened(isOpen: Bool): Door \{",
+      "  Door isOpen",
+      "\}",
+      "",
+      "print opened(isOpen: true).isOpen",
+      "",
+    ].joined(separator: "\n")
+    const renaming = renamingOf source
+    const expected = source.replace("  isOpen: Bool\n", "  open: Bool\n").replace(").isOpen", ").open")
+    expectText renamedText(renaming, [renameOf(renaming, "isOpen: Bool", "open")]), expected
+  }
+
+  test "what stands in the way is a problem, and nothing is renamed" {
+    const source = [
+      "type Door \{",
+      "  isOpen: Bool",
+      "  width: Int",
+      "",
+      "  fn open(): Bool \{",
+      "    isOpen",
+      "  \}",
+      "\}",
+      "",
+      "print Door(isOpen: true, width: 1).open()",
+      "",
+    ].joined(separator: "\n")
+    const renaming = renamingOf source
+    assert problemOf(renaming, renameOf(renaming, "isOpen: Bool", "open"), keywords: true).isSome()
+    assert problemOf(renaming, renameOf(renaming, "isOpen: Bool", "width"), keywords: true).isSome()
+    assert problemOf(renaming, renameOf(renaming, "isOpen: Bool", "var"), keywords: false).isSome()
+    assert problemOf(renaming, renameOf(renaming, "isOpen: Bool", "Open"), keywords: true).isSome()
+    assert problemOf(renaming, renameOf(renaming, "isOpen: Bool", "var"), keywords: true).isNone()
+  }
+
+  test "the command line: renames with `=`, the rest are paths" {
+    const options = renameOptionsOf([
+      "syntax/ast.trb:Parameter.annotation=type",
+      "ExpressionKind.If.otherwise=else",
+      "compiler",
+    ]).expect("options")
+    assert(options.paths == ["compiler"])
+    assert(options.requests.length() == 2)
+    assert(options.requests[0].file == "syntax/ast.trb")
+    assert(options.requests[0].owner == ["Parameter"])
+    assert(options.requests[0].field == "annotation")
+    assert(options.requests[0].newName == "type")
+    assert(options.requests[1].owner == ["ExpressionKind", "If"])
+    assert(renameOptionsOf(["Door.isOpen=open"]).expect("options").paths == ["."])
+    assert renameOptionsOf(["compiler"]).isNone()
+    assert renameOptionsOf(["Door=open"]).isNone()
+    assert renameOptionsOf(["--force", "Door.isOpen=open"]).isNone()
   }
 }
 
