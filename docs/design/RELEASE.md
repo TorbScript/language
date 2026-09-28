@@ -1537,6 +1537,18 @@ creates both in the web interface (`docs/contributing/releasing.md`, "One-time s
   permissions, and pushing an image is a package permission.
 - **The workflow file of a reusable workflow's job** is the calling run's: `images.yml` runs inside `release.yml` and
   `nightly.yml`, which is why those two are in the image integration's rule, and `images.yml` itself for a run by hand.
+- **A reusable workflow says `enable-openid-connect: true` at its top level**, not on its jobs, and the calling job
+  says nothing. A calling job without `runs-on` is expanded by the forge into the called workflow's jobs, each a job of
+  the calling run; the jobparser (runner 12.13.2, which Forgejo 16.0.5 builds in) re-reads each expanded job from a
+  one-job workflow whose job type has no field for the key, so a job-level `enable-openid-connect` of the called
+  workflow is dropped, and the calling job's own key is read for the calling job alone, which runs nothing. What
+  survives is the called workflow's top-level key. The first nightly's image jobs failed on exactly this ("this job
+  cannot ask for an ID token") while `images.yml` run by hand had pushed its images the same day; parsing
+  `nightly.yml`'s call with that jobparser gives the three expanded image jobs `false` with the key on the job and
+  `true` with it at the top, and the top-level key serves the run by hand as well. The alternative - `runs-on` on the
+  calling job, which the forge then leaves unexpanded (`expandForJob`, the behaviour from before the expansion) and
+  whose runner runs the called workflow inside that one job, under the calling job's key - would put three image builds
+  of up to two hours each into one job of the calling run.
 - **The patterns** are `gobwas/glob`'s, which the forge compiles when the integration is saved; `{a,b}` is an
   alternative, `*` crosses `/`.
 - **An hour**: a token lives `[actions] ID_TOKEN_EXPIRATION_TIME` (an hour by default), so every job asks for its token

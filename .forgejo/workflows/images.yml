@@ -57,12 +57,17 @@ on:
         options: [release, artifact]
         default: release
 
+# The push asks for an ID token, and this is the one place that grants it in both forms of the workflow. Called by
+# nightly.yml or release.yml, the forge expands `image` into jobs of the caller's run, and those jobs take the called
+# workflow's top-level `enable-openid-connect`: the key on a job of a called workflow is lost in the expansion (Forgejo
+# 16, the jobparser of runner 12.13), and the key on the calling job is never read for them (RELEASE.md section 14).
+enable-openid-connect: true
+
 jobs:
   image:
     name: cr.torb.dev/torbscript/${{ matrix.image }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    enable-openid-connect: true
     strategy:
       fail-fast: false
       # One image at a time: each build stage compiles a TorbScript program, the registry's with the compiler inside
