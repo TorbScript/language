@@ -31,7 +31,7 @@ public type Parsed {
 /** Lexes and parses one file, from its first token to `EndOfFile`, with the diagnostics of both in source order. */
 public fn parse(source: SourceText): Parsed {
   const lexed = lex source
-  var parser = Parser source, lexed.tokens, docs: lexed.docs
+  var parser = Parser.over source, lexed.tokens, docs: lexed.docs
   const statements = parseStatementsUntil parser, TokenKind.EndOfFile
   var diagnostics = lexed.diagnostics.appendedAll parser.diagnostics
   diagnostics.sort({ _.span.start })
@@ -44,12 +44,20 @@ public fn parse(source: SourceText): Parsed {
  */
 public type Parser {
   source: SourceText
-  /** Ends with `EndOfFile` */
-  tokens: List<Token>
+  /**
+   * Ends with `EndOfFile`. An `ArrayList` and not a `List`: every look at a token reads it, and through the trait each
+   * read is a call through a witness table.
+   */
+  tokens: ArrayList<Token>
   docs: List<DocComment> = []
   /** The first doc comment that was not looked at yet */
   var nextDoc: Int = 0
   var position: Int = 0
+  /**
+   * `tokens[position]`, which almost every step of the grammar looks at - several times per token, once for each form it
+   * tries: a field, where each look was a read of the list. `bump` is what moves both.
+   */
+  var current: Token
   var diagnostics: List<Diagnostic> = []
   /** The problems of the `String` reading of the interpolations of the string literals ([Parsed.deferred]). */
   var deferred: List<DeferredDiagnostic> = []
@@ -59,12 +67,17 @@ public type Parser {
    */
   var allowsTrailingClosures: Bool = true
 
+  /** A cursor at the first of the tokens, which end with `EndOfFile`. */
+  static fn over(source: SourceText, tokens: ArrayList<Token>, docs: List<DocComment> = []): Self {
+    Self source, tokens, docs: docs, current: tokens[0]
+  }
+
   fn token(): Token {
-    tokens[position]
+    current
   }
 
   fn kind(): TokenKind {
-    tokens[position].kind
+    current.kind
   }
 
   fn kindAt(offset: Int): TokenKind {
@@ -72,7 +85,7 @@ public type Parser {
   }
 
   fn span(): Span {
-    tokens[position].span
+    current.span
   }
 
   /** The span of the token `offset` places ahead, or of the last token where there are fewer. */
@@ -124,15 +137,19 @@ public type Parser {
 
   /** Where a statement, a member or a match arm has to end. */
   fn isAtEndOfStatement(): Bool {
-    isAtAny([TokenKind.Newline, TokenKind.BraceClose, TokenKind.EndOfFile])
+    match kind() {
+      .Newline | .BraceClose | .EndOfFile => true
+      _ => false
+    }
   }
 
   var fn bump(): Token {
-    const current = token()
+    const bumped = current
     if position < tokens.length() - 1 {
       position = position + 1
+      current = tokens[position]
     }
-    current
+    bumped
   }
 
   var fn eat(expected: TokenKind): Bool {

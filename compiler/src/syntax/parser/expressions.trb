@@ -221,13 +221,20 @@ fn parseArgument(var parser: Parser): Argument {
 }
 
 fn isAtRange(parser: Parser, minimum: Int): Bool {
-  parser.isAtAny([TokenKind.DotDot, TokenKind.DotDotEqual]) && minimum <= rangePower
+  const isRange = match parser.kind() {
+    .DotDot | .DotDotEqual => true
+    _ => false
+  }
+  isRange && minimum <= rangePower
 }
 
 fn parseBinary(var parser: Parser, minimum: Int): Expression {
   const start = parser.span()
   // Whether `left` is still a prefix operator as it was written, without parentheses around it: `-x ** 2`
-  var isBarePrefix = parser.isAtAny([TokenKind.Minus, TokenKind.Bang, TokenKind.Tilde])
+  var isBarePrefix = match parser.kind() {
+    .Minus | .Bang | .Tilde => true
+    _ => false
+  }
   // `..end`: a range without a start
   var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
   loop {
@@ -564,7 +571,7 @@ fn parseTextSegments(var parser: Parser, parts: List<TextPart>, literal: Span): 
       .Literal(text) => segments.append TextSegment.Literal(text)
       .Expression(range) => {
         const lexed = lexRange parser.source, range
-        var inner = Parser parser.source, lexed.tokens
+        var inner = Parser.over parser.source, lexed.tokens
         const expression = parseExpression inner
         if !inner.isAt(TokenKind.EndOfFile) {
           inner.errorHere "Expected `\}` after the expression. A literal brace is written `\\\{`"
