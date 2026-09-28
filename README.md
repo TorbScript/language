@@ -17,6 +17,7 @@ native executables, and it is its own configuration format.
 | `examples/`  | Tour and example projects                                                     |
 | `tests/`     | The conformance suite and the language smoke programs ([tests/conformance/README.md](tests/conformance/README.md)) |
 | `brand/`     | The logo, the icons and the design tokens ([brand/README.md](brand/README.md), [docs/design/BRAND.md](docs/design/BRAND.md)) |
+| `playground/` | The playground of torb.dev/play: `torb` built as WebAssembly, and the page's script ([docs/tooling/the-playground.md](docs/tooling/the-playground.md)) |
 
 ## Building
 
