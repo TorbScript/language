@@ -113,8 +113,8 @@ colours, which is what every golden file compares. The first of these rules that
 1. `--color always` or `--color never`.
 2. `FORCE_COLOR` or `CLICOLOR_FORCE` set to anything but empty or `0`: colour.
 3. `NO_COLOR` set to anything but empty: no colour ([no-color.org](https://no-color.org)).
-4. `auto`, the default: colour where the output is a terminal whose `TERM` is not `dumb`. Today standard error is
-   coloured where standard output is a terminal, as an interactive `torb` has one terminal for both.
+4. `auto`, the default: colour where the output is a terminal whose `TERM` is not `dumb`, decided for standard
+   output and standard error each: `torb check . 2> problems.txt` writes the file without colour.
 
 On Windows a console shows the colours once `torb` has turned on its processing of escape sequences, which every
 console of Windows 10 and later has; one that refuses gets plain text. Where `COLORTERM` is `truecolor` or `24bit` and

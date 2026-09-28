@@ -11,7 +11,7 @@
 
 use Environment from "std/os"
 use Process from "std/process"
-use isTerminal from "std/console"
+use isTerminal, isErrorTerminal from "std/console"
 
 /** What a piece of output means, which is all that decides its colour. */
 public type Role {
@@ -220,9 +220,7 @@ fn groundOf(around: ColorEnvironment): Ground? {
 public fn paletteFor(stream: Stream): Palette {
   const terminal = match stream {
     .Output => isTerminal()
-    // What `isTerminal` answers for standard output, until the seed knows `isErrorTerminal` of `std/console`: an
-    // interactive `torb` has one terminal for both streams
-    .Error => isTerminal()
+    .Error => isErrorTerminal()
   }
   const choice = match colorArguments(Process.arguments()) {
     Ok(found) => found.choice

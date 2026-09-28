@@ -505,8 +505,7 @@ only token in the brand's hue.
 **Status of this section: applied** (2026-09-28). `compiler/src/cli/color.trb` holds the palette and the rules below,
 `compiler/src/cli/render.trb` renders the diagnostics, and `runtime/test.c` colours the report of `torb test` by the
 same rules; `docs/tooling/the-torb-command.md` ("`--color`") describes it for users. Not yet: a `help` label (no
-diagnostic has one), a `skipped` test (the runner has none), OSC 8 hyperlinks and in-place progress lines, and standard
-error is judged by whether standard output is a terminal until the seed knows `isErrorTerminal` of `std/console`.
+diagnostic has one), a `skipped` test (the runner has none), OSC 8 hyperlinks and in-place progress lines.
 
 **Decision: `torb` colours by meaning, in the 16 ANSI colours, and never in the brand red.** In a terminal red means
 error and nothing else: no red banner, no red `torb`, no red progress. The name and the version are bold.
