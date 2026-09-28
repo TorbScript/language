@@ -553,7 +553,9 @@ beyond a megabyte stops the run. `TorbPlayground.mount` follows the contract of 
 
 **The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the six files into
 `assets/` where they were built; no page names them, so a site without them is still whole. `tools/deploy/nginx.conf`
-sends `torb.wasm.gz` with `gzip_static`. The site image builds the playground itself, in the pinned emscripten image,
+sends `torb.wasm.gz` with `gzip_static`, and has a browser ask for the playground's files again after five minutes
+(a 304 while the release has not replaced them): the site's script loads `assets/playground.js` by its name, without
+the hash behind `?v=` that lets the stylesheet be kept for a year. The site image builds the playground itself, in the pinned emscripten image,
 from the release's source and with the release's `torb` - the same inputs give the same wasm, and nothing but the
 release is downloaded for it. CI's `playground` job (`.forgejo/workflows/gates.yml`) builds it in that image from the
 compiler of the run and runs `smoke-test.mjs`.
