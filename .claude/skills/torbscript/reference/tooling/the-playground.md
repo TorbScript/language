@@ -116,13 +116,15 @@ error: `std/process` does not exist in the browser: a program in the browser sta
   = The playground runs a program in the browser: printing and the clock are real, `std/fs` is in memory
 ```
 
-A file written and read back in the file system in memory:
+A file written, read back and removed, in the file system in memory - and on your machine, where the same program
+runs in the working directory:
 
 ```trb run
 use File from "std/fs"
 
 File.writeText("notes.txt", "kept in memory").expect("written")
 print File.readText("notes.txt").expect("read")
+File.remove("notes.txt").expect("removed")
 // prints kept in memory
 ```
 
