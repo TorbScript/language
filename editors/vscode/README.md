@@ -98,10 +98,10 @@ the semantic colors from the syntax tree are layered over it.
 
 ## Colors
 
-The semantic colors follow VS Code's Dark+ palette, pinned so they hold on every theme: types `#4EC9B0`, traits
-`#B8D7A3`, generics `#5DBCD2`, cases `#4FC1FF`, functions `#DCDCAA`, methods `#E2C08D`, parameters `#9CDCFE`, locals
-`#C8CCD4`, fields `#E8E8E8`; a `var` is underlined, a `static` member italic. A theme's own semantic colors, or your
-`editor.semanticTokenColorCustomizations`, win where they are set.
+The semantic tokens use VS Code's standard types (type, interface, type parameter, enum member, function, method,
+parameter, variable, property), so every theme colors them in its own palette, light or dark. The extension adds only
+two styles: a `var` is underlined, a `static` member italic. Your `editor.semanticTokenColorCustomizations` win where
+they are set.
 
 ## Links
 

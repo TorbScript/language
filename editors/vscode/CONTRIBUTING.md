@@ -71,8 +71,9 @@ the integers of `textDocument/semanticTokens/full` are handed to VS Code as they
 alone: it assumes `value.field` is a field and `value.method()` a method, guesses what a single-segment
 `use Name from "..."` names from its first letter, and gives a name it cannot place no token at all, so the grammar's
 color shows. `mutable` is the one modifier that is not standard (declared in `semanticTokenModifiers`); `readonly`,
-`static`, `declaration` and `defaultLibrary` are set where they apply. The palette is `configurationDefaults` ->
-`editor.semanticTokenColorCustomizations`; every color clears WCAG AA on `#1E1E1E`. To underline nothing and
+`static`, `declaration` and `defaultLibrary` are set where they apply. The colors are the theme's: `configurationDefaults` ->
+`editor.semanticTokenColorCustomizations` sets no color, because a pinned palette cannot hold on light and dark
+themes alike, only the two styles of the modifiers. To underline nothing and
 italicize a `var` instead, change `"*.mutable:trb": { "underline": true }` to `{ "fontStyle": "italic" }`.
 
 ## Tests
