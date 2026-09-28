@@ -1291,3 +1291,148 @@ them: the verifier's definedness is a `List<Bool>` per block, compared whole per
 dispatched call builds the members of its witness table again (`tableMembersOf`, a fifth of the lowering); and
 `settleEscapes` walks every escape check of the program again after each module the lowering checks on demand, which is
 quadratic in the modules it enters. The C compile of section 8 is the larger half of a bootstrap again.
+
+### 9.4 The second round: what the time was spent on
+
+The list of 9.3, taken in order, on the same machine, which was loaded more heavily still - other agents' bootstraps
+and gate runs, and a C compile of the compiler that took three times its usual minute. So this round reads the
+**processor time** of each run next to its wall time (user and kernel, from `GetProcessTimes`): a loaded machine
+stretches the wall time of a run by whatever else runs beside it, and its processor time far less. The two binaries
+still alternate run by run, and a ratio is taken between neighbours. The profiler of round one gained an unwinder of its
+own - it copies the image of the process once and walks each stack with the image's unwind tables itself - which takes
+a sample in microseconds where `StackWalk64` took milliseconds.
+
+| Where | Share | Fixed by |
+|-------|-------|----------|
+| Lexing: a decoded copy of every character, each read through a witness table, the token list copied once more | half of parsing, and parsing was four fifths of a small build | a lexer over the bytes of the text |
+| Looking at the current token: a read of the list per look | 6% of parsing | the parser keeps the current token in a field |
+| Whether a task may take a value (`taskProblemOf`) | 7% of the compiler's own build | nothing found at the top of a walk is final for every type it entered |
+| The definedness of the verifier | nine tenths of verifying the IR | a `BitSet` per block; the liveness of the ownership pass the same |
+| The entry of a block in the range analysis (`entryOf`) | a third of finishing the lowering | a list of predecessors per function |
+| The members of a witness table (`tableMembersOf`) | a sixth of the lowering | built once per bound and subject |
+| `normalizePath` under the name of every symbol | 4% of the compiler's own build | a normalized path is answered as it is |
+| What a call through a witness table may run (`traitMembersOf`) | all of `settleEscapes`, 3% | kept per member and bound until an implementation is added |
+| The ownership check comparing every merged state whole | a tenth of it | the merge says whether it changed anything |
+
+**The lexer read a decoded copy of the file, one character at a time, through a trait.** `SourceText.of` decoded every
+character of a file into a `List<Char>` and wrote the byte offset of each into a `List<Int>` - a quarter of lexing, and
+twelve bytes per character held for as long as the module lives - and every `peek` read that list through a `List`
+field, which is a call through its witness table with two counts taken and dropped around it. The lexer reads the text
+itself now: a position is a byte offset, `peek` is `String.charAtByte`, and a comment is skipped with one search for
+`*/` or for the line break over the bytes; no byte of a character past its first is ASCII, so the search cannot stop
+inside one. A string literal keeps its `String` reading as slices of the source between the escape sequences, the
+interpolations and the indentation it loses, where it appended every character to a `List<Char>` and made a `String` of
+that with one `show()` per character; its verbatim reading, which only `writtenTextOf` asks for, is not built for any
+other literal. The line breaks that end no statement are dropped as the token after them arrives, instead of in a second
+pass over a copy of the list, and the punctuation is a `match` on its first character, where it was a walk over a list
+of 38 tuples. The parser reads its tokens from an `ArrayList`, keeps the one it stands on in a field that `bump` moves,
+and answers its questions of the form "is it one of these" with a `match` instead of a list literal built per question.
+
+Every token and every tree of the 933 `.trb` files of the repository, and of 800 generated snippets of broken strings,
+comments, escapes and characters of every width, is the same from both lexers (`torb tokens`, `torb ast`). The snippets
+found the one mistake the rewrite made before any file did: a character that is no punctuation and wider than a byte,
+whose second byte the punctuation looked at.
+
+**`taskProblemOf` was `mayHoldClose` again.** Whether a closure may cross into a task asks whether each capture may hold
+an object (`unseenInside`, `containsShared`), and both kept an answer only where the walk had not come back to a type it
+was still answering. In the syntax tree of the compiler it always had, so every closure body walked the whole family of
+the tree again. Round one's argument holds for both: nothing found at the top of a walk is final for every type the walk
+found nothing in, because anything found below it would have been found at the top.
+
+**The definedness was nine tenths of verifying, not a quarter.** It was a `List<Bool>` per block, intersected over the
+predecessors slot by slot and compared whole every round - and `List.equals` is `indexed().all { ... }`, an iterator and
+a closure per slot. A `BitSet` (`compiler/src/ir/bit-set.trb`) keeps 64 slots to an `Int` and compares word by word, and
+what leaves a block is kept beside what arrives in it instead of being joined again for each successor. The liveness of
+the ownership pass joins and compares the same way and turns its sets into the flags the pass reads once they settle;
+the ownership check merges a state and says whether it changed, and its rounds that report nothing build no location
+and list no reads.
+
+**The range analysis asked every block whether it precedes.** `entryOf` walked all blocks of the function for every block
+of every round of its fixpoint and asked each of them for its successors: quadratic in the blocks of a function. The
+predecessors are a list per block now, in the order the join took them, the natural loop of a back edge walks them
+instead of every block, and the entries of two rounds are compared field by field.
+
+**`tableMembersOf` is a question with one answer per program**: a signature, the supertraits of a bound, and which
+defaults the closed world overrides, which is collected once. It is kept per bound and subject. **`settleEscapes`
+re-walked no escape check**: what cost was `traitMembersOf`, which walks every implementation of the program for a call
+through a witness table and was asked again for every such call site each time the lowering checked a module on demand.
+It is kept per member and bound with the number of implementations it saw, so a derived implementation - which the
+checker adds when somebody first asks for it - makes it stale. **`normalizePath`** split and joined every path it was
+handed, and spelling the name of a symbol asks it for the path of the symbol's module three times (`moduleComponentOf`);
+a path that is normalized already is answered as it is.
+
+**What did not change is the C, and what a check reports.** The compiler's own C for `windows-x64` and for `linux-x64`,
+and the C of five conformance programs and of `tools/release-sync`, are the same bytes from the binary before this round
+and from the one after, and so is every token and every tree of the repository.
+
+**Measured and not taken: the counts inline.** `torb_retain` and `torb_release` are calls into `runtime/memory.c`, and a
+fifth of the samples of the compiler's own build are in them. A fast path of each, `static inline` in `torb.h` - a block
+no other thread can see is one increment or decrement, everything else the call - took 5 to 10% of the processor time of
+every case below. Finding 13 measured the same change on the benchmarks at up to 14% faster and up to 9% slower
+depending on the loop, so it stays a measurement to redo against the benchmarks rather than a change of this round.
+
+### 9.5 Before and after, the second round
+
+The processor time of each case, the mean of three runs (two for the compiler's own), with the binary of round one
+and the binary of round two alternating:
+
+| What | round one | round two | ratio |
+|------|----------:|----------:|------:|
+| A small program, `torb build --emit-c tests/conformance/adts.trb` | 2.70 s | 1.39 s | 1.9x |
+| `torb check tests/conformance/adts.trb` | 2.66 s | 1.34 s | 2.0x |
+| A tool, `torb build --emit-c tools/release-sync` | 6.31 s | 4.18 s | 1.5x |
+| `torb check tools/release-sync` | 2.23 s | 1.11 s | 2.0x |
+| The compiler's own front end, `torb build --emit-c ./compiler` | 79.3 s | 49.3 s | 1.6x |
+| `torb check compiler` | 19.3 s | 9.8 s | 2.0x |
+| `torb parse std compiler tests`, 830 files | 5.66 s | 2.19 s | 2.6x |
+
+The steps of one pair of `torb build --emit-c ./compiler` from the same runs, in wall time on the loaded machine - which
+is why they add up to more than the processor time above, and why the step nobody touched, emitting the C, is the one to
+read them against:
+
+| Step | round one | round two |
+|------|----------:|----------:|
+| lexing, parsing and the module graph | 11.0 s | 3.7 s |
+| the bodies the checker checks | 15.9 s | 7.5 s |
+| checking, all passes | 28.4 s | 12.3 s |
+| lowering | 39.2 s | 17.1 s |
+| ownership | 7.4 s | 6.0 s |
+| verifying | 14.5 s | 5.9 s |
+| emitting the C | 18.9 s | 18.7 s |
+| writing the C | 2.6 s | 2.6 s |
+
+At a quieter moment the build of round two took 45 s of wall time: checking 8.1 (parsing 1.6, bodies 5.7), lowering
+13.3, ownership 4.5, verifying 3.5, emitting the C 13.1, writing it 2.0. A small build is about a second, of which the
+parse is still two thirds.
+
+### 9.6 What is next
+
+**The parse, still.** It is two thirds of a small build: 2.7 MB at two and a half megabytes a second, where round one
+read one. What is left of it is how the parser handles tokens and trees, not how the lexer reads characters - every
+token is a counted record and every look at its kind takes a count and drops it, every node an allocation. Two levers do
+not depend on any of that: the files of a program are independent, so they can be parsed in parallel and handed back in
+order (`std/parallel` does exactly that, if the tree may cross back as the copy it makes), and the parsed `std` could be
+kept between runs.
+
+**`List.equals` is an iterator and a closure per item.** The verifier, the range analysis and the ownership check no
+longer ask it; a loop in `std/collections` would take the cost away from every program that compares lists - a change of
+`std`, and so of the C of every program that does.
+
+**The compiler's own build** is now emitting the C, the lowering and the checker's bodies, a third each of what remains,
+with ownership and verifying at a tenth. The profile names `Iterate.joined` over the lines of the program - 70 MB of C
+joined twice, once for `program.c` and once more per unit, pairwise in `log n` passes - at 4% of it, which one copy into
+a buffer of the right size would take; and the range analysis at 6%, most of it reading and appending the
+`List<Interval>` of each block through its witness table.
+
+**A write through a trait-typed list** - `self.tables[module].types.set(at, id)` where `tables` is a `List` field - is
+still the round trip of finding 3: `Indexed.at`, the change, `MutableIndexed.set`, all through the witness table, with
+the element owned twice while it changes, so that the change copies it. Round one fixed the one that cost by making that
+field an `ArrayList`. The whole class can go in the IR instead of field by field, and not in this round, because it
+takes a native and a seed: `List.update(index, change)` already exists with a default that is the round trip; `ArrayList`
+would answer it natively, making its storage unique and running the change through the element's address as
+`PathStep.Element` does; and the lowering would write a nested write through a container that stayed boxed as a call of
+`update` whose closure is the rest of the path. What makes it more than a peephole: the closure may evaluate nothing the
+assignment has not evaluated before the access (BACKEND 2.3: the keys, then the value, then the access), a key out of
+range must panic at the site of `at` as the element step reads it, and the VM needs the same member. A plain take-out
+and put-back is no answer: a generic container has no value of `Item` to leave behind, and `removeAt` and `insert` would
+shift the list twice.
