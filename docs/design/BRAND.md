@@ -1,7 +1,7 @@
 # The TorbScript Brand
 
 **Status: decided, assets in `brand/`** — the owner's decisions of 2026-09-28: the Orb as the mark, with a cut heavier
-than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Chivo Mono; the depth gradient as
+than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Geist Mono; the depth gradient as
 the primary form of the mark; a red button only for the main call to action. The logo files, the icons, the social card
 and the tokens are in `brand/` (`brand/README.md` lists every file). The VS Code extension carries the icons and the
 walkthrough, the released Windows `torb.exe` the Orb (section 11), and `torb` colours its output (section 10). Slice 1,
@@ -15,7 +15,7 @@ stands for: one clear shape instead of several, exact about where things change,
 ```text
    the Orb ─────────────► a carmine disc cut by one T: the mark, the favicon, the app and file icons (section 3)
    Torb Red #D4002D ────► the only brand colour; a warm ink and a warm paper around it (section 4)
-   Chivo + Chivo Mono ──► one type family for prose, headings and code (section 5)
+   Chivo + Geist Mono ──► matched terminals for prose and code, code ligatures always off (section 5)
    hairlines, no glow ──► surfaces are steps of the neutral scale, split by 1 px lines (section 6)
    brand/tokens.json ───► every value above, and brand/tokens.css for the site, the docs and the registry
 ```
@@ -381,13 +381,19 @@ Gradients are welcome where they are deliberate: linear, crisp, inside the red f
 |------|------|---------|---------|
 | display, headings, the wordmark | **Chivo** | 700, 800; 900 for the largest hero | SIL OFL 1.1, github.com/Omnibus-Type/Chivo |
 | text and UI | **Chivo** | 400 body, 500 UI labels, 600 strong | same |
-| code, identifiers, commands | **Chivo Mono** | 400 code, 500 labels, 700 emphasis | SIL OFL 1.1, github.com/Omnibus-Type/ChivoMono |
+| code, identifiers, commands | **Geist Mono** | 400 code, 500 labels, 700 emphasis | SIL OFL 1.1, github.com/vercel/geist-font |
 
-**Why Chivo.** One family for prose and code: the text face and the code face share a skeleton, so a page that mixes
-them has one voice. Its horizontal terminals match the straight cuts of the mark, its heavy weights hold at billboard
-size, and its 400 is plain enough for long documentation. And it is free of other developer brands: Inter, Fira,
-Source, Lato, Roboto, DM, Geist, JetBrains, Space, Lexend and Outfit each belong to a language or tool already, and
+**Why Chivo.** Its horizontal terminals match the straight cuts of the mark, its heavy weights hold at billboard size,
+and its 400 is plain enough for long documentation. And it is free of other developer brands: Inter, Fira, Source,
+Lato, Roboto, DM, Geist Sans, JetBrains, Space, Lexend and Outfit each belong to a language or tool already, and
 Archivo with Martian Mono is Bun's pair.
+
+**Why Geist Mono.** Its terminals are as straight and firm as Chivo's, so the two faces still read as one system even
+though code is no longer set in a cut of Chivo itself. Unlike faces that put a serif foot on `i`, `l` and `1` to keep
+them apart from `I`, Geist Mono leaves those three plain and gives `I` alone the serif, so the distinction does not
+depend on a mark easily lost at small sizes. `il1I` and `0O` stay apart at a glance, and **ligatures are always off**
+(`font-variant-ligatures: none`, `font-feature-settings: "liga" 0, "calt" 0`): code is characters, not the symbols a
+font silently swapped in for them.
 
 | token | face | size | line height | weight | tracking |
 |-------|------|------|-------------|--------|----------|
@@ -399,17 +405,19 @@ Archivo with Martian Mono is Bun's pair.
 | `body` | Chivo | 17 px | 1.6 | 400 | 0 |
 | `ui` | Chivo | 15 px | 1.45 | 500 | 0 |
 | `small` | Chivo | 13 px | 1.45 | 400 | 0.005em |
-| `code` | Chivo Mono | 15 px | 1.6 | 400 | 0 |
-| `code-dense` | Chivo Mono | 14 px | 1.5 | 400 | 0 |
+| `code` | Geist Mono | 15 px | 1.6 | 400 | 0 |
+| `code-dense` | Geist Mono | 14 px | 1.5 | 400 | 0 |
 
 - **Measure:** at most 72 characters of body text per line.
-- **Code always has the slashed zero** (`font-feature-settings: "zero" 1`, `--torb-font-mono-features`): Chivo Mono's
-  default zero is too close to its O. Font files for download and screenshots have the feature frozen in.
-- **Identifiers in running text are Chivo Mono.** In Chivo, capital I and lowercase l look alike; in the mono face they
-  do not.
+- **Code always has the slashed zero** (`font-feature-settings: "zero" 1`, `--torb-font-mono-features`) and never a
+  ligature (`font-variant-ligatures: none`, `font-feature-settings: "liga" 0, "calt" 0`, `--torb-font-mono-ligatures`
+  and the same `--torb-font-mono-features`): Geist Mono's zero is slashed by design, and the feature is kept frozen in
+  for font files given out for download and for screenshots, so the shape never depends on where the font renders.
+- **Identifiers in running text are Geist Mono.** In Chivo, capital I and lowercase l look alike; in the mono face they
+  do not - Geist Mono puts the serif on `I` alone and leaves `i`, `l` and `1` plain.
 - **Self-hosted** WOFF2, subset to Latin and the symbols the docs use, served from torb.dev: no request to a font CDN.
 - **Fallbacks:** `Chivo, ui-sans-serif, system-ui, "Segoe UI", sans-serif` and
-  `"Chivo Mono", ui-monospace, "Cascadia Mono", Consolas, monospace`.
+  `"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`.
 
 ## 6. Surfaces
 
@@ -598,8 +606,9 @@ white are ground colours in the light scheme, black in the dark one.
   drawn: `brand/icons/favicon.ico`, `apple-touch-icon.png`, and `app-icon-maskable.svg` with its 192 and 512 px PNGs,
   the paper mark at 62.5% of the square - the share the macOS tile gives it, and every edge of the cut on a whole pixel
   at 512.
-- **Fonts:** Chivo and Chivo Mono as variable `.woff2` in `brand/fonts/`, subset to Latin, Latin Extended-A, the
-  general punctuation, arrows and mathematical operators, served by the site from `/assets/fonts/`.
+- **Fonts:** Chivo and Geist Mono as variable `.woff2` in `brand/fonts/`, subset to Latin, Latin Extended-A, the
+  general punctuation, arrows and mathematical operators, served by the site from `/assets/fonts/`. Code ligatures are
+  always off.
 
 ### The documentation (/learn, /docs, /reference)
 
@@ -613,9 +622,9 @@ white are ground colours in the light scheme, black in the dark one.
 
 ### packages.torb.dev
 
-- **Shell:** the same header; after the lockup a label `packages` in Chivo Mono 500 in `text-muted`. No sub-brand and
+- **Shell:** the same header; after the lockup a label `packages` in Geist Mono 500 in `text-muted`. No sub-brand and
   no second logo.
-- **Package pages:** package names are code, so Chivo Mono 700; versions in tabular figures. The main action (copy
+- **Package pages:** package names are code, so Geist Mono 700; versions in tabular figures. The main action (copy
   `torb add owner/name`) is a primary ink button, not red. The capability summary is a row of neutral chips.
 - **States:** a yanked version uses the warning tint and the word "yanked"; a security advisory is the error block of
   section 4.6.
@@ -628,7 +637,7 @@ white are ground colours in the light scheme, black in the dark one.
 - **Primary is ink, not red.** `--color-primary` and its steps come from the neutral scale. Forgejo uses red for
   closing issues and deleting branches, and a red primary would make every button look destructive.
 - **States:** `--color-red` is the error text token, `--color-green` success, `--color-yellow` warning, `--color-blue`
-  info. The navigation bar is `background` with the 3 px top rule. Fonts are Chivo and Chivo Mono.
+  info. The navigation bar is `background` with the 3 px top rule. Fonts are Chivo and Geist Mono.
 - **Logo and favicon:** `custom/public/assets/img/logo.svg` is `brand/logo/mark-flat.svg`, `favicon.svg` is
   `brand/logo/favicon.svg`, with the PNG sizes Forgejo expects from `brand/icons/`.
 - **Verify the variable names** against Forgejo 16's `web_src/css/themes/` before shipping; they have been renamed
@@ -669,7 +678,7 @@ white are ground colours in the light scheme, black in the dark one.
 ### Social cards
 
 `brand/icons/social-card.svg` and `.png`, 1200 × 630 (Open Graph and X's large card): `gradient.ink`, the wordmark top
-left, the line in Chivo 800 at 84 px, the category line in Chivo 400, `torb.dev` in Chivo Mono, the mark in its dark
+left, the line in Chivo 800 at 84 px, the category line in Chivo 400, `torb.dev` in Geist Mono, the mark in its dark
 gradient on the right, the strata band along the foot. Per section of the site only the line changes (a page title, a
 package with its version, a release number); the forge's repository preview is the same layout at 1280 × 640.
 
