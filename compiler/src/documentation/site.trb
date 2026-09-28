@@ -1,0 +1,464 @@
+/**
+ * `torb docs site`: the website of TorbScript as static files, generated from `docs/` by the toolchain itself
+ * (docs/design/RELEASE.md section 6). The documentation tree `torb docs check` reads is the input, and the site is one
+ * more output of it beside the skill and the bundle.
+ *
+ * What it writes, below the output directory:
+ *
+ * - `index.html`, the front page, from `site/home.md`; `install.html`, `imprint.html` and `privacy.html` from the page
+ *   of the same name in `site/`, each only where that page exists; `404.html` for a path that is not there.
+ * - `docs/<version>/`, every page and design document of the documentation as HTML, with the navigation of the index
+ *   tree, and `docs/<version>/search-index.json`, the index the search reads.
+ * - `assets/site.css` and `assets/site.js`, one stylesheet and one script; `assets/fonts/`, Chivo and Chivo Mono.
+ * - The icons, the web manifest and the preview card, copied from `brand/`.
+ *
+ * [buildSite] is the whole site as a pure function of the [Documentation]; [writeBuiltSite] writes it and copies the
+ * files of the brand. Every internal link of the output is checked against the output, so a link that would lead
+ * nowhere fails the build instead of being written.
+ *
+ * # Related
+ *
+ * - [renderedBody] - one page's body.
+ * - [navigationOf] - the navigation.
+ * - [searchIndexOf] - the search.
+ */
+
+use File, IoError from "std/fs"
+use Sha256 from "std/digest"
+use normalizePath from "../project/path"
+use DocumentationProblem, readPage from "./markdown"
+use Page, Documentation, folderOf, fileName, joinDocumentationPath from "./tree"
+use SiteLinks, ContentsEntry, renderedBody, relativeUrl from "./site-html"
+use NavigationEntry, navigationOf, readingOrder, titlesOf, sectionsOf, siteFolder from "./site-navigation"
+use SearchPage, SearchHeading, IndexedPage, searchIndexOf, searchIndexJson from "./site-search"
+use SiteContext, DocumentationPage, docsDirectory, documentationPageHtml, plainPageHtml, missingPageHtml from "./site-layout"
+use frontPageHtml, forgeAddress, siteSlogan from "./site-layout"
+use fontFaces, baseStylesheet, siteStylesheet, themeScript, siteScript from "./site-style"
+use brandTokens from "./site-tokens"
+
+/** What a build of the site is given besides the documentation. */
+public type SiteSettings {
+  /** The version the documentation is of, and the name of its directory below `docs/` */
+  version: String
+  /** The horizontal lockup as inline SVG, its wordmark in `currentColor` */
+  lockup: String
+  /** The flat mark as inline SVG */
+  mark: String
+}
+
+/** The site: every text file it writes, every file of the brand it copies, and the problems found building it. */
+public type BuiltSite {
+  /** By path below the output directory */
+  texts: Map<String, String>
+  /** `(target, source)`: a path below the output directory, and one below the brand directory */
+  copies: List<(target: String, source: String)>
+  problems: List<DocumentationProblem>
+  /** How many pages of the documentation were written */
+  pages: Int
+}
+
+/**
+ * The files of the brand the site serves as they are: the fonts, the icons, the manifest's icons and the preview card,
+ * each with the path it is served at.
+ */
+public const brandCopies: List<(target: String, source: String)> = [
+  (target: "assets/fonts/chivo.woff2", source: "fonts/chivo.woff2"),
+  (target: "assets/fonts/chivo-mono.woff2", source: "fonts/chivo-mono.woff2"),
+  (target: "assets/fonts/OFL.txt", source: "fonts/OFL.txt"),
+  (target: "favicon.svg", source: "logo/favicon.svg"),
+  (target: "mask-icon.svg", source: "logo/favicon-mono.svg"),
+  (target: "favicon.ico", source: "icons/favicon.ico"),
+  (target: "apple-touch-icon.png", source: "icons/apple-touch-icon.png"),
+  (target: "icons/app-icon-256.png", source: "icons/app-icon-256.png"),
+  (target: "icons/app-icon-512.png", source: "icons/app-icon-512.png"),
+  (target: "icons/app-icon-maskable-192.png", source: "icons/app-icon-maskable-192.png"),
+  (target: "icons/app-icon-maskable-512.png", source: "icons/app-icon-maskable-512.png"),
+  (target: "social-card.png", source: "icons/social-card.png"),
+]
+
+/** The pages of `site/` the footer links when they exist, with the word it shows: the legal pages of a German site. */
+public const footerPageNames: List<(name: String, title: String)> = [
+  (name: "imprint", title: "Imprint"),
+  (name: "privacy", title: "Privacy"),
+]
+
+/**
+ * Where a file of the documentation is written, relative to the output directory: `site/home.md` is the front page,
+ * any other page of `site/` but its index stands at the root, and everything else below `docs/<version>/`.
+ *
+ * # Examples
+ *
+ *     print targetOf("guide/index.md", "0.2.0")
+ */
+public fn targetOf(path: String, version: String): String {
+  if path == "{siteFolder}/home.md" {
+    return "index.html"
+  }
+  const html = "{path.withoutSuffix(".md") ?? path}.html"
+  if const Some(name) = html.withoutPrefix("{siteFolder}/") {
+    if !name.contains("/") && name != "index.html" {
+      return name
+    }
+  }
+  "{docsDirectory(version)}/{html}"
+}
+
+/** The whole site of a documentation tree, without touching a disk. */
+public fn buildSite(documentation: Documentation, settings: SiteSettings): BuiltSite {
+  const version = settings.version
+  var targets: Map<String, String> = [:]
+  for page in documentation.pages {
+    targets.set page.path, targetOf(page.path, version)
+  }
+  for (path, _) in documentation.plainTexts {
+    targets.set path, targetOf(path, version)
+  }
+  const navigation = navigationOf documentation
+  const order = readingOrder navigation
+  var titles = titlesOf navigation
+  const sections = sectionsOf navigation
+  titles.set "index.md", "Overview"
+  var footerPages: List<(title: String, target: String)> = []
+  for (name, title) in footerPageNames {
+    if documentation.pageAt("{siteFolder}/{name}.md").isSome() {
+      footerPages.append((title: title, target: "{name}.html"))
+    }
+  }
+  const installPage = installPageOf documentation, targets, version
+  const css = siteCss()
+  const script = "{themeScript}\n{siteScript}"
+  const assetVersion = Sha256.of("{css}{script}".bytes().toList()).hex().prefix(characters: 12)
+  const site = SiteContext(
+    version,
+    settings.lockup,
+    settings.mark,
+    navigation,
+    targets,
+    footerPages,
+    installPage,
+    assetVersion,
+  )
+  var texts: Map<String, String> = [:]
+  var indexed: List<IndexedPage> = []
+  var pages = 0
+  for page in documentation.pages {
+    const target = targets.get(page.path) ?? ""
+    const links = SiteLinks target, page.folder, targets, "{forgeAddress}/src/branch/main"
+    const title = page.frontMatter.text("title") ?? page.path
+    const summary = page.frontMatter.text("summary") ?? ""
+    if page.folder == siteFolder && !page.indexesFolder {
+      if fileName(page.path) == "home.md" {
+        texts.set target, frontPageHtml(site, summary, page.read.body, links)
+      } else {
+        const body = renderedBody(page.read.body, page.read.headings, links).html
+        texts.set target, plainPageHtml(site, target, title, summary, body)
+      }
+      continue
+    }
+    const rendered = renderedBody page.read.body, page.read.headings, links
+    const neighbours = neighboursOf order, page.path, titles, targets
+    const body = "{referenceLinkOf(page, target, version)}{rendered.html}"
+    const shown = DocumentationPage(
+      page.path,
+      target,
+      title,
+      summary,
+      title,
+      body,
+      rendered.contents,
+      neighbours.previous,
+      neighbours.next,
+    )
+    texts.set target, documentationPageHtml(site, shown)
+    pages = pages + 1
+    if page.folder != siteFolder {
+      const entry = SearchPage(
+        title,
+        summary,
+        target.withoutPrefix("{docsDirectory(version)}/") ?? target,
+        sectionTitleOf(documentation, sections, page.path),
+        page.frontMatter.items("keywords"),
+        headingsOf(rendered.contents),
+      )
+      indexed.append IndexedPage(entry, rendered.text)
+    }
+  }
+  for (path, text) in documentation.plainTexts {
+    const target = targets.get(path) ?? ""
+    const read = readPage path, text
+    const links = SiteLinks target, folderOf(path), targets, "{forgeAddress}/src/branch/main"
+    const rendered = renderedBody text, read.headings, links
+    const title = documentation.plainTitles.get(path) ?? path
+    const neighbours = neighboursOf order, path, titles, targets
+    const shown = DocumentationPage(
+      path,
+      target,
+      "",
+      "",
+      title,
+      rendered.html,
+      rendered.contents,
+      neighbours.previous,
+      neighbours.next,
+    )
+    texts.set target, documentationPageHtml(site, shown)
+    pages = pages + 1
+    const entry = SearchPage(
+      title,
+      "",
+      target.withoutPrefix("{docsDirectory(version)}/") ?? target,
+      sectionTitleOf(documentation, sections, path),
+      [],
+      headingsOf(rendered.contents),
+    )
+    indexed.append IndexedPage(entry, rendered.text)
+  }
+  texts.set "404.html", missingPageHtml(site)
+  texts.set "{docsDirectory(version)}/search-index.json", searchIndexJson(searchIndexOf(version, indexed))
+  texts.set "assets/site.css", css
+  texts.set "assets/site.js", script
+  texts.set "manifest.webmanifest", manifestOf(documentation)
+  var problems: List<DocumentationProblem> = []
+  if documentation.pageAt("{siteFolder}/home.md").isNone() {
+    problems.append(DocumentationProblem(
+      "{documentation.root}/{siteFolder}/home.md",
+      0,
+      "The front page of the site is missing",
+    ))
+  }
+  problems.appendAll brokenLinks(texts, brandCopies, version)
+  BuiltSite texts, brandCopies, problems, pages
+}
+
+/**
+ * Where the front page's red button leads: the install page of the site, or the guide's page that builds the
+ * toolchain, or the overview of the documentation - the first of them the tree has.
+ */
+fn installPageOf(documentation: Documentation, targets: Map<String, String>, version: String): String {
+  if documentation.pageAt("{siteFolder}/install.md").isSome() {
+    return "install.html"
+  }
+  targets.get("guide/installing-and-running.md") ?? "{docsDirectory(version)}/index.html"
+}
+
+/** The one stylesheet of the site: the two faces, the tokens of the brand, and the rules written for the site. */
+public fn siteCss(): String {
+  "{fontFaces("fonts/")}\n{brandTokens}\n{baseStylesheet}\n{siteStylesheet}"
+}
+
+/** The previous and the next page of a page, in the order of the navigation. */
+fn neighboursOf(
+  order: List<String>,
+  path: String,
+  titles: Map<String, String>,
+  targets: Map<String, String>,
+): (previous: (title: String, target: String)?, next: (title: String, target: String)?) {
+  var at = -1
+  for index in 0..order.length() {
+    if order[index] == path {
+      at = index
+      break
+    }
+  }
+  if at < 0 {
+    return (previous: None, next: None)
+  }
+  const previous = if at > 0 { neighbourAt order[at - 1], titles, targets } else { None }
+  const next = if at + 1 < order.length() { neighbourAt order[at + 1], titles, targets } else { None }
+  (previous: previous, next: next)
+}
+
+fn neighbourAt(
+  path: String,
+  titles: Map<String, String>,
+  targets: Map<String, String>,
+): (title: String, target: String)? {
+  const target = targets.get(path) ?? ""
+  if target.isEmpty() {
+    return None
+  }
+  (title: titles.get(path) ?? path, target: target)
+}
+
+/**
+ * The title of the section a page belongs to - the index of the top-level folder whose navigation lists it, or of the
+ * folder it is in - for a result of the search.
+ */
+fn sectionTitleOf(documentation: Documentation, sections: Map<String, String>, path: String): String {
+  const folder = folderOf path
+  const top = sections.get(path) ?? (folder.split("/").first() ?? folder)
+  if top.isEmpty() {
+    return ""
+  }
+  match documentation.indexOf(top) {
+    Some(index) => index.frontMatter.text("title") ?? top
+    None => top
+  }
+}
+
+fn headingsOf(contents: List<ContentsEntry>): List<SearchHeading> {
+  var headings: List<SearchHeading> = []
+  for entry in contents {
+    headings.append SearchHeading(entry.text, entry.anchor)
+  }
+  headings
+}
+
+/**
+ * The link from the written page of a package of `std/` to its generated reference, which `torb doc std` writes into
+ * `docs/<version>/reference/` (docs/design/RELEASE.md section 6): the generator writes it, from the package name the
+ * page is titled with, so no page of `docs/` links into generated output.
+ */
+fn referenceLinkOf(page: Page, target: String, version: String): String {
+  const kind = page.frontMatter.text("kind") ?? ""
+  const title = page.frontMatter.text("title") ?? ""
+  if kind != "package" || !title.startsWith("std/") {
+    return ""
+  }
+  const reference = "{docsDirectory(version)}/reference/{title}/index.html"
+  const url = relativeUrl target, reference
+  "<p class=\"page-reference\">The generated reference of <a href=\"{url}\"><code>{title}</code></a> has every public construct with its signature, its doc comment and its examples.</p>\n"
+}
+
+/** The web manifest: the name, the colours of the two themes' grounds, and the icons with the maskable one. */
+fn manifestOf(documentation: Documentation): String {
+  const description = match documentation.pageAt("{siteFolder}/home.md") {
+    Some(page) => page.frontMatter.text("summary") ?? siteSlogan
+    None => siteSlogan
+  }
+  const escaped = description.replace("\\", "\\\\").replace("\"", "\\\"")
+  const lines = [
+    "\{",
+    "  \"name\": \"TorbScript\",",
+    "  \"short_name\": \"TorbScript\",",
+    "  \"description\": \"{escaped}\",",
+    "  \"start_url\": \"./\",",
+    "  \"scope\": \"./\",",
+    "  \"display\": \"minimal-ui\",",
+    "  \"background_color\": \"#FFFDFC\",",
+    "  \"theme_color\": \"#FFFDFC\",",
+    "  \"icons\": [",
+    "    \{ \"src\": \"icons/app-icon-256.png\", \"sizes\": \"256x256\", \"type\": \"image/png\", \"purpose\": \"any\" \},",
+    "    \{ \"src\": \"icons/app-icon-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\", \"purpose\": \"any\" \},",
+    "    \{ \"src\": \"icons/app-icon-maskable-192.png\", \"sizes\": \"192x192\", \"type\": \"image/png\", \"purpose\": \"maskable\" \},",
+    "    \{ \"src\": \"icons/app-icon-maskable-512.png\", \"sizes\": \"512x512\", \"type\": \"image/png\", \"purpose\": \"maskable\" \}",
+    "  ]",
+    "\}",
+    "",
+  ]
+  lines.joined separator: "\n"
+}
+
+/**
+ * Every link of the written pages that leads to no file of the site: an `href` or a `src` that is relative, resolved
+ * against the page it stands on. The generated reference below `docs/<version>/reference/` is not part of this build
+ * and is not asked for.
+ */
+public fn brokenLinks(
+  texts: Map<String, String>,
+  copies: List<(target: String, source: String)>,
+  version: String,
+): List<DocumentationProblem> {
+  var known: Set<String> = []
+  for (path, _) in texts {
+    known.insert path
+  }
+  for copy in copies {
+    known.insert copy.target
+  }
+  const reference = "{docsDirectory(version)}/reference/"
+  var problems: List<DocumentationProblem> = []
+  for (path, text) in texts {
+    if !path.endsWith(".html") {
+      continue
+    }
+    const folder = folderOf path
+    for url in linkTargetsOf(text) {
+      const isOutside = url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:")
+      if isOutside || url.startsWith("#") || url.startsWith("/") || url.startsWith("data:") || url.isEmpty() {
+        continue
+      }
+      const withoutFragment = url.substringBefore("#") ?? url
+      const bare = withoutFragment.substringBefore("?") ?? withoutFragment
+      const resolved = normalizePath joinDocumentationPath(folder, bare)
+      if resolved.startsWith(reference) || known.contains(resolved) {
+        continue
+      }
+      problems.append DocumentationProblem(path, 0, "The link `{url}` leads to no file of the site")
+    }
+  }
+  problems.sort({ (_.path, _.message) })
+  problems
+}
+
+/** The values of every `href="..."` and `src="..."` of an HTML text. */
+fn linkTargetsOf(html: String): List<String> {
+  var found: List<String> = []
+  for attribute in [" href=\"", " src=\""] {
+    // Split once instead of searching the rest again after every link: a design document has thousands of them
+    const pieces = html.split attribute
+    for index in 1..pieces.length() {
+      if const Some(value) = pieces[index].substringBefore("\"") {
+        found.append value.replace("&amp;", "&")
+      }
+    }
+  }
+  found
+}
+
+/**
+ * Writes the site into `output`: every text, and every file of the brand copied from `brand`. A directory is created
+ * before the first file that goes into it. Answers with the number of files written.
+ */
+public fn writeBuiltSite(output: String, brand: String, site: BuiltSite): Result<Int, IoError> {
+  var created: Set<String> = []
+  var count = 0
+  for (path, text) in site.texts {
+    const target = joinDocumentationPath output, path
+    ensureDirectory(created, folderOf(target))?
+    File.writeText(target, text)?
+    count = count + 1
+  }
+  for copy in site.copies {
+    const target = joinDocumentationPath output, copy.target
+    ensureDirectory(created, folderOf(target))?
+    File.copy(joinDocumentationPath(brand, copy.source), target)?
+    count = count + 1
+  }
+  count
+}
+
+fn ensureDirectory(var created: Set<String>, directory: String): Result<Void, IoError> {
+  if directory.isEmpty() || created.contains(directory) {
+    return Ok(void)
+  }
+  File.createDirectory(directory)?
+  created.insert directory
+  Ok(void)
+}
+
+/**
+ * The inline drawings of the header and the footer, read from the brand: the lockup with the flat mark, whose wordmark
+ * is made to follow the theme's text colour, and the flat mark.
+ */
+public fn brandDrawingsOf(brand: String): Result<(lockup: String, mark: String), IoError> {
+  const lockup = File.readText(joinDocumentationPath(brand, "logo/lockup-flat.svg"))?
+  const mark = File.readText(joinDocumentationPath(brand, "logo/mark-flat.svg"))?
+  const inline = withoutTitle(lockup.trim()).replace("fill=\"#14110F\"", "fill=\"currentColor\"")
+  (lockup: withRole(inline), mark: withRole(withoutTitle(mark.trim())))
+}
+
+/** A drawing without its `<title>`, which a link or a text beside it already says. */
+fn withoutTitle(svg: String): String {
+  match svg.splitOnce("<title>") {
+    Some(parts) => match parts.after.splitOnce("</title>") {
+      Some(rest) => "{parts.before}{rest.after}"
+      None => svg
+    }
+    None => svg
+  }
+}
+
+fn withRole(svg: String): String {
+  svg.replace "<svg ", "<svg aria-hidden=\"true\" focusable=\"false\" "
+}

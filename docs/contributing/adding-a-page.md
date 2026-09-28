@@ -21,7 +21,8 @@ index it belongs to updates itself.
    *acquisition* of skill or its *application*? Action plus acquisition is a `guide`, action plus application a
    `how-to`, cognition plus application a `reference`, cognition plus acquisition an `explanation`. A page that answers
    both ways is two pages. `contrast`, `tooling`, `package` and `glossary` are the four kinds that exist next to the
-   four modes; [structure.md](structure.md) says what each folder is for.
+   four modes, and `site` is a page of the website in `site/`; [structure.md](structure.md) says what each folder is
+   for.
 
 2. **Find a similar page in [the inventory](../internals/inventory.md)** and take its path, title, scope and sources
    as a pattern. It is the historical record of how the whole tree was planned, and every page in it exists today; a

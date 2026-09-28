@@ -32,6 +32,9 @@ torb docs index [root]                     Write the generated part of every ind
     --check                                Report instead of writing, for the gate
 torb docs skill <root> <out>               Write the Agent Skill of the language (fails on a dangling link)
 torb docs bundle <root> <out>              Write llms.txt and llms-full.txt
+torb docs site <root> --output <dir>       Write the website: the front page, every page, the search
+    --version <v>                          The version the documentation is of (default: latest)
+    --check                                Build it and check its links, and write nothing
 torb docs source <path>...                 Check the doc comments of the code itself
 ```
 
@@ -43,7 +46,8 @@ torb docs check docs
 torb docs index --check docs
 ```
 
-The first two are gates of every change. `docs source` is about the doc comments of `std/`, `compiler/` and `examples/`
+The first two are gates of every change. `docs site` writes the website from the same tree and has its own page,
+[torb docs site](../tooling/torb-docs-site.md). `docs source` is about the doc comments of `std/`, `compiler/` and `examples/`
 instead of about these pages, it has rules of its own, and it is not a gate yet - it has its own page,
 [torb docs source](../tooling/torb-docs-source.md).
 

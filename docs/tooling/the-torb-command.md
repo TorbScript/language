@@ -315,9 +315,9 @@ and `lock --check` writes nothing and fails where the file is not what `lock` wo
 
 ### `docs`
 
-Four commands over the documentation: `check` is the gate, `index` writes the generated part of every `index.md`, `skill`
-derives the Agent Skill, and `bundle` writes `llms.txt` and `llms-full.txt`. See
-[the docs commands](../contributing/checks.md).
+Five commands over the documentation: `check` is the gate, `index` writes the generated part of every `index.md`, `skill`
+derives the Agent Skill, `bundle` writes `llms.txt` and `llms-full.txt`, and `site` writes the website. See
+[the docs commands](../contributing/checks.md) and [torb docs site](torb-docs-site.md).
 
 ### `doc`
 
@@ -363,4 +363,4 @@ wrote ../build/dev/scratch.exe
   [torb test](torb-test.md), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb lsp](torb-lsp.md),
   [torb debug](torb-debug.md), [torb doc](torb-doc.md) - one page per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the rule of the canon that `format` writes first.
-- [The docs commands](../contributing/checks.md) - the four `docs` subcommands.
+- [The docs commands](../contributing/checks.md) - the `docs` subcommands.

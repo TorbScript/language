@@ -2,9 +2,9 @@
  * `torb docs <command>`: the commands that keep the documentation true. Every one of them is a gate that can be run
  * from a script, so all of them answer with the number of problems and print nothing but problems when there are any.
  *
- * [runCheck], [runIndex], [runSkill] and [runBundle] are the command line behind `torb docs check`, `docs index`,
- * `docs skill` and `docs bundle`; `docs source` is a command of its own in `source.trb`, because it reads `.trb`
- * files instead of the pages.
+ * [runCheck], [runIndex], [runSkill], [runBundle] and [runSite] are the command line behind `torb docs check`,
+ * `docs index`, `docs skill`, `docs bundle` and `docs site`; `docs source` is a command of its own in `source.trb`,
+ * because it reads `.trb` files instead of the pages.
  *
  * # Related
  *
@@ -23,6 +23,7 @@ use NativeOptions from "./native"
 use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, staleSkillFiles, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
+use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf from "./site"
 use counted from "../cli/render"
 
 /** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
@@ -36,13 +37,17 @@ public type DocumentationOptions {
   withoutNative: Bool
   /** `--check` of `docs index` and `docs skill` */
   onlyCheck: Bool
-  /** The output directory of `skill` and `bundle` */
+  /** The output directory of `skill`, `bundle` and `site`: the second path, or `--output` */
   out: String
+  /** `--version` of `docs site`: the version the documentation is of. Empty is `latest` */
+  version: String = ""
+  /** `--brand` of `docs site`: where `brand/` is. Empty means `<root>/../brand` */
+  brand: String = ""
 }
 
 /**
- * Parses `torb docs`'s arguments. `--standard-library`, `--no-snippets`, `--no-native` and `--check` are flags;
- * everything else is a path.
+ * Parses `torb docs`'s arguments. `--standard-library`, `--output`, `--version` and `--brand` take the argument after
+ * them; `--no-snippets`, `--no-native` and `--check` are flags; everything else is a path.
  */
 public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
   var paths: List<String> = []
@@ -50,15 +55,36 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   var withoutSnippets = false
   var withoutNative = false
   var onlyCheck = false
-  var wantsStandardLibrary = false
+  var output = ""
+  var version = ""
+  var brand = ""
+  var wanted = ""
   for argument in arguments {
-    if wantsStandardLibrary {
-      standardLibrary = argument
-      wantsStandardLibrary = false
-      continue
+    match wanted {
+      "--standard-library" => {
+        standardLibrary = argument
+        wanted = ""
+        continue
+      }
+      "--output" => {
+        output = argument
+        wanted = ""
+        continue
+      }
+      "--version" => {
+        version = argument
+        wanted = ""
+        continue
+      }
+      "--brand" => {
+        brand = argument
+        wanted = ""
+        continue
+      }
+      _ => {}
     }
-    if argument == "--standard-library" {
-      wantsStandardLibrary = true
+    if argument == "--standard-library" || argument == "--output" || argument == "--version" || argument == "--brand" {
+      wanted = argument
       continue
     }
     if argument == "--no-snippets" {
@@ -76,8 +102,8 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
     paths.append argument
   }
   const root = paths.get(0) ?? "docs"
-  const out = paths.get(1) ?? ""
-  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out
+  const out = if output.isEmpty() { paths.get(1) ?? "" } else { output }
+  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out, version, brand
 }
 
 /** Where the standard library is, for the type check of the snippets. */
@@ -206,6 +232,45 @@ public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
   0
 }
 
+/**
+ * `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]`. Returns the number of problems.
+ * With `--check` nothing is written: the site is built and its links are checked, which is the gate that keeps it from
+ * rotting between releases.
+ */
+public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
+  if options.out.isEmpty() && !options.onlyCheck {
+    printError "torb docs site <root> --output <dir>: where the site goes is missing"
+    return 1
+  }
+  const brand = if options.brand.isEmpty() { "{options.root}/../brand" } else { options.brand }
+  if !File.isDirectory(brand) {
+    printError "torb docs site: the brand is read from `{brand}`, which is not a directory. `--brand <dir>` names it"
+    return 1
+  }
+  const version = if options.version.isEmpty() { "latest" } else { options.version }
+  const documentation = readDocumentation(options.root)?
+  const drawings = brandDrawingsOf(brand)?
+  const site = buildSite documentation, SiteSettings(version, drawings.lockup, drawings.mark)
+  var count = reportProblems site.problems
+  for copy in site.copies {
+    const source = "{brand}/{copy.source}"
+    if !File.exists(source) {
+      printError "{source}: the site serves this file of the brand as `{copy.target}`, and it is missing"
+      count = count + 1
+    }
+  }
+  if count > 0 {
+    return count
+  }
+  if options.onlyCheck {
+    print "{counted(site.pages, "page")} of {version}, {counted(site.texts.length() + site.copies.length(), "file")}, no broken link"
+    return 0
+  }
+  const written = writeBuiltSite(options.out, brand, site)?
+  print "{counted(site.pages, "page")} of {version}: wrote {counted(written, "file")} to {options.out}"
+  0
+}
+
 fn titleOf(page: Page?): String {
   match page {
     Some(found) => found.frontMatter.text("title") ?? "TorbScript"
@@ -236,4 +301,8 @@ public fn printDocumentationUsage() {
   printError "  torb docs skill <root> <out>   Write the Agent Skill of the language"
   printError "                         --check: report the stale files instead of writing, for the gate"
   printError "  torb docs bundle <root> <out>  Write llms.txt and llms-full.txt"
+  printError "  torb docs site <root> --output <dir>  Write the website: the front page, every page, the search"
+  printError "                         --version <v>: the version the documentation is of (default: latest)"
+  printError "                         --brand <dir>: where brand/ is (default: <root>/../brand)"
+  printError "                         --check: build it and check its links, and write nothing"
 }

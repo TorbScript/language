@@ -448,6 +448,18 @@ checked snippets (`docs/contributing/`); an HTML writer is one more output of th
 | **`torb docs site`** — decided | one tool reads one tree; snippet checking, links and indexes are already there; the language documents itself with its own program | a Markdown renderer and a templating step to write; the look is ours to build |
 | mdBook, Docusaurus, VitePress, Hugo | mature, themes, search | a second reader of the same tree with its own ideas about front matter, links and structure; a Node or Rust toolchain in the release pipeline; nothing is checked the way `torb docs check` checks it |
 
+**As built (2026-09-28)**: `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]`
+([docs/tooling/torb-docs-site.md](../tooling/torb-docs-site.md)) writes the front page from `docs/site/home.md`,
+`/install`, `/imprint` and `/privacy` from the pages of the same name in `docs/site/` where they exist, every page and
+design document below `/docs/<version>/` with the navigation of the index tree, previous and next links and an edit
+link to the forge, `search-index.json` (the term index above), and one stylesheet and one script. `trb` blocks are
+coloured by the lexer and the resolver at generation time; every internal link of the output is checked. The Markdown
+is `std/markdown`'s tree with a renderer of the site's own (anchors, callouts, the rewritten links), not its HTML step.
+`site/` pages have the kind `site` and stay out of the skill and the bundle. The site image runs it from the release's
+source (`tools/deploy/Dockerfile.site`), and nginx serves it with clean URLs. Not built yet: `/learn`, `/download`,
+`/play`, `/releases/<version>`, and a version's link to the same page in the newest one - the version switcher reads a
+`docs/versions.json` that nothing writes yet.
+
 ### The playground
 
 **Decision: the whole toolchain compiled to WebAssembly and run in the browser — check, lower and run in the VM — with

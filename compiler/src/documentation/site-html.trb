@@ -1,0 +1,460 @@
+/**
+ * The body of a documentation page as the HTML of the site: `std/markdown` reads it, and this renderer writes the tree
+ * with what a site needs beyond CommonMark - an anchor on every heading that `torb docs check` resolves links against,
+ * a table that scrolls instead of the page, a code block coloured at generation time by the compiler's own lexer and
+ * resolver, a banner for a `Planned.` or `Draft.` page, and links between pages rewritten to the `.html` files they
+ * became.
+ *
+ * [renderedBody] is the whole step, a pure function of the text; [linkUrl] is the one place a link target is decided.
+ *
+ * # Related
+ *
+ * - [highlightedCode] - how a `trb` block is coloured.
+ * - [anchorOf] - the anchor a heading gets, shared with the link check.
+ */
+
+use Markdown, MarkdownBlock, MarkdownInline, ColumnAlignment, plainText from "std/markdown"
+use normalizePath from "../project/path"
+use highlightedCode, escapedHtml from "../reference/highlight"
+use Heading, anchorOf, words from "./markdown"
+use joinDocumentationPath, folderOf from "./tree"
+
+/**
+ * What a page's links are resolved against: where the page is written, where its source is, and where every other
+ * source file of the documentation was written.
+ */
+public type SiteLinks {
+  /** The output path of the page being rendered, relative to the root of the site: `docs/0.2/guide/index.html` */
+  page: String
+  /** The folder of its source, relative to the documentation root: `guide` */
+  folder: String
+  /** The output path of every `.md` file of the documentation, by its path relative to the documentation root */
+  targets: Map<String, String>
+  /** Where a file of the repository is shown, without the trailing `/`: the forge's view of the branch */
+  sourceBase: String
+}
+
+/** One heading of a page's table of contents: its level, its text as HTML and as plain text, and its anchor. */
+public type ContentsEntry {
+  level: Int
+  html: String
+  text: String
+  anchor: String
+}
+
+/** A body as HTML, with the headings a table of contents lists and the text a search indexes. */
+public type RenderedBody {
+  html: String
+  /** Every heading of level 2 and 3 of the top level, in order */
+  contents: List<ContentsEntry>
+  /** The words of the prose, the headings, the lists and the tables - not of the code blocks */
+  text: String
+}
+
+/**
+ * The HTML of a page body. `headings` are the headings the page reader found at the top level, in order: their anchors
+ * are the ones [anchorOf] derives or the page wrote as `{#anchor}`, so a link that `torb docs check` accepts lands.
+ *
+ * # Examples
+ *
+ *     const forge = "https://git.torb.dev/torbscript/language/src/branch/main"
+ *     const links = SiteLinks "docs/latest/index.html", "", [:], forge
+ *     print renderedBody("Some *text*.", [], links).html
+ */
+public fn renderedBody(body: String, headings: List<Heading>, links: SiteLinks): RenderedBody {
+  const document = Markdown(frontMatter: false).parse(body)
+  var renderer = SiteRenderer links, headings
+  renderer.blocks document.blocks, tight: false, topLevel: true
+  RenderedBody renderer.pieces.joined(separator: ""), renderer.contents, renderer.text.joined(separator: " ")
+}
+
+/**
+ * Blocks of a page as HTML, each heading with the anchor of its text: a part of a page, like a panel of the front
+ * page, whose headings the page reader has not seen.
+ */
+public fn blocksHtml(blocks: List<MarkdownBlock>, links: SiteLinks): String {
+  var renderer = SiteRenderer links, []
+  renderer.blocks blocks, tight: false, topLevel: true
+  renderer.pieces.joined separator: ""
+}
+
+/**
+ * Where a link of a page goes on the site. An external link, a `mailto:` and an anchor of the same page stay as they
+ * are; a link to a `.md` file of the documentation becomes the `.html` file it was written to, relative to the page, with
+ * its anchor; a link out of the documentation - `../CONCEPT.md`, a source file, an example - goes to the forge, because
+ * the site carries no file of the repository.
+ *
+ * # Examples
+ *
+ *     const forge = "https://git.torb.dev/torbscript/language/src/branch/main"
+ *     const targets = ["glossary.md": "docs/latest/glossary.html"]
+ *     const links = SiteLinks "docs/latest/guide/index.html", "guide", targets, forge
+ *     print linkUrl(links, "../glossary.md#binding")
+ */
+public fn linkUrl(links: SiteLinks, destination: String): String {
+  const isExternal = destination.startsWith("http://") || destination.startsWith("https://")
+  if isExternal || destination.startsWith("mailto:") || destination.startsWith("#") || destination.startsWith("/") {
+    return destination
+  }
+  if destination.isEmpty() {
+    return destination
+  }
+  const parts = destination.splitOnce "#"
+  const path = parts?.before ?? destination
+  const fragment = match parts {
+    Some(found) => "#{found.after}"
+    None => ""
+  }
+  const resolved = normalizePath joinDocumentationPath(links.folder, path)
+  if resolved.startsWith("..") || resolved == "." {
+    const repositoryPath = normalizePath joinDocumentationPath("docs", joinDocumentationPath(links.folder, path))
+    return "{links.sourceBase}/{repositoryPath}{fragment}"
+  }
+  if const Some(target) = links.targets.get(resolved) {
+    return "{relativeUrl(links.page, target)}{fragment}"
+  }
+  // A folder: its index, when it has one
+  if const Some(index) = links.targets.get(joinDocumentationPath(resolved, "index.md")) {
+    return "{relativeUrl(links.page, index)}{fragment}"
+  }
+  "{links.sourceBase}/docs/{resolved}{fragment}"
+}
+
+/**
+ * The URL of the file `target` as a link on the page `page` writes it, both relative to the root of the site:
+ * `../language/index.html` from `docs/0.2/guide/index.html` to `docs/0.2/language/index.html`.
+ *
+ * # Examples
+ *
+ *     print relativeUrl("docs/0.2/guide/index.html", "index.html")
+ */
+public fn relativeUrl(page: String, target: String): String {
+  const from = folderOf(page).split("/").filter({ !_.isEmpty() }).toList()
+  const to = target.split("/").toList()
+  var common = 0
+  while common < from.length() && common + 1 < to.length() && from[common] == to[common] {
+    common = common + 1
+  }
+  var segments: List<String> = []
+  for _ in common..from.length() {
+    segments.append ".."
+  }
+  for index in common..to.length() {
+    segments.append to[index]
+  }
+  segments.joined separator: "/"
+}
+
+/** The way from a page back to the root of the site: `../../` for `docs/0.2/index.html`, nothing for `index.html`. */
+public fn siteRootOf(page: String): String {
+  var prefix = ""
+  for character in page.chars() {
+    if character == '/' {
+      prefix = "{prefix}../"
+    }
+  }
+  prefix
+}
+
+/**
+ * The callouts of the documentation: a quote that starts with one of these labels in bold is a banner in the colours
+ * of its state. `Planned.` and `Draft.` are the banners `torb docs check` asks of a page that is not `stable`.
+ */
+fn calloutOf(label: String): String? {
+  match label {
+    "Planned." => "info"
+    "Not built natively yet." => "info"
+    "Draft." => "warning"
+    "Superseded by section 6b." => "warning"
+    "A historical record." => "warning"
+    _ => None
+  }
+}
+
+/** Whether a code block is a drawing: its lines are made of box-drawing characters and arrows, which Chivo Mono has not. */
+fn isDrawing(text: String): Bool {
+  for character in text.chars() {
+    const code = Int.from character
+    if code >= 0x2190 && code <= 0x25FF {
+      return true
+    }
+  }
+  false
+}
+
+/** Walks the blocks of one body and writes its HTML. */
+type SiteRenderer {
+  links: SiteLinks
+  /** The headings of the top level, as the page reader found them */
+  headings: List<Heading>
+  /** How many of them are written */
+  var written: Int = 0
+  var pieces: List<String> = []
+  var contents: List<ContentsEntry> = []
+  var text: List<String> = []
+
+  var fn write(piece: String) {
+    pieces.append piece
+  }
+
+  var fn blocks(blocks: List<MarkdownBlock>, tight: Bool, topLevel: Bool) {
+    for block in blocks {
+      self.block block, tight, topLevel
+    }
+  }
+
+  var fn block(block: MarkdownBlock, tight: Bool, topLevel: Bool) {
+    match block.content {
+      .Paragraph(inlines) => {
+        text.append plainText(inlines)
+        if tight {
+          write inlinesHtml(inlines)
+          return
+        }
+        write "<p>{inlinesHtml(inlines)}</p>\n"
+      }
+      .Heading(level, inlines) => heading level, inlines, topLevel
+      .ThematicBreak => write "<hr>\n"
+      .CodeBlock(info, code, _) => write codeBlockHtml(info, code)
+      .HtmlBlock(html) => write "{html}\n"
+      .BlockQuote(children) => quote children
+      .ItemList(list) => {
+        const name = if list.ordered { "ol" } else { "ul" }
+        if list.ordered && list.start != 1 {
+          write "<ol start=\"{list.start}\">\n"
+        } else {
+          write "<{name}>\n"
+        }
+        for item in list.items {
+          write "<li>"
+          blocks item.blocks, list.tight, topLevel: false
+          write "</li>\n"
+        }
+        write "</{name}>\n"
+      }
+      .Table(table) => {
+        write "<div class=\"table-wrap\"><table>\n<thead>\n<tr>"
+        for column in 0..table.header.length() {
+          cell("th", table.alignments.get(column) ?? ColumnAlignment.Unspecified, table.header[column])
+        }
+        write "</tr>\n</thead>\n"
+        if !table.rows.isEmpty() {
+          write "<tbody>\n"
+          for row in table.rows {
+            write "<tr>"
+            for column in 0..row.length() {
+              cell("td", table.alignments.get(column) ?? ColumnAlignment.Unspecified, row[column])
+            }
+            write "</tr>\n"
+          }
+          write "</tbody>\n"
+        }
+        write "</table></div>\n"
+      }
+    }
+  }
+
+  /**
+   * A heading of the top level takes the anchor the page reader gave it, and a heading of level 2 or 3 is an entry of
+   * the table of contents; a heading inside a list or a quote gets the anchor of its text.
+   */
+  var fn heading(level: Int, inlines: List<MarkdownInline>, topLevel: Bool) {
+    var shown = inlines
+    var anchor = anchorOf plainText(inlines)
+    if topLevel {
+      if const Some(found) = headings.get(written) {
+        if found.level == level {
+          anchor = found.anchor
+          if found.explicit {
+            shown = withoutExplicitAnchor inlines
+          }
+        }
+      }
+      written = written + 1
+    }
+    const html = inlinesHtml shown
+    text.append plainText(shown)
+    if topLevel && (level == 2 || level == 3) && !anchor.isEmpty() {
+      contents.append ContentsEntry(level, html, plainText(shown), anchor)
+    }
+    if anchor.isEmpty() {
+      write "<h{level}>{html}</h{level}>\n"
+      return
+    }
+    const link = "<a class=\"heading-anchor\" href=\"#{anchor}\" aria-label=\"Link to this section\">#</a>"
+    write "<h{level} id=\"{escapedHtml(anchor)}\">{html}{link}</h{level}>\n"
+  }
+
+  /** A quote, or a callout when it starts with a label the documentation gives a state. */
+  var fn quote(children: List<MarkdownBlock>) {
+    const label = match children.first()?.content {
+      Some(.Paragraph(inlines)) => match inlines.first() {
+        Some(.Strong(strong)) => plainText strong
+        _ => ""
+      }
+      _ => ""
+    }
+    match calloutOf(label) {
+      Some(state) => {
+        write "<div class=\"callout callout-{state}\">{calloutIcon(state)}<div class=\"callout-body\">\n"
+        blocks children, tight: false, topLevel: false
+        write "</div></div>\n"
+      }
+      None => {
+        write "<blockquote>\n"
+        blocks children, tight: false, topLevel: false
+        write "</blockquote>\n"
+      }
+    }
+  }
+
+  var fn cell(name: String, alignment: ColumnAlignment, inlines: List<MarkdownInline>) {
+    const attribute = match alignment {
+      .Unspecified => ""
+      .Left => " class=\"align-left\""
+      .Center => " class=\"align-center\""
+      .Right => " class=\"align-right\""
+    }
+    text.append plainText(inlines)
+    write "<{name}{attribute}>{inlinesHtml(inlines)}</{name}>"
+  }
+
+  fn inlinesHtml(inlines: List<MarkdownInline>): String {
+    var parts: List<String> = []
+    for inline in inlines {
+      parts.append inlineHtml(inline)
+    }
+    parts.joined separator: ""
+  }
+
+  fn inlineHtml(inline: MarkdownInline): String {
+    match inline {
+      .Text(value) => escapedHtml value
+      .Code(value) => "<code>{escapedHtml(value)}</code>"
+      .Emphasis(children) => "<em>{inlinesHtml(children)}</em>"
+      .Strong(children) => "<strong>{inlinesHtml(children)}</strong>"
+      .Link(destination, title, children, _) => {
+        const url = linkUrl links, destination
+        const titled = if title.isEmpty() { "" } else { " title=\"{escapedHtml(title)}\"" }
+        "<a href=\"{escapedHtml(url)}\"{titled}>{inlinesHtml(children)}</a>"
+      }
+      .Image(destination, title, children, _) => {
+        const url = linkUrl links, destination
+        const titled = if title.isEmpty() { "" } else { " title=\"{escapedHtml(title)}\"" }
+        const alternative = escapedHtml plainText(children).replace("\n", " ")
+        "<img src=\"{escapedHtml(url)}\" alt=\"{alternative}\"{titled} loading=\"lazy\">"
+      }
+      .Html(html) => html
+      .SoftBreak => "\n"
+      .HardBreak => "<br>\n"
+    }
+  }
+}
+
+/** The inlines of a heading without the `{#anchor}` it ends with. */
+fn withoutExplicitAnchor(inlines: List<MarkdownInline>): List<MarkdownInline> {
+  var kept = inlines
+  if const Some(.Text(last)) = kept.last() {
+    if const Some(parts) = last.splitOnce("\{#") {
+      kept.removeAt(kept.length() - 1)
+      const before = parts.before.trim()
+      if !before.isEmpty() {
+        kept.append MarkdownInline.Text(parts.before.withoutSuffix(" ") ?? parts.before)
+      }
+    }
+  }
+  kept
+}
+
+/**
+ * A fenced block as the site shows it. The language is the first word of the info string and the marker behind it is
+ * for the tools: a `trb` block is coloured by [highlightedCode], a `trb error` block carries the label that says it
+ * does not compile, a `console` block marks its prompts, a `diff` block its added and removed lines, and a drawing
+ * keeps a face that has its box-drawing characters.
+ */
+public fn codeBlockHtml(info: String, code: String): String {
+  const parts = words info
+  const language = parts.get(0) ?? ""
+  const marker = parts.get(1) ?? ""
+  const text = code.withoutSuffix("\n") ?? code
+  const inner = match language {
+    "trb" => highlightedCode text
+    "console" => consoleHtml text
+    "diff" => diffHtml text
+    _ => escapedHtml text
+  }
+  var classes = ["code"]
+  if !language.isEmpty() {
+    classes.append "language-{escapedHtml(language)}"
+  }
+  if language == "text" && isDrawing(text) {
+    classes.append "drawing"
+  }
+  const pre = "<pre class=\"{classes.joined(separator: " ")}\"><code>{inner}</code></pre>"
+  if language == "trb" && marker == "error" {
+    const label = "<div class=\"code-label\">{calloutIcon("error")}<span>Does not compile</span></div>"
+    return "<div class=\"code-block code-block-error\">{label}{pre}</div>\n"
+  }
+  "<div class=\"code-block\">{pre}</div>\n"
+}
+
+/** A console transcript: the `$ ` of a command is a prompt, and an `error:` or `warning:` line keeps its word bold. */
+fn consoleHtml(text: String): String {
+  var lines: List<String> = []
+  for line in text.split("\n") {
+    if const Some(command) = line.withoutPrefix("$ ") {
+      lines.append "<span class=\"prompt\">$ </span><span class=\"command\">{escapedHtml(command)}</span>"
+      continue
+    }
+    if const Some(command) = line.withoutPrefix("> ") {
+      lines.append "<span class=\"prompt\">&gt; </span><span class=\"command\">{escapedHtml(command)}</span>"
+      continue
+    }
+    if const Some(rest) = line.withoutPrefix("error:") {
+      lines.append "<span class=\"output-error\">error:</span>{escapedHtml(rest)}"
+      continue
+    }
+    if const Some(rest) = line.withoutPrefix("warning:") {
+      lines.append "<span class=\"output-warning\">warning:</span>{escapedHtml(rest)}"
+      continue
+    }
+    lines.append escapedHtml(line)
+  }
+  lines.joined separator: "\n"
+}
+
+/** A diff: an added line, a removed line and a hunk header each in the colour of the terminal scheme. */
+fn diffHtml(text: String): String {
+  var lines: List<String> = []
+  for line in text.split("\n") {
+    const style = if line.startsWith("+") {
+      "diff-added"
+    } else if line.startsWith("-") {
+      "diff-removed"
+    } else if line.startsWith("@@") {
+      "diff-hunk"
+    } else {
+      ""
+    }
+    if style.isEmpty() {
+      lines.append escapedHtml(line)
+    } else {
+      lines.append "<span class=\"{style}\">{escapedHtml(line)}</span>"
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+/**
+ * The icon of a state, drawn in the cut language of the mark: a filled disc with a straight cut out of it - a bar and
+ * a dot for information, a cross for an error, a bar and a dot upside down for a warning.
+ */
+public fn calloutIcon(state: String): String {
+  const cut = match state {
+    "error" => "M5.2 6.6 6.6 5.2 8 6.6 9.4 5.2 10.8 6.6 9.4 8 10.8 9.4 9.4 10.8 8 9.4 6.6 10.8 5.2 9.4 6.6 8Z"
+    "warning" => "M7 3.5h2v6H7ZM7 10.5h2v2H7Z"
+    _ => "M7 3.5h2v2H7ZM7 6.5h2v6H7Z"
+  }
+  const disc = "M8 0a8 8 0 1 1 0 16A8 8 0 1 1 8 0Z"
+  "<svg class=\"state-icon\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path fill-rule=\"evenodd\" d=\"{disc}{cut}\"/></svg>"
+}

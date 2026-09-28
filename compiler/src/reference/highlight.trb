@@ -4,8 +4,10 @@
  * a name the way the editor does, with no script in the browser.
  *
  * Every piece becomes a `<span class="t-...">` whose class is the token kind: `t-keyword`, `t-string`, `t-number`,
- * `t-comment`, and the kinds of the editor's semantic tokens (`t-type`, `t-enumMember`, `t-function`, `t-method`,
- * `t-parameter`, `t-variable`, `t-property`, ...). The stylesheet of the site gives them their colours.
+ * `t-comment`, `t-punctuation` for a bracket, a separator or an operator, and the kinds of the editor's semantic tokens
+ * (`t-type`, `t-enumMember`, `t-function`, `t-method`, `t-parameter`, `t-variable`, `t-property`, ...). A name that
+ * can be changed carries `t-mutable` besides, which the stylesheet draws as an underline, the way the editor does. The
+ * stylesheet of the site gives them their colours (docs/design/BRAND.md section 9).
  *
  * # Related
  *
@@ -18,7 +20,10 @@ use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use resolveFile from "../highlight/resolve"
 
-/** A range of the code with the class it is shown with. `rank` decides between two ranges that start together. */
+/**
+ * A range of the code with the classes it is shown with, the words of `style` each behind `t-`. `rank` decides between
+ * two ranges that start together.
+ */
 type Mark {
   start: Int
   end: Int
@@ -38,7 +43,8 @@ public fn highlightedCode(code: String): String {
   const source = SourceText.of code
   var marks: List<Mark> = []
   for token in resolveFile(parse(source).file) {
-    marks.append Mark(token.span.start, token.span.end, token.kind, 0)
+    const style = if token.modifiers.contains("mutable") { "{token.kind} mutable" } else { token.kind }
+    marks.append Mark(token.span.start, token.span.end, style, 0)
   }
   var after = 0
   for token in lex(source).tokens {
@@ -64,20 +70,22 @@ public fn highlightedCode(code: String): String {
       continue
     }
     pieces.append escapedHtml(code.sliceBytes(cursor, mark.start))
-    pieces.append "<span class=\"t-{mark.style}\">{escapedHtml(code.sliceBytes(mark.start, mark.end))}</span>"
+    const classes = mark.style.split(" ").map({ "t-{_}" }).joined(separator: " ")
+    pieces.append "<span class=\"{classes}\">{escapedHtml(code.sliceBytes(mark.start, mark.end))}</span>"
     cursor = mark.end
   }
   pieces.append escapedHtml(code.sliceBytes(cursor, code.byteLength()))
   pieces.joined separator: ""
 }
 
-/** The class of a token the resolver does not name: a keyword or a literal. */
+/** The class of a token the resolver does not name: a keyword, a literal, or a bracket, a separator or an operator. */
 fn styleOf(kind: TokenKind): String? {
   match kind {
     .Reserved(_) => "keyword"
     .IntegerLiteral | .FloatLiteral => "number"
     .CharLiteral(_) | .TextLiteral(_) => "string"
-    _ => None
+    .Identifier | .Newline | .EndOfFile => None
+    _ => "punctuation"
   }
 }
 

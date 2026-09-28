@@ -1,0 +1,204 @@
+/**
+ * The navigation of the documentation site, built from the index tree the way `torb docs index` builds the body of an
+ * index: `docs/index.md`, then the index of every folder below it, ordered by `order` and then by title, then the pages
+ * of the folder, then the design documents its index names. Nothing is configured: a page that `docs index` lists is in
+ * the navigation, where the index lists it.
+ *
+ * [navigationOf] is the tree, [readingOrder] the order the previous and next links of a page follow, and [sidebarHtml]
+ * the sidebar of one page, with the section of that page open and every other one closed.
+ *
+ * # Related
+ *
+ * - `generateIndexes` of `index.trb` - the same order, written into the indexes.
+ */
+
+use normalizePath from "../project/path"
+use escapedHtml from "../reference/highlight"
+use Page, Folder, Documentation, joinDocumentationPath from "./tree"
+use relativeUrl from "./site-html"
+
+/**
+ * The top-level folders that stand apart from the main navigation: they are public, and written for somebody working on
+ * the language rather than with it (docs/design/RELEASE.md section 6, "The structure").
+ */
+public const projectSections: List<String> = ["design", "internals", "contributing"]
+
+/** The folder of the website's own pages: the site writes them at its root, and the navigation leaves them out. */
+public const siteFolder = "site"
+
+/** One entry of the navigation: a page, a section or a design document, with the entries below it. */
+public type NavigationEntry {
+  title: String
+  /** The path of its source, relative to the documentation root: `guide/index.md` */
+  source: String
+  /** The top-level folder it belongs to: `guide`, or empty for a page of the root */
+  section: String
+  children: List<Self>
+
+  /** Whether the entry is the page with this source, or has it somewhere below it. */
+  fn leadsTo(path: String): Bool {
+    source == path || children.any({ _.leadsTo path })
+  }
+}
+
+/** The entries of the navigation below `docs/index.md`: every section, then every page of the root. */
+public fn navigationOf(documentation: Documentation): List<NavigationEntry> {
+  match documentation.folderAt("") {
+    Some(root) => childEntries documentation, root, ""
+    None => []
+  }
+}
+
+/** The entries below a folder: its sections, its pages, and the design documents its index names. */
+fn childEntries(documentation: Documentation, folder: Folder, section: String): List<NavigationEntry> {
+  var entries: List<NavigationEntry> = []
+  var sections: List<Page> = []
+  for child in folder.folders {
+    if child == siteFolder {
+      continue
+    }
+    if const Some(index) = documentation.indexOf(child) {
+      sections.append index
+    }
+  }
+  for index in sortedByOrder(sections) {
+    const childSection = if section.isEmpty() { index.folder.split("/").first() ?? "" } else { section }
+    match documentation.folderAt(index.folder) {
+      Some(found) => {
+        const children = childEntries documentation, found, childSection
+        entries.append NavigationEntry(titleOf(index), index.path, childSection, children)
+      }
+      None => {}
+    }
+  }
+  for page in sortedByOrder(folder.pages) {
+    entries.append NavigationEntry(titleOf(page), page.path, section, [])
+  }
+  if const Some(index) = folder.index {
+    for document in index.frontMatter.items("documents") {
+      const resolved = normalizePath joinDocumentationPath(folder.path, document)
+      const title = documentation.plainTitles.get(resolved) ?? resolved
+      entries.append NavigationEntry(title, resolved, section, [])
+    }
+  }
+  entries
+}
+
+fn titleOf(page: Page): String {
+  page.frontMatter.text("title") ?? page.path
+}
+
+/** By `order` where there is one, then by title: the order of `torb docs index`. */
+fn sortedByOrder(pages: List<Page>): List<Page> {
+  var sorted = pages
+  sorted.sort({ (_.frontMatter.number("order") ?? 1_000_000, _.frontMatter.text("title") ?? "") })
+  sorted
+}
+
+/**
+ * Every source of the navigation in the order a reader goes through it: `index.md`, then every entry before the entries
+ * below it. The previous and next links of a page are its neighbours here.
+ */
+public fn readingOrder(entries: List<NavigationEntry>): List<String> {
+  var order: List<String> = ["index.md"]
+  appendInOrder order, entries
+  order
+}
+
+fn appendInOrder(var order: List<String>, entries: List<NavigationEntry>) {
+  for entry in entries {
+    if !order.contains(entry.source) {
+      order.append entry.source
+    }
+    appendInOrder order, entry.children
+  }
+}
+
+/** The title of every entry, by its source: what a previous or next link shows. */
+public fn titlesOf(entries: List<NavigationEntry>): Map<String, String> {
+  var titles: Map<String, String> = [:]
+  addTitles titles, entries
+  titles
+}
+
+fn addTitles(var titles: Map<String, String>, entries: List<NavigationEntry>) {
+  for entry in entries {
+    titles.set entry.source, entry.title
+    addTitles titles, entry.children
+  }
+}
+
+/**
+ * The top-level folder of every entry, by its source: where the navigation lists a page, which for a design document
+ * an index names from elsewhere is not the folder the file is in.
+ */
+public fn sectionsOf(entries: List<NavigationEntry>): Map<String, String> {
+  var sections: Map<String, String> = [:]
+  addSections sections, entries
+  sections
+}
+
+fn addSections(var sections: Map<String, String>, entries: List<NavigationEntry>) {
+  for entry in entries {
+    sections.set entry.source, entry.section
+    addSections sections, entry.children
+  }
+}
+
+/**
+ * The sidebar of one page: the overview, the sections of the language and its tools, then the sections of the project.
+ * The entries on the way to the current page are open, and the page itself is marked `aria-current`, which the
+ * stylesheet draws as a bar in ink.
+ */
+public fn sidebarHtml(
+  entries: List<NavigationEntry>,
+  current: String,
+  page: String,
+  targets: Map<String, String>,
+): String {
+  var main: List<NavigationEntry> = []
+  var project: List<NavigationEntry> = []
+  for entry in entries {
+    if projectSections.contains(entry.section) {
+      project.append entry
+    } else {
+      main.append entry
+    }
+  }
+  var pieces: List<String> = ["<nav class=\"navigation\" aria-label=\"Documentation\">", "<ul>"]
+  const overview = NavigationEntry "Overview", "index.md", "", []
+  pieces.append entryHtml(overview, current, page, targets)
+  for entry in main {
+    pieces.append entryHtml(entry, current, page, targets)
+  }
+  pieces.append "</ul>"
+  if !project.isEmpty() {
+    pieces.append "<p class=\"navigation-heading\">The project</p>"
+    pieces.append "<ul>"
+    for entry in project {
+      pieces.append entryHtml(entry, current, page, targets)
+    }
+    pieces.append "</ul>"
+  }
+  pieces.append "</nav>"
+  pieces.joined separator: "\n"
+}
+
+fn entryHtml(entry: NavigationEntry, current: String, page: String, targets: Map<String, String>): String {
+  const target = targets.get(entry.source) ?? ""
+  const url = relativeUrl page, target
+  const isCurrent = entry.source == current
+  const marked = if isCurrent { " aria-current=\"page\"" } else { "" }
+  const isOpen = !entry.children.isEmpty() && entry.leadsTo(current)
+  const classes = if entry.children.isEmpty() { "" } else if isOpen { " class=\"open\"" } else { " class=\"closed\"" }
+  var pieces = ["<li{classes}><a href=\"{escapedHtml(url)}\"{marked}>{escapedHtml(entry.title)}</a>"]
+  if isOpen {
+    pieces.append "<ul>"
+    for child in entry.children {
+      pieces.append entryHtml(child, current, page, targets)
+    }
+    pieces.append "</ul>"
+  }
+  pieces.append "</li>"
+  pieces.joined separator: ""
+}

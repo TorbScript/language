@@ -1,6 +1,6 @@
 ---
 title: How this documentation is structured
-summary: The tree, what each folder is for, the nine kinds of page, and which source wins when two documents disagree.
+summary: The tree, what each folder is for, the ten kinds of page, and which source wins when two documents disagree.
 kind: explanation
 status: stable
 skill: omit
@@ -31,7 +31,8 @@ docs/
 ├ explanation/                 Why the language is the way it is, and contrast pages
 ├ tooling/                     The torb command, project files, the formatter canon
 ├ internals/                   An index that links the compiler design documents in place
-└ contributing/                How this documentation is written
+├ contributing/                How this documentation is written
+└ site/                        The pages of the website around the documentation: the front page, the install page
 ```
 
 The four modes of [Diátaxis](https://diataxis.fr/) map onto `guide/` (tutorial), `how-to/`, `language/` plus
@@ -49,6 +50,7 @@ which Diátaxis has no slot for.
 | `tooling/` | "Which command, which flag, which file?" | "How does the compiler work inside?" |
 | `internals/` | "How is the compiler built?" | Anything a user of the language needs |
 | `contributing/` | "How do I write a page here?" | Anything about the language itself |
+| `site/` | "What is TorbScript, and how do I install it?" | Anything the documentation answers |
 
 ## Why
 
@@ -71,7 +73,7 @@ paying.
 writes the front matter and an introduction; below the closing marker nothing is allowed. So an index cannot be stale,
 a new page appears in its index without a second edit, and `docs index --check` is a gate.
 
-### The nine kinds
+### The ten kinds
 
 `kind` in the front matter is a closed vocabulary. It picks the required sections, and the tool checks them.
 
@@ -86,6 +88,7 @@ a new page appears in its index without a second edit, and `docs index --check` 
 | `tooling` | A command or a project file | `Synopsis`, `What it does`, `Examples`, `Related` |
 | `package` | One package of `std/` | `Import`, `Declarations`, `Related` |
 | `glossary` | `glossary.md` | `Terms` |
+| `site` | A page of the website in `site/`, which `torb docs site` writes at the root of the site and the skill and the bundle leave out | none |
 
 Other `##` sections may stand between the required ones. A reference page is free to add `## More examples` or
 `## Coming from other languages`; it may not leave out `## What this is not`.

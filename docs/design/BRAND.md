@@ -4,9 +4,10 @@
 than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Chivo Mono; the depth gradient as
 the primary form of the mark; a red button only for the main call to action. The logo files, the icons, the social card
 and the tokens are in `brand/` (`brand/README.md` lists every file). The VS Code extension carries the icons and the
-walkthrough, the released Windows `torb.exe` the Orb (section 11), and `torb` colours its output (section 10); the
-extension's two colour themes, the website, the registry and the forge's theme are the slices of section 13 still to
-come.
+walkthrough, the released Windows `torb.exe` the Orb (section 11), and `torb` colours its output (section 10). Slice 1,
+the website and the docs, is built: `torb docs site` and `torb doc` apply the tokens, the fonts, the icons and the shell
+([docs/tooling/torb-docs-site.md](../tooling/torb-docs-site.md)). The extension's two colour themes, the registry and
+the forge's theme are the slices of section 13 still to come.
 
 **One mark, one red, one type family, and every value a named token.** The identity has to look like the language it
 stands for: one clear shape instead of several, exact about where things change, confident without effects.
@@ -589,11 +590,16 @@ white are ground colours in the light scheme, black in the dark one.
   in `display`, a category line in `text-muted`, the install one-liner in a code block, the call-to-action button, and
   the strata band at its foot.
 - **Body:** paper, ink, Chivo 400 at 17 px, headings in Chivo 700 and 800, links in ink with the carmine underline.
-- **Replaces** the stylesheet `torb docs site` writes today (`compiler/src/reference/site.trb`): it includes
-  `brand/tokens.css` and uses the roles, never raw hex.
+- **Replaces** the stylesheet `torb doc` wrote (`compiler/src/reference/site.trb`): the site and the reference include
+  `brand/tokens.css` and use the roles, never raw hex (`compiler/src/documentation/site-style.trb`).
 - **Favicons and the manifest:** `favicon.svg` (the 16 px art), `favicon.ico` with 16, 32 and 48 px, an opaque
   `apple-touch-icon.png` at 180 px and a maskable 512 px icon (the paper mark inside the central 80% of a full-bleed
-  depth gradient), both drawn in the site's slice; `theme-color` is paper for light and ink for dark, never red.
+  depth gradient), both drawn in the site's slice; `theme-color` is paper for light and ink for dark, never red. As
+  drawn: `brand/icons/favicon.ico`, `apple-touch-icon.png`, and `app-icon-maskable.svg` with its 192 and 512 px PNGs,
+  the paper mark at 62.5% of the square - the share the macOS tile gives it, and every edge of the cut on a whole pixel
+  at 512.
+- **Fonts:** Chivo and Chivo Mono as variable `.woff2` in `brand/fonts/`, subset to Latin, Latin Extended-A, the
+  general punctuation, arrows and mathematical operators, served by the site from `/assets/fonts/`.
 
 ### The documentation (/learn, /docs, /reference)
 

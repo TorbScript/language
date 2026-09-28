@@ -57,6 +57,8 @@ public type Documentation {
   folders: List<Folder>
   /** The first `# ` heading of every `.md` file that has no front matter, by path: what an index shows for it */
   plainTitles: Map<String, String>
+  /** The whole text of every `.md` file that has no front matter, by path: what the site renders of it */
+  plainTexts: Map<String, String>
   problems: List<DocumentationProblem>
 
   fn pageAt(path: String): Page? {
@@ -127,6 +129,7 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
   var problems: List<DocumentationProblem> = []
   var plainByFolder: Map<String, List<String>> = [:]
   var plainTitles: Map<String, String> = [:]
+  var plainTexts: Map<String, String> = [:]
   var folderPaths: List<String> = [""]
   for path in paths {
     if !path.endsWith(".md") {
@@ -145,6 +148,7 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
         const existing = plainByFolder.get(folder) ?? []
         plainByFolder.set folder, existing.appended(path)
         plainTitles.set path, firstHeadingOf(text, path)
+        plainTexts.set path, text
       }
     }
   }
@@ -161,7 +165,7 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
     }
     folders.append Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
   }
-  Documentation root, pages, folders, plainTitles, problems
+  Documentation root, pages, folders, plainTitles, plainTexts, problems
 }
 
 /** The first `# ` heading of a plain Markdown file, or its file name when it has none. */

@@ -28,6 +28,7 @@ one page that answers a question. Every page is written to be understandable on 
 - **[Design records](design/index.md)** - The specification documents behind a language or library feature that is still being built, each opening with a status line that says how much of it exists today.
 - **[How the toolchain is built](internals/index.md)** - The compiler design documents, indexed where they live: the architecture, the type checker and the back end.
 - **[Writing the documentation](contributing/index.md)** - The rules, templates and commands for writing a page here, and the research they come from.
+- **[The website](site/index.md)** - The pages torb.dev shows around the documentation - the front page and the install page - which torb docs site writes at the root of the site.
 
 ## Pages
 

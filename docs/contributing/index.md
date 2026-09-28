@@ -31,7 +31,7 @@ about what a program *does* comes with a program there.
 ## Pages
 
 - **[What the research decided](research.md)** - The ten rules this documentation is built on, each with the evidence and the source it comes from, and the practices that were deliberately left out.
-- **[How this documentation is structured](structure.md)** - The tree, what each folder is for, the nine kinds of page, and which source wins when two documents disagree.
+- **[How this documentation is structured](structure.md)** - The tree, what each folder is for, the ten kinds of page, and which source wins when two documents disagree.
 - **[The front matter](front-matter.md)** - The nine fields a page may carry, what reads each of them, and the exact subset of YAML that a page is allowed to use.
 - **[How to write here](writing.md)** - The writing rules for pages that both a person and a language model have to be able to trust, with the reason behind each one.
 - **[Add a page](adding-a-page.md)** - The seven steps from an empty file to a page that passes the gate, with a template for every kind of page to copy.

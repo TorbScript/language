@@ -1,0 +1,517 @@
+/**
+ * The pages of the documentation site around their bodies: the head with its icons and its preview card, the shell of
+ * docs/design/BRAND.md section 11 - the top rule, the lockup, the navigation, the search and the theme toggle - and the
+ * three layouts inside it: a page of the documentation with its navigation, contents and previous and next links, the
+ * front page, and a plain page of the site.
+ *
+ * Every function here is a pure function of a [SiteContext] and a rendered body, and every URL it writes is relative
+ * to the page, so the output can be served from any directory - except the page for a missing path, which the server
+ * answers at every depth and which therefore links from the root of the host.
+ *
+ * # Related
+ *
+ * - `renderedBody` of `site-html.trb` - the body of a page.
+ * - [sidebarHtml] - the navigation.
+ */
+
+use MarkdownBlock, BlockContent, plainText from "std/markdown"
+use escapedHtml from "../reference/highlight"
+use Markdown from "std/markdown"
+use NavigationEntry, sidebarHtml from "./site-navigation"
+use ContentsEntry, SiteLinks, relativeUrl, siteRootOf, blocksHtml, codeBlockHtml from "./site-html"
+use headScript from "./site-style"
+
+/** The line of the front page, decided with the name of the category (docs/design/RELEASE.md section 6). */
+public const siteSlogan = "One language, every layer."
+
+/** The address the site is served at, for the links a preview card and a feed need whole. */
+public const siteAddress = "https://torb.dev"
+
+/** The repository on the forge, where the source is and where a page is edited. */
+public const forgeAddress = "https://git.torb.dev/torbscript/language"
+
+/** The registry of packages. */
+public const registryAddress = "https://packages.torb.dev"
+
+/** The two commands that install the toolchain, as `tools/install.sh` and `tools/install.ps1` document them. */
+public const installCommandPosix = "curl -fsSL https://torb.dev/install.sh | sh"
+
+/** The command of `tools/install.ps1`, for PowerShell on Windows. */
+public const installCommandWindows = "irm https://torb.dev/install.ps1 | iex"
+
+/** What every page of one build shares: the version, the brand's inline drawings, the navigation and the targets. */
+public type SiteContext {
+  /** The version the documentation is of: `0.2.0`, `nightly`, `latest` */
+  version: String
+  /** The horizontal lockup as inline SVG, its wordmark in `currentColor` */
+  lockup: String
+  /** The flat mark as inline SVG */
+  mark: String
+  navigation: List<NavigationEntry>
+  /** The output path of every `.md` file of the documentation, by its source path */
+  targets: Map<String, String>
+  /** The pages of the site the footer links, with their output paths: the imprint and the privacy notice, when they exist */
+  footerPages: List<(title: String, target: String)>
+  /** Where the red button of the front page leads: the install page, when the site has one */
+  installPage: String
+  /**
+   * A hash of the stylesheet and the script, behind their URLs as `?v=`: a page asks for them again exactly when they
+   * changed, so the server may let a browser keep them for a year
+   */
+  assetVersion: String
+}
+
+/** The directory the documentation of this version is written to, relative to the root of the site. */
+public fn docsDirectory(version: String): String {
+  "docs/{version}"
+}
+
+/** The head of a page: what a tab, a search engine and a preview card show. */
+public type PageHead {
+  title: String
+  description: String
+  /** The output path of the page */
+  page: String
+  /** Whether the page links from the root of the host instead of relative to itself: the page for a missing path */
+  absolute: Bool = false
+}
+
+/** Which part of the site a page belongs to, for the item of the header's navigation it marks. */
+public type SitePart {
+  case Front
+  case Learn
+  case Docs
+  case Other
+}
+
+const menuIcon = "<svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M3 5.75h14M3 10h14M3 14.25h14\"/></svg>"
+
+const searchIcon = "<svg viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"8.75\" cy=\"8.75\" r=\"5.5\"/><path d=\"M12.75 12.75 17 17\"/></svg>"
+
+const moonIcon = "<svg class=\"icon-moon\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M16.25 12.1A6.75 6.75 0 0 1 7.9 3.75a6.75 6.75 0 1 0 8.35 8.35Z\"/></svg>"
+
+const sunIcon = "<svg class=\"icon-sun\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"10\" r=\"3.5\"/><path d=\"M10 1.75v2M10 16.25v2M1.75 10h2M16.25 10h2M4.17 4.17l1.41 1.41M14.42 14.42l1.41 1.41M4.17 15.83l1.41-1.41M14.42 5.58l1.41-1.41\"/></svg>"
+
+const editIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M10.5 2.5l3 3-8 8H2.5v-3z\"/></svg>"
+
+const arrowIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M2.5 8h11M9 3.5 13.5 8 9 12.5\"/></svg>"
+
+const copyIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"5.25\" y=\"5.25\" width=\"8.5\" height=\"8.5\" rx=\"1\"/><path d=\"M10.75 5.25V3.25a1 1 0 0 0-1-1h-6.5a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h2\"/></svg>"
+
+/** How a page links to the file `target` of the site: relative to itself, or from the root of the host. */
+fn urlOf(head: PageHead, target: String): String {
+  if head.absolute {
+    return "/{target}"
+  }
+  relativeUrl head.page, target
+}
+
+/** The `<head>` of every page: the icons, the manifest, the preview card, the stylesheet and the scripts. */
+fn headHtml(site: SiteContext, head: PageHead): String {
+  const title = escapedHtml head.title
+  const description = escapedHtml head.description
+  const canonical = if head.page == "index.html" { "{siteAddress}/" } else { "{siteAddress}/{head.page}" }
+  const lines = [
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "<head>",
+    "<meta charset=\"utf-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+    "<title>{title}</title>",
+    "<meta name=\"description\" content=\"{description}\">",
+    "<meta name=\"theme-color\" content=\"#FFFDFC\" media=\"(prefers-color-scheme: light)\">",
+    "<meta name=\"theme-color\" content=\"#14110F\" media=\"(prefers-color-scheme: dark)\">",
+    "<meta property=\"og:site_name\" content=\"TorbScript\">",
+    "<meta property=\"og:type\" content=\"website\">",
+    "<meta property=\"og:title\" content=\"{title}\">",
+    "<meta property=\"og:description\" content=\"{description}\">",
+    "<meta property=\"og:url\" content=\"{escapedHtml(canonical)}\">",
+    "<meta property=\"og:image\" content=\"{siteAddress}/social-card.png\">",
+    "<meta property=\"og:image:width\" content=\"1200\">",
+    "<meta property=\"og:image:height\" content=\"630\">",
+    "<meta property=\"og:image:alt\" content=\"TorbScript: {siteSlogan}\">",
+    "<meta name=\"twitter:card\" content=\"summary_large_image\">",
+    "<link rel=\"icon\" href=\"{urlOf(head, "favicon.ico")}\" sizes=\"48x48\">",
+    "<link rel=\"icon\" href=\"{urlOf(head, "favicon.svg")}\" type=\"image/svg+xml\">",
+    "<link rel=\"apple-touch-icon\" href=\"{urlOf(head, "apple-touch-icon.png")}\">",
+    "<link rel=\"mask-icon\" href=\"{urlOf(head, "mask-icon.svg")}\" color=\"#D4002D\">",
+    "<link rel=\"manifest\" href=\"{urlOf(head, "manifest.webmanifest")}\">",
+    "<link rel=\"preload\" href=\"{urlOf(head, "assets/fonts/chivo.woff2")}\" as=\"font\" type=\"font/woff2\" crossorigin>",
+    "<link rel=\"stylesheet\" href=\"{urlOf(head, "assets/site.css")}?v={site.assetVersion}\">",
+    "<script>{headScript.replace("\n", "")}</script>",
+    "<script src=\"{urlOf(head, "assets/site.js")}?v={site.assetVersion}\" defer></script>",
+    "</head>",
+  ]
+  lines.joined separator: "\n"
+}
+
+/** The header: the top rule, the lockup, the navigation of the site, the search and the theme toggle. */
+fn headerHtml(site: SiteContext, head: PageHead, part: SitePart, withMenu: Bool): String {
+  const docs = docsDirectory site.version
+  const menu = if withMenu {
+    "<label class=\"button button-quiet button-icon menu-button\" for=\"navigation-toggle\" aria-label=\"The navigation\">{menuIcon}</label>"
+  } else {
+    ""
+  }
+  const links = [
+    "<a href=\"{urlOf(head, "{docs}/guide/index.html")}\"{currentMark(part, SitePart.Learn)}>Learn</a>",
+    "<a href=\"{urlOf(head, "{docs}/index.html")}\"{currentMark(part, SitePart.Docs)}>Docs</a>",
+    "<a href=\"{urlOf(head, "{docs}/reference/index.html")}\">Reference</a>",
+    "<a href=\"{registryAddress}\">Packages</a>",
+    "<a href=\"{forgeAddress}\">Source</a>",
+  ]
+  const search = "<button type=\"button\" class=\"button button-secondary search-button\" data-search-open hidden>{searchIcon}<span class=\"search-label\">Search</span><kbd>/</kbd></button>"
+  const theme = "<button type=\"button\" class=\"button button-quiet button-icon theme-toggle\" data-theme-toggle hidden aria-label=\"Switch the theme\">{moonIcon}{sunIcon}</button>"
+  const lines = [
+    "<header class=\"site-header\">",
+    "<div class=\"header-inner\">",
+    menu,
+    "<a class=\"brand-link\" href=\"{urlOf(head, "index.html")}\" aria-label=\"TorbScript, the front page\">{site.lockup}</a>",
+    "<nav class=\"site-nav\" aria-label=\"The site\">{links.joined(separator: "")}</nav>",
+    "<div class=\"header-actions\">{search}{theme}</div>",
+    "</div>",
+    "</header>",
+  ]
+  lines.filter({ !_.isEmpty() }).toList().joined(separator: "\n")
+}
+
+/** The attribute that marks the item of the navigation a page belongs to. */
+fn currentMark(part: SitePart, wanted: SitePart): String {
+  if part == wanted { " aria-current=\"page\"" } else { "" }
+}
+
+/** The footer: the licence, where the source is, and the legal pages the site has. */
+fn footerHtml(site: SiteContext, head: PageHead): String {
+  const docs = docsDirectory site.version
+  var links = [
+    "<li><a href=\"{urlOf(head, "{docs}/index.html")}\">Documentation</a></li>",
+    "<li><a href=\"{registryAddress}\">Packages</a></li>",
+    "<li><a href=\"{forgeAddress}\">Source</a></li>",
+    "<li><a href=\"{forgeAddress}/src/branch/main/LICENSE\">MIT License</a></li>",
+  ]
+  for (title, target) in site.footerPages {
+    links.append "<li><a href=\"{urlOf(head, target)}\">{escapedHtml(title)}</a></li>"
+  }
+  const lines = [
+    "<footer class=\"site-footer\">",
+    "<div class=\"footer-inner\">",
+    "<div class=\"footer-mark\">{site.mark}<span>TorbScript is free software under the MIT License.</span></div>",
+    "<ul class=\"footer-links\">{links.joined(separator: "")}</ul>",
+    "</div>",
+    "</footer>",
+  ]
+  lines.joined separator: "\n"
+}
+
+/** The search dialog. It stays hidden without a script, which is the only thing that can search. */
+fn searchDialogHtml(): String {
+  const field = "<div class=\"search-field\">{searchIcon}<input class=\"search-input\" type=\"search\" placeholder=\"Search the documentation\" aria-label=\"Search the documentation\" autocomplete=\"off\" spellcheck=\"false\"><kbd>Esc</kbd></div>"
+  const footer = "<div class=\"search-footer\"><span><kbd>Enter</kbd> opens a result</span><span><kbd>Esc</kbd> closes</span></div>"
+  "<dialog class=\"search-dialog\" aria-label=\"Search the documentation\">{field}<ul class=\"search-results\" role=\"listbox\" aria-label=\"Results\"></ul>{footer}</dialog>"
+}
+
+/** A whole page: the head, the body's attributes the script reads, the shell and the main part. */
+fn pageHtml(site: SiteContext, head: PageHead, part: SitePart, main: String, docsPage: String, withMenu: Bool): String {
+  const root = if head.absolute { "/" } else { siteRootOf head.page }
+  const attributes = "data-root=\"{root}\" data-version=\"{escapedHtml(site.version)}\" data-page=\"{escapedHtml(docsPage)}\""
+  var lines = [
+    headHtml(site, head),
+    "<body {attributes}>",
+    "<a class=\"skip-link\" href=\"#main\">Skip to the content</a>",
+  ]
+  if withMenu {
+    lines.append "<input type=\"checkbox\" id=\"navigation-toggle\" class=\"navigation-toggle\" aria-hidden=\"true\" tabindex=\"-1\">"
+  }
+  lines.append headerHtml(site, head, part, withMenu)
+  lines.append main
+  lines.append footerHtml(site, head)
+  lines.append searchDialogHtml()
+  lines.append "</body>"
+  lines.append "</html>"
+  lines.append ""
+  lines.joined separator: "\n"
+}
+
+/** What a page of the documentation hands to its layout. */
+public type DocumentationPage {
+  /** Its source, relative to the documentation root */
+  source: String
+  /** Its output path */
+  target: String
+  /** Empty for a design document, whose body starts with its own `#` heading */
+  title: String
+  summary: String
+  /** The title the tab shows */
+  shownTitle: String
+  body: String
+  contents: List<ContentsEntry>
+  previous: (title: String, target: String)?
+  next: (title: String, target: String)?
+}
+
+/**
+ * A page of the documentation: the navigation with the page's section open, the breadcrumbs, the title and the summary,
+ * the body, the link that edits the page on the forge, the previous and next pages, and the contents beside it.
+ */
+public fn documentationPageHtml(site: SiteContext, page: DocumentationPage): String {
+  const head = PageHead "{page.shownTitle} - TorbScript", page.summary, page.target
+  const part = if page.source.startsWith("guide/") { SitePart.Learn } else { SitePart.Docs }
+  const docs = docsDirectory site.version
+  const docsPage = page.target.withoutPrefix("{docs}/") ?? page.target
+  var article: List<String> = ["<article class=\"article\">"]
+  article.append breadcrumbsHtml(site, page)
+  if !page.title.isEmpty() {
+    article.append "<h1 class=\"page-title\">{escapedHtml(page.title)}</h1>"
+  }
+  if !page.summary.isEmpty() && !page.title.isEmpty() {
+    article.append "<p class=\"page-summary\">{escapedHtml(page.summary)}</p>"
+  }
+  article.append "<div class=\"prose\">"
+  article.append page.body
+  article.append "</div>"
+  article.append pageFooterHtml(site, page)
+  article.append "</article>"
+  var main: List<String> = ["<div class=\"docs\">"]
+  const version = "<div class=\"version\" data-version-switch>Version <span class=\"version-label\">{escapedHtml(site.version)}</span></div>"
+  main.append "<aside class=\"sidebar\" id=\"navigation\">{version}{sidebarHtml(site.navigation, page.source, page.target, site.targets)}</aside>"
+  main.append "<main class=\"content\" id=\"main\">{article.joined(separator: "\n")}</main>"
+  main.append contentsHtml(page.contents)
+  main.append "</div>"
+  pageHtml site, head, part, main.joined(separator: "\n"), docsPage, withMenu: true
+}
+
+/** The way from the overview of the documentation to the section of the page, without the page itself. */
+fn breadcrumbsHtml(site: SiteContext, page: DocumentationPage): String {
+  if page.source == "index.md" {
+    return ""
+  }
+  var trail: List<NavigationEntry> = []
+  trailTo trail, site.navigation, page.source
+  var items = ["<li><a href=\"{relativeUrl(page.target, site.targets.get("index.md") ?? "")}\">Docs</a></li>"]
+  for entry in trail {
+    const url = relativeUrl(page.target, site.targets.get(entry.source) ?? "")
+    items.append "<li><a href=\"{escapedHtml(url)}\">{escapedHtml(entry.title)}</a></li>"
+  }
+  "<ol class=\"breadcrumbs\" aria-label=\"Breadcrumbs\">{items.joined(separator: "")}</ol>"
+}
+
+/** Appends the entries above `source` to `trail`, outermost first. Answers whether `source` is below `entries`. */
+fn trailTo(var trail: List<NavigationEntry>, entries: List<NavigationEntry>, source: String): Bool {
+  for entry in entries {
+    if entry.source == source {
+      return true
+    }
+    if entry.leadsTo(source) {
+      trail.append entry
+      return trailTo trail, entry.children, source
+    }
+  }
+  false
+}
+
+fn pageFooterHtml(site: SiteContext, page: DocumentationPage): String {
+  const edit = "{forgeAddress}/src/branch/main/docs/{page.source}"
+  var pieces = ["<footer class=\"page-footer\">"]
+  pieces.append "<a class=\"edit-link\" href=\"{escapedHtml(edit)}\">{editIcon}Edit this page on git.torb.dev</a>"
+  if page.previous.isSome() || page.next.isSome() {
+    pieces.append "<nav class=\"pager\" aria-label=\"Previous and next page\">"
+    if const Some(previous) = page.previous {
+      const url = relativeUrl page.target, previous.target
+      const label = "<span class=\"pager-label\">Previous</span><span class=\"pager-title\">{escapedHtml(previous.title)}</span>"
+      pieces.append "<a class=\"pager-previous\" href=\"{escapedHtml(url)}\" rel=\"prev\">{label}</a>"
+    }
+    if const Some(next) = page.next {
+      const url = relativeUrl page.target, next.target
+      const label = "<span class=\"pager-label\">Next</span><span class=\"pager-title\">{escapedHtml(next.title)}</span>"
+      pieces.append "<a class=\"pager-next\" href=\"{escapedHtml(url)}\" rel=\"next\">{label}</a>"
+    }
+    pieces.append "</nav>"
+  }
+  pieces.append "</footer>"
+  pieces.joined separator: "\n"
+}
+
+/** The contents beside a page: its headings of level 2 and 3. A page with fewer than two has none. */
+fn contentsHtml(contents: List<ContentsEntry>): String {
+  if contents.length() < 2 {
+    return "<aside class=\"toc\" aria-hidden=\"true\"></aside>"
+  }
+  var items: List<String> = []
+  for entry in contents {
+    items.append "<li class=\"level-{entry.level}\"><a href=\"#{escapedHtml(entry.anchor)}\">{entry.html}</a></li>"
+  }
+  "<aside class=\"toc\" aria-label=\"On this page\"><p class=\"toc-title\">On this page</p><ul>{items.joined(separator: "")}</ul></aside>"
+}
+
+/** A page of the site that is neither the front page nor documentation: the install page, the imprint, the privacy notice. */
+public fn plainPageHtml(site: SiteContext, target: String, title: String, summary: String, body: String): String {
+  const head = PageHead "{title} - TorbScript", summary, target
+  var main = ["<main class=\"plain\" id=\"main\">", "<h1 class=\"page-title\">{escapedHtml(title)}</h1>"]
+  if !summary.isEmpty() {
+    main.append "<p class=\"page-summary\">{escapedHtml(summary)}</p>"
+  }
+  main.append "<div class=\"prose\">{body}</div>"
+  main.append "</main>"
+  pageHtml site, head, SitePart.Other, main.joined(separator: "\n"), "", withMenu: false
+}
+
+/** The page the server answers for a path that is not there, at any depth, so it links from the root of the host. */
+public fn missingPageHtml(site: SiteContext): String {
+  const head = PageHead "Not found - TorbScript", "This page does not exist.", "404.html", absolute: true
+  const docs = docsDirectory site.version
+  const main = [
+    "<main class=\"plain\" id=\"main\">",
+    "<h1 class=\"page-title\">This page does not exist</h1>",
+    "<p class=\"page-summary\">The address may have changed with a version of the documentation, or it was never there.</p>",
+    "<div class=\"hero-actions\">",
+    "<a class=\"button button-primary\" href=\"/{docs}/index.html\">The documentation</a>",
+    "<a class=\"button button-secondary\" href=\"/\">The front page</a>",
+    "</div>",
+    "</main>",
+  ]
+  pageHtml site, head, SitePart.Other, main.joined(separator: "\n"), "", withMenu: false
+}
+
+/**
+ * The mark of the front page's hero: the disc in the depth gradient for dark grounds, cut by the bar and the stem of
+ * BRAND.md section 3.2 - a grid of 96, a cut of 18, the bar's top edge at 24. The two cuts are the two rectangles of a
+ * mask, so the stylesheet can play the logo's one animation: the bar cuts across from the left, then the stem drops.
+ */
+public fn heroMarkHtml(): String {
+  const gradient = "<linearGradient id=\"hero-depth\" x1=\"0\" x2=\"0\" y1=\"0\" y2=\"96\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0\" style=\"stop-color: var(--torb-red-500)\"/><stop offset=\"1\" style=\"stop-color: var(--torb-red-700)\"/></linearGradient>"
+  const cuts = "<rect class=\"hero-bar\" x=\"0\" y=\"24\" width=\"96\" height=\"18\" fill=\"#000\"/><rect class=\"hero-stem\" x=\"39\" y=\"24\" width=\"18\" height=\"72\" fill=\"#000\"/>"
+  const mask = "<mask id=\"hero-cut\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"96\" height=\"96\"><rect width=\"96\" height=\"96\" fill=\"#fff\"/>{cuts}</mask>"
+  const disc = "<circle cx=\"48\" cy=\"48\" r=\"48\" fill=\"url(#hero-depth)\" mask=\"url(#hero-cut)\"/>"
+  "<svg class=\"hero-mark\" viewBox=\"0 0 96 96\" role=\"img\" aria-label=\"The TorbScript mark\"><defs>{gradient}{mask}</defs>{disc}</svg>"
+}
+
+/**
+ * The front page: a band of ink with the mark, the line, the category, the two install commands and the one red
+ * button; then the tour, one panel per `##` section of `site/home.md` with its prose beside its code; then where to go
+ * next. `summary` is the category line and the description a search engine shows.
+ */
+public fn frontPageHtml(site: SiteContext, summary: String, body: String, links: SiteLinks): String {
+  const head = PageHead "TorbScript - {siteSlogan}", summary, "index.html"
+  const docs = docsDirectory site.version
+  const installTarget = site.installPage
+  const isRelease = (site.version.chars().first() ?? 'x').isDigit()
+  const label = if isRelease { "Install TorbScript {site.version}" } else { "Install TorbScript" }
+  const rows = [
+    installRowHtml("Linux, macOS", "$", installCommandPosix),
+    installRowHtml("Windows", "&gt;", installCommandWindows),
+  ]
+  const hero = [
+    "<section class=\"hero on-ink\" aria-labelledby=\"hero-title\">",
+    "<div class=\"hero-inner\">",
+    "<div class=\"hero-text\">",
+    "<h1 class=\"hero-title\" id=\"hero-title\">{siteSlogan}</h1>",
+    "<p class=\"hero-category\">{escapedHtml(summary)}</p>",
+    "<div class=\"install\" aria-label=\"Install TorbScript\">{rows.joined(separator: "")}</div>",
+    "<div class=\"hero-actions\">",
+    "<a class=\"button button-cta\" href=\"{relativeUrl("index.html", installTarget)}\">{escapedHtml(label)}</a>",
+    "<a class=\"button button-secondary\" href=\"{docs}/guide/index.html\">Read the guide</a>",
+    "</div>",
+    "</div>",
+    heroMarkHtml(),
+    "</div>",
+    "<div class=\"strata\" aria-hidden=\"true\"></div>",
+    "</section>",
+  ]
+  const destinations = [
+    destinationHtml(
+      "Documentation",
+      "The guide, the language reference, the toolchain, and why the language is the way it is.",
+      "{docs}/index.html",
+      "torb.dev/docs",
+    ),
+    destinationHtml(
+      "Reference",
+      "Every package of the standard library: its signatures, its doc comments and its examples.",
+      "{docs}/reference/index.html",
+      "torb.dev/docs/reference",
+    ),
+    destinationHtml(
+      "Packages",
+      "The registry: publish with torb publish, depend with torb add.",
+      registryAddress,
+      "packages.torb.dev",
+    ),
+    destinationHtml(
+      "Source",
+      "The compiler, the standard library and these pages, under the MIT License.",
+      forgeAddress,
+      "git.torb.dev",
+    ),
+  ]
+  const main = [
+    "<main id=\"main\">",
+    hero.joined(separator: "\n"),
+    "<div class=\"tour\">{tourHtml(body, links)}</div>",
+    "<nav class=\"destinations\" aria-label=\"Where to go next\">{destinations.joined(separator: "")}</nav>",
+    "</main>",
+  ]
+  pageHtml site, head, SitePart.Front, main.joined(separator: "\n"), "", withMenu: false
+}
+
+fn installRowHtml(platform: String, prompt: String, command: String): String {
+  const code = "<pre class=\"install-command\"><code><span class=\"prompt\">{prompt} </span>{escapedHtml(command)}</code></pre>"
+  const copy = "<button type=\"button\" class=\"copy-button\" data-copy=\"{escapedHtml(command)}\" hidden aria-label=\"Copy the command\">{copyIcon}<span>Copy</span></button>"
+  "<div class=\"install-row\"><span class=\"install-platform\">{platform}</span>{code}{copy}</div>"
+}
+
+fn destinationHtml(title: String, text: String, target: String, host: String): String {
+  const isExternal = target.startsWith "https://"
+  const url = if isExternal { target } else { relativeUrl "index.html", target }
+  const heading = "<span class=\"destination-title\">{escapedHtml(title)}{arrowIcon}</span>"
+  const parts = "{heading}<span class=\"destination-text\">{escapedHtml(text)}</span><span class=\"destination-host\">{host}</span>"
+  "<a class=\"destination\" href=\"{escapedHtml(url)}\">{parts}</a>"
+}
+
+/**
+ * The tour of the front page: the body of `site/home.md` cut at its `##` headings into panels, the prose of a section
+ * on one side and its code blocks on the other. What stands before the first heading is an introduction above them.
+ */
+fn tourHtml(body: String, links: SiteLinks): String {
+  const document = Markdown(frontMatter: false).parse(body)
+  var panels: List<String> = []
+  var text: List<MarkdownBlock> = []
+  var code: List<MarkdownBlock> = []
+  var hasHeading = false
+  for block in document.blocks {
+    const isSection = match block.content {
+      .Heading(level, _) => level == 2
+      _ => false
+    }
+    if isSection {
+      panels.append panelHtml(text, code, links, hasHeading)
+      text = [block]
+      code = []
+      hasHeading = true
+      continue
+    }
+    if const .CodeBlock(_, _, _) = block.content {
+      code.append block
+    } else {
+      text.append block
+    }
+  }
+  panels.append panelHtml(text, code, links, hasHeading)
+  panels.filter({ !_.isEmpty() }).toList().joined(separator: "\n")
+}
+
+fn panelHtml(text: List<MarkdownBlock>, code: List<MarkdownBlock>, links: SiteLinks, isSection: Bool): String {
+  if text.isEmpty() && code.isEmpty() {
+    return ""
+  }
+  var codeHtml: List<String> = []
+  for block in code {
+    if const .CodeBlock(info, content, _) = block.content {
+      codeHtml.append codeBlockHtml(info, content)
+    }
+  }
+  const prose = blocksHtml text, links
+  if !isSection {
+    return "<div class=\"tour-introduction prose\">{prose}{codeHtml.joined(separator: "")}</div>"
+  }
+  "<section class=\"panel\"><div class=\"panel-text prose\">{prose}</div><div class=\"panel-code\">{codeHtml.joined(separator: "")}</div></section>"
+}

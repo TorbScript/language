@@ -77,10 +77,10 @@ Plain files that can be opened from disk or served by any static host, and no re
 | `index.html` | Every package with its summary |
 | `<package>/index.html` | The module comment of the entry module, every module, and every construct in alphabetical order |
 | `<package>/<module>.html` | The module comment, a table of contents, and every construct with its signature, its doc comment, its sections and its members, each with an anchor: `#Option`, `#Option.map`, `#Option.Some` |
-| `search.js`, `search-index.js` | The search as the reader types, over every construct and member |
+| `search.js`, `search-index.js` | The search as the reader types, over every construct and member, and the theme toggle |
 | `search-index.json` | The same index for a tool |
 | `reference.json` | The whole model, what `--json` prints |
-| `style.css` | Light and dark through custom properties, readable at the width of a phone |
+| `style.css` | The tokens of `brand/tokens.css` and the stylesheet the documentation site shares, so the reference and [the site](torb-docs-site.md) look like one: light and dark by the system or by the toggle, Chivo where the host serves it at `/assets/fonts/`, readable at the width of a phone |
 
 The Markdown of a comment is rendered by [`std/markdown`](../standard-library/markdown.md), and every TorbScript code
 block is coloured at generation time by the lexer and the resolver behind [`torb highlight`](the-torb-command.md), so a
@@ -156,6 +156,7 @@ $ torb doc std/json --json
 - [Doc comments](../language/syntax/doc-comments.md) - what `/** */` attaches to and the headings it uses.
 - [torb docs source](torb-docs-source.md) - the gate of the doc comments of a whole tree, whose link rules `torb doc`
   shares.
+- [torb docs site](torb-docs-site.md) - the website around the reference, which links to it and shares its look.
 - [The standard library](../standard-library/index.md) - the hand-written pages of `std/`, which link to the generated
   reference.
 - [The torb command](the-torb-command.md) - every subcommand.

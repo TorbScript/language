@@ -1,0 +1,193 @@
+/**
+ * The search of the documentation site: one static JSON file per version, which the site's script fetches the first
+ * time somebody searches, and no search service. It holds what docs/design/RELEASE.md section 6 names - the title,
+ * summary, keywords and headings of every page, which the script ranks first, and a term index of the bodies below
+ * them.
+ *
+ * The term index is two lists side by side, sorted by term: `terms[i]` is a word of the bodies and `postings[i]` the
+ * pages it occurs on, the page that uses it most first. A word of one or two letters, a word on more than half of the
+ * pages and a word of [stopWords] are left out, because they find everything and rank nothing.
+ *
+ * # Related
+ *
+ * - [searchIndexOf] - the whole index, a pure function of the pages.
+ */
+
+use Json from "std/json"
+
+/** The version of the index's shape, raised whenever a field changes meaning or goes away. */
+public const searchFormat = 1
+
+/** How many pages a term keeps: the ones that use it most. A term on more pages ranks nothing past this. */
+public const longestPosting = 40
+
+/** One heading of a page, as the search shows it and links to it. */
+public type SearchHeading {
+  text: String
+  anchor: String
+}
+
+/** One page of the search: what a result shows, and what the script ranks it by. */
+public type SearchPage {
+  title: String
+  summary: String
+  /** The page, relative to the directory of the index: `guide/index.html` */
+  url: String
+  /** The title of the section the page belongs to, shown next to a result */
+  section: String
+  keywords: List<String>
+  headings: List<SearchHeading>
+}
+
+/** What a page hands to the index: its entry, and the text of its body the term index is made of. */
+public type IndexedPage {
+  page: SearchPage
+  text: String
+}
+
+/** The file `search-index.json`: every page, and the term index of their bodies. */
+public type SearchIndex {
+  format: Int
+  version: String
+  pages: List<SearchPage>
+  /** Sorted, and one entry per term */
+  terms: List<String>
+  /** The pages of `terms` at the same position, as positions in `pages` */
+  postings: List<List<Int>>
+}
+
+/** Words that are on almost every page of English prose, and none of which is a word of the language. */
+public const stopWords: List<String> = [
+  "about",
+  "all",
+  "also",
+  "and",
+  "any",
+  "are",
+  "been",
+  "but",
+  "can",
+  "does",
+  "each",
+  "every",
+  "for",
+  "from",
+  "has",
+  "have",
+  "how",
+  "into",
+  "its",
+  "more",
+  "not",
+  "one",
+  "only",
+  "other",
+  "same",
+  "some",
+  "such",
+  "than",
+  "that",
+  "the",
+  "their",
+  "them",
+  "then",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those",
+  "was",
+  "what",
+  "when",
+  "where",
+  "which",
+  "while",
+  "will",
+  "with",
+  "would",
+  "you",
+  "your",
+]
+
+/** The index of every page, in the order the pages are given. */
+public fn searchIndexOf(version: String, pages: List<IndexedPage>): SearchIndex {
+  var entries: List<SearchPage> = []
+  // One row per term and page, sorted by term: a term's pages are then one run of rows, without a list per term
+  // that would be copied on every page it is found on
+  var found: List<(term: String, page: Int, count: Int)> = []
+  var position = 0
+  for indexed in pages {
+    entries.append indexed.page
+    var counts: Map<String, Int> = [:]
+    for term in termsOf(indexed.text) {
+      counts.set(term, (counts.get(term) ?? 0) + 1)
+    }
+    for (term, count) in counts {
+      found.append((term: term, page: position, count: count))
+    }
+    position = position + 1
+  }
+  found.sort({ (_.term, -_.count, _.page) })
+  const widest = (pages.length() / 2).max(1)
+  var terms: List<String> = []
+  var postings: List<List<Int>> = []
+  var start = 0
+  while start < found.length() {
+    var end = start
+    while end < found.length() && found[end].term == found[start].term {
+      end = end + 1
+    }
+    if end - start <= widest {
+      var kept: List<Int> = []
+      for index in start..(start + (end - start).min(longestPosting)) {
+        kept.append found[index].page
+      }
+      terms.append found[start].term
+      postings.append kept
+    }
+    start = end
+  }
+  SearchIndex searchFormat, version, entries, terms, postings
+}
+
+/** The index as the JSON file the site's script reads. */
+public fn searchIndexJson(index: SearchIndex): String {
+  Json().encode(index)
+}
+
+/**
+ * The terms of a text: lowercase words of letters and digits, split at everything else, without the short ones, the
+ * numbers and the [stopWords]. `appendAll` is one term, `append-all` two.
+ *
+ * # Examples
+ *
+ *     print termsOf("The `var` binding appends: appendAll, 2026.")
+ */
+public fn termsOf(text: String): List<String> {
+  var terms: List<String> = []
+  var word: List<Char> = []
+  for character in text.toLowerCase().chars() {
+    if character.isLetter() || character.isDigit() {
+      word.append character
+      continue
+    }
+    addTerm terms, word
+    word = []
+  }
+  addTerm terms, word
+  terms
+}
+
+fn addTerm(var terms: List<String>, word: List<Char>) {
+  if word.length() < 3 {
+    return
+  }
+  if word.all({ _.isDigit() }) {
+    return
+  }
+  const term = String.from word
+  if stopWords.contains(term) {
+    return
+  }
+  terms.append term
+}

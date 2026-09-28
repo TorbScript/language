@@ -1,8 +1,9 @@
 /**
  * The static site of a [Reference]: an index of the packages, an index per package, one page per module, a search
- * index, and the whole model as JSON. It is plain files - no request leaves the page, the search is a script over a
- * generated index, light and dark come from the stylesheet's custom properties - so it can be opened from disk or
- * served by any static host.
+ * index, and the whole model as JSON. It is plain files - no request leaves the host, the search is a script over a
+ * generated index - so it can be opened from disk or served by any static host. It looks like the documentation site of
+ * `torb docs site`: the same tokens of `brand/tokens.css`, the same shared stylesheet, light and dark by the system
+ * or by the toggle, and Chivo where the host serves it at `/assets/fonts/`, as torb.dev does.
  *
  * [siteFiles] is a pure function from the model to the files, which is what a test asks; [writeSite] writes them.
  *
@@ -18,6 +19,8 @@ use joinPath, parentPath from "../project/path"
 use DocumentedPackage, DocumentedModule, DocumentedItem, ItemKind, ItemSection, ResolvedLink, Reference from "./model"
 use markdownHtml from "./render"
 use highlightedCode, escapedHtml from "./highlight"
+use fontFaces, baseStylesheet, themeScript, headScript from "../documentation/site-style"
+use brandTokens from "../documentation/site-tokens"
 
 /** The model as JSON, with the version of its shape, so a reader can tell a newer one. */
 public type ReferenceIndex {
@@ -61,8 +64,8 @@ public fn searchEntries(reference: Reference): List<SearchEntry> {
 public fn siteFiles(reference: Reference): Map<String, String> {
   var files: Map<String, String> = [:]
   files.set "index.html", rootPage(reference)
-  files.set "style.css", stylesheet
-  files.set "search.js", searchScript
+  files.set "style.css", "{fontFaces("/assets/fonts/")}\n{brandTokens}\n{baseStylesheet}\n{stylesheet}"
+  files.set "search.js", "{themeScript}\n{searchScript}"
   const entries = Json().encode(searchEntries(reference))
   files.set "search-index.json", entries
   files.set "search-index.js", "const searchIndex = {entries};\n"
@@ -122,9 +125,17 @@ fn linkTargets(page: String, links: List<ResolvedLink>): Map<String, String> {
   targets
 }
 
-/** The frame every page shares: the stylesheet, the search, the way back to the index. */
+const moonIcon = "<svg class=\"icon-moon\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><path d=\"M16.25 12.1A6.75 6.75 0 0 1 7.9 3.75a6.75 6.75 0 1 0 8.35 8.35Z\"/></svg>"
+
+const sunIcon = "<svg class=\"icon-sun\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><circle cx=\"10\" cy=\"10\" r=\"3.5\"/><path d=\"M10 1.75v2M10 16.25v2M1.75 10h2M16.25 10h2M4.17 4.17l1.41 1.41M14.42 14.42l1.41 1.41M4.17 15.83l1.41-1.41M14.42 5.58l1.41-1.41\"/></svg>"
+
+/**
+ * The frame every page shares: the stylesheet, the theme chosen last time, the search, and the header of the site -
+ * the top rule, the way back to the index, the search field and the theme toggle.
+ */
 fn pageOf(page: String, title: String, body: String): String {
   const root = rootOf page
+  const theme = "<button type=\"button\" class=\"button button-quiet button-icon theme-toggle\" data-theme-toggle hidden aria-label=\"Switch the theme\">{moonIcon}{sunIcon}</button>"
   const head = [
     "<!doctype html>",
     "<html lang=\"en\">",
@@ -132,14 +143,22 @@ fn pageOf(page: String, title: String, body: String): String {
     "<meta charset=\"utf-8\">",
     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
     "<title>{escapedHtml(title)}</title>",
+    "<meta name=\"theme-color\" content=\"#FFFDFC\" media=\"(prefers-color-scheme: light)\">",
+    "<meta name=\"theme-color\" content=\"#14110F\" media=\"(prefers-color-scheme: dark)\">",
     "<link rel=\"stylesheet\" href=\"{root}style.css\">",
+    "<script>{headScript.replace("\n", "")}</script>",
     "<script src=\"{root}search-index.js\" defer></script>",
     "<script src=\"{root}search.js\" defer></script>",
     "</head>",
     "<body data-root=\"{root}\">",
-    "<header>",
+    "<header class=\"site-header\">",
+    "<div class=\"header-inner\">",
     "<a class=\"home\" href=\"{root}index.html\">Reference</a>",
+    "<div class=\"header-actions\">",
     "<input id=\"search\" type=\"search\" placeholder=\"Search\" aria-label=\"Search the reference\" autocomplete=\"off\">",
+    theme,
+    "</div>",
+    "</div>",
     "</header>",
     "<ul id=\"results\" hidden></ul>",
     "<main>",
@@ -297,125 +316,76 @@ fn inlineSummary(summary: String): String {
 }
 
 /**
- * The stylesheet of every page. The colours are custom properties, set twice: for light, and for a reader whose system
- * asks for dark.
+ * The rules of the reference on top of the shared stylesheet of the site: the header's search field and its results,
+ * the listings, and a construct with its signature, its doc comment and its members. Every value is a token of the
+ * brand, so the reference and the documentation look like one site.
  */
 const stylesheet = raw"""
-  :root {
-    --background: #ffffff;
-    --surface: #f5f6f8;
-    --text: #1d1f23;
-    --muted: #5f6570;
-    --border: #dde0e5;
-    --link: #1f5fbf;
-    --keyword: #8a3ab9;
-    --type: #0f7069;
-    --function: #2b58c4;
-    --string: #a14a12;
-    --number: #9a5b00;
-    --comment: #6b7280;
-    --case: #7a4d00;
-    --parameter: #444a55;
-    color-scheme: light dark;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --background: #16181c;
-      --surface: #1f2228;
-      --text: #e4e6ea;
-      --muted: #9aa1ad;
-      --border: #30343c;
-      --link: #7fb0ff;
-      --keyword: #d09cf0;
-      --type: #5fd0c4;
-      --function: #8db4ff;
-      --string: #f0a878;
-      --number: #f2c46b;
-      --comment: #8a919c;
-      --case: #e8b86a;
-      --parameter: #c8ccd4;
-    }
-  }
-
-  * {
-    box-sizing: border-box;
-  }
-
-  body {
-    margin: 0;
-    background: var(--background);
-    color: var(--text);
-    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-
-  header {
-    position: sticky;
-    top: 0;
-    display: flex;
-    gap: 16px;
-    align-items: center;
-    padding: 10px 16px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-  }
-
-  header .home {
-    font-weight: 600;
-    color: var(--text);
+  .home {
+    font-size: 1.0625rem;
+    font-weight: 700;
+    color: var(--torb-text);
     text-decoration: none;
   }
 
   #search {
-    flex: 1;
-    min-width: 0;
-    max-width: 28rem;
-    padding: 6px 10px;
-    font: inherit;
-    color: var(--text);
-    background: var(--background);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    width: min(28rem, 50vw);
+    height: 36px;
+    padding: 0 12px;
+    font-family: var(--torb-font-sans);
+    font-size: var(--torb-type-ui-size);
+    color: var(--torb-text);
+    background: var(--torb-background);
+    border: 1px solid var(--torb-border-control);
+    border-radius: var(--torb-radius-small);
   }
 
   #results {
-    max-width: 60rem;
-    margin: 0 auto;
-    padding: 8px 16px;
+    position: fixed;
+    top: 72px;
+    left: 50%;
+    z-index: 40;
+    width: min(44rem, calc(100vw - 32px));
+    max-height: 70vh;
+    margin: 0;
+    padding: 8px;
+    overflow-y: auto;
     list-style: none;
-    border-bottom: 1px solid var(--border);
+    background: var(--torb-surface-raised);
+    border: 1px solid var(--torb-border);
+    border-radius: var(--torb-radius-medium);
+    box-shadow: var(--torb-shadow-overlay);
+    transform: translateX(-50%);
   }
 
   #results li {
-    padding: 4px 0;
+    padding: 8px 10px;
+    border-radius: var(--torb-radius-small);
+  }
+
+  #results li:hover {
+    background: var(--torb-surface-hover);
   }
 
   main {
-    max-width: 60rem;
+    max-width: 880px;
     margin: 0 auto;
-    padding: 8px 16px 64px;
+    padding: 40px 24px 96px;
   }
 
-  a {
-    color: var(--link);
-  }
-
-  code,
-  pre {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 0.92em;
-  }
-
-  pre {
-    padding: 10px 12px;
-    overflow-x: auto;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+  main > h1 {
+    margin: 12px 0 8px;
   }
 
   h1 code {
     font-size: 0.9em;
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+
+  main h2 {
+    margin: 48px 0 16px;
   }
 
   .crumbs,
@@ -423,16 +393,26 @@ const stylesheet = raw"""
   .summary,
   .kind,
   .undocumented {
-    color: var(--muted);
+    color: var(--torb-text-muted);
+  }
+
+  .crumbs {
+    font-size: var(--torb-type-small-size);
+  }
+
+  .crumbs a {
+    color: var(--torb-text-muted);
   }
 
   .file {
-    margin-top: -8px;
-    font-size: 0.9em;
+    margin: 0 0 24px;
+    font-family: var(--torb-font-mono);
+    font-size: var(--torb-type-small-size);
   }
 
   .kind {
-    font-size: 0.8em;
+    font-family: var(--torb-font-mono);
+    font-size: 0.75em;
     font-weight: 500;
   }
 
@@ -449,47 +429,87 @@ const stylesheet = raw"""
   }
 
   .listing li {
-    margin: 4px 0;
+    margin: 6px 0;
   }
 
   .contents ul {
     columns: 14rem;
-    padding-left: 1.2em;
+    margin: 24px 0;
+    padding: 16px 16px 16px 2em;
+    background: var(--torb-surface);
+    border: 1px solid var(--torb-border);
+    border-radius: var(--torb-radius-medium);
   }
 
   .item {
-    margin: 28px 0;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
+    margin: 40px 0;
+    padding-top: 24px;
+    border-top: 1px solid var(--torb-border);
+  }
+
+  .item > h2,
+  .item > h3,
+  .item > h4,
+  .item > h5,
+  .item > h6 {
+    margin: 0 0 12px;
+    font-size: 1.25rem;
+    letter-spacing: 0;
+  }
+
+  .item code {
+    padding: 0;
+    background: none;
+    border: 0;
   }
 
   .members {
-    margin-left: 12px;
-    padding-left: 12px;
-    border-left: 2px solid var(--border);
+    margin: 24px 0 0 4px;
+    padding-left: 20px;
+    border-left: 1px solid var(--torb-border);
   }
 
   .members .item {
-    margin: 18px 0;
-    border-top: none;
+    margin: 28px 0;
+    padding-top: 0;
+    border-top: 0;
   }
 
   .anchor {
-    color: var(--text);
+    color: var(--torb-text);
     text-decoration: none;
   }
 
+  pre.signature,
+  pre.code {
+    margin: 0 0 16px;
+    padding: 12px 16px;
+    overflow-x: auto;
+    font-size: var(--torb-type-code-dense-size);
+    line-height: var(--torb-type-code-dense-line-height);
+    color: var(--torb-syntax-variable);
+    background: var(--torb-code);
+    border: 1px solid var(--torb-border);
+    border-radius: var(--torb-radius-small);
+  }
+
+  .doc :not(pre) > code {
+    padding: 0.08em 0.32em;
+    background: var(--torb-surface);
+    border: 1px solid var(--torb-border);
+  }
+
   .section {
-    margin-bottom: 4px;
-    font-size: 1em;
+    margin: 20px 0 6px;
+    font-size: 1rem;
   }
 
   .parameters dt {
-    margin-top: 6px;
+    margin-top: 8px;
   }
 
   .parameters dd {
-    margin-left: 16px;
+    margin-left: 18px;
   }
 
   .parameters dd p {
@@ -497,66 +517,35 @@ const stylesheet = raw"""
   }
 
   table {
-    border-collapse: collapse;
     display: block;
     overflow-x: auto;
   }
 
   th,
   td {
-    padding: 4px 8px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--torb-border);
   }
 
-  .t-keyword {
-    color: var(--keyword);
-  }
-
-  .t-type,
-  .t-interface,
-  .t-typeParameter,
-  .t-namespace {
-    color: var(--type);
-  }
-
-  .t-function,
-  .t-method {
-    color: var(--function);
-  }
-
-  .t-string {
-    color: var(--string);
-  }
-
-  .t-number {
-    color: var(--number);
-  }
-
-  .t-comment {
-    color: var(--comment);
-    font-style: italic;
-  }
-
-  .t-enumMember {
-    color: var(--case);
-  }
-
-  .t-parameter {
-    color: var(--parameter);
-  }
-
-  @media (max-width: 40rem) {
-    body {
-      font-size: 15px;
+  @media (max-width: 640px) {
+    .header-inner {
+      gap: 12px;
+      padding: 0 16px;
     }
 
-    header {
-      gap: 10px;
+    .header-actions {
+      flex: 1;
+    }
+
+    #search {
+      width: 100%;
+    }
+
+    main {
+      padding: 24px 16px 72px;
     }
 
     .members {
-      margin-left: 4px;
-      padding-left: 8px;
+      padding-left: 12px;
     }
   }
   """

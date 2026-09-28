@@ -18,8 +18,8 @@
 # `torb test --filter` and `--report json` in both back ends (`tools/test-report.sh`), the unknown flags every
 # subcommand refuses (`tools/command-line.sh`), the package
 # manager against a `file:` registry (`tools/packages.sh`), `lock --check`
-# over every `project.lock.trb`, the four docs
-# gates, `doc --check --no-run std` (the links of std's doc comments and its examples, type checked), and
+# over every `project.lock.trb`, the five docs
+# gates (the last builds the website and checks its links), `doc --check --no-run std` (the links of std's doc comments and its examples, type checked), and
 # `format --check` over the repository. Every binary that is only built to be run once is built with `--profile dev`,
 # which `torb test --native` and `torb run --native` do.
 #
@@ -447,6 +447,8 @@ lane_docs() {
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs
   gate "docs skill --check" "$torb" docs skill docs .claude/skills/torbscript --check
+  # docs/tooling/torb-docs-site.md: the website of main builds, and every internal link of it leads to a file of it
+  gate "docs site --check" "$torb" docs site docs --check
   # docs/design/PANICS.md recommendation 10: every public function of std/ that can panic says when (`# Panics`)
   gate "docs source --panics" "$torb" docs source --panics std
   # docs/tooling/torb-doc.md: every link of a doc comment of std's public API resolves, and every example type checks.

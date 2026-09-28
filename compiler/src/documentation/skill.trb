@@ -94,15 +94,17 @@ public fn buildSkill(documentation: Documentation): BuiltSkill {
 }
 
 /**
- * Everything the skill carries: every page except the ones whose author said `skill: omit`. A `planned` page is
- * carried with its banner, like a `draft` one: the pages of the features that exist link it for the rules of a
- * construct they use (`spawn`, `.await()`), and a model reads the banner in the same file as the design.
+ * Everything the skill carries: every page except the ones whose author said `skill: omit` and the pages of the
+ * website (`kind: site`), which are about the site and not the language. A `planned` page is carried with its banner,
+ * like a `draft` one: the pages of the features that exist link it for the rules of a construct they use (`spawn`,
+ * `.await()`), and a model reads the banner in the same file as the design.
  */
 fn includedPages(documentation: Documentation): List<Page> {
   var kept: List<Page> = []
   for page in documentation.pages {
     const role = page.frontMatter.text("skill") ?? ""
-    if role == "omit" {
+    const kind = page.frontMatter.text("kind") ?? ""
+    if role == "omit" || kind == "site" {
       continue
     }
     kept.append page

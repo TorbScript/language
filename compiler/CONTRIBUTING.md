@@ -91,8 +91,8 @@ the sandboxed VM, it has to read as the static reader reads the file, docs/desig
 over `tests/lexer-cases/` and `tests/parser-cases/` as well), `test` of every std/example test package in both back
 ends (all of them build natively; one that waits for a back-end gap is named in
 [docs/RUST-EXIT.md](../docs/RUST-EXIT.md) section 2.4 and in the `broken` list of `gates.sh`, which skips it), every
-program of `tests/language/` run with `torb run --native` and with `torb run` against its `.expected`, the three docs gates
-(`docs check`, `docs index --check`, `docs skill --check`), `doc --check --no-run std` (every link of a doc comment of
+program of `tests/language/` run with `torb run --native` and with `torb run` against its `.expected`, the four docs gates
+(`docs check`, `docs index --check`, `docs skill --check`, `docs site --check`), `doc --check --no-run std` (every link of a doc comment of
 std's public API resolves and every example of it type checks), and `format --check` over the repository. Everything it
 builds only to run it once is built with the `dev` profile.
 

@@ -1,0 +1,238 @@
+/**
+ * The tests of `torb docs site`: the Markdown of a page as the site's HTML, the anchors of its headings, the links
+ * between pages rewritten to the files they became, the search index, and the whole site of a documentation tree held
+ * in a `Map` - the command is a pure function of it, so nothing here writes a file.
+ */
+
+use test, group from "std/test"
+use File from "std/fs"
+use normalizePath, parentPath, joinPath, pathDepth from "../src/project/path"
+use readPage from "../src/documentation/markdown"
+use documentationOf from "../src/documentation/tree"
+use SiteLinks, renderedBody, linkUrl, relativeUrl, codeBlockHtml from "../src/documentation/site-html"
+use navigationOf, readingOrder from "../src/documentation/site-navigation"
+use SearchPage, IndexedPage, searchIndexOf, termsOf from "../src/documentation/site-search"
+use SiteSettings, buildSite, targetOf, brokenLinks from "../src/documentation/site"
+use brandTokens from "../src/documentation/site-tokens"
+
+const forge = "https://git.torb.dev/torbscript/language/src/branch/main"
+
+/** The body of a page as the site renders it, read the way `torb docs site` reads it. */
+fn bodyOf(path: String, text: String, targets: Map<String, String>): String {
+  const read = readPage path, text
+  const target = targetOf path, "0.2"
+  const folder = if path.contains("/") { path.split("/").first() ?? "" } else { "" }
+  renderedBody(read.body, read.headings, SiteLinks(target, folder, targets, forge)).html
+}
+
+/** A page with the front matter every page has, and this body. */
+fn page(title: String, body: String): String {
+  "---\ntitle: {title}\nsummary: What this page is about, said in one sentence that is long enough.\nkind: guide\nstatus: stable\n---\n\n{body}"
+}
+
+fn tree(): Map<String, String> {
+  [
+    "index.md": page("The documentation", "The root. Start with [the guide](guide/index.md).\n"),
+    "guide/index.md": "---\ntitle: Learn\nsummary: The guide, in order.\nkind: index\nstatus: stable\norder: 10\n---\n\nThe guide.\n",
+    "guide/first.md": "---\ntitle: First\nsummary: The first step.\nkind: guide\nstatus: stable\norder: 1\n---\n\n## Goal\n\nSee [the second](second.md).\n",
+    "guide/second.md": "---\ntitle: Second\nsummary: The second step.\nkind: guide\nstatus: stable\norder: 2\n---\n\n## Goal\n\nBack to [the first](first.md#goal).\n",
+    "site/index.md": "---\ntitle: The website\nsummary: The pages of the site.\nkind: index\nstatus: stable\n---\n\nThe site.\n",
+    "site/home.md": "---\ntitle: TorbScript\nsummary: A single-language ecosystem.\nkind: site\nstatus: stable\n---\n\n## Values\n\nText.\n\n```trb\nconst answer = 42\n```\n",
+  ]
+}
+
+fn settings(): SiteSettings {
+  SiteSettings "latest", "<svg class=\"lockup\"></svg>", "<svg class=\"mark\"></svg>"
+}
+
+/** The root of the repository, found from wherever the test runner was started. */
+fn repositoryRoot(): String {
+  var current = normalizePath File.absolutePath(".").expect("the working directory")
+  while pathDepth(current) >= 1 {
+    if File.exists(joinPath(current, "compiler/project.trb")) {
+      return current
+    }
+    const parent = parentPath current
+    if parent == current {
+      break
+    }
+    current = parent
+  }
+  panic "the root of the repository is not above the working directory"
+}
+
+group "the body of a page" {
+  test "a heading has the anchor the link check resolves against, and a link to it" {
+    const html = bodyOf "guide/a.md", page("A", "## The `var` keyword\n\nText.\n"), [:]
+    assert html.contains("<h2 id=\"the-var-keyword\">The <code>var</code> keyword")
+    assert html.contains("<a class=\"heading-anchor\" href=\"#the-var-keyword\"")
+  }
+
+  test "an anchor written after the heading is its anchor, and is not shown" {
+    const html = bodyOf "guide/a.md", page("A", "## A long title \{#short\}\n\nText.\n"), [:]
+    assert html.contains("<h2 id=\"short\">A long title<a")
+    assert(!html.contains("\{#short\}"))
+  }
+
+  test "a table scrolls in its own box and keeps the alignment of its columns" {
+    const html = bodyOf "guide/a.md", page("A", "| Left | Right |\n|:-----|------:|\n| a | b |\n"), [:]
+    assert html.contains("<div class=\"table-wrap\"><table>")
+    assert html.contains("<th class=\"align-left\">Left</th>")
+    assert html.contains("<td class=\"align-right\">b</td>")
+  }
+
+  test "a trb block is coloured at generation time, and its marker is for the tools" {
+    const html = codeBlockHtml "trb run", "const answer = 42\nprint answer\n"
+    assert html.contains("<pre class=\"code language-trb\">")
+    assert html.contains("<span class=\"t-keyword\">const</span>")
+    assert html.contains("<span class=\"t-number\">42</span>")
+    assert(!html.contains("run"))
+  }
+
+  test "a trb error block says that it does not compile" {
+    const html = codeBlockHtml "trb error", "fixed.append 3\n// error: `append` needs a `var`\n"
+    assert html.contains("code-block-error")
+    assert html.contains("Does not compile")
+  }
+
+  test "a var binding is marked as one that can be changed" {
+    const html = codeBlockHtml "trb", "var counter = 0\ncounter = 1\n"
+    assert html.contains("t-mutable")
+  }
+
+  test "a drawing keeps a face that has its box-drawing characters" {
+    const html = codeBlockHtml "text", "a ──► b\n"
+    assert html.contains("<pre class=\"code language-text drawing\">")
+  }
+
+  test "a Planned banner is a callout in the colours of information" {
+    const html = bodyOf "guide/a.md", page("A", "> **Planned.** Nothing here works today.\n"), [:]
+    assert html.contains("<div class=\"callout callout-info\">")
+    assert(!html.contains("<blockquote>"))
+  }
+}
+
+group "the links" {
+  test "a link to a page is a link to the file it became, relative to the page" {
+    const targets = ["glossary.md": "docs/0.2/glossary.html", "guide/second.md": "docs/0.2/guide/second.html"]
+    const links = SiteLinks "docs/0.2/guide/first.html", "guide", targets, forge
+    assert(linkUrl(links, "../glossary.md#binding") == "../glossary.html#binding")
+    assert(linkUrl(links, "second.md") == "second.html")
+  }
+
+  test "a link out of the documentation goes to the forge" {
+    const links = SiteLinks "docs/0.2/index.html", "", [:], forge
+    assert(linkUrl(links, "../CONCEPT.md#bindings") == "{forge}/CONCEPT.md#bindings")
+    assert(linkUrl(links, "../compiler/src/main.trb") == "{forge}/compiler/src/main.trb")
+  }
+
+  test "an external link and an anchor of the same page stay as they are" {
+    const links = SiteLinks "docs/0.2/index.html", "", [:], forge
+    assert(linkUrl(links, "https://diataxis.fr/") == "https://diataxis.fr/")
+    assert(linkUrl(links, "#rules") == "#rules")
+  }
+
+  test "a relative URL goes up to what two pages share and down to the target" {
+    assert(relativeUrl("docs/0.2/guide/index.html", "docs/0.2/language/index.html") == "../language/index.html")
+    assert(relativeUrl("docs/0.2/guide/index.html", "index.html") == "../../../index.html")
+    assert(relativeUrl("index.html", "docs/0.2/index.html") == "docs/0.2/index.html")
+    assert(relativeUrl("docs/0.2/a.html", "docs/0.2/b.html") == "b.html")
+  }
+
+  test "a page of site/ is written at the root, and every other page below its version" {
+    assert(targetOf("site/home.md", "0.2") == "index.html")
+    assert(targetOf("site/imprint.md", "0.2") == "imprint.html")
+    assert(targetOf("site/index.md", "0.2") == "docs/0.2/site/index.html")
+    assert(targetOf("guide/index.md", "0.2") == "docs/0.2/guide/index.html")
+    assert(targetOf("ARCHITECTURE.md", "0.2") == "docs/0.2/ARCHITECTURE.html")
+  }
+
+  test "a link that leads to no file of the site is a problem, and the reference is not asked for" {
+    const texts = [
+      "index.html": "<a href=\"docs/latest/missing.html\">x</a> <a href=\"docs/latest/reference/index.html\">y</a>",
+    ]
+    const problems = brokenLinks texts, [], "latest"
+    assert(problems.length() == 1)
+    assert problems[0].message.contains("docs/latest/missing.html")
+  }
+}
+
+group "the search" {
+  test "the terms of a text are its words, without the short ones and the words of every page" {
+    assert(termsOf("The var binding: appendAll, 2026 and x.") == ["var", "binding", "appendall"])
+  }
+
+  test "a term keeps its pages, the page that uses it most first, and a term of every page is left out" {
+    const pages = [
+      IndexedPage(SearchPage("A", "", "a.html", "", [], []), "binding binding shared"),
+      IndexedPage(SearchPage("B", "", "b.html", "", [], []), "binding shared"),
+      IndexedPage(SearchPage("C", "", "c.html", "", [], []), "orange shared"),
+      IndexedPage(SearchPage("D", "", "d.html", "", [], []), "shared"),
+      IndexedPage(SearchPage("E", "", "e.html", "", [], []), "shared"),
+    ]
+    const index = searchIndexOf "0.2", pages
+    assert(index.pages.length() == 5)
+    assert(index.terms == ["binding", "orange"])
+    assert(index.postings == [[0, 1], [2]])
+  }
+}
+
+group "the site" {
+  test "the front page, every page, the search and the assets are written" {
+    const site = buildSite documentationOf("docs", tree()), settings()
+    assert site.texts.containsKey("index.html")
+    assert site.texts.containsKey("docs/latest/index.html")
+    assert site.texts.containsKey("docs/latest/guide/first.html")
+    assert site.texts.containsKey("docs/latest/search-index.json")
+    assert site.texts.containsKey("assets/site.css")
+    assert site.texts.containsKey("manifest.webmanifest")
+    assert site.texts.containsKey("404.html")
+    const problems = site.problems.map({ _.show() }).toList()
+    assert(problems == [])
+  }
+
+  test "the front page leads with the line, the install commands and the tour of site/home.md" {
+    const site = buildSite documentationOf("docs", tree()), settings()
+    const front = site.texts.get("index.html") ?? ""
+    assert front.contains("One language, every layer.")
+    assert front.contains("curl -fsSL https://torb.dev/install.sh | sh")
+    assert front.contains("irm https://torb.dev/install.ps1 | iex")
+    assert front.contains("<section class=\"panel\">")
+    assert front.contains("button-cta")
+  }
+
+  test "the imprint and the privacy notice exist only where their pages do" {
+    const withoutImprint = buildSite documentationOf("docs", tree()), settings()
+    assert(!withoutImprint.texts.containsKey("imprint.html"))
+    assert(!(withoutImprint.texts.get("index.html") ?? "").contains("imprint.html"))
+    var files = tree()
+    files.set(
+      "site/imprint.md",
+      "---\ntitle: Imprint\nsummary: Who runs this site.\nkind: site\nstatus: stable\n---\n\nText.\n",
+    )
+    const withImprint = buildSite documentationOf("docs", files), settings()
+    assert withImprint.texts.containsKey("imprint.html")
+    const front = withImprint.texts.get("index.html") ?? ""
+    assert front.contains("href=\"imprint.html\"")
+  }
+
+  test "a page links its neighbours in the order of the navigation, and its source on the forge" {
+    const documentation = documentationOf "docs", tree()
+    assert(
+      readingOrder(navigationOf(documentation)) == ["index.md", "guide/index.md", "guide/first.md", "guide/second.md"],
+    )
+    const site = buildSite documentation, settings()
+    const first = site.texts.get("docs/latest/guide/first.html") ?? ""
+    assert first.contains("href=\"index.html\" rel=\"prev\"")
+    assert first.contains("href=\"second.html\" rel=\"next\"")
+    assert first.contains("{forge}/docs/guide/first.md")
+    assert first.contains("<a href=\"second.html\">the second</a>")
+  }
+}
+
+group "the brand" {
+  test "the tokens the compiler writes are brand/tokens.css" {
+    const written = File.readText(joinPath(repositoryRoot(), "brand/tokens.css")).expect("brand/tokens.css")
+    assert(written.replace("\r\n", "\n").trim() == brandTokens.trim())
+  }
+}

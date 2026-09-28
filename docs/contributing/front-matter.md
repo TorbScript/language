@@ -88,7 +88,7 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 |-------|------|----------|------|
 | `title` | scalar | reader, index generator, skill navigation | At most 60 characters, no full stop at the end. It is the `#` heading of the page, so the body starts at `##`. |
 | `summary` | scalar | index generator, skill, and an agent deciding whether to open the page | 40 to 240 characters, one or two whole sentences, ends with `.`, `?` or `!`. It must not contain `this page`: a summary is about the subject. |
-| `kind` | scalar | checker (section order), template, skill builder | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`. |
+| `kind` | scalar | checker (section order), template, skill builder, site generator | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`, `site`. A `site` page is left out of the skill and the bundle. |
 | `status` | scalar | reader, skill builder | One of `stable`, `draft`, `planned`. |
 
 ### The five optional fields
