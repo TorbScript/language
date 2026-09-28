@@ -49,13 +49,15 @@ mark is for small sizes, one-colour work and print.
 | File | What it is for |
 |------|----------------|
 | `chivo.woff2` | Chivo, variable from 100 to 900: prose, headings and the UI of the website and the docs |
-| `chivo-mono.woff2` | Chivo Mono, variable from 100 to 900: code, identifiers and commands |
-| `OFL.txt` | The SIL Open Font License 1.1 both are published under, with their copyright line |
+| `GeistMono-Variable.woff2` | Geist Mono, variable from 100 to 900: code, identifiers and commands, with ligatures off |
+| `OFL.txt` | The SIL Open Font License 1.1 Chivo is published under, with its copyright line |
+| `GeistMono-OFL.txt` | The SIL Open Font License 1.1 Geist Mono is published under, with its own copyright line |
 
 Both are subset to Basic Latin, Latin-1, Latin Extended-A, the general punctuation, the arrows and the mathematical
-operators the fonts carry, with every OpenType feature kept (the slashed zero is `"zero" 1`), and compressed as WOFF2 -
-by `pyftsubset` of fontTools from the fonts of github.com/Omnibus-Type/Chivo and Omnibus-Type/ChivoMono. The website
-serves them itself, from `/assets/fonts/`: no page asks a font service for anything.
+operators the fonts carry, with every OpenType feature kept (the slashed zero is `"zero" 1`, ligatures off with `"liga"
+0, "calt" 0`), and compressed as WOFF2 - by `pyftsubset` of fontTools from the fonts of github.com/Omnibus-Type/Chivo
+and github.com/vercel/geist-font. The website serves them itself, from `/assets/fonts/`: no page asks a font service
+for anything.
 
 ## Tokens
 
