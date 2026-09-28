@@ -55,6 +55,16 @@
 #  define TORB_POSIX_NO_SIGPIPE_OPTION 0
 #endif
 
+/* Linux passes the errors already pending on a connection through the `accept` that takes it, and names them in
+   accept(2): those of TCP/IP. BSD and macOS report a connection that is gone before its accept as `ECONNABORTED` alone. */
+#if defined(__linux__)
+#  define TORB_POSIX_PENDING_NETWORK_ERROR(code)                                                                   \
+    ((code) == ENETDOWN || (code) == ENOPROTOOPT || (code) == EHOSTDOWN || (code) == ENONET                        \
+     || (code) == EHOSTUNREACH || (code) == EOPNOTSUPP || (code) == ENETUNREACH)
+#else
+#  define TORB_POSIX_PENDING_NETWORK_ERROR(code) false
+#endif
+
 /* ------------------------------------------------------------------------------------------------- failures --- */
 
 torb_io_failure torb_io_system_failure_kind(uint32_t code) {
@@ -386,6 +396,16 @@ bool torb_io_posix_wants_writable(const torb_io_operation *operation) {
          || operation->kind == (uint8_t)TORB_IO_SEND_DATAGRAM;
 }
 
+/*
+ * Whether a failed `accept` failed for the one connection it was about to take and not for the listener: the peer gave
+ * up before the accept (`ECONNABORTED`, and `EPROTO` where a system says it that way), or on Linux an error of TCP/IP
+ * that was pending on the connection. accept(2) says to treat those like `EAGAIN`, so the accept takes the next
+ * connection, or waits for one, instead of ending a server's accept loop with a failure that was never its own.
+ */
+static bool torb_posix_accept_failed_connection(int code) {
+  return code == ECONNABORTED || code == EPROTO || TORB_POSIX_PENDING_NETWORK_ERROR(code);
+}
+
 /* A connection an accept took: a record of its own, non-blocking, without Nagle. */
 static int64_t torb_posix_accepted(torb_io_operation *operation, int descriptor) {
   int yes = 1;
@@ -456,8 +476,8 @@ int64_t torb_io_posix_perform(torb_io_operation *operation) {
         if (accepted >= 0) {
           return torb_posix_accepted(operation, accepted);
         }
-        /* A connection that was reset before it was accepted is not this listener's failure: wait for the next */
-        if (errno == ECONNABORTED) {
+        /* A failure of the one connection that was pending is not this listener's failure: take the next */
+        if (torb_posix_accept_failed_connection(errno)) {
           continue;
         }
         break;

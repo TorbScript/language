@@ -223,7 +223,11 @@ when the limit passes, and the cancellation is the row above. The HTTP server's 
   peer read; a writer that awaits each `add` is paced by the peer. The runtime copies a chunk into the operation once
   and holds no other buffer.
 - **Accepting is the backlog.** A listener has one accept in flight per waiting `accept()`; the kernel's backlog is
-  the queue, and the backlog is a parameter of `listen`.
+  the queue, and the backlog is a parameter of `listen`. A connection that fails before its accept takes it is skipped
+  and the accept takes the next, because the failure is the connection's and not the listener's: `ECONNABORTED` (and
+  `EPROTO`) everywhere, and on Linux, which passes an error already pending on the connection through `accept`, the
+  errors of TCP/IP that accept(2) names (`ENETDOWN`, `ENOPROTOOPT`, `EHOSTDOWN`, `ENONET`, `EHOSTUNREACH`, `EOPNOTSUPP`,
+  `ENETUNREACH`).
 
 ## 4. `std/network`
 
