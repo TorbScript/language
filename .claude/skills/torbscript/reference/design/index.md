@@ -30,6 +30,7 @@ documents:
   - DEBUGGER.md
   - PANICS.md
   - FLAGS.md
+  - CLOSED-TRAITS.md
   - TEXT-FORMATS.md
   - RANDOM.md
   - CLI.md
@@ -52,8 +53,9 @@ The specification of a feature that spans several packages or several `language/
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, networking with TLS and HTTP, the
 Domain Name System, the web layer on top of the network, the language server, the debugger, the public release with its website and package registry,
-where a program may panic, cases with fixed values and bit flags, YAML and regular expressions, random numbers, command
-lines, tensors and gradients, the application framework, the JavaScript and PHP back ends, and the brand: the logo,
+where a program may panic, cases with fixed values and bit flags, cases as types of a closed trait, YAML and
+regular expressions, random numbers, command lines, tensors and gradients, the application framework, the JavaScript
+and PHP back ends, and the brand: the logo,
 the colours, the type and how the toolchain colours its output. Each is plain Markdown without front
 matter, linked here rather than copied, and stays where the feature it describes keeps changing. The roadmap
 orders them into the milestones that are still ahead.
@@ -92,6 +94,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **The Debugger**
 - **Panics**
 - **Cases with Fixed Values and Flags**
+- **Closed Traits: Every Case Is a Type**
 - **YAML, Regular Expressions and Markdown**
 - **Random Numbers**
 - **Command Lines**
