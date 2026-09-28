@@ -96,14 +96,40 @@ static torb_list received_bytes(int64_t stream, size_t expected) {
   return into;
 }
 
+/* Whether every address of a resolution - family, high and low, three numbers each - is a loopback address. */
+static bool all_loopback(torb_list parts) {
+  int64_t index;
+  for (index = 0; index + 2 < torb_list_length(parts); index += 3) {
+    int64_t family = *(const int64_t *)torb_list_at(parts, index, torb_location_unknown);
+    int64_t high = *(const int64_t *)torb_list_at(parts, index + 1, torb_location_unknown);
+    int64_t low = *(const int64_t *)torb_list_at(parts, index + 2, torb_location_unknown);
+    if (family == 4 ? (low >> 24) != 127 : !(family == 6 && high == 0 && low == 1)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /*
  * The first test of the file, so nothing opened a socket before it: a name resolved before any socket once called
- * Winsock's resolver before the core had loaded Winsock. `.invalid` never exists (RFC 6761), network or not.
+ * Winsock's resolver before the core had loaded Winsock, and crashed (docs/design/RELEASE.md section 7.13). Both answers
+ * of the system's resolver, and neither needs a network: `localhost`, which the native asks the system for - only
+ * `std/network` answers it itself - and which every system answers from its own tables, and `.invalid`, which never
+ * exists (RFC 6761).
  */
 TORB_TEST(test_io_resolving_before_any_socket) {
+  torb_text local = torb_text_from_cstring("localhost");
   torb_text host = torb_text_from_cstring("torbscript.invalid");
+  torb_list parts = torb_list_new(&torb_element_int64);
+  int64_t resolution = answer_of(torb_network_resolve(local));
+  TORB_CHECK(resolution > 0);
+  torb_network_take_resolved(resolution, &parts);
+  TORB_CHECK(torb_list_length(parts) >= 3);
+  TORB_CHECK(all_loopback(parts));
   TORB_CHECK_INTEGER(kind_of(answer_of(torb_network_resolve(host))), 8);
+  torb_list_release(parts);
   torb_text_release(host);
+  torb_text_release(local);
   torb_scheduler_finish();
   TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
 }
@@ -347,6 +373,7 @@ TORB_TEST(test_io_resolving_localhost) {
   /* At least one address, three numbers each, and every one of them a loopback address */
   TORB_CHECK(torb_list_length(parts) >= 3);
   TORB_CHECK_INTEGER(torb_list_length(parts) % 3, 0);
+  TORB_CHECK(all_loopback(parts));
   /* The resolution's handle is gone once it was taken */
   torb_network_take_resolved(resolution, &parts);
   TORB_CHECK_INTEGER(kind_of(answer_of(torb_network_resolve(nobody))), 8);

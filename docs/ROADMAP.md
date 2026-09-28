@@ -83,8 +83,8 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   7.14); `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;
   two majors of one package in one graph; `torb lock` and `lock --check`; the variables an evaluation read, printed by
   `publish` and recorded in `from`; and a way for `torb` to wait for a task without
-  making its top level one, which lets the client use `std/http`. **A bug found on the way:** `std/network`'s name
-  resolution crashes a native program on Windows for a host that needs a DNS lookup (RELEASE.md section 7.13).
+  making its top level one, which lets the client use `std/http`. The bug found on the way - `std/network`'s name
+  resolution crashed a program on Windows for a host that needs a DNS lookup - is fixed (RELEASE.md section 7.13).
 - **`torb doc`** is built: the reference of a package as a static site or as JSON, and the examples of its doc
   comments as doc tests ([tooling/torb-doc.md](tooling/torb-doc.md)). What is left: `std/` has 218 public constructs
   without a doc comment, which `torb doc --check` counts and does not fail on yet; the `## Declarations` sections of
