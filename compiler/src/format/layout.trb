@@ -59,7 +59,7 @@ public fn laidOut(source: String): String? {
   const start = if hasMark { byteOrderMark.byteLength() } else { 0 }
   const pieces = piecesOf(source, tokens, start)?
   const lines = linesOf pieces
-  const indents = indentationsOf lines, tokens, marks
+  const indents = indentationsOf lines, tokens, marks, source
   const lineEnding = lineEndingOf source
   var parts: List<String> = []
   if hasMark {
@@ -271,7 +271,7 @@ type Context {
  * The level of indentation of every line. The `<` of type arguments that ends a line opens a level like a bracket,
  * and the `>` that starts a line closes it: the shape `torb format` breaks a long list of type arguments into.
  */
-fn indentationsOf(lines: List<Line>, tokens: List<Token>, marks: Marks): List<Int> {
+fn indentationsOf(lines: List<Line>, tokens: List<Token>, marks: Marks, source: String): List<Int> {
   const closureArrows = marks.closureArrows
   var indents: List<Int> = []
   var current = Context(opener: TokenKind.EndOfFile, content: 0, itemIndent: 0, line: -1)
@@ -298,7 +298,7 @@ fn indentationsOf(lines: List<Line>, tokens: List<Token>, marks: Marks): List<In
         indent = current.itemIndent + 1
       } else {
         current.itemIndent = indent
-        current.headed = startsWithHeadKeyword tokens, code
+        current.headed = startsWithHeadKeyword tokens, code, source
       }
     }
     const commentIndent = if isClosing(first) || closesAngle { indent + 1 } else { indent }
@@ -399,7 +399,7 @@ fn isMatchKeyword(tokens: List<Token>, code: List<Int>, position: Int): Bool {
  * Whether an item starts with a keyword whose block follows a head that may run over several lines: the block of such
  * a head is one level deeper than its first line, not than its last.
  */
-fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>): Bool {
+fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>, source: String): Bool {
   // `type: String` is a field named after the keyword, not a declaration
   if code.length() > 1 && tokens[code[1]].kind == TokenKind.Colon {
     return false
@@ -409,6 +409,27 @@ fn startsWithHeadKeyword(tokens: List<Token>, code: List<Int>): Bool {
     .Reserved(.If | .Else | .While | .For | .Match | .Loop | .Fn | .Type | .Trait | .Extend | .Foreign) => true
     .Reserved(.Public | .Private | .Native | .Shared | .Static) => true
     .Reserved(.Var) => code.length() > 1 && tokens[code[1]].kind == TokenKind.Reserved(Keyword.Fn)
+    .Identifier => startsWithProtected tokens, code, source
+    _ => false
+  }
+}
+
+/**
+ * Whether a line starts with the modifier `protected` (`protected var connections: Int`), which heads a declaration as
+ * `private` does. It is a word and no keyword, so the kind of its token does not say it: its text does, and the keyword
+ * behind it - the words the parser takes it as a modifier in front of - so `protected = 1` and `protected.count` stay
+ * what they are.
+ */
+fn startsWithProtected(tokens: List<Token>, code: List<Int>, source: String): Bool {
+  if code.length() < 2 {
+    return false
+  }
+  const first = tokens[code[0]].span
+  if source.sliceBytes(first.start, first.end) != "protected" {
+    return false
+  }
+  match tokens[code[1]].kind {
+    .Reserved(.Public | .Private | .Native | .Shared | .Static | .Fn | .Var | .Const) => true
     _ => false
   }
 }
