@@ -71,6 +71,12 @@ static inline int64_t torb_atomic_load_i64(const int64_t *pointer) {
 static inline int64_t torb_atomic_add_i64(int64_t *pointer, int64_t value) {
   return __atomic_fetch_add(pointer, value, __ATOMIC_SEQ_CST);
 }
+static inline void *torb_atomic_load_pointer(void *const *pointer) {
+  return __atomic_load_n(pointer, __ATOMIC_ACQUIRE);
+}
+static inline void torb_atomic_store_pointer(void **pointer, void *value) {
+  __atomic_store_n(pointer, value, __ATOMIC_RELEASE);
+}
 #elif defined(_MSC_VER)
 #  include <intrin.h>
 static inline uint32_t torb_atomic_load_u32(const uint32_t *pointer) {
@@ -105,6 +111,12 @@ static inline int64_t torb_atomic_load_i64(const int64_t *pointer) {
 }
 static inline int64_t torb_atomic_add_i64(int64_t *pointer, int64_t value) {
   return _InterlockedExchangeAdd64((volatile long long *)pointer, value);
+}
+static inline void *torb_atomic_load_pointer(void *const *pointer) {
+  return *(void *const volatile *)pointer;
+}
+static inline void torb_atomic_store_pointer(void **pointer, void *value) {
+  *(void *volatile *)pointer = value;
 }
 #else
 #  error "the worker pool needs the atomic builtins of GCC or clang, or the interlocked intrinsics of MSVC"

@@ -114,8 +114,12 @@ typedef struct torb_pool_state {
   uint32_t stealable;
   /** Workers waiting on their condition. */
   uint32_t sleeping;
-  /** What the main thread's `torb_scheduler_run` waits for, so the worker that completes it can wake it. */
-  torb_task *until;
+  /**
+   * What the main thread's `torb_scheduler_run` waits for, so the worker that completes it can wake it: a `torb_task`,
+   * or `NULL`. Set under that task's lock and read under it by the worker that completes it (`torb_until_set`), and
+   * read and written atomically everywhere, because a worker completing another task reads it at any time.
+   */
+  void *until;
   /** A `Process.exit` from another worker than the main thread, which the main thread carries out; and its code. */
   uint32_t exiting;
   /** Whether some worker asked for the exit at all: the first request is the one that counts. Under worker 0's lock. */
@@ -857,6 +861,7 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
   bool last;
   bool unqueued = false;
   bool last_of_test = false;
+  bool wakes_main;
   if (task->waiting != (uint8_t)TORB_WAITING_NOTHING) {
     torb_internal_error("a task completed while it was still waiting");
   }
@@ -927,8 +932,13 @@ static void torb_complete(torb_worker *self, torb_task *task, bool finished) {
     waiter->outcome = (int32_t)TORB_OUTCOME_READY;
     torb_wake_taken(self, waiter);
   }
+  /*
+   * Under the task's lock, where the main thread publishes what it waits for: either it published this task before,
+   * and it is woken here, or it publishes it after and then reads the status stored above (`torb_until_set`)
+   */
+  wakes_main = self != &torb_main_worker && torb_atomic_load_pointer(&torb_pool.until) == (void *)task;
   torb_spin_unlock(&task->lock);
-  if (task == torb_pool.until && self != &torb_main_worker) {
+  if (wakes_main) {
     torb_wake_worker(&torb_main_worker);
   }
   if (last) {
@@ -2015,12 +2025,29 @@ static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main, 
         return;
       }
       self->scheduler.running = false;
-      torb_pool.until = NULL;
+      torb_atomic_store_pointer(&torb_pool.until, NULL);
       torb_panic_text("deadlock: every task is waiting for another one, and nothing is left that could wake one",
                       torb_location_unknown);
     }
     torb_idle(self, until, is_main, for_test);
   }
+}
+
+/*
+ * The task the main thread waits for, published under its lock. The worker that completes it stores its status and
+ * reads `until` under the same lock, so one of the two sees the other: the worker this task and wakes the main thread,
+ * or the main thread the status and never sleeps. A plain store here and a load after the unlock there could miss each
+ * other - each thread's store still on its way while it loads - and the main thread would sleep with nothing left to
+ * wake it.
+ */
+static void torb_until_set(torb_task *until) {
+  if (until == NULL) {
+    torb_atomic_store_pointer(&torb_pool.until, NULL);
+    return;
+  }
+  torb_spin_lock(&until->lock);
+  torb_atomic_store_pointer(&torb_pool.until, until);
+  torb_spin_unlock(&until->lock);
 }
 
 void torb_scheduler_run(torb_task *until) {
@@ -2032,9 +2059,9 @@ void torb_scheduler_run(torb_task *until) {
     torb_internal_error("the scheduler was run from inside a task");
   }
   self->scheduler.running = true;
-  torb_pool.until = until;
+  torb_until_set(until);
   torb_worker_loop(self, until, true, false);
-  torb_pool.until = NULL;
+  torb_atomic_store_pointer(&torb_pool.until, NULL);
   self->scheduler.running = false;
 }
 
@@ -2085,7 +2112,7 @@ static TORB_NORETURN void torb_exit_from_worker(torb_worker *self, torb_task *cu
 void torb_scheduler_exit(int64_t code) {
   torb_worker *self = torb_worker_self();
   torb_task *current = self->scheduler.current;
-  torb_task *awaited = self == &torb_main_worker ? torb_pool.until : NULL;
+  torb_task *awaited = self == &torb_main_worker ? (torb_task *)torb_atomic_load_pointer(&torb_pool.until) : NULL;
   /* A test body inside a task of the main thread that waits for the test's tasks: that task never returns either */
   torb_task *host = self == &torb_main_worker && torb_pool.test_draining != 0u ? torb_pool.test_host : NULL;
   torb_task *task;
@@ -2130,7 +2157,7 @@ void torb_scheduler_exit(int64_t code) {
   torb_pool.test_draining = 0u;
   (void)torb_atomic_add_i64(&torb_pool.floor, -torb_atomic_load_i64(&torb_pool.floor));
   self->scheduler.running = false;
-  torb_pool.until = NULL;
+  torb_atomic_store_pointer(&torb_pool.until, NULL);
   torb_scheduler_finish();
   if (awaited != NULL) {
     torb_task_release(awaited);
