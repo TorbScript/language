@@ -93,6 +93,22 @@ for file in "$runtime"/*.c "$runtime"/os/*.c; do
   fi
 done
 
+# What `torb build ./compiler` adds for the compiler, which hosts the VM, so a `torb` built here - the release binaries
+# of CI are - runs programs the way a bootstrapped one does: `TORB_HOSTS_MACHINE`, so that `TORB_MEMORY_LIMIT` limits
+# the program `torb run` interprets and not `torb` itself, and the TLS part of the runtime with the mbedTLS of
+# `vendor/` (docs/design/NETWORK.md section 5), without which `torb run` of a program that speaks TLS panics. A runtime
+# that has no TLS part yet gets the macro alone.
+hosting="-DTORB_HOSTS_MACHINE"
+if [ -f "$runtime/tls/torb_mbedtls_user.h" ] && [ -d "$runtime/vendor/mbedtls/library" ]; then
+  hosting="$hosting -DTORB_WITH_TLS -DMBEDTLS_USER_CONFIG_FILE=<torb_mbedtls_user.h> -I $runtime/tls"
+  hosting="$hosting -I $runtime/vendor/mbedtls/include -I $runtime/vendor/mbedtls/library"
+  for file in "$runtime"/tls/*.c "$runtime"/vendor/mbedtls/library/*.c; do
+    if [ -f "$file" ]; then
+      sources="$sources $file"
+    fi
+  done
+fi
+
 mkdir -p "$(dirname "$output")"
 log="$(dirname "$output")/c-compiler.log"
 
@@ -100,13 +116,13 @@ say "compiling $seed/program.c with $compiler - this takes a few minutes"
 slot="$here/build-slot.sh"
 # shellcheck disable=SC2086
 if [ -f "$slot" ]; then
-  if ! sh "$slot" "$log" "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} -I "$runtime/include" -o "$output" \
+  if ! sh "$slot" "$log" "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} $hosting -I "$runtime/include" -o "$output" \
     "$seed/program.c" $sources $threads -lm; then
     cat "$log" >&2
     fail "the C compiler could not build $seed/program.c"
   fi
 else
-  if ! "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} -I "$runtime/include" -o "$output" \
+  if ! "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} $hosting -I "$runtime/include" -o "$output" \
     "$seed/program.c" $sources $threads -lm >"$log" 2>&1; then
     cat "$log" >&2
     fail "the C compiler could not build $seed/program.c"
