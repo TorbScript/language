@@ -38,7 +38,7 @@ fn check(config: Config): Task<Void> {
   match config.source().recentReleases(recentCount).await() {
     Fail(message) => printError "release-sync: the periodic check could not reach the forge: {message}"
     Ok(releases) => {
-      for release in missingReleases(releases, config.root) {
+      for release in missingReleases(releases, config.root, config.source()).await() {
         print "release-sync: the periodic check found {release.tagName}, not yet placed - syncing"
         match syncRelease(release, config).await() {
           Fail(message) => printError "release-sync: syncing {release.tagName} failed: {message}"

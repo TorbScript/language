@@ -1,8 +1,10 @@
 /**
  * The periodic check against a fake forge over loopback: a server that answers the releases of two repositories the
  * way Forgejo answers them - one with a month of nightlies, a draft and two stable releases, one with no release at
- * all - and a `404` for every other path. What the check asks the forge, and which releases it would sync into a
- * download directory where one of them is placed already, is compared.
+ * all - a `SHA256SUMS` of its own for every tag, and a `404` for every other path. What the check asks the forge,
+ * which releases it would sync into a download directory where one of them is placed already, and whether a nightly
+ * rebuilt under the same tag - its own `SHA256SUMS` no longer matching what is placed, without a fresh "released"
+ * webhook - is synced again, is compared.
  *
  * A test body is no task and cannot `await()`, so the calls run at the top of the file and the tests compare what they
  * answered.
@@ -12,7 +14,7 @@ use test, group from "std/test"
 use File from "std/fs"
 use SocketAddress, IpAddress from "std/network"
 use Server, Request, Response, Status, HttpError, Headers, Body from "std/http"
-use Forge, ReleaseSource from "../src/forge"
+use Forge, ReleaseSource, ReleaseAsset, ReleaseInfo from "../src/forge"
 use missingReleases from "../src/sync"
 
 /** What the fake forge was asked: the path and the query of every request, in order. */
@@ -22,9 +24,35 @@ shared type Asked {
 
 const asked = Asked()
 
+/**
+ * What only the fake forge itself knows once it is listening: its own base URL, which every release's `SHA256SUMS`
+ * asset points back at, and the content that URL answers for a tag whose default a test has overridden - the way a
+ * nightly rebuilt under the same tag answers different bytes at the same address.
+ */
+shared type Fixture {
+  var base: String = ""
+  var overrides: List<(tag: String, content: String)> = []
+}
+
+const fixture = Fixture()
+
+/** What `GET {base}/download/<tag>/SHA256SUMS` answers: a test's override for `tag`, or `"sums"` for any other. */
+fn sumsFor(tag: String): String {
+  match fixture.overrides.find({ _.tag == tag }) {
+    Some(entry) => entry.content
+    None => "sums"
+  }
+}
+
+/** The tag of a `/download/<tag>/SHA256SUMS` path, or `None` for any other. */
+fn downloadTag(path: String): String? {
+  const rest = path.withoutPrefix("/download/")?
+  rest.withoutSuffix "/SHA256SUMS"
+}
+
 /** One release as Forgejo lists it, cut down to what the check reads and a little around it. */
 fn releaseJson(tag: String, draft: Bool, prerelease: Bool): String {
-  const url = "https://forge.example.test/download/{tag}/SHA256SUMS"
+  const url = "{fixture.base}/download/{tag}/SHA256SUMS"
   const asset = "\{\"name\":\"SHA256SUMS\",\"browser_download_url\":\"{url}\"\}"
   const flags = "\"draft\":{draft},\"prerelease\":{prerelease}"
   "\{\"id\":1,\"tag_name\":\"{tag}\",\"name\":\"{tag}\",{flags},\"assets\":[{asset}]\}"
@@ -45,6 +73,9 @@ fn languageReleases(): String {
 
 fn forge(request: Request): Task<Result<Response, HttpError>> {
   asked.requests.append "{request.path()}?{request.query() ?? ""}"
+  if const Some(tag) = downloadTag(request.path()) {
+    return Response.text sumsFor(tag), status: Status.ok
+  }
   var headers = Headers()
   headers.set "Content-Type", "application/json"
   const text = match request.path() {
@@ -57,20 +88,36 @@ fn forge(request: Request): Task<Result<Response, HttpError>> {
 
 var server = Server.listen(SocketAddress(IpAddress.loopback, 0), forge)?
 var serving = server.serve()
-const base = "http://{server.localAddress()}"
+fixture.base = "http://{server.localAddress()}"
+const base = fixture.base
 
 const listed = ReleaseSource(Forge.Forgejo, base, "torbscript/language", token: None).recentReleases(50).await()
 const empty = ReleaseSource(Forge.Forgejo, base, "torbscript/empty", token: None).recentReleases(50).await()
 const missing = ReleaseSource(Forge.Forgejo, base, "torbscript/missing", token: None).recentReleases(50).await()
-serving.cancel()
+const languageSource = ReleaseSource Forge.Forgejo, base, "torbscript/language", token: None
 
 // A download directory where one of the nightlies is placed already, and another one only half, the way a placement
-// left it before placing was one rename
+// left it before placing was one rename - its SHA256SUMS matches the forge's own, so it stays placed
 const root = File.createTemporaryDirectory(prefix: "release-sync-check-test-").expect("a temporary directory")
 File.createDirectory("{root}/download/nightly-20260927").expect("a placed nightly")
 File.writeText("{root}/download/nightly-20260927/SHA256SUMS", "sums").expect("its sums")
 File.createDirectory("{root}/download/0.2.0").expect("an empty directory under the stable version")
-const toSync = missingReleases(listed.ok() ?? [], root)
+const toSync = missingReleases(listed.ok() ?? [], root, languageSource).await()
+
+// A nightly rebuilt under the same tag from a newer commit: the forge answers a different SHA256SUMS at the same
+// asset URL, without a fresh "released" webhook - the periodic check catches it by comparing the two
+const rebuiltRoot = File.createTemporaryDirectory(prefix: "release-sync-check-test-rebuilt-")
+  .expect("a temporary directory")
+File.createDirectory("{rebuiltRoot}/download/nightly-20260930").expect("a placed nightly")
+File.writeText("{rebuiltRoot}/download/nightly-20260930/SHA256SUMS", "sums").expect("its sums")
+const rebuiltAsset = ReleaseAsset name: "SHA256SUMS", browserDownloadUrl: "{base}/download/nightly-20260930/SHA256SUMS"
+const rebuiltRelease = ReleaseInfo "nightly-20260930", assets: [rebuiltAsset], prerelease: true
+const beforeRebuild = missingReleases([rebuiltRelease], rebuiltRoot, languageSource).await()
+const rebuiltContent: (tag: String, content: String) = (tag: "nightly-20260930", content: "sums of a newer commit")
+fixture.overrides.append rebuiltContent
+const afterRebuild = missingReleases([rebuiltRelease], rebuiltRoot, languageSource).await()
+
+serving.cancel()
 
 group "the periodic check" {
   test "the forge is asked for its newest releases without the drafts" {
@@ -95,6 +142,11 @@ group "the periodic check" {
     assert(toSync.map({ _.tagName }).toList() == ["nightly-20260928", "v0.2.0"])
   }
 
+  test "a nightly rebuilt under the same tag is synced again once its own SHA256SUMS no longer matches" {
+    assert(beforeRebuild == [])
+    assert(afterRebuild.map({ _.tagName }).toList() == ["nightly-20260930"])
+  }
+
   test "a repository without a release is nothing to sync, not a failure" {
     assert(empty == [])
   }
@@ -106,8 +158,10 @@ group "the periodic check" {
     }
   }
 
-  test "the temporary directory is removed again" {
-    File.removeDirectory(root).expect("the root removed")
-    assert(!File.exists(root))
+  test "the temporary directories are removed again" {
+    for directory in [root, rebuiltRoot] {
+      File.removeDirectory(directory).expect("a root removed")
+      assert(!File.exists(directory))
+    }
   }
 }

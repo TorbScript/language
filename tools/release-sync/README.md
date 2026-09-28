@@ -108,6 +108,16 @@ directory a failed placement left before placing was one rename, and since a fai
 version's name now, the next check tries it again. A check with nothing to do - also while the repository has no
 release at all - says nothing; one that cannot reach the forge says so and tries again at the next.
 
+**A tag rebuilt under the same version** - the nightly workflow deletes and recreates `nightly-YYYYMMDD` when it runs
+again on a day that already has one (`.forgejo/workflows/nightly.yml`), so a placed nightly can be replaced by a newer
+commit's build without a new tag ever appearing. Placed no longer means done: for a release the newest list still
+names, the check also asks the forge for that release's own `SHA256SUMS` - one small file, not the rest of the
+release - and compares it against the one already placed, syncing again where they differ. A release this program
+cannot reach right now is left as it is; the next check tries again. This is also the fallback for a rebuild whose
+webhook delivery never arrived at all: deleting and recreating the release, then publishing it (`PATCH
+{"draft":false}`), does fire "published" again like any other release, but the forge does not redeliver a webhook it
+could not send, and a container that was down for a moment is exactly such a case (see "The webhook" below).
+
 ## Running it locally
 
 The tests need nothing but `torb`:

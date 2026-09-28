@@ -16,6 +16,10 @@
  * half-filled directory. A placement that fails after the rename - `versions.txt` or `latest` cannot be written - is
  * undone, so the periodic check, which asks whether the version is placed (`isPlaced`), tries it again; and whatever
  * an attempt leaves in the scratch directory is removed when it ends, and when the program starts.
+ *
+ * **A tag republished under the same version** - a nightly rebuilt from a newer commit without a fresh "released"
+ * webhook - is caught by the periodic check too ([missingReleases]): a version already placed is compared against
+ * the release's own `SHA256SUMS`, fetched by itself, and re-synced where the two differ.
  */
 
 use File, IoError, Permissions from "std/fs"
@@ -43,11 +47,41 @@ public fn isPlaced(root: String, version: String): Bool {
 }
 
 /**
- * Of the newest releases the forge lists, the ones the periodic check syncs: those [releasesToSync] chooses - the
- * newest stable release and the nightlies of the last thirty days - that are not placed yet, oldest first.
+ * Whether the `SHA256SUMS` already placed under `version` is not the one `release` itself lists now - a nightly
+ * rebuilt under the same tag from a newer commit, republished without a "released" webhook the periodic check would
+ * otherwise have missed (`tools/release-sync/README.md`, "The periodic check"). Fetches only that one small asset,
+ * never the rest of the release. A release with no `SHA256SUMS` asset, or one this machine cannot reach right now,
+ * answers `false`: nothing this program cannot verify is placed over what is already there, and the next periodic
+ * check tries again.
  */
-public fn missingReleases(releases: List<ReleaseInfo>, root: String): List<ReleaseInfo> {
-  releasesToSync(releases).filter({ !isPlaced(root, versionOf(_.tagName)) }).toList()
+fn rebuiltUnderSameTag(release: ReleaseInfo, root: String, version: String, source: ReleaseSource): Task<Bool> {
+  match source.sums(release).await() {
+    Fail(_) => false
+    Ok(remote) => {
+      const local = File.readText("{root}/download/{version}/SHA256SUMS").ok() ?? ""
+      remote.trim() != local.trim()
+    }
+  }
+}
+
+/**
+ * Of the newest releases the forge lists, the ones the periodic check syncs: those [releasesToSync] chooses - the
+ * newest stable release and the nightlies of the last thirty days - that are either not placed yet, or placed with a
+ * `SHA256SUMS` that no longer matches the release's own, oldest first. The second case is a release rebuilt under the
+ * same tag: nothing else changes what is on the forge without a new tag, since a tag's release is otherwise
+ * immutable, and the placed `SHA256SUMS` is compared instead of downloading the whole release again to hash it.
+ */
+public fn missingReleases(releases: List<ReleaseInfo>, root: String, source: ReleaseSource): Task<List<ReleaseInfo>> {
+  var chosen: List<ReleaseInfo> = []
+  for release in releasesToSync(releases) {
+    const version = versionOf release.tagName
+    if !isPlaced(root, version) {
+      chosen.append release
+    } else if rebuiltUnderSameTag(release, root, version, source).await() {
+      chosen.append release
+    }
+  }
+  chosen
 }
 
 /**
