@@ -308,7 +308,7 @@ TORB_TEST(a_list_of_lists_of_strings_releases_the_whole_tree) {
     torb_list inner = torb_list_new(&torb_element_text);
     int64_t index;
     for (index = 0; index < 4; index += 1) {
-      char name[24];
+      char name[48];
       snprintf(name, sizeof name, "name-%lld-%lld", (long long)group, (long long)index);
       add_text(&inner, name);
     }

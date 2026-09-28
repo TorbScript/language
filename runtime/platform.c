@@ -95,6 +95,18 @@
 #  else
 #    define TORB_ALLOCATION_SIZE(block) ((void)(block), (size_t)0u)
 #  endif
+/*
+ * A binary built under AddressSanitizer or ThreadSanitizer (`TORB_CFLAGS`, docs/tooling/torb-build.md) has terabytes of
+ * shadow memory mapped before `main` runs, and every mapping its allocator makes afterwards would fail against a limit
+ * of the system: there the runtime counts its own allocations, as it does on macOS.
+ */
+#  if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#    undef TORB_MEMORY_RESOURCE
+#  elif defined(__has_feature)
+#    if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
+#      undef TORB_MEMORY_RESOURCE
+#    endif
+#  endif
 #endif
 
 /* =============================================================== the boundary to Windows: UTF-8 and UTF-16 ====== */

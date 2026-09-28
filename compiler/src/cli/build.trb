@@ -28,7 +28,7 @@ use Package from "../project/workspace"
 use PackageProgram, programsOf, libraryEntry from "../project/programs"
 use programOfEntry from "../semantics/graph"
 use readSourceTree, absolutePaths from "../project/read"
-use findRuntime, threadArguments from "../project/toolchain"
+use findRuntime, threadArguments, extraCompilerArguments from "../project/toolchain"
 use BuildTarget, hostTarget from "../project/target"
 use ModuleId from "../semantics/module"
 use check, Checked, modulesOfProgram from "../semantics/check"
@@ -1329,6 +1329,7 @@ fn compileInParallel(
   }
   flags.appendAll parts.flags
   flags.appendAll threadArguments()
+  flags.appendAll extraCompilerArguments()
   // What decides every object besides the text of its own file
   var identity = combineHashes compiler.command.hash(), compiler.version.hash()
   identity = combineHashes identity, flags.joined(separator: "\n").hash()
@@ -1377,6 +1378,7 @@ fn compileInParallel(
   var inputs = linked
   inputs.appendAll parts.objects
   inputs.appendAll threadArguments()
+  inputs.appendAll extraCompilerArguments()
   inputs.append "-lm"
   if optimizesAcross {
     inputs.appendAll([profile.optimization(), profile.debugging(), "-Wall", "-Wextra", "-Werror"])
@@ -1477,7 +1479,8 @@ fn runtimeHeadersHashOf(runtime: String): Int {
 
 /**
  * The flags of BACKEND 4, plus the warnings: a warning in generated code is a bug of the emitter, so it is an error
- * here and not a message the user has to read. The profile decides the optimization and nothing else.
+ * here and not a message the user has to read. The profile decides the optimization and nothing else; `$TORB_CFLAGS`
+ * adds what somebody asked for ([extraCompilerArguments]).
  */
 fn compilerArguments(
   compiler: CCompiler,
@@ -1497,6 +1500,7 @@ fn compilerArguments(
     }
     arguments.append source
     arguments.appendAll sources
+    arguments.appendAll extraCompilerArguments()
     return arguments
   }
   var arguments = [
@@ -1516,6 +1520,7 @@ fn compilerArguments(
   arguments.append source
   arguments.appendAll sources
   arguments.appendAll threadArguments()
+  arguments.appendAll extraCompilerArguments()
   arguments.append "-lm"
   arguments
 }

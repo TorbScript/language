@@ -660,7 +660,7 @@ TORB_TEST(a_counted_result_comes_back_from_the_worker_that_made_it) {
   }
   for (index = 0; index < 32; index += 1) {
     torb_text value = torb_text_empty();
-    char expected[32];
+    char expected[48];
     torb_scheduler_run(speakers[index]);
     snprintf(expected, sizeof expected, "%lld%lld", (long long)(1000 + index), (long long)(1000 + index));
     if (!torb_task_result(speakers[index], &value) || value.length != strlen(expected)

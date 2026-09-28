@@ -50,6 +50,22 @@ public fn threadArguments(): List<String> {
   ["-pthread"]
 }
 
+/**
+ * `$TORB_CFLAGS`: what every C file of a build is compiled and linked with beyond the flags of its profile, apart by
+ * white space - a sanitizer (`-fsanitize=address,undefined`), `-g` for a debugger. Nothing where it is not set, which
+ * is every build nobody asked for more. `tools/build-seed.sh` takes the same variable for the compiler's own C.
+ */
+public fn extraCompilerArguments(): List<String> {
+  const given = Environment.get("TORB_CFLAGS") ?? ""
+  var arguments: List<String> = []
+  for word in given.replace("\t", " ").split(" ") {
+    if !word.isEmpty() {
+      arguments.append word
+    }
+  }
+  arguments
+}
+
 fn findToolchainPart(variable: String, name: String, marker: String, paths: List<String>): String? {
   if const Some(given) = Environment.get(variable) {
     if !given.isEmpty() {

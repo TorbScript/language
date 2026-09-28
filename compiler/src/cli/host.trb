@@ -17,7 +17,7 @@ use Clock from "std/time"
 use normalizePath, parentPath, joinPath, isInside, relativePath, embeddedPathOf, embeddedRoot, commonDirectoryOf from "../project/path"
 use SourceTree from "../project/source-tree"
 use readSourceTree from "../project/read"
-use findCompilerSources from "../project/toolchain"
+use findCompilerSources, extraCompilerArguments from "../project/toolchain"
 use hostTarget from "../project/target"
 use check, Checked, modulesOfProgram from "../semantics/check"
 use checkBodiesOf from "../semantics/checker/check"
@@ -139,6 +139,7 @@ public fn scriptHostObjectOf(options: BuildOptions, runtime: String, compiler: C
   for macro in options.profile.macros() {
     arguments.append "-D{macro}"
   }
+  arguments.appendAll extraCompilerArguments()
   arguments.appendAll(["-c", "-o", object, source])
   const size = File.readText(source).map({ _.byteLength() }).ok() ?? 0
   const output = match runCompiler(compiler, arguments, source, size, runtime) {
@@ -258,6 +259,7 @@ fn keyOf(
   compiler: CCompiler,
 ): String {
   var parts: List<String> = [standard, options.profile.name(), compiler.command]
+  parts.appendAll extraCompilerArguments()
   for path in tree.below(joinPath(sources, "src")) {
     parts.append path
     parts.append(tree.text(path) ?? "")

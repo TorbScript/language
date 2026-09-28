@@ -38,7 +38,8 @@ tls="-DTORB_WITH_TLS -DMBEDTLS_USER_CONFIG_FILE=<torb_mbedtls_user.h> -Itls -Ive
 vendor_out="$out/mbedtls"
 mkdir -p "$out/tls" "$vendor_out"
 version=$(grep -o 'MBEDTLS_VERSION_STRING  *"[^"]*"' vendor/mbedtls/include/mbedtls/build_info.h | sed 's/.*"\(.*\)"/\1/')
-if [ "$(cat "$vendor_out/compiled-version" 2>/dev/null)" != "$version $cc" ]; then
+# The flags are part of what was compiled: a build under a sanitizer cannot link the objects of one without it
+if [ "$(cat "$vendor_out/compiled-version" 2>/dev/null)" != "$version $cc ${CFLAGS-}" ]; then
   echo "compiling mbedTLS $version once, with $cc"
   rm -f "$vendor_out"/*.o "$vendor_out/compiled-version"
   for source in vendor/mbedtls/library/*.c; do
@@ -46,7 +47,7 @@ if [ "$(cat "$vendor_out/compiled-version" 2>/dev/null)" != "$version $cc" ]; th
     # shellcheck disable=SC2086
     "$cc" -std=c11 -O2 -w $threads ${CFLAGS-} $tls -Ivendor/mbedtls/library -c "$source" -o "$vendor_out/$name.o"
   done
-  printf '%s\n' "$version $cc" > "$vendor_out/compiled-version"
+  printf '%s\n' "$version $cc ${CFLAGS-}" > "$vendor_out/compiled-version"
 fi
 echo "compiling the runtime with $cc"
 objects=""

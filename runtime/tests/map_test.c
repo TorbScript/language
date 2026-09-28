@@ -231,12 +231,12 @@ TORB_TEST(a_map_from_string_to_list_releases_the_whole_tree) {
   torb_map copy;
   int64_t group;
   for (group = 0; group < 6; group += 1) {
-    char name[16];
+    char name[32];
     torb_text key;
     torb_list values = torb_list_new(&torb_element_text);
     int64_t index;
     for (index = 0; index < 3; index += 1) {
-      char item[24];
+      char item[48];
       torb_text text;
       snprintf(item, sizeof item, "item-%lld-%lld", (long long)group, (long long)index);
       text = torb_text_from_cstring(item);
