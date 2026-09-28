@@ -61,8 +61,8 @@ public type Instantiation {
 public fn newInstantiation(checker: Checker): Instantiation {
   var table: Map<Int, PrimitiveKind> = [:]
   for width in [8, 16, 32, 64] {
-    addPrimitive checker, table, "Int{width}", PrimitiveKind.Integer(width, true)
-    addPrimitive checker, table, "UInt{width}", PrimitiveKind.Integer(width, false)
+    addPrimitive checker, table, "Int{width}", PrimitiveKind.Integer(width, isSigned: true)
+    addPrimitive checker, table, "UInt{width}", PrimitiveKind.Integer(width, isSigned: false)
   }
   addPrimitive checker, table, "Float32", PrimitiveKind.Floating(32)
   addPrimitive checker, table, "Float64", PrimitiveKind.Floating(64)
@@ -205,7 +205,7 @@ fn tupleType(
   if reserved.isFresh {
     var built: List<FieldLayout> = []
     for index in 0..annotations.length() {
-      built.append FieldLayout("{index}", annotations[index], None)
+      built.append FieldLayout("{index}", annotations[index], symbol: None)
     }
     const layout = program.layoutAt reserved.layout
     program.setLayout reserved.layout, layout.copy(arguments: annotations, fields: built, isBuilt: true)
@@ -409,7 +409,7 @@ fn buildNominalLayout(
     const empty: Map<ParameterId, TypeId> = [:]
     const inner = instantiateType program, checker, instantiation, empty, arguments[0]
     const cell = cellType program, checker, instantiation, arguments[0], inner
-    fields.append FieldLayout("value", cell, None)
+    fields.append FieldLayout("value", cell, symbol: None)
   }
   const layout = program.layoutAt id
   program.setLayout(

@@ -58,7 +58,7 @@ public fn taskMachineOf(program: IrProgram, function: IrFunction): TaskMachine {
   // The same analysis over every slot, counted or not: a number that is read after a suspension has to survive it too
   const every = everySlotOf function
   const across = livenessOf program, function, every
-  var frame = filledFlags slotCount, false
+  var frame = filledFlags slotCount, value: false
   for index in 0..slotCount {
     if const .Parameter(_) = function.slots[index].role {
       frame.set index, true
@@ -117,7 +117,7 @@ fn everySlotOf(function: IrFunction): Counted {
     indices.append index
     slots.append Slot(index)
   }
-  Counted indices, slots, filledFlags(function.slots.length(), false)
+  Counted indices, slots, filledFlags(function.slots.length(), value: false)
 }
 
 /** One instruction backwards: the slot it defines dies above it, and the slots it reads are live above it. */
@@ -163,12 +163,12 @@ fn slotsOf(counted: Counted, live: List<Bool>): List<Slot> {
  */
 fn backEdgesOf(function: IrFunction): List<Bool> {
   const blockCount = function.blocks.length()
-  var edges = filledFlags blockCount, false
+  var edges = filledFlags blockCount, value: false
   if blockCount == 0 {
     return edges
   }
-  var visited = filledFlags blockCount, false
-  var onStack = filledFlags blockCount, false
+  var visited = filledFlags blockCount, value: false
+  var onStack = filledFlags blockCount, value: false
   var stack = [0]
   var cursor = [0]
   visited.set 0, true

@@ -26,7 +26,7 @@ fn text(lines: List<String>): String {
 }
 
 fn integerType(var program: IrProgram, width: Int): IrTypeId {
-  program.internType IrType.Integer(width, true)
+  program.internType IrType.Integer(width, isSigned: true)
 }
 
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
@@ -118,7 +118,7 @@ group "The text format" {
     var builder = newFunction "t_main_count", None, IrSignature([IrParameter("limit", int64)], voidType), "body"
     const condition = addLocal builder, boolean, "isMore"
     const again = addBlock builder, "while", head
-    const done = addBlock builder, "after", None
+    const done = addBlock builder, "after", at: None
     terminate builder, Terminator.Jump(again)
     switchTo builder, again
     emit builder, Instruction.Copy(condition, condition)
@@ -191,7 +191,7 @@ group "The text format" {
     emit builder, Instruction.Release(message)
     emit builder, Instruction.MakeUnique(Reference(Slot(1), [PathStep.Field(holder, 0)]))
     emit builder, Instruction.Call(None, printer, [borrowed(message)], [])
-    emit builder, Instruction.Intrinsic(same, Intrinsic(IntrinsicOperation.TextEqual, None), [message, key], at)
+    emit builder, Instruction.Intrinsic(same, Intrinsic(IntrinsicOperation.TextEqual, kind: None), [message, key], at)
     emit builder, Instruction.Construct(circle, shape, 1, [owned(count)])
     emit builder, Instruction.Tag(tag, circle)
     emit builder, Instruction.Read(items, Reference(Slot(1), [PathStep.Field(holder, 0)]))
@@ -202,7 +202,7 @@ group "The text format" {
     )
     emit builder, Instruction.BoxNew(boxed, owned(count))
     emit builder, Instruction.BoxNew(cell, owned(count))
-    emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
+    emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, kind: None), [cell], at)
     emit builder, Instruction.TakeOut(count, Reference(Slot(0)), key, RuntimeKind.MapStorage)
     emit builder, Instruction.PutBack(Reference(Slot(0)), key, count, RuntimeKind.MapStorage)
     emit builder, Instruction.Panic(owned(message), at)
@@ -253,7 +253,7 @@ group "The text format" {
     const innerBuilder = newFunction "t_main_inner", None, IrSignature([IrParameter("value", int64)], voidType), "body"
     const inner = finishFunction program, innerBuilder
     emit builder, Instruction.Copy(counter, counter)
-    emit builder, Instruction.Closure(made, inner, [Capture.Value(counter)], false)
+    emit builder, Instruction.Closure(made, inner, [Capture.Value(counter)], isEscaping: false)
     emit builder, Instruction.CallClosure(None, made, [borrowed(counter)])
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
@@ -279,9 +279,9 @@ group "The text format" {
     const int64 = integerType program, 64
     const voidType = program.internType IrType.VoidType
     var builder = newFunction "t_main_pick", None, IrSignature([IrParameter("value", int64)], voidType), "body"
-    const first = addBlock builder, "first", None
-    const second = addBlock builder, "second", None
-    const other = addBlock builder, "otherwise", None
+    const first = addBlock builder, "first", at: None
+    const second = addBlock builder, "second", at: None
+    const other = addBlock builder, "otherwise", at: None
     terminate builder, Terminator.Switch(Slot(0), [0, 1], [first, second], other)
     terminateBlock builder, first, Terminator.Return(None)
     terminateBlock builder, second, Terminator.Return(None)
@@ -360,8 +360,8 @@ group "The verifier" {
     const boolean = program.internType IrType.Boolean
     var builder = newFunction "t_main_broken", None, IrSignature([IrParameter("flag", boolean)], boolean), "body"
     const answer = addLocal builder, boolean, "answer"
-    const then = addBlock builder, "then", None
-    const after = addBlock builder, "after", None
+    const then = addBlock builder, "then", at: None
+    const after = addBlock builder, "after", at: None
     terminate builder, Terminator.Branch(Slot(0), then, after)
     switchTo builder, then
     emit builder, Instruction.Copy(answer, Slot(0))
@@ -390,8 +390,8 @@ group "The verifier" {
     var program = IrProgram()
     const voidType = program.internType IrType.VoidType
     var builder = newFunction "t_main_dead", None, IrSignature([], voidType), "body"
-    const marker = addBlock builder, "marker", None
-    const dead = addBlock builder, "dead", None
+    const marker = addBlock builder, "marker", at: None
+    const dead = addBlock builder, "dead", at: None
     terminate builder, Terminator.Return(None)
     terminateBlock builder, dead, Terminator.Return(None)
     const identifier = finishFunction program, builder
@@ -407,7 +407,7 @@ group "The verifier" {
     const int64 = integerType program, 64
     const voidType = program.internType IrType.VoidType
     var builder = newFunction "t_main_pick", None, IrSignature([IrParameter("value", int64)], voidType), "body"
-    const other = addBlock builder, "otherwise", None
+    const other = addBlock builder, "otherwise", at: None
     terminate builder, Terminator.Switch(Slot(0), [0, 1], [other], other)
     terminateBlock builder, other, Terminator.Return(None)
     const identifier = finishFunction program, builder
@@ -527,7 +527,7 @@ group "The verifier" {
       "body",
     )
     const wrong = addTemporary builder, int64
-    const plain = Intrinsic IntrinsicOperation.Less, None
+    const plain = Intrinsic IntrinsicOperation.Less, kind: None
     emit builder, Instruction.Intrinsic(wrong, plain, [Slot(0), Slot(1)], at)
     terminate builder, Terminator.Return(owned(Slot(0)))
     const identifier = finishFunction program, builder
@@ -545,7 +545,7 @@ group "The verifier" {
   test "an intrinsic operand has the type the intrinsic names" {
     var program = IrProgram()
     const int64 = integerType program, 64
-    const int32 = program.internType IrType.Integer(32, true)
+    const int32 = program.internType IrType.Integer(32, isSigned: true)
     const at = program.internLocation Location("src/math.trb", 3, 5)
     var builder = newFunction "t_main_add", None, IrSignature([IrParameter("a", int32)], int64), "body"
     const total = addTemporary builder, int64
@@ -645,16 +645,16 @@ group "The verifier" {
   test "a part of a concatenation the runtime cannot show is reported, and so is a `print` part that is no text" {
     var program = IrProgram()
     const strings = program.internType IrType.Text
-    const integer = program.internType IrType.Integer(64, true)
+    const integer = program.internType IrType.Integer(64, isSigned: true)
     const signature = program.internSignature IrSignature([], integer)
     const closure = program.internType IrType.Closure(signature)
     const at = program.internLocation Location("src/text.trb", 5, 3)
     const parameters = [IrParameter("text", strings), IrParameter("number", integer), IrParameter("step", closure)]
     var builder = newFunction "t_main_join", None, IrSignature(parameters, strings), "body"
     const joined = addTemporary builder, strings
-    const concat = Intrinsic IntrinsicOperation.TextConcat, None
+    const concat = Intrinsic IntrinsicOperation.TextConcat, kind: None
     emit builder, Instruction.Intrinsic(joined, concat, [Slot(0), Slot(1), Slot(2)], at)
-    const printed = Intrinsic IntrinsicOperation.PrintParts, None
+    const printed = Intrinsic IntrinsicOperation.PrintParts, kind: None
     emit builder, Instruction.Intrinsic(None, printed, [joined, Slot(1)], at)
     terminate builder, Terminator.Return(owned(joined))
     const identifier = finishFunction program, builder
@@ -674,7 +674,7 @@ group "The verifier" {
     const strings = program.internType IrType.Text
     const at = program.internLocation Location("src/text.trb", 5, 3)
     var builder = newFunction "t_main_write", None, IrSignature([IrParameter("text", strings)], strings), "body"
-    const printed = Intrinsic IntrinsicOperation.PrintParts, None
+    const printed = Intrinsic IntrinsicOperation.PrintParts, kind: None
     emit builder, Instruction.Intrinsic(Slot(0), printed, [Slot(0)], at)
     terminate builder, Terminator.Return(owned(Slot(0)))
     const identifier = finishFunction program, builder
@@ -712,7 +712,7 @@ group "The verifier" {
     var program = IrProgram()
     const int64 = integerType program, 64
     const float64 = program.internType IrType.Floating(64)
-    const unsigned = program.internType IrType.Integer(8, false)
+    const unsigned = program.internType IrType.Integer(8, isSigned: false)
     const at = program.internLocation Location("src/math.trb", 9, 1)
     var builder = newFunction "t_main_mix", None, IrSignature([IrParameter("value", int64)], int64), "body"
     const sum = addTemporary builder, int64
@@ -741,7 +741,7 @@ group "The verifier" {
     const voidType = program.internType IrType.VoidType
     const task = program.internType IrType.Runtime(RuntimeKind.TaskObject, [int64])
     var builder = newFunction "t_main_wait", None, IrSignature([IrParameter("value", task)], voidType), "body"
-    emit builder, Instruction.Suspend(1, Slot(0), false)
+    emit builder, Instruction.Suspend(1, Slot(0), observes: false)
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program

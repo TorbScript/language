@@ -63,7 +63,7 @@ group "Every operand position of every instruction" {
   test "a place with an element step, a box and a write keep their operands" {
     var program = IrProgram()
     const text = program.internType IrType.Text
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const voidType = program.internType IrType.VoidType
     const items = program.internType IrType.Runtime(RuntimeKind.ListStorage, [text])
     const box = program.internType IrType.Box(text)
@@ -110,12 +110,15 @@ group "Every operand position of every instruction" {
   test "a container that is taken out of and put back into, and the tag of a variant" {
     var program = IrProgram()
     const text = program.internType IrType.Text
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const voidType = program.internType IrType.VoidType
     const mapping = program.internType IrType.Runtime(RuntimeKind.MapStorage, [text, text])
     const choice = variantLayout program, "T_Choice", [[FieldLayout("name", text)], []], ["First", "Second"]
     const choiceType = program.internType IrType.Variant(choice)
-    const signature = IrSignature([IrParameter("table", mapping, true), IrParameter("key", text)], voidType)
+    const signature = IrSignature(
+      [IrParameter("table", mapping, isReference: true), IrParameter("key", text)],
+      voidType,
+    )
     var builder = newFunction "t_container", None, signature, "body"
     const taken = addTemporary builder, text
     const made = addTemporary builder, choiceType
@@ -171,7 +174,7 @@ group "Every operand position of every instruction" {
     var builder = newFunction "t_indirect", None, signature, "body"
     const made = addTemporary builder, closureType
     const shownValue = addTemporary builder, objectType
-    emit builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], false)
+    emit builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], isEscaping: false)
     emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(0))])
     emit builder, Instruction.TraitValue(shownValue, borrowed(Slot(0)), [WitnessSource(WitnessRoot.Table(table))])
     emit builder, Instruction.CallWitness(None, WitnessSource(WitnessRoot.Table(table)), 0, [borrowed(shownValue)])

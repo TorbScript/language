@@ -185,7 +185,7 @@ fn parseCommandCall(var parser: Parser, start: Span, callee: Expression): Expres
   checkArgumentOrder parser, arguments
   // The `{` belongs to the command, like the `{` after the head of an `if`
   if parser.allowsTrailingClosures && parser.isAt(TokenKind.BraceOpen) {
-    arguments.append Argument(None, isSpread: false, value: parseClosure(parser))
+    arguments.append Argument(label: None, isSpread: false, value: parseClosure(parser))
     if parser.isAtAny([TokenKind.Dot, TokenKind.QuestionDot, TokenKind.BraceOpen]) {
       parser.errorHere "The `\{ ... \}` in front of this belongs to the command call, like the `\{` after the head of an `if`. To pass a closure to one of the arguments, call the command with parentheses: `print(list.map \{ ... \})`"
       parser.recoverToLineEnd()
@@ -236,7 +236,7 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
     _ => false
   }
   // `..end`: a range without a start
-  var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
+  var left = if isAtRange(parser, minimum) { parseRange parser, start, left: None } else { parseUnary parser }
   loop {
     if isAtRange(parser, minimum) {
       left = parseRange parser, start, left
@@ -389,7 +389,7 @@ fn parsePostfix(var parser: Parser): Expression {
         }
       }
       .BraceOpen if parser.allowsTrailingClosures && takesTrailingClosure(expression) => {
-        const closure = Argument None, isSpread: false, value: parseClosure(parser)
+        const closure = Argument label: None, isSpread: false, value: parseClosure(parser)
         match expression.kind {
           .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call(
             callee,

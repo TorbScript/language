@@ -360,7 +360,7 @@ fn valueDestinationOf(var lowering: Lowering, var builder: FunctionBuilder, expr
  */
 public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
   if !lowering.isSupported {
-    return abandonedSlot lowering, builder, None
+    return abandonedSlot lowering, builder, destination: None
   }
   const annotation = match typeAtSpan(lowering, expression.span) {
     Some(found) => found
@@ -369,7 +369,7 @@ public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuild
     }
   }
   if !canReplayAdaptations(lowering, expression) {
-    return abandonedSlot lowering, builder, None
+    return abandonedSlot lowering, builder, destination: None
   }
   const destination = valueDestinationOf lowering, builder, expression
   lowerInnerExpression lowering, builder, expression, destination, annotation
@@ -986,7 +986,7 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   lowering.inlinedConstants.set constant.instance.key, true
   const location = locationOf lowering, value.span
   setBlockLocation inner, BlockId(0), location
-  const built = lowerExpression lowering, inner, value, None
+  const built = lowerExpression lowering, inner, value, destination: None
   const slot = destructuredSlot lowering, inner, constant, built, value.span
   const produced = inner.function.typeOfSlot slot
   if lowering.isSupported && !lowering.isDiverged {
@@ -1476,7 +1476,7 @@ fn lowerOrderComparison(
   if index < 0 {
     return unsupportedSlot lowering, builder, destination, "an `Ordering` without a `{wanted}` case", at
   }
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, order)
   const value = integerSlot lowering, builder, index, integer
@@ -1578,7 +1578,7 @@ fn lowerTextComparison(
     const equal = intrinsicSlot lowering, builder, None, equals, None, [first, second], annotation, at
     return intrinsicSlot lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [equal], annotation, at
   }
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const order = addTemporary builder, integer
   emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [first, second], at
   const zero = integerSlot lowering, builder, 0, integer
@@ -1793,7 +1793,7 @@ fn lowerIfStatement(
   }
   finishBlock lowering, builder, Terminator.Branch(scrutinee, thenBlock, join)
   continueIn lowering, builder, thenBlock
-  lowerBlockInto lowering, builder, then, None
+  lowerBlockInto lowering, builder, then, destination: None
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }

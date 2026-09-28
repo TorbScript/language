@@ -76,11 +76,11 @@ public type Operand {
 }
 
 fn borrowedOperand(slot: Slot): Operand {
-  Operand slot, false, false, false
+  Operand slot, false, false, retainsItself: false
 }
 
 fn ownedOperand(slot: Slot): Operand {
-  Operand slot, true, true, false
+  Operand slot, true, true, retainsItself: false
 }
 
 fn borrowedOperands(slots: List<Slot>): List<Operand> {
@@ -107,8 +107,8 @@ fn ownedOperands(arguments: List<Argument>): List<Operand> {
 public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruction): List<Operand> {
   match instruction {
     .Constant(_, _) => []
-    .Move(_, source) => [Operand(source, true, true, true)]
-    .Copy(_, source) => [Operand(source, true, true, true)]
+    .Move(_, source) => [Operand(source, true, true, retainsItself: true)]
+    .Copy(_, source) => [Operand(source, true, true, retainsItself: true)]
     // What this pass inserted itself. They are not uses a position could decide anything about
     .Retain(_) => []
     .Release(_) => []
@@ -226,8 +226,8 @@ fn captureOperands(captures: List<Capture>): List<Operand> {
   var found: List<Operand> = []
   for capture in captures {
     match capture {
-      .Value(slot) => found.append Operand(slot, true, false, false)
-      .Boxed(slot) => found.append Operand(slot, true, false, false)
+      .Value(slot) => found.append Operand(slot, true, false, retainsItself: false)
+      .Boxed(slot) => found.append Operand(slot, true, false, retainsItself: false)
       .Place(reference) => found.appendAll borrowedOperands(placeSlotsOf(reference))
     }
   }
@@ -411,6 +411,6 @@ fn withPlace(reference: Reference, decided: List<Argument>, first: Int): Referen
 fn decidedAt(decided: List<Argument>, index: Int): Argument {
   match decided.get(index) {
     Some(found) => found
-    None => Argument Slot(0), Ownership.Borrowed, false
+    None => Argument Slot(0), Ownership.Borrowed, isLastUse: false
   }
 }

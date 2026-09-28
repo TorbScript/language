@@ -73,20 +73,20 @@ fn failureOf(text: String): String {
 group "decoding into a type" {
   test "a field reads its scalar as its own type" {
     const service = decodedService "name: web\nreplicas: 3\nports: [80, 443]\nlabels:\n  tier: front\n"
-    assert(service == Service("web", 3, [80, 443], true, ["tier": "front"], None))
+    assert(service == Service("web", 3, [80, 443], true, ["tier": "front"], owner: None))
   }
 
   test "no is the text `no` in a String field and an error in a Bool field" {
     const flags = Yaml().decode<Flags>("country: no\nactive: true\n")
-    assert(flags.ok() == Flags("no", true))
+    assert(flags.ok() == Flags("no", active: true))
     assert(!Yaml().decode<Flags>("country: no\nactive: no\n").isOk())
   }
 
   test "a document that says %YAML 1.1 reads yes, no, on and off as truth values" {
     const flags = Yaml().decode<Flags>("%YAML 1.1\n---\ncountry: no\nactive: yes\n")
-    assert(flags.ok() == Flags("no", true))
+    assert(flags.ok() == Flags("no", active: true))
     const legacy = Yaml(version: YamlVersion.Yaml11).decode<Flags>("country: NO\nactive: off\n")
-    assert(legacy.ok() == Flags("NO", false))
+    assert(legacy.ok() == Flags("NO", active: false))
   }
 
   test "YAML 1.1 reads 0777 as an octal number and 1_000 with its separator" {
@@ -114,7 +114,7 @@ group "decoding into a type" {
 
   test "an absent field takes its default, and null is None" {
     const service = decodedService "name: api\nowner: ~\n"
-    assert(service == Service("api", 1, [], true, [:], None))
+    assert(service == Service("api", 1, [], true, [:], owner: None))
     assert(decodedService("name: api\nowner: ada\n").map({ _.owner }) == Some(Some("ada")))
   }
 
@@ -138,7 +138,7 @@ group "decoding into a type" {
         name: web
       """
     const services = Yaml().decode<Map<String, Service>>(text).ok() ?? [:]
-    assert(services.get("service") == Service("web", 2, [], false, [:], None))
+    assert(services.get("service") == Service("web", 2, [], false, [:], owner: None))
   }
 
   test "a list of mappings merges in order" {
@@ -211,7 +211,7 @@ group "decoding into a type" {
 
 group "encoding" {
   test "a record is a block mapping in declaration order" {
-    const text = Yaml().encode(Service("web", 2, [80], true, ["tier": "front"], None))
+    const text = Yaml().encode(Service("web", 2, [80], true, ["tier": "front"], owner: None))
     assert(text == "name: web\nreplicas: 2\nports:\n  - 80\nenabled: true\nlabels:\n  tier: front\nowner: null\n")
   }
 

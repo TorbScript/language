@@ -100,7 +100,7 @@ public fn concatenatedSlot(var lowering: Lowering, var builder: FunctionBuilder,
 /** One concatenation of every part, never a chain of two-part additions. */
 fn concatenate(var lowering: Lowering, var builder: FunctionBuilder, target: Slot, parts: List<Slot>, at: Span) {
   const location = locationOf lowering, at
-  const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
+  const intrinsic = Intrinsic IntrinsicOperation.TextConcat, kind: None
   emit builder, Instruction.Intrinsic(target, intrinsic, parts, location)
 }
 
@@ -149,7 +149,7 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
   lowering.shownParts.set at, true
   const value = lowerUncoercedValue lowering, builder, expression
   if !lowering.isSupported {
-    return abandonedSlot lowering, builder, None
+    return abandonedSlot lowering, builder, destination: None
   }
   if raw && textPartKindOf(lowering.program, builder.typeOfSlot(value)).isSome() {
     return value
@@ -161,12 +161,12 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
 public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Slot, subject: TypeId, at: Span): Slot {
   // A part before this one did not return: nothing is shown, and no `show` is instantiated for it
   if lowering.isDiverged {
-    return abandonedSlot lowering, builder, None
+    return abandonedSlot lowering, builder, destination: None
   }
   // `"{item}"` with an `item: Never` - inside `List<Never>.show`, say - is never reached, and `Never` has no `show`
   if const .NeverType = lowering.checker.types.form(subject) {
     finishBlock lowering, builder, Terminator.Unreachable
-    return abandonedSlot lowering, builder, None
+    return abandonedSlot lowering, builder, destination: None
   }
   const bound = match showBoundOf(lowering) {
     Some(found) => found
@@ -199,7 +199,7 @@ public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: 
   const called = match memberOfType(lowering, subject, bound, "show", at) {
     Some(found) => found
     None => {
-      return abandonedSlot lowering, builder, None
+      return abandonedSlot lowering, builder, destination: None
     }
   }
   const empty: List<WitnessSource> = []
@@ -323,7 +323,7 @@ public fn lowerPrint(
     parts.append shown
   }
   const location = locationOf lowering, expression.span
-  const intrinsic = Intrinsic operation, None
+  const intrinsic = Intrinsic operation, kind: None
   emit builder, Instruction.Intrinsic(None, intrinsic, parts, location)
   match destination {
     Some(_) => voidSlot lowering, builder, destination

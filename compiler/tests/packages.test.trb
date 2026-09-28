@@ -516,7 +516,7 @@ const lockOfJson = "graph \{\n  package \"acme/json\", version: \"1.2.0\", regis
 
 group "The build and the lock" {
   test "a locked package unpacked in the cache is a package of the workspace, with the settings of its own lock" {
-    const workspace = findWorkspace lockedTree(lockOfJson, true), "app"
+    const workspace = findWorkspace lockedTree(lockOfJson, installed: true), "app"
     assert workspace.problems.isEmpty()
     const json = workspace.packageNamed("acme/json").expect("the locked package")
     assert json.installed
@@ -525,9 +525,9 @@ group "The build and the lock" {
   }
 
   test "a locked package that is not installed, and a dependency the lock does not pin, name the command" {
-    const missing = findWorkspace lockedTree(lockOfJson, false), "app"
+    const missing = findWorkspace lockedTree(lockOfJson, installed: false), "app"
     assert(missing.problems == ["acme/json 1.2.0 is in project.lock.trb and not installed: run `torb install`"])
-    const unpinned = findWorkspace lockedTree("", true), "app"
+    const unpinned = findWorkspace lockedTree("", installed: true), "app"
     assert(
       unpinned.problems
         == ["`acme/app` depends on `acme/json:^1.0.0`, and project.lock.trb does not pin it: run `torb update`"],
@@ -535,10 +535,10 @@ group "The build and the lock" {
   }
 
   test "a pinned version the requirement does not allow, or another registry than the owner's, is refused" {
-    const old = findWorkspace lockedTree(lockOfJson.replace("1.2.0", "0.9.0"), true), "app"
+    const old = findWorkspace lockedTree(lockOfJson.replace("1.2.0", "0.9.0"), installed: true), "app"
     assert(old.problems == ["project.lock.trb pins acme/json 0.9.0, and `acme/app` needs `acme/json:^1.0.0`: run `torb update acme/json`"])
     const elsewhere = findWorkspace(
-      lockedTree(lockOfJson.replace("https://packages.torb.dev", "file:../mirror"), true),
+      lockedTree(lockOfJson.replace("https://packages.torb.dev", "file:../mirror"), installed: true),
       "app",
     )
     assert(elsewhere.problems.length() == 1)

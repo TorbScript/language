@@ -388,7 +388,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
   // The module that runs: the same statements, handing the new bindings out
   var final = form.copy outputs: outputTexts(outputs), shown: shown, shownBindings: shownBindings, imports: imports
   synthesis = synthesize session.sources, declarations, texts, current, plan, final
-  checked = checkSession session, synthesis.text, true
+  checked = checkSession session, synthesis.text, forLowering: true
   problems = problemsOf session, checked, synthesis
   // A binding whose type cannot be written here is not handed out; it lives as long as its entry, as `using` does
   unwritable = []
@@ -408,7 +408,7 @@ fn compileEntry(var session: Session, current: Int, plan: EntryPlan): Compiled? 
     outputs = outputs.filter({ !dropped.contains(_.0) }).toList()
     final = final.copy outputs: outputTexts(outputs)
     synthesis = synthesize session.sources, declarations, texts, current, plan, final
-    checked = checkSession session, synthesis.text, true
+    checked = checkSession session, synthesis.text, forLowering: true
     problems = problemsOf session, checked, synthesis
   }
   if !reportProblems(session, checked, synthesis, current, problems) {
@@ -440,7 +440,7 @@ fn probe(
 ): Probed {
   const plain = Form imports: imports, colored: session.colored
   const synthesis = synthesize session.sources, declarations, texts, current, plan, plain
-  const checked = checkSession session, synthesis.text, false
+  const checked = checkSession session, synthesis.text, forLowering: false
   const problems = problemsOf session, checked, synthesis
   if problems.isEmpty() || !problems.all({ isTopLevelTry _ }) {
     return Probed plain, synthesis, checked, problems
@@ -455,7 +455,7 @@ fn probe(
   addImports withFailure, needed, named
   const failing = Form failure: failure, imports: withFailure, colored: session.colored
   const again = synthesize session.sources, declarations, texts, current, plan, failing
-  const checkedAgain = checkSession session, again.text, false
+  const checkedAgain = checkSession session, again.text, forLowering: false
   Probed failing, again, checkedAgain, problemsOf(session, checkedAgain, again)
 }
 
@@ -783,7 +783,7 @@ fn renamedDeclaration(var session: Session, found: KeptDeclaration, name: String
   const renamed = renamedWord text, name, mangled
   session.sources.append EntrySource(original.label, renamed)
   const source = session.sources.length() - 1
-  KeptDeclaration([mangled], source, Span(0, renamed.byteLength()), false)
+  KeptDeclaration([mangled], source, Span(0, renamed.byteLength()), isImport: false)
 }
 
 /**
@@ -847,7 +847,7 @@ fn keepDeclarations(
     for (name, text) in declaration.imports {
       session.sources.append EntrySource(label, text)
       const source = session.sources.length() - 1
-      declarations.append KeptDeclaration([name], source, Span(0, text.byteLength()), true)
+      declarations.append KeptDeclaration([name], source, Span(0, text.byteLength()), isImport: true)
     }
   }
   session.declarations = declarations

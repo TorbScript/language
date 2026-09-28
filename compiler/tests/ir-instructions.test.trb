@@ -62,8 +62,8 @@ fn variantLayout(var program: IrProgram, name: String, names: List<String>, case
 group "A function that uses every instruction" {
   test "it passes the verifier, and every instruction has the line the format says" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
-    const int32 = program.internType IrType.Integer(32, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int32 = program.internType IrType.Integer(32, isSigned: true)
     const float64 = program.internType IrType.Floating(64)
     const boolean = program.internType IrType.Boolean
     const voidType = program.internType IrType.VoidType
@@ -176,21 +176,26 @@ group "A function that uses every instruction" {
     emit builder, Instruction.BoxNew(cell, owned(Slot(3)))
     emit(
       builder,
-      Instruction.Closure(made, inner, [Capture.Value(Slot(3)), Capture.Boxed(boxed), Capture.Place(itemsPlace)], true),
+      Instruction.Closure(
+        made,
+        inner,
+        [Capture.Value(Slot(3)), Capture.Boxed(boxed), Capture.Place(itemsPlace)],
+        isEscaping: true,
+      ),
     )
     emit builder, Instruction.CallClosure(None, made, [borrowed(Slot(3))])
     emit builder, Instruction.Intrinsic(total, add, [Slot(3), total], at)
     emit builder, Instruction.Construct(circle, shape, 1, [owned(Slot(3))])
     emit builder, Instruction.Tag(tagValue, circle)
     emit builder, Instruction.Read(items, itemsPlace)
-    emit builder, Instruction.Write(itemsPlace, Argument(items, Ownership.Owned, true))
+    emit builder, Instruction.Write(itemsPlace, Argument(items, Ownership.Owned, isLastUse: true))
     emit(
       builder,
       Instruction.Read(element0, Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(int64, Slot(3), at)])),
     )
     emit builder, Instruction.TakeOut(taken, Reference(Slot(1)), Slot(2), RuntimeKind.MapStorage)
     emit builder, Instruction.PutBack(Reference(Slot(1)), Slot(2), taken, RuntimeKind.MapStorage)
-    emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at)
+    emit builder, Instruction.Intrinsic(forced, Intrinsic(IntrinsicOperation.LazyForce, kind: None), [cell], at)
     emit builder, Instruction.TraitValue(asObject, owned(Slot(3)), [WitnessSource(WitnessRoot.Table(showTable))])
     emit(
       builder,
@@ -206,7 +211,7 @@ group "A function that uses every instruction" {
       builder,
       Instruction.Intrinsic(isEqual, Intrinsic(IntrinsicOperation.Equal, NumericKind.Signed(64)), [Slot(3), total], at),
     )
-    emit builder, Instruction.Intrinsic(isNot, Intrinsic(IntrinsicOperation.BooleanNot, None), [isEqual], at)
+    emit builder, Instruction.Intrinsic(isNot, Intrinsic(IntrinsicOperation.BooleanNot, kind: None), [isEqual], at)
     emit(
       builder,
       Instruction.Intrinsic(
@@ -218,12 +223,15 @@ group "A function that uses every instruction" {
     )
     emit(
       builder,
-      Instruction.Intrinsic(joined, Intrinsic(IntrinsicOperation.TextConcat, None), [firstText, secondText], at),
+      Instruction.Intrinsic(joined, Intrinsic(IntrinsicOperation.TextConcat, kind: None), [firstText, secondText], at),
     )
-    emit builder, Instruction.Intrinsic(byteLength, Intrinsic(IntrinsicOperation.TextByteLength, None), [firstText], at)
     emit(
       builder,
-      Instruction.Intrinsic(order, Intrinsic(IntrinsicOperation.TextCompare, None), [firstText, secondText], at),
+      Instruction.Intrinsic(byteLength, Intrinsic(IntrinsicOperation.TextByteLength, kind: None), [firstText], at),
+    )
+    emit(
+      builder,
+      Instruction.Intrinsic(order, Intrinsic(IntrinsicOperation.TextCompare, kind: None), [firstText, secondText], at),
     )
     emit(
       builder,
@@ -294,14 +302,14 @@ group "A function that uses every instruction" {
 
   test "a task body says that it is one, and only it suspends" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const voidType = program.internType IrType.VoidType
     const task = program.internType IrType.Runtime(RuntimeKind.TaskObject, [int64])
     var builder = newFunction "t_main_wait", None, IrSignature([IrParameter("state", task)], voidType), "entry"
     setFunctionKind builder, FunctionKind.TaskResume
-    const resumed = openBlock builder, "resumed", None
+    const resumed = openBlock builder, "resumed", at: None
     terminateBlock builder, BlockId(0), Terminator.Jump(resumed)
-    emit builder, Instruction.Suspend(2, Slot(0), false)
+    emit builder, Instruction.Suspend(2, Slot(0), observes: false)
     terminate builder, Terminator.Return(None)
     const identifier = finishFunction program, builder
     finishProgram program
@@ -313,7 +321,7 @@ group "A function that uses every instruction" {
 
   test "a result the model calls too big to return in registers is written through a pointer" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const wide = program.internType IrType.FixedArray(int64, 9)
     var builder = newFunction "t_main_wide", None, IrSignature([], wide), "body"
     const target = addSlot builder, wide, SlotRole.ResultPointer, "result"
@@ -347,7 +355,7 @@ group "What an instruction reads and writes" {
     assert(
       usedSlots(Instruction.Intrinsic(
         None,
-        Intrinsic(IntrinsicOperation.TextConcat, None),
+        Intrinsic(IntrinsicOperation.TextConcat, kind: None),
         [first, second],
         LocationId(0),
       ))
@@ -362,7 +370,7 @@ group "What an instruction reads and writes" {
         first,
         FunctionId(0),
         [Capture.Value(second), Capture.Boxed(third), Capture.Place(place)],
-        false,
+        isEscaping: false,
       ))
         == [second, third, first, second],
     )
@@ -373,7 +381,7 @@ group "What an instruction reads and writes" {
       usedSlots(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == [first, second, third],
     )
     assert(usedSlots(Instruction.Panic(owned(first), LocationId(0))) == [first])
-    assert(usedSlots(Instruction.Suspend(0, first, false)) == [first])
+    assert(usedSlots(Instruction.Suspend(0, first, observes: false)) == [first])
 
     assert(definedSlot(Instruction.Constant(first, StaticId(0))) == first)
     assert(definedSlot(Instruction.Move(first, second)) == first)
@@ -383,13 +391,13 @@ group "What an instruction reads and writes" {
     assert(definedSlot(Instruction.CallClosure(first, second, [])) == first)
     assert(definedSlot(Instruction.CallWitness(first, witness, 0, [])) == first)
     assert(
-      definedSlot(Instruction.Intrinsic(first, Intrinsic(IntrinsicOperation.TextConcat, None), [], LocationId(0)))
+      definedSlot(Instruction.Intrinsic(first, Intrinsic(IntrinsicOperation.TextConcat, kind: None), [], LocationId(0)))
         == first,
     )
     assert(definedSlot(Instruction.Construct(first, LayoutId(0), 0, [])) == first)
     assert(definedSlot(Instruction.Read(first, place)) == first)
     assert(definedSlot(Instruction.Tag(first, second)) == first)
-    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], false)) == first)
+    assert(definedSlot(Instruction.Closure(first, FunctionId(0), [], isEscaping: false)) == first)
     assert(definedSlot(Instruction.BoxNew(first, owned(second))) == first)
     assert(definedSlot(Instruction.TraitValue(first, owned(second), [])) == first)
     assert(definedSlot(Instruction.TakeOut(first, Reference(second), third, RuntimeKind.MapStorage)) == first)
@@ -399,7 +407,7 @@ group "What an instruction reads and writes" {
     assert(definedSlot(Instruction.Write(place, owned(third))) == None)
     assert(definedSlot(Instruction.PutBack(Reference(first), second, third, RuntimeKind.MapStorage)) == None)
     assert(definedSlot(Instruction.Panic(owned(first), LocationId(0))) == None)
-    assert(definedSlot(Instruction.Suspend(0, first, false)) == None)
+    assert(definedSlot(Instruction.Suspend(0, first, observes: false)) == None)
 
     assert(usedByTerminator(Terminator.Jump(BlockId(0))) == [])
     assert(usedByTerminator(Terminator.Branch(first, BlockId(0), BlockId(1))) == [first])
@@ -436,17 +444,17 @@ group "Names of intrinsics and of the runtime's types" {
     assert(
       describeIntrinsic(Intrinsic(IntrinsicOperation.Convert(NumericKind.Floating(64)), signed)) == "convert.i64.f64",
     )
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.BooleanNot, None)) == "booleanNot")
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextConcat, None)) == "textConcat")
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextEqual, None)) == "textEqual")
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextCompare, None)) == "textCompare")
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextByteLength, None)) == "textByteLength")
-    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.LazyForce, None)) == "lazyForce")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.BooleanNot, kind: None)) == "booleanNot")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextConcat, kind: None)) == "textConcat")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextEqual, kind: None)) == "textEqual")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextCompare, kind: None)) == "textCompare")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.TextByteLength, kind: None)) == "textByteLength")
+    assert(describeIntrinsic(Intrinsic(IntrinsicOperation.LazyForce, kind: None)) == "lazyForce")
   }
 
   test "every type the runtime owns has a name, and interning tells them apart" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const kinds = [
       RuntimeKind.ListStorage,
       RuntimeKind.MapStorage,

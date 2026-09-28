@@ -48,7 +48,7 @@ public fn lowerBlockInto(var lowering: Lowering, var builder: FunctionBuilder, b
  * instead of a copy of it.
  */
 public fn lowerBlockValue(var lowering: Lowering, var builder: FunctionBuilder, block: Block): Slot? {
-  lowerStatements lowering, builder, block, None
+  lowerStatements lowering, builder, block, destination: None
 }
 
 /**
@@ -86,7 +86,7 @@ fn lowerStatementsOfScope(
         // Which discarded values are errors?). Producing it into the arm's own slot would put a `Token` in a `Void`
         // slot, which is what the verifier catches
         if discardsLastValue(lowering, builder, expression, destination) {
-          const _ = lowerExpression lowering, builder, expression, None
+          const _ = lowerExpression lowering, builder, expression, destination: None
           if isStatement {
             endTemporaries lowering, builder, firstSlot
           }
@@ -157,7 +157,7 @@ fn lowerStatementKind(var lowering: Lowering, var builder: FunctionBuilder, stat
     .Break => lowerBreak lowering, builder, statement.span
     .Continue => lowerContinue lowering, builder, statement.span
     .Evaluate(expression) => {
-      const _ = lowerExpression lowering, builder, expression, None
+      const _ = lowerExpression lowering, builder, expression, destination: None
     }
   }
 }
@@ -409,7 +409,7 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
   finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
   continueIn lowering, builder, inner
   enterLoop lowering, done, check
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(check)
@@ -428,7 +428,7 @@ fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, 
   finishBlock lowering, builder, Terminator.Jump(inner)
   continueIn lowering, builder, inner
   enterLoop lowering, done, inner
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   const broke = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(inner)
@@ -523,7 +523,7 @@ fn lowerFor(
   if takesApart {
     lowerPatternBinding lowering, builder, pattern, counter, pattern.span
   }
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(step)
@@ -636,7 +636,7 @@ fn lowerForIterate(
   const inner = addBlock builder, "body", location
   const done = addBlock builder, "done", location
   const pulled = addTemporary builder, option
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
@@ -658,7 +658,7 @@ fn lowerForIterate(
   }
   declareScoped lowering, builder, value
   declareScopedFrom lowering, builder, firstSlot
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   closeScope lowering, builder
   const _ = leaveLoop lowering
   if !lowering.isDiverged {

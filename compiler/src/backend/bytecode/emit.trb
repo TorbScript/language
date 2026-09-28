@@ -1019,7 +1019,7 @@ fn crossingTestsOf(var emitter: Emitter, program: IrProgram, id: IrTypeId, regis
     // A variant with a counted case: the kernel walks the words of the case the value is, by its shape
     // (`TORB_CROSSING_VALUE`, the kind 4 with the shape's index times 8 on top), as the C back end switches on its tag
     .Variant(_) => {
-      if const .Never = crossingOf(program, id, CExpression.Name("value"), true) {
+      if const .Never = crossingOf(program, id, CExpression.Name("value"), isTransfer: true) {
         return false
       }
       tests.append(4 + 8 * valueShapeIndex(emitter, program, id))
@@ -1177,7 +1177,7 @@ fn entryCellChunk(
       code.append headWord(Opcode.Return, 0, width, 0)
     }
     .Write => {
-      parameters.append ParameterEntry(0, width, false)
+      parameters.append ParameterEntry(0, width, isReference: false)
       const shape = shapeOperand emitter, program, held
       if shape != 0 {
         if entryCellCopies(program, held) {
@@ -1452,8 +1452,8 @@ fn narrowCodeOf(program: IrProgram, id: IrTypeId): Int {
       }
       0
     }
-    .Boolean => narrowCode 1, false
-    .Character => narrowCode 4, false
+    .Boolean => narrowCode 1, isSigned: false
+    .Character => narrowCode 4, isSigned: false
     _ => 0
   }
 }

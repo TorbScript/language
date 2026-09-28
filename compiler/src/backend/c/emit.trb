@@ -1333,7 +1333,7 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
     }
   }
   for index in demand.retained {
-    emitHelper emission, program, program.layouts[index], "R_", true
+    emitHelper emission, program, program.layouts[index], "R_", isRetain: true
   }
   for index in demand.dropped {
     const closer = program.closeFunctions.get index
@@ -1521,7 +1521,7 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
   var body: List<CStatement> = []
   const cast = CExpression.Cast "{layout.name} *", CExpression.Name("block")
   body.append CStatement.Declaration("{layout.name} *", "value", cast)
-  const children = childStatements emission, program, layout, isRetain, false
+  const children = childStatements emission, program, layout, isRetain, isReversed: false
   body.appendAll children
   const declaration = CDeclaration.Definition "", helperHeadOf(prefix, layout.name), body
   write emission, declaration
@@ -1535,7 +1535,7 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
  */
 fn emitDropHelper(var emission: Emission, program: IrProgram, layout: Layout, closer: FunctionId?, isReversed: Bool) {
   if closer.isNone() && !isReversed {
-    emitHelper emission, program, layout, "D_", false
+    emitHelper emission, program, layout, "D_", isRetain: false
     return
   }
   var body: List<CStatement> = []
@@ -2115,7 +2115,7 @@ fn emitTextStorage(var emission: Emission, program: IrProgram, id: StaticId) {
   // The type is a whole anonymous struct, so this one declaration is the only line the emitter breaks
   const annotation = "static struct \{ torb_header header; uint32_t capacity; uint8_t data[{count}]; \}"
   // Only the constants over it name the storage, and they are data too: it stays `static` in a split program
-  const storage = CDeclaration.StaticData annotation, storageNameOf(value), initializer, true
+  const storage = CDeclaration.StaticData annotation, storageNameOf(value), initializer, isWrapped: true
   writePlaced emission, storage, Placement.LocalData
 }
 

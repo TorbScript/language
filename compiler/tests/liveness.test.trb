@@ -53,7 +53,7 @@ fn shownSet(counted: Counted, flags: List<Bool>): String {
 }
 
 fn textByteLength(): Intrinsic {
-  Intrinsic IntrinsicOperation.TextByteLength, None
+  Intrinsic IntrinsicOperation.TextByteLength, kind: None
 }
 
 fn someLocation(var program: IrProgram): LocationId {
@@ -77,7 +77,7 @@ group "Which slots a frame counts" {
   test "a counted slot is one whose value owns a count and whose count is this frame's" {
     var program = IrProgram()
     const text = textType program
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const small = recordLayout program, "T_Small", [FieldLayout("name", text), FieldLayout("size", int64)]
     const smallType = program.internType IrType.Record(small)
     const signature = IrSignature(
@@ -102,7 +102,7 @@ group "Which slots a frame counts" {
 
   test "a function over numbers counts nothing, which is what makes the pass free for one" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const signature = IrSignature([IrParameter("first", int64), IrParameter("second", boolean)], int64)
     var builder = newFunction "t_plain", None, signature, "body"
@@ -126,9 +126,9 @@ group "The order the blocks are walked in" {
     const voidType = program.internType IrType.VoidType
     const signature = IrSignature([IrParameter("flag", boolean)], voidType)
     var builder = newFunction "t_diamond", None, signature, "body"
-    const then = addBlock builder, "then", None
-    const otherwise = addBlock builder, "else", None
-    const join = addBlock builder, "join", None
+    const then = addBlock builder, "then", at: None
+    const otherwise = addBlock builder, "else", at: None
+    const join = addBlock builder, "join", at: None
     terminate builder, Terminator.Branch(Slot(0), then, otherwise)
     terminateBlock builder, then, Terminator.Jump(join)
     terminateBlock builder, otherwise, Terminator.Jump(join)
@@ -140,7 +140,7 @@ group "The order the blocks are walked in" {
     var program = IrProgram()
     const voidType = program.internType IrType.VoidType
     var builder = newFunction "t_dead", None, IrSignature([], voidType), "body"
-    const lost = addBlock builder, "lost", None
+    const lost = addBlock builder, "lost", at: None
     terminate builder, Terminator.Return(None)
     terminateBlock builder, lost, Terminator.Unreachable
     assert(shownOrder(postorderOf(builder.function)) == "b0")
@@ -184,8 +184,8 @@ group "What is live where" {
       text,
     )
     var builder = newFunction "t_branch", None, signature, "body"
-    const then = addBlock builder, "then", None
-    const otherwise = addBlock builder, "else", None
+    const then = addBlock builder, "then", at: None
+    const otherwise = addBlock builder, "else", at: None
     terminate builder, Terminator.Branch(Slot(0), then, otherwise)
     terminateBlock builder, then, Terminator.Return(borrowed(Slot(1)))
     terminateBlock builder, otherwise, Terminator.Return(borrowed(Slot(2)))
@@ -207,16 +207,16 @@ group "What is live where" {
   test "a loop: the back edge keeps a value the body uses live at the head" {
     var program = IrProgram()
     const text = textType program
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], int64)
     var builder = newFunction "t_loop", None, signature, "body"
     const total = addLocal builder, int64, "total"
     const condition = addTemporary builder, boolean
     const length = addTemporary builder, int64
-    const head = addBlock builder, "while", None
-    const body = addBlock builder, "body", None
-    const done = addBlock builder, "done", None
+    const head = addBlock builder, "while", at: None
+    const body = addBlock builder, "body", at: None
+    const done = addBlock builder, "done", at: None
     terminate builder, Terminator.Jump(head)
     terminateBlock builder, head, Terminator.Branch(condition, body, done)
     switchTo builder, body

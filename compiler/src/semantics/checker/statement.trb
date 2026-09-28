@@ -149,7 +149,7 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       // The condition runs again after every round, so its reads belong to the loop: `while isChanged` is what keeps
       // the `isChanged = false` at the top of the body alive
       const uses = checker.valueUses.length()
-      checkCondition checker, condition, true
+      checkCondition checker, condition, isLoop: true
       // `while const Some(item) = next()`: what the pattern bound has to be read in the body
       const bound = checker.bindingsHere()
       checker.loopDepth = checker.loopDepth + 1
@@ -252,7 +252,7 @@ fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body:
   const subject = inferExpression checker, iterable
   const element = iterationItemOf checker, subject, iterable.span
   checker.openScope()
-  checkPattern checker, pattern, element, false
+  checkPattern checker, pattern, element, isVar: false
   requireIrrefutable checker, pattern, element, "The pattern of a `for`", "item"
   const uses = checker.valueUses.length()
   checker.loopDepth = checker.loopDepth + 1
@@ -572,7 +572,7 @@ public fn checkBodyOf(var checker: Checker, symbol: SymbolId) {
     signature.takesSelf,
     signature.isVarSelf,
     signature.form.result,
-    false,
+    isInferred: false,
     declared: symbol,
   )
 }
@@ -728,7 +728,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   }
   checker.checkedDestructured.set key, true
   const voidType = checker.voidType
-  const saved = checker.enterBody module, voidType, true, None
+  const saved = checker.enterBody module, voidType, true, own: None
   checker.awaitsTasks = allowsTopLevelCode checker, module
   checker.writesDeclarations = checker.awaitsTasks
   checker.openScope()

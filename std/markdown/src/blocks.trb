@@ -425,9 +425,9 @@ type BlockParser {
       .BlockQuote => {
         if !indented && characterAt(nextNonspace) == '>' {
           advanceNextNonspace()
-          advanceOffset 1, false
+          advanceOffset 1, columns: false
           if characterAt(offset).map({ isSpaceOrTab _ }) == true {
-            advanceOffset 1, true
+            advanceOffset 1, columns: true
           }
           return 0
         }
@@ -444,7 +444,7 @@ type BlockParser {
           return 0
         }
         if indent >= data.markerOffset + data.padding {
-          advanceOffset(data.markerOffset + data.padding, true)
+          advanceOffset(data.markerOffset + data.padding, columns: true)
           return 0
         }
         1
@@ -463,13 +463,13 @@ type BlockParser {
           }
           var remaining = nodes[container].fenceOffset
           while remaining > 0 && characterAt(offset).map({ isSpaceOrTab _ }) == true {
-            advanceOffset 1, true
+            advanceOffset 1, columns: true
             remaining = remaining - 1
           }
           return 0
         }
         if indent >= 4 {
-          advanceOffset 4, true
+          advanceOffset 4, columns: true
           return 0
         }
         if blank {
@@ -546,9 +546,9 @@ type BlockParser {
       return 0
     }
     advanceNextNonspace()
-    advanceOffset 1, false
+    advanceOffset 1, columns: false
     if characterAt(offset).map({ isSpaceOrTab _ }) == true {
-      advanceOffset 1, true
+      advanceOffset 1, columns: true
     }
     closeUnmatchedBlocks()
     const _block = addChild Kind.BlockQuote
@@ -568,12 +568,12 @@ type BlockParser {
       return 0
     }
     advanceNextNonspace()
-    advanceOffset level, false
+    advanceOffset level, columns: false
     closeUnmatchedBlocks()
     const heading = addChild Kind.Heading
     nodes[heading].level = level
     nodes[heading].lines = [headingText(restFrom(offset))]
-    advanceOffset(line.length() - offset, false)
+    advanceOffset(line.length() - offset, columns: false)
     2
   }
 
@@ -605,7 +605,7 @@ type BlockParser {
     nodes[block].fenceCharacter = character
     nodes[block].fenceOffset = indent
     advanceNextNonspace()
-    advanceOffset length, false
+    advanceOffset length, columns: false
     2
   }
 
@@ -659,7 +659,7 @@ type BlockParser {
     nodes[container].lines = [content]
     nodes[container].skippedLines = skipped
     tip = container
-    advanceOffset(line.length() - offset, false)
+    advanceOffset(line.length() - offset, columns: false)
     2
   }
 
@@ -669,7 +669,7 @@ type BlockParser {
     }
     closeUnmatchedBlocks()
     const _block = addChild Kind.ThematicBreak
-    advanceOffset(line.length() - offset, false)
+    advanceOffset(line.length() - offset, columns: false)
     2
   }
 
@@ -699,7 +699,7 @@ type BlockParser {
     if !indented || nodes[tip].kind == Kind.Paragraph || blank {
       return 0
     }
-    advanceOffset 4, true
+    advanceOffset 4, columns: true
     closeUnmatchedBlocks()
     const _block = addChild Kind.CodeBlock
     2
@@ -746,7 +746,7 @@ type BlockParser {
       tip = container
     }
     nodes[table].alignments = alignments
-    advanceOffset(line.length() - offset, false)
+    advanceOffset(line.length() - offset, columns: false)
     2
   }
 
@@ -791,11 +791,11 @@ type BlockParser {
       return None
     }
     advanceNextNonspace()
-    advanceOffset markerLength, true
+    advanceOffset markerLength, columns: true
     const spacesStartColumn = column
     const spacesStartOffset = offset
     loop {
-      advanceOffset 1, true
+      advanceOffset 1, columns: true
       const next = characterAt offset
       if column - spacesStartColumn >= 5 || next.map({ isSpaceOrTab _ }) != true {
         break
@@ -808,7 +808,7 @@ type BlockParser {
       column = spacesStartColumn
       offset = spacesStartOffset
       if characterAt(offset).map({ isSpaceOrTab _ }) == true {
-        advanceOffset 1, true
+        advanceOffset 1, columns: true
       }
     } else {
       data = data.copy(padding: markerLength + spacesAfterMarker)
@@ -943,7 +943,7 @@ type BlockParser {
       const firstBreak = content.byteOffsetOf("\n") ?? content.byteLength()
       const info = unescaped content.sliceBytes(0, firstBreak).trim()
       const rest = if firstBreak < content.byteLength() { content.sliceBytes(firstBreak + 1, content.byteLength()) } else { "" }
-      return BlockContent.CodeBlock info, rest, true
+      return BlockContent.CodeBlock info, rest, fenced: true
     }
     // An indented block loses its blank lines at the end
     var lines = content.split "\n"
@@ -951,7 +951,7 @@ type BlockParser {
       lines = lines.removedAt(lines.length() - 1)
     }
     const text = if lines.isEmpty() { "" } else { lines.joined(separator: "\n") + "\n" }
-    BlockContent.CodeBlock "", text, false
+    BlockContent.CodeBlock "", text, fenced: false
   }
 
   fn tableOf(node: Node, firstLine: Int): BlockContent {

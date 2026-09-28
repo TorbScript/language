@@ -386,7 +386,7 @@ public fn lowerForcedRead(
   const target = valueSlot lowering, builder, destination, annotation
   const held = addTemporary builder, optional
   emit builder, Instruction.Read(held, Reference(cell, [PathStep.Field(layout, 0)]))
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, held)
   const forced = addBlock builder, "forced", location
@@ -493,7 +493,7 @@ public fn lowerNamedFunctionValue(
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.Closure(target, function, [], false)
+  emit builder, Instruction.Closure(target, function, [], isEscaping: false)
   target
 }
 
@@ -574,7 +574,7 @@ fn lowerBoundMethodValue(
   const index = lowering.closureCount
   lowering.closureCount = index + 1
   const closureName = closureFunctionName lowering.owner, index
-  const environment = environmentLayoutOf lowering.program, closureName, [FieldLayout("receiver", held, None)]
+  const environment = environmentLayoutOf lowering.program, closureName, [FieldLayout("receiver", held, symbol: None)]
   const environmentType = lowering.program.internType IrType.Record(environment)
   var parameters = [IrParameter("environment", environmentType, false, Ownership.Borrowed)]
   parameters.appendAll shape.parameters
@@ -720,7 +720,7 @@ public fn lowerConstructorValue(
   }
   const function = constructorFunctionOf lowering, layout, variant, shape
   const target = valueSlot lowering, builder, destination, annotation
-  emit builder, Instruction.Closure(target, function, [], false)
+  emit builder, Instruction.Closure(target, function, [], isEscaping: false)
   target
 }
 
@@ -1072,7 +1072,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     const name = if binding.name.isEmpty() { "captured" } else { binding.name }
     if const Some(box) = lowering.boxes.get(declared) {
       const annotation = builder.typeOfSlot box
-      plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, None), declared, true)
+      plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, symbol: None), declared, isBoxed: true)
       continue
     }
     const slot = match lowering.slots.get(declared) {
@@ -1088,7 +1088,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
       return []
     }
     const annotation = builder.typeOfSlot slot
-    plans.append CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, None), declared, false)
+    plans.append CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, symbol: None), declared, isBoxed: false)
   }
   plans
 }

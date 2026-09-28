@@ -468,7 +468,7 @@ type ModuleReader {
         }
         const end = bodyStart function.body, span.end
         const parameters = parametersOf function.parameters
-        const found = item ItemKind.Function, function.name.text, "", span, end, parameters, [], true
+        const found = item ItemKind.Function, function.name.text, "", span, end, parameters, [], isRequired: true
         located found, function.name.span
       }
       .Type(declared) => {
@@ -476,24 +476,27 @@ type ModuleReader {
           return None
         }
         const name = declared.name.text
-        const members = membersOf declared.members, name, true
+        const members = membersOf declared.members, name, isAsked: true
         const header = headerEnd declared.name.span.end, span.end
-        located item(ItemKind.Type, name, "", span, header, [], members, true), declared.name.span
+        located item(ItemKind.Type, name, "", span, header, [], members, isRequired: true), declared.name.span
       }
       .Trait(declared) => {
         if !isIncluded(declared.name.span, visibility) {
           return None
         }
         const name = declared.name.text
-        const members = membersOf declared.members, name, true
+        const members = membersOf declared.members, name, isAsked: true
         const header = headerEnd declared.name.span.end, span.end
-        located item(ItemKind.Trait, name, "", span, header, [], members, true), declared.name.span
+        located item(ItemKind.Trait, name, "", span, header, [], members, isRequired: true), declared.name.span
       }
       .Alias(declared) => {
         if !isIncluded(declared.name.span, visibility) {
           return None
         }
-        located item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], true), declared.name.span
+        located(
+          item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], isRequired: true),
+          declared.name.span,
+        )
       }
       .Constant(binding) => {
         const names = bindingNames binding.pattern
@@ -501,7 +504,7 @@ type ModuleReader {
         if !isIncluded(binding.pattern.span, visibility) {
           return None
         }
-        located item(ItemKind.Constant, name, "", span, span.end, [], [], true), binding.pattern.span
+        located item(ItemKind.Constant, name, "", span, span.end, [], [], isRequired: true), binding.pattern.span
       }
       .Extend(extension) => {
         const target = typeNameOf extension.target
@@ -511,7 +514,7 @@ type ModuleReader {
           return None
         }
         const header = headerEnd extension.target.span.end, span.end
-        const found = item ItemKind.Extension, target, "", span, header, [], members, true
+        const found = item ItemKind.Extension, target, "", span, header, [], members, isRequired: true
         if const Some(owner) = targetSymbol(extension.target) {
           locateMembers found, owner
         }

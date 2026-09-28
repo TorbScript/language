@@ -237,7 +237,7 @@ public type Parallel<Item> {
 
   /** Every item, in input order. */
   fn toList(): Task<List<Item>> {
-    const chunks = plan.run(limit, { _ }, undecided, None).await()
+    const chunks = plan.run(limit, { _ }, undecided, most: None).await()
     var items: List<Item> = []
     for chunk in chunks {
       items.appendAll chunk
@@ -257,7 +257,7 @@ public type Parallel<Item> {
    *     print words.parallel().map({ _.byteLength() }).collect(counting()).await()
    */
   fn collect<Output>(collector: Merge<Item, Output>): Task<Output> {
-    const chunks = plan.run(limit, { _ }, undecided, None).await()
+    const chunks = plan.run(limit, { _ }, undecided, most: None).await()
     var total: Output? = None
     for chunk in chunks {
       if chunk.length() == 0 {
@@ -281,7 +281,7 @@ public type Parallel<Item> {
 
   /** How many items come out of the pipeline. */
   fn count(): Task<Int> {
-    const counts = plan.run(limit, { _.length() }, undecided, None).await()
+    const counts = plan.run(limit, { _.length() }, undecided, most: None).await()
     var total = 0
     for count in counts {
       total = total + count
@@ -294,7 +294,7 @@ public type Parallel<Item> {
    * same number on every machine, and not the same number as the sequential `sum()`, which adds in another order.
    */
   fn sum(): Task<Item> where Item: Add & From<Int> {
-    const sums = plan.run(limit, { summed _ }, undecided, None).await()
+    const sums = plan.run(limit, { summed _ }, undecided, most: None).await()
     var total = Item.from 0
     for value in sums {
       total = total + value
@@ -304,7 +304,7 @@ public type Parallel<Item> {
 
   /** The item with the smallest key, or `None`. Of two equal keys the earlier one in input order, as `minBy` answers. */
   fn minBy<Key: Compare>(key: Transform<Item, Key>): Task<Item?> {
-    const bests = plan.run(limit, { smallest _, key }, undecided, None).await()
+    const bests = plan.run(limit, { smallest _, key }, undecided, most: None).await()
     var best: Item? = None
     for candidate in bests {
       best = earlierOrSmaller best, candidate, key
@@ -314,7 +314,7 @@ public type Parallel<Item> {
 
   /** The item with the largest key, or `None`. Of two equal keys the earlier one in input order, as `maxBy` answers. */
   fn maxBy<Key: Compare>(key: Transform<Item, Key>): Task<Item?> {
-    const bests = plan.run(limit, { largest _, key }, undecided, None).await()
+    const bests = plan.run(limit, { largest _, key }, undecided, most: None).await()
     var best: Item? = None
     for candidate in bests {
       best = earlierOrLarger best, candidate, key
@@ -338,7 +338,7 @@ public type Parallel<Item> {
 
   /** Runs `body` for every item, the chunks on the workers. The order in which items of two chunks run is the machine's. */
   fn forEach(body: Action<Item>): Task<Void> {
-    const _ = plan.run(limit, { visited _, body }, undecided, None).await()
+    const _ = plan.run(limit, { visited _, body }, undecided, most: None).await()
   }
 }
 

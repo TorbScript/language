@@ -74,7 +74,7 @@ public fn summarizeParameters(var program: IrProgram) {
   const erased = closureBodiesOf program
   const callers = callersOf program
   var queue: List<Int> = []
-  var isQueued = filledFlags count, true
+  var isQueued = filledFlags count, value: true
   for index in 0..count {
     queue.append index
   }
@@ -172,7 +172,7 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
  */
 fn closureBodiesOf(program: IrProgram): List<Bool> {
   const count = program.functions.length()
-  var found = filledFlags count, false
+  var found = filledFlags count, value: false
   for index in 0..count {
     for block in program.functions[index].blocks {
       for instruction in block.instructions {
@@ -269,8 +269,8 @@ fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
  */
 fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
   const slotCount = function.slots.length()
-  var escapes = filledFlags slotCount, false
-  var mutated = filledFlags slotCount, false
+  var escapes = filledFlags slotCount, value: false
+  var mutated = filledFlags slotCount, value: false
   const facts = slotFactsOf program, function
   for block in function.blocks {
     for instruction in block.instructions {
@@ -431,7 +431,7 @@ fn rewriteFunction(var program: IrProgram, index: Int, closing: Closing) {
  * excluding these slots from the edge drops is exact and not a leak.
  */
 fn conditionalOutSlotsOf(program: IrProgram, function: IrFunction): List<Bool> {
-  var found = filledFlags function.slots.length(), false
+  var found = filledFlags function.slots.length(), value: false
   for block in function.blocks {
     for instruction in block.instructions {
       if const .Call(_, callee, arguments, _, _) = instruction {
@@ -595,10 +595,10 @@ fn renamedUse(program: IrProgram, facts: SlotFacts, instruction: Instruction, sl
   var decided: List<Argument> = []
   for operand in operandsOf(program, facts, instruction) {
     if operand.slot == slot {
-      decided.append Argument(saved, Ownership.Borrowed, false)
+      decided.append Argument(saved, Ownership.Borrowed, isLastUse: false)
       continue
     }
-    decided.append Argument(operand.slot, Ownership.Borrowed, false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, isLastUse: false)
   }
   withOperands instruction, decided
 }
@@ -693,7 +693,7 @@ fn rewriteTerminator(
       }
       var retains: List<Instruction> = []
       var releases: List<Instruction> = []
-      const operand = Operand argument.slot, true, true, false
+      const operand = Operand argument.slot, true, true, retainsItself: false
       const answer = decideOperand program, facts, counted, alive, retains, releases, operand
       // Nothing can follow a `return`, and a value that is returned is never released: only a retain can land here
       tail.appendAll retains
@@ -757,7 +757,7 @@ fn rewriteInstruction(
   }
   var decided: List<Argument> = []
   for operand in operands {
-    decided.append Argument(operand.slot, Ownership.Borrowed, false)
+    decided.append Argument(operand.slot, Ownership.Borrowed, isLastUse: false)
   }
   var taken: List<Instruction> = []
   var dropped: List<Instruction> = []
@@ -808,13 +808,13 @@ fn decideOperand(
 ): Argument {
   const slot = operand.slot
   if !facts.isCountedSlot(slot) {
-    return Argument slot, Ownership.Borrowed, false
+    return Argument slot, Ownership.Borrowed, isLastUse: false
   }
   if counted.isImmortal(slot) {
     if !operand.takesCount {
-      return Argument slot, Ownership.Borrowed, false
+      return Argument slot, Ownership.Borrowed, isLastUse: false
     }
-    return Argument slot, Ownership.Owned, false
+    return Argument slot, Ownership.Owned, isLastUse: false
   }
   const position = counted.positionOf slot
   const isLast = position >= 0 && !alive[position]
@@ -825,7 +825,7 @@ fn decideOperand(
     return Argument slot, Ownership.Borrowed, isLast
   }
   if isLast && operand.canMove {
-    return Argument slot, Ownership.Owned, true
+    return Argument slot, Ownership.Owned, isLastUse: true
   }
   if !operand.retainsItself {
     retains.append Instruction.Retain(slot)
@@ -833,7 +833,7 @@ fn decideOperand(
   if isLast {
     releases.append Instruction.Release(slot)
   }
-  Argument slot, Ownership.Owned, false
+  Argument slot, Ownership.Owned, isLastUse: false
 }
 
 fn markAlive(var alive: List<Bool>, counted: Counted, slot: Slot) {
@@ -1010,7 +1010,7 @@ fn resolvedScopeEnds(program: IrProgram, original: IrFunction): IrFunction {
   const function = withClearedTemporaries program, original
   const states = scopeStatesOfBody program, function
   // A binding that is moved on one path and not on another keeps all of its ends
-  var isPinned = filledFlags function.slots.length(), false
+  var isPinned = filledFlags function.slots.length(), value: false
   for block in 0..function.blocks.length() {
     const instructions = function.blocks[block].instructions
     for at in 0..instructions.length() {
@@ -1067,7 +1067,7 @@ fn scopeStatesOfBody(program: IrProgram, function: IrFunction): List<List<Int>> 
  */
 fn withClearedTemporaries(program: IrProgram, function: IrFunction): IrFunction {
   const states = scopeStatesOfBody program, function
-  var isPartial = filledFlags function.slots.length(), false
+  var isPartial = filledFlags function.slots.length(), value: false
   var slots: List<Slot> = []
   for block in 0..function.blocks.length() {
     const instructions = function.blocks[block].instructions
@@ -1110,7 +1110,7 @@ fn withClearedTemporaries(program: IrProgram, function: IrFunction): IrFunction 
 
 /** Whether a block can be reached again from itself: whether it is inside a loop. */
 fn isOnCycle(function: IrFunction, start: Int): Bool {
-  var isSeen = filledFlags function.blocks.length(), false
+  var isSeen = filledFlags function.blocks.length(), value: false
   var pending: List<Int> = []
   for target in successorsOf(function.blocks[start]) {
     pending.append target
@@ -1286,7 +1286,7 @@ fn scopeStatesOf(function: IrFunction, moves: List<List<List<Slot>>>): List<List
     const initial = if index == 0 { stateUndefined } else { stateUnreached }
     entering.append filledStates(slotCount, initial)
   }
-  var isQueued = filledFlags blockCount, false
+  var isQueued = filledFlags blockCount, value: false
   var queue: List<Int> = []
   if blockCount > 0 {
     queue.append 0

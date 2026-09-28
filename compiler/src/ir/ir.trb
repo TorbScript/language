@@ -472,12 +472,12 @@ public type Argument {
 
 /** A borrowed operand: what phase 1 of the lowering emits everywhere. */
 public fn borrowed(slot: Slot): Argument {
-  Argument slot, Ownership.Borrowed, false
+  Argument slot, Ownership.Borrowed, isLastUse: false
 }
 
 /** An operand position that takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return`, a stored parameter. */
 public fn owned(slot: Slot): Argument {
-  Argument slot, Ownership.Owned, false
+  Argument slot, Ownership.Owned, isLastUse: false
 }
 
 /**
@@ -927,12 +927,12 @@ public type IrProgram {
    */
   var fn reserveLayout(name: String, kind: LayoutKind): ReservedLayout {
     if const Some(existing) = layoutIdentifiers.get(name) {
-      return ReservedLayout existing, false
+      return ReservedLayout existing, isFresh: false
     }
     const identifier = LayoutId layouts.length()
     layouts.append Layout(name, kind)
     layoutIdentifiers.set name, identifier
-    ReservedLayout identifier, true
+    ReservedLayout identifier, isFresh: true
   }
 
   fn layoutAt(id: LayoutId): Layout {

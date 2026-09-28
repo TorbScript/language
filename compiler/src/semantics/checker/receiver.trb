@@ -61,14 +61,14 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
   const statements = checker.program.graph.at(module).file.statements
   const isProjectFile = if const Some(.ProjectFile) = checker.program.graph.at(module).receiver { true } else { false }
   const nothing = checker.voidType
-  const saved = checker.enterBody module, nothing, true, None
+  const saved = checker.enterBody module, nothing, true, own: None
   // A receiver script is a script, and `await()` is allowed at its top level (CONCEPT, "Concurrency")
   checker.awaitsTasks = true
   checker.openScope()
   const binding = checker.declareBinding LocalBinding("self", receiver, true, Span(0, 0), isReceiver: true)
   checker.setReceiver binding
   // The file *is* the closure, so its receiver is recorded where a closure would record its own: at its own span
-  checker.recordReceiver Span(0, 0), ReceiverClosure(binding, receiver, true, true)
+  checker.recordReceiver Span(0, 0), ReceiverClosure(binding, receiver, true, isImplicit: true)
   // Every statement is an ordinary one, not a top-level declaration of a module: a `const` of a script is a *local* of
   // the closure, so it may read the receiver (`const binary = name.substringAfter("/") ?? name`) and what came before it
   for statement in statements {

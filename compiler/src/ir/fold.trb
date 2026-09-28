@@ -101,7 +101,7 @@ fn knownValueAt(var lowering: Lowering, expression: Expression, depth: Int): Kno
   match expression.kind {
     .BoolLiteral(value) => KnownValue.Scalar(.Boolean(value))
     .CharLiteral(value) => KnownValue.Scalar(.Character(value))
-    .IntegerLiteral(text) => KnownValue.Scalar(integerLiteral(text, false)?)
+    .IntegerLiteral(text) => KnownValue.Scalar(integerLiteral(text, isNegative: false)?)
     .TextLiteral(segments) => {
       // A literal of the literal rule is a `Uri` or a `Regex`, whose value no fold knows
       if lowering.checker.checkedLiteralAt(lowering.module, expression.span).isSome() {
@@ -156,7 +156,7 @@ fn knownUnary(var lowering: Lowering, operator: PrefixOperator, operand: Express
     .Negate => {
       // `-3` is one literal, exactly as the checker reads it; a negation of anything else may overflow
       if const .IntegerLiteral(text) = operand.kind {
-        return KnownValue.Scalar(integerLiteral(text, true)?)
+        return KnownValue.Scalar(integerLiteral(text, isNegative: true)?)
       }
       None
     }

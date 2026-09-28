@@ -218,7 +218,7 @@ fn parseUseItem(var parser: Parser): UseItem {
   }
   // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
   if !parser.isAtWord("as") {
-    return UseItem path, None
+    return UseItem path, alias: None
   }
   parser.bump()
   UseItem path, parser.name()
@@ -314,7 +314,7 @@ fn parseWrittenReceiver(var parser: Parser, doc: String?, isVar: Bool, isVariadi
   parser.errorWithNote "A method does not list `self`", note, written.span
   const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
   // An empty name is the parser's placeholder: the member keeps the receiver it was given, not this one
-  Parameter doc, Name("", written.span), isVar, isVariadic, annotation, None
+  Parameter doc, Name("", written.span), isVar, isVariadic, annotation, default: None
 }
 
 /** `<Key: Hash & Equals, Value = Self>`, `<const Size: Int>` */
@@ -599,12 +599,13 @@ fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
   const modifiers = parseModifiers parser
   const kind = match parser.kind() {
     // `type: String`, `case: Int`: a reserved word followed by `:` names a field, which is reached as `self.type`
-    .Reserved(_) if hasReceiver && parser.kindAt(1) == TokenKind.Colon => MemberKind.Field parseField(parser, false)
+    .Reserved(_) if hasReceiver
+      && parser.kindAt(1) == TokenKind.Colon => MemberKind.Field parseField(parser, isVar: false)
     .Reserved(.Static) if hasReceiver => parseStaticMember parser
     .Reserved(.Fn) => MemberKind.Function parseMethod(parser, hasReceiver, isVar: false)
     .Reserved(.Var) if hasReceiver && parser.kindAt(1) == TokenKind.Reserved(Keyword.Fn) => {
       parser.bump()
-      MemberKind.Function parseMethod(parser, true, isVar: true)
+      MemberKind.Function parseMethod(parser, hasReceiver: true, isVar: true)
     }
     .Reserved(.Const) => parseConstantMember parser
     .Reserved(.Case) => {
@@ -634,7 +635,7 @@ fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDecl
   if !hasReceiver {
     return function
   }
-  var parameters = [Parameter(None, Name("self", function.name.span), isVar, false, None, None)]
+  var parameters = [Parameter(None, Name("self", function.name.span), isVar, false, None, default: None)]
   parameters.appendAll function.parameters
   function.copy parameters: parameters
 }
@@ -662,7 +663,7 @@ fn parseStaticMember(var parser: Parser): MemberKind {
   }
   // `static zero: Self` without a value is what a trait requires of its implementations. Whether the member stands in a
   // trait is the checker's question: the parser only knows it has a name and a type and no `=`
-  MemberKind.Constant parseBindingBody(parser, None, false, valueOptional: true)
+  MemberKind.Constant parseBindingBody(parser, None, isVar: false, valueOptional: true)
 }
 
 /**
@@ -688,7 +689,7 @@ fn parseConstantMember(var parser: Parser): MemberKind {
     }
     return MemberKind.Field Field(None, name, false, annotation, default)
   }
-  MemberKind.Field parseField(parser, false)
+  MemberKind.Field parseField(parser, isVar: false)
 }
 
 /** A field of a type or of a case. Its name may be a reserved word (`type: String`): a field is reached after a `.`. */

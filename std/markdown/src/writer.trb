@@ -17,7 +17,7 @@ public fn markdownOf(document: MarkdownDocument): String {
       pieces.append "\n"
     }
   }
-  pieces.append blocksText(document.blocks, false)
+  pieces.append blocksText(document.blocks, tight: false)
   pieces.joined separator: ""
 }
 
@@ -73,16 +73,16 @@ fn isSameKindOfList(previous: BlockContent, current: BlockContent): Bool {
 
 fn blockText(block: MarkdownBlock): String {
   match block.content {
-    .Paragraph(inlines) => inlinesText(inlines, false) + "\n"
+    .Paragraph(inlines) => inlinesText(inlines, inCell: false) + "\n"
     .Heading(level, inlines) => headingText level, inlines
     .ThematicBreak => "***\n"
     .CodeBlock(info, text, _) => codeBlockText info, text
     .HtmlBlock(html) => html + "\n"
-    .BlockQuote(blocks) => prefixed blocksText(blocks, false), "> ", ">"
+    .BlockQuote(blocks) => prefixed blocksText(blocks, tight: false), "> ", ">"
     .ItemList(list) => listText list
     .Table(table) => {
       var pieces: List<String> = []
-      pieces.append rowText(table.header.map({ inlinesText _, true }).toList())
+      pieces.append rowText(table.header.map({ inlinesText _, inCell: true }).toList())
       const delimiters = table.alignments.map({ alignment =>
         match alignment {
           .Unspecified => "---"
@@ -93,7 +93,7 @@ fn blockText(block: MarkdownBlock): String {
       }).toList()
       pieces.append rowText(delimiters)
       for row in table.rows {
-        pieces.append rowText(row.map({ inlinesText _, true }).toList())
+        pieces.append rowText(row.map({ inlinesText _, inCell: true }).toList())
       }
       pieces.joined separator: ""
     }
@@ -106,7 +106,7 @@ fn rowText(cells: List<String>): String {
 
 /** An ATX heading where it fits on one line; a heading of several lines, which only levels 1 and 2 have, underlined. */
 fn headingText(level: Int, inlines: List<MarkdownInline>): String {
-  const text = inlinesText inlines, false
+  const text = inlinesText inlines, inCell: false
   if text.contains("\n") && level <= 2 {
     return text + "\n" + (if level == 1 { "===" } else { "---" }) + "\n"
   }

@@ -377,7 +377,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
     emit builder, Instruction.Constant(shown, written)
     shownSlots.append shown
     const same = addTemporary builder, boolean
-    const equal = Intrinsic IntrinsicOperation.TextEqual, None
+    const equal = Intrinsic IntrinsicOperation.TextEqual, kind: None
     emit builder, Instruction.Intrinsic(same, equal, [text, shown], location)
     const found = addBlock builder, "member", location
     const next = addBlock builder, "other", location
@@ -595,7 +595,7 @@ fn identityBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   }
   const boolean = booleanTypeOf lowering
   if result == boolean {
-    answerBoolean lowering, builder, true
+    answerBoolean lowering, builder, value: true
     return
   }
   reportUnsupported lowering, "a generated member that answers itself and is neither its own type nor a `Bool`", at
@@ -801,9 +801,9 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
     return
   }
   if !isVariant {
-    answerBoolean lowering, builder, true
+    answerBoolean lowering, builder, value: true
     switchTo builder, failed
-    answerBoolean lowering, builder, false
+    answerBoolean lowering, builder, value: false
     return
   }
   const equal = addBlock builder, "equal", location
@@ -833,15 +833,15 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
   const chosen = Terminator.Switch tag, values, targets, equal
   terminateBlock builder, head, chosen
   switchTo builder, equal
-  answerBoolean lowering, builder, true
+  answerBoolean lowering, builder, value: true
   switchTo builder, failed
-  answerBoolean lowering, builder, false
+  answerBoolean lowering, builder, value: false
 }
 
 /** The two tags, compared: a value of another case is never equal, whatever the fields say. Answers the tag of `self`. */
 fn sameTagBlock(var lowering: Lowering, var builder: FunctionBuilder, failed: BlockId, at: Span): Slot {
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const left = addTemporary builder, integer
   const right = addTemporary builder, integer
   emit builder, Instruction.Tag(left, Slot(0))
@@ -898,12 +898,12 @@ fn fieldEquality(
     return target
   }
   if isPlainEquality(lowering, annotation) {
-    const intrinsic = Intrinsic IntrinsicOperation.Equal, None
+    const intrinsic = Intrinsic IntrinsicOperation.Equal, kind: None
     emit builder, Instruction.Intrinsic(target, intrinsic, [left, right], location)
     return target
   }
   if isTextType(lowering, annotation) {
-    const intrinsic = Intrinsic IntrinsicOperation.TextEqual, None
+    const intrinsic = Intrinsic IntrinsicOperation.TextEqual, kind: None
     emit builder, Instruction.Intrinsic(target, intrinsic, [left, right], location)
     return target
   }
@@ -930,7 +930,7 @@ fn fieldEquality(
  * nothing a program can observe depends on one.
  */
 fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const annotation = builder.function.signature.parameters[0].annotation
   const accumulated = zeroSlot lowering, builder, integer
   const layout = match layoutOfType(lowering.program, annotation) {
@@ -1014,7 +1014,7 @@ fn hashFields(
 
 /** One field's hash: the field type's own `hash`, whatever shape that member has. */
 fn fieldHash(var lowering: Lowering, var builder: FunctionBuilder, field: DerivedField, value: Slot, at: Span): Slot {
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const target = addTemporary builder, integer
   const location = locationOf lowering, at
   const called = match traitMemberFunction(lowering, field.subject, "Hash", "hash", at) {
@@ -1030,7 +1030,7 @@ fn fieldHash(var lowering: Lowering, var builder: FunctionBuilder, field: Derive
 
 /** `accumulated = (accumulated ^ value) ^ ((accumulated ^ value) << 17)`: three intrinsics, and nothing can overflow. */
 fn mixInto(var lowering: Lowering, var builder: FunctionBuilder, accumulated: Slot, value: Slot, at: Span) {
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const kind = NumericKind.Signed 64
   const location = locationOf lowering, at
   const combined = addTemporary builder, integer
@@ -1185,7 +1185,7 @@ fn compareTupleBody(
     return
   }
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const boolean = booleanTypeOf lowering
   const result = builder.function.signature.result
   const empty: List<WitnessSource> = []
@@ -1254,9 +1254,9 @@ fn emitOrdering(
     return true
   }
   if isTextType(lowering, annotation) {
-    const integer = lowering.program.internType IrType.Integer(64, true)
+    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
     const order = addTemporary builder, integer
-    const compared = Intrinsic IntrinsicOperation.TextCompare, None
+    const compared = Intrinsic IntrinsicOperation.TextCompare, kind: None
     emit builder, Instruction.Intrinsic(order, compared, [Slot(0), Slot(1)], location)
     const zero = zeroSlot lowering, builder, integer
     const intrinsic = Intrinsic operation, NumericKind.Signed(64)
@@ -1265,7 +1265,7 @@ fn emitOrdering(
   }
   if isCharacterType(lowering, annotation) {
     // A `Char` is a code point, and the order of the code points is the order of the characters
-    const intrinsic = Intrinsic operation, None
+    const intrinsic = Intrinsic operation, kind: None
     emit builder, Instruction.Intrinsic(target, intrinsic, [Slot(0), Slot(1)], location)
     return true
   }
@@ -1351,7 +1351,7 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
 /** A variant layout: one `TextConcat` per case, chosen by the tag. */
 fn showVariantBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, layout: LayoutId, at: Span) {
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, Slot(0))
   const shape = lowering.program.layoutAt layout
@@ -1512,7 +1512,7 @@ fn concatenateInto(var lowering: Lowering, var builder: FunctionBuilder, parts: 
   const text = lowering.program.internType IrType.Text
   const target = addTemporary builder, text
   const location = locationOf lowering, at
-  const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
+  const intrinsic = Intrinsic IntrinsicOperation.TextConcat, kind: None
   emit builder, Instruction.Intrinsic(target, intrinsic, parts, location)
   terminate builder, Terminator.Return(borrowed(target))
 }

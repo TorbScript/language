@@ -285,7 +285,7 @@ fn settledEntries(program: IrProgram, function: IrFunction, universes: Universes
   const headers = loopWritesOf function, order, predecessors
   var entries: List<List<Interval>> = []
   var exits: List<List<Interval>> = []
-  var visited = filledFlags blockCount, false
+  var visited = filledFlags blockCount, value: false
   for _ in 0..blockCount {
     entries.append universes.range
     exits.append universes.range
@@ -389,7 +389,7 @@ fn loopWritesOf(function: IrFunction, order: List<Int>, predecessors: List<List<
   var written: List<List<Bool>> = []
   for _ in 0..blockCount {
     position.append blockCount
-    written.append filledFlags(slotCount, false)
+    written.append filledFlags(slotCount, value: false)
   }
   for index in 0..order.length() {
     position.set order[index], index
@@ -415,7 +415,7 @@ fn loopWritesOf(function: IrFunction, order: List<Int>, predecessors: List<List<
 /** The head plus every block that reaches the source of the back edge without passing the head. */
 fn naturalLoopOf(function: IrFunction, predecessors: List<List<Int>>, head: Int, source: Int): List<Bool> {
   const blockCount = function.blocks.length()
-  var body = filledFlags blockCount, false
+  var body = filledFlags blockCount, value: false
   body.set head, true
   if source == head {
     return body
@@ -952,7 +952,7 @@ fn provenPlace(
     if const .Element(item, index, at, checked) = step {
       const container = Reference place.base, place.steps[0..position]
       if checked && isInsideArray(program, function, universes, facts, container, index) {
-        steps.append PathStep.Element(item, index, at, false)
+        steps.append PathStep.Element(item, index, at, checked: false)
         isChanged = true
         continue
       }

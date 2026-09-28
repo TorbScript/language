@@ -194,7 +194,15 @@ fn fieldGroupsOf(
       const step = PathStep.Variant layout, variant, index
       const subject = substitute lowering.checker.types, field.annotation, mapping
       const annotation = laid[index].annotation
-      fields.append EncodedFieldOf(field.name, subject, annotation, step, field.symbol, field.hasDefault, true)
+      fields.append(EncodedFieldOf(
+        field.name,
+        subject,
+        annotation,
+        step,
+        field.symbol,
+        field.hasDefault,
+        isPassable: true,
+      ))
     }
     groups.append FieldGroup(declared.name, variant, fields)
   }
@@ -333,7 +341,7 @@ fn encodeFields(
   }
   // A type with cases: one block per case, chosen by the tag
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, Slot(0))
   const impossible = addBlock builder, "no such case", location
@@ -540,7 +548,7 @@ fn decodeFields(
   for group in groups {
     const wanted = textSlot lowering, builder, group.name
     const same = addTemporary builder, boolean
-    const intrinsic = Intrinsic IntrinsicOperation.TextEqual, None
+    const intrinsic = Intrinsic IntrinsicOperation.TextEqual, kind: None
     emit builder, Instruction.Intrinsic(same, intrinsic, [name, wanted], location)
     const chosen = addBlock builder, "case {group.name}", location
     const next = addBlock builder, "not {group.name}", location
@@ -781,7 +789,7 @@ fn checkedStep(
     return None
   }
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, answer)
   const succeeded = addBlock builder, "{name} succeeded", location
@@ -1092,7 +1100,7 @@ fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String)
 }
 
 fn integerSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Int): Slot {
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const target = addTemporary builder, integer
   const contents = StaticContents.Literal LiteralValue.Integer(value)
   const found = internStatic lowering, contents, integer

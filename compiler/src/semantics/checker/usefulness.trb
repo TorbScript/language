@@ -395,7 +395,7 @@ fn splitColumn(
     if const .ListOf(_, _) = constructor {
       // An `Array<Item, Size>` has exactly one length, which is in its type the way the arity of a tuple is
       if const Some(size) = fixedLengthOf(checker, annotation) {
-        return ConstructorSet([Constructor.ListOf(size, false)], false)
+        return ConstructorSet([Constructor.ListOf(size, hasRest: false)], hasMissing: false)
       }
       return splitLists written
     }
@@ -403,17 +403,17 @@ fn splitColumn(
   // A pattern the checker does not model leaves the type open, and everything written stays its own constructor: that
   // is the safe direction, where nothing is exhaustive by accident and no arm above hides one below
   if hasOpaque {
-    return ConstructorSet uniqueConstructors(written), true
+    return ConstructorSet uniqueConstructors(written), hasMissing: true
   }
   match columnKind(checker, annotation) {
     .Finite(constructors) => {
       if fitsFinite(written, constructors) {
-        return ConstructorSet constructors, false
+        return ConstructorSet constructors, hasMissing: false
       }
-      ConstructorSet uniqueConstructors(written), true
+      ConstructorSet uniqueConstructors(written), hasMissing: true
     }
     .Intervals(low, high) => splitIntervals written, low, high
-    .Unknown => ConstructorSet uniqueConstructors(written), true
+    .Unknown => ConstructorSet uniqueConstructors(written), hasMissing: true
   }
 }
 
@@ -545,10 +545,10 @@ fn splitLists(written: List<Constructor>): ConstructorSet {
   }
   var constructors: List<Constructor> = []
   for length in 0..border {
-    constructors.append Constructor.ListOf(length, false)
+    constructors.append Constructor.ListOf(length, hasRest: false)
   }
-  constructors.append Constructor.ListOf(border, true)
-  ConstructorSet constructors, false
+  constructors.append Constructor.ListOf(border, hasRest: true)
+  ConstructorSet constructors, hasMissing: false
 }
 
 /**
@@ -573,7 +573,7 @@ fn splitIntervals(written: List<Constructor>, low: Int, high: Int): ConstructorS
     }
   }
   if bounds.isEmpty() {
-    return ConstructorSet([], true)
+    return ConstructorSet([], hasMissing: true)
   }
   bounds.sort({ _ })
   var pieces: List<Constructor> = []

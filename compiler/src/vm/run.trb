@@ -52,7 +52,7 @@ public fn runInMachine(
   clock.lap "reading the files"
   const requested = absolutePaths([path])?
   // The bodies of the entry: the lowering checks those of every module it reaches when it gets there
-  const checked = check tree, requested, withTimings, false, [], true
+  const checked = check tree, requested, withTimings, false, [], onlyReached: true
   for timing in checked.checker.timings {
     clock.note "  {timing.pass}", timing.milliseconds
   }
@@ -125,7 +125,7 @@ public shared type RunClock {
 public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const requested = absolutePaths(paths)?
-  const checked = check tree, requested, false, false, [], true
+  const checked = check tree, requested, false, false, [], onlyReached: true
   if reportChecked(checked) > 0 {
     return refusedCode
   }
@@ -157,7 +157,7 @@ fn runModules(
       return refusedCode
     }
   }
-  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, true) {
+  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, onDemand: true) {
     Some(found) => found
     None => {
       return refusedCode
@@ -183,12 +183,12 @@ public fn bytecodeOf(
 ): BytecodeProgram? {
   var checker = checked.checker
   checker.checksOnDemand = onDemand
-  var lowering = lowerWorkspace checker, pathsOfModules(checked), modules, false, hostTarget(), true
+  var lowering = lowerWorkspace checker, pathsOfModules(checked), modules, false, hostTarget(), forMachine: true
   if onDemand && !isLowered(lowering) {
     // A refusal is about the program as a native build sees it: every body of the program checked, and lowered again
     var every = checked.checker
     checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
-    lowering = lowerWorkspace every, pathsOfModules(checked), modules, false, hostTarget(), true
+    lowering = lowerWorkspace every, pathsOfModules(checked), modules, false, hostTarget(), forMachine: true
   }
   clock.lap "lowering"
   insertOwnership lowering.program
@@ -304,7 +304,7 @@ fn loadAtRunTime(
   const script = RuntimeScript absolute, declaring, name
   const parsed = known.parsedTree()
   const around = parsed.withFile absolute, text
-  const checked = check around, requested, false, false, [script], true
+  const checked = check around, requested, false, false, [script], onlyReached: true
   const shown = around.display absolute
   for file in checked.files {
     if file.path == shown && !file.diagnostics.isEmpty() {

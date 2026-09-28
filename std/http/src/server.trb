@@ -213,7 +213,7 @@ fn acceptLoop(
   drainBytes: Int,
 ): Task<Result<Void, HttpError>> {
   const limits = ServerLimits headBytes, headFields, headMilliseconds, idleMilliseconds, drainBytes
-  serveAccepted(acceptor, handler, limits, None).await()
+  serveAccepted(acceptor, handler, limits, identity: None).await()
 }
 
 /**
@@ -480,7 +480,7 @@ fn refuse(var connection: Connection, problem: HttpError): Task<Result<Void, Htt
   if const Some(code) = problem.answerStatus() {
     const status = Status.of(code)?
     const answer = Response.text "{problem}\n", status: status
-    const _ = writeResponse(connection, answer, Method.Get, "HTTP/1.1", true).await()
+    const _ = writeResponse(connection, answer, Method.Get, "HTTP/1.1", closing: true).await()
   }
   closeGently(connection).await()
 }

@@ -471,7 +471,7 @@ public fn lowerWhileBinding(
   // Every round binds the names again, so every round ends them - and a `break` or a `continue` does too
   openScope lowering
   declareScopedBetween lowering, builder, firstSlot, lastSlot
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   closeScope lowering, builder
   const _ = leaveLoop lowering
   if !lowering.isDiverged {
@@ -552,7 +552,7 @@ fn lowerWhileVarBinding(
     lowering.references.set declared, place
   }
   openScope lowering
-  lowerBlockInto lowering, builder, body, None
+  lowerBlockInto lowering, builder, body, destination: None
   closeScope lowering, builder
   for (declared, _) in named {
     const _ = lowering.references.remove declared
@@ -723,7 +723,7 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
           return
         }
       }
-      const integer = lowering.program.internType IrType.Integer(64, true)
+      const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
       const tag = addTemporary builder, integer
       emit builder, Instruction.Tag(tag, value)
       var values: List<Int> = []
@@ -983,7 +983,7 @@ fn lengthSlotOf(
       return None
     }
   }
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const target = addTemporary builder, integer
   const places: List<Reference?> = []
   const found = lowerDispatched lowering, builder, target, at, dispatched, [container], places, integer
@@ -1087,7 +1087,7 @@ fn restSlotOf(
   }
   const stage = resultTypeOf lowering, skipped
   const stageAnnotation = irTypeOfClosed lowering, stage
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const amount = integerSlot lowering, builder, index, integer
   const rest = addTemporary builder, stageAnnotation
   const places: List<Reference?> = []
@@ -1196,7 +1196,7 @@ fn itemStepOf(
   }
   match step {
     .Item(index) => {
-      const integer = lowering.program.internType IrType.Integer(64, true)
+      const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
       const position = integerSlot lowering, builder, index, integer
       itemSlotOf lowering, builder, base, containerType, position, destination, at
     }
@@ -1248,7 +1248,7 @@ fn literalComparison(
       const equals = IntrinsicOperation.TextEqual
       return intrinsicSlot lowering, builder, None, equals, None, [value, other], boolean, at
     }
-    const integer = lowering.program.internType IrType.Integer(64, true)
+    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
     const order = addTemporary builder, integer
     emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [value, other], at
     const zero = constantSlot lowering, builder, None, StaticContents.Literal(LiteralValue.Integer(0)), integer
@@ -1475,7 +1475,7 @@ public fn lowerTry(
   const location = locationOf lowering, expression.span
   const value = addBlock builder, "value", location
   const failed = addBlock builder, "failed", location
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
@@ -1533,7 +1533,7 @@ fn lowerTopLevelTry(
   const location = locationOf lowering, at
   const value = addBlock builder, "value", location
   const failed = addBlock builder, "failed", location
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
@@ -1608,7 +1608,7 @@ fn reportFailure(
       return
     }
   }
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const code = integerSlot lowering, builder, 1, integer
   emitIntrinsic lowering, builder, None, IntrinsicOperation.ExitWithCode, None, [code], at
   finishBlock lowering, builder, Terminator.Unreachable
@@ -1653,7 +1653,7 @@ fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current
     return
   }
   const text = lowering.program.internType IrType.Text
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const location = locationOf lowering, at
   const check = addBlock builder, "cause", location
   const inner = addBlock builder, "caused", location
@@ -1877,7 +1877,7 @@ public fn lowerCoalesce(
   const value = addBlock builder, "value", location
   const fallback = addBlock builder, "fallback", location
   const join = addBlock builder, "join", location
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], fallback)
@@ -1959,7 +1959,7 @@ public fn lowerOptionalMember(
   const present = addBlock builder, "present", location
   const absent = addBlock builder, "absent", location
   const join = addBlock builder, "join", location
-  const integer = lowering.program.internType IrType.Integer(64, true)
+  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [some], [present], absent)

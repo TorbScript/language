@@ -60,8 +60,8 @@ fn shown(program: IrProgram, layout: LayoutId): String {
 group "Layouts" {
   test "a record of small values is inline, and its size follows the model" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
-    const int8 = program.internType IrType.Integer(8, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int8 = program.internType IrType.Integer(8, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const point = recordLayout program, "T_main_Point", [FieldLayout("x", int64), FieldLayout("y", int64)]
     const padded = recordLayout program, "T_main_Padded", [FieldLayout("flag", boolean), FieldLayout("value", int64)]
@@ -74,7 +74,7 @@ group "Layouts" {
 
   test "a record that holds storage is counted, and a big one is boxed" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const strings = program.internType IrType.Text
     const named = recordLayout program, "T_main_Named", [FieldLayout("name", strings), FieldLayout("age", int64)]
     var many: List<FieldLayout> = []
@@ -94,7 +94,7 @@ group "Layouts" {
 
   test "a record that contains a boxed one holds a pointer, so it is inline again" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     var many: List<FieldLayout> = []
     for index in 0..5 {
       many.append FieldLayout("field{index}", int64)
@@ -111,7 +111,7 @@ group "Layouts" {
 
   test "`Option` of something pointer-like uses the niche, `Option<Int64>` carries a tag" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const strings = program.internType IrType.Text
     const listOfInteger = program.internType IrType.Runtime(RuntimeKind.ListStorage, [int64])
     const ofText = optionLayout program, "T_Option__String", strings
@@ -146,7 +146,7 @@ group "Layouts" {
 
   test "a type that contains itself is boxed, and so is every other layout of the cycle" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const reserved = program.reserveLayout "T_main_Node", LayoutKind.Variant
     const nodeType = program.internType IrType.Variant(reserved.layout)
     const filled = program.layoutAt reserved.layout
@@ -168,7 +168,7 @@ group "Layouts" {
 
   test "a tuple has numbered fields and no labels" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const strings = program.internType IrType.Text
     const pair = tupleLayout program, "T_tuple__Int64_String", [int64, strings]
     finishProgram program
@@ -179,7 +179,7 @@ group "Layouts" {
 
   test "`Array<Item, Size>` lives inline until it grows past the limit" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const four = program.internType IrType.FixedArray(int64, 4)
     const five = program.internType IrType.FixedArray(int64, 5)
     const small = recordLayout program, "T_main_Small", [FieldLayout("cells", four)]
@@ -193,7 +193,7 @@ group "Layouts" {
 
   test "a field that can reach a `shared` object or a `Box` is what a trace function is emitted for" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const cell = recordLayout program, "T_main_Cell", [FieldLayout("value", int64)]
     const cellType = program.internType IrType.SharedObject(cell)
     const holder = recordLayout program, "T_main_Holder", [FieldLayout("cell", cellType)]
@@ -209,7 +209,7 @@ group "Layouts" {
 
   test "a type with fields of its own and cases keeps the common fields in front of every group" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const strings = program.internType IrType.Text
     const reserved = program.reserveLayout "T_main_Event", LayoutKind.Variant
     const layout = program.layoutAt reserved.layout
@@ -231,7 +231,7 @@ group "Layouts" {
 
   test "only a pointer that is never null can carry a niche" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const strings = program.internType IrType.Text
     const listOfInteger = program.internType IrType.Runtime(RuntimeKind.ListStorage, [int64])
     const box = program.internType IrType.Box(int64)
@@ -248,7 +248,7 @@ group "Layouts" {
 group "Mangling" {
   test "a name is the source path plus the arguments, and nothing else" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const list = SymbolPath "std/prelude", "collections/list", ["ArrayList"], "append"
     assert(functionName(program, list, [int64]) == "t_std_x2f_prelude_collections_x2f_list_ArrayList_append__Int64")
     assert(functionName(program, SymbolPath("", "main", [], "translated"), []) == "t_main_translated")
@@ -258,7 +258,7 @@ group "Mangling" {
 
   test "a generic instance, and a generic instance of a generic instance" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const listOfInteger = program.internType IrType.Runtime(RuntimeKind.ListStorage, [int64])
     const option = SymbolPath "std/prelude", "option", [], "Option"
     assert(layoutName(program, option, [int64]) == "T_std_x2f_prelude_option_Option__Int64")
@@ -274,7 +274,7 @@ group "Mangling" {
 
   test "a tuple, a function type and a trait-typed value are spelled from their parts" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const strings = program.internType IrType.Text
     assert(tupleLayoutName(program, [int64, strings]) == "T_tuple__Int64_String")
@@ -297,14 +297,14 @@ group "Mangling" {
     assert(
       canonicalType(program, object) == "Object_std_x2f_prelude_convert_Show_std_x2f_prelude_iteration_Iterate_Int64",
     )
-    const target = program.internType IrType.Integer(32, true)
+    const target = program.internType IrType.Integer(32, isSigned: true)
     assert(witnessTableName(program, show, target) == "w_std_x2f_prelude_convert_Show__Int32")
     assert(witnessTableName(program, iterable, target) == "w_std_x2f_prelude_iteration_Iterate__Int32_Int64")
   }
 
   test "a const argument is part of the name, and so is its sign" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const float64 = program.internType IrType.Floating(64)
     const cells = program.internType IrType.FixedArray(float64, 16)
     assert(canonicalType(program, cells) == "Array_Float64_16")
@@ -322,7 +322,7 @@ group "Mangling" {
 
   test "the smallest `Int64` as a const argument is spelled without negating it" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const smallest = 0 - 9223372036854775807 - 1
     const argument = program.internType IrType.ConstantValue(LiteralValue.Integer(smallest), int64)
     assert(canonicalType(program, argument) == "minus9223372036854775808")
@@ -384,8 +384,8 @@ group "Mangling" {
 
   test "every form of a type has a spelling of its own" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
-    const unsigned = program.internType IrType.Integer(8, false)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const unsigned = program.internType IrType.Integer(8, isSigned: false)
     const boolean = program.internType IrType.Boolean
     const character = program.internType IrType.Character
     const voidType = program.internType IrType.VoidType
@@ -426,7 +426,7 @@ group "Mangling" {
 
   test "a parameter that the callee stores is part of the shape it is called with" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const borrows = program.internSignature IrSignature([IrParameter("value", int64)], boolean)
     const takes = program.internSignature IrSignature([IrParameter("value", int64, false, Ownership.Owned)], boolean)
@@ -439,7 +439,7 @@ group "Mangling" {
 
   test "an element descriptor is named after its element type alone" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const point = recordLayout program, "T_main_Point", [FieldLayout("x", int64)]
     const pointType = program.internType IrType.Record(point)
     assert(elementName(program, int64) == "d_Int64")

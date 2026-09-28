@@ -152,12 +152,12 @@ public fn synthesize(
   }
   for kept in declarations {
     const source = sources[kept.source]
-    writer.copy kept.source, source.text, kept.span.start, kept.span.end, false
+    writer.copy kept.source, source.text, kept.span.start, kept.span.end, holdsStatements: false
     writer.write "\n\n"
   }
   // The declarations of the entry at the top level, with its statements blanked where they stood
   const declared = blanked plan.text, plan.statements
-  writer.copy current, declared, 0, declared.byteLength(), false
+  writer.copy current, declared, 0, declared.byteLength(), holdsStatements: false
   writer.write "\n\n"
   var signature: List<String> = []
   var arguments: List<String> = []
@@ -208,14 +208,14 @@ public fn synthesize(
   match last {
     Some(value) => {
       const start = lineStartOf plan.text, value.start
-      writer.copy current, statements, 0, start, true
+      writer.copy current, statements, 0, start, holdsStatements: true
       if start > 0 && statements.byteAt(start - 1) != 10 {
         writer.write "\n"
       }
       writer.write "const replShown =\n"
-      writer.copy current, statements, start, statements.byteLength(), true
+      writer.copy current, statements, start, statements.byteLength(), holdsStatements: true
     }
-    None => writer.copy current, statements, 0, statements.byteLength(), true
+    None => writer.copy current, statements, 0, statements.byteLength(), holdsStatements: true
   }
   writer.write "\n"
   // Shown before the assignment that hands it to the session: that assignment is the last use the ownership pass

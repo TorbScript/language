@@ -1510,7 +1510,7 @@ fn lowerConstructorCall(
 ): Slot {
   // `Channel<Item>(capacity:)` is a block of the runtime, which only the runtime can make
   if const Some(item) = channelItemOf(lowering, annotation) {
-    const fields = lowerFieldArguments lowering, builder, expression, arguments, owner, None
+    const fields = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver: None
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
@@ -1539,7 +1539,7 @@ fn lowerConstructorCall(
   if !shape.variants.isEmpty() {
     return unsupportedSlot lowering, builder, destination, "a constructor of a variant type", expression.span
   }
-  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, None
+  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver: None
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
@@ -1744,7 +1744,7 @@ fn readFieldOf(var lowering: Lowering, var builder: FunctionBuilder, base: Slot,
     Some(found) => found
     None => {
       reportUnsupported lowering, "`copy` of a value without a layout", at
-      return abandonedSlot lowering, builder, None
+      return abandonedSlot lowering, builder, destination: None
     }
   }
   const shape = lowering.program.layoutAt layout

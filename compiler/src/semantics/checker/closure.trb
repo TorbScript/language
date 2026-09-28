@@ -101,7 +101,7 @@ fn parameterFormsOf(var checker: Checker, closure: Closure, form: FunctionForm?,
     None => []
   }
   if closure.parameters.isEmpty() {
-    return ClosureParameters wanted, false
+    return ClosureParameters wanted, isBroken: false
   }
   const scope = scopeHere checker
   var parameters: List<ParameterForm> = []
@@ -206,7 +206,7 @@ fn checkClosureBody(
       produced = taskValueOf(checker, found) ?? found
       isTask = produced != found
       isInferred = hasVariable checker, produced
-      inner = bodyExpectation checker, produced, false
+      inner = bodyExpectation checker, produced, isInferred: false
     }
   }
   checker.resultType = produced
@@ -312,7 +312,7 @@ fn declareReceiver(
   if !hasParameters || index >= closure.parameters.length() {
     const binding = checker.declareBinding LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
     checker.setReceiver binding
-    checker.recordReceiver at, ReceiverClosure(binding, form.annotation, isVar, true)
+    checker.recordReceiver at, ReceiverClosure(binding, form.annotation, isVar, isImplicit: true)
     return
   }
   const before = checker.bindings.length()
@@ -320,7 +320,7 @@ fn declareReceiver(
   checker.receiverType = None
   checker.receiverBinding = None
   if checker.bindings.length() > before {
-    checker.recordReceiver at, ReceiverClosure(BindingId(before), form.annotation, isVar, false)
+    checker.recordReceiver at, ReceiverClosure(BindingId(before), form.annotation, isVar, isImplicit: false)
   }
 }
 

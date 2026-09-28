@@ -169,13 +169,18 @@ fn runExamples(
     }
   }
   // One lowering of all of them answers almost always; only where it refuses is every example asked on its own
-  const isRefused = !refusalsOfModules(checked, paths, found.map({ _.module }).toList(), false).isEmpty()
+  const isRefused = !refusalsOfModules(
+    checked,
+    paths,
+    found.map({ _.module }).toList(),
+    seedsEverything: false,
+  ).isEmpty()
   var runnable: List<Snippet> = []
   var modules: List<ModuleId> = []
   for entry in found {
     const example = entry.example
     const module = entry.module
-    const refused = if isRefused { refusalsOf checked, paths, module, false } else { [] }
+    const refused = if isRefused { refusalsOf checked, paths, module, seedsEverything: false } else { [] }
     if !refused.isEmpty() {
       const said = refused.joined separator: " | "
       problems.append(DocumentationProblem(
@@ -214,7 +219,7 @@ fn snippetOf(example: SourceExample): Snippet {
     example.module,
     "",
     "stable",
-    false,
+    hasNativeNote: false,
     comparesOutput: !expected.isEmpty(),
   )
 }

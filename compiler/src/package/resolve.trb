@@ -90,12 +90,12 @@ type Term {
   fn intersection(other: Self): Self? {
     if positive != other.positive {
       const (yes, no) = if positive { (self, other) } else { (other, self) }
-      return nonEmpty yes.versions.difference(no.versions), true
+      return nonEmpty yes.versions.difference(no.versions), isPositive: true
     }
     if positive {
-      return nonEmpty versions.intersection(other.versions), true
+      return nonEmpty versions.intersection(other.versions), isPositive: true
     }
-    Self package, versions.union(other.versions), false
+    Self package, versions.union(other.versions), positive: false
   }
 
   /** This term and not `other`. */
@@ -200,7 +200,7 @@ type Solver {
   var negativeTerms: Map<String, Term> = [:]
 
   var fn solve(): Result<Resolution, String> {
-    add Incompatibility([Term(root, VersionSet.exactly(rootVersion), false)], Cause.Root)
+    add Incompatibility([Term(root, VersionSet.exactly(rootVersion), positive: false)], Cause.Root)
     var next: String? = root
     var steps = 0
     while const Some(package) = next {
@@ -303,7 +303,7 @@ type Solver {
 
   var fn decide(package: String, version: Version) {
     decisions.set package, version
-    assign Term(package, VersionSet.exactly(version), true), None
+    assign Term(package, VersionSet.exactly(version), positive: true), cause: None
   }
 
   var fn register(term: Term) {
@@ -515,7 +515,7 @@ type Solver {
     }
     open.sort by: { (_.count, _.package) }
     const package = open[0].package
-    const term = positiveTerms.get(package) ?? Term(package, VersionSet.none, true)
+    const term = positiveTerms.get(package) ?? Term(package, VersionSet.none, positive: true)
     const allowed = allowedOf package, term.versions
     const chosen = match preferred.get(package) {
       Some(locked) => {
@@ -601,8 +601,8 @@ type Solver {
         withPreRelease = withPreRelease || known[position].version.isPreRelease()
       }
       const range = if package == root { VersionSet.exactly rootVersion } else { rangeOf low, high, withPreRelease }
-      const depender = Term package, range, true
-      const needed = Term dependency.package, dependency.versions, false
+      const depender = Term package, range, positive: true
+      const needed = Term dependency.package, dependency.versions, positive: false
       found.append Incompatibility([depender, needed], Cause.Dependency)
     }
     found
@@ -648,9 +648,9 @@ type Explanation {
   var fn write(failure: Int): String {
     countDerivations failure
     if incompatibilities[failure].isDerived() {
-      visit failure, true
+      visit failure, conclusion: true
     } else {
-      record failure, "Because {textOf(failure)}, version solving failed.", false
+      record failure, "Because {textOf(failure)}, version solving failed.", numbered: false
     }
     // A number is only shown where a later line refers back to it
     var referenced: Set<Int> = Set.of()
@@ -739,7 +739,7 @@ type Explanation {
           Some(found) => (conflict, other, found)
           None => (other, conflict, otherLine ?? 0)
         }
-        visit withoutLine, false
+        visit withoutLine, conclusion: false
         record position, "{conjunction} because {textOf(withLine)} ({line}), {text}.", numbered
         return
       }
@@ -748,14 +748,14 @@ type Explanation {
       if singleConflict || singleOther {
         const first = if singleOther { conflict } else { other }
         const second = if singleOther { other } else { conflict }
-        visit first, false
-        visit second, false
+        visit first, conclusion: false
+        visit second, conclusion: false
         record position, "Thus, {text}.", numbered
         return
       }
-      visit conflict, true
+      visit conflict, conclusion: true
       lines.append((text: "", number: None))
-      visit other, false
+      visit other, conclusion: false
       const line = numbers.get(conflict) ?? 0
       record position, "{conjunction} because {textOf(conflict)} ({line}), {text}.", numbered
       return
@@ -771,16 +771,20 @@ type Explanation {
         if const .Conflict(innerFirst, innerSecond) = incompatibilities[derived].cause {
           const innerDerived = if incompatibilities[innerFirst].isDerived() { innerFirst } else { innerSecond }
           const innerExternal = if incompatibilities[innerFirst].isDerived() { innerSecond } else { innerFirst }
-          visit innerDerived, false
-          record position, "{conjunction} because {joinedOf(innerExternal, external, None, None)}, {text}.", numbered
+          visit innerDerived, conclusion: false
+          record(
+            position,
+            "{conjunction} because {joinedOf(innerExternal, external, None, secondLine: None)}, {text}.",
+            numbered,
+          )
           return
         }
       }
-      visit derived, false
+      visit derived, conclusion: false
       record position, "{conjunction} because {textOf(external)}, {text}.", numbered
       return
     }
-    record position, "Because {joinedOf(conflict, other, None, None)}, {text}.", numbered
+    record position, "Because {joinedOf(conflict, other, None, secondLine: None)}, {text}.", numbered
   }
 
   fn isSingleLine(position: Int): Bool {
@@ -815,8 +819,8 @@ type Explanation {
     if firstLine.isNone() && secondLine.isNone() {
       if const (.Dependency, .Dependency) = (one.cause, two.cause) {
         if one.terms[0] == two.terms[0] {
-          const depender = terse one.terms[0], true
-          return "{depender} depends on both {terse(one.terms[1], false)} and {terse(two.terms[1], false)}"
+          const depender = terse one.terms[0], allowEvery: true
+          return "{depender} depends on both {terse(one.terms[1], allowEvery: false)} and {terse(two.terms[1], allowEvery: false)}"
         }
       }
     }
@@ -841,7 +845,7 @@ type Explanation {
       }
       .Dependency => {
         if terms.length() == 2 {
-          return "{terse(terms[0], true)} depends on {terse(terms[1], false)}"
+          return "{terse(terms[0], allowEvery: true)} depends on {terse(terms[1], allowEvery: false)}"
         }
       }
       .NoVersions(note) => {
@@ -856,22 +860,22 @@ type Explanation {
       return "version solving failed"
     }
     if const [only] = terms {
-      return if only.positive { "{terse(only, true)} is forbidden" } else { "{terse(only, false)} is required" }
+      return if only.positive { "{terse(only, allowEvery: true)} is forbidden" } else { "{terse(only, allowEvery: false)} is required" }
     }
     if const [first, second] = terms {
       if first.positive && second.positive {
-        return "{terse(first, false)} is incompatible with {terse(second, false)}"
+        return "{terse(first, allowEvery: false)} is incompatible with {terse(second, allowEvery: false)}"
       }
       if !first.positive && !second.positive {
-        return "either {terse(first, false)} or {terse(second, false)}"
+        return "either {terse(first, allowEvery: false)} or {terse(second, allowEvery: false)}"
       }
     }
-    const positives = terms.filter({ _.positive }).map({ terse _, false }).toList()
-    const negatives = terms.filter({ !_.positive }).map({ terse _, false }).toList()
+    const positives = terms.filter({ _.positive }).map({ terse _, allowEvery: false }).toList()
+    const negatives = terms.filter({ !_.positive }).map({ terse _, allowEvery: false }).toList()
     if !positives.isEmpty() && !negatives.isEmpty() {
       if positives.length() == 1 {
         const single = terms.find({ _.positive }) ?? terms[0]
-        return "{terse(single, true)} requires {negatives.joined(separator: " or ")}"
+        return "{terse(single, allowEvery: true)} requires {negatives.joined(separator: " or ")}"
       }
       return "if {positives.joined(separator: " and ")} then {negatives.joined(separator: " or ")}"
     }

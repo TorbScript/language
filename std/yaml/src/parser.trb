@@ -169,7 +169,7 @@ type Parser {
       const start = advance()
       explicitStart = true
       if startsNode() {
-        root = node(true, false)?
+        root = node(true, indentless: false)?
       } else {
         root = emptyAt(start.end).copy(comments: YamlComments(trailing: takeTrailing(start.end.line)))
       }
@@ -177,7 +177,7 @@ type Parser {
       if hasDirectives {
         return Fail failure(peek().start, "directives are followed by `---`")
       }
-      root = node(true, false)?
+      root = node(true, indentless: false)?
     }
     var explicitEnd = false
     var endComments: List<String> = []
@@ -320,7 +320,7 @@ type Parser {
         if isAt(TokenKind.BlockEntry) || isAt(TokenKind.BlockEnd) {
           items.append emptyEntry(entry)
         } else {
-          items.append(node(true, false)?)
+          items.append(node(true, indentless: false)?)
         }
         continue
       }
@@ -351,7 +351,7 @@ type Parser {
         || kind == TokenKind.BlockEnd {
         items.append emptyEntry(entry)
       } else {
-        items.append(node(true, false)?)
+        items.append(node(true, indentless: false)?)
       }
     }
     YamlContent.Sequence items, CollectionStyle.Block
@@ -368,7 +368,7 @@ type Parser {
         if kind == TokenKind.Key || kind == TokenKind.Value || kind == TokenKind.BlockEnd {
           key = key.copy comments: YamlComments(takeLeading(keyToken.start.line))
         } else {
-          key = node(true, true)?
+          key = node(true, indentless: true)?
         }
         const value = blockMappingValue(keyToken.end)?
         entries.append entryOf(key, value)
@@ -404,7 +404,7 @@ type Parser {
     if peek().start.line > valueToken.start.line {
       keyComment = takeTrailing valueToken.start.line
     }
-    const value = node(true, true)?
+    const value = node(true, indentless: true)?
     MappingValue value, keyComment
   }
 
@@ -434,7 +434,7 @@ type Parser {
         if isAt(TokenKind.Key) {
           const _key = advance()
           if !isAt(TokenKind.Value) && !isAt(TokenKind.FlowEntry) && !isAt(TokenKind.FlowSequenceEnd) {
-            key = node(false, false)?
+            key = node(false, indentless: false)?
           }
         }
         const value = flowValue(TokenKind.FlowSequenceEnd)?
@@ -442,7 +442,7 @@ type Parser {
         items.append YamlNode(pair, line: pairStart.start.line + 1, column: pairStart.start.column + 1)
         continue
       }
-      items.append(node(false, false)?)
+      items.append(node(false, indentless: false)?)
     }
     YamlContent.Sequence items, CollectionStyle.Flow
   }
@@ -471,10 +471,10 @@ type Parser {
       if isAt(TokenKind.Key) {
         const _key = advance()
         if !isAt(TokenKind.Value) && !isAt(TokenKind.FlowEntry) && !isAt(TokenKind.FlowMappingEnd) {
-          key = node(false, false)?
+          key = node(false, indentless: false)?
         }
       } else if !isAt(TokenKind.Value) {
-        key = node(false, false)?
+        key = node(false, indentless: false)?
       }
       const value = flowValue(TokenKind.FlowMappingEnd)?
       entries.append YamlEntry(key, value)
@@ -491,7 +491,7 @@ type Parser {
     if isAt(TokenKind.FlowEntry) || isAt(closing) {
       return emptyAt valueToken.end
     }
-    node false, false
+    node false, indentless: false
   }
 }
 

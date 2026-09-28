@@ -78,7 +78,7 @@ group "A function that answers a `Task`" {
 group "The verifier of the task instructions" {
   test "`taskNew` starts a resume function with its parameters, and makes a `Task`" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const voidType = program.internType IrType.VoidType
     const task = taskOf program, int64
     var resume = newFunction "t_resume__t_main_run", None, IrSignature([IrParameter("value", int64)], int64), "task"
@@ -117,16 +117,16 @@ group "The verifier of the task instructions" {
 group "The state machine of a resume function" {
   test "a slot read after a suspension is in the frame, and one read before it is a local of one resume" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const task = taskOf program, int64
     const location = program.internLocation Location("tasks.trb", 1, 1)
     var builder = newFunction "t_main_wait", None, IrSignature([IrParameter("awaited", task)], int64), "task"
     setFunctionKind builder, FunctionKind.TaskResume
     const before = addLocal builder, int64, "before"
     const after = addLocal builder, int64, "after"
-    const add = Intrinsic IntrinsicOperation.Add, None
+    const add = Intrinsic IntrinsicOperation.Add, kind: None
     emit builder, Instruction.Intrinsic(before, add, [before, before], location)
-    emit builder, Instruction.Suspend(1, Slot(0), false)
+    emit builder, Instruction.Suspend(1, Slot(0), observes: false)
     emit builder, Instruction.Intrinsic(after, add, [before, before], location)
     terminate builder, Terminator.Return(owned(after))
     const identifier = finishFunction program, builder
@@ -139,19 +139,25 @@ group "The state machine of a resume function" {
 
   test "a loop that turns around is a back-edge, where the machine checks its flag" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, true)
+    const int64 = program.internType IrType.Integer(64, isSigned: true)
     const boolean = program.internType IrType.Boolean
     const location = program.internLocation Location("tasks.trb", 1, 1)
     var builder = newFunction "t_main_spin", None, IrSignature([], int64), "task"
     setFunctionKind builder, FunctionKind.TaskResume
     const count = addLocal builder, int64, "count"
     const going = addLocal builder, boolean, "going"
-    emit builder, Instruction.Intrinsic(count, Intrinsic(IntrinsicOperation.Subtract, None), [count, count], location)
-    const head = openBlock builder, "head", None
+    emit(
+      builder,
+      Instruction.Intrinsic(count, Intrinsic(IntrinsicOperation.Subtract, kind: None), [count, count], location),
+    )
+    const head = openBlock builder, "head", at: None
     terminateBlock builder, BlockId(0), Terminator.Jump(head)
-    emit builder, Instruction.Intrinsic(going, Intrinsic(IntrinsicOperation.Equal, None), [count, count], location)
-    const body = openBlock builder, "body", None
-    const done = openBlock builder, "done", None
+    emit(
+      builder,
+      Instruction.Intrinsic(going, Intrinsic(IntrinsicOperation.Equal, kind: None), [count, count], location),
+    )
+    const body = openBlock builder, "body", at: None
+    const done = openBlock builder, "done", at: None
     terminateBlock builder, head, Terminator.Branch(going, body, done)
     terminateBlock builder, body, Terminator.Jump(head)
     terminateBlock builder, done, Terminator.Return(owned(count))

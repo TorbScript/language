@@ -242,7 +242,7 @@ fn memberTarget(
   isOptional: Bool,
   explicit: List<TypeId>,
 ): Target {
-  const owner = resolveTarget checker, base, None
+  const owner = resolveTarget checker, base, expected: None
   checker.resolved base.span, owner.resolution
   const _ = checker.typed base.span, owner.annotation
   // `a?.m` is `Option.map`, or `flatMap` when `m` gives back an `Option` itself: it never nests one
@@ -2566,7 +2566,7 @@ fn ifType(
 ): TypeId {
   // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing after it
   checker.openScope()
-  checkCondition checker, condition, false
+  checkCondition checker, condition, isLoop: false
   // What the pattern in the head bound: every one of those names has to be read in the body
   const bound = checker.bindingsHere()
   const alternative = match otherwise {
@@ -2627,7 +2627,7 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
   var plans: List<MatchArmPlan> = []
   for arm in arms {
     checker.openScope()
-    checkPattern checker, arm.pattern, found, false
+    checkPattern checker, arm.pattern, found, isVar: false
     // The names this arm bound: the guard and the body are where they have to be read
     const bound = checker.bindingsHere()
     const plan = armPlanOf checker, arm, found

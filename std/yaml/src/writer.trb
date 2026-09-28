@@ -75,7 +75,7 @@ type Writer {
       ""
     }
     comments document.root.comments.leading, 0
-    blockNode document.root, start, 0, false
+    blockNode document.root, start, 0, compact: false
     comments document.endComments, 0
     if document.explicitEnd || closeExplicitly {
       pieces.append "...\n"
@@ -107,7 +107,7 @@ type Writer {
             comments item.comments.leading, indent
           }
           first = false
-          blockNode(item, itemPrefix, indent + 2, true)
+          blockNode(item, itemPrefix, indent + 2, compact: true)
         }
       }
       .Mapping(entries, style) => {
@@ -143,17 +143,17 @@ type Writer {
           return
         }
         if isBlockCollection(entry.value) && propertiesOf(entry.value).isEmpty() {
-          blockNode(entry.value, "", indent + 2, false)
+          blockNode(entry.value, "", indent + 2, compact: false)
         } else {
-          blockNode(entry.value, spaces(indent + 2), indent + 2, false)
+          blockNode(entry.value, spaces(indent + 2), indent + 2, compact: false)
         }
         return
       }
-      blockNode(entry.value, keyLine, indent + 2, false)
+      blockNode(entry.value, keyLine, indent + 2, compact: false)
       return
     }
-    blockNode(key, prefix + "?", indent + 2, true)
-    blockNode(entry.value, spaces(indent) + ":", indent + 2, true)
+    blockNode(key, prefix + "?", indent + 2, compact: true)
+    blockNode(entry.value, spaces(indent) + ":", indent + 2, compact: true)
   }
 
   var fn scalar(text: String, style: ScalarStyle, prefix: String, properties: String, indent: Int, trailing: String?) {
@@ -166,7 +166,7 @@ type Writer {
     }
     if style == ScalarStyle.Plain && text.contains("\n") {
       if const Some(lines) = plainLines(text) {
-        line joined(prefix, properties, lines[0]), None
+        line joined(prefix, properties, lines[0]), comment: None
         for index in 1..lines.length() {
           if lines[index].isEmpty() {
             pieces.append "\n"
@@ -179,7 +179,7 @@ type Writer {
         return
       }
     }
-    line joined(prefix, properties, inlineScalar(text, style, false)), trailing
+    line joined(prefix, properties, inlineScalar(text, style, flow: false)), trailing
   }
 
   /** A literal or folded block scalar: its header on the prefix's line, its lines below it at `indent`. */
@@ -237,7 +237,7 @@ type Writer {
         if text.isEmpty() && style == ScalarStyle.Plain && !properties.isEmpty() {
           ""
         } else {
-          inlineScalar text, style, true
+          inlineScalar text, style, flow: true
         }
       }
       .Sequence(items, _) => {
@@ -254,7 +254,7 @@ type Writer {
               if isEmptyPlain(entry.key) {
                 ""
               } else if entry.key.anchor.isNone() && entry.key.tag.isNone() {
-                keyScalar text, style, true
+                keyScalar text, style, flow: true
               } else if text.isEmpty() && style == ScalarStyle.Plain {
                 // Properties alone, and a space so that the `:` does not become part of a tag or an anchor
                 flowText(entry.key) + " "
@@ -328,7 +328,7 @@ type Writer {
           }
           return properties + " "
         }
-        joined properties, keyScalar(text, style, false)
+        joined properties, keyScalar(text, style, flow: false)
       }
       .Sequence(_, style) => {
         if style == CollectionStyle.Block && !key.items().isEmpty() {
@@ -373,7 +373,7 @@ fn isEmptyPlain(node: YamlNode): Bool {
 
 /** A key on one line: the same as a value, except that a plain key may end with `:`, as its own `:` follows it. */
 fn keyScalar(text: String, style: ScalarStyle, flow: Bool): String {
-  if style == ScalarStyle.Plain && isPlainSafe(text, flow, true) {
+  if style == ScalarStyle.Plain && isPlainSafe(text, flow, key: true) {
     return text
   }
   inlineScalar text, style, flow
@@ -386,7 +386,7 @@ public fn inlineScalar(text: String, style: ScalarStyle, flow: Bool): String {
       if text.isEmpty() && !flow {
         return ""
       }
-      if isPlainSafe(text, flow, false) {
+      if isPlainSafe(text, flow, key: false) {
         return text
       }
       doubleQuoted text
@@ -539,7 +539,7 @@ fn plainLines(text: String): List<String>? {
       empty = empty + 1
       continue
     }
-    if !isPlainSafe(part, false, false) || isAmbiguousStart(part) {
+    if !isPlainSafe(part, false, key: false) || isAmbiguousStart(part) {
       return None
     }
     if !first {

@@ -138,12 +138,12 @@ fn walkStatement(var walk: Walk, statement: Statement) {
     .Declare(declaration) => walkDeclaration walk, declaration
     .Bind(binding) => walkBinding walk, binding
     .Assign(target, value) => {
-      walkExpression walk, target, false
-      walkExpression walk, value, true
+      walkExpression walk, target, isCommandPosition: false
+      walkExpression walk, value, isCommandPosition: true
     }
     .For(pattern, iterable, body) => {
       walkPattern walk, pattern
-      walkExpression walk, iterable, false
+      walkExpression walk, iterable, isCommandPosition: false
       walkStatements walk, body.statements
     }
     .While(condition, body) => {
@@ -153,13 +153,13 @@ fn walkStatement(var walk: Walk, statement: Statement) {
     .Loop(body) => walkStatements walk, body.statements
     .Return(value) => {
       match value {
-        Some(found) => walkExpression walk, found, true
+        Some(found) => walkExpression walk, found, isCommandPosition: true
         None => {}
       }
     }
     .Break => {}
     .Continue => {}
-    .Evaluate(expression) => walkExpression walk, expression, true
+    .Evaluate(expression) => walkExpression walk, expression, isCommandPosition: true
   }
 }
 
@@ -184,7 +184,7 @@ fn walkMembers(var walk: Walk, members: List<Member>) {
       // A member of a type ends at the end of its line, so a command in a default has nothing to swallow
       .Field(field) => {
         match field.default {
-          Some(found) => walkExpression walk, found, true
+          Some(found) => walkExpression walk, found, isCommandPosition: true
           None => {}
         }
       }
@@ -194,7 +194,7 @@ fn walkMembers(var walk: Walk, members: List<Member>) {
       .Case(inner) => {
         for field in inner.fields {
           match field.default {
-            Some(found) => walkExpression walk, found, false
+            Some(found) => walkExpression walk, found, isCommandPosition: false
             None => {}
           }
         }
@@ -207,7 +207,7 @@ fn walkMembers(var walk: Walk, members: List<Member>) {
 fn walkFunction(var walk: Walk, declaration: FunctionDeclaration) {
   for parameter in declaration.parameters {
     match parameter.default {
-      Some(found) => walkExpression walk, found, false
+      Some(found) => walkExpression walk, found, isCommandPosition: false
       None => {}
     }
   }
@@ -219,22 +219,22 @@ fn walkFunction(var walk: Walk, declaration: FunctionDeclaration) {
 
 fn walkBinding(var walk: Walk, binding: Binding) {
   walkPattern walk, binding.pattern
-  walkExpression walk, binding.value, true
+  walkExpression walk, binding.value, isCommandPosition: true
 }
 
 fn walkCondition(var walk: Walk, condition: Condition) {
   match condition {
-    .Test(expression) => walkExpression walk, expression, false
+    .Test(expression) => walkExpression walk, expression, isCommandPosition: false
     .Bind(_, pattern, value) => {
       walkPattern walk, pattern
-      walkExpression walk, value, false
+      walkExpression walk, value, isCommandPosition: false
     }
   }
 }
 
 fn walkArguments(var walk: Walk, arguments: List<Argument>) {
   for argument in arguments {
-    walkExpression walk, argument.value, false
+    walkExpression walk, argument.value, isCommandPosition: false
   }
 }
 
@@ -255,44 +255,44 @@ fn walkExpression(var walk: Walk, expression: Expression, isCommandPosition: Boo
     .TextLiteral(segments) => {
       for segment in segments {
         if const .Interpolated(inner) = segment {
-          walkExpression walk, inner, false
+          walkExpression walk, inner, isCommandPosition: false
         }
       }
     }
-    .Generic(target, _) => walkExpression walk, target, false
+    .Generic(target, _) => walkExpression walk, target, isCommandPosition: false
     .TupleLiteral(items) => walkArguments walk, items
     .ListLiteral(items) => walkArguments walk, items
     .MapLiteral(entries) => {
       for (key, value) in entries {
-        walkExpression walk, key, false
-        walkExpression walk, value, false
+        walkExpression walk, key, isCommandPosition: false
+        walkExpression walk, value, isCommandPosition: false
       }
     }
-    .Member(target, _, _) => walkExpression walk, target, false
+    .Member(target, _, _) => walkExpression walk, target, isCommandPosition: false
     .Index(target, index) => {
-      walkExpression walk, target, false
-      walkExpression walk, index, false
+      walkExpression walk, target, isCommandPosition: false
+      walkExpression walk, index, isCommandPosition: false
     }
     .Call(callee, arguments, _) => {
-      walkExpression walk, callee, false
+      walkExpression walk, callee, isCommandPosition: false
       walkArguments walk, arguments
     }
-    .Unary(_, operand) => walkExpression walk, operand, false
+    .Unary(_, operand) => walkExpression walk, operand, isCommandPosition: false
     .Binary(_, left, right) => {
-      walkExpression walk, left, false
-      walkExpression walk, right, false
+      walkExpression walk, left, isCommandPosition: false
+      walkExpression walk, right, isCommandPosition: false
     }
     .RangeLiteral(start, end, _) => {
       match start {
-        Some(found) => walkExpression walk, found, false
+        Some(found) => walkExpression walk, found, isCommandPosition: false
         None => {}
       }
       match end {
-        Some(found) => walkExpression walk, found, false
+        Some(found) => walkExpression walk, found, isCommandPosition: false
         None => {}
       }
     }
-    .Try(inner) => walkExpression walk, inner, false
+    .Try(inner) => walkExpression walk, inner, isCommandPosition: false
     .Closure(closure) => {
       for parameter in closure.parameters {
         walkPattern walk, parameter.pattern
@@ -303,19 +303,19 @@ fn walkExpression(var walk: Walk, expression: Expression, isCommandPosition: Boo
       walkCondition walk, condition
       walkStatements walk, then.statements
       match otherwise {
-        Some(found) => walkExpression walk, found, false
+        Some(found) => walkExpression walk, found, isCommandPosition: false
         None => {}
       }
     }
     .Match(subject, arms) => {
-      walkExpression walk, subject, false
+      walkExpression walk, subject, isCommandPosition: false
       for arm in arms {
         walkPattern walk, arm.pattern
         match arm.guard {
-          Some(found) => walkExpression walk, found, false
+          Some(found) => walkExpression walk, found, isCommandPosition: false
           None => {}
         }
-        walkExpression walk, arm.body, true
+        walkExpression walk, arm.body, isCommandPosition: true
       }
     }
     .Block(block) => walkStatements walk, block.statements
@@ -327,10 +327,10 @@ fn walkPattern(var walk: Walk, pattern: Pattern) {
     .Wildcard => {}
     .Binding(_) => {}
     .Invalid => {}
-    .Literal(value) => walkExpression walk, value, false
+    .Literal(value) => walkExpression walk, value, isCommandPosition: false
     .RangePattern(start, end, _) => {
-      walkExpression walk, start, false
-      walkExpression walk, end, false
+      walkExpression walk, start, isCommandPosition: false
+      walkExpression walk, end, isCommandPosition: false
     }
     .TuplePattern(items) => {
       for item in items {
