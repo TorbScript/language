@@ -36,7 +36,7 @@ public type Dispatched {
   /** The substitution its instance is built under: the generic parameters of the member and of its owner. */
   mapping: Map<ParameterId, TypeId>
   /** The trait the member satisfies, with its arguments. `Invalid` where the member belongs to no trait. */
-  capability: TypeId
+  trait: TypeId
   /**
    * The owner component of a manifest entry: `"Int64"`, `"String"`, `""` for a free function. It is the **target type**
    * of the implementation and not the type that declares the member, because that is what the manifest is keyed by:
@@ -301,7 +301,7 @@ fn memberOfImplementationDispatch(
   // `Slice.slice` is required by `Slice` and written by `List`, so a trait-typed list's slice would have nothing to call
   const member = providerOfMember lowering, target, implementation, symbol, name
   var mapping = memberMappingOf lowering, member, target, bound
-  addTraitOnlyArguments lowering, mapping, found.generics, found.capability, bound
+  addTraitOnlyArguments lowering, mapping, found.generics, found.trait, bound
   addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
   const owner = ownerOfImplementation lowering, found.target, target, member
@@ -508,7 +508,7 @@ public fn resultTypeOf(var lowering: Lowering, dispatched: Dispatched): TypeId {
 /** The trait an implementation provides, with its arguments as they are for the type it was reached on. */
 fn boundOfImplementation(var lowering: Lowering, implementation: ImplementationId, subject: TypeId?): TypeId {
   const found = lowering.checker.implementations.at implementation
-  const capability = match found.capability {
+  const capability = match found.trait {
     Some(inner) => inner
     None => {
       return lowering.checker.invalidType

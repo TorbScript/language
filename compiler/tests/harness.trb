@@ -773,10 +773,10 @@ public type Probed {
   fn quotationOf(written: String): List<String> {
     const at = spanOf written
     const found = checker.quotationAt(module, at).expect("a quotation at `{written}`")
-    var lines = ["value {checker.describe(found.annotation)}"]
+    var lines = ["value {checker.describe(found.type)}"]
     for index in 0..found.captures.length() {
       const capture = found.captures[index]
-      const shown = checker.describe capture.annotation
+      const shown = checker.describe capture.type
       const witness = describeWitness checker, capture.witness
       lines.append "capture {index} {capture.name}: {shown} through {witness}"
     }
@@ -784,7 +784,7 @@ public type Probed {
     for (span, parameters) in found.lambdas {
       var parts: List<String> = []
       for parameter in parameters {
-        parts.append "{parameter.name}: {checker.describe(parameter.annotation)}"
+        parts.append "{parameter.name}: {checker.describe(parameter.type)}"
       }
       inside.append((span, "lambda `{textAt(span)}` ({parts.joined(separator: ", ")})"))
     }
@@ -1074,7 +1074,7 @@ public fn describeResolution(checker: Checker, resolution: Resolution): String {
 /** The receiver of the receiver closure at `written`, as a test compares it: the binding, its type, and how it got it. */
 public fn describeReceiver(checker: Checker, found: ReceiverClosure): String {
   const name = checker.binding(found.binding).name
-  const shown = checker.describe found.annotation
+  const shown = checker.describe found.type
   const how = if found.implicit { "implicit" } else { "named" }
   const mode = if found.var { "var " } else { "" }
   "{how} {mode}{name}: {shown}"
@@ -1131,7 +1131,7 @@ public fn describeWitness(checker: Checker, witness: Witness): String {
   match witness {
     .Implementation(implementation, _, inner) => {
       const found = checker.implementations.at implementation
-      const shown = "{checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+      const shown = "{checker.describe(found.target)}: {describeTrait(checker, found.trait)}"
       if inner.isEmpty() {
         return shown
       }
@@ -1161,7 +1161,7 @@ public fn describeDispatch(checker: Checker, dispatch: Dispatch): String {
     .Direct => "direct"
     .Implementation(implementation, _) => {
       const found = checker.implementations.at implementation
-      const shown = describeTrait checker, found.capability
+      const shown = describeTrait checker, found.trait
       "implementation {checker.describe(found.target)}: {shown}"
     }
     .Object(bound, _) => "object {checker.describe(bound)}"

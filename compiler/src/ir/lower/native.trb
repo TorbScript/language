@@ -100,7 +100,7 @@ fn wrapperKeyOf(entry: NativeEntry, arguments: List<IrTypeId>, declared: IrSigna
     return arguments
   }
   match declared.parameters.first() {
-    Some(parameter) => arguments.appended parameter.annotation
+    Some(parameter) => arguments.appended parameter.type
     None => arguments
   }
 }
@@ -204,7 +204,7 @@ fn runtimeShapeOf(
   const declared = irSignatureUnder lowering, signature, mapping
   var annotations: List<IrTypeId> = []
   for out in outParametersOf(lowering, declared, crossing, isPartsResult(entry), writesAnyPayload(entry)) {
-    annotations.append out.annotation
+    annotations.append out.type
   }
   RuntimeShape entry.addressedParameters, annotations, []
 }
@@ -234,7 +234,7 @@ fn isPartsResult(entry: NativeEntry): Bool {
 type OutParameter {
   /** The field of the failure type it fills, or `out` for the payload of the success case. */
   name: String
-  annotation: IrTypeId
+  type: IrTypeId
 }
 
 /**
@@ -270,12 +270,12 @@ fn outParametersOf(
   const success = successVariantOf lowering, layout
   if success >= 0 {
     if const Some(first) = shape.fieldsOfVariant(success).first() {
-      if !isVoidResult(lowering, first.annotation) || writesVoid {
+      if !isVoidResult(lowering, first.type) || writesVoid {
         if isSplit {
-          found.appendAll payloadParametersOf(lowering, first.annotation)
+          found.appendAll payloadParametersOf(lowering, first.type)
         } else {
           // The runtime writes the storage of a collection, not the trait-typed value the declaration names
-          var annotation = first.annotation
+          var annotation = first.type
           if const Some(inner) = crossing {
             annotation = inner.storage
           }
@@ -294,7 +294,7 @@ fn outParametersOf(
       return found
     }
   }
-  const errorLayout = match layoutOfType(lowering.program, carried.annotation) {
+  const errorLayout = match layoutOfType(lowering.program, carried.type) {
     Some(inner) => inner
     None => {
       return found
@@ -306,7 +306,7 @@ fn outParametersOf(
   }
   for field in errorShape.fields {
     if parameterNamed(declared, field.name) < 0 {
-      found.append OutParameter(field.name, field.annotation)
+      found.append OutParameter(field.name, field.type)
     }
   }
   found
@@ -391,7 +391,7 @@ fn buildWrapper(
   const outs = outParametersOf lowering, declared, crossing, isPartsResult(entry), writesAnyPayload(entry)
   var slots: List<Slot> = []
   for out in outs {
-    const slot = addTemporary builder, out.annotation
+    const slot = addTemporary builder, out.type
     slots.append slot
     given.append referenced(Reference(slot, []))
   }
@@ -557,7 +557,7 @@ fn successConstruct(
   if fields.isEmpty() {
     return []
   }
-  const annotation = fields[0].annotation
+  const annotation = fields[0].type
   if isVoidResult(lowering, annotation) {
     const slot = addTemporary builder, annotation
     const value = internStatic lowering, StaticContents.VoidValue, annotation
@@ -619,7 +619,7 @@ fn payloadParametersOf(var lowering: Lowering, payload: IrTypeId): List<OutParam
   }
   const fields = lowering.program.layoutAt(layout).fields
   for index in 0..fields.length() {
-    found.append OutParameter("out{index}", fields[index].annotation)
+    found.append OutParameter("out{index}", fields[index].type)
   }
   found
 }
@@ -652,7 +652,7 @@ fn failureConstruct(
     emit builder, Instruction.Construct(target, layout, failure, [])
     return true
   }
-  const error = fields[0].annotation
+  const error = fields[0].type
   const errorLayout = match layoutOfType(lowering.program, error) {
     Some(found) => found
     None => {

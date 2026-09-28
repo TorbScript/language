@@ -115,7 +115,7 @@ fn printParameter(program: IrProgram, parameter: IrParameter): String {
     ""
   }
   const name = if parameter.name.isEmpty() { "" } else { "{parameter.name}: " }
-  "{reference}{name}{describeIrType(program, parameter.annotation)} {printOwnership(parameter.ownership)}"
+  "{reference}{name}{describeIrType(program, parameter.type)} {printOwnership(parameter.ownership)}"
 }
 
 fn printResult(program: IrProgram, signature: IrSignature): String {
@@ -135,7 +135,7 @@ fn printSlot(program: IrProgram, index: Int, slot: SlotDeclaration): String {
     .ResultPointer => "result"
   }
   const name = if slot.name.isEmpty() { "" } else { " {slot.name}" }
-  "slot %{index} {role}{name}: {describeIrType(program, slot.annotation)}"
+  "slot %{index} {role}{name}: {describeIrType(program, slot.type)}"
 }
 
 fn printBlockComment(program: IrProgram, block: Block): String {
@@ -456,7 +456,7 @@ public fn printLayout(program: IrProgram, layout: Layout): String {
 fn printFields(program: IrProgram, fields: List<FieldLayout>): String {
   var parts: List<String> = []
   for field in fields {
-    parts.append "{field.name}: {describeIrType(program, field.annotation)}"
+    parts.append "{field.name}: {describeIrType(program, field.type)}"
   }
   parts.joined separator: ", "
 }
@@ -513,7 +513,7 @@ public fn printWitnessTable(program: IrProgram, table: WitnessTable): String {
 
 /** One static value: its name, its type, and its contents. */
 public fn printStatic(program: IrProgram, value: StaticValue): String {
-  "static {value.name}: {describeIrType(program, value.annotation)} = {printContents(program, value.contents)}"
+  "static {value.name}: {describeIrType(program, value.type)} = {printContents(program, value.contents)}"
 }
 
 fn printContents(program: IrProgram, contents: StaticContents): String {
@@ -601,7 +601,7 @@ public fn describeIrSignature(program: IrProgram, id: IrSignatureId): String {
   var parts: List<String> = []
   for parameter in signature.parameters {
     const reference = if parameter.byReference { "var " } else { "" }
-    parts.append "{reference}{describeIrType(program, parameter.annotation)}"
+    parts.append "{reference}{describeIrType(program, parameter.type)}"
   }
   for witness in signature.witnesses {
     parts.append "witness {describeTrait(program, witness)}"

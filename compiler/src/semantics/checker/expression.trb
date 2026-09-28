@@ -169,7 +169,7 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .Binary(operator, left, right) => binaryType checker, operator, left, right, expression.span, annotation
     .If(condition, then, otherwise) => ifType checker, condition, then, otherwise, expected
     .Match(subject, arms) => matchType checker, subject, arms, expected
-    .Block(block) => checkBlock(checker, block, expected).annotation
+    .Block(block) => checkBlock(checker, block, expected).type
     // `to<Set<Int>>()`, `Map<String, Int>()`: the explicit type arguments fill the callee's parameters from the left
     .Generic(_, _) => {
       const target = resolveTarget checker, expression, annotation
@@ -1089,7 +1089,7 @@ fn traitImplies(var checker: Checker, bound: TypeId, capability: SymbolId, depth
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
   for supertrait in shape.traits {
-    if traitImplies(checker, supertrait.capability, capability, depth + 1) {
+    if traitImplies(checker, supertrait.trait, capability, depth + 1) {
       return true
     }
   }
@@ -1545,7 +1545,7 @@ fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>,
           return builtMapType checker, entries, found, first, second, at
         }
         None => {
-          return wrongMapType checker, entries, found.annotation, at
+          return wrongMapType checker, entries, found.type, at
         }
       }
     }
@@ -1610,7 +1610,7 @@ fn defaultMapType(
 
 /** An expected `Array<Item, Size>`, taken apart: what a literal that fills its inline slots has to match. */
 type ExpectedArray {
-  annotation: TypeId
+  type: TypeId
   item: TypeId
   /** The const argument: a number where the annotation wrote one, an open variable where the literal solves it. */
   size: TypeId
@@ -1618,7 +1618,7 @@ type ExpectedArray {
 
 /** An expected type that has to be *built* from a collection, with the `From<Iterate<Item>>` that does it. */
 type BuiltTarget {
-  annotation: TypeId
+  type: TypeId
   item: TypeId
   witness: Witness
 }
@@ -1796,14 +1796,14 @@ fn arrayLiteralType(var checker: Checker, items: List<Argument>, target: Expecte
   if !isCounted {
     // The message about the spread is the root cause: "cannot infer `Size`" on top of it would say nothing new
     suppressVariables checker, target.size
-    return target.annotation
+    return target.type
   }
-  if !matchArraySize(checker, target.annotation, target.size, count, at) {
-    return target.annotation
+  if !matchArraySize(checker, target.type, target.size, count, at) {
+    return target.type
   }
   const item = resolveType checker, target.item
   checker.recordCollectionLiteral at, CollectionLiteral.InlineArray(item, count)
-  resolveType checker, target.annotation
+  resolveType checker, target.type
 }
 
 /**
@@ -1874,7 +1874,7 @@ fn builtListType(var checker: Checker, items: List<Argument>, target: BuiltTarge
     const _ = checkExpression checker, argument.value, inner
   }
   recordBuiltLiteral checker, target, at
-  target.annotation
+  target.type
 }
 
 /** `const index: HashMap<String, Int> = ["a": 1]`: the default map is built and handed to `HashMap.from`. */
@@ -1893,7 +1893,7 @@ fn builtMapType(
     const _ = checkExpression checker, given, values
   }
   recordBuiltLiteral checker, target, at
-  target.annotation
+  target.type
 }
 
 /** A map literal against a type that takes no entries. The entries are still checked: they are ordinary expressions. */
@@ -1904,7 +1904,7 @@ fn wrongMapType(var checker: Checker, entries: List<(Expression, Expression)>, a
 }
 
 fn recordBuiltLiteral(var checker: Checker, target: BuiltTarget, at: Span) {
-  const annotation = resolveType checker, target.annotation
+  const annotation = resolveType checker, target.type
   const item = resolveType checker, target.item
   checker.recordCollectionLiteral at, CollectionLiteral.FromIterate(annotation, item, target.witness)
 }
@@ -2605,7 +2605,7 @@ fn ifType(
   if expected.isStatement() {
     return checker.voidType
   }
-  armResult checker, [first.annotation, second], [then.span, alternative.span], expected, "The branches of this `if`"
+  armResult checker, [first.type, second], [then.span, alternative.span], expected, "The branches of this `if`"
 }
 
 /**
@@ -3405,7 +3405,7 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
 fn foundAliasAt(var checker: Checker, at: Span, given: TypeId): String? {
   if const Some(.Local(binding)) = checker.resolutionHere(at) {
     const written = checker.bindingAliases.get(binding.value)?
-    if sameType(checker.types, checker.binding(binding).annotation, given) {
+    if sameType(checker.types, checker.binding(binding).type, given) {
       return written
     }
   }

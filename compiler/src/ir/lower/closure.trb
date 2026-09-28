@@ -324,8 +324,8 @@ public fn lowerLazyArgument(
     reportUnsupported lowering, "a `lazy` cell of an unexpected shape", value.span
     return None
   }
-  const optional = shape.fields[0].annotation
-  const thunkType = shape.fields[1].annotation
+  const optional = shape.fields[0].type
+  const thunkType = shape.fields[1].type
   const thunkSignature = match closureSignatureOf(lowering, thunkType) {
     Some(found) => found
     None => {
@@ -380,7 +380,7 @@ public fn lowerForcedRead(
   if shape.fields.length() != 2 {
     return unsupportedSlot lowering, builder, destination, "a `lazy` cell of an unexpected shape", at
   }
-  const optional = shape.fields[0].annotation
+  const optional = shape.fields[0].type
   const optionLayout = match layoutOfType(lowering.program, optional) {
     Some(found) => found
     None => {
@@ -406,7 +406,7 @@ public fn lowerForcedRead(
   emit builder, Instruction.Read(target, Reference(held, [PathStep.Variant(optionLayout, someIndex, 0)]))
   finishBlock lowering, builder, Terminator.Jump(join)
   continueIn lowering, builder, pending
-  const thunkType = shape.fields[1].annotation
+  const thunkType = shape.fields[1].type
   const thunk = addTemporary builder, thunkType
   emit builder, Instruction.Read(thunk, Reference(cell, [PathStep.Field(layout, 1)]))
   emit builder, Instruction.CallClosure(target, thunk, [], location)
@@ -813,7 +813,7 @@ public fn lowerClosureCall(
     // `commaSeparated(closer, parse: (var Parser) => Item)`: a `var` parameter of a closure type takes a place, exactly
     // as a `var` parameter of a declaration does - the closure writes through the caller's own storage
     if shape.parameters[position].byReference {
-      const inner = shape.parameters[position].annotation
+      const inner = shape.parameters[position].type
       const path = match argumentReference(lowering, builder, value, inner, "a `var` argument") {
         Some(found) => found
         None => {
@@ -1307,7 +1307,7 @@ fn bindCaptures(
   const slot = Slot 0
   for index in 0..plans.length() {
     const plan = plans[index]
-    const annotation = plan.field.annotation
+    const annotation = plan.field.type
     const held = addLocal builder, annotation, plan.field.name
     emit builder, Instruction.Read(held, Reference(slot, [PathStep.Field(layout, index)]))
     declareVisible lowering, builder, held

@@ -127,8 +127,8 @@ public fn noteClosureKind(
       parameters.append owner
       continue
     }
-    if !binding.var && taskProblemOf(checker, binding.annotation).isSome() {
-      const item = (binding.name, binding.annotation)
+    if !binding.var && taskProblemOf(checker, binding.type).isSome() {
+      const item = (binding.name, binding.type)
       unseen.append item
     }
   }
@@ -392,7 +392,7 @@ fn traitMembersFound(var checker: Checker, symbol: SymbolId, bound: TypeId): Lis
   var traits: List<SymbolId> = []
   for index in 0..checker.implementations.all.length() {
     const implementation = checker.implementations.all[index]
-    const head = match implementation.capability {
+    const head = match implementation.trait {
       Some(found) => headOf checker, found
       None => None
     }
@@ -466,7 +466,7 @@ fn extendsTrait(var checker: Checker, capability: SymbolId, wanted: SymbolId, de
   const identifier = typeSignatureOf checker, capability
   const shape = checker.typeSignature identifier
   for supertrait in shape.traits {
-    if const Some(head) = headOf(checker, supertrait.capability) {
+    if const Some(head) = headOf(checker, supertrait.trait) {
       if extendsTrait(checker, head, wanted, depth + 1) {
         return true
       }

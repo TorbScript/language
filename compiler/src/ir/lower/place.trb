@@ -48,7 +48,7 @@ use entryCellRead, readEntryCell from "./cell"
  */
 public type PlacePath {
   reference: Reference
-  annotation: IrTypeId
+  type: IrTypeId
   /** Outermost first. `putBackElements` writes them back, and every caller of one of the two forms below calls it. */
   taken: List<TakenElement> = []
 }
@@ -278,7 +278,7 @@ fn steppedFrom(
 ): PlacePath? {
   var base = root.reference.base
   var steps = root.reference.steps
-  var annotation = root.annotation
+  var annotation = root.type
   var taken: List<TakenElement> = []
   var position = 0
   for step in written {
@@ -316,7 +316,7 @@ fn steppedFrom(
       }
     }
     steps.append next.step
-    annotation = next.annotation
+    annotation = next.type
   }
   PlacePath Reference(base, steps), annotation, taken
 }
@@ -331,7 +331,7 @@ type TakenKind {
 /** One step of a path, and the type it leads to. */
 type SteppedPath {
   step: PathStep
-  annotation: IrTypeId
+  type: IrTypeId
 }
 
 /**
@@ -449,7 +449,7 @@ fn steppedPath(var lowering: Lowering, annotation: IrTypeId, step: PlaceStep, wh
 }
 
 fn fieldTypeOf(var lowering: Lowering, layout: LayoutId, index: Int): IrTypeId {
-  lowering.program.layoutAt(layout).fields[index].annotation
+  lowering.program.layoutAt(layout).fields[index].type
 }
 
 /**
@@ -467,7 +467,7 @@ fn typeOfPlace(var lowering: Lowering, var builder: FunctionBuilder, place: Refe
         annotation = fieldTypeOf lowering, layout, index
       }
       .Variant(layout, variant, index) => {
-        annotation = lowering.program.layoutAt(layout).fieldsOfVariant(variant)[index].annotation
+        annotation = lowering.program.layoutAt(layout).fieldsOfVariant(variant)[index].type
       }
       _ => {}
     }

@@ -199,8 +199,8 @@ fn withValueShapes(var emitter: Emitter, program: IrProgram, function: IrFunctio
   for position in 0..chunk.parameters.length() {
     var entry = chunk.parameters[position]
     if const Some(declared) = function.signature.parameters.get(position) {
-      const shape = shapeOperand emitter, program, declared.annotation
-      entry = entry.copy valueShape: shape, valueWidth: emitter.tables.widthOf(declared.annotation)
+      const shape = shapeOperand emitter, program, declared.type
+      entry = entry.copy valueShape: shape, valueWidth: emitter.tables.widthOf(declared.type)
     }
     parameters.append entry
   }
@@ -271,7 +271,7 @@ fn layoutComparesByWords(program: IrProgram, layout: LayoutId): Bool {
   }
   if const .Inline = shape.representation {
     for field in shape.fields {
-      if !comparesByWords(program, field.annotation) {
+      if !comparesByWords(program, field.type) {
         return false
       }
     }
@@ -371,7 +371,7 @@ fn recordShape(var emitter: Emitter, program: IrProgram, layout: LayoutId, name:
   const isReversed = emitter.closing.holdsLayout layout
   var counted: List<CountedWord> = []
   for position in fieldOrder(shape.fields.length(), isReversed) {
-    countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], counted
+    countedWordsOf emitter, program, shape.fields[position].type, words.offsets[position], counted
   }
   Shape(name, words.width, counted, 0 - 1, [], isReversed)
 }
@@ -383,14 +383,14 @@ fn variantShape(var emitter: Emitter, program: IrProgram, layout: LayoutId, name
   const isReversed = emitter.closing.holdsLayout layout
   var counted: List<CountedWord> = []
   for position in fieldOrder(shape.commonFieldCount, isReversed) {
-    countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], counted
+    countedWordsOf emitter, program, shape.fields[position].type, words.offsets[position], counted
   }
   var groups: List<List<CountedWord>> = []
   for variant in shape.variants {
     var group: List<CountedWord> = []
     for inside in fieldOrder(variant.count, isReversed) {
       const position = variant.first + inside
-      countedWordsOf emitter, program, shape.fields[position].annotation, words.offsets[position], group
+      countedWordsOf emitter, program, shape.fields[position].type, words.offsets[position], group
     }
     groups.append group
   }
@@ -464,7 +464,7 @@ fn countedLayoutWords(
     // A niche is its payload, so it is counted as the payload is
     .Niche(_, field) => {
       if const Some(found) = shape.fields.get(field) {
-        countedWordsOf emitter, program, found.annotation, offset, into
+        countedWordsOf emitter, program, found.type, offset, into
       }
     }
     .Inline => {
@@ -476,7 +476,7 @@ fn countedLayoutWords(
       const isReversed = emitter.closing.holdsLayout layout
       for position in fieldOrder(shape.fields.length(), isReversed) {
         const field = shape.fields[position]
-        countedWordsOf(emitter, program, field.annotation, offset + words.offsets[position], into)
+        countedWordsOf(emitter, program, field.type, offset + words.offsets[position], into)
       }
     }
   }
@@ -585,7 +585,7 @@ fn constantPartsOf(var emitter: Emitter, program: IrProgram, id: StaticId, var i
         // An integer literal where a float is expected (`Square(2)` of a `Float` field) is the float: a register of
         // a float holds the bits of its `double`, as C converts the literal
         .Integer(number) => {
-          if const .Floating(_) = program.typeAt(value.annotation) {
+          if const .Floating(_) = program.typeAt(value.type) {
             into.append ConstantPart.Floating(Float64.from(number))
           } else {
             into.append ConstantPart.Word(number)
@@ -626,7 +626,7 @@ fn aggregateParts(
         return
       }
       const width = match shape.fields.get(field) {
-        Some(found) => emitter.tables.widthOf found.annotation
+        Some(found) => emitter.tables.widthOf found.type
         None => 1
       }
       for _ in 0..width {
@@ -712,17 +712,17 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   for index in 0..function.slots.length() {
     const declared = function.slots[index]
     const isReference = isReferenceRole function, declared.role
-    if const Some(why) = whyNoWords(program, declared.annotation) {
+    if const Some(why) = whyNoWords(program, declared.type) {
       report emitter, why
     }
-    var width = if isReference { 1 } else { emitter.tables.widthOf declared.annotation }
+    var width = if isReference { 1 } else { emitter.tables.widthOf declared.type }
     if width < 1 {
       width = 1
     }
     offsets.append cursor
     widths.append width
     references.append isReference
-    const described = describeType program, declared.annotation
+    const described = describeType program, declared.type
     const shown = if isReference { "&{described}" } else { described }
     slots.append FrameSlot(index, cursor, width, shown)
     cursor = cursor + width
@@ -737,8 +737,8 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     const declared = function.signature.parameters[position]
     var retained = 0 - 1
     if !declared.byReference && declared.ownership == Ownership.Owned {
-      if containsCountedType(program, declared.annotation) {
-        retained = valueShapeIndex emitter, program, declared.annotation
+      if containsCountedType(program, declared.type) {
+        retained = valueShapeIndex emitter, program, declared.type
       }
     }
     parameters.append ParameterEntry(offsets[found], widths[found], references[found], retained)
@@ -1064,7 +1064,7 @@ fn crossingLayoutTestsOf(
       const words = emitter.tables.wordsOf layout
       for position in 0..shape.fields.length() {
         const field = shape.fields[position]
-        if !crossingTestsOf(emitter, program, field.annotation, register + words.offsets[position], tests) {
+        if !crossingTestsOf(emitter, program, field.type, register + words.offsets[position], tests) {
           return false
         }
       }
@@ -1086,7 +1086,7 @@ fn savedFrameOf(emitter: Emitter, function: IrFunction): (List<Int>, Int) {
     var width = if isReferenceRole(function, function.slots[index].role) {
       1
     } else {
-      emitter.tables.widthOf function.slots[index].annotation
+      emitter.tables.widthOf function.slots[index].type
     }
     if width < 1 {
       width = 1
@@ -1200,7 +1200,7 @@ fn entryCellChunk(
 ): Chunk {
   const held = match access {
     .Read => function.signature.result
-    .Write => function.signature.parameters[0].annotation
+    .Write => function.signature.parameters[0].type
   }
   const width = emitter.tables.widthOf held
   const offset = match emitter.entryCells.get(cell) {
@@ -1389,7 +1389,7 @@ fn allocateScratch(var body: Body, width: Int): Int {
 }
 
 fn typeOf(body: Body, slot: Slot): IrTypeId {
-  body.function.slots[slot.value].annotation
+  body.function.slots[slot.value].type
 }
 
 /**
@@ -1462,7 +1462,7 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
           steps.append PlaceStep.Dereference
         }
         pending = pending + fieldOffset(emitter, layout, index)
-        current = program.layoutAt(layout).fields[index].annotation
+        current = program.layoutAt(layout).fields[index].type
       }
       .TupleField(layout, index) => {
         if isBlockPointer(program, current) {
@@ -1470,12 +1470,12 @@ fn placeOf(var emitter: Emitter, var body: Body, program: IrProgram, reference: 
           steps.append PlaceStep.Dereference
         }
         pending = pending + fieldOffset(emitter, layout, index)
-        current = program.layoutAt(layout).fields[index].annotation
+        current = program.layoutAt(layout).fields[index].type
       }
       .Variant(layout, variant, index) => {
         const shape = program.layoutAt layout
         const position = shape.variants[variant].first + index
-        current = shape.fields[position].annotation
+        current = shape.fields[position].type
         // A niche is its payload: the step into the one field of the payload variant goes nowhere
         if const .Niche(_, _) = shape.representation {
           continue
@@ -1550,11 +1550,11 @@ fn placeType(program: IrProgram, body: Body, reference: Reference): IrTypeId {
   var current = typeOf body, reference.base
   for step in reference.steps {
     current = match step {
-      .Field(layout, index) => program.layoutAt(layout).fields[index].annotation
-      .TupleField(layout, index) => program.layoutAt(layout).fields[index].annotation
+      .Field(layout, index) => program.layoutAt(layout).fields[index].type
+      .TupleField(layout, index) => program.layoutAt(layout).fields[index].type
       .Variant(layout, variant, index) => {
         const shape = program.layoutAt layout
-        shape.fields[shape.variants[variant].first + index].annotation
+        shape.fields[shape.variants[variant].first + index].type
       }
       .Element(item, _, _, _) => item
       .Contents(annotation) => annotation
@@ -2434,7 +2434,7 @@ fn emitConstruct(
     .Niche(payload, field) => {
       if variant == payload {
         if const Some(found) = registers.first() {
-          const width = emitter.tables.widthOf shape.fields[field].annotation
+          const width = emitter.tables.widthOf shape.fields[field].type
           emitHead emitter, body, Opcode.Move, register, found, width
         }
         return
@@ -2445,7 +2445,7 @@ fn emitConstruct(
       const positions = constructedPositions shape, variant
       for index in 0..registers.length() {
         const position = positions.get(index) ?? 0
-        const width = emitter.tables.widthOf shape.fields[position].annotation
+        const width = emitter.tables.widthOf shape.fields[position].type
         emitHead(emitter, body, Opcode.Move, register + words.offsets[position], registers[index], width)
       }
       if !shape.variants.isEmpty() {
@@ -2460,7 +2460,7 @@ fn emitConstruct(
         const position = positions.get(index) ?? 0
         placed.append words.offsets[position]
         placed.append registers[index]
-        placed.append emitter.tables.widthOf(shape.fields[position].annotation)
+        placed.append emitter.tables.widthOf(shape.fields[position].type)
       }
       if !shape.variants.isEmpty() {
         const tag = allocateScratch body, 1
@@ -2618,7 +2618,7 @@ fn emitClosure(
       for index in 0..registers.length() {
         placed.append words.offsets[index]
         placed.append registers[index]
-        placed.append emitter.tables.widthOf(shape.fields[index].annotation)
+        placed.append emitter.tables.widthOf(shape.fields[index].type)
       }
       const contents = blockShapeIndex emitter, program, layout
       emitBlockNew(emitter, body, register + 1, contents, environmentBlockKind, words.width, placed)
@@ -2627,7 +2627,7 @@ fn emitClosure(
       var tests: List<Int> = []
       var crosses = true
       for index in 0..registers.length() {
-        if !crossingTestsOf(emitter, program, shape.fields[index].annotation, registers[index], tests) {
+        if !crossingTestsOf(emitter, program, shape.fields[index].type, registers[index], tests) {
           crosses = false
         }
       }

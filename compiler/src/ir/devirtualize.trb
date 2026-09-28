@@ -168,7 +168,7 @@ fn hasObjectInSignature(program: IrProgram, signature: IrSignature): Bool {
     return true
   }
   for parameter in signature.parameters {
-    if isObjectType(program, parameter.annotation) {
+    if isObjectType(program, parameter.type) {
       return true
     }
   }
@@ -243,7 +243,7 @@ fn locationsOf(program: IrProgram): Locations {
     places.slotBase.append base
     places.slotCount.append function.slots.length()
     for declaration in function.slots {
-      if isObjectType(program, declaration.annotation) {
+      if isObjectType(program, declaration.type) {
         const at = places.count
         places.ofSlot.append at
         places.count = at + 1
@@ -342,7 +342,7 @@ fn newPeeling(program: IrProgram, places: Locations): Peeling {
     for position in 0..function.slots.length() {
       const location = slotLocation places, index, Slot(position)
       if location >= 0 {
-        peeling.declared.set location, function.slots[position].annotation.value
+        peeling.declared.set location, function.slots[position].type.value
       }
     }
     const answer = resultLocation places, index
@@ -1066,7 +1066,7 @@ fn directCallOf(
     return None
   }
   const first = signature.parameters[0]
-  if first.out || first.byAddress || first.annotation != payload {
+  if first.out || first.byAddress || first.type != payload {
     return None
   }
   if !argumentsFit(function, signature, arguments) {
@@ -1117,7 +1117,7 @@ fn argumentsFit(function: IrFunction, signature: IrSignature, arguments: List<Ar
       if !place.steps.isEmpty() || place.base != argument.slot {
         return false
       }
-      if function.typeOfSlot(place.base) != parameter.annotation {
+      if function.typeOfSlot(place.base) != parameter.type {
         return false
       }
       continue
@@ -1125,7 +1125,7 @@ fn argumentsFit(function: IrFunction, signature: IrSignature, arguments: List<Ar
     if argument.place.isSome() {
       return false
     }
-    if function.typeOfSlot(argument.slot) != parameter.annotation {
+    if function.typeOfSlot(argument.slot) != parameter.type {
       return false
     }
   }
@@ -1231,11 +1231,11 @@ fn rewriteFunction(peeling: Peeling, places: Locations, var program: IrProgram, 
     }
     const payload = payloadOf peeling, location
     const declaration = original.slots[position]
-    function.slots.set position, declaration.copy(annotation: payload)
+    function.slots.set position, declaration.copy(type: payload)
     if const .Parameter(at) = declaration.role {
       if at >= 0 && at < parameters.length() {
         const parameter = parameters[at]
-        parameters.set at, parameter.copy(annotation: payload)
+        parameters.set at, parameter.copy(type: payload)
       }
     }
   }

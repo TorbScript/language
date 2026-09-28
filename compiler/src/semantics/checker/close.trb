@@ -45,7 +45,7 @@ public fn checkCloseImplementer(var checker: Checker, index: Int) {
       return
     }
   }
-  const capability = match implementation.capability {
+  const capability = match implementation.trait {
     Some(applied) => headSymbolOf checker, applied
     None => None
   }
@@ -101,7 +101,7 @@ public fn closeImplementers(var checker: Checker): Set<Int> {
     }
   }
   for implementation in checker.implementations.all {
-    const capability = match implementation.capability {
+    const capability = match implementation.trait {
       Some(applied) => headSymbolOf checker, applied
       None => None
     }
@@ -141,7 +141,7 @@ public fn traitsOfCloseImplementers(var checker: Checker, implementers: Set<Int>
     if !implementers.contains(target.value) {
       continue
     }
-    if const Some(applied) = implementation.capability {
+    if const Some(applied) = implementation.trait {
       if const Some(head) = headSymbolOf(checker, applied) {
         addWithSupertraits checker, found, head, 0
       }
@@ -159,7 +159,7 @@ fn addWithSupertraits(var checker: Checker, var found: Set<Int>, capability: Sym
     const identifier = typeSignatureOf checker, capability
     const shape = checker.typeSignature identifier
     for supertrait in shape.traits {
-      if const Some(head) = headSymbolOf(checker, supertrait.capability) {
+      if const Some(head) = headSymbolOf(checker, supertrait.trait) {
         addWithSupertraits(checker, found, head, depth + 1)
       }
     }
@@ -178,7 +178,7 @@ fn comesWithClose(var checker: Checker, capability: SymbolId, close: SymbolId, d
     const identifier = typeSignatureOf checker, capability
     const shape = checker.typeSignature identifier
     for supertrait in shape.traits {
-      if const Some(head) = headSymbolOf(checker, supertrait.capability) {
+      if const Some(head) = headSymbolOf(checker, supertrait.trait) {
         if comesWithClose(checker, head, close, depth + 1) {
           return true
         }

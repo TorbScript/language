@@ -67,7 +67,7 @@ public fn isQuotationValue(var checker: Checker, expression: Expression): Bool {
     }
   }
   if const Some(.Bound(binding)) = checker.findLocal(text) {
-    const annotation = checker.binding(binding).annotation
+    const annotation = checker.binding(binding).type
     return isQuotation checker, annotation
   }
   // A top-level `const` of a module is a declaration and not a local: `const isAdult: Expression<...> = { ... }`
@@ -509,7 +509,7 @@ fn encodedCaptures(
   for index in 0..state.captures.length() {
     const binding = state.captures[index].binding
     const local = checker.binding binding
-    const annotation = resolveType checker, local.annotation
+    const annotation = resolveType checker, local.type
     const witness = witnessFor checker, annotation, bound
     if const .Unresolved = witness {
       const at = state.firstReads.get(index) ?? local.at
@@ -525,7 +525,7 @@ fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapt
   var found: List<QuotationCapture> = []
   for capture in state.captures {
     const local = checker.binding capture.binding
-    const annotation = resolveType checker, local.annotation
+    const annotation = resolveType checker, local.type
     found.append QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved)
   }
   found

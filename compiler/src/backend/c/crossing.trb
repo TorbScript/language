@@ -283,7 +283,7 @@ fn isCopyableLayout(program: IrProgram, layout: LayoutId, var visiting: List<Int
   }
   visiting.append layout.value
   for field in shape.fields {
-    if !isCopyable(program, field.annotation, visiting, withoutShared) {
+    if !isCopyable(program, field.type, visiting, withoutShared) {
       return false
     }
   }
@@ -355,16 +355,13 @@ public fn environmentCopyNameOf(program: IrProgram, layout: LayoutId): String {
  */
 public fn environmentCopyOf(program: IrProgram, layout: LayoutId): Crossing {
   const shape = program.layoutAt layout
-  if !shape.fields.any({ containsCountedType program, _.annotation }) {
+  if !shape.fields.any({ containsCountedType program, _.type }) {
     return Crossing.Never
   }
   const value = CExpression.Name "value"
   var combined = Crossing.Always
   for field in shape.fields {
-    combined = bothOf(
-      combined,
-      privateOf(program, field.annotation, CExpression.PointerMember(value, memberNameOf(field))),
-    )
+    combined = bothOf combined, privateOf(program, field.type, CExpression.PointerMember(value, memberNameOf(field)))
   }
   combined
 }
@@ -405,20 +402,20 @@ fn layoutCrossingOf(
   if shape.variants.isEmpty() {
     var combined = Crossing.Always
     for each in shape.fields {
-      combined = bothOf combined, field(each.annotation, member(memberNameOf(each)))
+      combined = bothOf combined, field(each.type, member(memberNameOf(each)))
     }
     return combined
   }
   var combined = Crossing.Always
   for each in shape.commonFields() {
-    combined = bothOf combined, field(each.annotation, member(memberNameOf(each)))
+    combined = bothOf combined, field(each.type, member(memberNameOf(each)))
   }
   var arms: List<(Int, CExpression)> = []
   for variant in 0..shape.variants.length() {
     const group = CExpression.Member member("payload"), variantMemberNameOf(variant)
     var chosen = Crossing.Always
     for each in shape.fieldsOfVariant(variant) {
-      chosen = bothOf chosen, field(each.annotation, CExpression.Member(group, memberNameOf(each)))
+      chosen = bothOf chosen, field(each.type, CExpression.Member(group, memberNameOf(each)))
     }
     match chosen {
       .Always => {}

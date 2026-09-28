@@ -123,7 +123,7 @@ type EncodedFieldOf {
   /** The checker type, substituted: what the steps are instantiated for. */
   subject: TypeId
   /** The IR type of the slot it is read into. */
-  annotation: IrTypeId
+  type: IrTypeId
   step: PathStep
   symbol: SymbolId
   hasDefault: Bool
@@ -164,7 +164,7 @@ fn fieldGroupsOf(
     var fields: List<EncodedFieldOf> = []
     for index in 0..shape.fields.length() {
       const field = shape.fields[index]
-      const annotation = layoutShape.fields[index].annotation
+      const annotation = layoutShape.fields[index].type
       const step = PathStep.Field layout, index
       const subject = substitute lowering.checker.types, field.type, mapping
       const passable = field.visibility != Visibility.Private
@@ -193,7 +193,7 @@ fn fieldGroupsOf(
       const field = declared.fields[index]
       const step = PathStep.Variant layout, variant, index
       const subject = substitute lowering.checker.types, field.type, mapping
-      const annotation = laid[index].annotation
+      const annotation = laid[index].type
       fields.append(EncodedFieldOf(
         field.name,
         subject,
@@ -285,7 +285,7 @@ fn encodePositions(
   target: TypeId,
   at: Span,
 ) {
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -298,7 +298,7 @@ fn encodePositions(
   perform lowering, builder, "encodeSequence", [target], [borrowed(length), place], at
   const shape = lowering.program.layoutAt layout
   for index in 0..fields.length() {
-    const value = readInto builder, Slot(0), PathStep.TupleField(layout, index), shape.fields[index].annotation
+    const value = readInto builder, Slot(0), PathStep.TupleField(layout, index), shape.fields[index].type
     perform lowering, builder, "encodeItem", [fields[index], target], [borrowed(value), place], at
   }
   perform lowering, builder, "encodeFinish", [target], [place], at
@@ -314,7 +314,7 @@ fn encodeFields(
   target: TypeId,
   at: Span,
 ) {
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -380,7 +380,7 @@ fn encodeGroup(
     if isPrivate && !isEncodable(lowering, field.subject) {
       continue
     }
-    const value = readInto builder, Slot(0), field.step, field.annotation
+    const value = readInto builder, Slot(0), field.step, field.type
     const name = textSlot lowering, builder, field.name
     const written = if isPrivate { "encodePrivateField" } else { "encodeField" }
     perform lowering, builder, written, [field.subject, target], [borrowed(value), borrowed(name), place], at
@@ -616,7 +616,7 @@ fn decodeGroup(
     }
     const asked = if field.passable { "decodeHasField" } else { "decodeHasPrivateField" }
     const present = checkedStep(lowering, builder, asked, [source], [borrowed(name), place], at)?
-    const value = addLocal builder, field.annotation, field.name
+    const value = addLocal builder, field.type, field.name
     const given = addBlock builder, "{field.name} given", location
     const missing = addBlock builder, "{field.name} missing", location
     const joined = addBlock builder, "{field.name} read", location
@@ -756,7 +756,7 @@ fn okTypeOf(var lowering: Lowering, result: IrTypeId): IrTypeId? {
   const shape = lowering.program.layoutAt layout
   const fields = shape.fieldsOfVariant success
   match fields.first() {
-    Some(found) => found.annotation
+    Some(found) => found.type
     None => None
   }
 }
@@ -797,11 +797,11 @@ fn checkedStep(
   terminate builder, Terminator.Switch(tag, [success], [succeeded], failed)
   switchTo builder, failed
   const shape = lowering.program.layoutAt layout
-  const problemType = shape.fieldsOfVariant(failure)[0].annotation
+  const problemType = shape.fieldsOfVariant(failure)[0].type
   const problem = readInto builder, answer, PathStep.Variant(layout, failure, 0), problemType
   answerFailure lowering, builder, problem, at
   switchTo builder, succeeded
-  const valueType = shape.fieldsOfVariant(success)[0].annotation
+  const valueType = shape.fieldsOfVariant(success)[0].type
   // `Result<Void, _>` answers nothing worth reading: the step's own slot stands in for it
   if isVoidType(lowering, valueType) {
     return answer

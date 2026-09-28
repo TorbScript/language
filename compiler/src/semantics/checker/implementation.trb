@@ -87,7 +87,7 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
         addOne(
           checker,
           Implementation(
-            bound.capability,
+            bound.trait,
             own,
             generics,
             bounds,
@@ -125,7 +125,7 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
     const identifier = addOne(
       checker,
       Implementation(
-        capability: None,
+        trait: None,
         target: target,
         generics: generics,
         bounds: bounds,
@@ -168,7 +168,7 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
 
 fn addOne(var checker: Checker, implementation: Implementation): ImplementationId {
   const shape = targetShapeOf checker, implementation.target
-  const capability = capabilitySymbolOf checker, implementation.capability
+  const capability = capabilitySymbolOf checker, implementation.trait
   checker.implementations.add implementation, shape, capability
 }
 
@@ -337,7 +337,7 @@ fn innerWitnesses(
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   const _ = matchTarget checker, found, annotation, mapping
-  if const Some(applied) = found.capability {
+  if const Some(applied) = found.trait {
     const _ = matchPattern checker, applied, bound, found.generics, mapping
   }
   var witnesses: List<Witness> = []
@@ -593,7 +593,7 @@ fn applies(var checker: Checker, index: Int, annotation: TypeId, wanted: TypeId?
   if !matchTarget(checker, implementation, annotation, mapping) {
     return None
   }
-  const applied = implementation.capability?
+  const applied = implementation.trait?
   // `where Target: From<Source>`: the arguments of the bound bind the rest of the implementation's parameters
   if const Some(bound) = wanted {
     if !matchPattern(checker, applied, bound, implementation.generics, mapping) {
@@ -633,7 +633,7 @@ fn matchTarget(
       return true
     }
     // ...and has to be able to reach what the implementation provides at all
-    if !reachesImplementers(checker, implementation.capability) {
+    if !reachesImplementers(checker, implementation.trait) {
       return false
     }
     const pattern = match checker.types.form(target) {
@@ -960,7 +960,7 @@ fn throughSupertraits(var checker: Checker, annotation: TypeId, capability: Symb
   const candidates = checker.implementations.declaredFor head
   for index in candidates {
     const implementation = checker.implementations.all[index]
-    const declared = match implementation.capability {
+    const declared = match implementation.trait {
       Some(found) => found
       None => {
         continue
@@ -1042,7 +1042,7 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
   }
   var found: List<TypeId> = []
   for supertrait in shape.traits {
-    found.append substitute(checker.types, supertrait.capability, mapping)
+    found.append substitute(checker.types, supertrait.trait, mapping)
   }
   found
 }
@@ -1101,7 +1101,7 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
   const candidates = checker.implementations.open
   for index in candidates {
     const implementation = checker.implementations.all[index]
-    const declared = match implementation.capability {
+    const declared = match implementation.trait {
       Some(inner) => inner
       None => {
         continue
@@ -1219,7 +1219,7 @@ public fn writtenTraitsOf(var checker: Checker, annotation: TypeId, capability: 
     if isGenerated(implementation) {
       continue
     }
-    const declared = match implementation.capability {
+    const declared = match implementation.trait {
       Some(inner) => inner
       None => {
         continue
@@ -1350,7 +1350,7 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
       var found: List<TypeId> = []
       for index in candidates {
         const implementation = checker.implementations.all[index]
-        const declared = match implementation.capability {
+        const declared = match implementation.trait {
           Some(inner) => inner
           None => {
             continue
@@ -1954,7 +1954,7 @@ fn isHandWrittenInto(var checker: Checker, implementation: Implementation): Bool
       return false
     }
   }
-  if capabilitySymbolOf(checker, implementation.capability) != into {
+  if capabilitySymbolOf(checker, implementation.trait) != into {
     return false
   }
   checker.symbolAt(into).module != implementation.module
@@ -1964,7 +1964,7 @@ fn isHandWrittenInto(var checker: Checker, implementation: Implementation): Bool
 fn reportHandWrittenInto(var checker: Checker, index: Int) {
   const implementation = checker.implementations.all[index]
   const source = checker.describe implementation.target
-  const target = match checker.types.form(implementation.capability ?? checker.invalidType) {
+  const target = match checker.types.form(implementation.trait ?? checker.invalidType) {
     .Nominal(_, arguments) => {
       match arguments.first() {
         Some(found) => checker.describe found
@@ -1998,7 +1998,7 @@ fn checkTraitPromise(var checker: Checker, index: Int) {
   if isGenerated(implementation) || implementation.bounds.isEmpty() {
     return
   }
-  const capability = match capabilitySymbolOf(checker, implementation.capability) {
+  const capability = match capabilitySymbolOf(checker, implementation.trait) {
     Some(found) => found
     None => {
       return
@@ -2018,7 +2018,7 @@ fn checkTraitPromise(var checker: Checker, index: Int) {
     }
     var promised = false
     for supertrait in shape.traits {
-      if headSymbolOf(checker, supertrait.capability) == capability {
+      if headSymbolOf(checker, supertrait.trait) == capability {
         promised = true
       }
     }
@@ -2050,13 +2050,13 @@ fn checkOrphan(var checker: Checker, index: Int) {
   if isGenerated(implementation) {
     return
   }
-  const declared = match implementation.capability {
+  const declared = match implementation.trait {
     Some(found) => found
     None => {
       return
     }
   }
-  const capability = match capabilitySymbolOf(checker, implementation.capability) {
+  const capability = match capabilitySymbolOf(checker, implementation.trait) {
     Some(found) => found
     None => {
       return
@@ -2100,7 +2100,7 @@ fn checkOrphan(var checker: Checker, index: Int) {
  * nesting another package wrote, and the overlap rule proves disjointness by heads alone.
  */
 fn ownsTraitArgument(var checker: Checker, implementation: Implementation): Bool {
-  const applied = implementation.capability ?? checker.invalidType
+  const applied = implementation.trait ?? checker.invalidType
   const arguments = match checker.types.form(applied) {
     .Nominal(_, held) => held
     _ => {
@@ -2147,7 +2147,7 @@ fn checkOverlaps(var checker: Checker) {
     if isGenerated(implementation) {
       continue
     }
-    if const Some(capability) = capabilitySymbolOf(checker, implementation.capability) {
+    if const Some(capability) = capabilitySymbolOf(checker, implementation.trait) {
       var known = groups.get(capability.value) ?? []
       known.append index
       groups.set capability.value, known
@@ -2175,8 +2175,8 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   if !couldUnify(checker, left.target, right.target) {
     return
   }
-  const leftTrait = left.capability ?? checker.invalidType
-  const rightTrait = right.capability ?? checker.invalidType
+  const leftTrait = left.trait ?? checker.invalidType
+  const rightTrait = right.trait ?? checker.invalidType
   if !couldUnify(checker, leftTrait, rightTrait) {
     return
   }
@@ -2218,11 +2218,11 @@ fn reportTraitTargetOverlap(var checker: Checker, forTrait: Implementation, own:
     }
   }
   // A trait target that only the trait-typed value reaches (`From` answers `Self`) never meets the type's own
-  if !reachesImplementers(checker, forTrait.capability) {
+  if !reachesImplementers(checker, forTrait.trait) {
     return false
   }
-  const leftTrait = forTrait.capability ?? checker.invalidType
-  const rightTrait = own.capability ?? checker.invalidType
+  const leftTrait = forTrait.trait ?? checker.invalidType
+  const rightTrait = own.trait ?? checker.invalidType
   if !couldUnify(checker, leftTrait, rightTrait) {
     return false
   }
@@ -2274,7 +2274,7 @@ fn reportBlanketOverlap(var checker: Checker, blanket: Implementation, written: 
         return false
       }
     }
-    const capability = nameOfCapability checker, written.capability
+    const capability = nameOfCapability checker, written.trait
     const source = nameOfCapability checker, firstBoundTraitOf(blanket)
     const package = checker.program.workspace.packages[blanket.package].name
     const target = checker.describe written.target
@@ -2310,8 +2310,8 @@ fn blanketAdviceOf(var checker: Checker, blanket: Implementation, written: Imple
   if !matchTypePattern(checker, blanket.target, target, generics, mapping) {
     return None
   }
-  const pattern = blanket.capability ?? checker.invalidType
-  const applied = written.capability ?? checker.invalidType
+  const pattern = blanket.trait ?? checker.invalidType
+  const applied = written.trait ?? checker.invalidType
   if !matchTypePattern(checker, pattern, applied, generics, mapping) {
     return None
   }
@@ -2436,7 +2436,7 @@ fn checkOneImplementation(var checker: Checker, index: Int, rows: Map<String, Bo
   if isGenerated(implementation) {
     return
   }
-  const declared = match implementation.capability {
+  const declared = match implementation.trait {
     Some(found) => found
     None => {
       return
@@ -2717,8 +2717,8 @@ fn isSiblingOf(var checker: Checker, index: Int, other: Int): Bool {
   if index == other {
     return false
   }
-  const own = checker.implementations.all[index].capability
-  const found = checker.implementations.all[other].capability
+  const own = checker.implementations.all[index].trait
+  const found = checker.implementations.all[other].trait
   if const Some(first) = own {
     if const Some(second) = found {
       const capability = headSymbolOf checker, first

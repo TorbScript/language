@@ -352,7 +352,7 @@ fn frameNameOf(
     const name = names.get(symbol.value) ?? function.name
     if const Some(first) = function.signature.parameters.first() {
       if first.name == "self" {
-        return "{typeNameOf(inspector, first.annotation)}.{name}"
+        return "{typeNameOf(inspector, first.type)}.{name}"
       }
     }
     return name
@@ -816,7 +816,7 @@ fn localsOf(session: Session, registers: Registers, frame: StackFrame): List<(St
         continue
       }
     }
-    if declared.name.isEmpty() || isEnvironment(session.ir, declared.annotation) {
+    if declared.name.isEmpty() || isEnvironment(session.ir, declared.type) {
       continue
     }
     const place = match chunk.slots.get(slot) {
@@ -829,13 +829,13 @@ fn localsOf(session: Session, registers: Registers, frame: StackFrame): List<(St
     if place.description.startsWith("&") {
       // A `var` parameter holds the address of what it names
       const address = registerWord(registers, frame.base + place.offset)
-      words = if address == 0 { [] } else { wordsAt address, session.inspector.tables.widthOf(declared.annotation) }
+      words = if address == 0 { [] } else { wordsAt address, session.inspector.tables.widthOf(declared.type) }
     } else {
       for offset in 0..place.width {
         words.append registerWord(registers, frame.base + place.offset + offset)
       }
     }
-    const value = Value declared.annotation, words
+    const value = Value declared.type, words
     var replaced = false
     for index in 0..found.length() {
       if found[index].0 == declared.name {
@@ -862,7 +862,7 @@ fn isEnvironment(ir: IrProgram, annotation: IrTypeId): Bool {
 fn variableOf(session: Session, name: String, value: Value): JsonValue {
   const inspector = session.inspector
   const shown = showValue inspector, value
-  var fields = [("name", text(name)), ("value", text(shown)), ("type", text(typeNameOf(inspector, value.annotation)))]
+  var fields = [("name", text(name)), ("value", text(shown)), ("type", text(typeNameOf(inspector, value.type)))]
   var reference = 0
   if hasChildren(inspector, value) {
     session.references.append Referenced.Children(value)

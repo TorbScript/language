@@ -86,7 +86,7 @@ public type Representation {
 /** One field of a [Layout]: its name, its type, and the field of the source it came from, where it has one. */
 public type FieldLayout {
   name: String
-  annotation: IrTypeId
+  type: IrTypeId
   /** The field of the source. `None` for a tuple field and for a field the lowering invented. */
   symbol: SymbolId? = None
 }
@@ -236,7 +236,7 @@ public fn isStaticLayout(program: IrProgram, id: LayoutId): Bool {
     return false
   }
   for field in layout.fields {
-    if !hasFinalSize(program, field.annotation) {
+    if !hasFinalSize(program, field.type) {
       return false
     }
   }
@@ -562,8 +562,8 @@ fn updateLayout(var program: IrProgram, id: LayoutId, objects: Set<Int>): Bool {
   } else if const Some(found) = niche {
     representation = found
     const payload = before.fields[fieldOfNiche(found)]
-    size = sizeOfType program, payload.annotation
-    alignment = alignmentOfType program, payload.annotation
+    size = sizeOfType program, payload.type
+    alignment = alignmentOfType program, payload.type
   } else if packed.size > inlineSizeLimit {
     representation = Representation.Boxed
   }
@@ -610,9 +610,9 @@ fn packedGroup(program: IrProgram, fields: List<FieldLayout>): PackedSize {
   var offset = 0
   var alignment = 1
   for field in fields {
-    const own = alignmentOfType program, field.annotation
+    const own = alignmentOfType program, field.type
     alignment = alignment.max own
-    offset = alignedOffset(offset, own) + sizeOfType(program, field.annotation)
+    offset = alignedOffset(offset, own) + sizeOfType(program, field.type)
   }
   PackedSize alignedOffset(offset, alignment), alignment
 }
@@ -641,18 +641,18 @@ fn nicheOf(program: IrProgram, layout: Layout): Representation? {
     return None
   }
   const field = layout.variants[payload].first
-  if !isNichePayload(program, layout.fields[field].annotation) {
+  if !isNichePayload(program, layout.fields[field].type) {
     return None
   }
   Representation.Niche payload, field
 }
 
 fn anyFieldIsCounted(program: IrProgram, layout: Layout): Bool {
-  layout.fields.any({ containsCountedType program, _.annotation })
+  layout.fields.any({ containsCountedType program, _.type })
 }
 
 fn anyFieldIsShared(program: IrProgram, layout: Layout): Bool {
-  layout.fields.any({ containsSharedType program, _.annotation })
+  layout.fields.any({ containsSharedType program, _.type })
 }
 
 /**
@@ -679,7 +679,7 @@ fn valueEdges(program: IrProgram): List<List<Int>> {
   for layout in program.layouts {
     var targets: List<Int> = []
     for field in layout.fields {
-      for target in inlineLayoutsOf(program, field.annotation) {
+      for target in inlineLayoutsOf(program, field.type) {
         if !targets.contains(target) {
           targets.append target
         }

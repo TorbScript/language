@@ -828,7 +828,7 @@ type ExpressionNode {
   case Construct(arguments: List<ExpressionNode>, of: TypeReference)
   case Unary(operator: UnaryOperator, operand: ExpressionNode, of: TypeReference)
   case Binary(operator: BinaryOperator, left: ExpressionNode, right: ExpressionNode, of: TypeReference)
-  case Conditional(condition: ExpressionNode, then: ExpressionNode, otherwise: ExpressionNode, of: TypeReference)
+  case Conditional(condition: ExpressionNode, then: ExpressionNode, else: ExpressionNode, of: TypeReference)
   case Lambda(parameters: List<String>, body: ExpressionNode, of: TypeReference)
   case Items(items: List<ExpressionNode>, of: TypeReference)            // List literal
   case Interpolation(parts: List<ExpressionNode>)                       // "{a} and {b}": literals and expressions

@@ -63,7 +63,7 @@ public fn generatedFunctionOf(
   // A type has one generated `from` per source it is made from, so the source is part of the name
   var arguments = [target]
   if const .Conversion = kind {
-    arguments.append built.parameters[0].annotation
+    arguments.append built.parameters[0].type
   }
   // Every literal type of one base is that base at run time, so its members are what tells two `tryFrom`s - and two
   // `decode`s, which check against the values - apart
@@ -208,8 +208,8 @@ fn delegateBody(var lowering: Lowering, var builder: FunctionBuilder, request: G
       reportUnsupported lowering, "a `var` member forwarded by `by`", at
       return
     }
-    if parameter.annotation == target {
-      const unwrapped = readField lowering, builder, Slot(index), PathStep.Field(layout, 0), field.annotation
+    if parameter.type == target {
+      const unwrapped = readField lowering, builder, Slot(index), PathStep.Field(layout, 0), field.type
       arguments.append borrowed(unwrapped)
     } else {
       arguments.append borrowed(Slot(index))
@@ -267,7 +267,7 @@ fn arrayStorageBody(var lowering: Lowering, var builder: FunctionBuilder, operat
     return
   }
   const receiver = match signature.parameters.first() {
-    Some(found) => found.annotation
+    Some(found) => found.type
     None => {
       reportUnsupported lowering, "a storage member of `Array` without a receiver", at
       return
@@ -304,7 +304,7 @@ fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span
   const signature = builder.function.signature
   const result = signature.result
   const given = match signature.parameters.first() {
-    Some(found) => found.annotation
+    Some(found) => found.type
     None => {
       reportUnsupported lowering, "a generated `from` without a value to convert", at
       return
@@ -324,7 +324,7 @@ fn conversionBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span
   const shape = lowering.program.layoutAt layout
   for index in 0..shape.variants.length() {
     const fields = shape.fieldsOfVariant index
-    if fields.length() == 1 && fields[0].annotation == given {
+    if fields.length() == 1 && fields[0].type == given {
       const target = addTemporary builder, result
       emit builder, Instruction.Construct(target, layout, index, [borrowed(Slot(0))])
       terminate builder, Terminator.Return(borrowed(target))
@@ -366,7 +366,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
     reportUnsupported lowering, "a generated `tryFrom` whose result is not a `Result`", at
     return
   }
-  const payload = shape.fieldsOfVariant(success)[0].annotation
+  const payload = shape.fieldsOfVariant(success)[0].type
   const text = Slot 0
   const textType = builder.typeOfSlot text
   const boolean = booleanTypeOf lowering
@@ -392,7 +392,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
     terminate builder, Terminator.Return(borrowed(answer))
     switchTo builder, next
   }
-  const error = shape.fieldsOfVariant(failure)[0].annotation
+  const error = shape.fieldsOfVariant(failure)[0].type
   const errorLayout = match layoutOfType(lowering.program, error) {
     Some(found) => found
     None => {
@@ -415,7 +415,7 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
       continue
     }
     if field.name == "expected" {
-      const expected = match listOfValues(lowering, builder, shownSlots, string, field.annotation, at) {
+      const expected = match listOfValues(lowering, builder, shownSlots, string, field.type, at) {
         Some(found) => found
         None => {
           return
@@ -589,7 +589,7 @@ fn identityBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) 
   const signature = builder.function.signature
   const result = signature.result
   if const Some(first) = signature.parameters.first() {
-    if first.annotation == result {
+    if first.type == result {
       terminate builder, Terminator.Return(borrowed(Slot(0)))
       return
     }
@@ -693,7 +693,7 @@ fn answerBoolean(var lowering: Lowering, var builder: FunctionBuilder, value: Bo
  */
 type DerivedField {
   name: String
-  annotation: IrTypeId
+  type: IrTypeId
   subject: TypeId
   step: PathStep
 }
@@ -719,7 +719,7 @@ fn derivedFieldsOf(var lowering: Lowering, subject: TypeId, layout: LayoutId, va
     } else {
       PathStep.Variant layout, variant, index
     }
-    found.append DerivedField(field.name, field.annotation, subjects[position], step)
+    found.append DerivedField(field.name, field.type, subjects[position], step)
   }
   found
 }
@@ -774,7 +774,7 @@ fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
  * what makes a nested record and a recursive one work.
  */
 fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
     None => {
@@ -867,8 +867,8 @@ fn compareFields(
 ): Bool {
   const location = locationOf lowering, at
   for field in fields {
-    const left = readField lowering, builder, Slot(0), field.step, field.annotation
-    const right = readField lowering, builder, Slot(1), field.step, field.annotation
+    const left = readField lowering, builder, Slot(0), field.step, field.type
+    const right = readField lowering, builder, Slot(1), field.step, field.type
     const equal = fieldEquality lowering, builder, field, left, right, at
     if !lowering.supported {
       return false
@@ -889,7 +889,7 @@ fn fieldEquality(
   right: Slot,
   at: Span,
 ): Slot {
-  const annotation = field.annotation
+  const annotation = field.type
   const boolean = booleanTypeOf lowering
   const target = addTemporary builder, boolean
   const location = locationOf lowering, at
@@ -932,7 +932,7 @@ fn fieldEquality(
  */
 fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
   const integer = lowering.program.internType IrType.Integer(64, signed: true)
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   const accumulated = zeroSlot lowering, builder, integer
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
@@ -1004,7 +1004,7 @@ fn hashFields(
   at: Span,
 ) {
   for field in fields {
-    const value = readField lowering, builder, Slot(0), field.step, field.annotation
+    const value = readField lowering, builder, Slot(0), field.step, field.type
     const hashed = fieldHash lowering, builder, field, value, at
     if !lowering.supported {
       return
@@ -1062,7 +1062,7 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Ty
       return
     }
   }
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   if isTupleType(lowering, subject) {
     compareTupleBody lowering, builder, subject, annotation, layout, at
     return
@@ -1191,8 +1191,8 @@ fn compareTupleBody(
   const result = builder.function.signature.result
   const empty: List<WitnessSource> = []
   for field in fields {
-    const left = readField lowering, builder, Slot(0), field.step, field.annotation
-    const right = readField lowering, builder, Slot(1), field.step, field.annotation
+    const left = readField lowering, builder, Slot(0), field.step, field.type
+    const right = readField lowering, builder, Slot(1), field.step, field.type
     const called = match traitMemberFunction(lowering, field.subject, "Compare", "compare", at) {
       Some(found) => found
       None => {
@@ -1298,7 +1298,7 @@ fn answerOrdering(var lowering: Lowering, var builder: FunctionBuilder, layout: 
  * function to point at either way.
  */
 fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
-  const annotation = builder.function.signature.parameters[0].annotation
+  const annotation = builder.function.signature.parameters[0].type
   const text = lowering.program.internType IrType.Text
   if builder.function.signature.result != text {
     reportUnsupported lowering, "a generated `show` whose result is not a `String`", at
@@ -1415,7 +1415,7 @@ fn addShownFields(
     const separator = if index == 0 { opening } else { ", " }
     const label = if labeled { "{field.name}: " } else { "" }
     parts.append textSlot(lowering, builder, "{separator}{label}")
-    const value = readField lowering, builder, Slot(0), field.step, field.annotation
+    const value = readField lowering, builder, Slot(0), field.step, field.type
     const shown = fieldShown lowering, builder, field, value, at
     if !lowering.supported {
       return

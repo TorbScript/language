@@ -106,14 +106,14 @@ fn verifyParameters(program: IrProgram, function: IrFunction, var found: List<St
     if slot.role != SlotRole.Parameter(index) {
       found.append "{function.name}: slot %{index} has to be parameter {index}"
     }
-    if slot.annotation != parameters[index].annotation {
-      const wanted = describeIrType program, parameters[index].annotation
-      const actual = describeIrType program, slot.annotation
+    if slot.type != parameters[index].type {
+      const wanted = describeIrType program, parameters[index].type
+      const actual = describeIrType program, slot.type
       found.append "{function.name}: parameter {index} is `{wanted}` and its slot is `{actual}`"
     }
   }
   for index in 0..function.slots.length() {
-    const annotation = function.slots[index].annotation
+    const annotation = function.slots[index].type
     match program.typeAt(annotation) {
       // A slot of `Never` is allowed: an instance of a generic with `Never` - `ArrayList<Never>.append(value: Never)`,
       // the `Some(item)` of an `Option<Never>` - has one, and no value ever arrives in it, so every instruction that
@@ -664,7 +664,7 @@ fn verifyInstruction(
         found.append "{at}: there is no static value s{value.value}"
         return
       }
-      expectType program, function, found, at, target, program.staticAt(value).annotation, "the constant"
+      expectType program, function, found, at, target, program.staticAt(value).type, "the constant"
     }
     .Move(target, source) => expectSame program, function, found, at, target, source, "a move"
     .Copy(target, source) => expectSame program, function, found, at, target, source, "a copy"
@@ -923,7 +923,7 @@ fn verifyTaskNew(
     return
   }
   for index in 0..arguments.length() {
-    expectType program, function, found, at, arguments[index].slot, parameters[index].annotation, "a frame parameter"
+    expectType program, function, found, at, arguments[index].slot, parameters[index].type, "a frame parameter"
   }
   if !function.hasSlot(target) {
     found.append "{at}: there is no slot %{target.value}"
@@ -960,14 +960,14 @@ fn verifyCall(
     for index in 0..arguments.length() {
       const parameter = signature.parameters[index]
       if parameter.byReference {
-        checkPlaceArgument program, function, found, at, arguments[index], parameter.annotation, index, callee
+        checkPlaceArgument program, function, found, at, arguments[index], parameter.type, index, callee
         continue
       }
       if arguments[index].place.isSome() {
         found.append "{at}: parameter {index} of {callee} takes a value, so argument {index} carries no place"
         continue
       }
-      expectType program, function, found, at, arguments[index].slot, parameter.annotation, "argument {index}"
+      expectType program, function, found, at, arguments[index].slot, parameter.type, "argument {index}"
     }
   }
   if witnesses.length() != signature.witnesses.length() {
@@ -1069,7 +1069,7 @@ fn verifyClosure(
   for index in 0..shape.parameters.length() {
     const declared = target.signature.parameters[index + first]
     const wanted = shape.parameters[index]
-    if declared.annotation != wanted.annotation || declared.byReference != wanted.byReference {
+    if declared.type != wanted.type || declared.byReference != wanted.byReference {
       found.append "{at}: parameter {index} of `{target.name}` is not the parameter the closure type declares"
     }
   }
@@ -1095,8 +1095,8 @@ fn verifyClosure(
       found.append "{at}: there is no slot %{slot.value}"
       continue
     }
-    if function.typeOfSlot(slot) != fields[index].annotation {
-      const shown = describeIrType program, fields[index].annotation
+    if function.typeOfSlot(slot) != fields[index].type {
+      const shown = describeIrType program, fields[index].type
       found.append "{at}: the environment of `{target.name}` keeps `{shown}` and %{slot.value} is `{describeIrType(program, function.typeOfSlot(slot))}`"
     }
   }
@@ -1105,7 +1105,7 @@ fn verifyClosure(
 /** A closure body is the one kind of function whose first parameter is the environment of a closure. */
 fn environmentLayoutOf(program: IrProgram, target: IrFunction): LayoutId? {
   const parameter = target.signature.parameters.first()?
-  const layout = layoutOfType(program, parameter.annotation)?
+  const layout = layoutOfType(program, parameter.type)?
   if !isEnvironmentLayout(program.layoutAt(layout)) {
     return None
   }
@@ -1203,7 +1203,7 @@ fn verifyConstruct(
         found,
         at,
         fields[index].slot,
-        wanted[index].annotation,
+        wanted[index].type,
         "the field `{wanted[index].name}`",
       )
     }
@@ -1731,7 +1731,7 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
       if index < 0 || index >= shape.fields.length() {
         return None
       }
-      shape.fields[index].annotation
+      shape.fields[index].type
     }
     .TupleField(layout, index) => {
       if layoutOfType(program, current) != layout || !program.hasLayout(layout) {
@@ -1741,7 +1741,7 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
       if index < 0 || index >= shape.fields.length() {
         return None
       }
-      shape.fields[index].annotation
+      shape.fields[index].type
     }
     .Variant(layout, variant, index) => {
       if layoutOfType(program, current) != layout || !program.hasLayout(layout) {
@@ -1755,7 +1755,7 @@ fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
       if index < 0 || index >= fields.length() {
         return None
       }
-      fields[index].annotation
+      fields[index].type
     }
     .Element(item, _, location, _) => {
       // The site of the panic of an index out of range is what the step carries instead of the call it replaced, so a

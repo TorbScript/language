@@ -185,7 +185,7 @@ public type Ownership {
 /** One parameter of a monomorphic function. Its name is for `torb ir` and for readable C, never load bearing. */
 public type IrParameter {
   name: String
-  annotation: IrTypeId
+  type: IrTypeId
   /** A `var` parameter or a `var fn` receiver: a reference into the caller's frame, never counted (BACKEND 2.3). */
   byReference: Bool = false
   ownership: Ownership = Ownership.Borrowed
@@ -233,7 +233,7 @@ public type Location {
 public type StaticValue {
   /** Mangled, prefix `s`. */
   name: String
-  annotation: IrTypeId
+  type: IrTypeId
   contents: StaticContents
 }
 
@@ -318,7 +318,7 @@ public type SlotRole {
 
 /** One slot of a function's frame: its type, the role it plays, and the source name it prints as. */
 public type SlotDeclaration {
-  annotation: IrTypeId
+  type: IrTypeId
   role: SlotRole
   /** A name from the source, for `torb ir` and for `#line`-friendly C identifiers. Never load bearing. */
   name: String = ""
@@ -409,7 +409,7 @@ public type IrFunction {
   tracksCaller: Bool = false
 
   fn typeOfSlot(slot: Slot): IrTypeId {
-    slots[slot.value].annotation
+    slots[slot.value].type
   }
 
   fn hasSlot(slot: Slot): Bool {
@@ -451,7 +451,7 @@ public type PathStep {
    */
   case Element(item: IrTypeId, index: Slot, at: LocationId, checked: Bool = true)
   /** Dereference a boxed layout, a `Box`, a `Lazy` cell or a `shared` object. */
-  case Contents(annotation: IrTypeId)
+  case Contents(type: IrTypeId)
 }
 
 /** How one operand is consumed. Filled in by the ownership pass (BACKEND 2). */
@@ -1170,7 +1170,7 @@ public fn keyOfSignature(signature: IrSignature): String {
     const out = if parameter.out { "!" } else { "" }
     const address = if parameter.byAddress { "@" } else { "" }
     const ownership = keyOfOwnership parameter.ownership
-    key = key + ";{reference}{out}{address}{ownership}{parameter.annotation.value}"
+    key = key + ";{reference}{out}{address}{ownership}{parameter.type.value}"
   }
   var witnesses = ""
   for witness in signature.witnesses {

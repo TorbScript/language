@@ -73,7 +73,7 @@ public fn resolveName(
       Some(receiver) => {
         // A closure that names the receiver captures it, which is what decides whether that closure may escape
         noteCapture checker, receiver
-        const annotation = checker.binding(receiver).annotation
+        const annotation = checker.binding(receiver).type
         return Target Resolution.Local(receiver), annotation, name: "self"
       }
       // A field default, a parameter default and a `static fn` have no receiver
@@ -139,7 +139,7 @@ fn localTarget(
       if local.lazy {
         checker.adapted at, Adaptation.Force
       }
-      const annotation = local.annotation
+      const annotation = local.type
       Target Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text
     }
     // A `fn`, `type` or `trait` of a block, and a generic parameter that is in scope
@@ -212,7 +212,7 @@ fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: 
 public fn targetOfCandidate(var checker: Checker, candidate: Candidate, text: String): Target {
   const target = Target(
     resolutionOfCandidate(candidate),
-    candidate.annotation,
+    candidate.type,
     form: formOfCandidate(checker, candidate),
     name: text,
     takesVarSelf: candidate.takesVarSelf,
@@ -526,7 +526,7 @@ fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
   if const Some(found) = candidate.form {
     return found
   }
-  const form = formOf(checker, candidate.annotation)?
+  const form = formOf(checker, candidate.type)?
   for parameter in form.parameters {
     if const .Receiver(_) = parameter.mode {
       return None

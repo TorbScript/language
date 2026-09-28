@@ -628,7 +628,7 @@ public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   const adaptations = lowering.checker.adaptationsAt module, callee.span
   for adaptation in adaptations {
     if const .ImplicitSelf(receiver) = adaptation {
-      return lowering.checker.binding(receiver).annotation
+      return lowering.checker.binding(receiver).type
     }
   }
   None
@@ -930,7 +930,7 @@ fn arrayStorageMemberOf(
 ): FunctionId? {
   const subject = dispatched.subject?
   const member = dispatched.member
-  const bound = dispatched.capability
+  const bound = dispatched.trait
   const mapping = dispatched.mapping
   generatedFunctionOf lowering, Generated.ArrayStorage(operation), member, subject, bound, mapping, at
 }
@@ -939,7 +939,7 @@ fn arrayStorageMemberOf(
 fn containerMemberOf(var lowering: Lowering, dispatched: Dispatched, kind: RuntimeKind, at: Span): FunctionId? {
   const subject = dispatched.subject?
   const member = dispatched.member
-  const bound = dispatched.capability
+  const bound = dispatched.trait
   const mapping = dispatched.mapping
   generatedFunctionOf lowering, Generated.Container(kind), member, subject, bound, mapping, at
 }
@@ -956,7 +956,7 @@ fn generatedMemberFor(var lowering: Lowering, dispatched: Dispatched, at: Span):
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const kind = generatedKindOf(lowering, member, owner, implementation, signature, at)?
-  const bound = dispatched.capability
+  const bound = dispatched.trait
   const mapping = dispatched.mapping
   generatedFunctionOf lowering, kind, member, subject, bound, mapping, at
 }
@@ -972,7 +972,7 @@ fn generatedMemberOf(var lowering: Lowering, dispatched: Dispatched, derived: De
   }
   const kind = derivedKindOf(lowering, derived, at)?
   const member = dispatched.member
-  const bound = dispatched.capability
+  const bound = dispatched.trait
   const mapping = dispatched.mapping
   generatedFunctionOf lowering, kind, member, subject, bound, mapping, at
 }
@@ -1280,13 +1280,11 @@ fn referenceArgumentAt(
    * because it reads the argument as a value; here it is a clean finding instead of the two internal errors of the
    * verifier ("its place is …") a body in `std/stream` would otherwise produce.
    */
-  if path.annotation != annotation
-    && isSharedObjectType(lowering, path.annotation)
-    && isObjectType(lowering, annotation) {
+  if path.type != annotation && isSharedObjectType(lowering, path.type) && isObjectType(lowering, annotation) {
     return sharedObjectAsTraitPlace lowering, builder, value, signature, position, mapping, path, annotation
   }
-  if path.annotation != annotation {
-    const given = describeIrType lowering.program, path.annotation
+  if path.type != annotation {
+    const given = describeIrType lowering.program, path.type
     const wanted = describeIrType lowering.program, annotation
     const what = "a `var` argument of `{given}` where the parameter asks for `{wanted}`, which a place cannot become"
     reportUnsupported lowering, what, value.span
@@ -1320,7 +1318,7 @@ fn sharedObjectAsTraitPlace(
       return None
     }
   }
-  const held = addTemporary builder, path.annotation
+  const held = addTemporary builder, path.type
   emit builder, Instruction.Read(held, path.reference)
   const boxed = addTemporary builder, annotation
   if !lowerTraitValue(lowering, builder, boxed, held, boundsOfTraitValue(lowering, wanted), source, value.span) {
@@ -1766,7 +1764,7 @@ fn readFieldOf(var lowering: Lowering, var builder: FunctionBuilder, base: Slot,
     }
   }
   const shape = lowering.program.layoutAt layout
-  const annotation = shape.fields[index].annotation
+  const annotation = shape.fields[index].type
   const target = valueSlot lowering, builder, destination: None, annotation: annotation
   emit builder, Instruction.Read(target, Reference(base, [PathStep.Field(layout, index)]))
   target

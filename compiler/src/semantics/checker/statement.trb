@@ -34,7 +34,7 @@ use markUsingBinding, markClosingSelf, checkScopedUses from "./close"
 
 /** What a block is worth: the type of its value, and whether control never reaches its end. */
 public type BlockResult {
-  annotation: TypeId
+  type: TypeId
   diverges: Bool
   /** Whether the last statement was an expression, which is the only case in which the block produces a value. */
   endsWithValue: Bool = false
@@ -626,7 +626,7 @@ public fn checkFunctionBody(
   if isClosing || checker.scopedBindings.length() > scopedBefore {
     checkScopedUses checker, body
   }
-  var found = outcome.annotation
+  var found = outcome.type
   if isInferred {
     found = inferredResult checker, outcome
     settleTries checker, found, isClosure: false
@@ -657,7 +657,7 @@ fn requireDeclaredEnding(var checker: Checker, body: Block, outcome: BlockResult
     }
   }
   if const .Evaluate(expression) = last.kind {
-    const found = outcome.annotation
+    const found = outcome.type
     requireDeclaredResult checker, found, expression.span
   }
 }
@@ -812,7 +812,7 @@ public fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): E
  * what makes `{ parser => ... return Some(parsePattern(parser)) ... None }` an `Option<Pattern>`.
  */
 public fn inferredResult(var checker: Checker, outcome: BlockResult): TypeId {
-  const found = outcome.annotation
+  const found = outcome.type
   const returns = checker.returnTypes
   if found == checker.voidType || found == checker.neverType || checker.isBroken(found) {
     for candidate in returns {
@@ -838,7 +838,7 @@ fn requireResult(var checker: Checker, outcome: BlockResult, result: TypeId, at:
   if outcome.diverges || checker.absorbs(result) || result == checker.voidType {
     return
   }
-  if outcome.endsWithValue || outcome.annotation != checker.voidType {
+  if outcome.endsWithValue || outcome.type != checker.voidType {
     return
   }
   const wanted = checker.describe result

@@ -37,7 +37,7 @@ use providerOfMember, memberMappingOf from "./witness"
 /** One compile-time value: what it is, and what type it has. */
 public type ConstantValue {
   contents: StaticContents
-  annotation: IrTypeId
+  type: IrTypeId
 }
 
 /** The largest `Int64`, spelled the way `std/number` spells it. */
@@ -173,7 +173,7 @@ fn binaryConstant(
   }
   if const Some(found) = integerOf(first) {
     const other = integerOf(second)?
-    return integerOperation lowering, operator, found, other, first.annotation, annotation, at
+    return integerOperation lowering, operator, found, other, first.type, annotation, at
   }
   const found = floatOf(first)?
   const other = floatOf(second)?
@@ -670,7 +670,7 @@ fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrT
     .Constant(symbol, owner) => {
       const identifier = staticOfConstant(lowering, symbol, owner)?
       const value = lowering.program.staticAt identifier
-      ConstantValue value.contents, value.annotation
+      ConstantValue value.contents, value.type
     }
     _ => None
   }
@@ -703,7 +703,7 @@ fn aggregateConstant(var lowering: Lowering, items: List<Argument>, annotation: 
   var fields: List<StaticId> = []
   for index in 0..items.length() {
     const value = heldConstant(lowering, items[index].value)?
-    fields.append internStatic(lowering, value.contents, value.annotation)
+    fields.append internStatic(lowering, value.contents, value.type)
   }
   ConstantValue StaticContents.Aggregate(layout, 0, fields), annotation
 }
@@ -738,7 +738,7 @@ fn callConstant(
         return None
       }
       const value = heldConstant(lowering, arguments[index].value)?
-      const field = internStatic lowering, value.contents, value.annotation
+      const field = internStatic lowering, value.contents, value.type
       fields.set position, field
     }
     return ConstantValue StaticContents.Aggregate(layout, 0, fields), annotation
@@ -1055,7 +1055,7 @@ fn componentOfBinding(var lowering: Lowering, pattern: Pattern, at: Span, whole:
       return None
     }
     const inner = lowering.program.staticAt identifier
-    found = ConstantValue inner.contents, inner.annotation
+    found = ConstantValue inner.contents, inner.type
   }
   found
 }

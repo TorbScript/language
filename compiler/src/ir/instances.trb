@@ -170,7 +170,7 @@ public type RuntimeShape {
 public type StoragePosition {
   /** The index of the declared parameter, or `-1` for the result. */
   at: Int
-  annotation: IrTypeId
+  type: IrTypeId
 }
 
 /** The same for a native of a generic owner, whose parameters the caller has filled in. */
@@ -210,7 +210,7 @@ public fn runtimeFunctionShaped(
   var function = IrFunction name, symbol, built, [], [], FunctionKind.Runtime(runtime)
   for index in 0..built.parameters.length() {
     const parameter = built.parameters[index]
-    function.slots.append SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
+    function.slots.append SlotDeclaration(parameter.type, SlotRole.Parameter(index), parameter.name)
   }
   const added = lowering.program.addFunction function
   lowering.program.instances.set key, added
@@ -229,7 +229,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   for index in 0..declared.parameters.length() {
     var parameter = declared.parameters[index]
     if const Some(found) = storageAt(shape, index) {
-      parameter = parameter.copy annotation: found
+      parameter = parameter.copy type: found
     }
     if shape.addressed.contains(index) {
       parameters.append parameter.copy(byAddress: true)
@@ -255,7 +255,7 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
 fn storageAt(shape: RuntimeShape, at: Int): IrTypeId? {
   for position in shape.storage {
     if position.at == at {
-      return position.annotation
+      return position.type
     }
   }
   None

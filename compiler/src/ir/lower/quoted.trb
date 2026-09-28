@@ -88,7 +88,7 @@ public fn lowerQuotation(
       return unsupportedSlot lowering, builder, destination, "a quotation without `Expression` in the prelude", at
     }
   }
-  const value = substituted lowering, quotation.annotation
+  const value = substituted lowering, quotation.type
   const annotation = irTypeOf lowering, lowering.checker.nominal(symbol, [value])
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
@@ -143,7 +143,7 @@ fn treeBuilderOf(var lowering: Lowering, quotation: Quotation, layout: LayoutId,
     reportUnsupported lowering, "an `Expression` whose layout is not tree, source, location and value", at
     return None
   }
-  const node = shape.fields[0].annotation
+  const node = shape.fields[0].type
   const nodeLayout = layoutIn(lowering, node, "ExpressionNode", at)?
   const call = fieldsOfCase(lowering, nodeLayout, "Call", at)?
   const lambda = fieldsOfCase(lowering, nodeLayout, "Lambda", at)?
@@ -175,7 +175,7 @@ fn treeBuilderOf(var lowering: Lowering, quotation: Quotation, layout: LayoutId,
     optionalNode: optionalNode,
     optionalLayout: layoutIn(lowering, optionalNode, "ExpressionNode?", at)?,
     nodes: call[3],
-    references: referenceShape.fields[1].annotation,
+    references: referenceShape.fields[1].type,
     names: lambda[0],
     stringItem: stringItem,
   )
@@ -210,7 +210,7 @@ fn fieldsOfCase(var lowering: Lowering, layout: LayoutId, name: String, at: Span
     return None
   }
   const shape = lowering.program.layoutAt layout
-  shape.fieldsOfVariant(variant).map({ _.annotation }).toList()
+  shape.fieldsOfVariant(variant).map({ _.type }).toList()
 }
 
 // --- Nodes ----------------------------------------------------------------------------------------------------------
@@ -768,7 +768,7 @@ fn namedReference(
 /** `SourceLocation(file, line, column)` of where the quoted expression starts. */
 fn sourceLocationOf(var lowering: Lowering, var builder: FunctionBuilder, layout: LayoutId, at: Span): Slot? {
   const shape = lowering.program.layoutAt layout
-  const annotation = shape.fields[2].annotation
+  const annotation = shape.fields[2].type
   const target = layoutIn(lowering, annotation, "SourceLocation", at)?
   // Interned first: the receiver of `locationAt` is read before its argument runs
   const interned = locationOf lowering, at
@@ -803,7 +803,7 @@ public fn lowerQuotedValue(
   if shape.fields.length() != 4 {
     return unsupportedSlot lowering, builder, destination, "`value()` of an `Expression` without its cell", at
   }
-  const cell = addTemporary builder, shape.fields[3].annotation
+  const cell = addTemporary builder, shape.fields[3].type
   emit builder, Instruction.Read(cell, Reference(quotation, [PathStep.Field(layout, 3)]))
   lowerForcedRead lowering, builder, destination, cell, annotation, at
 }

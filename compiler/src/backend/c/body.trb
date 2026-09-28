@@ -362,7 +362,7 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
   }
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
-    const spelling = valueTypeOf program, parameter.annotation
+    const spelling = valueTypeOf program, parameter.type
     const name = slotNameOf function, Slot(index)
     if parameter.byReference {
       parameters.append declarationOf(pointerTo(spelling), name)
@@ -860,7 +860,7 @@ fn slotDeclarationsOf(program: IrProgram, body: Body): List<CStatement> {
     if isParameterSlot(declared) {
       continue
     }
-    const spelling = valueTypeOf program, declared.annotation
+    const spelling = valueTypeOf program, declared.type
     statements.append CStatement.Declaration(spelling, name, zeroInitializer)
   }
   statements.appendAll frameEnvironmentDeclarations(program, body)
@@ -1310,7 +1310,7 @@ public fn countedFormOf(program: IrProgram, id: IrTypeId): IrTypeId {
   const shape = program.layoutAt layout
   if const .Niche(_, field) = shape.representation {
     if field >= 0 && field < shape.fields.length() {
-      return shape.fields[field].annotation
+      return shape.fields[field].type
     }
   }
   id
@@ -1934,7 +1934,7 @@ fn closureStatements(
     const value = captureExpression emission, program, body, captures[index]
     inner.append CStatement.Assignment(member, value)
     members.append member
-    types.append shape.fields[index].annotation
+    types.append shape.fields[index].type
   }
   // Captures that may all cross to another worker make the environment shared, so the closure may run on several
   const sharing = CStatement.Evaluate(CExpression.Call(
@@ -2035,7 +2035,7 @@ public fn closureThunkNameOf(name: String): String {
  */
 public fn environmentLayoutOfFunction(program: IrProgram, function: IrFunction): LayoutId? {
   const parameter = function.signature.parameters.first()?
-  const layout = match program.typeAt(parameter.annotation) {
+  const layout = match program.typeAt(parameter.type) {
     .Record(found) => found
     _ => {
       return None
@@ -2076,7 +2076,7 @@ fn closureCallStatements(
   const held = slotExpression body, callee
   var spellings = ["torb_environment *"]
   for parameter in signature.parameters {
-    const spelling = valueTypeOf program, parameter.annotation
+    const spelling = valueTypeOf program, parameter.type
     spellings.append(if parameter.byReference { pointerTo spelling } else { spelling })
   }
   const result = resultTypeOf program, signature.result
@@ -2882,7 +2882,7 @@ fn emptySlice(annotation: String, members: Int): CExpression {
 fn nichePayloadTypeOf(program: IrProgram, shape: Layout): IrTypeId {
   if const .Niche(_, field) = shape.representation {
     if field >= 0 && field < shape.fields.length() {
-      return shape.fields[field].annotation
+      return shape.fields[field].type
     }
   }
   IrTypeId(0 - 1)
@@ -3138,7 +3138,7 @@ fn fieldTypeOf(program: IrProgram, layout: LayoutId, index: Int): IrTypeId {
   if index < 0 || index >= shape.fields.length() {
     return IrTypeId(0 - 1)
   }
-  shape.fields[index].annotation
+  shape.fields[index].type
 }
 
 fn variantFieldTypeOf(program: IrProgram, layout: LayoutId, variant: Int, index: Int): IrTypeId {
@@ -3153,7 +3153,7 @@ fn variantFieldTypeOf(program: IrProgram, layout: LayoutId, variant: Int, index:
   if index < 0 || index >= fields.length() {
     return IrTypeId(0 - 1)
   }
-  fields[index].annotation
+  fields[index].type
 }
 
 // --- Terminators ----------------------------------------------------------------------------------------------------

@@ -97,7 +97,7 @@ public type BindingId {
  */
 public type LocalBinding {
   name: String
-  annotation: TypeId
+  type: TypeId
   var: Bool
   /** The span of the name, which is what a message about the declaration points at. */
   at: Span
@@ -176,7 +176,7 @@ public type DefaultSource {
  */
 public type ReceiverClosure {
   binding: BindingId
-  annotation: TypeId
+  type: TypeId
   /** `(var self: T) => Void` configures its receiver in place, `(self: T) => Value` reads it. */
   var: Bool
   /** Whether the closure wrote the parameter itself (`html { root => ... }`) or `self` is the implicit receiver. */
@@ -205,7 +205,7 @@ public type Dispatch {
 public type Candidate {
   kind: CandidateKind
   /** The member as a value: the type of a field, or the function type of a method bound to its receiver. */
-  annotation: TypeId
+  type: TypeId
   /** When the member is a function: its form, with the generic parameters of its owner substituted. */
   form: FunctionForm? = None
   takesSelf: Bool = false
@@ -610,7 +610,7 @@ public fn useKey(root: UseRoot): Int {
  */
 public type Quotation {
   /** The `Value` of the `Expression<Value>` this quotation fills: the type of the quoted expression itself. */
-  annotation: TypeId
+  type: TypeId
   /** The bindings the quotation reads from the scope around it, in the order of their `Captured.index`. */
   captures: List<QuotationCapture>
   /** Every name inside that becomes a `Parameter` or a `Captured` node, by the span that wrote it. */
@@ -626,14 +626,14 @@ public type Quotation {
 public type QuotationParameter {
   /** What the tree calls it. An implicit parameter is called what the expected function type calls it, or `_`. */
   name: String
-  annotation: TypeId
+  type: TypeId
 }
 
 /** One captured binding: `ExpressionNode.Captured(index, name, of)`, and the value `captures()` has to hold. */
 public type QuotationCapture {
   binding: BindingId
   name: String
-  annotation: TypeId
+  type: TypeId
   /** `Encode` for the captured value. `Unresolved` where the type does not have it and it was reported. */
   witness: Witness
 }
@@ -724,14 +724,14 @@ public type Expectation {
   case None
   case Type(type: TypeId)
   /**
-   * The operand of a `?` whose own value is expected to be `annotation`: the operand itself is an `Option` or a
+   * The operand of a `?` whose own value is expected to be `type`: the operand itself is an `Option` or a
    * `Result` *of* that type, and which of the two it is only the operand says.
    *
    * This is not an expected type - nothing is checked against it, and no literal adapts to it - it is the one fact a
    * `?` can pass down: what will be left once it has unwrapped. `const port: Int = text.tryInto()?` is what needs it,
    * because the target of `tryInto()` has nowhere else to come from.
    */
-  case Unwrapped(annotation: TypeId)
+  case Unwrapped(type: TypeId)
   /** The arms of a `match` that is used as a statement, and the body of a `for`: a value is not wanted. */
   case Statement
   /**
@@ -1916,7 +1916,7 @@ public type Checker {
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
   var fn setReceiver(binding: BindingId) {
     receiverBinding = binding
-    receiverType = bindings[binding.value].annotation
+    receiverType = bindings[binding.value].type
   }
 
   /**

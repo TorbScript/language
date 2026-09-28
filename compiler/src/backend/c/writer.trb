@@ -44,17 +44,17 @@ public type CExpression {
   case Dereference(value: Self)
   case Call(callee: Self, arguments: List<Self>)
   /** `(int64_t)value`. The spelling of the type is text, which is what `type.trb` answers. */
-  case Cast(annotation: String, value: Self)
+  case Cast(type: String, value: Self)
   /** A prefix operator: `!`, `-`, `~`. */
   case Unary(operator: String, value: Self)
   case Binary(left: Self, operator: String, right: Self)
-  case Conditional(condition: Self, then: Self, otherwise: Self)
+  case Conditional(condition: Self, then: Self, else: Self)
   /** `{ a, b }`: the members in order. An empty one is `{ 0 }`, because an empty initializer is not C. */
   case Initializer(values: List<Self>)
   /** `{ .tag = 1, .payload = { .v0 = { x } } }` */
   case Designated(parts: List<CDesignatedField>)
   /** `(T_x){ ... }`: an unnamed value of a named type. */
-  case CompoundLiteral(annotation: String, value: Self)
+  case CompoundLiteral(type: String, value: Self)
 }
 
 /** The limit that allows every expression, which is what an argument and the right side of an assignment are. */
@@ -197,13 +197,13 @@ public type CStatement {
    * `int64_t s3 = { 0 };`. A `count` above zero makes an array of that many items
    * (`const torb_text parts[2] = { ... }`), which is the only declarator besides a plain name the emitter writes.
    */
-  case Declaration(annotation: String, name: String, value: CExpression? = None, count: Int = 0)
+  case Declaration(type: String, name: String, value: CExpression? = None, count: Int = 0)
   case Assignment(target: CExpression, value: CExpression)
   /** An expression statement: a call whose result nobody takes, a `(void)` that silences an unread slot. */
   case Evaluate(value: CExpression)
   /** `if (c) { ... }`. A body of one line shares the line, which is what every branch of the lowering is. */
   case If(condition: CExpression, then: List<Self>)
-  case Switch(scrutinee: CExpression, cases: List<CSwitchCase>, otherwise: List<Self>)
+  case Switch(scrutinee: CExpression, cases: List<CSwitchCase>, else: List<Self>)
   case Goto(label: String)
   /** The label of a block, with the label the IR gave it written after it as a comment. */
   case Label(label: String, comment: String = "")
@@ -306,7 +306,7 @@ fn isAtMargin(statement: CStatement): Bool {
 
 /** What stands between the braces of a struct: a field, an unnamed struct under a name, an unnamed union under one. */
 public type CMember {
-  case Field(annotation: String, name: String)
+  case Field(type: String, name: String)
   /** `struct { ... } v0;`: one group of a variant layout. */
   case Group(name: String, members: List<Self>)
   /** The groups of a variant layout together, under one name: `union { ... } payload;`. */
@@ -330,14 +330,14 @@ public type CDeclaration {
    * being one very long line. It is the only line the emitter ever breaks: everything else carries a mangled name, and
    * a name cannot be broken.
    */
-  case StaticData(annotation: String, name: String, value: CExpression, wrapped: Bool = false)
+  case StaticData(type: String, name: String, value: CExpression, wrapped: Bool = false)
   /**
    * `static torb_text t_main_table_cell;`: a mutable static of the translation unit, zero initialized by C.
    *
    * The cell of an immortal constant and the flag that says it was built are the only two, and both are deliberately
    * without an initializer: a `{ 0 }` would have to be spelled per type, and static storage starts out zero anyway.
    */
-  case Variable(annotation: String, name: String)
+  case Variable(type: String, name: String)
   /** A comment of its own, which is how the sections of the file are named. */
   case Comment(text: String)
   /** A fixed block of C the emitter wrote as a `"""` string: the head of the unit, `main`. Written as it is. */

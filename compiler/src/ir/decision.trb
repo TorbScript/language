@@ -29,15 +29,15 @@ public type NodeId {
 public type DecisionNode {
   /**
    * Which case the value at `path` is. One edge per variant any row tests, in the order they are written, and
-   * `otherwise` for every value none of them covers - which is where the rows that test nothing at this path go.
+   * `else` for every value none of them covers - which is where the rows that test nothing at this path go.
    */
-  case SwitchCase(path: List<PatternStep>, owner: TypeId, edges: List<CaseEdge>, otherwise: NodeId)
+  case SwitchCase(path: List<PatternStep>, owner: TypeId, edges: List<CaseEdge>, else: NodeId)
   /** A literal, a range or a length: one question, two ways. */
-  case Check(path: List<PatternStep>, check: PatternCheck, then: NodeId, otherwise: NodeId)
+  case Check(path: List<PatternStep>, check: PatternCheck, then: NodeId, else: NodeId)
   /** Arm `arm` matched through alternative `branch`: bind its names and run its body. */
   case Arm(arm: Int, branch: Int)
-  /** The same, with a guard: bind the names, and where the guard does not hold go on with `otherwise`. */
-  case Guarded(arm: Int, branch: Int, otherwise: NodeId)
+  /** The same, with a guard: bind the names, and where the guard does not hold go on with `else`. */
+  case Guarded(arm: Int, branch: Int, else: NodeId)
   /** No arm matches. Impossible after the checker for a `match`, and the `else` of an `if const`. */
   case Fail
 }
@@ -133,7 +133,7 @@ fn buildFresh(var graph: DecisionGraph, rows: List<Row>): NodeId {
 
 /**
  * One question about which case a value is, answered for every variant any row names. A row that tests nothing at this
- * path fits every answer, so it is in every edge *and* in `otherwise`.
+ * path fits every answer, so it is in every edge *and* in `else`.
  */
 fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep>, owner: TypeId): NodeId {
   var variants: List<SymbolId> = []
@@ -171,7 +171,7 @@ fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep
 
 /**
  * A literal, a range or a length: two ways. A row that makes exactly this check has it removed on the `then` side and is
- * gone on the `otherwise` side; a row that makes no check at this path is on both. A row that makes a *different* kind
+ * gone on the `else` side; a row that makes no check at this path is on both. A row that makes a *different* kind
  * of check here - a range next to a literal - stays on both sides and is asked again, which is the one place where a
  * path is tested twice on one path through the graph.
  */

@@ -140,7 +140,7 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
       continue
     }
     // A list of numbers stores its items as bytes: there is no count to hand over, so the mode would only be noise
-    if !containsCountedType(program, parameter.annotation) {
+    if !containsCountedType(program, parameter.type) {
       continue
     }
     const promoted = parameter.copy ownership: Ownership.Owned
@@ -238,7 +238,7 @@ fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
     if parameter.byReference || parameter.ownership == Ownership.Owned {
       continue
     }
-    if !containsCountedType(program, parameter.annotation) {
+    if !containsCountedType(program, parameter.type) {
       continue
     }
     if position >= function.slots.length() || (!escaping[position] && !isTask) {
@@ -1156,7 +1156,7 @@ fn isZeroReleasable(program: IrProgram, id: IrTypeId, depth: Int): Bool {
       if const .Boxed = shape.representation {
         return true
       }
-      shape.fields.all({ isZeroReleasable(program, _.annotation, depth + 1) })
+      shape.fields.all({ isZeroReleasable(program, _.type, depth + 1) })
     }
     .FixedArray(item, _) => isZeroReleasable(program, item, depth + 1)
     _ => true

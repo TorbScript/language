@@ -385,7 +385,7 @@ fn lowerIfVarBinding(
   }
   // The test itself binds nothing: the names are the paths above, not copies of what they lead to
   const bare = plan.copy arms: [arm.copy(branches: [branch.copy(bindings: [])])]
-  const scrutinee = addTemporary builder, subject.annotation
+  const scrutinee = addTemporary builder, subject.type
   emit builder, Instruction.Read(scrutinee, subject.reference)
   const location = locationOf lowering, expression.span
   const target = match otherwise {
@@ -439,11 +439,11 @@ fn namedPaths(var lowering: Lowering, subject: PlacePath, branch: PatternBranch,
   var named: List<(Span, Reference)> = []
   for binding in branch.bindings {
     var steps = subject.reference.steps
-    var current = subject.annotation
+    var current = subject.type
     for step in binding.path {
       const resolved = resolvedStepOn(lowering, current, step, at)?
       steps.append resolved.step
-      current = resolved.annotation
+      current = resolved.type
     }
     const declared = lowering.checker.binding(binding.binding).at
     const place = Reference subject.reference.base, steps
@@ -564,7 +564,7 @@ fn lowerWhileVarBinding(
     }
   }
   const bare = plan.copy arms: [arm.copy(branches: [branch.copy(bindings: [])])]
-  const scrutinee = addTemporary builder, subject.annotation
+  const scrutinee = addTemporary builder, subject.type
   emit builder, Instruction.Read(scrutinee, subject.reference)
   const graph = decisionTreeOf bare
   const walk = Walk bare, graph, [None], scrutinee, [inner], done, [], pattern.span, location
@@ -653,7 +653,7 @@ fn declareBindings(var lowering: Lowering, var builder: FunctionBuilder, plan: M
         lowering.slots.set declared, found
         continue
       }
-      const annotation = irTypeOf lowering, binding.annotation
+      const annotation = irTypeOf lowering, binding.type
       const slot = addLocal builder, annotation, binding.name
       byName.set binding.name, slot
       lowering.slots.set declared, slot
@@ -1376,7 +1376,7 @@ fn isTextType(var lowering: Lowering, annotation: IrTypeId): Bool {
 /** One step of a path, resolved against the layout of the value it starts from. */
 type ResolvedStep {
   step: PathStep
-  annotation: IrTypeId
+  type: IrTypeId
 }
 
 /** The value a path names, in a slot of its own. Every step is one `Read`, which is one member access in C. */
@@ -1410,7 +1410,7 @@ fn readPath(
         return None
       }
     }
-    const target = addTemporary builder, resolved.annotation
+    const target = addTemporary builder, resolved.type
     emit builder, Instruction.Read(target, Reference(current, [resolved.step]))
     current = target
   }
@@ -1490,21 +1490,21 @@ fn resolvedStepOn(var lowering: Lowering, owner: IrTypeId, step: PatternStep, at
         reportUnsupported lowering, "a case pattern with a position the case does not have", at
         return None
       }
-      ResolvedStep PathStep.Variant(layout, found, index), fields[index].annotation
+      ResolvedStep PathStep.Variant(layout, found, index), fields[index].type
     }
     .Field(_, index, _) => {
       if index < 0 || index >= shape.fields.length() {
         reportUnsupported lowering, "a pattern with a field the type does not have", at
         return None
       }
-      ResolvedStep PathStep.Field(layout, index), shape.fields[index].annotation
+      ResolvedStep PathStep.Field(layout, index), shape.fields[index].type
     }
     .TupleField(_, index) => {
       if index < 0 || index >= shape.fields.length() {
         reportUnsupported lowering, "a tuple pattern with a position the tuple does not have", at
         return None
       }
-      ResolvedStep PathStep.TupleField(layout, index), shape.fields[index].annotation
+      ResolvedStep PathStep.TupleField(layout, index), shape.fields[index].type
     }
     _ => {
       reportUnsupported lowering, "a list pattern", at
@@ -1655,7 +1655,7 @@ fn lowerTopLevelTry(
 fn carriesNever(var lowering: Lowering, layout: LayoutId, variant: Int): Bool {
   const fields = lowering.program.layoutAt(layout).fieldsOfVariant(variant)
   if const Some(field) = fields.first() {
-    if const .NeverType = lowering.program.typeAt(field.annotation) {
+    if const .NeverType = lowering.program.typeAt(field.type) {
       return true
     }
   }
@@ -1689,7 +1689,7 @@ fn reportFailure(
   var chain: (Slot, TypeId)? = None
   // A `None` carries nothing, so the line is the prefix alone: `x?` on an `Option` says that there was no value
   if const Some(field) = fields.first() {
-    const carried = addTemporary builder, field.annotation
+    const carried = addTemporary builder, field.type
     const step = PathStep.Variant subjectLayout, failure, 0
     emit builder, Instruction.Read(carried, Reference(subject, [step]))
     const (shown, failed) = match shownFailure(lowering, builder, carried, at) {
@@ -1900,9 +1900,9 @@ fn emitFailure(
       reportUnsupported lowering, "`?` on a failure case that carries no value", at
       return
     }
-    const error = addTemporary builder, group[0].annotation
+    const error = addTemporary builder, group[0].type
     emit builder, Instruction.Read(error, Reference(subject, [PathStep.Variant(subjectLayout, failure, 0)]))
-    const converted = match convertedError(lowering, builder, error, wanted[0].annotation, at) {
+    const converted = match convertedError(lowering, builder, error, wanted[0].type, at) {
       Some(found) => found
       None => {
         return
@@ -1997,7 +1997,7 @@ fn wrappingVariantOf(var lowering: Lowering, wanted: IrTypeId, given: IrTypeId):
   const shape = lowering.program.layoutAt layout
   for index in 0..shape.variants.length() {
     const fields = shape.fieldsOfVariant index
-    if fields.length() == 1 && fields[0].annotation == given {
+    if fields.length() == 1 && fields[0].type == given {
       return index
     }
   }
@@ -2175,7 +2175,7 @@ fn payloadTypeOf(var lowering: Lowering, layout: LayoutId, variant: Int): IrType
   const shape = lowering.program.layoutAt layout
   const fields = shape.fieldsOfVariant variant
   match fields.first() {
-    Some(found) => found.annotation
+    Some(found) => found.type
     None => lowering.program.internType IrType.VoidType
   }
 }

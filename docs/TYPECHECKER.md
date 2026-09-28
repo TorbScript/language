@@ -1122,8 +1122,9 @@ The design above is the plan; where it did not fit what milestone 3 actually bui
 list. Everything else is as written.
 
 - **`Void` and `Never` are `TypeForm.VoidType` and `.NeverType`.** A case may not shadow a type name of the prelude,
-  which is the same rule that makes the syntax tree say `TupleType` and `FunctionType`. For the same reason the field
-  that holds a type is `annotation`, not `type`: `type` is a keyword.
+  which is the same rule that makes the syntax tree say `TupleType` and `FunctionType`. A field that holds a type is
+  named `type` and one that holds a trait `trait`, because a member may be named after a keyword; a parameter or a
+  binding may not, and is `annotation` or `capability`.
 - **`typeFromReference` lives in a file of its own, `lowering.trb`, not in `type.trb`.** Building a type expands
   aliases and asks a declaration how many parameters it has, so it needs the signature tables; and building a
   signature needs the types. The two files use each other, which is what cyclic imports are for. `type.trb` stays the
@@ -1228,9 +1229,8 @@ list. Everything else is as written.
 - **An implementation whose target is a trait applies to every type that implements it.** `extend<Item: Show> List<Item>
   with Show` makes `ArrayList<Int>` showable. Such a target is a third shape next to "one head" and "every type"
   (`TargetShape.Bounded`), and it is what `List.from`, `Map.from` and the `Show` of every collection rest on.
-- **`Implementation.capability` is the field the design calls `trait`**, because `trait` is a keyword. The data model of
-  section 4.2 (`Implementation`, `ImplementationTable`, `Resolved`, `Witness`, `DerivedImplementation`) lives in
-  `type.trb` next to `Signature`, and only the algorithms are in `implementation.trb`.
+- **The data model of section 4.2** (`Implementation`, `ImplementationTable`, `Resolved`, `Witness`,
+  `DerivedImplementation`) lives in `type.trb` next to `Signature`, and only the algorithms are in `implementation.trb`.
 - **`Candidate` moved to `context.trb`.** Member lookup is the hottest question of the pass, so the `Checker` keeps the
   answers (`memberAnswers` by module, receiver and name) - and what a table of the `Checker` holds cannot live in the
   file that asks the question.
@@ -2380,7 +2380,7 @@ implementation asks for - which `extend<Value: Show, Failure: Show> Result<Value
 a signature says it as the type of the language, while `with Equals, Hash, Show` stands on the `native type Void` of
 `std/core`, so nothing connected the two and `Void` implemented nothing at all.
 _Proposal:_ a trait-typed value, `&` intersections included, satisfies a bound on any trait of the supertrait closure
-of its own traits, and the witness recorded is `Witness.Object(annotation, bound)` - the value's own table, which the
+of its own traits, and the witness recorded is `Witness.Object(type, bound)` - the value's own table, which the
 back end reads as `WitnessRoot.Value(slot, bound)` plus the steps through `WitnessTable.nested` (BACKEND 1.4). And
 trait resolution asks about the declaration of `Void` wherever the type `Void` is the subject. _Reason:_ both are the
 same question - "which declaration says what this type implements" - and neither needs a new witness shape.
@@ -2840,7 +2840,7 @@ checks and reaches neither back end, and a `where` clause whose *subject* is a c
 `tryType` infers its operand with no expectation, so `const port: Int = text.tryInto()?` leaves `tryInto()` without a
 target although the binding names one. It is *the* way to read text once `TryFrom<String, Failure>` is the only one, so
 the call has to work.
-_Proposal:_ a `?` passes what is expected of **itself** down as `Expectation.Unwrapped(annotation)` - a fact and not an
+_Proposal:_ a `?` passes what is expected of **itself** down as `Expectation.Unwrapped(type)` - a fact and not an
 expected type. Nothing is checked against it, no literal adapts to it, and the one reader is `fallibleConversionType`:
 the target is that annotation, and the failure is the one of the target's `TryFrom<Source, Failure>` implementations
 that takes the receiver's type.

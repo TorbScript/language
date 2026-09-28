@@ -39,7 +39,7 @@ public fn inspectorOf(ir: IrProgram, names: Map<Int, String>): Inspector {
 
 /** A value of the program: its IR type and its words, copied out of the registers or out of a block. */
 public type Value {
-  annotation: IrTypeId
+  type: IrTypeId
   words: List<Int>
 }
 
@@ -200,7 +200,7 @@ public fn typeNameOf(inspector: Inspector, annotation: IrTypeId): String {
     .Tuple(layout) => {
       var parts: List<String> = []
       for field in inspector.ir.layoutAt(layout).fields {
-        parts.append typeNameOf(inspector, field.annotation)
+        parts.append typeNameOf(inspector, field.type)
       }
       "({parts.joined(separator: ", ")})"
     }
@@ -284,7 +284,7 @@ fn declarationNameOf(inspector: Inspector, layout: LayoutId): String {
  * is shortened to its type's name, so a line stays a line.
  */
 public fn showValue(inspector: Inspector, value: Value, depth: Int = 0): String {
-  const annotation = value.annotation
+  const annotation = value.type
   if !inspector.ir.hasType(annotation) {
     return "?"
   }
@@ -425,7 +425,7 @@ fn partsOf(inspector: Inspector, layout: LayoutId, value: Value): (String, List<
       return (caseNameOf(inspector, layout, empty), [])
     }
     const inner = shape.fields[field]
-    return (caseNameOf(inspector, layout, payload), [(inner.name, Value(inner.annotation, value.words))])
+    return (caseNameOf(inspector, layout, payload), [(inner.name, Value(inner.type, value.words))])
   }
   const contents = contentsOf(inspector, layout, value)?
   const words = inspector.tables.wordsOf layout
@@ -434,7 +434,7 @@ fn partsOf(inspector: Inspector, layout: LayoutId, value: Value): (String, List<
     for index in 0..shape.fields.length() {
       const field = shape.fields[index]
       const label = if shape.kind == LayoutKind.Tuple { "{index}" } else { field.name }
-      fields.append((label, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+      fields.append((label, sliceOf(inspector, contents, words.offsets[index], field.type)))
     }
     const name = if shape.kind == LayoutKind.Tuple { "" } else { declarationNameOf inspector, layout }
     return (name, fields)
@@ -446,12 +446,12 @@ fn partsOf(inspector: Inspector, layout: LayoutId, value: Value): (String, List<
   var fields: List<(String, Value)> = []
   for index in 0..shape.commonFieldCount {
     const field = shape.fields[index]
-    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.type)))
   }
   const variant = shape.variants[tag]
   for index in variant.first..variant.first + variant.count {
     const field = shape.fields[index]
-    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.annotation)))
+    fields.append((field.name, sliceOf(inspector, contents, words.offsets[index], field.type)))
   }
   (caseNameOf(inspector, layout, tag), fields)
 }
@@ -488,7 +488,7 @@ fn payloadOf(inspector: Inspector, value: Value): Value? {
 /** A list, an array, a map or a set on one line: its first items, or how many there are. */
 fn showItems(inspector: Inspector, value: Value, depth: Int): String {
   const count = childCountOf inspector, value
-  const name = typeNameOf inspector, value.annotation
+  const name = typeNameOf inspector, value.type
   if count == 0 {
     return if isMap(inspector, value) { "[:]" } else { "[]" }
   }
@@ -509,7 +509,7 @@ fn showItems(inspector: Inspector, value: Value, depth: Int): String {
 }
 
 fn isMap(inspector: Inspector, value: Value): Bool {
-  if const .Runtime(.MapStorage, _) = inspector.ir.typeAt(value.annotation) {
+  if const .Runtime(.MapStorage, _) = inspector.ir.typeAt(value.type) {
     return true
   }
   false
@@ -524,7 +524,7 @@ public fn hasChildren(inspector: Inspector, value: Value): Bool {
 
 /** Whether a value's children are items counted from 0, which an editor shows in pages. */
 public fn isIndexed(inspector: Inspector, value: Value): Bool {
-  match inspector.ir.typeAt(value.annotation) {
+  match inspector.ir.typeAt(value.type) {
     .FixedArray(_, _) => true
     .Runtime(kind, _) => kind == RuntimeKind.ListStorage || kind == RuntimeKind.SetStorage
     .Box(item) => isIndexed inspector, Value(item, [])
@@ -534,10 +534,10 @@ public fn isIndexed(inspector: Inspector, value: Value): Bool {
 
 /** How many children a value has. */
 public fn childCountOf(inspector: Inspector, value: Value): Int {
-  if !inspector.ir.hasType(value.annotation) {
+  if !inspector.ir.hasType(value.type) {
     return 0
   }
-  match inspector.ir.typeAt(value.annotation) {
+  match inspector.ir.typeAt(value.type) {
     .Record(layout) => layoutChildCount inspector, layout, value
     .Variant(layout) => layoutChildCount inspector, layout, value
     .Tuple(layout) => layoutChildCount inspector, layout, value
@@ -580,11 +580,11 @@ fn layoutChildCount(inspector: Inspector, layout: LayoutId, value: Value): Int {
  * field's name, `0` and `1` for a tuple, `[3]` for an item, the key's own line for an entry of a map.
  */
 public fn childrenOf(inspector: Inspector, value: Value, start: Int, count: Int): List<(String, Value)> {
-  if !inspector.ir.hasType(value.annotation) {
+  if !inspector.ir.hasType(value.type) {
     return []
   }
   const end = start + count
-  match inspector.ir.typeAt(value.annotation) {
+  match inspector.ir.typeAt(value.type) {
     .Record(layout) => layoutChildren inspector, layout, value, start, end
     .Variant(layout) => layoutChildren inspector, layout, value, start, end
     .Tuple(layout) => layoutChildren inspector, layout, value, start, end

@@ -155,7 +155,7 @@ fn emitExports(var emission: Emission, program: IrProgram, functions: List<IrFun
     var parameters: List<String> = []
     var arguments: List<String> = []
     for index in 0..function.signature.parameters.length() {
-      parameters.append declarationOf(valueTypeOf(program, function.signature.parameters[index].annotation), "a{index}")
+      parameters.append declarationOf(valueTypeOf(program, function.signature.parameters[index].type), "a{index}")
       arguments.append "a{index}"
     }
     const written = if parameters.isEmpty() { "void" } else { parameters.joined separator: ", " }
@@ -309,16 +309,16 @@ fn objectTypesOf(program: IrProgram, functions: List<IrFunction>, layouts: List<
       continue
     }
     for field in program.layouts[index].fields {
-      collectObjectType program, names, byName, field.annotation
+      collectObjectType program, names, byName, field.type
     }
   }
   for function in functions {
     collectObjectType program, names, byName, function.signature.result
     for parameter in function.signature.parameters {
-      collectObjectType program, names, byName, parameter.annotation
+      collectObjectType program, names, byName, parameter.type
     }
     for slot in function.slots {
-      collectObjectType program, names, byName, slot.annotation
+      collectObjectType program, names, byName, slot.type
     }
   }
   var sorted = names
@@ -546,7 +546,7 @@ fn thunkHeadOf(
   // `const` of a read-only member is kept one line further in, on the box the thunk unwraps.
   var parameters = ["void *self"]
   for position in 1..signature.parameters.length() {
-    const spelling = valueTypeOf program, signature.parameters[position].annotation
+    const spelling = valueTypeOf program, signature.parameters[position].type
     const written = if signature.parameters[position].byReference { pointerTo spelling } else { spelling }
     parameters.append declarationOf(written, "a{position}")
   }
@@ -605,7 +605,7 @@ fn emitThunk(var emission: Emission, program: IrProgram, table: WitnessTable, in
   // parameter is already a local of the thunk and is retained in place
   const receiver = match retainedReceiverOf(program, table, index) {
     Some(statement) => {
-      const annotation = valueTypeOf program, function.signature.parameters[0].annotation
+      const annotation = valueTypeOf program, function.signature.parameters[0].type
       body.append CStatement.Declaration(annotation, receiverName, unwrapped)
       body.append statement
       CExpression.Name receiverName
@@ -650,7 +650,7 @@ fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CSta
   if parameter.byReference || parameter.ownership != Ownership.Owned {
     return None
   }
-  retainStatement program, parameter.annotation, CExpression.Name(receiverName)
+  retainStatement program, parameter.type, CExpression.Name(receiverName)
 }
 
 /**
@@ -663,7 +663,7 @@ fn retainedArgumentOf(program: IrProgram, function: IrFunction, position: Int, a
   if parameter.byReference || parameter.ownership != Ownership.Owned {
     return None
   }
-  retainStatement program, parameter.annotation, argument
+  retainStatement program, parameter.type, argument
 }
 
 /** `box->f_value`: the payload the thunk unwraps out of the block a trait-typed value points at. */
@@ -824,7 +824,7 @@ fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrF
   var parameters = ["torb_environment *environment"]
   for index in first..signature.parameters.length() {
     const parameter = signature.parameters[index]
-    const spelling = valueTypeOf program, parameter.annotation
+    const spelling = valueTypeOf program, parameter.type
     const shown = if parameter.byReference { pointerTo spelling } else { spelling }
     parameters.append declarationOf(shown, "a{index}")
   }
@@ -878,16 +878,16 @@ fn checkProgramTypes(var emission: Emission, program: IrProgram, functions: List
     }
     const layout = program.layouts[index]
     for field in layout.fields {
-      checkType emission, program, field.annotation
+      checkType emission, program, field.type
     }
   }
   for function in functions {
     checkType emission, program, function.signature.result
     for parameter in function.signature.parameters {
-      checkType emission, program, parameter.annotation
+      checkType emission, program, parameter.type
     }
     for slot in function.slots {
-      checkType emission, program, slot.annotation
+      checkType emission, program, slot.type
     }
   }
   for descriptor in program.elements {
@@ -1043,10 +1043,10 @@ fn usedLayoutsOf(program: IrProgram, functions: List<IrFunction>): List<Bool> {
   for function in functions {
     markLayoutOfType program, used, pending, function.signature.result
     for parameter in function.signature.parameters {
-      markLayoutOfType program, used, pending, parameter.annotation
+      markLayoutOfType program, used, pending, parameter.type
     }
     for slot in function.slots {
-      markLayoutOfType program, used, pending, slot.annotation
+      markLayoutOfType program, used, pending, slot.type
     }
     for block in function.blocks {
       for instruction in block.instructions {
@@ -1069,7 +1069,7 @@ fn usedLayoutsOf(program: IrProgram, functions: List<IrFunction>): List<Bool> {
     const current = pending[last]
     pending.removeAt last
     for field in program.layouts[current].fields {
-      markLayoutOfType program, used, pending, field.annotation
+      markLayoutOfType program, used, pending, field.type
     }
   }
   used
@@ -1159,7 +1159,7 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, functions: Li
       continue
     }
     for field in layout.fields {
-      emitArrayDefinition emission, program, arrays, written, field.annotation
+      emitArrayDefinition emission, program, arrays, written, field.type
     }
     write emission, structDeclarationOf(program, layout)
   }
@@ -1204,10 +1204,10 @@ fn usedArraysOf(program: IrProgram, functions: List<IrFunction>, layouts: List<B
   for function in functions {
     collectArrays program, found, function.signature.result
     for parameter in function.signature.parameters {
-      collectArrays program, found, parameter.annotation
+      collectArrays program, found, parameter.type
     }
     for slot in function.slots {
-      collectArrays program, found, slot.annotation
+      collectArrays program, found, slot.type
     }
   }
   for index in 0..layouts.length() {
@@ -1215,7 +1215,7 @@ fn usedArraysOf(program: IrProgram, functions: List<IrFunction>, layouts: List<B
       continue
     }
     for field in program.layouts[index].fields {
-      collectArrays program, found, field.annotation
+      collectArrays program, found, field.type
     }
   }
   for descriptor in program.elements {
@@ -1285,7 +1285,7 @@ fn emitTaskFrames(var emission: Emission, program: IrProgram, functions: List<Ir
       if !machine.isFrameSlot(Slot(index)) {
         continue
       }
-      const spelling = valueTypeOf program, function.slots[index].annotation
+      const spelling = valueTypeOf program, function.slots[index].type
       members.append CMember.Field(spelling, slotNameOf(function, Slot(index)))
     }
     if members.isEmpty() {
@@ -1656,18 +1656,18 @@ fn childStatement(
   field: FieldLayout,
   isRetain: Bool,
 ): CStatement? {
-  if !containsCountedType(program, field.annotation) {
+  if !containsCountedType(program, field.type) {
     return None
   }
   const statement = if isRetain {
-    retainStatement program, field.annotation, place
+    retainStatement program, field.type, place
   } else {
-    releaseStatement program, field.annotation, place
+    releaseStatement program, field.type, place
   }
   match statement {
     Some(found) => found
     None => {
-      reportUnsupported emission, "a counted field that is {describeCounted(program, field.annotation)}"
+      reportUnsupported emission, "a counted field that is {describeCounted(program, field.type)}"
       None
     }
   }
@@ -1710,7 +1710,7 @@ fn demandFlagsOf(program: IrProgram, functions: List<IrFunction>): DemandFlags {
       match access {
         .Read => markRetained program, retains, function.signature.result
         .Write => {
-          const held = function.signature.parameters[0].annotation
+          const held = function.signature.parameters[0].type
           markDropped program, drops, held
           if entryCellCopies(program, held) {
             markRetained program, retains, held
@@ -1777,7 +1777,7 @@ fn markThunkRetains(program: IrProgram, var retains: List<Bool>, table: WitnessT
       if parameter.byReference || parameter.ownership != Ownership.Owned {
         continue
       }
-      markRetained program, retains, parameter.annotation
+      markRetained program, retains, parameter.type
     }
   }
 }
@@ -1913,10 +1913,10 @@ fn closeHelperDemand(program: IrProgram, var retains: List<Bool>, var drops: Lis
       const layout = program.layouts[index]
       for field in layout.fields {
         if retains[index] {
-          markRetained program, retains, field.annotation
+          markRetained program, retains, field.type
         }
         if drops[index] {
-          markDropped program, drops, field.annotation
+          markDropped program, drops, field.type
         }
       }
     }
@@ -1994,7 +1994,7 @@ fn emitStaticData(var emission: Emission, program: IrProgram, functions: List<Ir
   write emission, CDeclaration.Comment("The compile-time constants of the program.")
   for id in named {
     const value = program.staticAt id
-    const spelling = valueTypeOf program, value.annotation
+    const spelling = valueTypeOf program, value.type
     const initializer = staticValueOf emission, program, value
     write emission, CDeclaration.StaticData("static const {spelling}", value.name, initializer)
   }
@@ -2143,7 +2143,7 @@ const zeroInitializer = CExpression.Initializer([CExpression.Literal("0")])
 fn literalOf(program: IrProgram, value: StaticValue, literal: LiteralValue): CExpression {
   match literal {
     .Integer(number) => {
-      if const .Integer(width, false) = program.typeAt(value.annotation) {
+      if const .Integer(width, false) = program.typeAt(value.type) {
         if width >= 64 && number < 0 {
           return CExpression.Literal "{unsignedDigits(number)}u"
         }
@@ -2468,7 +2468,7 @@ fn emitEntryCell(var emission: Emission, program: IrProgram, function: IrFunctio
       }
     }
     .Write => {
-      const held = function.signature.parameters[0].annotation
+      const held = function.signature.parameters[0].type
       const value = CExpression.Name slotNameOf(function, Slot(0))
       if isFlag {
         // The top-level code only ever sets it
@@ -2536,7 +2536,7 @@ fn entryCellsOf(functions: List<IrFunction>): List<(String, IrTypeId)> {
       seen.insert cell
       const held = match access {
         .Read => function.signature.result
-        .Write => function.signature.parameters[0].annotation
+        .Write => function.signature.parameters[0].type
       }
       found.append((cell, held))
     }

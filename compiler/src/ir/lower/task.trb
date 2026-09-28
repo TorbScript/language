@@ -152,11 +152,11 @@ public fn lowerChannelNew(
 public fn resumeSignatureOf(var lowering: Lowering, signature: IrSignature, value: IrTypeId, at: Span): IrSignature? {
   var parameters: List<IrParameter> = []
   for parameter in signature.parameters {
-    if parameter.byReference && !crossesByIdentity(lowering, parameter.annotation) {
+    if parameter.byReference && !crossesByIdentity(lowering, parameter.type) {
       reportUnsupported lowering, "a `var` parameter of a value type in a function that answers a `Task`", at
       return None
     }
-    parameters.append IrParameter(parameter.name, parameter.annotation, ownership: Ownership.Borrowed)
+    parameters.append IrParameter(parameter.name, parameter.type, ownership: Ownership.Borrowed)
   }
   IrSignature parameters, value
 }
@@ -176,7 +176,7 @@ public fn buildTaskConstructor(
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
     if parameter.byReference {
-      const held = addTemporary builder, parameter.annotation
+      const held = addTemporary builder, parameter.type
       emit builder, Instruction.Read(held, Reference(Slot(index), []))
       arguments.append borrowed(held)
       continue
