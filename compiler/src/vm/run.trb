@@ -26,6 +26,8 @@ use entryNameOf from "../ir/lower/function"
 use printDiagnostic, printProblem, printErrorMessage from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
 use BytecodeProgram from "../backend/bytecode/format"
+use IrProgram from "../ir/ir"
+use Environment from "std/os"
 use RuntimeScript from "../semantics/scripts"
 use scriptReceiverOf, moduleOfImport from "../semantics/checker/receiver"
 use runProgram, ScriptLoader, LoadedScript, ScriptStop from "./interpret"
@@ -139,6 +141,95 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
   runModules checked, tree, modules, [], true, "", requested, RunClock(enabled: false, last: 0)
 }
 
+/**
+ * A program checked, lowered and encoded, ready to run - what `torb debug` launches (docs/design/DEBUGGER.md section
+ * 16). `files` holds, per module of the program, the absolute path of its file and the path a location of the IR names
+ * it by, and `checked` is kept for the names of its declarations.
+ */
+public type PreparedRun {
+  lowered: MachineLowering
+  executable: String
+  loader: ScriptLoader
+  pool: (workers: Int, blocking: Int)
+  files: List<(String, String)>
+  checked: Checked
+}
+
+/**
+ * The program at `path` - a file, the only program below a directory, or the one called `program` - or every test file
+ * below `path` where `isTestRun`, checked, lowered for the VM (for the debugger where `debugging`) and encoded. What
+ * refused it is printed to standard error, and the answer is then `None`.
+ */
+public fn prepareRun(path: String, program: String, isTestRun: Bool, debugging: Bool): Result<PreparedRun?, IoError> {
+  const tree = readSourceTree([path])?
+  const requested = absolutePaths([path])?
+  const checked = check tree, requested, false, false, [], onlyReached: true
+  if reportChecked(checked) > 0 {
+    return Ok None
+  }
+  var modules: List<ModuleId> = []
+  var executable = ""
+  if isTestRun {
+    modules = match entryModulesOf(checked, tree, BuildOptions([path], testing: true)) {
+      Some(found) => found
+      None => {
+        printError "error: no test file (`*.test.trb`) below {path}"
+        return Ok None
+      }
+    }
+  } else {
+    const options = BuildOptions([path], program: program, command: "debug")
+    const module = match chosenPrograms(checked, tree, requested, options) {
+      .Chosen(found) => {
+        if found.length() > 1 {
+          printError "error: {nameOne(found, options)}"
+          return Ok None
+        }
+        found[0].module
+      }
+      .Libraries(what) => {
+        printError "error: {what}: there is nothing to run"
+        return Ok None
+      }
+      .Refused(message) => {
+        printError "error: {message}"
+        return Ok None
+      }
+    }
+    modules = [module]
+    executable = checked.program.graph.at(module).path
+  }
+  const pool = match poolOf(checked, modules[0]) {
+    Ok(found) => found
+    Fail(problem) => {
+      printError "error: {problem}"
+      return Ok None
+    }
+  }
+  const clock = RunClock enabled: false, last: 0
+  const lowered = match machineLoweringOf(
+    checked,
+    tree,
+    modules,
+    isTestRun,
+    clock,
+    onDemand: true,
+    debugging: debugging,
+  ) {
+    Some(found) => found
+    None => {
+      return Ok None
+    }
+  }
+  var files: List<(String, String)> = []
+  const stable = pathsOfModules checked
+  for index in 0..checked.program.graph.modules.length() {
+    files.append((checked.program.graph.modules[index].path, stable.get(index) ?? ""))
+  }
+  const loader = scriptLoaderOf tree, requested
+  Ok Some(PreparedRun(lowered, executable, loader, pool, files, checked))
+}
+
 /** The entry files lowered, owned, verified, encoded and run; a test run with the file of every entry. */
 fn runModules(
   checked: Checked,
@@ -157,7 +248,9 @@ fn runModules(
       return refusedCode
     }
   }
-  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, onDemand: true) {
+  // `TORB_VM_DEBUGGED`: lowered as for the debugger and run without one, which has to change nothing the program does
+  const debugging = Environment.get("TORB_VM_DEBUGGED").isSome()
+  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, onDemand: true, debugging: debugging) {
     Some(found) => found
     None => {
       return refusedCode
@@ -171,7 +264,8 @@ fn runModules(
 
 /**
  * The entry files lowered for the VM, owned, verified and encoded as bytecode; a test run with the file of every entry.
- * `None` where the lowering or the emitter refused the program, which is printed.
+ * `None` where the lowering or the emitter refused the program, which is printed. `debugging` lowers it for the
+ * debugger (docs/design/DEBUGGER.md section 5).
  */
 public fn bytecodeOf(
   checked: Checked,
@@ -180,15 +274,37 @@ public fn bytecodeOf(
   isTestRun: Bool = false,
   clock: RunClock = RunClock(enabled: false, last: 0),
   onDemand: Bool = false,
+  debugging: Bool = false,
 ): BytecodeProgram? {
+  const lowered = machineLoweringOf(checked, tree, modules, isTestRun, clock, onDemand, debugging)?
+  lowered.program
+}
+
+/** What [bytecodeOf] answers, with the final IR it was encoded from: what a debugger reads the program's values by. */
+public type MachineLowering {
+  program: BytecodeProgram
+  ir: IrProgram
+}
+
+/** [bytecodeOf], keeping the final IR beside the bytecode. */
+public fn machineLoweringOf(
+  checked: Checked,
+  tree: SourceTree,
+  modules: List<ModuleId>,
+  isTestRun: Bool = false,
+  clock: RunClock = RunClock(enabled: false, last: 0),
+  onDemand: Bool = false,
+  debugging: Bool = false,
+): MachineLowering? {
   var checker = checked.checker
   checker.checksOnDemand = onDemand
-  var lowering = lowerWorkspace checker, pathsOfModules(checked), modules, false, hostTarget(), forMachine: true
+  const paths = pathsOfModules checked
+  var lowering = lowerWorkspace checker, paths, modules, false, hostTarget(), forMachine: true, debugging: debugging
   if onDemand && !isLowered(lowering) {
     // A refusal is about the program as a native build sees it: every body of the program checked, and lowered again
     var every = checked.checker
     checkBodiesOf every, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
-    lowering = lowerWorkspace every, pathsOfModules(checked), modules, false, hostTarget(), forMachine: true
+    lowering = lowerWorkspace every, paths, modules, false, hostTarget(), forMachine: true, debugging: debugging
   }
   clock.lap "lowering"
   insertOwnership lowering.program
@@ -235,7 +351,7 @@ public fn bytecodeOf(
     return None
   }
   clock.lap "the bytecode"
-  emission.program
+  MachineLowering emission.program, lowering.program
 }
 
 /**

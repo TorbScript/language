@@ -18,8 +18,8 @@ use verifyOwnedProgram from "../src/ir/ownership-verify"
 use Lowering from "../src/ir/lower/context"
 use lowerChecked, loweredText from "../src/ir/lower/lower"
 
-public fn lowered(source: String, extra: Map<String, String> = [:]): Lowering {
-  loweredWith source, [], extra
+public fn lowered(source: String, extra: Map<String, String> = [:], debugging: Bool = false): Lowering {
+  loweredWith source, [], extra, debugging: debugging
 }
 
 /**
@@ -30,7 +30,12 @@ public fn lowered(source: String, extra: Map<String, String> = [:]): Lowering {
  * `extra` are further files of the workspace, for a program that needs a declaration `acme/app` may not write itself:
  * only the standard library may claim a `native`, so a test about lowering one puts it in `std/prelude`.
  */
-public fn loweredWith(source: String, expected: List<String>, extra: Map<String, String> = [:]): Lowering {
+public fn loweredWith(
+  source: String,
+  expected: List<String>,
+  extra: Map<String, String> = [:],
+  debugging: Bool = false,
+): Lowering {
   var files = extra
   files.set "app/src/main.trb", source
   const tree = workspaceWith files
@@ -46,7 +51,7 @@ public fn loweredWith(source: String, expected: List<String>, extra: Map<String,
     }
   }
   assert(found == expected)
-  lowerChecked checked
+  lowerChecked checked, debugging: debugging
 }
 
 /** One function of the program, with the verifier's findings in its place if it has any. */

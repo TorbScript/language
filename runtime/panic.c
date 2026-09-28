@@ -60,11 +60,16 @@ _Thread_local uintptr_t torb_thread_stack_floor = 0u;
 #  endif
 #endif
 static torb_panic_hook torb_hook = NULL;
+static torb_debug_panic_hook torb_debug_hook = NULL;
 /** Set by the first thread that panics: a second panic on another worker waits for the first to end the process. */
 static uint32_t torb_panicking = 0u;
 
 void torb_set_panic_hook(torb_panic_hook hook) {
   torb_hook = hook;
+}
+
+void torb_set_debug_panic_hook(torb_debug_panic_hook hook) {
+  torb_debug_hook = hook;
 }
 
 /* The recovery point is the running thread's: a panic on a worker must never jump into a frame of the main thread. */
@@ -141,6 +146,13 @@ static TORB_NORETURN void torb_end_with_panic(const char *message, torb_location
   char buffer[TORB_PANIC_BUFFER_SIZE];
   char frames[TORB_FRAMES_BUFFER_SIZE];
   torb_worker *worker = torb_worker_current();
+  /* A debugger stops the program where it panics, with every frame still in place; then the panic goes on */
+  if (torb_debug_hook != NULL && code == TORB_PANIC_EXIT_CODE) {
+    torb_debug_panic_hook hook = torb_debug_hook;
+    torb_debug_hook = NULL;
+    hook(message, at);
+    torb_debug_hook = hook;
+  }
   /*
    * A test runner that set up a recovery point catches the panic instead: the message and the site go into the point
    * and the jump lands in the frame that owns it. The point is taken away first, so a panic *while* a failure is being

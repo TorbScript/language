@@ -46,6 +46,7 @@ use dispatchedMember from "./generic"
 use argumentReference, putBackElements, TakenElement from "./place"
 use taskValueOf, resumeSignatureOf, buildTaskConstructor, numberSuspensions, taskResultElement from "./task"
 use isTaskBodyClosure from "./task"
+use startVisible, declareVisible from "./scope"
 
 // --- Which `var` bindings become boxes ------------------------------------------------------------------------------
 
@@ -1301,6 +1302,7 @@ fn bindCaptures(
     const annotation = plan.field.annotation
     const held = addLocal builder, annotation, plan.field.name
     emit builder, Instruction.Read(held, Reference(slot, [PathStep.Field(layout, index)]))
+    declareVisible lowering, builder, held
     if plan.boxed {
       lowering.boxes.set plan.declared, held
       continue
@@ -1399,6 +1401,7 @@ public type SavedFrame {
   scopes: List<List<Slot>>
   loopScopes: List<Int>
   endedTemporaries: Set<Int>
+  visible: List<List<Slot>>
   inlinedThunks: Map<Span, Bool>
   owner: String
   closureCount: Int
@@ -1432,6 +1435,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.scopes,
     lowering.loopScopes,
     lowering.endedTemporaries,
+    lowering.visible,
     lowering.inlinedThunks,
     lowering.owner,
     lowering.closureCount,
@@ -1471,6 +1475,7 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.scopes = []
   lowering.loopScopes = []
   lowering.endedTemporaries = Set.of()
+  startVisible lowering
   lowering.inlinedThunks = [:]
   lowering.owner = name
   lowering.closureCount = 0
@@ -1497,6 +1502,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.scopes = saved.scopes
   lowering.loopScopes = saved.loopScopes
   lowering.endedTemporaries = saved.endedTemporaries
+  lowering.visible = saved.visible
   lowering.inlinedThunks = saved.inlinedThunks
   lowering.owner = saved.owner
   lowering.closureCount = saved.closureCount

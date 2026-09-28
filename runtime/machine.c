@@ -224,8 +224,26 @@ enum {
   /* Run a chunk without parameters and answer nothing: the release of the entry cells at a `Process.exit`. */
   TORB_REQUEST_CALL = 4,
   /* Run the destructors this thread queued, now: a release outside every operation of the loop (below). */
-  TORB_REQUEST_CLOSE = 5
+  TORB_REQUEST_CLOSE = 5,
+  /* A panic begins in a debugged run: the debugger stops before it goes on (`torb_machine_debug_panic`, below). */
+  TORB_REQUEST_PANIC = 6
 };
+
+/* The message and the site of the panic a debugger stops at, which `DebugPanicMessage` hands it. */
+static char torb_machine_debug_message[1024];
+static torb_location torb_machine_debug_at = { NULL, 0, 0 };
+
+/*
+ * The hook of `torb_set_debug_panic_hook` a debugged run installs (`DebugPanics`): the interpreter is called back while
+ * every frame of the program is still in place, and the panic goes on once it answers (docs/design/DEBUGGER.md
+ * section 13).
+ */
+static void torb_machine_debug_panic(const char *message, torb_location at) {
+  torb_machine_request request = { TORB_REQUEST_PANIC, 0, 0, 0, 0 };
+  snprintf(torb_machine_debug_message, sizeof torb_machine_debug_message, "%s", message);
+  torb_machine_debug_at = at;
+  (void)torb_machine_call_interpreter((int64_t)(intptr_t)&request);
+}
 
 /* The chunk that releases the entry cells, which `torb_process_exit` runs through the interpreter; -1 for none. */
 static int64_t torb_machine_exit_chunk = -1;
@@ -1658,7 +1676,16 @@ enum {
   TORB_OPERATION_SITE_POP = 67,
   TORB_OPERATION_LIST_ITEM_ADDRESS = 68,
   TORB_OPERATION_TAKE_INPUTS = 69,
-  TORB_OPERATION_IMMORTAL_COPY = 70
+  TORB_OPERATION_IMMORTAL_COPY = 70,
+  TORB_OPERATION_DEBUG_READ = 71,
+  TORB_OPERATION_DEBUG_TAKE = 72,
+  TORB_OPERATION_DEBUG_PENDING = 73,
+  TORB_OPERATION_DEBUG_FLUSH = 74,
+  TORB_OPERATION_DEBUG_DIRECTORY = 75,
+  TORB_OPERATION_DEBUG_VARIABLE = 76,
+  TORB_OPERATION_DEBUG_PANICS = 77,
+  TORB_OPERATION_DEBUG_PANIC_MESSAGE = 78,
+  TORB_OPERATION_DEBUG_CONTAINER = 79
 };
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
@@ -2361,6 +2388,47 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       torb_raw_free(original, bytes);
       return torb_machine_queued();
     }
+    /* The debuggee of `torb debug` (runtime/debug.c): its channel, its launch, the panics it stops at, containers */
+    case TORB_OPERATION_DEBUG_READ:
+      return torb_debug_read();
+    case TORB_OPERATION_DEBUG_TAKE:
+      return torb_debug_take(words + base + o[0]);
+    case TORB_OPERATION_DEBUG_PENDING:
+      return torb_debug_pending();
+    case TORB_OPERATION_DEBUG_FLUSH:
+      /* What the host printed - an answer on the channel - goes out now, after everything the program printed */
+      fflush(stdout);
+      return 0;
+    case TORB_OPERATION_DEBUG_DIRECTORY: {
+      torb_text path;
+      memcpy(&path, words + base + o[0], sizeof path);
+      return torb_debug_directory(path);
+    }
+    case TORB_OPERATION_DEBUG_VARIABLE: {
+      torb_text name;
+      torb_text value;
+      memcpy(&name, words + base + o[0], sizeof name);
+      memcpy(&value, words + base + o[1], sizeof value);
+      return torb_debug_variable(name, value);
+    }
+    case TORB_OPERATION_DEBUG_PANICS:
+      torb_set_debug_panic_hook(o[0] != 0 ? torb_machine_debug_panic : NULL);
+      return 0;
+    case TORB_OPERATION_DEBUG_PANIC_MESSAGE: {
+      /* target: the message and its site, one byte per word; answers how many */
+      char text[1400];
+      const size_t length = torb_machine_debug_at.path != NULL
+        ? (size_t)snprintf(text, sizeof text, "%s (at %s:%u:%u)", torb_machine_debug_message, torb_machine_debug_at.path,
+                           torb_machine_debug_at.line, torb_machine_debug_at.column)
+        : (size_t)snprintf(text, sizeof text, "%s", torb_machine_debug_message);
+      const size_t count = length < sizeof text ? length : sizeof text - 1u;
+      for (size_t index = 0u; index < count; index++) {
+        words[base + o[0] + (int64_t)index] = (int64_t)(uint8_t)text[index];
+      }
+      return (int64_t)count;
+    }
+    case TORB_OPERATION_DEBUG_CONTAINER:
+      return torb_debug_container(o[0], words + base + o[1], o[2], words + base + o[3]);
     case TORB_OPERATION_TAKE_INPUTS: {
       /* target: what the sandbox opened last recorded (`torb_sandbox_recorded`), as a text the host reads out */
       size_t length = 0u;

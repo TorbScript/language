@@ -281,6 +281,8 @@ fn markReadSlots(program: IrProgram, function: IrFunction, var reads: List<Bool>
     .Suspend(_, awaited, _) => markRead reads, awaited
     .TaskNew(_, _, _, arguments) => markArguments reads, arguments
     .ChannelNew(_, capacity, _, _) => markRead reads, capacity
+    .Statement(_, _) => {}
+    .KeepAlive(slot) => markRead reads, slot
   }
 }
 
@@ -1062,6 +1064,14 @@ fn instructionStatements(
       ])
       [CStatement.Assignment(slotExpression(body, target), made)]
     }
+    // A statement of a debugged program points a C debugger at its line (docs/design/DEBUGGER.md section 4)
+    .Statement(at, _) => {
+      match lineDirectiveOf(program, at) {
+        Some(directive) => [directive]
+        None => []
+      }
+    }
+    .KeepAlive(_) => []
   }
 }
 

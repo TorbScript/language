@@ -45,6 +45,7 @@ use Opcode, KernelOperation, kernelNumberOf, opcodeOf, tailLengthOf, stoppedWord
 use BytecodeProgram, Chunk, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "../backend/bytecode/format"
 use ConstantPart, Shape, CountedWord from "../backend/bytecode/format"
 use CountedKind, ElementKind, widthOfPart from "../backend/bytecode/format"
+use Debugger, beginLoop, finishLoop, reachStatement from "./debug"
 
 /**
  * The register file, shared by the loop and by the interpreter the kernel calls back into: one object, so a call back
@@ -90,6 +91,11 @@ public shared type Registers {
   var scriptPool: Int = 0
   /** The chunks of the bodies of the scripts loaded at run time: the only ones `RunLoaded` runs. */
   var loadedScripts: List<Int> = []
+  /**
+   * The debugger of a debugged run (docs/design/DEBUGGER.md), which every `statement` instruction asks whether to stop;
+   * empty for every other run, which has no such instruction.
+   */
+  var debugger: Debugger? = None
 }
 
 /**
@@ -248,6 +254,9 @@ const contentsOffset = 16
  * Answers the exit code: 0, or `TORB_EXIT_CANCELLED` where the main task ended cancelled (docs/design/CONCURRENCY.md
  * section 8). A program that ends by `Process.exit` or a panic never comes back here, exactly as its native binary
  * never returns from `main`.
+ *
+ * A `debugger` debugs the run (docs/design/DEBUGGER.md): every `statement` of the program asks it whether to stop, and
+ * the tasks run on this thread alone.
  */
 public fn runProgram(
   program: BytecodeProgram,
@@ -255,9 +264,13 @@ public fn runProgram(
   executable: String = "",
   loader: ScriptLoader? = None,
   pool: (workers: Int, blocking: Int) = (workers: 0, blocking: 0),
+  debugger: Debugger? = None,
+  onStart: (Registers) => Void = { _ => void },
 ): Int {
   const registers = registersFor program
   registers.loader = loader
+  registers.debugger = debugger
+  onStart registers
   // `tasks { workers, blocking }` of the program's manifest, before a worker of the pool is asked for
   if pool.workers != 0 || pool.blocking != 0 {
     const _ = kernelCall(
@@ -281,11 +294,12 @@ public fn runProgram(
  * other thread ever touches. Then the kernel lets a task whose frame may cross start portable. A program without tasks
  * needs none of it, and neither does one that runs scripts: the sandbox is the whole process's, so its tasks stay on
  * the thread that runs it - nor one whose top-level `const` a function reads holds a value no immortal copy was made
- * of (`BytecodeProgram.confinesTasks`), because such a function may run in any task.
+ * of (`BytecodeProgram.confinesTasks`), because such a function may run in any task. A debugged run keeps its tasks on
+ * this thread too, so one stop stops everything (docs/design/DEBUGGER.md section 14).
  */
 fn workersFor(main: Registers, program: BytecodeProgram): List<Registers> {
   var workers: List<Registers> = []
-  if !program.usesTasks || main.image.runsScripts || program.confinesTasks {
+  if !program.usesTasks || main.image.runsScripts || program.confinesTasks || main.debugger.isSome() {
     return workers
   }
   // A worker of the ring by its index (kind 0), a thread of the blocking pool by its number (kind 1)
@@ -1185,6 +1199,9 @@ const callRequest = 4
 
 const closeRequest = 5
 
+/** A panic is about to end the program or its test, and a debugger asked to stop before it (`DebugPanics`). */
+const panicRequest = 6
+
 const requestChunk = 8
 
 const requestFirst = 16
@@ -1209,7 +1226,12 @@ fn answer(registers: Registers, request: Int): Int {
   var budget = unlimitedBudget()
   var poll = finishedPoll
   var answered = 0
-  if kind == closeRequest {
+  if kind == panicRequest {
+    // The program stops where it panics, before the panic goes on: nothing of the program runs meanwhile
+    if const Some(debugger) = registers.debugger {
+      debugger.panicked()
+    }
+  } else if kind == closeRequest {
     // The destructors a release queued outside every operation of the loop, run where it happened
     if !runClosers(registers.words, kernelScratch(), budget, registers, image, program, saved) {
       poll = haltedPoll
@@ -1569,6 +1591,11 @@ fn header(image: Image, chunk: Int, word: Int): Int {
   Machine.load(image.headersAddress + 8 * (chunk * headerWords + word))
 }
 
+/** Where a chunk's code begins in the image of the run: its offset 0 as the loop and a breakpoint count code offsets. */
+public fn codeStartOf(registers: Registers, chunk: Int): Int {
+  header registers.image, chunk, codeWord
+}
+
 /** One word of a parameter of a chunk: its register (0), its width (1), a reference (2), its shape (3). */
 fn parameterWord(image: Image, chunk: Int, parameter: Int, word: Int): Int {
   const index = (header(image, chunk, firstParameterWord) + parameter) * parameterWords + word
@@ -1651,8 +1678,45 @@ fn resolvePlace(
  * for none. Every call it makes is a frame of this loop, with its return record in the words below it; a destructor that has to run in the middle of an instruction is one more `execute`, above every word
  * in use. Answers the poll of a task's body, [finishedPoll] for a chunk that returns, and [haltedPoll] where a
  * sandboxed script stopped - after adding the frames of this loop to `budget.frames`.
+ *
+ * A debugged run notes the loop for its debugger while it runs ([beginLoop]), so a stop inside a call back finds the
+ * frames of this loop below its own.
  */
 fn execute(
+  var words: ArrayList<Int>,
+  var kernel: ArrayList<Int>,
+  var budget: Budget,
+  registers: Registers,
+  entryImage: Image,
+  entryProgram: BytecodeProgram,
+  entry: Int,
+  entryBase: Int,
+  entryPc: Int,
+  resultAddress: Int,
+): Int {
+  if const Some(debugger) = registers.debugger {
+    const pc = if entryPc >= 0 { entryPc } else { header entryImage, entry, codeWord }
+    beginLoop debugger, entry, pc, entryBase
+    const poll = executeLoop(
+      words,
+      kernel,
+      budget,
+      registers,
+      entryImage,
+      entryProgram,
+      entry,
+      entryBase,
+      entryPc,
+      resultAddress,
+    )
+    finishLoop debugger
+    return poll
+  }
+  executeLoop words, kernel, budget, registers, entryImage, entryProgram, entry, entryBase, entryPc, resultAddress
+}
+
+/** The loop of [execute]. */
+fn executeLoop(
   var words: ArrayList<Int>,
   var kernel: ArrayList<Int>,
   var budget: Budget,
@@ -2202,6 +2266,14 @@ fn execute(
           Machine.store(frame + 8 * (a + offset), Machine.load(cell + 8 * (1 + offset)))
         }
         pc = pc + 3
+      }
+      // Only a debugged program has it: the debugger decides whether the program stops here
+      .Statement => {
+        if const Some(debugger) = registers.debugger {
+          const statement = Machine.load(code + 8 * (pc + 1))
+          reachStatement debugger, program, first, chunk, pc, base, depth, statement
+        }
+        pc = pc + 2
       }
     }
   }

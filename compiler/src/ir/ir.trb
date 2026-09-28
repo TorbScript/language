@@ -733,6 +733,21 @@ public type Instruction {
    * can name - the same reason `ContainerNew` is an instruction. A negative capacity panics at `at`.
    */
   case ChannelNew(target: Slot, capacity: Slot, item: ElementId, at: LocationId)
+  /**
+   * A statement of the source begins here, at `at`: the line a debugger stops at and steps by (docs/design/DEBUGGER.md
+   * section 5). `visible` is every binding of the source that is declared and still in scope where it begins, the
+   * earliest first - the locals the line shows; parameters and a closure's captures are in sight for the whole body and
+   * are not listed. Only a lowering asked for a debugged program writes one; it has no operands, and every pass carries
+   * it through where it stands.
+   */
+  case Statement(at: LocationId, visible: List<Slot>)
+  /**
+   * The end of a binding's scope in a debugged program: an ordinary borrowed use that does nothing, so the ownership
+   * pass releases the value after it and never before, and a move before it becomes a copy (docs/design/DEBUGGER.md
+   * section 6). A binding a debugger shows therefore holds its value to the end of its block. The back ends write
+   * nothing for it.
+   */
+  case KeepAlive(slot: Slot)
 }
 
 /** How a [Block] ends: a jump, a branch, a switch, a return, or code nothing may reach. */

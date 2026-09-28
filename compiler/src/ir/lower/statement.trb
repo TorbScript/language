@@ -28,6 +28,7 @@ use dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
 use iterateBoundOf, iteratorBoundOf from "./collection"
 use openScope, closeScope, declareScoped, declareScopedFrom, endEveryScope, endLoopScopes, endTemporaries from "./scope"
+use markStatement, openVisible, closeVisible, declareVisible from "./scope"
 
 /**
  * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
@@ -74,6 +75,10 @@ fn lowerStatementsOfScope(
       return None
     }
     const statement = block.statements[index]
+    // A debugged program marks where every statement begins; a declaration inside a block runs nothing
+    if runsCode(statement) {
+      markStatement lowering, builder, statement.span
+    }
     if index == last {
       if const .Evaluate(expression) = statement.kind {
         // The last expression of a block that stands as a statement - a loop body, a body, a branch whose value nobody
@@ -102,6 +107,14 @@ fn lowerStatementsOfScope(
     lowerStatement lowering, builder, statement
   }
   None
+}
+
+/** Whether a statement of a block runs anything: a `fn`, a `type` or a `trait` declared inside it does not. */
+fn runsCode(statement: Statement): Bool {
+  match statement.kind {
+    .Declare(_) => false
+    _ => true
+  }
 }
 
 /** Whether the slot the block produces into is `Void` while its last expression answers something else. */
@@ -520,10 +533,19 @@ fn lowerFor(
   finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
   continueIn lowering, builder, inner
   enterLoop lowering, done, step
+  // The counter is a binding of the body, which a debugger shows there and nowhere else
+  openVisible lowering
   if takesApart {
+    const first = builder.slotCount()
     lowerPatternBinding lowering, builder, pattern, counter, pattern.span
+    for index in first..builder.slotCount() {
+      declareVisible lowering, builder, Slot(index)
+    }
+  } else {
+    declareVisible lowering, builder, counter
   }
   lowerBlockInto lowering, builder, body, destination: None
+  closeVisible lowering, builder
   const _ = leaveLoop lowering
   if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(step)

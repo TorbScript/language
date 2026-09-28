@@ -343,6 +343,15 @@ typedef void (*torb_panic_hook)(const char *message);
 void torb_set_panic_hook(torb_panic_hook hook);
 
 /**
+ * What a debugger runs first where a panic begins - before a recovery point catches it, before it prints - with the
+ * message and the site, both borrowed (docs/design/DEBUGGER.md section 13). It returns, and the panic goes on as it
+ * would have. The hook is taken away while it runs, so a panic inside it is an ordinary one. Running out of memory is
+ * never handed to it. `NULL` removes it; only the VM's kernel installs one, for a debugged run.
+ */
+typedef void (*torb_debug_panic_hook)(const char *message, torb_location at);
+void torb_set_debug_panic_hook(torb_debug_panic_hook hook);
+
+/**
  * Where a panic goes instead of leaving the process: the recovery point a test runner sets up around one test body, so
  * that a test that panics is reported and the next test still runs.
  *
@@ -1502,6 +1511,16 @@ bool torb_platform_is_link(const char *path);
 /** Result owned, freed with `torb_raw_free`; `*length` is the byte length without the NUL. `NULL` on failure. */
 char *torb_platform_working_directory(size_t *length);
 /**
+ * The working directory changed to `path` (borrowed, NUL terminated): what the debuggee of `torb debug` does with the
+ * `cwd` of a launch (docs/design/DEBUGGER.md section 16). False on failure.
+ */
+bool torb_platform_set_working_directory(const char *path);
+/**
+ * Whether a read of standard input answers without waiting: bytes wait in it, or it has ended. The debuggee of
+ * `torb debug` looks at its channel with it while the program runs (docs/design/DEBUGGER.md section 9).
+ */
+bool torb_platform_standard_input_ready(void);
+/**
  * Every entry of a directory, appended to `*out` as texts, unsorted. False on failure with a libc message in
  * `*message` (borrowed, static) - including for an entry whose name has no UTF-8 spelling at all, because a `String`
  * always has one.
@@ -1690,8 +1709,9 @@ bool torb_platform_environment_variable(const char *name, char **value, size_t *
  */
 void torb_platform_environment_entries(torb_list *names, torb_list *values, bool (*keep)(const char *name));
 /**
- * `name` and `value` borrowed, NUL terminated. Only `runtime/tests` calls this - no native sets an environment
- * variable, so there is nothing above the platform layer to route it through. False on failure.
+ * `name` and `value` borrowed, NUL terminated. `runtime/tests` calls this, and the debuggee of `torb debug` for the
+ * `env` of a launch (docs/design/DEBUGGER.md section 16) - no native sets an environment variable, so there is nothing
+ * above the platform layer to route it through. False on failure.
  */
 bool torb_platform_set_environment_variable(const char *name, const char *value);
 /**

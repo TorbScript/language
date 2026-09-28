@@ -26,6 +26,7 @@ use ElementId, CellAccess from "../../ir/ir"
 use Instruction, Terminator, Argument, Reference, PathStep, Capture, WitnessSource, WitnessRoot from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind, SlotRole, StaticContents, FunctionKind from "../../ir/ir"
 use Ownership from "../../ir/ir"
+use consumedSlotsOf from "../../ir/operand"
 use LiteralValue from "../../semantics/checker/type"
 use Layout, Representation, containsCountedType, isManagedType, textPartKindOf, TextPartKind from "../../ir/layout"
 use closingOf, Closing from "../../ir/closing"
@@ -39,7 +40,7 @@ use readPrototype, matchPrototype, PrototypeMatch from "../c/prototype"
 use Opcode, KernelOperation, kernelNumberOf, kernelNativeBase, headWord, largestOperand from "./format"
 use BytecodeProgram, Chunk, ParameterEntry, FrameSlot, Place, PlaceStep, WitnessEntry, WitnessRootEntry from "./format"
 use Shape, CountedWord, CountedKind, ConstantPart, TableEntry, ElementEntry, ElementKind, widthOfPart from "./format"
-use narrowCode, isSignedNarrow from "./format"
+use narrowCode, isSignedNarrow, StatementEntry from "./format"
 use callerSiteMarker from "./format"
 use WordTables, LayoutWords, wordTablesOf, whyNoWords, isBlockPointer, isBoxed, layoutOfType from "./words"
 use nativeIndices from "./natives"
@@ -117,6 +118,8 @@ type Body {
   var stopPatches: List<(Int, Int)> = []
   /** `(code offset, location index)` of every block and instruction that carries a location, in code order. */
   var sites: List<(Int, Int)> = []
+  /** Every statement of a debugged program, in code order: [Chunk.statements]. */
+  var statements: List<StatementEntry> = []
 }
 
 /**
@@ -772,6 +775,7 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
   if function.tracksCaller {
     emitKernel emitter, body, kernelNumberOf(KernelOperation.SitePush), []
   }
+  const debugged = isDebugged function
   if const Some(found) = machine {
     // Every resume starts with the cancellation check, the entry included
     body.resumes.append 0
@@ -793,6 +797,9 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
       }
       emitInstruction emitter, body, program, instruction
       flushStores emitter, body, program
+      if debugged {
+        emptyMovedBindings emitter, body, instruction
+      }
     }
     body.scratch = body.firstScratch
     // Where a loop of a task turns around, it reads its cancellation flag
@@ -835,6 +842,7 @@ fn emitChunk(var emitter: Emitter, program: IrProgram, function: IrFunction): Ch
     machine.isSome(),
     taskRegister,
     body.resumes,
+    body.statements,
   )
 }
 
@@ -1086,6 +1094,38 @@ fn savedFrameOf(emitter: Emitter, function: IrFunction): (List<Int>, Int) {
     cursor = cursor + width
   }
   (offsets, cursor + 1)
+}
+
+/** Whether a function was lowered for a debugger: it has a `Statement` (docs/design/DEBUGGER.md section 5). */
+fn isDebugged(function: IrFunction): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Statement(_, _) = instruction {
+        return true
+      }
+    }
+  }
+  false
+}
+
+/**
+ * The bindings of the source an instruction moved out of, zeroed: in a debugged program a binding a debugger shows
+ * holds its value or nothing, never the words of a value somebody else owns now (docs/design/DEBUGGER.md section 6). A
+ * binding kept alive to the end of its scope is never moved; one that may hold a `Close` object is, where it is handed
+ * on, and reads as empty afterwards.
+ */
+fn emptyMovedBindings(var emitter: Emitter, var body: Body, instruction: Instruction) {
+  for slot in consumedSlotsOf(instruction) {
+    if !body.function.hasSlot(slot) || body.references[slot.value] {
+      continue
+    }
+    const declared = body.function.slots[slot.value]
+    if const .Local = declared.role {
+      if !declared.name.isEmpty() {
+        emitHead emitter, body, Opcode.Zero, body.offsets[slot.value], body.widths[slot.value], 0
+      }
+    }
+  }
 }
 
 /** The location an instruction carries, where it carries one: what a stop of a script names (SCRIPTS.md section 6). */
@@ -1675,6 +1715,18 @@ fn emitInstruction(var emitter: Emitter, var body: Body, program: IrProgram, ins
         [register, size, emitter.elementBase + item.value, location],
       )
     }
+    // A statement of a debugged program: the instruction that asks the debugger, and its entry in the chunk's table
+    .Statement(at, visible) => {
+      var slots: List<Int> = []
+      for slot in visible {
+        slots.append slot.value
+      }
+      const location = locationIndex emitter, program, at
+      emitHead emitter, body, Opcode.Statement, 0, 0, 0
+      emitTail body, body.statements.length()
+      body.statements.append StatementEntry(body.code.length() - 2, location, slots)
+    }
+    .KeepAlive(_) => {}
   }
 }
 

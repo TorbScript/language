@@ -175,6 +175,10 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     // The frame of the new task takes every argument, exactly as a `Construct` takes its fields
     .TaskNew(_, _, _, arguments) => ownedOperands arguments
     .ChannelNew(_, capacity, _, _) => [borrowedOperand(capacity)]
+    // A marker of the debugger reads nothing; the bindings it lists are no uses
+    .Statement(_, _) => []
+    // The end of a binding's scope in a debugged program reads the value, so its release goes after it
+    .KeepAlive(slot) => [borrowedOperand(slot)]
   }
 }
 
@@ -370,6 +374,8 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
       Instruction.TaskNew target, resume, result, takenArguments(arguments, decided, 0)
     }
     .ChannelNew(target, _, item, at) => Instruction.ChannelNew target, decidedAt(decided, 0).slot, item, at
+    .Statement(_, _) => instruction
+    .KeepAlive(_) => instruction
   }
 }
 

@@ -345,6 +345,41 @@ char *torb_platform_working_directory(size_t *length) {
   return text;
 }
 
+bool torb_platform_set_working_directory(const char *path) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  bool changed;
+  if (wide == NULL) {
+    return false;
+  }
+  changed = SetCurrentDirectoryW(wide) != 0;
+  torb_raw_free(wide, capacity);
+  return changed;
+}
+
+/*
+ * A pipe says how many bytes wait in it, and one whose writer is gone fails to say, which is its end: a read answers at
+ * once either way. A file never makes a read wait. A console is not looked at - the debuggee's input is a pipe.
+ */
+bool torb_platform_standard_input_ready(void) {
+  HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+  DWORD available = 0u;
+  if (handle == NULL || handle == INVALID_HANDLE_VALUE) {
+    return true;
+  }
+  switch (GetFileType(handle)) {
+    case FILE_TYPE_PIPE:
+      if (!PeekNamedPipe(handle, NULL, 0u, NULL, &available, NULL)) {
+        return true;
+      }
+      return available > 0u;
+    case FILE_TYPE_DISK:
+      return true;
+    default:
+      return false;
+  }
+}
+
 bool torb_platform_list_directory(const char *path, torb_list *out, const char **message) {
   size_t capacity = 0u;
   wchar_t *wide = torb_platform_system_path(path, &capacity);
@@ -1230,6 +1265,19 @@ char *torb_platform_working_directory(size_t *length) {
     }
     capacity *= 2u;
   }
+}
+
+bool torb_platform_set_working_directory(const char *path) {
+  return chdir(path) == 0;
+}
+
+/* Readable, or at its end, or broken: a read answers at once in each of the three. */
+bool torb_platform_standard_input_ready(void) {
+  struct pollfd watched;
+  watched.fd = STDIN_FILENO;
+  watched.events = POLLIN;
+  watched.revents = 0;
+  return poll(&watched, 1u, 0) > 0;
 }
 
 /*

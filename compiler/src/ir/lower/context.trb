@@ -288,6 +288,17 @@ public type Lowering {
   /** The temporaries whose statement already ended them, by slot index: each one ends once (`endTemporaries`). */
   var endedTemporaries: Set<Int> = []
   /**
+   * Whether the program is lowered for a debugger (docs/design/DEBUGGER.md sections 5 and 6): a `Statement` in front of
+   * every statement, and a `KeepAlive` for every binding where its scope ends. Off, the lowering writes neither.
+   */
+  var debugging: Bool = false
+  /**
+   * The bindings of the source a debugger shows, per open block of the body being lowered, innermost last, in
+   * declaration order - `scopes` for every binding and not only the ones that may hold a `Close` object. The first entry
+   * is the body's own, which holds a closure's captures. Empty where the program is not lowered for a debugger.
+   */
+  var visible: List<List<Slot>> = []
+  /**
    * The declarations that implement `Close` and the traits an object of one can be seen through, by `SymbolId.value`,
    * asked of the checker once per program (`closeFactsKnown`), and per IR type whether a value of it may hold such an
    * object.

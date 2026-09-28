@@ -42,7 +42,7 @@ use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
 use referenceAt, PlacePath from "./place"
 use showSlot from "./text"
-use endEveryScope, openScope, closeScope, declareScopedBetween from "./scope"
+use endEveryScope, openScope, closeScope, declareScopedBetween, markStatement from "./scope"
 
 /** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
 type Walk {
@@ -133,6 +133,7 @@ public fn lowerMatch(
     continueIn lowering, builder, armBlocks[index]
     openScope lowering
     declareScopedBetween lowering, builder, firstSlots[index], firstSlots[index + 1]
+    markArm lowering, builder, arms[index].body
     const _ = lowerExpression lowering, builder, arms[index].body, target
     closeScope lowering, builder
     if !lowering.diverged {
@@ -169,9 +170,21 @@ fn lowerSelectedArm(
   }
   openScope lowering
   declareScopedBetween lowering, builder, firstSlot, lastSlot
+  markArm lowering, builder, body
   const _ = lowerExpression lowering, builder, body, target
   closeScope lowering, builder
   target
+}
+
+/**
+ * The body of an arm is a line of its own for a debugger (docs/design/DEBUGGER.md section 5): a body that is a block
+ * marks each of its statements, any other expression is marked here as one.
+ */
+fn markArm(var lowering: Lowering, var builder: FunctionBuilder, body: Expression) {
+  if const .Block(_) = body.kind {
+    return
+  }
+  markStatement lowering, builder, body.span
 }
 
 /**

@@ -11,6 +11,10 @@
  *
  * Every other binding is left alone, so a function that holds no such value is lowered exactly as before.
  *
+ * A program lowered for a debugger (docs/design/DEBUGGER.md sections 5 and 6) keeps a second stack beside it,
+ * [Lowering.visible]: every binding of every open block. A `Statement` in front of each statement lists them - the
+ * locals its line shows - and a `KeepAlive` where their block ends keeps each one's value until then.
+ *
  * # Pitfalls
  *
  * A temporary that only some paths of its statement define (the arms of an `if` expression, the fallback of a `??`)
@@ -20,9 +24,10 @@
  * closure captured is still held by its slot until its scope ends.
  */
 
+use Span from "../../syntax/source"
 use IrTypeId, Slot, Instruction, LayoutId, TraitId, RuntimeKind from "../ir"
 use FunctionBuilder, emit from "../build"
-use Lowering, enterModule from "./context"
+use Lowering, enterModule, locationOf from "./context"
 use closeImplementers, traitsOfCloseImplementers from "../../semantics/checker/close"
 use TypeId, ParameterId from "../../semantics/checker/type"
 use memberOfType from "../witness"
@@ -30,6 +35,7 @@ use memberOfType from "../witness"
 /** A block begins: the bindings declared from here on belong to it. */
 public fn openScope(var lowering: Lowering) {
   lowering.scopes.append([])
+  openVisible lowering
 }
 
 /**
@@ -44,11 +50,13 @@ public fn closeScope(var lowering: Lowering, var builder: FunctionBuilder) {
   if !lowering.diverged && lowering.supported {
     endBindings builder, lowering.scopes[last]
   }
-  const _ = lowering.scopes.removeAt last
+  const closing = lowering.scopes.removeAt(last) ?? []
+  closeVisible lowering, builder, closing
 }
 
-/** A binding of the innermost block, if its value may hold a `Close` object. */
+/** A binding of the innermost block, if its value may hold a `Close` object; in a debugged program, a binding it shows. */
 public fn declareScoped(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot) {
+  declareVisible lowering, builder, slot
   const last = lowering.scopes.length() - 1
   if last < 0 {
     return
@@ -140,6 +148,103 @@ fn endBindings(var builder: FunctionBuilder, slots: List<Slot>) {
     emit builder, Instruction.EndOfScope(slots[index])
     index = index - 1
   }
+}
+
+// --- What a debugger sees -------------------------------------------------------------------------------------------
+
+/**
+ * The body of a function begins, in a debugged program with one open block of its own: the one a closure's captures are
+ * declared in (docs/design/DEBUGGER.md section 5). Every function's lowering starts here.
+ */
+public fn startVisible(var lowering: Lowering) {
+  lowering.visible = []
+  openVisible lowering
+}
+
+/** A block a debugger sees begins, where a debugged program is lowered. */
+public fn openVisible(var lowering: Lowering) {
+  if lowering.debugging {
+    lowering.visible.append([])
+  }
+}
+
+/**
+ * The innermost block a debugger sees ends: every binding of it is kept alive to here, the last declared first, so it
+ * holds its value as long as a debugger shows it (docs/design/DEBUGGER.md section 6). A binding in `closing` - one whose
+ * value may hold a `Close` object - already ends here, and keeping it alive would turn the move that hands it on into a
+ * copy, which moves its `close()`.
+ */
+public fn closeVisible(var lowering: Lowering, var builder: FunctionBuilder, closing: List<Slot> = []) {
+  const last = lowering.visible.length() - 1
+  if !lowering.debugging || last < 0 {
+    return
+  }
+  const slots = lowering.visible.removeAt(last) ?? []
+  if lowering.diverged || !lowering.supported {
+    return
+  }
+  var index = slots.length() - 1
+  while index >= 0 {
+    if !closing.contains(slots[index]) {
+      emit builder, Instruction.KeepAlive(slots[index])
+    }
+    index = index - 1
+  }
+}
+
+/**
+ * The end of a body in a debugged program: its parameters and its captures, which a debugger shows in every one of its
+ * frames, kept alive to here - an owned parameter handed on is copied instead of moved, so its slot still holds it.
+ * A `return` further up leaves without them, and the frame goes with it.
+ */
+public fn keepBodyAlive(var lowering: Lowering, var builder: FunctionBuilder) {
+  if !lowering.debugging || lowering.diverged || !lowering.supported {
+    return
+  }
+  const parameters = builder.function.signature.parameters
+  for index in 0..builder.function.slots.length() {
+    const declared = builder.function.slots[index]
+    if const .Parameter(position) = declared.role {
+      const isValue = !(parameters.get(position)?.byReference ?? true)
+      if isValue && !declared.name.isEmpty() {
+        emit builder, Instruction.KeepAlive(Slot(index))
+      }
+    }
+  }
+  if const Some(captures) = lowering.visible.first() {
+    for slot in captures {
+      emit builder, Instruction.KeepAlive(slot)
+    }
+  }
+}
+
+/** A binding of the source a debugged program shows from its next statement on, until the innermost block ends. */
+public fn declareVisible(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot) {
+  const last = lowering.visible.length() - 1
+  if !lowering.debugging || last < 0 || !builder.function.hasSlot(slot) {
+    return
+  }
+  const declared = builder.function.slots[slot.value]
+  if const .Local = declared.role {
+    if !declared.name.isEmpty() && !lowering.visible[last].contains(slot) {
+      lowering.visible[last].append(slot)
+    }
+  }
+}
+
+/**
+ * A statement of the source begins at `at`: a debugged program marks it with every binding in sight, the earliest
+ * declared first - the line a debugger stops at and the locals it shows there (docs/design/DEBUGGER.md section 5).
+ */
+public fn markStatement(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  if !lowering.debugging || lowering.diverged || !lowering.supported {
+    return
+  }
+  var slots: List<Slot> = []
+  for scope in lowering.visible {
+    slots.appendAll scope
+  }
+  emit builder, Instruction.Statement(locationOf(lowering, at), slots)
 }
 
 // --- Which values may hold a `Close` object -------------------------------------------------------------------------

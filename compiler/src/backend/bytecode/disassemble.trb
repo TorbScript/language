@@ -175,6 +175,16 @@ fn chunkLines(program: BytecodeProgram, index: Int, natives: List<String>): List
   for witness in 0..chunk.witnesses.length() {
     lines.append "  witness {witness}: {describeWitness(chunk.witnesses[witness])}"
   }
+  // A debugged program's line table and variables table: where each statement is, and the bindings in sight there
+  for index in 0..chunk.statements.length() {
+    const statement = chunk.statements[index]
+    var visible: List<String> = []
+    for slot in statement.visible {
+      visible.append "%{slot}"
+    }
+    const at = describeLocation program.locations, statement.location
+    lines.append "  statement {index}: {statement.offset} at {at}, visible [{visible.joined(separator: ", ")}]"
+  }
   var starts: Map<Int, Int> = [:]
   for block in 0..chunk.blockStarts.length() {
     starts.set chunk.blockStarts[block], block
@@ -333,6 +343,7 @@ fn describeInstruction(
     .RunScript => "{name} r{a} = r{b}(r{c}), grant r{first}"
     .LoadScript => "{name} r{a} = r{b} against r{c}"
     .RunLoaded => "{name} r{a} = chunk r{b}(r{c}), grant r{first}"
+    .Statement => "{name} {first}"
     _ => "{name} r{a}, r{b}, r{c}"
   }
 }

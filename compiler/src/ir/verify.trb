@@ -523,6 +523,9 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     .Suspend(_, awaited, _) => [awaited]
     .TaskNew(_, _, _, arguments) => slotsOfArguments arguments
     .ChannelNew(_, capacity, _, _) => [capacity]
+    // The bindings a statement lists are read by a debugger, never by the program
+    .Statement(_, _) => []
+    .KeepAlive(slot) => [slot]
   }
 }
 
@@ -669,6 +672,9 @@ fn verifyInstruction(
     .Release(slot) => expectManaged program, function, found, at, slot, "release"
     // Any binding may end its scope: whether its value holds a `Close` object is decided by the ownership pass
     .EndOfScope(_) => {}
+    // A debugged program's markers and ends of scope hold for a value of any type
+    .Statement(_, _) => {}
+    .KeepAlive(_) => {}
     // The zero value of any type is a value of it
     .Clear(_) => {}
     .MakeUnique(reference) => {

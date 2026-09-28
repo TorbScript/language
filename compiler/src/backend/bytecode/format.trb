@@ -136,6 +136,12 @@ public type Opcode {
    * `T0` = the grant: `runLoadedScript` of `std/sandbox`, which is [RunScript] for such a script.
    */
   case RunLoaded
+  /**
+   * `T0` = the index of the statement in the chunk's [Chunk.statements]: a statement of the source begins here. Only a
+   * debugged program has it, and it asks the debugger whether to stop (docs/design/DEBUGGER.md section 7); without one
+   * it does nothing.
+   */
+  case Statement
 
   /** The number the head word carries. */
   fn number(): Int {
@@ -185,6 +191,7 @@ public type Opcode {
       .EntryCell => 42
       .LoadScript => 43
       .RunLoaded => 44
+      .Statement => 45
     }
   }
 
@@ -236,6 +243,7 @@ public type Opcode {
       .EntryCell => "entry.cell"
       .LoadScript => "load.script"
       .RunLoaded => "run.loaded"
+      .Statement => "statement"
     }
   }
 }
@@ -287,6 +295,7 @@ public const allOpcodes: List<Opcode> = [
   Opcode.EntryCell,
   Opcode.LoadScript,
   Opcode.RunLoaded,
+  Opcode.Statement,
 ]
 
 /**
@@ -339,6 +348,7 @@ public fn opcodeOf(number: Int): Opcode {
     42 => Opcode.EntryCell
     43 => Opcode.LoadScript
     44 => Opcode.RunLoaded
+    45 => Opcode.Statement
     _ => Opcode.Unreachable
   }
 }
@@ -401,6 +411,7 @@ public fn tailLengthOf(opcode: Opcode, head: Int): Int {
     .Resume => 1
     .EntryCell => 1
     .RunLoaded => 1
+    .Statement => 1
     _ => 0
   }
 }
@@ -616,6 +627,32 @@ public type KernelOperation {
    * the register held on the original given back - what an entry cell holds (docs/BACKEND.md, "The entry cell").
    */
   case ImmortalCopy
+  /**
+   * The debuggee's channel (docs/design/DEBUGGER.md section 3): answers the byte length of the next line of standard
+   * input, without its line break, once it is whole; `-1` at the end of the input. The operations `Debug...` are the
+   * host's, never the program's.
+   */
+  case DebugRead
+  /** `target`: the bytes of that line, one per word from the register on, and the line taken off. Answers how many. */
+  case DebugTake
+  /** Answers 1 where a whole line waits or the input has ended, 0 where a read would wait, without waiting. */
+  case DebugPending
+  /** Standard output flushed: an answer the host printed goes out after everything the program printed. */
+  case DebugFlush
+  /** `path`: the register of a text, which becomes the working directory. Answers 0, or `-1` where it could not. */
+  case DebugDirectory
+  /** `name, value`: the registers of two texts, the environment variable set. Answers 0, or `-1` where it could not. */
+  case DebugVariable
+  /** `flag`: a debugged run stops before every panic (1, `TORB_REQUEST_PANIC`), or no longer (0). */
+  case DebugPanics
+  /** `target`: the message and the site of the panic it stops at, one byte per word. Answers how many. */
+  case DebugPanicMessage
+  /**
+   * `kind, source, index, target`: a list (0), a map (1) or a set (2) in the registers from `source` - its length into
+   * `target`, and where `index` is inside it the address of the item or key into `target + 1`, of the value into
+   * `target + 2`. Answers 1 where `index` is inside it.
+   */
+  case DebugContainer
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -691,6 +728,15 @@ public type KernelOperation {
       .SitePop => "site.pop"
       .TakeInputs => "take.inputs"
       .ImmortalCopy => "immortal.copy"
+      .DebugRead => "debug.read"
+      .DebugTake => "debug.take"
+      .DebugPending => "debug.pending"
+      .DebugFlush => "debug.flush"
+      .DebugDirectory => "debug.directory"
+      .DebugVariable => "debug.variable"
+      .DebugPanics => "debug.panics"
+      .DebugPanicMessage => "debug.panic.message"
+      .DebugContainer => "debug.container"
     }
   }
 }
@@ -768,6 +814,15 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.ListItemAddress,
   KernelOperation.TakeInputs,
   KernelOperation.ImmortalCopy,
+  KernelOperation.DebugRead,
+  KernelOperation.DebugTake,
+  KernelOperation.DebugPending,
+  KernelOperation.DebugFlush,
+  KernelOperation.DebugDirectory,
+  KernelOperation.DebugVariable,
+  KernelOperation.DebugPanics,
+  KernelOperation.DebugPanicMessage,
+  KernelOperation.DebugContainer,
 ]
 
 /**
@@ -1017,6 +1072,19 @@ public type ParameterEntry {
   valueWidth: Int = 0
 }
 
+/**
+ * One statement of a debugged program: where its `statement` instruction is, the line it stands for, and the bindings
+ * in sight there - the line table and the variables table of a debugger at once (docs/design/DEBUGGER.md section 5).
+ */
+public type StatementEntry {
+  /** The code offset of the `statement` instruction, in the chunk's own code. */
+  offset: Int
+  /** Where the statement is, as an index of [BytecodeProgram.locations]. */
+  location: Int
+  /** The IR slots of the bindings in sight, the earliest declared first: [Chunk.slots] says where each one is. */
+  visible: List<Int>
+}
+
 /** One slot of a frame, for the disassembly: the IR slot, its register and width, and its type. */
 public type FrameSlot {
   slot: Int
@@ -1055,6 +1123,8 @@ public type Chunk {
   taskRegister: Int = -1
   /** A task's body: the code offset each state goes on at, by state, 0 the entry. */
   resumes: List<Int> = []
+  /** Every statement of a debugged program, in code order; empty for every program that is not debugged. */
+  statements: List<StatementEntry> = []
 
   /** How many words of a task's frame a suspension saves: its slots and its task register. */
   fn savedWords(): Int {

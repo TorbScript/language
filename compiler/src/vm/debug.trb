@@ -1,0 +1,390 @@
+/**
+ * The VM's half of the debugger (docs/design/DEBUGGER.md sections 7 to 10): where the loops of a debugged run are, when
+ * the program stops, and its frames read back out of the registers.
+ *
+ * A debugged program has a `statement` instruction in front of every statement, and nothing else of the program
+ * changes; the loop hands each one to [reachStatement]. There every `execute` in progress notes where it is - its
+ * [LoopRecord] - the debugger looks at its channel every [pollInterval] statements, and the program stops for a pause,
+ * a breakpoint, the first statement or the end of a step by calling [Debugger.stop], which a host answers: it reads the
+ * frames ([framesOf]) and the values in them, and sets what happens next before it returns.
+ *
+ * A program that is not debugged has no `statement` instruction and runs with `Registers.debugger` empty, so none of
+ * this is ever reached - the cost is one test of that field per `execute`, never per instruction (section 19).
+ *
+ * # Related
+ *
+ * - [Debugger] - the state of a debugged run, shared by the loop and the host.
+ * - [framesOf] - the call stack of a stop, innermost first.
+ */
+
+use Machine from "std/machine"
+use ArrayList from "std/collections"
+use BytecodeProgram, Chunk, StatementEntry, KernelOperation, kernelNumberOf from "../backend/bytecode/format"
+use Registers, codeStartOf from "./interpret"
+
+/**
+ * Where one `execute` of a debugged run is: the frame of its innermost call at its last statement. Written at every
+ * statement the loop reaches, so an `execute` a call back interrupted is found where it made the call.
+ */
+public type LoopRecord {
+  chunk: Int
+  /** The code offset of its last statement in the image: where the loop is, as the breakpoints name it. */
+  pc: Int
+  base: Int
+  /** How many calls of this loop have not returned: the frames above its bottom one. */
+  depth: Int
+  /** The index of that statement in the chunk's [Chunk.statements], `-1` before the loop's first statement. */
+  statement: Int
+  /** How many frames the loops below this one hold: its bottom frame's height. */
+  below: Int
+}
+
+/** What the program does until its next stop. */
+public type Stepping {
+  /** Runs until a breakpoint, a pause or a panic. */
+  case Running
+  /** Stops at the next line of this frame or of a lower one. */
+  case Over
+  /** Stops at the next statement anywhere but the rest of this line. */
+  case In
+  /** Stops at the next statement of a lower frame. */
+  case Out
+}
+
+/** Why the program stops, as the `stopped` event of the Debug Adapter Protocol says it. */
+public type StopEvent {
+  /** `breakpoint`, `step`, `pause`, `entry` or `exception`. */
+  reason: String
+  /** What a person reads: the message of a panic, or nothing. */
+  description: String = ""
+}
+
+/**
+ * The state of a debugged run, shared by the loop that reaches the statements and the host that answers the stops.
+ *
+ * The host fills the tables before the run - [Debugger.lineKeys] and [Debugger.skipped] by location, the breakpoints
+ * by code offset - and gives it the three calls a run makes into it: [Debugger.stop], [Debugger.poll] and
+ * [Debugger.panicked].
+ */
+public shared type Debugger {
+  /** The `execute`s in progress, the outermost first. */
+  var loops: List<LoopRecord> = []
+  /** The code offsets in the image of the statements a breakpoint is set at. */
+  var breakpoints: Set<Int> = []
+  var stepping: Stepping = Stepping.Running
+  /** Where the step began: the frame's height, chunk, base, return address, depth, line and code offset. */
+  var startHeight: Int = 0
+  var startChunk: Int = 0
+  var startBase: Int = 0
+  var startReturn: Int = 0
+  var startLine: Int = 0
+  var startPc: Int = 0
+  /** Stop at the next statement, whatever it is: a pause the host read, or `stopOnEntry` before the first one. */
+  var pauseRequested: Bool = false
+  var stopsOnEntry: Bool = false
+  /** Statements until the next look at the channel. */
+  var countdown: Int = 0
+  /** By location index: a number two locations share exactly when they are the same line of the same file. */
+  var lineKeys: List<Int> = []
+  /** By location index: whether a step passes over it without stopping - a file of the standard library. */
+  var skipped: List<Bool> = []
+  /** The program stops: the host answers requests until it goes on, and sets what happens next. */
+  stop: (StopEvent) => Void
+  /** Every [pollInterval] statements: the host reads what arrived on its channel while the program ran. */
+  poll: () => Void
+  /** A panic is about to end the program or its test: the host stops before it goes on. */
+  panicked: () => Void
+
+  /** The height of the innermost frame of the innermost loop: how many frames there are in all. */
+  fn height(): Int {
+    match loops.last() {
+      Some(record) => record.below + record.depth + 1
+      None => 0
+    }
+  }
+}
+
+/** How many statements run between two looks at the channel. */
+public const pollInterval = 1000
+
+/**
+ * Where a new `execute` of a debugged run begins: a record above the ones in progress, before its first statement.
+ * [finishLoop] takes it off again.
+ */
+public fn beginLoop(debugger: Debugger, chunk: Int, pc: Int, base: Int) {
+  const below = debugger.height()
+  debugger.loops.append LoopRecord(chunk, pc, base, 0, 0 - 1, below)
+}
+
+/** An `execute` of a debugged run returned. */
+public fn finishLoop(debugger: Debugger) {
+  const last = debugger.loops.length() - 1
+  if last >= 0 {
+    const _ = debugger.loops.removeAt last
+  }
+}
+
+/**
+ * The loop reached the statement `statement` of `chunk`, at the code offset `pc` of the image: the innermost loop's
+ * record is written, the channel is looked at every [pollInterval] statements, and the program stops where a pause, a
+ * breakpoint, the first statement or the step in progress says so.
+ */
+public fn reachStatement(
+  debugger: Debugger,
+  program: BytecodeProgram,
+  first: Int,
+  chunk: Int,
+  pc: Int,
+  base: Int,
+  depth: Int,
+  statement: Int,
+) {
+  const last = debugger.loops.length() - 1
+  if last < 0 {
+    return
+  }
+  const below = debugger.loops[last].below
+  debugger.loops.set last, LoopRecord(chunk, pc, base, depth, statement, below)
+  debugger.countdown = debugger.countdown - 1
+  if debugger.countdown <= 0 {
+    debugger.countdown = pollInterval
+    debugger.poll()
+  }
+  const location = locationOfStatement program, chunk, statement
+  var reason = ""
+  if debugger.pauseRequested {
+    reason = "pause"
+  } else if debugger.stopsOnEntry {
+    reason = "entry"
+  } else if debugger.breakpoints.contains(pc) {
+    reason = "breakpoint"
+  } else if stepEnds(debugger, location, below + depth + 1, chunk, base, returnOf(first, base, depth), depth, pc) {
+    reason = "step"
+  }
+  if reason.isEmpty() {
+    return
+  }
+  debugger.pauseRequested = false
+  debugger.stopsOnEntry = false
+  debugger.stepping = Stepping.Running
+  // A closure in a field is called through a binding: `debugger.stop event` would read as a write of the field
+  const stopHere = debugger.stop
+  stopHere StopEvent(reason)
+}
+
+/** The location of a statement of a chunk, `-1` where there is none. */
+fn locationOfStatement(program: BytecodeProgram, chunk: Int, statement: Int): Int {
+  match program.chunks.get(chunk) {
+    Some(found) => {
+      match found.statements.get(statement) {
+        Some(entry) => entry.location
+        None => 0 - 1
+      }
+    }
+    None => 0 - 1
+  }
+}
+
+/** The return address of a frame with calls below it in its loop; the bottom frame of a loop has none. */
+fn returnOf(first: Int, base: Int, depth: Int): Int {
+  if depth == 0 {
+    return 0 - 1
+  }
+  Machine.load(first + 8 * base - 32)
+}
+
+/**
+ * Whether the step in progress ends at a statement of this location and frame (docs/design/DEBUGGER.md section 8).
+ * The same frame is the same height, chunk and base - and, above the bottom of a loop, the same return address, so a
+ * sibling the caller calls next at the same height is another frame.
+ */
+fn stepEnds(
+  debugger: Debugger,
+  location: Int,
+  height: Int,
+  chunk: Int,
+  base: Int,
+  returned: Int,
+  depth: Int,
+  pc: Int,
+): Bool {
+  if const .Running = debugger.stepping {
+    return false
+  }
+  if debugger.skipped.get(location) ?? false {
+    return false
+  }
+  if height < debugger.startHeight {
+    return true
+  }
+  if const .Out = debugger.stepping {
+    return false
+  }
+  const isSameFrame = height == debugger.startHeight && chunk == debugger.startChunk && base == debugger.startBase
+    && (depth == 0 || returned == debugger.startReturn)
+  const isSameLine = (debugger.lineKeys.get(location) ?? (0 - 1)) == debugger.startLine
+  // A loop that jumped back comes to the same line again, and that is a step too
+  const isFurtherOnLine = isSameFrame && isSameLine && pc > debugger.startPc
+  match debugger.stepping {
+    .In => !isFurtherOnLine
+    _ => isSameFrame && !isFurtherOnLine
+  }
+}
+
+/**
+ * A step begins at the innermost statement: `next`, `stepIn` or `stepOut` of the Debug Adapter Protocol. The program goes
+ * on once [Debugger.stop] returns.
+ */
+public fn beginStep(debugger: Debugger, program: BytecodeProgram, registers: Registers, stepping: Stepping) {
+  const record = match debugger.loops.last() {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  // A host that left the line keys out gets them made here: without them every statement would be on one line
+  if debugger.lineKeys.length() < program.locations.length() {
+    debugger.lineKeys = lineKeysOf program
+  }
+  debugger.stepping = stepping
+  debugger.startHeight = record.below + record.depth + 1
+  debugger.startChunk = record.chunk
+  debugger.startBase = record.base
+  debugger.startReturn = returnOf registers.address, record.base, record.depth
+  debugger.startPc = record.pc
+  const location = locationOfStatement program, record.chunk, record.statement
+  debugger.startLine = debugger.lineKeys.get(location) ?? (0 - 1)
+}
+
+/** By location: a number two locations share exactly when they are one line of one file - [Debugger.lineKeys]. */
+public fn lineKeysOf(program: BytecodeProgram): List<Int> {
+  var keys: Map<String, Int> = [:]
+  var found: List<Int> = []
+  for location in program.locations {
+    const key = "{location.path}:{location.line}"
+    const number = match keys.get(key) {
+      Some(known) => known
+      None => {
+        const made = keys.length()
+        keys.set key, made
+        made
+      }
+    }
+    found.append number
+  }
+  found
+}
+
+// --- The frames of a stop -------------------------------------------------------------------------------------------
+
+/** One frame of a stop: its chunk, where in the chunk's own code it is, its base, and its statement. */
+public type StackFrame {
+  chunk: Int
+  /** The code offset in the chunk's own code: the statement of the innermost frame, the call a caller is in. */
+  offset: Int
+  base: Int
+  /** The index of the statement in the chunk's table the frame is at, `-1` where it has none. */
+  statement: Int
+}
+
+/**
+ * The frames of the program where it stopped, the innermost first: the frame of every loop in progress at its record,
+ * then each caller of it through the return records below the frames (docs/design/VM.md section 4), then the next
+ * loop down. A caller is at the last statement before its return address, which is the one whose call it is in.
+ */
+public fn framesOf(debugger: Debugger, registers: Registers): List<StackFrame> {
+  const program = registers.program
+  const first = registers.address
+  var frames: List<StackFrame> = []
+  var index = debugger.loops.length() - 1
+  while index >= 0 {
+    const record = debugger.loops[index]
+    index = index - 1
+    const start = codeStartOf registers, record.chunk
+    frames.append StackFrame(record.chunk, record.pc - start, record.base, record.statement)
+    var frame = first + 8 * record.base
+    for _ in 0..record.depth {
+      const callerPc = Machine.load(frame - 32)
+      const callerBase = Machine.load(frame - 24)
+      const callerChunk = Machine.load(frame - 16)
+      const offset = callerPc - codeStartOf(registers, callerChunk)
+      frames.append StackFrame(callerChunk, offset, callerBase, statementBefore(program, callerChunk, offset))
+      frame = first + 8 * callerBase
+    }
+  }
+  frames
+}
+
+/** The last statement of a chunk before a code offset: the statement a call that returns to the offset is part of. */
+public fn statementBefore(program: BytecodeProgram, chunk: Int, offset: Int): Int {
+  const statements = match program.chunks.get(chunk) {
+    Some(found) => found.statements
+    None => {
+      return 0 - 1
+    }
+  }
+  var found = 0 - 1
+  for index in 0..statements.length() {
+    if statements[index].offset >= offset {
+      break
+    }
+    found = index
+  }
+  found
+}
+
+/**
+ * Where every chunk's code begins in the image, which lays the chunks out one after the other in their order: what a
+ * host turns a statement's offset into the code offset of a breakpoint with, before the run lays out the image.
+ */
+public fn codeStartsOf(program: BytecodeProgram): List<Int> {
+  var starts: List<Int> = []
+  var cursor = 0
+  for chunk in program.chunks {
+    starts.append cursor
+    cursor = cursor + chunk.code.length()
+  }
+  starts
+}
+
+/** One word of the registers, by its absolute index: what a host reads the values of a frame out of. */
+public fn registerWord(registers: Registers, index: Int): Int {
+  Machine.load(registers.address + 8 * index)
+}
+
+// --- The debugger's own calls of the kernel -------------------------------------------------------------------------
+
+/**
+ * Words of the debugger's own, for the operations of the kernel it makes itself - reading its channel, taking a text
+ * of the program apart, looking into a list - so that no call of the debugger ever writes a register of the program.
+ */
+public shared type DebugKernel {
+  var words: ArrayList<Int>
+  var kernel: ArrayList<Int>
+}
+
+/** A [DebugKernel] with room for a few words. */
+public fn debugKernel(): DebugKernel {
+  const kernel = DebugKernel ArrayList.withCapacity(256), ArrayList.withCapacity(16)
+  ensureDebugWords kernel, 256
+  kernel
+}
+
+/** At least `count` words, zero where they are new. */
+public fn ensureDebugWords(kernel: DebugKernel, count: Int) {
+  while kernel.words.length() < count {
+    kernel.words.append 0
+  }
+}
+
+/** One operation of the kernel over the debugger's own words, its registers counted from the first of them. */
+public fn debugOperate(kernel: DebugKernel, operation: KernelOperation, operands: List<Int>): Int {
+  while kernel.kernel.length() < operands.length() + 1 {
+    kernel.kernel.append 0
+  }
+  kernel.kernel.set 0, kernelNumberOf(operation)
+  for index in 0..operands.length() {
+    kernel.kernel.set(index + 1, operands[index])
+  }
+  Machine.operate kernel.words, 0, kernel.kernel, 0
+}

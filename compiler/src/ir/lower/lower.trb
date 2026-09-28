@@ -35,7 +35,11 @@ use lowerGenerated from "./derive"
 use requestCloseFunctions from "./scope"
 use settleEntryCells from "./cell"
 
-/** The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches. */
+/**
+ * The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches.
+ * `debugging` lowers it for a debugger - a `Statement` in front of every statement and a `KeepAlive` where every
+ * binding's scope ends (docs/design/DEBUGGER.md sections 5 and 6).
+ */
 public fn lowerWorkspace(
   checker: Checker,
   paths: List<String>,
@@ -45,9 +49,11 @@ public fn lowerWorkspace(
   forMachine: Bool = false,
   scriptSources: String = "",
   scriptRoot: String = "",
+  debugging: Bool = false,
 ): Lowering {
   var lowering = newLowering checker, paths, target
   lowering.forMachine = forMachine
+  lowering.debugging = debugging
   lowering.scriptSources = scriptSources
   lowering.scriptRoot = scriptRoot
   lowering.programPackages = programPackagesOf checker, modules
@@ -391,11 +397,11 @@ fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
 }
 
 /** What `torb ir` lowers: everything the requested modules declare, for the machine it runs on unless told otherwise. */
-public fn lowerChecked(checked: Checked, target: BuildTarget = hostTarget()): Lowering {
+public fn lowerChecked(checked: Checked, target: BuildTarget = hostTarget(), debugging: Bool = false): Lowering {
   const paths = pathsOfModules checked
   const modules = checked.requested
   const checker = checked.checker
-  lowerWorkspace checker, paths, modules, true, target
+  lowerWorkspace checker, paths, modules, true, target, debugging: debugging
 }
 
 /**
