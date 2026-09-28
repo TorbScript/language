@@ -1,6 +1,6 @@
 ---
 title: Cut a release
-summary: The steps from a green main to a signed release on the forge at git.torb.dev, how a seed is published on its own, what the owner sets up once on the forge, the GitHub mirror and the root server, and what to do when a release job fails.
+summary: From a green main to a signed release on git.torb.dev and the VS Code extension in its stores, a seed published on its own, what the owner sets up once on the forge, the stores, the mirror and the server, and what to do when a job fails.
 kind: how-to
 status: stable
 skill: omit
@@ -19,6 +19,8 @@ keywords:
   - forge
   - Authorized Integration
   - push mirror
+  - VS Code Marketplace
+  - Open VSX
 source:
   - docs/design/RELEASE.md#13-the-release-pipeline-as-built
   - docs/design/RELEASE.md#14-the-forge
@@ -35,6 +37,8 @@ source:
   - tools/install.sh
   - tools/install.ps1
   - tools/render-package-manifests.sh
+  - tools/package-extension.sh
+  - editors/vscode/package.json
   - tools/release-sync
   - tools/registry
   - tools/deploy
@@ -42,8 +46,9 @@ source:
 
 A release of TorbScript is made by pushing a tag `v0.MINOR.PATCH` of a commit of `main` to the forge, git.torb.dev. The
 workflow `release` checks the tag, runs every gate, and only when all of them are green publishes the archives, the
-source, the portable seed and `SHA256SUMS` with its cosign signature as a release of `torbscript/language`; release-sync
-then places them at `https://torb.dev/download/<version>/`, where the installers read them. The design behind it is
+source, the portable seed, the VS Code extension and `SHA256SUMS` with its cosign signature as a release of
+`torbscript/language`; release-sync then places them at `https://torb.dev/download/<version>/`, where the installers
+read them, and the extension goes to the Visual Studio Marketplace and to Open VSX. The design behind it is
 [section 13 of the release record](../design/RELEASE.md#13-the-release-pipeline-as-built), and the forge, its runners,
 the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-forge).
 
@@ -52,20 +57,30 @@ the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-fo
 1. **Choose the number.** Before 1.0 a minor release may break and a patch may not
    ([RELEASE.md section 3](../design/RELEASE.md#3-versions-and-the-stability-promise)): a release with a breaking change
    raises `MINOR` and sets `PATCH` to 0, a release of fixes only raises `PATCH`.
-2. **Write the number into both manifests.** `version "0.2.0"` in `project.trb` and in `compiler/project.trb`. The
-   workflow refuses a tag whose number differs from either.
+2. **Write the number into the three manifests.** `version = "0.2.0"` in `project.trb` and in `compiler/project.trb`,
+   and `"version": "0.2.0"` in `editors/vscode/package.json` - the VS Code extension carries the toolchain's number.
+   The workflow refuses a tag whose number differs from any of them, and CI refuses a `package.json` whose number is not
+   `project.trb`'s.
 3. **Write the release notes** in `docs/releases/0.2.0.md`, when there are notes to write: every breaking change, and
    the command that migrates it. Without the file the release says one line, its targets and how to verify a download.
+   What changed in the extension goes into `editors/vscode/CHANGELOG.md` as a section `## 0.2.0`, which the stores
+   show as its changelog.
 4. **Land on `main` and wait for `ci` to be green** on the forge (Actions of `torbscript/language`). The release runs
    the same gates again, but a red `ci` is the cheaper place to find out.
 5. **Tag the commit and push the tag to the forge.** Only the tag starts a release, and pushing it is the approval: the
    forge holds no job for a reviewer. The workflow checks that the commit is on `main`.
 6. **Check the release page** on git.torb.dev: one `.tar.gz` per target that has a runner and a `.zip` for Windows, the
-   source, the seed with its `.sha256`, `SHA256SUMS` and `SHA256SUMS.sig`. The release is a draft until its last asset
-   is uploaded, so the webhook reaches release-sync once, with everything there. The seed is added to `seeds.txt` of the
-   release `seeds`, the job `images` pushes `cr.torb.dev/torbscript/release-sync`, `site` and `registry` tagged with the
-   version and `latest`, signed, and `publish-packages` pushes the Homebrew formula and the Scoop manifest where the
-   release has their archives. The root server takes the images with `docker compose pull && docker compose up -d`.
+   source, the seed with its `.sha256`, the VS Code extension `torbscript-0.2.0.vsix`, `SHA256SUMS` and
+   `SHA256SUMS.sig`. The release is a draft until its last asset is uploaded, so the webhook reaches release-sync once,
+   with everything there. The seed is added to `seeds.txt` of the release `seeds`, the job `images` pushes
+   `cr.torb.dev/torbscript/release-sync`, `site` and `registry` tagged with the version and `latest`, signed, and
+   `publish-packages` pushes the Homebrew formula and the Scoop manifest where the release has their archives. The root
+   server takes the images with `docker compose pull && docker compose up -d`.
+7. **Check the extension in the stores.** The job `publish-extension` publishes the `.vsix` of the release to the Visual
+   Studio Marketplace and to Open VSX; its log says "not published" for a store whose secret is not set. The
+   Marketplace verifies an upload for a few minutes before
+   [its page](https://marketplace.visualstudio.com/items?itemName=torbscript.torbscript) shows the version; Open VSX
+   shows it at once ([open-vsx.org/extension/torbscript/torbscript](https://open-vsx.org/extension/torbscript/torbscript)).
 
 **Which targets a release carries**: linux-x64 always, and windows-x64, linux-arm64 and macos-arm64 once the forge has
 a runner of that label and the repository variable `TORB_RUNNERS` names it. Until then a release is a linux-x64 release,
@@ -105,6 +120,12 @@ $ TORB_FORGE_TOKEN=<forge token> sh tools/publish-seed.sh build/seed-archive/tor
   public; GitHub's needs `GH_TOKEN` while that repository is private.
 - **A breaking change pushed in one go** fails CI at the bootstrap: the published seed does not know the new form. Push
   the teaching commit, run `seed`, then push the migration.
+- **`publish-extension` failed** after the release is out: the release stays as it is. A store that refused a token
+  (401, "Access Denied", or an expired token - an Azure DevOps token lives a year at most) needs a new token in its
+  secret (step 9 of "One-time setup"); then re-run that job alone, which passes over the store that has the version
+  already. Both stores keep a published version for good, so the fix of a broken extension is the next patch release.
+- **The job `extension` of CI is red** with "package.json says version ... and project.trb ...": step 2 above wrote the
+  number into the manifests but not into `editors/vscode/package.json`.
 
 ## Full example
 
@@ -113,9 +134,10 @@ The release of 0.2.0, from a green `main`:
 ```console
 $ git switch main
 $ git pull forgejo main
-$ grep '^version' project.trb compiler/project.trb
-project.trb:version "0.2.0"
-compiler/project.trb:version "0.2.0"
+$ grep -E '^version|^  "version"' project.trb compiler/project.trb editors/vscode/package.json
+project.trb:version = "0.2.0"
+compiler/project.trb:version = "0.2.0"
+editors/vscode/package.json:  "version": "0.2.0",
 $ git tag v0.2.0
 $ git push forgejo v0.2.0
 ```
@@ -190,6 +212,36 @@ value to enter.
    private that workflow does nothing.
 8. **Once the forge has every seed** (`sh tools/migrate-seeds.sh` answers "nothing to copy"): the release `seeds` on
    GitHub may stay as an archive; nothing reads it any more.
+9. **The stores of the VS Code extension**, so that `publish-extension` of a release publishes `torbscript.torbscript`.
+   Until both secrets exist the job skips the store without one and says so; nothing else waits for them.
+
+   **The Visual Studio Marketplace**, with one Microsoft account for all three steps:
+
+   1. The token: sign in at `https://dev.azure.com` (create an Azure DevOps organization when asked - any name, it only
+      holds the token), then User settings (the icon beside the avatar, top right) -> Personal access tokens -> New
+      Token. Name `torbscript-vsce`; Organization **All accessible organizations** (a token of one organization is
+      refused by the Marketplace); Expiration: the longest offered, one year - note the date, a release after it fails
+      until the token is renewed; Scopes: Custom defined -> Show all scopes -> **Marketplace: Manage**. Create, and copy
+      the token: it is shown once.
+   2. The publisher: `https://marketplace.visualstudio.com/manage` -> Create publisher: ID `torbscript` (it cannot be
+      changed, and it is the first half of `torbscript.torbscript`), Name `TorbScript`. Optionally, the publisher's
+      "Verified domain" with `torb.dev` (a TXT record) gives the store page its verified mark.
+   3. The check, on any machine with Node.js 22: `VSCE_PAT=<token> npx @vscode/vsce@4.0.0 verify-pat torbscript`
+      answers that the token may publish as `torbscript`.
+
+   **Open VSX** (the store of VSCodium, Cursor, Gitpod and the other editors built on VS Code's open source):
+
+   1. Sign in at `https://open-vsx.org` with a GitHub account, and sign the Eclipse Foundation's Open VSX Publisher
+      Agreement under Profile (it asks for an Eclipse account, which can be created there).
+   2. The token: Profile -> Access Tokens -> Generate New Token, description `torbscript release`; copy it, it is
+      shown once. It does not expire.
+   3. The namespace: `OVSX_PAT=<token> npx ovsx@1.2.0 create-namespace torbscript` creates `torbscript`, owned by that
+      account. To have it verified (the store's mark that the namespace belongs to the project), open an issue at
+      `https://github.com/EclipseFdn/open-vsx.org/issues` asking for ownership of the namespace `torbscript`.
+
+   **The secrets**: `torbscript/language` -> Settings -> Actions -> Secrets -> Add secret: `VSCE_PAT` = the Azure DevOps
+   token, `OVSX_PAT` = the Open VSX token. Only `publish-extension` of `release` reads them. A renewed token replaces
+   the value of its secret; nothing else changes.
 
 **The root server** ([RELEASE.md section
 7.11](../design/RELEASE.md#the-root-server-and-the-write-service-as-built-2026-09-27)): torb.dev with the downloads,

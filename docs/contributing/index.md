@@ -37,6 +37,6 @@ about what a program *does* comes with a program there.
 - **[Add a page](adding-a-page.md)** - The seven steps from an empty file to a page that passes the gate, with a template for every kind of page to copy.
 - **[The docs commands](checks.md)** - What torb docs check, index, skill and bundle each do, which rules they decide, and which rules only a reviewer can decide.
 - **[The Agent Skill](the-skill.md)** - How torb docs skill turns this documentation into an Agent Skill, what it copies, what it leaves out, and how to install the result.
-- **[Cut a release](releasing.md)** - The steps from a green main to a signed release on the forge at git.torb.dev, how a seed is published on its own, what the owner sets up once on the forge, the GitHub mirror and the root server, and what to do when a release job fails.
+- **[Cut a release](releasing.md)** - From a green main to a signed release on git.torb.dev and the VS Code extension in its stores, a seed published on its own, what the owner sets up once on the forge, the stores, the mirror and the server, and what to do when a job fails.
 
 <!-- torb:index:end -->

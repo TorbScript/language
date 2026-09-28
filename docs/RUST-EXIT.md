@@ -50,7 +50,7 @@ suites beside it. Every use of it in the repository, as it stood before the exit
 | `bootstrap/tests/native/stage-0-only/` - one program whose behaviour only stage 0 produced | The C back end lowers the `cause()` loop of a top-level `?` (slice 5); the program moved up one directory and the now-empty `stage-0-only/` is gone | no - done |
 | `bootstrap/tests/lexer-cases/`, `parser-cases/` | Deliberately broken sources; they moved to `tests/lexer-cases/` and `tests/parser-cases/` (slice 6) and are what the recovery of the self-hosted parser is read against | no - done |
 | `.vscode/tasks.json` - two tasks that run `cargo run --release -q -- ...` | The same two commands on the native binary (slice 6) | no - done |
-| `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` and nowhere else (slices 4 and 6) | no - done |
+| The VS Code extension (then `.vscode/extensions/torbscript`, now `editors/vscode`) - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` and nowhere else (slices 4 and 6) | no - done |
 | `benchmarks/run.sh` - `$torb` is `bootstrap/target/release/torb`, used to build each program | `build/release/torb`, called directly (slice 6) | no - done |
 | `runtime/build.sh` - checks `torb_natives.h` against the headers, and names `torb natives --header` in a comment | Already independent: the check is C against C. Only the comment mentions the command | no |
 | `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources, at `tools/bootstrap.sh` and at `tools/gates.sh` (slice 6) | no - done |

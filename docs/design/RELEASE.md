@@ -62,7 +62,7 @@ that does not block core work can be built now, in the order of section 10.
 | 13 | Nothing in `std/` or `runtime/` computes SHA-256, reads or writes a `tar` or `gzip` archive, or speaks TLS | `grep` |
 | 14 | `docs/` has 221 pages with `status: stable`, 6 `planned` and 2 `draft`. `torb docs bundle` writes `llms.txt` and `llms-full.txt`, `torb docs skill` the Agent Skill; nothing writes HTML | `grep`, `compiler/src/documentation/command.trb` |
 | 15 | The documentation tool reads a page through `std/markdown` (CommonMark 0.31.2 with GitHub's tables) and its front matter through `std/yaml` (`compiler/src/documentation/markdown.trb`, `docs/design/TEXT-FORMATS.md` section 3a); nothing renders HTML from it yet | the file's module comment |
-| 16 | The VS Code extension lives in `.vscode/extensions/torbscript` (publisher `torbscript`, version 0.2.0) and starts `torb lsp`; it is not published | `package.json`, `docs/design/LANGUAGE-SERVER.md` |
+| 16 | The VS Code extension lives in `editors/vscode` (publisher `torbscript`, the toolchain's version) and starts `torb lsp`; every release publishes it to the Visual Studio Marketplace and Open VSX (section 13, since 2026-09-28) | `editors/vscode/package.json`, `docs/design/LANGUAGE-SERVER.md` |
 | 17 | The repository's remote is `github.com/TorbScript/language` | `git remote -v` |
 | 18 | `OperatingSystem` has four cases (`Windows`, `Linux`, `MacOs`, `FreeBsd`) and `Architecture` two (`X64`, `Arm64`); adding a case is a breaking change of `std/core` (OS.md, "Adding an operating system") | `std/core/src/target.trb` |
 
@@ -1173,6 +1173,7 @@ the first runs it reports were GitHub's.
 | `.forgejo/actions/portable` | what a target other than linux-x64 runs: bootstrap, `check .`, the conformance suite, the runtime's tests, the C of every target, the release binary |
 | `.forgejo/actions/token` | the token of an Authorized Integration for the job (section 14) |
 | `.forgejo/actions/cosign` | the pinned cosign that signs, the release release-sync verifies with |
+| `.forgejo/actions/node` | the pinned Node.js that packs and publishes the VS Code extension, checked against the SHA-256 nodejs.org lists |
 | `.github/workflows/portable.yml` | the GitHub mirror's one workflow: `.forgejo/actions/portable` on windows-x64, linux-arm64 and macos-arm64, and their agreement on the C (section 14) |
 | `tools/forge.sh` | the releases of the forge over its REST API with curl: create, upload, download, publish, delete, list - Forgejo, or GitHub |
 | `tools/agree.sh` | the compiler's C for every target as one host emits it, and whether the lists of several hosts agree |
@@ -1182,6 +1183,7 @@ the first runs it reports were GitHub's.
 | `tools/publish-seed.sh` | uploads a packed seed to the `seeds` release of the forge and puts it on top of `seeds.txt` (`tools/forge.sh`) |
 | `tools/migrate-seeds.sh` | copies every seed of GitHub's `seeds` release the forge's lacks, once |
 | `tools/package.sh` | lays out and packs the toolchain of one target (section 4) |
+| `tools/package-extension.sh` | packs the VS Code extension of `editors/vscode` into `torbscript-<version>.vsix` with `@vscode/vsce` (pinned, through `npx`), after checking that its version is the toolchain's |
 | `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables |
 
 ### The seed, published
@@ -1253,6 +1255,7 @@ on first use, and `seeds.txt` is replaced by deleting the asset and uploading th
 | `... (linux-arm64)` | a runner labelled `linux-arm64`, gcc | the same | as windows-x64 |
 | `... (macos-arm64)` | a runner labelled `macos-arm64`, clang | the same | as windows-x64 |
 | `every host emits the same C` | `ubuntu-latest` | `tools/agree.sh`: linux-x64 emits the compiler's C for all eight targets (`torb build --emit-c --target`), `--target linux-x64` has to be the bootstrap's C, and every other runner of the run has to emit the same C for every target | always |
+| `the VS Code extension (editors/vscode)` | `ubuntu-latest`, the pinned Node.js | `tools/package-extension.sh`: the `.vsix` packed with `@vscode/vsce`, its version checked against `project.trb` - a manifest the stores would refuse fails here, not in a release | always |
 
 **Why tier A and tier B run on one target only.** Nearly every gate tests the compiler, and the compiler is the same C on
 every machine - which the `agree` job proves on every run, and which is the strongest cross-platform statement the
@@ -1301,9 +1304,16 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 ### Versions, tags and channels
 
 - **A release is a pushed tag `v0.MINOR.PATCH`** and nothing else. `release.yml` refuses a tag that is not
-  `0.MINOR.PATCH` without leading zeros, whose version differs from `version` in `project.trb` or
-  `compiler/project.trb` (section 3: one number), whose commit is not on `main`, or that has no `LICENSE` (section 9;
-  the owner chose MIT, question 5) - the forge's repository is public.
+  `0.MINOR.PATCH` without leading zeros, whose version differs from `version` in `project.trb`,
+  `compiler/project.trb` or `editors/vscode/package.json` (section 3: one number, the editor extension's included),
+  whose commit is not on `main`, or that has no `LICENSE` (section 9; the owner chose MIT, question 5) - the forge's
+  repository is public.
+- **The VS Code extension follows the release.** A release publishes `torbscript-<version>.vsix`, the file among its
+  assets, to the Visual Studio Marketplace (`vsce publish`, the secret `VSCE_PAT`) and to Open VSX (`ovsx publish`, the
+  secret `OVSX_PAT`), each only where its secret exists, after the release is on the forge. A nightly carries
+  `torbscript-nightly-YYYYMMDD.vsix` with the version `package.json` says, marked as a pre-release, and no store gets
+  it: the Marketplace's pre-release channel needs a version of its own for every upload, and the toolchain's numbers
+  belong to releases.
 - **stable**: the release, marked latest, kept forever. **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
   when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on
   one day replaces that day's nightly.
@@ -1318,6 +1328,7 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 | `torb-<version>-windows-x64.zip` | the same for Windows, as a zip as well |
 | `torb-<version>-source.tar.gz` | `git archive` of the tag |
 | `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |
+| `torbscript-<version>.vsix` | the VS Code extension of `editors/vscode`, the file the Marketplace and Open VSX get (a nightly: `torbscript-nightly-YYYYMMDD.vsix`, a pre-release) |
 | `SHA256SUMS` | the SHA-256 of every asset above |
 | `SHA256SUMS.sig` | the cosign signature of `SHA256SUMS`, made with the project's key (`SHA256SUMS.sigstore.json`, the keyless bundle, while releases were made on GitHub) |
 

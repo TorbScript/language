@@ -57,10 +57,13 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   input and output, the diagnostics of `check` with their ranges, hover, go to definition, completion, semantic tokens
   from the highlighter sharpened by the checker, and the lint fixes as quick fixes; a keystroke redoes the front of the
   one file that changed and checks its bodies and those of the open files that import it. The VS Code extension in
-  `.vscode/extensions/torbscript` is its client ([tooling/torb-lsp.md](tooling/torb-lsp.md),
-  [design/LANGUAGE-SERVER.md](design/LANGUAGE-SERVER.md)). **Left** (LANGUAGE-SERVER.md section 11): checking one body
-  instead of the file it is in, hover from the model of `torb doc`, signature help, references, rename, symbols and
-  formatting, and the published extension.
+  `editors/vscode` is its client ([tooling/torb-lsp.md](tooling/torb-lsp.md),
+  [design/LANGUAGE-SERVER.md](design/LANGUAGE-SERVER.md)), **published with every release (2026-09-28)** to the Visual
+  Studio Marketplace and Open VSX as `torbscript.torbscript`, with the Test Explorer (`torb test --report json`), Format
+  Document, and a walkthrough that installs the toolchain ([how-to/set-up-your-editor.md](how-to/set-up-your-editor.md)).
+  **Left** (LANGUAGE-SERVER.md section 11): checking one body instead of the file it is in, hover from the model of
+  `torb doc`, signature help, references, rename, symbols and formatting in the server, and the extension's brand (its
+  icon and images are placeholders).
 - **The package manager**: the manifest that is evaluated, the lock file, `add`, `remove`, `update`, `publish`, and
   the registry at packages.torb.dev ([design/PROJECT.md](design/PROJECT.md) section 12,
   [design/RELEASE.md](design/RELEASE.md) section 7). **The client is built (2026-09-26)**: `torb add`, `remove`,

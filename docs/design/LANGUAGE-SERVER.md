@@ -4,7 +4,8 @@
 the Language Server Protocol over standard input and output (`compiler/src/language-server/`): the life cycle,
 incremental document sync, the diagnostics of `torb check` with their ranges, hover, go to definition, completion of
 members and of the names in scope, semantic tokens, and the fixes of `torb lint` as quick fixes. The VS Code extension
-in `.vscode/extensions/torbscript` starts it (`lsp-client.js`). A keystroke redoes the part of the one file that changed
+in `editors/vscode` starts it (`lsp-client.js`), published to the Visual Studio Marketplace and Open VSX with every
+release (section 10). A keystroke redoes the part of the one file that changed
 (section 6). `compiler/tests/language-server.test.trb` holds sessions fed to the server in memory, `tests/lsp/` whole
 sessions over standard input and output (`tools/lsp.sh`, a gate of tier A). Section 11 is what is left.
 
@@ -196,13 +197,22 @@ its JSON.
 ## 10. The client
 
 **Decision: `lsp-client.js` speaks the protocol to `torb lsp` directly, without `vscode-languageclient`.** The extension
-is a folder of plain files with no `node_modules` and no build step, which is what makes it installable from the
-repository as a workspace extension, and a client of the handful of messages this server answers is four hundred lines.
+is a folder of plain files with no `node_modules` and no build step - `editors/vscode` is packed into a `.vsix` as it
+is (`tools/package-extension.sh`) - and a client of the handful of messages this server answers is four hundred lines.
 It syncs every open `.trb` file with incremental changes, turns what the server answers into VS Code's diagnostics,
 hovers, locations, completion items, semantic tokens and code actions, reports file changes of the workspace, restarts a
 crashed server up to three times in three minutes, and has a command to restart it by hand.
 `torbscript.languageServer.enabled` turns it off; where it does not run, the TextMate grammar and `torb highlight` color
 the code as they did before.
+
+**Decision (2026-09-28): the extension is published, from `editors/vscode`, with the toolchain's version.** The
+release workflow packs it with every release and publishes it to the Visual Studio Marketplace and to Open VSX as
+`torbscript.torbscript`; a nightly carries a pre-release `.vsix` that no store gets (RELEASE.md section 13). An extension
+from a store may run where no `torb` is, so it looks for one in the places the installers write as well, offers the
+official installer in a terminal the person sees where it finds none, and opens a walkthrough on its first start; its
+Test Explorer lists the tests of `torbscript/tests` and runs them with `torb test --report json`
+(`editors/vscode/CONTRIBUTING.md`). The repository recommends the published extension in `.vscode/extensions.json`,
+and `.vscode/launch.json` runs the working copy in an Extension Development Host.
 
 ## 11. What is left
 
@@ -216,8 +226,9 @@ the code as they did before.
   generic call beside the declaration.
 - **Requests not answered yet**: `completionItem/resolve` (a signature and a doc comment for every item),
   `textDocument/signatureHelp`, `references`, `rename`, `documentSymbol`, `workspace/symbol`, and
-  `textDocument/formatting` from `torb format`.
+  `textDocument/formatting` from `torb format` (the VS Code extension formats through `torb format` over a temporary
+  copy until then).
 - **The workspace**: only the first workspace folder is read; a file deleted on disk stays in the tree until the server
   starts again; the diagnostics of files that are not open are not published.
-- **The published extension** (RELEASE.md section 2, the 1.0 list): a package for the marketplace, which this round
-  deliberately did not make.
+- **The brand of the published extension**: its icon, gallery banner and walkthrough images are placeholders
+  (`editors/vscode/CONTRIBUTING.md`, "The brand").

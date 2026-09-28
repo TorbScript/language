@@ -3644,8 +3644,9 @@ operator traits deleted in favour of the prelude's - which is why `Add`, `Subtra
 `Negate` and `Compare` are in stage 0's `prelude.trb` now: `a + b` means the *prelude's* `Add`, and a script that
 declares a trait of its own name does not get the operator. `tests/language/` and `tests/conformance/` are
 each a workspace of their own, and `torb check tests/conformance tests/language` is the second `check` of the
-gate list. The only TorbScript left outside a `check` is `tests/parser-cases/`, `tests/lexer-cases/` (deliberate errors)
-and `.vscode/extensions/torbscript/samples/tokens.trb`, which is not a program at all and only has to parse.
+gate list. The only TorbScript left outside a `check` is `tests/parser-cases/` and `tests/lexer-cases/` (deliberate
+errors); the extension's sample of every semantic token, once outside as well, became a script `torb check .` reaches
+when the extension moved to `editors/vscode/samples/tokens.trb` (2026-09-28).
 
 **15 gate programs were added for behaviour that had none**, chosen by reading the language reference for rules with
 observable run-time behaviour: `copies.trb` (a value has no identity, so a second name is a second value),
