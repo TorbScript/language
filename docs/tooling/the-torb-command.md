@@ -72,6 +72,11 @@ torb test --native compiler/tests
 torb format --check .
 ```
 
+An argument that starts with `--` and is none of the flags of its subcommand is refused before anything runs, with
+`error: unknown flag <argument>`, a pointer to `torb --help` and exit code 2, rather than looked for as a file or a
+program of that name; a path that starts with `--` is written `./--name`. Behind the path of `run` every argument is
+the program's own. `torb --help` prints the usage.
+
 ## What it does
 
 ### `--version`

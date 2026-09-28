@@ -58,6 +58,22 @@ fn exitWith(code: Int) {
   }
 }
 
+/**
+ * Leaves with 2 where an argument that starts with `--` is none of the flags a subcommand takes: read as a path or as the
+ * name of a program, it would be looked for and reported as one that does not exist. A path that starts with `--` is
+ * written `./--name`.
+ */
+fn refuseUnknownFlag(arguments: List<String>, known: List<String>) {
+  if const Some(flag) = arguments.find({ _.startsWith("--") && !known.contains(_) }) {
+    reportUnknownFlag flag
+    Process.exit 2
+  }
+}
+
+fn reportUnknownFlag(flag: String) {
+  printError "error: unknown flag {flag}, see `torb --help`"
+}
+
 /** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
 fn printUsage() {
   printError "torb - the TorbScript toolchain (self-hosted)"
@@ -494,6 +510,10 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
       wantsTarget = true
       continue
     }
+    if argument.startsWith("--") {
+      reportUnknownFlag argument
+      return None
+    }
     if isPathArgument(argument) {
       paths.append argument
       continue
@@ -718,6 +738,11 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     index = index + 2
   }
   const given = arguments.get(index) ?? "."
+  // In front of the path every argument is a flag of `run`, behind it the program's own
+  if given.startsWith("--") {
+    reportUnknownFlag given
+    return None
+  }
   const rest = arguments.skip(index + 1).toList()
   if isPathArgument(given) {
     return RunOptions given, rest, profile, usesMachine, withTimings
@@ -808,11 +833,12 @@ match Process.arguments() {
   // docs/design/RELEASE.md section 3: one number for the toolchain, the language and the standard library
   ["--version"] => print "torb {languageVersion}"
   ["check", ...more] => {
+    const flags = ["--statistics", "--timings", "--every-target", "--partial"]
+    refuseUnknownFlag more, flags
     const withStatistics = more.contains "--statistics"
     const withTimings = more.contains "--timings"
     const withEveryTarget = more.contains "--every-target"
     const withPartial = more.contains "--partial"
-    const flags = ["--statistics", "--timings", "--every-target", "--partial"]
     const given = more.filter({ !flags.contains(_) }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
     if checkProjects(paths, withStatistics, withTimings, withEveryTarget, withPartial)? > 0 {
@@ -832,12 +858,10 @@ match Process.arguments() {
   // Everything behind the path is the program's, whatever it looks like: `torb run tool.trb --emit-c` passes
   // `--emit-c` on rather than reading it here
   ["run", ...more] => {
+    // Whatever makes the arguments `None` has said what is wrong with them
     const options = match runOptionsOf(more) {
       Some(found) => found
-      None => {
-        printUsage()
-        Process.exit 2
-      }
+      None => Process.exit 2
     }
     const code = runProgram(options)?
     if code != 0 {
@@ -903,6 +927,7 @@ match Process.arguments() {
     }
   }
   ["manifest", ...more] => {
+    refuseUnknownFlag more, ["--check"]
     const checks = more.contains "--check"
     const given = more.filter({ _ != "--check" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
@@ -912,6 +937,7 @@ match Process.arguments() {
     }
   }
   ["ir", ...more] => {
+    refuseUnknownFlag more, ["--statistics", "--no-ownership", "--bytecode"]
     const onlyStatistics = more.contains "--statistics"
     const withOwnership = !more.contains("--no-ownership")
     const asBytecode = more.contains "--bytecode"
@@ -964,6 +990,7 @@ match Process.arguments() {
     }
   }
   ["parse", first, ...more] => {
+    refuseUnknownFlag([first, ...more], [])
     if checkSyntax([first, ...more])? > 0 {
       Process.exit 1
     }
@@ -1023,6 +1050,7 @@ match Process.arguments() {
       }
     }
   }
+  ["--help"] | ["help"] => printUsage()
   _ => {
     printUsage()
     Process.exit 2
