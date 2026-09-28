@@ -49,7 +49,7 @@ torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]
 | `docs/<version>/search-index.json` | The search of this version | every page |
 | `404.html` | The page for a path that is not there | |
 | `assets/site.css`, `assets/site.js` | The one stylesheet and the one script | the compiler |
-| `assets/fonts/` | Chivo and Chivo Mono as `.woff2`, with their licence | `brand/fonts/` |
+| `assets/fonts/` | Chivo and Geist Mono as `.woff2`, with their licence | `brand/fonts/` |
 | `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `mask-icon.svg`, `icons/`, `manifest.webmanifest`, `social-card.png` | The icons, the web manifest with a maskable icon, and the preview card | `brand/` |
 
 Every link between two pages is relative, so the output can be served from any directory. The page for a missing
