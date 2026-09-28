@@ -23,6 +23,7 @@ documents:
   - RELEASE.md
   - NETWORK.md
   - DNS.md
+  - FIRST-PARTY.md
   - BINARY.md
   - WEB.md
   - REPL.md
@@ -30,7 +31,6 @@ documents:
   - DEBUGGER.md
   - PANICS.md
   - FLAGS.md
-  - CLOSED-TRAITS.md
   - TEXT-FORMATS.md
   - RANDOM.md
   - CLI.md
@@ -52,10 +52,10 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, networking with TLS and HTTP, the
-Domain Name System, the web layer on top of the network, the language server, the debugger, the public release with its website and package registry,
-where a program may panic, cases with fixed values and bit flags, cases as types of a closed trait, YAML and
-regular expressions, random numbers, command lines, tensors and gradients, the application framework, the JavaScript
-and PHP back ends, and the brand: the logo,
+Domain Name System, the first-party packages outside `std` for databases and other services, the web layer on top of
+the network, the language server, the debugger, the public release with its website and package registry,
+where a program may panic, cases with fixed values and bit flags, YAML and regular expressions, random numbers, command
+lines, tensors and gradients, the application framework, the JavaScript and PHP back ends, and the brand: the logo,
 the colours, the type and how the toolchain colours its output. Each is plain Markdown without front
 matter, linked here rather than copied, and stays where the feature it describes keeps changing. The roadmap
 orders them into the milestones that are still ahead.
@@ -87,6 +87,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Releasing TorbScript**
 - **Networking, TLS and HTTP**
 - **The Domain Name System**
+- **First-Party Packages**
 - **Binary Formats**
 - **Web: Handlers, HTML and a Live UI**
 - **The REPL**
@@ -94,7 +95,6 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **The Debugger**
 - **Panics**
 - **Cases with Fixed Values and Flags**
-- **Closed Traits: Every Case Is a Type**
 - **YAML, Regular Expressions and Markdown**
 - **Random Numbers**
 - **Command Lines**

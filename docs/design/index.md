@@ -23,6 +23,7 @@ documents:
   - RELEASE.md
   - NETWORK.md
   - DNS.md
+  - FIRST-PARTY.md
   - BINARY.md
   - WEB.md
   - REPL.md
@@ -52,7 +53,8 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, networking with TLS and HTTP, the
-Domain Name System, the web layer on top of the network, the language server, the debugger, the public release with its website and package registry,
+Domain Name System, the first-party packages outside `std` for databases and other services, the web layer on top of
+the network, the language server, the debugger, the public release with its website and package registry,
 where a program may panic, cases with fixed values and bit flags, cases as types of a closed trait, YAML and
 regular expressions, random numbers, command lines, tensors and gradients, the application framework, the JavaScript
 and PHP back ends, and the brand: the logo,
@@ -87,6 +89,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **[Releasing TorbScript](RELEASE.md)**
 - **[Networking, TLS and HTTP](NETWORK.md)**
 - **[The Domain Name System](DNS.md)**
+- **[First-Party Packages](FIRST-PARTY.md)**
 - **[Binary Formats](BINARY.md)**
 - **[Web: Handlers, HTML and a Live UI](WEB.md)**
 - **[The REPL](REPL.md)**
