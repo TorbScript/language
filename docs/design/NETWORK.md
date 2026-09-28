@@ -227,7 +227,13 @@ when the limit passes, and the cancellation is the row above. The HTTP server's 
   and the accept takes the next, because the failure is the connection's and not the listener's: `ECONNABORTED` (and
   `EPROTO`) everywhere, and on Linux, which passes an error already pending on the connection through `accept`, the
   errors of TCP/IP that accept(2) names (`ENETDOWN`, `ENOPROTOOPT`, `EHOSTDOWN`, `ENONET`, `EHOSTUNREACH`, `EOPNOTSUPP`,
-  `ENETUNREACH`).
+  `ENETUNREACH`), `EPERM` where a firewall refused the connection, and `ETIMEDOUT`. On Windows a client that reset its
+  connection while it waited in the backlog makes `AcceptEx` fail with `WSAECONNRESET` at once or complete with
+  `ERROR_NETNAME_DELETED` (and an aborted one with `WSAECONNABORTED` or `ERROR_CONNECTION_ABORTED`); until 2026-09-28
+  that ended the server's accept loop. `AcceptEx` is made again then, with a new socket, unless the listener was
+  closed or the accept cancelled meanwhile (`runtime/os/iocp.c`, `torb_iocp_accept_again`; a cancel that came while the
+  new call was made is repeated after it). `runtime/tests/io_test.c` resets a connection before its accept, which on
+  Windows is `ERROR_NETNAME_DELETED` every time, and Linux hands over as a connection.
 
 ## 4. `std/network`
 

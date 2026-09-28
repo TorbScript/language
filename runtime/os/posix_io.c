@@ -76,11 +76,14 @@
 #endif
 
 /* Linux passes the errors already pending on a connection through the `accept` that takes it, and names them in
-   accept(2): those of TCP/IP. BSD and macOS report a connection that is gone before its accept as `ECONNABORTED` alone. */
+   accept(2): those of TCP/IP, `EPERM` where firewall rules forbid the connection, and `ETIMEDOUT` among what "various
+   Linux kernels can return". BSD and macOS report a connection that is gone before its accept as `ECONNABORTED`
+   alone. */
 #if defined(__linux__)
 #  define TORB_POSIX_PENDING_NETWORK_ERROR(code)                                                                   \
     ((code) == ENETDOWN || (code) == ENOPROTOOPT || (code) == EHOSTDOWN || (code) == ENONET                        \
-     || (code) == EHOSTUNREACH || (code) == EOPNOTSUPP || (code) == ENETUNREACH)
+     || (code) == EHOSTUNREACH || (code) == EOPNOTSUPP || (code) == ENETUNREACH || (code) == EPERM                 \
+     || (code) == ETIMEDOUT)
 #else
 #  define TORB_POSIX_PENDING_NETWORK_ERROR(code) false
 #endif
@@ -430,8 +433,10 @@ bool torb_io_posix_wants_writable(const torb_io_operation *operation) {
 /*
  * Whether a failed `accept` failed for the one connection it was about to take and not for the listener: the peer gave
  * up before the accept (`ECONNABORTED`, and `EPROTO` where a system says it that way), or on Linux an error of TCP/IP
- * that was pending on the connection. accept(2) says to treat those like `EAGAIN`, so the accept takes the next
- * connection, or waits for one, instead of ending a server's accept loop with a failure that was never its own.
+ * that was pending on the connection, or a firewall's refusal of it (`EPERM`) - the class of IOCP's
+ * `ERROR_NETNAME_DELETED` and `WSAECONNRESET` (runtime/os/iocp.c). accept(2) says to treat those like `EAGAIN`, so the
+ * accept takes the next connection, or waits for one, instead of ending a server's accept loop with a failure that was
+ * never its own.
  */
 static bool torb_posix_accept_failed_connection(int code) {
   return code == ECONNABORTED || code == EPROTO || TORB_POSIX_PENDING_NETWORK_ERROR(code);

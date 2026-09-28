@@ -276,6 +276,9 @@ static bool torb_ws_address_from(const struct sockaddr *address, torb_io_address
 
 /* ------------------------------------------------------------------------------------------------ the IO thread --- */
 
+static bool torb_ws_accept_lost_connection(uint32_t code);
+static bool torb_iocp_accept_again(torb_io_operation *operation);
+
 /* A completion: what the kernel said, as the operation's answer. */
 static void torb_iocp_finish(torb_io_operation *operation, OVERLAPPED *overlapped, DWORD bytes) {
   LONG status = (LONG)overlapped->Internal;
@@ -315,7 +318,13 @@ static void torb_iocp_finish(torb_io_operation *operation, OVERLAPPED *overlappe
         break;
     }
   } else {
-    result = torb_ws_failed((uint32_t)torb_ws.status_to_error(status));
+    uint32_t code = (uint32_t)torb_ws.status_to_error(status);
+    /* A connection gone before its accept finished is the client's failure: the accept waits for the next one */
+    if (operation->kind == (uint8_t)TORB_IO_ACCEPT && torb_ws_accept_lost_connection(code)
+        && torb_iocp_accept_again(operation)) {
+      return;
+    }
+    result = torb_ws_failed(code);
   }
   torb_io_complete(operation, result);
 }
@@ -488,6 +497,102 @@ static LPFN_CONNECTEX torb_ws_connect_function(SOCKET handle, int32_t family) {
 /* The size AcceptEx wants per address: the largest address, plus sixteen bytes it documents. */
 #define TORB_WS_ACCEPT_ADDRESS ((DWORD)(sizeof(SOCKADDR_STORAGE) + 16u))
 
+/* `CancelIoEx` of the one operation, where its socket is still open. */
+static void torb_iocp_cancel_now(torb_io_operation *operation) {
+  torb_io_socket *socket = operation->socket;
+  if (socket != NULL && socket->system != -1) {
+    (void)CancelIoEx((HANDLE)(SOCKET)socket->system, (OVERLAPPED *)(void *)operation->system);
+  }
+}
+
+/*
+ * Whether an accept failed for the one connection it was about to take and not for the listener: the client reset the
+ * connection or gave up on it before the accept finished. `AcceptEx` says so at once with `WSAECONNRESET`, and through
+ * the port with the status of a reset, which `RtlNtStatusToDosError` makes `ERROR_NETNAME_DELETED`; an aborted
+ * connection is POSIX's `ECONNABORTED`. The `ERROR_OPERATION_ABORTED` of a cancellation is none of them.
+ */
+static bool torb_ws_accept_lost_connection(uint32_t code) {
+  return code == ERROR_NETNAME_DELETED || code == WSAECONNRESET || code == WSAECONNABORTED
+         || code == ERROR_CONNECTION_ABORTED;
+}
+
+/* Whether an accept whose connection was gone is made again: not on a listener that was closed, nor once cancelled. */
+static bool torb_iocp_accepts_again(torb_io_operation *operation) {
+  torb_io_socket *listener = operation->socket;
+  bool closed;
+  torb_spin_lock(&listener->lock);
+  closed = listener->closed != 0u;
+  torb_spin_unlock(&listener->lock);
+  return !closed && torb_atomic_read_u32(&operation->cancelling) == 0u;
+}
+
+/* The socket and the address buffer of an accept that took no connection, given back before the next try. */
+static void torb_iocp_forget_accepted(torb_io_operation *operation) {
+  if (operation->accepted != NULL) {
+    torb_io_socket_release(operation->accepted);
+    operation->accepted = NULL;
+  }
+  free(operation->buffer);
+  operation->buffer = NULL;
+}
+
+/*
+ * `AcceptEx` on the listener, into a socket made for the connection. A connection that was gone before the call could
+ * take it is the client's failure and not the listener's, so the call is made again, with a new socket, for the next
+ * connection (`torb_ws_accept_lost_connection`). Answers 0 where the completion comes through the port, the error of a
+ * call that failed outright, or -1 where the operation was completed here because no socket could be made.
+ */
+static int torb_iocp_accept(torb_io_operation *operation, OVERLAPPED *overlapped) {
+  SOCKET handle = (SOCKET)operation->socket->system;
+  LPFN_ACCEPTEX accept = torb_ws_accept_function(handle, operation->socket->family);
+  for (;;) {
+    int64_t accepted = torb_io_system_socket(operation->socket->family, false);
+    DWORD received = 0u;
+    int code;
+    if (accepted < 0) {
+      torb_io_complete(operation, accepted);
+      return -1;
+    }
+    operation->accepted = torb_io_socket_new(TORB_IO_STREAM, operation->socket->family, accepted);
+    operation->buffer = (uint8_t *)calloc(2u, TORB_WS_ACCEPT_ADDRESS);
+    if (accept == NULL || operation->buffer == NULL) {
+      torb_io_complete(operation, torb_io_failed(TORB_IO_OTHER, 0u));
+      return -1;
+    }
+    memset(overlapped, 0, sizeof *overlapped);
+    if (accept(handle, (SOCKET)accepted, operation->buffer, 0u, TORB_WS_ACCEPT_ADDRESS, TORB_WS_ACCEPT_ADDRESS,
+               &received, overlapped)) {
+      return 0;
+    }
+    code = torb_ws.last_error();
+    if (!torb_ws_accept_lost_connection((uint32_t)code) || !torb_iocp_accepts_again(operation)) {
+      return code;
+    }
+    torb_iocp_forget_accepted(operation);
+  }
+}
+
+/*
+ * The accept completed through the port with a connection that was gone: it is made again, for the next connection,
+ * where the listener is open and nobody cancelled it. The new `AcceptEx` may complete the operation at once and let go
+ * of it, so a count is held around it; and a cancel that came after the flag was read found nothing to cancel, so it
+ * is repeated once the new call is made - the flag is read again in the order of the sequentially consistent
+ * operations, after the call, and the cancel wrote it before its own `CancelIoEx`. Answers whether it was made again.
+ */
+static bool torb_iocp_accept_again(torb_io_operation *operation) {
+  if (!torb_iocp_accepts_again(operation)) {
+    return false;
+  }
+  torb_iocp_forget_accepted(operation);
+  (void)torb_atomic_add_u32(&operation->count, 1u);
+  torb_io_system_submit(operation);
+  if (torb_atomic_read_u32(&operation->cancelling) != 0u) {
+    torb_iocp_cancel_now(operation);
+  }
+  torb_io_operation_release(operation);
+  return true;
+}
+
 void torb_io_system_submit(torb_io_operation *operation) {
   OVERLAPPED *overlapped = (OVERLAPPED *)(void *)operation->system;
   SOCKET handle = (SOCKET)operation->socket->system;
@@ -546,22 +651,9 @@ void torb_io_system_submit(torb_io_operation *operation) {
       break;
     }
     case TORB_IO_ACCEPT: {
-      LPFN_ACCEPTEX accept = torb_ws_accept_function(handle, operation->socket->family);
-      int64_t accepted = torb_io_system_socket(operation->socket->family, false);
-      DWORD received = 0u;
-      if (accepted < 0) {
-        torb_io_complete(operation, accepted);
+      code = torb_iocp_accept(operation, overlapped);
+      if (code < 0) {
         return;
-      }
-      operation->accepted = torb_io_socket_new(TORB_IO_STREAM, operation->socket->family, accepted);
-      operation->buffer = (uint8_t *)calloc(2u, TORB_WS_ACCEPT_ADDRESS);
-      if (accept == NULL || operation->buffer == NULL) {
-        torb_io_complete(operation, torb_io_failed(TORB_IO_OTHER, 0u));
-        return;
-      }
-      if (!accept(handle, (SOCKET)accepted, operation->buffer, 0u, TORB_WS_ACCEPT_ADDRESS, TORB_WS_ACCEPT_ADDRESS,
-                  &received, overlapped)) {
-        code = torb_ws.last_error();
       }
       break;
     }
@@ -601,10 +693,9 @@ void torb_io_system_submit(torb_io_operation *operation) {
 }
 
 void torb_io_system_cancel(torb_io_operation *operation) {
-  torb_io_socket *socket = operation->socket;
-  if (socket != NULL && socket->system != -1) {
-    (void)CancelIoEx((HANDLE)(SOCKET)socket->system, (OVERLAPPED *)(void *)operation->system);
-  }
+  /* First the flag, then the cancel: an accept made again after the flag was read cancels itself (`torb_iocp_accept_again`) */
+  (void)torb_atomic_exchange_u32(&operation->cancelling, 1u);
+  torb_iocp_cancel_now(operation);
 }
 
 /* The pipes of a child are anonymous pipes without overlapped IO, which no completion port takes: runtime/stream.c reads

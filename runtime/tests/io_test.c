@@ -15,6 +15,16 @@
 #include <errno.h>
 #include <stdlib.h>
 
+#if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
+
 #define LOOPBACK4 ((int64_t)0x7F000001)
 #define CANCELLED INT64_MIN
 
@@ -282,6 +292,123 @@ TORB_TEST(test_io_a_cancelled_accept_leaves_the_connection_to_the_next) {
   server = answer_of(torb_network_accept(listener));
   TORB_CHECK(server > 0);
   torb_network_close(server);
+  torb_network_close(client);
+  torb_network_close(listener);
+  torb_scheduler_finish();
+  TORB_CHECK_INTEGER(torb_network_operations_alive(), 0);
+}
+
+/*
+ * A client of the operating system's own that connects to `port` over IPv4 loopback and resets the connection at once
+ * - `SO_LINGER` with a time of zero, then a close - before the server took it. False where it could not connect.
+ */
+#if defined(_WIN32)
+typedef uintptr_t reset_socket;
+typedef reset_socket(__stdcall *reset_socket_function)(int, int, int);
+typedef int(__stdcall *reset_connect_function)(reset_socket, const void *, int);
+typedef int(__stdcall *reset_option_function)(reset_socket, int, int, const char *, int);
+typedef int(__stdcall *reset_close_function)(reset_socket);
+
+static bool connected_and_reset(int64_t port) {
+  /* The runtime loaded Winsock for the listener, and started it; the four functions come from it by name */
+  HMODULE library = GetModuleHandleW(L"ws2_32.dll");
+  reset_socket_function make;
+  reset_connect_function connect_to;
+  reset_option_function option;
+  reset_close_function close_socket;
+  unsigned char address[16];
+  struct {
+    unsigned short onoff;
+    unsigned short time;
+  } linger = { 1u, 0u };
+  reset_socket handle;
+  if (library == NULL) {
+    return false;
+  }
+  make = (reset_socket_function)(void (*)(void))GetProcAddress(library, "socket");
+  connect_to = (reset_connect_function)(void (*)(void))GetProcAddress(library, "connect");
+  option = (reset_option_function)(void (*)(void))GetProcAddress(library, "setsockopt");
+  close_socket = (reset_close_function)(void (*)(void))GetProcAddress(library, "closesocket");
+  if (make == NULL || connect_to == NULL || option == NULL || close_socket == NULL) {
+    return false;
+  }
+  /* A `sockaddr_in`: the family 2, the port in network order, 127.0.0.1 */
+  memset(address, 0, sizeof address);
+  address[0] = 2u;
+  address[2] = (unsigned char)(port >> 8);
+  address[3] = (unsigned char)(port & 0xFF);
+  address[4] = 127u;
+  address[7] = 1u;
+  handle = make(2, 1, 6);
+  if (handle == (reset_socket)~(uintptr_t)0) {
+    return false;
+  }
+  if (connect_to(handle, address, (int)sizeof address) != 0) {
+    (void)close_socket(handle);
+    return false;
+  }
+  /* `SOL_SOCKET` and `SO_LINGER` of Winsock */
+  (void)option(handle, 0xFFFF, 0x0080, (const char *)&linger, (int)sizeof linger);
+  (void)close_socket(handle);
+  return true;
+}
+#else
+static bool connected_and_reset(int64_t port) {
+  struct sockaddr_in address;
+  struct linger linger;
+  int descriptor = socket(AF_INET, SOCK_STREAM, 0);
+  if (descriptor < 0) {
+    return false;
+  }
+  memset(&address, 0, sizeof address);
+  address.sin_family = AF_INET;
+  address.sin_port = htons((uint16_t)port);
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (connect(descriptor, (const struct sockaddr *)(const void *)&address, (socklen_t)sizeof address) != 0) {
+    (void)close(descriptor);
+    return false;
+  }
+  linger.l_onoff = 1;
+  linger.l_linger = 0;
+  (void)setsockopt(descriptor, SOL_SOCKET, SO_LINGER, &linger, (socklen_t)sizeof linger);
+  (void)close(descriptor);
+  return true;
+}
+#endif
+
+/*
+ * A client that resets its connection before the server's accept took it, then one that stays and sends a byte. The
+ * accept answers a connection every time and never a failure: a connection gone before its accept finished is its
+ * client's failure, and a server's accept loop that ended on it would serve nobody after one client that went away
+ * (IOCP's `ERROR_NETNAME_DELETED` and `WSAECONNRESET`, POSIX's `ECONNABORTED`). A system that hands over the reset
+ * connection itself answers it first - Linux does - and the one after it is the client that stayed.
+ */
+TORB_TEST(test_io_a_connection_reset_before_its_accept_leaves_the_listener_serving) {
+  int64_t listener = torb_network_listen(4, 0, LOOPBACK4, 0, 8);
+  int64_t port = port_of(listener);
+  int64_t client;
+  int64_t attempt;
+  bool served = false;
+  torb_list bytes;
+  TORB_CHECK(port > 0);
+  TORB_CHECK(connected_and_reset(port));
+  /* The reset reaches the listener's queue before the next client does */
+  torb_platform_sleep(50000000);
+  client = answer_of(torb_network_connect(4, 0, LOOPBACK4, port));
+  TORB_CHECK(client > 0);
+  bytes = bytes_of("x");
+  TORB_CHECK_INTEGER(answer_of(torb_network_send(client, bytes, 0)), 1);
+  torb_list_release(bytes);
+  for (attempt = 0; attempt < 2 && !served; attempt += 1) {
+    int64_t server = answer_of(torb_network_accept(listener));
+    torb_list received;
+    TORB_CHECK(server > 0);
+    received = received_bytes(server, 1u);
+    served = bytes_are(received, "x");
+    torb_list_release(received);
+    torb_network_close(server);
+  }
+  TORB_CHECK(served);
   torb_network_close(client);
   torb_network_close(listener);
   torb_scheduler_finish();
@@ -744,6 +871,7 @@ void torb_register_io_tests(void) {
   TORB_ADD(test_io_an_address_in_use_fails);
   TORB_ADD(test_io_a_cancelled_receive_loses_nothing);
   TORB_ADD(test_io_a_cancelled_accept_leaves_the_connection_to_the_next);
+  TORB_ADD(test_io_a_connection_reset_before_its_accept_leaves_the_listener_serving);
   TORB_ADD(test_io_several_accepts_wait_on_one_listener);
   TORB_ADD(test_io_closing_wakes_a_receive_that_waits);
   TORB_ADD(test_io_the_end_of_the_program_stops_what_waits);

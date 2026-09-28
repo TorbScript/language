@@ -178,6 +178,12 @@ struct torb_io_operation {
   /** The queue it waits in: the resolver threads' for a resolution, a listener's accepts on epoll and kqueue. */
   torb_io_operation *queued_next;
   uint8_t in_queue;
+  /**
+   * Its waiter asked for it to be cancelled (IOCP). An accept whose connection was gone before it finished is made
+   * again for the next connection, but not once this is set - and a cancel that came while the new `AcceptEx` was being
+   * made is repeated after it. Written and read in the one total order of the sequentially consistent operations.
+   */
+  uint32_t cancelling;
 };
 
 /* ------------------------------------------------------------------------------ what io.c gives the pollers --- */
