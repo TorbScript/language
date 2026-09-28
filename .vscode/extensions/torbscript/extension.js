@@ -6,6 +6,8 @@
 // lexer, keywords only in the positions this list's caller already restricts them to). `protected` is a word only in
 // front of `var` (`protected var count: Int`) and a name everywhere else, so `highlightCode` asks for the `var`.
 
+const { startLanguageClient } = require('./lsp-client');
+
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'break', 'continue', 'return',
   'const', 'var', 'static', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
@@ -121,15 +123,17 @@ function highlight(code) {
     .join('');
 }
 
-// --- Semantic tokens: runs `torb highlight --stdin` and turns its JSON into a SemanticTokensBuilder result --------
+// --- Semantic tokens: from `torb lsp`, and from `torb highlight --stdin` where the language server does not run ---
 //
 // The TextMate grammar in ./syntaxes is a heuristic; it cannot know whether a name is a field or a local, a case
-// or a plain type, a method or a function - that needs the syntax tree, which only the `torb` binary has (there is
-// no language server yet; milestone 8 brings one behind this same JSON). This provider is the bridge: one process
-// per request, its stdout is one JSON document (`compiler/src/highlight/` documents the exact shape), and if
-// the binary is missing, fails, or answers late, this provider gives VS Code no tokens at all - the TextMate
-// grammar's colors stand on their own, and the only trace is one line in the "TorbScript" output channel, never a
-// popup. See README.md for the settings and the color palette this feeds through `configurationDefaults`.
+// or a plain type, a method or a function - that needs the syntax tree, which only the `torb` binary has. While the
+// language server of ./lsp-client.js runs, its semantic tokens answer: the same resolver as `torb highlight`,
+// sharpened by the checker. Where it does not run (turned off, not found, crashed too often) this provider is the
+// fallback: one `torb highlight` process per request, its stdout is one JSON document (`compiler/src/highlight/`
+// documents the exact shape), and if the binary is missing, fails, or answers late, this provider gives VS Code no
+// tokens at all - the TextMate grammar's colors stand on their own, and the only trace is one line in the
+// "TorbScript" output channel, never a popup. See README.md for the settings and the color palette this feeds
+// through `configurationDefaults`.
 
 const TOKEN_TYPES = [
   'type', 'interface', 'typeParameter', 'enumMember', 'namespace', 'function', 'method', 'parameter', 'variable', 'property',
@@ -183,13 +187,25 @@ class TorbSemanticTokensProvider {
     this.current = null; // The child process of the request still in flight, if any.
   }
 
-  provideDocumentSemanticTokens(document, cancellationToken) {
+  async provideDocumentSemanticTokens(document, cancellationToken) {
     const { vscode } = this;
     const enabled = vscode.workspace.getConfiguration('torbscript').get('semanticHighlighting.enabled', true);
     const builder = new vscode.SemanticTokensBuilder(this.legend);
     if (!enabled) {
       return builder.build();
     }
+    // The language server's legend is this one, in the same order, so its integers are handed on as they are
+    if (this.languageClient && this.languageClient.isRunning()) {
+      const tokens = await this.languageClient.semanticTokens(document);
+      if (tokens) {
+        return tokens;
+      }
+    }
+    return this.highlightTokens(document, cancellationToken, builder);
+  }
+
+  highlightTokens(document, cancellationToken, builder) {
+    const { vscode } = this;
     this.killCurrent();
     const executable = findExecutable(vscode, this.fs, this.path);
     return new Promise((resolve) => {
@@ -299,6 +315,9 @@ class TorbSemanticTokensProvider {
   }
 }
 
+/** The client of `torb lsp` while the extension is active, or `null` where the setting turns it off. */
+let languageClient = null;
+
 function activate(context) {
   const vscode = require('vscode');
   const cp = require('child_process');
@@ -306,6 +325,10 @@ function activate(context) {
   const path = require('path');
 
   const provider = new TorbSemanticTokensProvider(vscode, cp, fs, path);
+  languageClient = startLanguageClient(context, vscode, cp, findExecutable(vscode, fs, path), (message) =>
+    log(vscode, message)
+  );
+  provider.languageClient = languageClient;
   context.subscriptions.push(
     vscode.languages.registerDocumentSemanticTokensProvider({ language: 'trb' }, provider, provider.legend)
   );
@@ -324,4 +347,9 @@ function activate(context) {
   };
 }
 
-module.exports = { activate, highlight, TorbSemanticTokensProvider, findExecutable, TOKEN_TYPES, TOKEN_MODIFIERS };
+/** Ends the language server with `shutdown` and `exit`, which VS Code waits for. */
+function deactivate() {
+  return languageClient ? languageClient.stop() : undefined;
+}
+
+module.exports = { activate, deactivate, highlight, TorbSemanticTokensProvider, findExecutable, TOKEN_TYPES, TOKEN_MODIFIERS };
