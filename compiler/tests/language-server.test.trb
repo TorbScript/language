@@ -67,7 +67,7 @@ fn replaced(uri: String, version: Int, text: String): String {
 
 fn at(method: String, id: Int, uri: String, line: Int, character: Int): String {
   const position = "\"position\":\{\"line\":{line},\"character\":{character}\}"
-  message method, "\{\"textDocument\":\{\"uri\":\"{uri}\"\},{position}\}", Some(id)
+  message method, "\{\"textDocument\":\{\"uri\":\"{uri}\"\},{position}\}", id
 }
 
 /** The messages the server sent for these, each as its JSON text. */
@@ -89,7 +89,7 @@ fn only(var server: LanguageServer, messages: List<String>): JsonValue {
 fn published(answers: List<JsonValue>): Map<String, List<JsonValue>> {
   var found: Map<String, List<JsonValue>> = [:]
   for answer in answers {
-    if textAt(answer, ["method"]) == Some("textDocument/publishDiagnostics") {
+    if textAt(answer, ["method"]) == "textDocument/publishDiagnostics" {
       found.set(textAt(answer, ["params", "uri"]) ?? "", itemsAt(answer, ["params", "diagnostics"]))
     }
   }
@@ -179,14 +179,14 @@ group "Positions" {
 
 group "URIs" {
   test "a URI of a drive becomes the path `File.absolutePath` spells" {
-    assert(absolutePathOf("file:///c%3A/Projekte/a%20b.trb") == Some("C:/Projekte/a b.trb"))
-    assert(absolutePathOf("file:///home/ada/main.trb") == Some("/home/ada/main.trb"))
+    assert(absolutePathOf("file:///c%3A/Projekte/a%20b.trb") == "C:/Projekte/a b.trb")
+    assert(absolutePathOf("file:///home/ada/main.trb") == "/home/ada/main.trb")
     assert(absolutePathOf("untitled:Untitled-1") == None)
   }
 
   test "below the root a URI keeps the spelling of the root the client sent" {
     const locations = Locations.of "file:///c%3A/work", "C:/work"
-    assert(locations.pathOf("file:///c%3A/work/src/main.trb") == Some("C:/work/src/main.trb"))
+    assert(locations.pathOf("file:///c%3A/work/src/main.trb") == "C:/work/src/main.trb")
     assert(locations.uriOf("C:/work/src/main.trb") == "file:///c%3A/work/src/main.trb")
     assert(locations.uriOf("C:/std/lib.trb") == "file:///C%3A/std/lib.trb")
     assert(fileUriOf("/home/a b/x.trb") == "file:///home/a%20b/x.trb")
@@ -196,9 +196,9 @@ group "URIs" {
 group "The life cycle" {
   test "a request before `initialize` is refused" {
     var server = LanguageServer.over workspaceWith([:]), root
-    const answer = only server, [message("textDocument/hover", "\{\}", Some(7))]
-    assert(integerAt(answer, ["error", "code"]) == Some(-32002))
-    assert(integerAt(answer, ["id"]) == Some(7))
+    const answer = only server, [message("textDocument/hover", "\{\}", 7)]
+    assert(integerAt(answer, ["error", "code"]) == (-32002))
+    assert(integerAt(answer, ["id"]) == 7)
   }
 
   test "`initialize` says what the server does" {
@@ -213,7 +213,7 @@ group "The life cycle" {
 
   test "`shutdown`, then `exit`, ends with 0" {
     var server = started()
-    const answers = sent server, [message("shutdown", "null", Some(2))]
+    const answers = sent server, [message("shutdown", "null", 2)]
     assert(answers == ["\{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":null\}"])
     const isRunning = !server.hasExited()
     assert isRunning
@@ -225,7 +225,7 @@ group "The life cycle" {
 
   test "`exit` without `shutdown` ends with 1, and nothing after it is read" {
     var server = started()
-    const answers = sent server, [message("exit", "null"), message("shutdown", "null", Some(3))]
+    const answers = sent server, [message("exit", "null"), message("shutdown", "null", 3)]
     assert answers.isEmpty()
     const code = server.exitCode()
     assert(code == 1)
@@ -233,14 +233,14 @@ group "The life cycle" {
 
   test "a request the server does not know is answered with an error" {
     var server = started()
-    const answer = only server, [message("workspace/symbol", "\{\"query\":\"\"\}", Some(4))]
-    assert(integerAt(answer, ["error", "code"]) == Some(-32601))
+    const answer = only server, [message("workspace/symbol", "\{\"query\":\"\"\}", 4)]
+    assert(integerAt(answer, ["error", "code"]) == (-32601))
   }
 
   test "a message that is not JSON is answered with a parse error" {
     var server = started()
     const answer = only server, ["\{nope"]
-    assert(integerAt(answer, ["error", "code"]) == Some(-32700))
+    assert(integerAt(answer, ["error", "code"]) == (-32700))
   }
 }
 
@@ -254,14 +254,14 @@ group "Diagnostics" {
       encoded(memberAt(diagnostics[0], ["range"]) ?? JsonValue.Null),
       "\{\"start\":\{\"line\":0,\"character\":19\},\"end\":\{\"line\":0,\"character\":23\}\}",
     )
-    assert(integerAt(diagnostics[0], ["severity"]) == Some(1))
+    assert(integerAt(diagnostics[0], ["severity"]) == 1)
   }
 
   test "a change that fixes the problem publishes no diagnostics" {
     var server = started()
     const _first = send server, [opened(mainUri, "const total: Int = \"no\"\nprint total\n")]
     const answers = send server, [replaced(mainUri, 2, "const total: Int = 1\nprint total\n")]
-    assert(published(answers).get(mainUri) == Some([]))
+    assert(published(answers).get(mainUri) == [])
   }
 
   test "the changes of one batch are checked once" {
@@ -273,7 +273,7 @@ group "Diagnostics" {
       replaced(mainUri, 4, "print 4\n"),
     ])
     assert(answers.length() == 1)
-    assert(published(answers).get(mainUri) == Some([]))
+    assert(published(answers).get(mainUri) == [])
   }
 
   test "a change of a module checks the open document that imports it" {
@@ -284,7 +284,7 @@ group "Diagnostics" {
     const _first = send server, [opened(mainUri, main), opened(helperUri, helper)]
     const answers = send server, [replaced(helperUri, 2, "public fn double(value: String): String \{\n  value\n\}\n")]
     const found = published answers
-    assert(found.get(helperUri) == Some([]))
+    assert(found.get(helperUri) == [])
     assert(messagesOf(found.get(mainUri) ?? []) == ["Expected `String`, found `Int64`"])
   }
 
@@ -293,7 +293,7 @@ group "Diagnostics" {
     const _first = send server, [opened(mainUri, "print missing\n")]
     const closing = message "textDocument/didClose", "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\}\}"
     const answers = send server, [closing]
-    assert(published(answers).get(mainUri) == Some([]))
+    assert(published(answers).get(mainUri) == [])
   }
 
   test "the findings of the lint rules are hints that name their rule" {
@@ -301,9 +301,9 @@ group "Diagnostics" {
     const source = "type Point \{\n  x: Int\n\n  static fn origin(): Point \{\n    Point(0)\n  \}\n\}\n\nprint Point.origin()\n"
     const diagnostics = published(server.receive([opened(mainUri, source)])).get(mainUri) ?? []
     assert(diagnostics.length() == 2)
-    assert(integerAt(diagnostics[0], ["severity"]) == Some(4))
-    assert(textAt(diagnostics[0], ["code"]) == Some("self-name"))
-    assert(textAt(diagnostics[0], ["source"]) == Some("torb lint"))
+    assert(integerAt(diagnostics[0], ["severity"]) == 4)
+    assert(textAt(diagnostics[0], ["code"]) == "self-name")
+    assert(textAt(diagnostics[0], ["source"]) == "torb lint")
   }
 }
 
@@ -336,7 +336,7 @@ group "A change redoes the front of its file" {
       server,
       [replaced(mainUri, 2, "fn double(value: Int): Int \{\n  value * 2\n\}\n\nprint double(1)\n")],
     )
-    assert(published(answers).get(mainUri) == Some([]))
+    assert(published(answers).get(mainUri) == [])
     const answer = only server, [at("textDocument/hover", 21, mainUri, 4, 7)]
     expectText(textAt(answer, ["result", "contents", "value"]) ?? "", "```trb\nfn double(value: Int): Int\n```")
   }
@@ -377,7 +377,7 @@ group "Hover" {
     var server = started()
     const _first = send server, [opened(mainUri, "print 1\n\n\n")]
     const answer = only server, [at("textDocument/hover", 8, mainUri, 2, 0)]
-    assert(memberAt(answer, ["result"]) == Some(JsonValue.Null))
+    assert(memberAt(answer, ["result"]) == JsonValue.Null)
   }
 }
 
@@ -407,10 +407,10 @@ group "Go to definition" {
 
 group "Completion" {
   test "where the cursor stands" {
-    assert(completionContextOf("point.x", 7) == CompletionContext.Member(5, 5, false))
-    assert(completionContextOf("point?.", 7) == CompletionContext.Member(5, 6, true))
+    assert(completionContextOf("point.x", 7) == CompletionContext.Member(5, 5, optional: false))
+    assert(completionContextOf("point?.", 7) == CompletionContext.Member(5, 6, optional: true))
     assert(completionContextOf("print to", 8) == CompletionContext.Name(6))
-    assert(withoutMemberAccess("print point.xy\n", 11, 14, false) == "print point\n")
+    assert(withoutMemberAccess("print point.xy\n", 11, 14, isOptional: false) == "print point\n")
   }
 
   test "behind a `.` the members of the value's type" {
@@ -429,7 +429,7 @@ group "Completion" {
     const source = "type Point \{\n  x: Int\n\}\n\nconst point = Point(1)\nprint point.\n"
     const _first = send server, [opened(mainUri, source)]
     const answers = send server, [at("textDocument/completion", 12, mainUri, 5, 12)]
-    const answer = answers.find({ integerAt(_, ["id"]) == Some(12) }) ?? JsonValue.Null
+    const answer = answers.find({ integerAt(_, ["id"]) == 12 }) ?? JsonValue.Null
     const labels = itemsAt(answer, ["result", "items"]).map({ textAt(_, ["label"]) ?? "" }).toList()
     assert labels.contains("x")
   }
@@ -445,7 +445,7 @@ group "Completion" {
     assert labels.contains("run")
     assert labels.contains("print")
     assert labels.contains("match")
-    assert(textAt(items[1], ["detail"]) == Some("Int64"))
+    assert(textAt(items[1], ["detail"]) == "Int64")
   }
 }
 
@@ -455,7 +455,7 @@ group "Semantic tokens" {
     const _first = send server, [opened(mainUri, "const total = 1\nprint total\n")]
     const answer = only(
       server,
-      [message("textDocument/semanticTokens/full", "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\}\}", Some(14))],
+      [message("textDocument/semanticTokens/full", "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\}\}", 14)],
     )
     // `total` declared (line 0, character 6, a readonly variable), `print` (a function), `total` used (readonly)
     expectText encoded(memberAt(answer, ["result"]) ?? JsonValue.Null), "\{\"data\":[0,6,5,8,3,1,0,5,5,0,0,6,5,8,2]\}"
@@ -469,10 +469,10 @@ group "Quick fixes" {
     const _first = send server, [opened(mainUri, source)]
     const range = "\"range\":\{\"start\":\{\"line\":3,\"character\":0\},\"end\":\{\"line\":3,\"character\":30\}\}"
     const params = "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\},{range},\"context\":\{\"diagnostics\":[]\}\}"
-    const answer = only server, [message("textDocument/codeAction", params, Some(15))]
+    const answer = only server, [message("textDocument/codeAction", params, 15)]
     const actions = itemsAt answer, ["result"]
     assert(actions.length() == 1)
-    assert(textAt(actions[0], ["kind"]) == Some("quickfix"))
+    assert(textAt(actions[0], ["kind"]) == "quickfix")
     const edits = itemsAt actions[0], ["edit", "changes", mainUri]
     expectText(
       encoded(JsonValue.Array(edits)),

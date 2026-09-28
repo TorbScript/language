@@ -62,7 +62,7 @@ fn isNamedAt(text: String, span: Span, name: String): Bool {
   }
   // A name is ASCII, so each of its bytes is a character of its own
   for (index, byte) in name.bytes().indexed() {
-    if text.byteAt(span.start + index) != Some(byte) {
+    if text.byteAt(span.start + index) != byte {
       return false
     }
   }
@@ -88,7 +88,7 @@ public fn foundAt(checked: Checked, module: ModuleId, offset: Int): Found? {
   }
   const text = checked.program.graph.at(module).source.text
   for (index, symbol) in checker.symbols.all.indexed() {
-    if symbol.module == Some(module) && holds(symbol.span, offset) && isNarrower(symbol.span, best) {
+    if symbol.module == module && holds(symbol.span, offset) && isNarrower(symbol.span, best) {
       // A language server's run keeps the symbols of an earlier text of the file: a name that is not there any more
       if isNamedAt(text, symbol.span, symbol.name) {
         best = Found.Declared symbol.span, SymbolId(index)
@@ -259,12 +259,8 @@ fn writtenInMembers(members: List<Member>, text: String, name: Span): Written? {
         }
         for field in written.fields {
           if field.name.span == name {
-            return Written(
-              field.name.span.start,
-              member.span.end.min(field.name.span.end),
-              ItemKind.Field,
-              field.doc ?? "",
-            )
+            const end = fieldEnd text, field.name.span.end, member.span.end
+            return Written(field.name.span.start, end, ItemKind.Field, field.doc ?? "")
           }
         }
       }
@@ -280,6 +276,32 @@ fn patternNames(pattern: Pattern, name: Span): Bool {
     .TuplePattern(items) => items.any({ patternNames _, name })
     _ => false
   }
+}
+
+/**
+ * Where a field of a case ends: at the `,` or the `)` behind it that no bracket of its type encloses, or at the end of
+ * the case.
+ */
+fn fieldEnd(text: String, after: Int, end: Int): Int {
+  var depth = 0
+  var at = after
+  while at < end {
+    const byte = text.byteAt(at) ?? 0
+    // `(`, `[` and `<` open a bracket of the type, `)`, `]` and `>` close one - but the `>` of a `=>` does not
+    const isArrow = byte == 62 && at > 0 && text.byteAt(at - 1) == 61
+    if byte == 40 || byte == 91 || byte == 60 {
+      depth = depth + 1
+    } else if (byte == 41 || byte == 93 || byte == 62) && !isArrow {
+      if depth == 0 {
+        return at
+      }
+      depth = depth - 1
+    } else if byte == 44 && depth == 0 {
+      return at
+    }
+    at = at + 1
+  }
+  end
 }
 
 /** Where the header of a type or a trait ends: at the `{` of its members, or at its end where it has none. */

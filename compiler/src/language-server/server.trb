@@ -76,7 +76,7 @@ public type LanguageServer {
 
   /** A server over a tree built in memory, whose root is `rootUri`: nothing is read from disk. */
   static fn over(tree: SourceTree, rootUri: String): Self {
-    Self tree: Some(tree), locations: Locations.of(rootUri, "."), readsDisk: false
+    Self tree: tree, locations: Locations.of(rootUri, "."), readsDisk: false
   }
 
   fn hasExited(): Bool {
@@ -406,8 +406,8 @@ public type LanguageServer {
         analyze current, openPaths, paths
       }
     }
-    front = Some analysis.front
-    tree = Some current.withParsed(parsesOf(analysis.checked))
+    front = analysis.front
+    tree = current.withParsed parsesOf(analysis.checked)
     const checkedAt = Clock.milliseconds()
     for path in paths {
       analyses.set path, analysis
@@ -498,7 +498,7 @@ public type LanguageServer {
   /** The run of a document, checked now where its text changed since or no run has checked it. */
   private var fn analysisOf(path: String): Analysis? {
     if changed.contains(path) || !analyses.containsKey(path) {
-      refresh Some(path)
+      refresh path
     }
     analyses.get path
   }

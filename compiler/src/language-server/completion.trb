@@ -25,7 +25,7 @@ use object, integer, text, array from "./json"
 /** Where the cursor stands, for a completion. */
 public type CompletionContext {
   /** Behind `receiver.` or `receiver?.`, with what is typed of the member name so far */
-  case Member(receiverEnd: Int, dot: Int, isOptional: Bool)
+  case Member(receiverEnd: Int, dot: Int, optional: Bool)
   /** Anywhere else */
   case Name(prefixStart: Int)
 }
@@ -36,12 +36,12 @@ public fn completionContextOf(source: String, offset: Int): CompletionContext {
   while start > 0 && isNameByte(source.byteAt(start - 1) ?? 0) {
     start = start - 1
   }
-  if start > 0 && source.byteAt(start - 1) == Some(46) {
+  if start > 0 && source.byteAt(start - 1) == 46 {
     const dot = start - 1
-    if dot > 0 && source.byteAt(dot - 1) == Some(63) {
-      return CompletionContext.Member(dot - 1, dot, true)
+    if dot > 0 && source.byteAt(dot - 1) == 63 {
+      return CompletionContext.Member(dot - 1, dot, optional: true)
     }
-    return CompletionContext.Member dot, dot, false
+    return CompletionContext.Member dot, dot, optional: false
   }
   CompletionContext.Name start
 }
@@ -71,7 +71,7 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, i
       None => true
     }
     if isNarrower {
-      receiver = Some((span, found))
+      receiver = (span, found)
     }
   }
   const (span, annotation) = receiver?
@@ -121,16 +121,21 @@ public fn nameCompletion(analysis: Analysis, path: String, offset: Int): JsonVal
   const checker = analysis.checked.checker
   var items: List<JsonValue> = []
   var seen: Set<String> = Set.of()
-  const file = program.graph.at(module).file
-  const source = program.graph.at(module).source.text
-  for local in localsAt(file, offset) {
+  const locals = localsAt program.graph.at(module).file, offset
+  // A name bound again inside shadows the one around it: its type is the one the item says
+  var innermost: Map<String, Span> = [:]
+  for local in locals {
+    innermost.set local.text, local.span
+  }
+  for local in locals {
     if seen.contains(local.text) || local.text.startsWith("_") {
       continue
     }
     seen.insert local.text
+    const bound = innermost.get(local.text) ?? local.span
     var detail = ""
     for binding in checker.bindings {
-      if binding.at == local.span && binding.at.end <= source.byteLength() && binding.name == local.text {
+      if binding.at == bound && binding.name == local.text {
         detail = checker.describe binding.annotation
       }
     }
