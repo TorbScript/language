@@ -74,6 +74,97 @@ and next pages in the order of the navigation; beside it on a wide screen, its h
 - **The written page of a package of `std/`** links to its generated reference below `docs/<version>/reference/`,
   which `torb doc std` writes; the link comes from the package name the page is titled with.
 
+### Runnable blocks and exercises
+
+A `trb run` block can be edited and run in the page, and a `trb exercise` block is a small task with an expected
+output. Both stay ordinary Markdown that `torb docs check` verifies; the site turns them into mounts that the
+playground (`docs/design/RELEASE.md`, "The playground") enhances, and without the playground they are highlighted code
+with a copy button.
+
+**In Markdown.** An exercise is its starting code, then a folded hint, then a folded solution. The solution is the first
+`trb run` block after the exercise and before the next one, and the lines its `// prints` comments name are the
+exercise's expected output, so the output a reader is asked for is the output `docs check` saw the solution print.
+
+````md
+```trb exercise
+const name = "World"
+print "Hello, {name}!"
+```
+
+<details>
+<summary>Hint</summary>
+
+The text between the quotes is what the name holds.
+
+</details>
+
+<details>
+<summary>Solution</summary>
+
+```trb run
+const name = "Ada"
+print "Hello, {name}!"
+// prints Hello, Ada!
+```
+
+</details>
+````
+
+| Fence | What `docs check` asks of it |
+|---|---|
+| `trb run` | Type checks, is built natively and run, and prints what its `// prints` comments say |
+| `trb exercise` | Parses, is in the canon and type checks: a whole program that does not do the task yet. Its output is not compared |
+| `trb exercise incomplete` | Lexes: starting code with a gap on purpose, which the reader fills in |
+
+A `trb exercise` block without a `trb run` block after it, before the next exercise, is a problem. The blank lines
+around the `<details>` and `<summary>` lines are what keep the Markdown between them Markdown.
+
+**In HTML.** Every `trb run` block but a solution, and every `trb exercise` block, is written as a mount. The attribute
+names are stable; the playground reads nothing else:
+
+```text
+<div class="playground" data-playground="run" data-file="first-program.trb" data-source="...">
+  <div class="code-block"><pre class="code language-trb"><code>...highlighted...</code></pre></div>
+  <p class="playground-local">...torb run first-program.trb...</p>
+</div>
+
+<div class="playground playground-exercise" data-playground="exercise" data-file="first-program.trb"
+     data-source="..." data-expected-output="Hello, Ada!" data-solution="...">
+  ...the same fallback, and the expected output as text...
+</div>
+```
+
+| Attribute | What it holds |
+|---|---|
+| `data-playground` | `run` or `exercise` |
+| `data-source` | The code of the block, exactly as written in the Markdown, HTML-escaped |
+| `data-file` | The name a reader saves it as to run it locally: the page's file name with `.trb` |
+| `data-expected-output` | Exercise only: the expected standard output, its lines joined by a line feed, no final one |
+| `data-solution` | Exercise only: the code of the solution, for a button that shows it |
+
+A solution is written as a plain code block inside its `<details>`, not as a mount. The line "run it locally" stands
+only in the pages of Start; everywhere else a mount looks like any other code block until the playground takes it.
+
+**Loading.** No page names `playground.js` statically, so the link check does not require it. When a page has a mount,
+`assets/site.js` inserts `<script src="<root>assets/playground.js">`; when that loads and defines
+`window.TorbPlayground`, it calls, for every mount in document order:
+
+```text
+TorbPlayground.mount(element, {
+  source,           // data-source
+  file,             // data-file
+  expectedOutput,   // data-expected-output, or undefined
+  solution,         // data-solution, or undefined
+  labels,           // { run, reset, solution, output, expected, solved, running }, in the page's language
+  onResult          // function ({ output, exitCode, passed }) - passed: the output equals expectedOutput
+})
+```
+
+From then on `mount` owns the element's children. `playground.js` does not mount anything by itself, and whatever it
+loads besides - the toolchain as WebAssembly - it loads relative to its own URL. When the script is missing or fails,
+nothing happens and the fallback stays. A page `site/play.md` is written as `play.html`, and the header links it as
+Playground where it exists.
+
 ### The search
 
 `search-index.json` holds the title, the summary, the keywords and the headings of every page, and a term index of
@@ -100,8 +191,11 @@ The fonts are served by the site itself, never by a font service. Every script o
 without it: the copy buttons, the theme toggle, the search and the version switcher.
 
 **What a page asks of a reader's browser**: no cookie, and no request to another host - the fonts, the icons, the
-search index and `versions.json` all come from the site. The one thing stored on the device is the theme a reader
-picks with the toggle (`localStorage`, key `torb-theme`), and only when the toggle is used. The logo of the front page
+search index and `versions.json` all come from the site. Three things can be stored on the device, each only in
+`localStorage`, each only after the reader does something, and each read and written inside a `try` so that a browser
+that refuses storage shows the same pages: the theme a reader picks with the toggle (key `torb-theme`), the language
+picked with the switcher (key `torb-language`), and which lessons of Start were opened and which exercises solved (key
+`torb-progress`), so the list of lessons can mark them. None of it leaves the device. The logo of the front page
 assembles when the reader arrives from elsewhere and not again on the way back from another page of the site, which
 the page it came from says, so nothing is stored for it.
 
