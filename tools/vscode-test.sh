@@ -20,11 +20,12 @@ say() {
   printf '%s\n' "$*" >&2
 }
 
+# The `.exe` first: Git Bash finds `torb` where only `torb.exe` exists, and the extension looks for the file it is named
 binary_of() {
-  if [ -f "$1" ]; then
-    printf '%s\n' "$1"
-  elif [ -f "$1.exe" ]; then
+  if [ -f "$1.exe" ]; then
     printf '%s\n' "$1.exe"
+  elif [ -f "$1" ]; then
+    printf '%s\n' "$1"
   fi
   return 0
 }
@@ -93,5 +94,7 @@ else
   exit 1
 fi
 if [ "$status" -ne 0 ] || ! grep -q '^ok$' "$scratch/result.txt"; then
+  say "--- the last lines VS Code wrote"
+  tail -40 "$scratch/vscode.log" >&2
   exit 1
 fi

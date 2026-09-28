@@ -15,6 +15,9 @@ const vscode = require('vscode');
 /** Every message the adapters of the host sent, in order. */
 const messages = [];
 
+/** What went wrong with an adapter itself: an error of its stream, or its exit with a code. */
+const troubles = [];
+
 /** Resolves once `check` answers something, or rejects after `milliseconds`. */
 function waitFor(what, check, milliseconds = 60000) {
   return new Promise((resolve, reject) => {
@@ -46,7 +49,7 @@ async function debugProgram(folder, lines) {
     name: 'Debug main.trb',
     program: program.fsPath,
   });
-  assert.ok(started, 'the debug session started');
+  assert.ok(started, `the debug session started${troubles.length ? ` (${troubles.join('; ')})` : ''}`);
   await waitFor('the stop at the breakpoint', () => eventsNamed('stopped', before)[0]);
   const session = vscode.debug.activeDebugSession;
   assert.ok(session, 'there is an active debug session');
@@ -116,7 +119,15 @@ async function run() {
     assert.ok(extension, 'the extension is loaded');
     await extension.activate();
     vscode.debug.registerDebugAdapterTrackerFactory('torbscript', {
-      createDebugAdapterTracker: () => ({ onDidSendMessage: (message) => messages.push(message) }),
+      createDebugAdapterTracker: () => ({
+        onDidSendMessage: (message) => messages.push(message),
+        onError: (error) => troubles.push(`the adapter's stream failed: ${error.message}`),
+        onExit: (code, signal) => {
+          if (code !== 0) {
+            troubles.push(`the adapter exited with ${code}${signal ? ` (${signal})` : ''}`);
+          }
+        },
+      }),
     });
     const folder = vscode.workspace.workspaceFolders[0];
     await debugProgram(folder, lines);
