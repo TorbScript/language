@@ -367,6 +367,19 @@ fn calleesOf(var checker: Checker, site: ArgumentSite): Callees {
  * can run to keep or to hand on what the call is given.
  */
 fn traitMembersOf(var checker: Checker, symbol: SymbolId, bound: TypeId): List<SymbolId> {
+  const key = (symbol.value, bound.value)
+  const count = checker.implementations.all.length()
+  if const Some(known) = checker.traitMembers.get(key) {
+    if known.0 == count {
+      return known.1
+    }
+  }
+  const members = traitMembersFound checker, symbol, bound
+  checker.traitMembers.set key, (count, members)
+  members
+}
+
+fn traitMembersFound(var checker: Checker, symbol: SymbolId, bound: TypeId): List<SymbolId> {
   var members: List<SymbolId> = []
   addWithBody checker, members, symbol
   const capability = match checker.types.form(bound) {
