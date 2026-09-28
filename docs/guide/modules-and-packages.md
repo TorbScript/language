@@ -95,6 +95,10 @@ lives in a module like `src/greeting.trb`, and both import it. Only a package li
 from another one, by its name and never by a relative path - see
 [Packages](../language/modules-and-packages/packages.md).
 
+A layout like this one - `src/main.trb` beside a testable `src/greeting.trb` - is exactly what
+[`torb new --template app`](../tooling/torb-new.md) starts from; a library with a `src/lib.trb` and nothing to run
+is `torb new`'s own default template, `package`.
+
 ## Next
 
 - [Tests and the toolchain](tests-and-tooling.md) - writing a test and running the checks.

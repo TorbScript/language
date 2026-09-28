@@ -57,6 +57,8 @@ torb lsp               The language server, over standard input and output, for 
 torb debug             The debugger, over standard input and output (the Debug Adapter Protocol)
 torb canon [path]...   Deprecated: runs torb format
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
+torb new <path>        A new package or app, from a template or the built-in scaffold
+torb init              The same, into the current, empty-enough directory
 torb add <package>...  Add a dependency to project.trb, resolve, lock and install it
 torb remove <package>...  Remove a dependency from project.trb and project.lock.trb
 torb update [package]...  Resolve every package, or the named ones, to the highest version allowed
@@ -364,7 +366,8 @@ wrote ../build/dev/scratch.exe
 - [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
   [torb test](torb-test.md), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb lsp](torb-lsp.md),
-  [torb debug](torb-debug.md), [torb doc](torb-doc.md) - one page per command, in depth.
+  [torb debug](torb-debug.md), [torb doc](torb-doc.md), [torb new](torb-new.md), [torb init](torb-init.md) - one page
+  per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the rule of the canon that `format` writes first.
 - The docs commands - the `docs` subcommands.
 

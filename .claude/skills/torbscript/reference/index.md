@@ -9,7 +9,6 @@ that answers the question. A page marked (planned) describes a feature that does
 - design
 - explanation
 - guide
-- guide/coming-from
 - how-to
 - language
 - language/collections-and-iteration
@@ -72,24 +71,14 @@ that answers the question. A page marked (planned) describes a feature that does
 - `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
 - `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
 - `guide/idiomatic-torbscript.md` - **Idiomatic TorbScript** (guide): The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
-- `guide/index.md` - **Learn TorbScript** (index): A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
+- `guide/index.md` - **Learn TorbScript** (index): The learning path from nothing to a working program, in order, one step per page.
 - `guide/installing-and-running.md` - **Run your first program** (guide): Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
 - `guide/modules-and-packages.md` - **Modules and packages** (guide): How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
 - `guide/tests-and-tooling.md` - **Tests and the toolchain** (guide): How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
 - `guide/the-language-in-sixty-seconds.md` - **The language in sixty seconds** (guide): The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
-- `guide/torbscript-in-15-minutes.md` - **TorbScript in 15 minutes** (guide): The fastest honest tour of TorbScript for a working programmer, one short example and a few sentences per idea.
 - `guide/traits.md` - **Traits** (guide): How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
 - `guide/types-and-methods.md` - **Types and methods** (guide): How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
 - `guide/values-and-bindings.md` - **Values and bindings** (guide): Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
-
-## guide/coming-from
-
-- `guide/coming-from/go.md` - **Coming from Go** (contrast): The 15 things that map directly from Go, the 5 that will surprise you, and the concurrency primitives that are not built yet.
-- `guide/coming-from/index.md` - **Coming from another language** (index): One page per language - a table of the 10 to 15 things that map directly, the 5 that will surprise you, and what is deliberately missing.
-- `guide/coming-from/kotlin-swift.md` - **Coming from Kotlin and Swift** (contrast): The 15 things that map directly from Kotlin or Swift, the 5 that will surprise you, and the property and coroutine machinery neither one keeps.
-- `guide/coming-from/python.md` - **Coming from Python** (contrast): The 15 things that map directly from Python, the 5 that will surprise you, and what static, value-typed code gives up on dynamism.
-- `guide/coming-from/rust.md` - **Coming from Rust** (contrast): The 15 things that map directly from Rust, the 5 that will surprise you, and what Rust has that TorbScript deliberately does not.
-- `guide/coming-from/typescript-javascript.md` - **Coming from TypeScript and JavaScript** (contrast): The 15 things that map directly from TypeScript and JavaScript, the 5 that will surprise you, and the type-level tricks that have no counterpart.
 
 ## how-to
 
@@ -337,14 +326,15 @@ that answers the question. A page marked (planned) describes a feature that does
 - `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - `tooling/torb-debug.md` - **torb debug** (tooling): torb debug is the debugger - a debug adapter over the Debug Adapter Protocol on standard input and output - with breakpoints, stepping, the call stack, locals and evaluate for a program or a test run in the VM.
 - `tooling/torb-doc.md` - **torb doc** (tooling): torb doc turns the public API of a package and its doc comments into a reference - a static site, or one JSON document for an editor and the registry - and runs the examples of the doc comments as doc tests.
-- `tooling/torb-docs-site.md` - **torb docs site** (tooling): torb docs site writes the website of TorbScript from docs/ as static files - three levels from the first lesson to the reference, in every language of translations/, with a search per language.
+- `tooling/torb-docs-site.md` - **torb docs site** (tooling): torb docs site writes the website of TorbScript from docs/ as static files - the front page, every page with its navigation, a search index per version - highlighted by the compiler and styled by brand/.
 - `tooling/torb-docs-source.md` - **torb docs source** (tooling): torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - `tooling/torb-format.md` - **torb format** (tooling): torb format writes TorbScript sources in the one layout of the language - the rules of the formatter canon, then indentation, spaces, blank lines and a width of 120 columns - and --check fails on every file that is not in it.
+- `tooling/torb-init.md` - **torb init** (tooling): torb init fills the current, empty-enough directory with a template - or the built-in scaffold - the way torb new fills a new one, and refuses to overwrite a file that is already there.
 - `tooling/torb-install.md` - **torb install** (tooling): torb install fetches every package project.lock.trb pins that is not in the cache yet, checks its tree hash before a file is written, and never changes the lock.
 - `tooling/torb-lint.md` - **torb lint** (tooling): torb lint reports the style rules the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a redundant Some or Ok, private(var) - each with its id and, where certain, a fix.
 - `tooling/torb-lock.md` - **torb lock** (tooling): torb lock writes the settings block of every member of a workspace into project.lock.trb from its evaluated manifest and keeps the graph as it is; with --check it writes nothing and fails where the file is not what it would write.
-- `tooling/torb-lsp.md` - **torb lsp** (tooling): torb lsp is the language server - the compiler over the Language Server Protocol - with the diagnostics of torb check for the whole workspace, hover from torb doc, references, a checked rename, completion, formatting and lint fixes.
-- `tooling/torb-new.md` - **torb new** (tooling): torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
+- `tooling/torb-lsp.md` - **torb lsp** (tooling): torb lsp is the language server - the compiler over the Language Server Protocol on standard input and output - with the diagnostics of torb check, hover, go to definition, completion, semantic tokens and lint fixes as quick fixes.
+- `tooling/torb-new.md` - **torb new** (tooling): torb new scaffolds a package or app from a template - git.torb.dev's package or app by default - or, offline, the built-in project.trb, src/main.trb and tests/main.test.trb; torb init does the same into the current directory.
 - `tooling/torb-publish.md` - **torb publish** (tooling): torb publish builds and checks a package's archive as a registry receives it, prints its tree hash and capabilities, and writes it into a directory registry or uploads it with a token or through trusted publishing.
 - `tooling/torb-remove.md` - **torb remove** (tooling): torb remove takes a dependency out of project.trb, resolves the workspace again, and drops from project.lock.trb every package nothing needs any more.
 - `tooling/torb-rename.md` - **torb rename** (tooling): torb rename renames fields at their declaration and at every use the type checker resolves to them - members, bare names, labels, patterns and doc links - or refuses and writes nothing.

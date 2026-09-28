@@ -26,7 +26,8 @@ design, which is in internals. A page here is about what you type and what comes
 
 - **[The torb command](the-torb-command.md)** - Every subcommand of the toolchain, what it does today, and which of them are still planned.
 - **[Verify your work](verifying-your-work.md)** - The commands that decide whether TorbScript you wrote is correct and in the layout of the formatter, in the order to run them.
-- **[torb new](torb-new.md)** - torb new scaffolds a package - project.trb, a src/main.trb that prints a greeting, and a tests/main.test.trb with one passing test - refusing where the name already exists.
+- **[torb new](torb-new.md)** - torb new scaffolds a package or app from a template - git.torb.dev's package or app by default - or, offline, the built-in project.trb, src/main.trb and tests/main.test.trb; torb init does the same into the current directory.
+- **[torb init](torb-init.md)** - torb init fills the current, empty-enough directory with a template - or the built-in scaffold - the way torb new fills a new one, and refuses to overwrite a file that is already there.
 - **[torb check](torb-check.md)** - torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
 - **[torb run](torb-run.md)** - torb run runs a file, the only program below a directory or the program named in the bytecode VM, or builds and runs it natively with --native, passing the rest of the command line, the three streams and the exit code through.
 - **[torb repl](torb-repl.md)** - torb repl reads entries from standard input, checks each against the session, runs it in the bytecode VM and keeps what it binds and declares for the next entry - a typed session and a piped file behave the same.

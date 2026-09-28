@@ -70,10 +70,13 @@ why there is no module initialization order in the language.
 ## Create a project
 
 `torb new <name>` is the start: it writes a project for you, in the shape [`torb run`](../tooling/torb-run.md) and
-[`torb test`](../tooling/torb-test.md) already know how to build.
+[`torb test`](../tooling/torb-test.md) already know how to build. Without `--offline` it starts from a template of
+[git.torb.dev](https://git.torb.dev) and asks a few questions first - see [`torb new`](../tooling/torb-new.md) for all
+of that. This page uses the plain, built-in scaffold `--offline` writes at once, because it is what the rest of the
+page builds on line by line:
 
 ```console
-$ torb new hello
+$ torb new hello --offline
 wrote hello/project.trb, hello/src/main.trb, hello/tests/main.test.trb
 ```
 
