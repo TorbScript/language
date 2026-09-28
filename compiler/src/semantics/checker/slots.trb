@@ -1,0 +1,193 @@
+/**
+ * `for var item in items` and `for (key, var value) in items`: every slot of a container in place
+ * (docs/design/COLLECTIONS.md section 3.11). [checkSlotLoop] holds the loop to the six rules of the design - the container
+ * is a `var` path, the body reaches it through the slot alone, the slot is a reference, a map keeps its keys, a `Set`
+ * and a plain `Iterate` have no slots - and records the container's place, which is what the lowering opens
+ * `items[key]` through for every key `MutableIndex.keys()` answers.
+ */
+
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Pattern, Block from "../../syntax/ast"
+use Checker, Expectation from "./context"
+use TypeId from "./type"
+use placeOf, checkAccess, isMutable, requireMutable, openAccess, closeAccessesTo, Mutation from "./place"
+use notePlaceChanged, settleLoop, markReferenceBindings from "./mutation"
+use traitArgumentsOf from "./implementation"
+use sameType from "./unify"
+use checkPattern from "./pattern"
+use requireIrrefutable from "./exhaustive"
+use inferExpression from "./expression"
+use checkBlock from "./statement"
+
+/** What the accesses of the exclusivity rule call the change a `for var` makes. */
+public const slotLoopChange = "for var"
+
+/**
+ * One `for var` loop: the container a `var` path whose place is recorded, the key and the slot bound for the body, and
+ * the body checked while the loop holds the container open - which is what makes any other access to the container in
+ * it an exclusivity error, as it is for a closure argument of a call that changes a path.
+ */
+public fn checkSlotLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body: Block) {
+  const subject = inferExpression checker, iterable
+  const place = placeOf checker, iterable
+  const at = iterable.span
+  // A value without slots is the one message: that it is also a temporary follows from it
+  const found = slotTypesOf checker, subject, iterable, pattern
+  if found.isSome() {
+    const _ = checkAccess checker, place, at
+    if isMutable(checker, place) {
+      checker.recordPlace at, place
+    } else {
+      const _ = requireMutable checker, place, at, Mutation.Slots
+    }
+    notePlaceChanged checker, place
+  }
+  const deferred = checker.deferredType
+  const slots = found ?? (key: deferred, value: deferred)
+  checker.openScope()
+  var key: Pattern? = None
+  var value = pattern
+  if const .TuplePattern(items) = pattern.kind {
+    if items.length() == 2 {
+      key = items[0]
+      value = items[1]
+    }
+  }
+  if const Some(written) = key {
+    checkPattern checker, written, slots.key, isVar: false
+    requireIrrefutable checker, written, slots.key, "The key of a `for var`", "key"
+  }
+  // The slot is `items[key]` for one turn: a change of it lands in the container and is never dead, and no closure
+  // that may outlive the turn may carry it off - the rules of a `var` parameter. A slot that is no name was refused by
+  // the parser, and its names are declared all the same, as `var`s of no particular type
+  const first = checker.bindings.length()
+  const slotType = if isNamePattern(value) { slots.value } else { deferred }
+  checkPattern checker, value, slotType, isVar: true
+  markReferenceBindings checker, first
+  markSlotBindings checker, first
+  const depth = checker.accesses.length()
+  openAccess checker, place, slotLoopChange, at
+  checker.runningClosures = checker.runningClosures + 1
+  const uses = checker.valueUses.length()
+  checker.loopDepth = checker.loopDepth + 1
+  const _ = checkBlock checker, body, Expectation.Statement
+  checker.loopDepth = checker.loopDepth - 1
+  checker.runningClosures = checker.runningClosures - 1
+  closeAccessesTo checker, depth
+  settleLoop checker, uses
+  checker.closeScope()
+}
+
+/** Every binding declared from `from` on as the slot of a `for var`, which is what its messages call it. */
+fn markSlotBindings(var checker: Checker, from: Int) {
+  var index = from
+  while index < checker.bindings.length() {
+    const found = checker.bindings[index]
+    checker.bindings.set index, found.copy(bindsSlot: true)
+    index = index + 1
+  }
+}
+
+/**
+ * The key and the value of the slots of a container: `MutableIndex<Key, Value>`, `Deferred` for both where the
+ * container's type is broken already, and `None` once a message said why it has no slots.
+ */
+fn slotTypesOf(
+  var checker: Checker,
+  subject: TypeId,
+  iterable: Expression,
+  pattern: Pattern,
+): (key: TypeId, value: TypeId)? {
+  const deferred = checker.deferredType
+  if checker.absorbs(subject) {
+    return (key: deferred, value: deferred)
+  }
+  const indexed = match checker.wellKnown.mutableIndex {
+    Some(found) => found
+    None => {
+      return (key: deferred, value: deferred)
+    }
+  }
+  const arguments = match traitArgumentsOf(checker, subject, indexed) {
+    Some(found) if found.length() == 2 => found
+    _ => {
+      reportNoSlots checker, subject, iterable
+      return None
+    }
+  }
+  const value = arguments[1]
+  if !isKeyAndSlot(pattern) {
+    if const Some(item) = iterationItemOf(checker, subject) {
+      if !sameType(checker.types, item, value) {
+        const shown = checker.describe subject
+        const note = "Write `for (key, var value) in {writtenText(checker, iterable)}`: it changes every value and leaves every key"
+          + " alone"
+        const message = "`for var` changes one slot per key, and the items of `{shown}` are entries: a key cannot change in place"
+        checker.reportHere Diagnostic.error(message, iterable.span).withNote(note)
+        return None
+      }
+    }
+  }
+  (key: arguments[0], value: value)
+}
+
+/** Whether a pattern is one name, which is what the slot of a `for var` has to be. */
+fn isNamePattern(pattern: Pattern): Bool {
+  match pattern.kind {
+    .Binding(_) => true
+    _ => false
+  }
+}
+
+/** `(key, var value)`, the head that binds the key beside the slot. */
+fn isKeyAndSlot(pattern: Pattern): Bool {
+  match pattern.kind {
+    .TuplePattern(items) => items.length() == 2
+    _ => false
+  }
+}
+
+/** What `for` walks over a value: the item of its `Iterate`, where it has one. */
+fn iterationItemOf(var checker: Checker, subject: TypeId): TypeId? {
+  const iterate = checker.wellKnown.iterate?
+  const arguments = traitArgumentsOf(checker, subject, iterate)?
+  arguments.first()
+}
+
+/**
+ * A container without slots (rule 5): a `Set`, whose element's place depends on its value, and anything that only
+ * iterates, which has no slots at all.
+ */
+fn reportNoSlots(var checker: Checker, subject: TypeId, iterable: Expression) {
+  if isSetType(checker, subject) {
+    const note = "Remove the element and insert the changed one, or build a new set with `map`"
+    const message = "`for var` changes the slots of a container, and a `Set` has none: an element's place depends on its value"
+    checker.reportHere Diagnostic.error(message, iterable.span).withNote(note)
+    return
+  }
+  const written = writtenText checker, iterable
+  const what = match iterationItemOf(checker, subject) {
+    Some(item) => "only an `Iterate<{checker.describe(item)}>`"
+    None => "no container at all"
+  }
+  const note = "Build a new collection with `map`, or loop over a `List` held in a `var`"
+  const message = "`for var` needs a container with slots (`MutableIndex`), and `{written}` is {what}"
+  checker.reportHere Diagnostic.error(message, iterable.span).withNote(note)
+}
+
+/** Whether a value is a `Set` of the prelude, by the trait: `TrieSet`, `HashSet` and a set of the program alike. */
+fn isSetType(var checker: Checker, subject: TypeId): Bool {
+  const set = match checker.wellKnown.symbolNamed("Set") {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  traitArgumentsOf(checker, subject, set).isSome()
+}
+
+/** How the source writes an expression, for a message that names it. */
+fn writtenText(checker: Checker, expression: Expression): String {
+  const text = checker.program.graph.at(checker.module).source.text
+  text.sliceBytes expression.span.start, expression.span.end
+}

@@ -119,8 +119,10 @@ while const <pattern> = <expression> { ... }     re-evaluates and re-matches bef
    print total(["a": 1, "b": 2])
    ```
 
-5. **The name a `for` loop binds is `const` for the duration of one iteration.** To change an element in place, use a
-   path into the collection (`items[index].x = 1`) or `items.update(index) { ... }`, not the loop variable.
+5. **The name a `for` loop binds is `const` for the duration of one iteration.** To change an element in place, write
+   `for var item in items`, whose name is the slot and a single name, never a pattern that takes the element apart
+   ([Changing elements in place](../collections-and-iteration/changing-in-place.md)) - or use a path into the
+   collection (`items[index].x = 1`).
 
 ## What this is not
 

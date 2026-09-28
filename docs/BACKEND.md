@@ -334,6 +334,7 @@ underscore is written when it would create one).
 | `match`                      | `MatchPlan` to a decision tree of `Switch`/`Branch`/comparison blocks, tests memoized so the DAG is shared  |
 | `e?`                         | `Tag` + `Switch`; the error arm calls the recorded `From.from` and `Return`s after releasing everything live |
 | `for x in xs`                | `xs` into a temporary, `Iterate.iterate()`, loop head calls `next()` on a local `var`, `Switch` on the `Option` |
+| `for var x in xs`            | The path of `xs` once; a counter over `0..length()` for a list or an array, `keys()` pulled otherwise; every use of `x` is the path `xs[key]` |
 | `"{a} and {b}"`              | `Show.show`/`showNested` per part, then one `Intrinsic.TextConcat(parts)` - never repeated `String.add`      |
 | defaults                     | `Adaptation.DefaultArgument`: the default expression is lowered **at the call site**, after the written arguments |
 | variadics / `...e`           | Build a list at the call site; `Spread` calls `addAll` through the recorded `Iterate` witness                |
@@ -1970,6 +1971,15 @@ first, plus the two findings that were hiding behind each other.
   `ir/lower/generic.trb` is the dispatch of a member the **lowering itself** calls, with no call site to read a
   resolution from; it asks the very question a written call asks, so `xs.iterate()` reaches the same function either
   way.
+- **`for var` is an index loop, and its slot is no local** (docs/design/COLLECTIONS.md section 3.11). The container's
+  path is evaluated once - its root and every key on it - and the slot becomes an entry of `Lowering.slotAliases`:
+  that path with the index of the turn's key behind it. Every use of the name continues the path through the place
+  machinery an index path already has - a read is `Index.at` with nothing put back, a change is `MutableIndex.set` in
+  the same statement - so the round trip `ir/elements.trb` turns into an `Element` step is the same one, and no exit
+  of the loop has anything to write back. The keys of a `List` and an `Array` are counted from `0` to `length()`
+  (`lowerSlotIndices`); every other container answers `MutableIndex.keys()` once, pulled like the items of a `for`
+  (`lowerSlotKeys`, which shares `pullPlanOf` with `lowerForIterate`). A closure that captures the slot is a finding,
+  as one that captures a `var` parameter is.
 - **A range as a value is one `Construct`.** A `Range` is the one `native type` that declares fields and is no
   `RuntimeKind` (5.1's note), so `3..7` builds its three fields - an `Option` around each end, and `inclusive` as a
   `Bool` - in source order. Nothing about *iterating* one is here.

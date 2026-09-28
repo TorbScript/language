@@ -76,6 +76,7 @@ public trait List<Item>
   fn last(): Item?
   fn indexOf(value: Item): Int? where Item: Equals
   fn part(range: Bounds<Int>): Self?
+  fn keys(): Iterate<Int>
 }
 ```
 
@@ -89,6 +90,8 @@ and is a documented alias of `ArrayList` until the trie exists.
 
 `list[index]` panics with `index 9 is out of bounds for a length of 3` where `get(index)` answers `None`, and
 `list[from..to]` panics where `part(from..to)` answers `None`: every partial read has its total twin beside it.
+`keys()` is `0..length()`, the indices `for var item in items` walks to change every item in place
+([Changing elements in place](../language/collections-and-iteration/changing-in-place.md)).
 
 `ArrayList.withCapacity(capacity)` builds an empty list with room for `capacity` items before it has to grow again -
 what to reach for ahead of a loop of `append`s whose count is already known, instead of the default empty list that
@@ -120,7 +123,7 @@ public trait Map<Key, Value>
 value, cut after 60 characters, or `the key` alone where its type has no `Show` - and `get(key)` answers `None`.
 
 Mapping from keys to values, iterated as `(key, value)` tuples. Its verb is `set` (`map[key] = value`), whose
-participle is `updated`. The trait asks nothing of `Key`; what a key has to be able to do is a matter of the
+participle is `updated`, and `for (key, var value) in map` changes every value in place. The trait asks nothing of `Key`; what a key has to be able to do is a matter of the
 implementation (`TrieMap` and `HashMap` need `Hash`). **Every implementation iterates in insertion order**, and
 removing an entry does not reorder the rest; an empty map shows as `[:]`. `TrieMap` is the default (a hash array
 mapped trie, cheap to keep in many versions); `HashMap` is a flat hash table with the fastest lookups and writes, at

@@ -35,7 +35,7 @@ use isSharedStorage from "../capture"
 use describeIrType from "../print"
 use isReferenceParameter, isClosedType from "../instances"
 use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf, locationOf from "./context"
-use substituted from "./context"
+use substituted, SlotAlias from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
 use Dispatched, dispatchedOn, resultTypeOf from "./generic"
@@ -199,19 +199,48 @@ public fn pathPreludeAt(
       return temporaryPrelude lowering, builder, target
     }
   }
-  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
-    Some(found) => found
-    None => {
-      return None
-    }
+  const alias = slotAliasOf lowering, place.root
+  const root = match alias {
+    Some(found) => PlacePath found.root, found.type
+    None => rootReferenceOf(lowering, builder, place.root, what, at)?
   }
-  const keys = match loweredKeys(lowering, builder, place.steps, indexKeysOf(target), what, at) {
-    Some(found) => found
-    None => {
-      return None
-    }
+  const keys = loweredKeys(lowering, builder, place.steps, indexKeysOf(target), what, at)?
+  // The slot of a `for var` is `container[key]` of the turn: the path goes on from there
+  if const Some(found) = alias {
+    var steps = found.steps
+    steps.appendAll place.steps
+    var every = found.keys
+    every.appendAll keys
+    return PathPrelude root, steps, every
   }
   PathPrelude root, place.steps, keys
+}
+
+/** The path a root stands for where it is the slot of a `for var`, and `None` for every other root. */
+fn slotAliasOf(var lowering: Lowering, root: PlaceRoot): SlotAlias? {
+  if const .Local(binding) = root {
+    const declared = lowering.checker.binding(binding).at
+    return lowering.slotAliases.get declared
+  }
+  None
+}
+
+/**
+ * The value of the slot of a `for var` at this moment: every `a[key]` of its path read with `Index.at`, and nothing
+ * put back, because a read changes nothing. `None` where a step could not be formed, which has been reported. The
+ * caller asks only for a binding that is in [Lowering.slotAliases].
+ */
+public fn slotAliasRead(var lowering: Lowering, var builder: FunctionBuilder, declared: Span, at: Span): Slot? {
+  const alias = lowering.slotAliases.get(declared)?
+  const what = "a read of the slot of a `for var`"
+  const path = steppedFrom(lowering, builder, PlacePath(alias.root, alias.type), alias.steps, alias.keys, what, at)?
+  // The element is in a temporary of its own already, which is the value
+  if path.reference.steps.isEmpty() && !path.taken.isEmpty() {
+    return path.reference.base
+  }
+  const target = addTemporary builder, path.type
+  emit builder, Instruction.Read(target, path.reference)
+  target
 }
 
 /**
@@ -669,8 +698,11 @@ fn takingMemberOf(
   dispatchedOn lowering, container, bound, name, at
 }
 
-/** `Index.at` and `MutableIndex.set` of the container's own type: the two halves of an index path. */
-fn indexedMemberOf(
+/**
+ * `Index.at` and `MutableIndex.set` of the container's own type: the two halves of an index path. `MutableIndex.keys`
+ * is the third member a `for var` asks for.
+ */
+public fn indexedMemberOf(
   var lowering: Lowering,
   container: TypeId,
   isMutable: Bool,
@@ -842,20 +874,19 @@ public fn lowerPlaceAssignment(
   target: Expression,
   value: Expression,
 ) {
-  // `a[key] = value` is `MutableIndex.set` and not a `Write`, which is the whole difference between a write and an
-  // insert: what a missing key does is the container's own answer (`map[key] = value` adds it) and no rule of the back end
-  if const Some(place) = placeRecordedAt(lowering, target.span) {
-    if isIndexedTarget(place) {
-      lowerIndexAssignment lowering, builder, place, target, value
-      return
-    }
-  }
   const what = "an assignment"
   const prelude = match pathPreludeAt(lowering, builder, target, what) {
     Some(found) => found
     None => {
       return
     }
+  }
+  // `a[key] = value` is `MutableIndex.set` and not a `Write`, which is the whole difference between a write and an
+  // insert: what a missing key does is the container's own answer (`map[key] = value` adds it) and no rule of the back end.
+  // The slot of a `for var` assigned as a whole is one as well: its path ends in the index of the turn
+  if isIndexedTarget(prelude.steps) {
+    lowerIndexAssignment lowering, builder, prelude, target, value
+    return
   }
   const written = lowerValue lowering, builder, value
   if !lowering.supported {
@@ -872,8 +903,8 @@ public fn lowerPlaceAssignment(
 }
 
 /** Whether the *last* step of a path is an index, which is what makes an assignment through it a `set`. */
-fn isIndexedTarget(place: Place): Bool {
-  if const Some(last) = place.steps.last() {
+fn isIndexedTarget(steps: List<PlaceStep>): Bool {
+  if const Some(last) = steps.last() {
     if const .Index(_, _, _) = last {
       return true
     }
@@ -896,13 +927,13 @@ fn isIndexedTarget(place: Place): Bool {
 fn lowerIndexAssignment(
   var lowering: Lowering,
   var builder: FunctionBuilder,
-  place: Place,
+  prelude: PathPrelude,
   target: Expression,
   value: Expression,
 ) {
   const what = "an assignment"
   const at = target.span
-  const steps = place.steps
+  const steps = prelude.steps
   const last = steps.length() - 1
   const container = match steps[last] {
     .Index(found, _, _) => found
@@ -911,18 +942,8 @@ fn lowerIndexAssignment(
       return
     }
   }
-  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  const keys = match loweredKeys(lowering, builder, steps, indexKeysOf(target), what, at) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
+  const root = prelude.root
+  const keys = prelude.keys
   const key = match keys.last() {
     Some(found) => found
     None => {

@@ -1,0 +1,330 @@
+/**
+ * `for var item in items` and `for (key, var value) in items`: every slot of a container in place
+ * (docs/design/COLLECTIONS.md section 3.11). The parser reads the two heads, the checker holds the loop to the six rules
+ * of the design, and the lowering walks the keys and opens `items[key]` as a path for every use of the slot.
+ */
+
+use test, group from "std/test"
+use SourceText from "../src/syntax/source"
+use Pattern from "../src/syntax/ast"
+use parse from "../src/syntax/parser/parser"
+use problems from "./harness"
+use irOf from "./lower-harness"
+
+/** The head of the first statement of a parsed source, which is a `for`: its pattern and whether it is a `for var`. */
+fn headOf(source: String): (Pattern, Bool) {
+  const parsed = parse SourceText.of(source)
+  assert parsed.diagnostics.isEmpty()
+  match parsed.file.statements[0].kind {
+    .For(pattern, _, _, isSlots) => (pattern, isSlots)
+    _ => {
+      panic "a `for`"
+    }
+  }
+}
+
+fn isName(pattern: Pattern): Bool {
+  match pattern.kind {
+    .Binding(_) => true
+    _ => false
+  }
+}
+
+fn isPair(pattern: Pattern): Bool {
+  match pattern.kind {
+    .TuplePattern(items) => items.length() == 2
+    _ => false
+  }
+}
+
+/** What the parser says about a source, message by message. */
+fn parseProblems(source: String): List<String> {
+  var found: List<String> = []
+  for diagnostic in parse(SourceText.of(source)).diagnostics {
+    found.append diagnostic.message
+  }
+  found
+}
+
+group "The head of a `for var`" {
+  test "`var name` binds the slot" {
+    const (pattern, isSlots) = headOf "for var item in items \{\n  item = 1\n\}\n"
+    assert isSlots
+    assert isName(pattern)
+  }
+
+  test "`(key, var name)` binds the key beside the slot" {
+    const (pattern, isSlots) = headOf "for (name, var count) in stock \{\n  count = 1\n\}\n"
+    assert isSlots
+    assert isPair(pattern)
+  }
+
+  test "a tuple without `var` is the head of every other `for`" {
+    const (pattern, isSlots) = headOf "for (name, count) in stock \{\n  print count\n\}\n"
+    assert(!isSlots)
+    assert isPair(pattern)
+  }
+
+  test "the slot is one name, and a pattern that takes the element apart is refused once" {
+    const source = "var pairs = [(1, 2)]\nfor var (first, second) in pairs \{\n  first = second\n\}\n"
+    assert(parseProblems(source) == ["`for var` binds one name: the element, in place"])
+    assert(problems(source) == ["`for var` binds one name: the element, in place"])
+  }
+}
+
+group "The rules of a `for var`" {
+  test "every element of a list changes in place, through its fields, by assignment and by a `var fn`" {
+    const source = raw"""
+      type Particle {
+        var position: Float
+        var velocity: Float
+
+        var fn advance() {
+          position = position + velocity
+        }
+      }
+
+      fn bumped(var value: Float) {
+        value = value + 1.0
+      }
+
+      var particles = [Particle(0.0, 1.5)]
+      for var particle in particles {
+        particle.position = particle.position + particle.velocity
+        particle.advance()
+        bumped particle.velocity
+        particle = particle
+      }
+      print particles.length()
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "a map changes its values and keeps its keys" {
+    const source = raw"""
+      var stock: Map<String, Int> = ["apple": 3]
+      for (name, var count) in stock {
+        count = count + 1
+        print name
+      }
+      print stock.length()
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "the container is a `var` path" {
+    const source = raw"""
+      const numbers = [1, 2, 3]
+      for var number in numbers {
+        number = number + 1
+      }
+      """
+    assert(problems(source) == ["`numbers` is a `const`. Only a `var` binding can be changed"])
+  }
+
+  test "a temporary is no container the loop could change" {
+    const source = raw"""
+      fn made(): List<Int> {
+        [1]
+      }
+
+      for var number in made() {
+        number = 2
+      }
+      """
+    assert(
+      problems(source)
+        == ["This is a temporary, and `for var` changes every slot of it: the change would be thrown away"],
+    )
+  }
+
+  test "the body reaches the container through the slot alone" {
+    const source = raw"""
+      var numbers = [1, 2, 3]
+      for var number in numbers {
+        numbers.append number
+      }
+      """
+    assert(problems(source) == ["`numbers` is being changed by `for var` right now"])
+    const reading = raw"""
+      var numbers = [1, 2, 3]
+      for var number in numbers {
+        number = numbers.length()
+      }
+      """
+    assert(problems(reading) == ["`numbers` is being changed by `for var` right now"])
+  }
+
+  test "an inner `for var` over the slot of an outer one holds the outer slot open" {
+    const source = raw"""
+      var grid = [[1, 2], [3]]
+      for var row in grid {
+        for var cell in row {
+          cell = cell + 1
+        }
+        row.append 0
+      }
+      """
+    assert problems(source).isEmpty()
+    const touching = raw"""
+      var grid = [[1, 2], [3]]
+      for var row in grid {
+        for var cell in row {
+          cell = row.length()
+        }
+      }
+      """
+    assert(problems(touching) == ["`row` is being changed by `for var` right now"])
+  }
+
+  test "the slot is a reference: no closure that may outlive the turn carries it off" {
+    const source = raw"""
+      var numbers = [1, 2, 3]
+      var kept: List<() => Int> = []
+      for var number in numbers {
+        kept.append { number }
+      }
+      print kept.length()
+      """
+    assert(
+      problems(source) == ["This closure captures the slot `number` of a `for var`, and `append` keeps its `value`"],
+    )
+  }
+
+  test "the key is a copy and stays constant" {
+    const source = raw"""
+      var stock: Map<String, Int> = ["apple": 3]
+      for (name, var count) in stock {
+        name = "pear"
+        count = 1
+      }
+      """
+    assert(problems(source) == ["`name` is a `const`. Only a `var` binding can be changed"])
+  }
+
+  test "a container whose items are entries changes its values, never its entries" {
+    const source = raw"""
+      type Shelf with MutableIndex<String, Int>, Iterate<(String, Int)> {
+        var counts: List<Int>
+
+        fn at(key: String): Int {
+          counts[0]
+        }
+
+        var fn set(key: String, value: Int) {
+          counts[0] = value
+        }
+
+        fn iterate(): Iterator<(String, Int)> {
+          panic "unused"
+        }
+      }
+
+      var shelf = Shelf([1])
+      for var entry in shelf {
+        entry = entry
+      }
+      """
+    assert(
+      problems(source)
+        == ["`for var` changes one slot per key, and the items of `Shelf` are entries: a key cannot change in place"],
+    )
+  }
+
+  test "a set has no slots" {
+    const source = raw"""
+      var names: Set<String> = ["a"]
+      for var name in names {
+        name = "b"
+      }
+      """
+    assert(problems(source)
+      == ["`for var` changes the slots of a container, and a `Set` has none: an element's place depends on its value"])
+  }
+
+  test "a plain `Iterate` has no slots, and that is the one message" {
+    const source = raw"""
+      fn counted(): Iterate<Int> {
+        0..3
+      }
+
+      var numbers = counted()
+      for var number in numbers {
+        number = 1
+      }
+      """
+    assert(
+      problems(source)
+        == ["`for var` needs a container with slots (`MutableIndex`), and `numbers` is only an `Iterate<Int64>`"],
+    )
+  }
+
+  test "a change of the slot is never dead, and a slot the body never changes is no mistake" {
+    const source = raw"""
+      var numbers = [1, 2, 3]
+      for var number in numbers {
+        print number
+      }
+      for var number in numbers {
+        number = 0
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+}
+
+/** A `List` and a container of the program, so that the IR names the members it calls. */
+const slotPrograms = raw"""
+  type Row with MutableIndex<Int, Int> {
+    var only: Int
+
+    fn at(key: Int): Int {
+      only
+    }
+
+    var fn set(key: Int, value: Int) {
+      only = value
+    }
+
+    fn keys(): Iterate<Int> {
+      0..1
+    }
+  }
+
+  fn doubledNumbers(var numbers: List<Int>) {
+    for var number in numbers {
+      number = number * 2
+    }
+  }
+
+  fn doubledRow(var row: Row) {
+    for var value in row {
+      value = value * 2
+    }
+  }
+  """
+
+group "The lowering of a `for var`" {
+  /**
+   * The keys of a `List` (and an `Array`) are its indices: a counter from `0` to `length()`, compared and incremented,
+   * with no iterator. The slot is the path `numbers[index]` of the turn: the element is read with `at` where the name
+   * is read, and the assignment is the `set` of the list, both through the table of the trait-typed list.
+   */
+  test "a list is walked by a counter, and the slot is `numbers[index]` of the turn" {
+    const text = irOf slotPrograms, "t_acme_x2f_app_main_doubledNumbers"
+    assert text.contains("local index: Int64")
+    assert text.contains("intrinsic less.i64")
+    assert text.contains("intrinsic add.i64")
+    assert(!text.contains("iterator"))
+    assert(!text.contains("Option"))
+  }
+
+  /** Every other container answers its keys: `keys()` once, `next()` of its cursor per turn, `at` and `set` per use. */
+  test "a container of the program is walked by its keys" {
+    const text = irOf slotPrograms, "t_acme_x2f_app_main_doubledRow"
+    assert text.contains("t_acme_x2f_app_main_Row_keys")
+    assert text.contains("local iterator")
+    assert text.contains("t_acme_x2f_app_main_Row_at")
+    assert text.contains("t_acme_x2f_app_main_Row_set")
+  }
+}

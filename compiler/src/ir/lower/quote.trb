@@ -29,6 +29,7 @@ use Lowering, reportUnsupported, locationOf, finishBlock, continueIn, substitute
 use unsupportedSlot, abandonedSlot, voidSlot, lowerValue from "./expression"
 use textSlot, showSlot, concatenatedSlot from "./text"
 use bindingReferenceOf from "./closure"
+use slotAliasRead from "./place"
 
 /** Whether a call reaches the `assert` of the standard library, which is the one call lowered here. */
 public fn isAssertion(lowering: Lowering, symbol: SymbolId): Bool {
@@ -195,6 +196,9 @@ fn captureSlot(var lowering: Lowering, var builder: FunctionBuilder, capture: Qu
     const target = addTemporary builder, annotation
     emit builder, Instruction.Read(target, place)
     return target
+  }
+  if lowering.slotAliases.containsKey(declared) {
+    return slotAliasRead lowering, builder, declared, at
   }
   match lowering.slots.get(declared) {
     Some(found) => found

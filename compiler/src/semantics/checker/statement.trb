@@ -32,6 +32,7 @@ use checkDeclaration from "./check"
 use requireDeclaredResult, allowsTopLevelCode from "./declaration"
 use markUsingBinding, markClosingSelf, checkScopedUses from "./close"
 use refuseLocalDeprecation from "./deprecation"
+use checkSlotLoop from "./slots"
 
 /** What a block is worth: the type of its value, and whether control never reaches its end. */
 public type BlockResult {
@@ -140,8 +141,12 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       noteAssignment checker, place
       false
     }
-    .For(pattern, iterable, body) => {
-      checkLoop checker, pattern, iterable, body
+    .For(pattern, iterable, body, isSlots) => {
+      if isSlots {
+        checkSlotLoop checker, pattern, iterable, body
+      } else {
+        checkLoop checker, pattern, iterable, body
+      }
       false
     }
     .While(condition, body) => {

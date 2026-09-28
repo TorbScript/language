@@ -11,20 +11,24 @@ use Span from "../../syntax/source"
 use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
 use resultOf from "../../semantics/checker/signature"
 use IrTypeId, IrType, Slot, Terminator, IntrinsicOperation, Instruction, Reference, PathStep, borrowed from "../ir"
+use LayoutId from "../ir"
 use FunctionBuilder, addLocal, addTemporary, addBlock, emit from "../build"
 use numericKindOf, layoutOfType from "../verify"
-use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf from "./context"
+use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, SlotAlias from "./context"
 use substituted, irTypeOfClosed from "./context"
 use isVoidType, isNeverType, typeAtSpan, finishBlock, continueIn from "./context"
 use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
 use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
+use traitArgumentsOf from "../../semantics/checker/implementation"
 use lowerPatternBinding, lowerWhileBinding, variantLayoutOfType, variantNamed from "./match"
 use lowerPlaceAssignment, lowerSlotAssignment, isReferenceSlot from "./place"
+use pathPreludeAt, referenceFrom, indexedMemberOf, PathPrelude from "./place"
+use PlaceStep from "../../semantics/checker/context"
 use isCapturedVariable, lowerBoxedBinding, bindingReferenceOf from "./closure"
 use containsCountedType from "../layout"
 use TypeId from "../../semantics/checker/type"
 use isClosedType from "../instances"
-use dispatchedOn, resultTypeOf from "./generic"
+use Dispatched, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
 use iterateBoundOf, iteratorBoundOf from "./collection"
 use openScope, closeScope, declareScoped, declareScopedFrom, endEveryScope, endLoopScopes, endTemporaries from "./scope"
@@ -165,7 +169,13 @@ fn lowerStatementKind(var lowering: Lowering, var builder: FunctionBuilder, stat
     .Assign(target, value) => lowerAssignment lowering, builder, target, value, statement.span
     .While(condition, body) => lowerWhile lowering, builder, condition, body, statement.span
     .Loop(body) => lowerLoop lowering, builder, body, statement.span
-    .For(pattern, iterable, body) => lowerFor lowering, builder, pattern, iterable, body, statement.span
+    .For(pattern, iterable, body, isSlots) => {
+      if isSlots {
+        lowerForSlots lowering, builder, pattern, iterable, body, statement.span
+      } else {
+        lowerFor lowering, builder, pattern, iterable, body, statement.span
+      }
+    }
     .Return(value) => lowerReturn lowering, builder, value, statement.span
     .Break => lowerBreak lowering, builder, statement.span
     .Continue => lowerContinue lowering, builder, statement.span
@@ -307,6 +317,11 @@ fn lowerAssignment(
     }
   }
   const declared = lowering.checker.binding(binding).at
+  // The slot of a `for var` is `container[key]` of the turn, so assigning it is `MutableIndex.set`
+  if lowering.slotAliases.containsKey(declared) {
+    lowerPlaceAssignment lowering, builder, target, value
+    return
+  }
   // A captured `var` binding is a shared box, so an assignment to it writes through that box and both sides see it
   if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
     const slot = lowerValue lowering, builder, value
@@ -603,42 +618,17 @@ fn lowerForIterate(
   if !lowering.supported {
     return
   }
-  const cursor = match lowerCursor(lowering, builder, subject, subjectType, iterateBound, at) {
+  const plan = match pullPlanOf(lowering, builder, subject, subjectType, iterateBound, at) {
     Some(found) => found
     None => {
       return
     }
   }
-  const iteratorBound = match iteratorBoundOf(lowering, cursor.type, at) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  const pull = match dispatchedOn(lowering, cursor.type, iteratorBound, "next", at) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  const optionType = resultTypeOf lowering, pull
-  if !isClosedType(lowering, optionType) {
-    reportUnsupported lowering, "`for` whose item type the back end cannot close", at
-    return
-  }
-  const option = irTypeOfClosed lowering, optionType
-  const layout = match variantLayoutOfType(lowering, option) {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
-      return
-    }
-  }
-  const some = variantNamed lowering, layout, "Some"
-  if some < 0 {
-    reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
-    return
-  }
+  const cursor = plan.cursor
+  const pull = plan.pull
+  const option = plan.option
+  const layout = plan.layout
+  const some = plan.some
   const item = match patternTypeOf(lowering, pattern.span) {
     Some(found) => found
     None => {
@@ -687,6 +677,324 @@ fn lowerForIterate(
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
+}
+
+/**
+ * What a loop pulls its items with: the cursor `iterate()` made of the subject, the `next` dispatched on it, and the
+ * `Option` that `next` answers - its IR type, its layout and the position of `Some` in it. `None` where one of them
+ * cannot be formed, which has been reported.
+ */
+fn pullPlanOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  subjectType: TypeId,
+  iterateBound: TypeId,
+  at: Span,
+): PullPlan? {
+  const cursor = lowerCursor(lowering, builder, subject, subjectType, iterateBound, at)?
+  const iteratorBound = iteratorBoundOf(lowering, cursor.type, at)?
+  const pull = dispatchedOn(lowering, cursor.type, iteratorBound, "next", at)?
+  const optionType = resultTypeOf lowering, pull
+  if !isClosedType(lowering, optionType) {
+    reportUnsupported lowering, "`for` whose item type the back end cannot close", at
+    return None
+  }
+  const option = irTypeOfClosed lowering, optionType
+  const layout = match variantLayoutOfType(lowering, option) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
+      return None
+    }
+  }
+  const some = variantNamed lowering, layout, "Some"
+  if some < 0 {
+    reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
+    return None
+  }
+  PullPlan cursor, pull, option, layout, some
+}
+
+/** The parts of [pullPlanOf]. */
+type PullPlan {
+  cursor: Cursor
+  pull: Dispatched
+  option: IrTypeId
+  layout: LayoutId
+  /** Which variant of the `Option` is `Some`. */
+  some: Int
+}
+
+// --- `for var` ------------------------------------------------------------------------------------------------------
+
+/**
+ * `for var particle in particles`, `for (name, var count) in stock`: every slot of a container in place
+ * (docs/design/COLLECTIONS.md section 3.11).
+ *
+ * The container's path is evaluated once - its root and the key of every `a[key]` on it - and so are its keys. In a
+ * turn the slot is no binding of the frame but the path `container[key]` ([SlotAlias]), which every use of the name
+ * continues: a read takes the element out with `Index.at`, a change puts it back with `MutableIndex.set` in the same
+ * statement. That round trip is the one `ir/elements.trb` turns into a single `Element` step where the container is the
+ * runtime's own list or an array, so the loop holds no copy of an element there - and everywhere, `break`, `continue`,
+ * `return` and `?` leave nothing to write back, because every change was written where it happened.
+ *
+ * The keys of a `List` and an `Array` are its indices, `0..length()`, walked as a counter ([lowerSlotIndices]) without
+ * an iterator; every other container answers `MutableIndex.keys()`, pulled like the items of any `Iterate`
+ * ([lowerSlotKeys]). The checker's rule 2 is what makes both sound: nothing in the body reaches the container except
+ * through the slot, so nothing grows, shrinks or rehashes it under the loop.
+ */
+fn lowerForSlots(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  pattern: Pattern,
+  iterable: Expression,
+  body: Block,
+  at: Span,
+) {
+  const what = "`for var`"
+  const module = lowering.module
+  const written = match lowering.checker.expressionType(module, iterable.span) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for var` over a container the checker recorded no type for", at
+      return
+    }
+  }
+  var keyPattern: Pattern? = None
+  var slotPattern = pattern
+  if const .TuplePattern(items) = pattern.kind {
+    if items.length() == 2 {
+      keyPattern = items[0]
+      slotPattern = items[1]
+    }
+  }
+  const prelude = match pathPreludeAt(lowering, builder, iterable, what) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  // The container once, for its keys: reading a path takes nothing out for good
+  const container = match referenceFrom(lowering, builder, prelude, what, iterable.span) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const receiver = addTemporary builder, container.type
+  emit builder, Instruction.Read(receiver, container.reference)
+  const turn = SlotTurn prelude, written, keyPattern, slotPattern, body, at
+  if walksIndices(lowering, written, container.type) {
+    lowerSlotIndices lowering, builder, turn, receiver
+  } else {
+    lowerSlotKeys lowering, builder, turn, receiver
+  }
+}
+
+/** What every turn of a `for var` needs, whichever way its keys are walked. */
+type SlotTurn {
+  /** The container's path, evaluated before the loop. */
+  prelude: PathPrelude
+  /** The container's type as the checker wrote it. */
+  container: TypeId
+  keyPattern: Pattern?
+  slotPattern: Pattern
+  body: Block
+  at: Span
+}
+
+/**
+ * Whether the keys of a container are its indices `0..length()`: a `List` - the contract of `List.keys()` - and an
+ * `Array<Item, Size>`.
+ */
+fn walksIndices(var lowering: Lowering, written: TypeId, annotation: IrTypeId): Bool {
+  if const .FixedArray(_, _) = lowering.program.typeAt(annotation) {
+    return true
+  }
+  const list = match lowering.checker.wellKnown.list {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  traitArgumentsOf(lowering.checker, substituted(lowering, written), list).isSome()
+}
+
+/**
+ * The keys of a `List` or an `Array` as a counter: `length()` once, then a comparison and an increment per turn -
+ * the loop of a written range, with no iterator. `continue` goes to the increment.
+ */
+fn lowerSlotIndices(var lowering: Lowering, var builder: FunctionBuilder, turn: SlotTurn, receiver: Slot) {
+  const at = turn.at
+  const containerType = substituted lowering, turn.container
+  const measure = match lengthOf(lowering, containerType, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
+  const kind = match numericKindOf(lowering.program, integer) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for var` without an integer type", at
+      return
+    }
+  }
+  const limit = addTemporary builder, integer
+  const noPlaces: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, limit, at, measure, [receiver], noPlaces, integer
+  if !lowering.supported {
+    return
+  }
+  const key = addLocal builder, integer, keyNameOf(turn.keyPattern, "index")
+  const zero = integerSlot lowering, builder, 0, integer
+  emit builder, Instruction.Copy(key, zero)
+  const location = locationOf lowering, at
+  const check = addBlock builder, "for", location
+  const inner = addBlock builder, "body", location
+  const step = addBlock builder, "step", location
+  const done = addBlock builder, "done", location
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const boolean = booleanTypeOf lowering
+  const scrutinee = addTemporary builder, boolean
+  emitIntrinsic lowering, builder, scrutinee, IntrinsicOperation.Less, kind, [key, limit], at
+  finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
+  continueIn lowering, builder, inner
+  enterLoop lowering, done, step
+  lowerSlotTurn lowering, builder, turn, key
+  const _ = leaveLoop lowering
+  if !lowering.diverged {
+    finishBlock lowering, builder, Terminator.Jump(step)
+  }
+  continueIn lowering, builder, step
+  const one = integerSlot lowering, builder, 1, integer
+  emitIntrinsic lowering, builder, key, IntrinsicOperation.Add, kind, [key, one], at
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, done
+}
+
+/** `Length.length` of a container's own type, or the `length` of its `List` where that trait declares one itself. */
+fn lengthOf(var lowering: Lowering, container: TypeId, at: Span): Dispatched? {
+  const empty: List<TypeId> = []
+  if const Some(symbol) = lowering.checker.wellKnown.symbolNamed("Length") {
+    if traitArgumentsOf(lowering.checker, container, symbol).isSome() {
+      return dispatchedOn lowering, container, lowering.checker.nominal(symbol, empty), "length", at
+    }
+  }
+  const list = match lowering.checker.wellKnown.list {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for var` over a container without `length`", at
+      return None
+    }
+  }
+  const arguments = traitArgumentsOf(lowering.checker, container, list) ?? empty
+  dispatchedOn lowering, container, lowering.checker.nominal(list, arguments), "length", at
+}
+
+/**
+ * The keys of every other container: `MutableIndex.keys()` once, then `next()` of its cursor per turn, exactly as a
+ * `for` pulls the items of an `Iterate`. `continue` goes to the pull.
+ */
+fn lowerSlotKeys(var lowering: Lowering, var builder: FunctionBuilder, turn: SlotTurn, receiver: Slot) {
+  const at = turn.at
+  const what = "`for var`"
+  const containerType = substituted lowering, turn.container
+  const keysMember = match indexedMemberOf(lowering, containerType, isMutable: true, name: "keys", what: what, at: at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const keysType = resultTypeOf lowering, keysMember
+  if !isClosedType(lowering, keysType) {
+    reportUnsupported lowering, "`for var` whose keys the back end cannot close", at
+    return
+  }
+  const keysSpelling = irTypeOfClosed lowering, keysType
+  const keys = addTemporary builder, keysSpelling
+  const noPlaces: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, keys, at, keysMember, [receiver], noPlaces, keysSpelling
+  if !lowering.supported {
+    return
+  }
+  const iterateBound = match iterateBoundOf(lowering, keysType, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const plan = match pullPlanOf(lowering, builder, keys, keysType, iterateBound, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const keyItem = lowering.program.layoutAt(plan.layout).fieldsOfVariant(plan.some)[0].type
+  const key = addLocal builder, keyItem, keyNameOf(turn.keyPattern, "key")
+  const location = locationOf lowering, at
+  const check = addBlock builder, "for", location
+  const inner = addBlock builder, "body", location
+  const done = addBlock builder, "done", location
+  const pulled = addTemporary builder, plan.option
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
+  const tag = addTemporary builder, integer
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const places = [Some(Reference(plan.cursor.slot, []))]
+  const _ = lowerDispatched lowering, builder, pulled, at, plan.pull, [plan.cursor.slot], places, plan.option
+  if !lowering.supported {
+    return
+  }
+  emit builder, Instruction.Tag(tag, pulled)
+  finishBlock lowering, builder, Terminator.Switch(tag, [plan.some], [inner], done)
+  continueIn lowering, builder, inner
+  emit builder, Instruction.Read(key, Reference(pulled, [PathStep.Variant(plan.layout, plan.some, 0)]))
+  enterLoop lowering, done, check
+  lowerSlotTurn lowering, builder, turn, key
+  const _ = leaveLoop lowering
+  if !lowering.diverged {
+    finishBlock lowering, builder, Terminator.Jump(check)
+  }
+  continueIn lowering, builder, done
+}
+
+/** What a debugger and the IR call the key of a turn: the name the pattern gives it, or `fallback`. */
+fn keyNameOf(keyPattern: Pattern?, fallback: String): String {
+  match keyPattern {
+    Some(found) => bindingNameOf(found) ?? fallback
+    None => fallback
+  }
+}
+
+/**
+ * One turn: the key bound as the pattern says - a copy, like the item of every `for` - and the slot as the path
+ * `container[key]` for as long as the body runs.
+ */
+fn lowerSlotTurn(var lowering: Lowering, var builder: FunctionBuilder, turn: SlotTurn, key: Slot) {
+  openScope lowering
+  const firstSlot = builder.slotCount()
+  if const Some(found) = turn.keyPattern {
+    if const Some(_) = bindingNameOf(found) {
+      lowering.slots.set found.span, key
+    } else if !isWildcardPattern(found) {
+      lowerPatternBinding lowering, builder, found, key, found.span
+    }
+  }
+  declareScoped lowering, builder, key
+  declareScopedFrom lowering, builder, firstSlot
+  var steps = turn.prelude.steps
+  steps.append PlaceStep.Index(turn.container, turn.at, "")
+  var keys = turn.prelude.keys
+  keys.append key
+  const root = turn.prelude.root
+  lowering.slotAliases.set turn.slotPattern.span, SlotAlias(root.reference, root.type, steps, keys)
+  lowerBlockInto lowering, builder, turn.body, destination: None
+  const _ = lowering.slotAliases.remove turn.slotPattern.span
+  closeScope lowering, builder
 }
 
 /** The cursor a loop pulls from: `xs.iterate()`, with the type it answered, which is what `next` is dispatched on. */

@@ -63,7 +63,8 @@ for (<name>, <name>) in <iterable of tuples> { ... }
    collection has (`map`, `filter`, `fold`, `toList()`, ...) is a default method built from those two.
 
 2. **`for value in xs { ... }` calls `xs.iterate()` once and then `next()` until it answers `None`.** The loop
-   variable is a `const` copy of each item, produced fresh by every `next()`.
+   variable is a `const` copy of each item, produced fresh by every `next()`. To change the items themselves,
+   `for var item in xs` binds each slot of a container instead ([Changing elements in place](changing-in-place.md)).
 
 3. **The subject of a `for` is evaluated once, into a temporary.** Changing the binding named after `in` inside the
    loop body does not change what the loop walks, because the loop is already iterating a copy of the value the
@@ -118,5 +119,6 @@ for value in Point(1, 2) {
 
 - [The collection traits](collection-traits.md) - the five kinds, each built on top of `Iterate`.
 - [Pipelines](pipelines.md) - the lazy stages and terminal operations `Iterate` gives every collection for free.
+- [Changing elements in place](changing-in-place.md) - `for var`, whose variable is the slot and not a copy.
 - [Bindings](../values-and-types/bindings.md) - why the loop variable is always a `const`.
 

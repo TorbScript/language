@@ -1,0 +1,176 @@
+/**
+ * `for var` (docs/design/COLLECTIONS.md section 3.11): every slot of a container changes in place - a list, an array, a
+ * window of a list, the values of a map and a container of the program - through fields, by assignment, by a `var fn`
+ * and as a `var` argument. `break`, `continue`, `return` and `?` leave the loop with every change made so far in the
+ * container and nothing more, and an inner `for var` over the slot of an outer one changes the grid itself.
+ */
+type Particle {
+  var position: Float
+  var velocity: Float
+  var age: Int = 0
+
+  var fn advance() {
+    position = position + velocity
+  }
+}
+
+/** A container of the program: three named slots, visited in the order its keys say. */
+type Triple with MutableIndex<Int, String> {
+  var first: String
+  var second: String
+  var third: String
+
+  fn get(key: Int): String? {
+    match key {
+      0 => first
+      1 => second
+      2 => third
+      _ => None
+    }
+  }
+
+  var fn set(key: Int, value: String) {
+    match key {
+      0 => {
+        first = value
+      }
+      1 => {
+        second = value
+      }
+      _ => {
+        third = value
+      }
+    }
+  }
+
+  fn keys(): Iterate<Int> {
+    [2, 0, 1]
+  }
+}
+
+type Failure with Error {
+  value: Int
+
+  fn message(): String {
+    "stopped at {value}"
+  }
+}
+
+fn grown(var value: Int) {
+  value = value * 10
+}
+
+/** A `return` from the middle of the loop: the slots changed before it stay changed. */
+fn firstNegative(var numbers: List<Int>): Int? {
+  for var number in numbers {
+    if number < 0 {
+      return number
+    }
+    number = number + 100
+  }
+  None
+}
+
+fn halved(value: Int): Result<Int, Failure> {
+  if value % 2 == 1 {
+    return Fail Failure(value)
+  }
+  Ok(value / 2)
+}
+
+/** A `?` that leaves the loop: the slots changed before it stay changed as well, and the failing one is untouched. */
+fn halvedAll(var numbers: List<Int>): Result<Void, Failure> {
+  for var number in numbers {
+    number = halved(number)?
+  }
+  Ok void
+}
+
+var particles = [Particle(0.0, 1.5), Particle(10.0, -2.0)]
+for var particle in particles {
+  particle.position = particle.position + particle.velocity
+  particle.age = particle.age + 1
+  particle.advance()
+}
+print particles
+
+var numbers = [1, 2, 3, 4]
+for var number in numbers {
+  number = number * 2
+}
+print numbers
+
+for var number in numbers {
+  grown number
+  if number > 50 {
+    break
+  }
+}
+print numbers
+
+var words = ["a", "bb", "ccc"]
+for var word in words {
+  word = "{word}!"
+  if word.byteLength() == 3 {
+    continue
+  }
+  word = "{word}?"
+}
+print words
+
+var mixed = [1, 2, -3, 4]
+print firstNegative(mixed)
+print mixed
+
+var evens = [4, 8, 5, 6]
+match halvedAll(evens) {
+  Ok(_) => print "all even"
+  Fail(failure) => print failure.message()
+}
+print evens
+
+var stock = ["apple": 3, "pear": 0]
+for (name, var count) in stock {
+  count = count + name.byteLength()
+}
+print stock
+
+var grid = [[1, 2], [3, 4]]
+for var row in grid {
+  row.append 0
+  for var cell in row {
+    cell = cell + 100
+  }
+}
+print grid
+
+for (index, var cell) in grid[1] {
+  cell = -cell - index
+}
+print grid
+
+var samples = [1, 2, 3, 4, 5]
+for var sample in samples[1..4] {
+  sample = sample * 11
+}
+print samples
+
+var cells: Array<Int, 3> = [7, 8, 9]
+for (index, var cell) in cells {
+  cell = cell + index
+}
+print cells
+
+var triple = Triple "a", "b", "c"
+var order: List<Int> = []
+for (key, var text) in triple {
+  order.append key
+  text = "{text}{key}"
+}
+print "{triple.first} {triple.second} {triple.third} {order}"
+
+var empty: List<Int> = []
+for var number in empty {
+  number = 1
+}
+print empty

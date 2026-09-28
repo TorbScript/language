@@ -116,6 +116,7 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## language/collections-and-iteration
 
+- `language/collections-and-iteration/changing-in-place.md` - **Changing elements in place** (reference): for var item in items binds each slot of a container in turn, so a change of item changes the container itself - over a List, an Array, a window, the values of a Map, and any type with MutableIndex.
 - `language/collections-and-iteration/collection-traits.md` - **The collection traits** (reference): Every kind of collection is a trait - List, Set, Map, Stack, Queue - so a signature names what a value can do, and only its construction names the data structure behind it.
 - `language/collections-and-iteration/collectors.md` - **Collectors** (reference): An Accumulator describes what to do with the values of a pipeline and is the state of one run at the same time, because a value is a copy; collect fills a copy of the one it is given.
 - `language/collections-and-iteration/index.md` - **Collections and iteration** (index): List, Map, Set, Stack and Queue as traits over a shared Iterate, plus slices, pipelines and collectors.

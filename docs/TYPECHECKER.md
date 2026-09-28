@@ -2356,7 +2356,12 @@ with the exclusivity rule if the subject counted as an open access.
 _Proposal:_ the subject is evaluated once into a temporary; it is not an open access, and the loop variable is a
 `const` copy of each item. _Reason:_ it is what the concept promises, and it makes the exclusivity check simpler.
 
-_Decision:_ accepted.
+_Decision:_ accepted. **`for var` is the other answer, and it is the opposite on purpose** (docs/design/COLLECTIONS.md
+section 3.11, `checker/slots.trb`): its container is a `var` path whose place is recorded, the loop holds an access to
+it open for the whole body - with `runningClosures` raised, the way a closure argument of a changing call is checked -
+so any other use of the container in the body is "`items` is being changed by `for var` right now", and the slot is a
+`var` binding marked as a reference (`bindsParameter`, `bindsSlot`): never dead, never carried off by an escaping
+closure. A `Set`, a plain `Iterate` and the whole entry of a map are refused before anything else is said.
 
 **41. Is `public const` allowed at top level?**
 "Visibility": "Top-level declarations are private to their file unless marked `public`" - which of them can be

@@ -67,9 +67,13 @@ public const preludeSource = raw"""
     fn at(key: Key): Value
   }
 
-  /** `a[key] = v`, and what makes `a[key]` a `var` path at all (milestone 4.6). */
+  /** `a[key] = v`, what makes `a[key]` a `var` path at all (milestone 4.6), and the keys a `for var` visits. */
   public trait MutableIndex<Key, Value> with Index<Key, Value> {
     var fn set(key: Key, value: Value)
+
+    fn keys(): Iterate<Key> {
+      panic "the keys of the container"
+    }
   }
 
   public trait Slice {
@@ -111,10 +115,7 @@ public const preludeSource = raw"""
     fn encode(): String
   }
 
-  /**
-   * `Expression<Value>` quotes what arrives at it: the argument is checked as an ordinary `Value` and handed over with its
-   * tree. Everything it captures has to be `Encode`, which is why the numbers and the collections below have it.
-   */
+  /** `Expression<Value>` quotes what arrives at it, and everything it captures is `Encode`, so the numbers are. */
   public native type Expression<Value> {
     source: String
 
@@ -130,7 +131,6 @@ public const preludeSource = raw"""
 
   public trait Length {
     fn length(): Int
-
     fn isEmpty(): Bool {
       length() == 0
     }

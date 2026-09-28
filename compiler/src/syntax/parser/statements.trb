@@ -7,7 +7,7 @@
 
 use Span from "../source"
 use TokenKind, Keyword from "../token"
-use Statement, StatementKind, Binding, Block, Condition, Expression, ExpressionKind from "../ast"
+use Statement, StatementKind, Binding, Block, Condition, Expression, ExpressionKind, Pattern, PatternKind from "../ast"
 use Parser from "./parser"
 use parseDeclaration, isAtProtectedDeclaration, isAtDeprecatedDeclaration from "./declarations"
 use parseType from "./types"
@@ -178,10 +178,65 @@ public fn parseBindingBody(var parser: Parser, doc: String?, isVar: Bool, valueO
 
 fn parseFor(var parser: Parser): StatementKind {
   parser.bump()
-  const pattern = parsePattern parser
+  // `for var particle in particles`, `for (name, var count) in stock`: every slot of the container in place
+  const slot = parseSlotPattern parser
+  const pattern = slot ?? parsePattern(parser)
   parser.expect TokenKind.Reserved(Keyword.In)
   const iterable = parseHeadExpression parser
-  StatementKind.For pattern, iterable, parseBlock(parser)
+  StatementKind.For pattern, iterable, parseBlock(parser), var: slot.isSome()
+}
+
+/**
+ * The head of a `for` that binds a slot of its container (docs/design/COLLECTIONS.md section 3.11): `var name`, or
+ * `(key, var name)`, whose key is any pattern and whose second item is the slot. `None`, with nothing consumed, for the
+ * head of every other `for`. A `var` in front of anything but a name binds no slot, and says so.
+ */
+fn parseSlotPattern(var parser: Parser): Pattern? {
+  if parser.isAtKeyword(Keyword.Var) {
+    parser.bump()
+    return slotName parser
+  }
+  if !parser.isAt(TokenKind.ParenOpen) {
+    return None
+  }
+  // `(key, var value)`: tried, and given back where the second item is no `var`
+  var attempt = parser
+  const start = attempt.span()
+  attempt.bump()
+  attempt.skipNewlines()
+  const key = parsePattern attempt
+  attempt.skipNewlines()
+  if !attempt.eat(TokenKind.Comma) {
+    return None
+  }
+  attempt.skipNewlines()
+  if !attempt.isAtKeyword(Keyword.Var) {
+    return None
+  }
+  attempt.bump()
+  const value = slotName attempt
+  attempt.skipNewlines()
+  const _ = attempt.eat TokenKind.Comma
+  attempt.skipNewlines()
+  attempt.expect TokenKind.ParenClose
+  parser = attempt
+  Pattern PatternKind.TuplePattern([key, value]), start.to(parser.previousSpan())
+}
+
+/**
+ * The name a `var` of a `for` head binds as a slot: a name, and never a pattern that takes the element apart. Such a
+ * pattern is refused, and kept as the slot behind a key `_`, so that the names it binds are declared all the same and
+ * the body says nothing more about them.
+ */
+fn slotName(var parser: Parser): Pattern {
+  const pattern = parsePattern parser
+  if const .Binding(_) = pattern.kind {
+    return pattern
+  }
+  const note = "The slot is changed in place as a whole: `for var item in items`, then `item.field = ...` in the body"
+  parser.errorWithNote "`for var` binds one name: the element, in place", note, pattern.span
+  const key = Pattern PatternKind.Wildcard, Span(pattern.span.start, pattern.span.start)
+  Pattern PatternKind.TuplePattern([key, pattern]), pattern.span
 }
 
 /** The head of `if` and `while`. */

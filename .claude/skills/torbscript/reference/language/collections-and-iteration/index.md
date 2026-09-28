@@ -27,6 +27,7 @@ over time, `Source` and `Sink`, which are in
 - **[Stacks and queues](stacks-and-queues.md)** - Stack is LIFO with push, pop and peek, Queue is FIFO with enqueue, dequeue and peek - the words everybody knows for each structure.
 - **[Slices](slices.md)** - list[from..to] answers a List that shares storage and starts at index 0 again; as a var path the same expression is a window into the original instead.
 - **[Iterating](iterating.md)** - for pulls from Iterator.next() through Iterate.iterate(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
+- **[Changing elements in place](changing-in-place.md)** - for var item in items binds each slot of a container in turn, so a change of item changes the container itself - over a List, an Array, a window, the values of a Map, and any type with MutableIndex.
 - **[Pipelines](pipelines.md)** - A pipeline is a source, zero or more lazy stages and exactly one terminal operation, and nothing runs until the terminal operation pulls a value through.
 - **[Collectors](collectors.md)** - An Accumulator describes what to do with the values of a pipeline and is the state of one run at the same time, because a value is a copy; collect fills a copy of the one it is given.
 

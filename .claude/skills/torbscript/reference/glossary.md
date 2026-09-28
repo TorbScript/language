@@ -499,6 +499,12 @@ A `torb` binary that already exists, which `sh tools/bootstrap.sh` compiles the 
 compiler is written in TorbScript, so something that already compiles TorbScript has to build it once. See
 the architecture.
 
+### Slot
+
+The place of one element in a container, `items[key]`. `for var item in items` binds each slot in turn, so a change of
+`item` is a change of `items`; the variable of a plain `for` is a copy instead. See
+[Changing elements in place](language/collections-and-iteration/changing-in-place.md).
+
 ### Snippet
 
 A fenced code block of this documentation. A `trb` snippet is verified by the compiler's own front end; the marker in the

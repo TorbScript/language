@@ -581,8 +581,9 @@ fn reportEscaping(var checker: Checker, binding: LocalBinding, at: Span) {
     checker.reportHere Diagnostic.error("This closure captures {held} and may outlive it", at).withNote(sharingNote())
     return
   }
+  const outlived = if binding.bindsSlot { "the turn" } else { "the call" }
   checker.reportHere(
-    Diagnostic.error("This closure captures {held} and may outlive the call", at)
+    Diagnostic.error("This closure captures {held} and may outlive {outlived}", at)
       .withNote(
         "A reference is second-class: only a closure written straight as the argument of a call that just calls it"
           + " may hold one",
@@ -671,6 +672,9 @@ fn sharingNote(): String {
 fn heldName(binding: LocalBinding): String {
   if binding.bindsReceiver {
     return "the receiver `self`"
+  }
+  if binding.bindsSlot {
+    return "the slot `{binding.name}` of a `for var`"
   }
   if binding.bindsParameter {
     return "the `var` parameter `{binding.name}`"

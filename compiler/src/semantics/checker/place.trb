@@ -27,6 +27,7 @@ use traitArgumentsOf from "./implementation"
 use isRange from "./expression"
 use noteChange, notePlaceChanged, dropRead from "./mutation"
 use isInsideType, isSharedType from "./declaration"
+use slotLoopChange from "./slots"
 
 /** Why a place has to be mutable. The message follows from this, so every caller says what it is doing. */
 public type Mutation {
@@ -40,6 +41,8 @@ public type Mutation {
   case Argument(parameter: String, callee: String)
   /** `if var Some(inner) = current`: the pattern binds `var` paths into the subject. */
   case Subject
+  /** `for var item in items`: the loop changes every slot of the container in place. */
+  case Slots
 }
 
 /** Why a change may not go through a path, or `.Writable` when it may. */
@@ -577,12 +580,16 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
     .Receiver(member) => "`{member}` changes its receiver"
     .Argument(parameter, callee) => "`{callee}` changes `{parameter}`"
     .Subject => "`if var` binds paths into its subject"
+    .Slots => "`for var` changes every slot of it"
     .Write => "an assignment writes it"
     .Command(member) => "a command configures its field `{member}`"
   }
+  const note = match cause {
+    .Slots => "Bind it first (`var items = make()`, then `for var item in items`), and the loop changes the binding"
+    _ => "Bind it first (`var cursor = iterate()`), then the path leads somewhere"
+  }
   checker.reportHere(
-    Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at)
-      .withNote("Bind it first (`var cursor = iterate()`), then the path leads somewhere"),
+    Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at).withNote(note),
   )
 }
 
@@ -933,7 +940,9 @@ fn reportConflict(var checker: Checker, place: Place, access: Access, at: Span) 
   } else {
     Diagnostic.error "`{name}` is being changed by `{changedBy}` right now", at
   }
-  if hasIndex(place) && hasIndex(access.place) {
+  if changedBy == slotLoopChange {
+    problem = problem.withNote "The body of a `for var` reaches its container through the slot alone: read and change the element"
+  } else if hasIndex(place) && hasIndex(access.place) {
     problem = problem.withNote "`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`"
   } else {
     problem = problem.withNote "While a `var` access runs, the same path cannot be reached a second time"

@@ -166,6 +166,8 @@ Show & Encode                                an intersection of traits
 return value                                 an early return
 for item in items { ... }                     over anything `Iterate`
 for (key, value) in table { ... }             destructuring in a loop
+for var item in items { ... }                 every slot in place: `item` is `items[key]` of the turn
+for (key, var value) in table { ... }         every value of a map in place, the key a copy
 while condition { ... }                      `break` and `continue` work
 loop { ... }                                 endless: `Never` without a `break`, `Void` with one
 if const Some(user) = find(id) { ... }        a pattern in a condition

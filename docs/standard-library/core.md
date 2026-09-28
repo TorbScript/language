@@ -141,7 +141,9 @@ what `Flags<Case: RawValue>` of `std/collections` is.
 `Int`, a float by a float or by an `Int`). `a[i]`
 is `Index.at`, `a[i] = v` is `MutableIndex.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is
 `MutableSlice.replace`, and `a ?? b` is `OrElse.orElse`, whose `fallback` is `lazy` so that it is only evaluated where
-there is nothing to give back.
+there is nothing to give back. `MutableIndex` requires `keys()` besides `set`: the keys a `for var item in items` visits,
+in its order - the indices `0..length()` of a `List` and an `Array`, the keys of a `Map` in insertion order
+([Changing elements in place](../language/collections-and-iteration/changing-in-place.md)).
 
 ### Range, RangeFrom, RangeTo, Bounds
 
@@ -185,6 +187,7 @@ public native type Array<Item, const Size: Int>
   static fn generated(produce: (index: Int) => Item): Array<Item, Size>
   static fn from(items: Iterate<Item>): Array<Item, Size>?
   var fn set(index: Int, value: Item)
+  fn keys(): Iterate<Int>
   var fn fill(value: Item)
   fn mapped<Output>(transform: Transform<Item, Output>): Array<Output, Size>
 }

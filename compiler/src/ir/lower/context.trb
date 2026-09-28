@@ -16,7 +16,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, ImplementationId from "../../semantics/checker/type"
-use Checker, Capture from "../../semantics/checker/context"
+use Checker, Capture, PlaceStep from "../../semantics/checker/context"
 use checkBodiesOf from "../../semantics/checker/check"
 use NativeEntry, nativeEntries, ArrayOperation from "../../backend/c/natives"
 use BuildTarget from "../../project/target"
@@ -28,6 +28,23 @@ use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
 use unsupportedMessage from "../unsupported"
 use FunctionBuilder, terminate, seal, switchTo from "../build"
+
+/**
+ * The path a slot of a `for var` stands for in one turn: the container's own path, evaluated once before the loop, and
+ * the index of the turn's key behind it. A use of the name continues the path; a read takes the element out and puts
+ * nothing back, a change goes through `MutableIndex.set` at once - so a turn holds no copy of its element, and leaving
+ * the loop by `break`, `return` or `?` has nothing to write back.
+ */
+public type SlotAlias {
+  /** Where the container's path starts. */
+  root: Reference
+  /** The type the root's reference ends in. */
+  type: IrTypeId
+  /** The container's steps, then `PlaceStep.Index` of the turn. */
+  steps: List<PlaceStep>
+  /** One slot per index of `steps`: the container's own keys, evaluated once, then the slot of the turn's key. */
+  keys: List<Slot>
+}
 
 /** One construct the lowering does not translate yet, with where it was first seen and how often it blocked a function. */
 public type Unsupported {
@@ -208,6 +225,11 @@ public type Lowering {
    * lives in the environment as the pointer it is. `if var` of 5.9b needs the same table.
    */
   var references: Map<Span, Reference> = [:]
+  /**
+   * The slot a `for var` binds, by the span it is declared under: no slot of the frame but the path `container[key]` of
+   * the turn, so every use of the name forms that path again (`ir/lower/statement.trb`, [SlotAlias]).
+   */
+  var slotAliases: Map<Span, SlotAlias> = [:]
   /**
    * The parameter slots of the closure that is being lowered, by the position the *declaration* counts them in - which
    * is what `Adaptation.ImplicitParameter` names. Empty outside of a closure body.

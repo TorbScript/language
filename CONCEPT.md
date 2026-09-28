@@ -1119,10 +1119,10 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
   `drain(File.open(path)?)` for a `fn drain(var file: File)`. The rule is about the base of a path (`f().x = 1`), not about ownership.
-- The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
-  `items.update(index) { ... }`) or build a new collection with `map`. **`for var element in items`** (decided, not
-  yet implemented - [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot
-  instead, for one turn of the body; see [Collections and Iteration](#collections-and-iteration).
+- The variable of a `for` loop is a `const`. To change elements, **`for var element in items`**
+  ([docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11) binds a `var` reference to each slot instead,
+  for one turn of the body; see [Collections and Iteration](#collections-and-iteration). The path
+  (`items[index].x = 1`, `items.update(index) { ... }`) and a new collection built with `map` stay the other ways.
 - Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
   the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
 - **A captured `var` binding is shared only while the binding exists.** Because a closure that captures one never
@@ -1943,13 +1943,14 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
 - `for x in xs` works with everything that is `Iterate<Item>`. **The subject is evaluated once, into a temporary,**
   so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
   loop variable is a `const` copy of each item.
-- **`for var element in container` changes every element in place** (decided, not yet implemented -
-  [docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
+- **`for var element in container` changes every element in place**
+  ([docs/design/COLLECTIONS.md](docs/design/COLLECTIONS.md) section 3.11). It binds a `var` reference to each slot for one turn of the
   body - Rust's `iter_mut`, not Swift's `for var`, which binds a mutable copy. It is sugar over `MutableIndex` plus
   its `keys()`, so a `List`, an `Array`, a slice and the values of a `Map` (`for (key, var value) in map`) work, and a
   user container joins by implementing that one trait; a `Set` and a plain `Iterate` are rejected with a message that
-  says why. The container has to be a `var` path, the body may not touch it any other way (exclusivity), and the loop
-  is lowered to an index loop over element paths - no iterator object, no copy per element.
+  says why. The container has to be a `var` path and the body may not touch it any other way (exclusivity). Every use
+  of the slot is the access `container[key]` of the turn, so every change lands at once and `break`, `return` and `?`
+  have nothing to write back; the keys of a `List` and an `Array` are counted without an iterator.
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
   `HashMap()`, `Set.of(1, 2)`.
 - **A collection literal adapts to the type that is expected of it,** exactly as a number literal does, and the target
@@ -2716,9 +2717,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **A closure that captures a `var` binding may not escape its scope** (2026-09-22), the rule `var` parameters have.
   The escaping box gave pure value code aliasing, races through `spawn`, an exclusivity bypass and cycles. State that
   has to escape is a `shared type`. Decided, not yet enforced by the checker.
-- **`for var element in container`** (2026-09-22; docs/design/COLLECTIONS.md section 3.11) is a `var` reference to each slot,
-  sugar over `MutableIndex` plus `keys()`, lowered to an index loop over element paths. Not Swift's mutable copy.
-  Decided, not yet implemented.
+- **`for var element in container`** (2026-09-22, built 2026-09-29; docs/design/COLLECTIONS.md section 3.11) is a
+  `var` reference to each slot, sugar over `MutableIndex` plus `keys()`, lowered to an index loop over element paths.
+  Not Swift's mutable copy.
 - **Every collection kind keeps its own words, and `Iterable` is `Iterate`** (owner, 2026-09-22; docs/design/COLLECTIONS.md
   section 6b). `iterate()`, `List.append`, `Set.insert`/`remove`, `Map.set`/`remove`, `Stack.push`/`pop`/`peek`,
   `Queue.enqueue`/`dequeue`/`peek`; the `Collection` trait is deleted and `Add` stays (`Plus` is no longer planned).

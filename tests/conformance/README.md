@@ -141,6 +141,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `nested-list-patterns.trb` | A list pattern **inside** another one: in a case field, in a record field, in a tuple, inside another list, with a rest, under a guard, and in an instance of a generic |
 | `states.trb` | A state machine over unit cases, `if const` and `while const` |
 | `adts.trb` | A recursive algebraic data type and the decision trees over it |
+| `slot-loops.trb` | `for var` over a list of records, a list of numbers and of strings, the values of a map, the rows of a grid and a row of it, a window of a list, an array and a container of the program in the order of its keys; `break`, `continue`, `return` and `?` keep what the turns before changed |
 | `case-values.trb` | `case Read = 1`: `rawValue()` and `fromRawValue` both ways, negative and hex numbers, a `match` that stays exhaustive, and `RawValue` as a bound |
 | `optional-chain.trb` | `?.`: the member on the payload, or `None` without touching the member |
 

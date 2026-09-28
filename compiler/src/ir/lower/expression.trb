@@ -35,6 +35,7 @@ use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./cont
 use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed, substituted, enterModule from "./context"
 use irTypeOf from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue, lowerConversionCall from "./call"
+use slotAliasRead from "./place"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
 use lowerListLiteral, lowerMapLiteral, lowerIndexRead from "./collection"
@@ -761,6 +762,13 @@ fn lowerLocalRead(
     const target = valueSlot lowering, builder, destination, annotation
     emit builder, Instruction.Read(target, place)
     return target
+  }
+  // The slot of a `for var`: `container[key]` of the turn, read where the name stands
+  if lowering.slotAliases.containsKey(declared) {
+    return match slotAliasRead(lowering, builder, declared, at) {
+      Some(found) => copiedInto builder, destination, found
+      None => abandonedSlot lowering, builder, destination
+    }
   }
   const slot = match lowering.slots.get(declared) {
     Some(found) => found

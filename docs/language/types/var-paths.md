@@ -132,10 +132,22 @@ print counter.count
    As the *argument* of a `var` parameter a temporary is fine: the callee becomes its only owner, so nothing is ever
    written back anywhere. `tick(makeCounter())` needs nothing bound first.
 
-6. **The variable of a `for` loop is a `const`.** Changing an element needs the path (`items[index].x = 1`) or a new
-   collection built with `map`; the loop variable itself never becomes a `var` path. *(Decided, not implemented:
-   `for var element in items` binds a `var` reference to each slot instead, over `MutableIndex` - see the collections
-   design record, section 3.11. Until it lands the path is the only way.)*
+6. **The variable of a `for` loop is a `const`; the slot of a `for var` is a path.** `for var element in items`
+   binds each slot of the container in turn, and every use of `element` is the access `items[key]` of the turn - see
+   [Changing elements in place](../collections-and-iteration/changing-in-place.md). The variable of a plain `for` is a
+   copy, so changing an element through it needs the path (`items[index].x = 1`) or a new collection built with `map`.
+
+   ```trb run
+   type Counter {
+     var hits: Int
+   }
+
+   var counters = [Counter(0), Counter(5)]
+   for var counter in counters {
+     counter.hits = counter.hits + 1
+   }
+   print counters // prints [Counter(hits: 1), Counter(hits: 6)]
+   ```
 
 ## What this is not
 

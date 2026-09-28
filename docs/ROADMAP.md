@@ -218,7 +218,7 @@ supported, and neither is a dialect with its own name.
 |---|---|
 | Loops as expressions | [design/LOOPS.md](design/LOOPS.md) |
 | One principle for where a program may panic | [design/PANICS.md](design/PANICS.md) |
-| `for var`, the words per kind of collection | [design/COLLECTIONS.md](design/COLLECTIONS.md) |
+| The words per kind of collection (`for var` is built) | [design/COLLECTIONS.md](design/COLLECTIONS.md) |
 | A public enum that may grow, the prelude rule | [design/RELEASE.md](design/RELEASE.md) section 2, the 1.0 list |
 | The candidates without a decision: let-else, variadic type parameters, `_` as a type argument, fields on one line, and others | CONCEPT, "Open Questions" |
 

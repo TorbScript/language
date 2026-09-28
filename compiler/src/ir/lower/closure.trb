@@ -36,7 +36,7 @@ use layoutOfType from "../verify"
 use describeIrType from "../print"
 use closureFunctionName, constructorFunctionName, resumeFunctionName from "../mangle"
 use instanceFor, cellTypeFor from "../instances"
-use Lowering, reportUnsupported, locationOf, irTypeOf, substituted from "./context"
+use Lowering, reportUnsupported, locationOf, irTypeOf, substituted, SlotAlias from "./context"
 use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "./context"
 use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use lowerBody from "./function"
@@ -92,7 +92,7 @@ fn collectStatement(var lowering: Lowering, var found: Map<Span, Bool>, statemen
       collectBlock lowering, found, body
     }
     .Loop(body) => collectBlock lowering, found, body
-    .For(_, iterable, body) => {
+    .For(_, iterable, body, _) => {
       collectExpression lowering, found, iterable
       collectBlock lowering, found, body
     }
@@ -1078,6 +1078,10 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
       plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, symbol: None), declared, boxed: true)
       continue
     }
+    if lowering.slotAliases.containsKey(declared) {
+      reportUnsupported lowering, "a closure that captures the slot of a `for var`", at
+      return []
+    }
     const slot = match lowering.slots.get(declared) {
       Some(found) => found
       None => {
@@ -1399,6 +1403,7 @@ public type SavedFrame {
   entryLocals: Map<Int, Slot>
   boxes: Map<Span, Slot>
   references: Map<Span, Reference>
+  slotAliases: Map<Span, SlotAlias>
   closureParameters: List<Slot>
   hole: Slot?
   diverged: Bool
@@ -1433,6 +1438,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.entryLocals,
     lowering.boxes,
     lowering.references,
+    lowering.slotAliases,
     lowering.closureParameters,
     lowering.hole,
     lowering.diverged,
@@ -1473,6 +1479,7 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.entryLocals = [:]
   lowering.boxes = [:]
   lowering.references = [:]
+  lowering.slotAliases = [:]
   lowering.closureParameters = []
   lowering.hole = None
   lowering.diverged = false
@@ -1500,6 +1507,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.entryLocals = saved.entryLocals
   lowering.boxes = saved.boxes
   lowering.references = saved.references
+  lowering.slotAliases = saved.slotAliases
   lowering.closureParameters = saved.closureParameters
   lowering.hole = saved.hole
   lowering.diverged = saved.diverged

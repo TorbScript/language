@@ -1,7 +1,7 @@
 # Collections
 
-**Status: partly implemented** — C2b to C6 are in the code; the words per kind decided on 2026-09-22 (section 6b)
-revise C1 and C2 and land in the rename round, and `for var` (section 3.11) is decided and not implemented.
+**Status: partly implemented** — C2b to C6 and `for var` (C9, section 3.11) are in the code; the words per kind
+decided on 2026-09-22 (section 6b) revise C1 and C2 and land in the rename round.
 
 One family, from the cursor to the byte buffer. This is the specification of `std/iteration`, `std/collections` and the
 part of `std/core` the language itself reaches into — which traits exist, what each one is for, which words they spend,
@@ -29,7 +29,7 @@ container are told apart (`Accumulator` stands alone, `Collector` is merged into
 participles — and **the owner's decision of 2026-09-22 revises both** (section 6b): every kind keeps its own words,
 the `Collection` trait is deleted, and `Iterable` becomes `Iterate`. That lands in the rename round (C2c, two commits,
 section 6a); until it has, the code and `docs/language` still show the C1/C2 words. `for var` (section 3.11) is
-decided and not implemented. Sections 1 and 2 are the survey the design was argued from and are kept as written;
+built. Sections 1 and 2 are the survey the design was argued from and are kept as written;
 section 3 is the design with sections 3.2, 3.3 and the stack and queue rows of 3.9 superseded by 6b, and section 5
 says which slices are still open.
 
@@ -759,7 +759,7 @@ right; the five that move are the ones where a reader had a choice of words and 
 
 ### 3.11 `for var`: every element in place
 
-**Decided 2026-09-22, not implemented.** `for var element in container` binds `element` to each **slot** of the
+**Decided 2026-09-22, built 2026-09-29.** `for var element in container` binds `element` to each **slot** of the
 container in turn, as a `var` reference, for the duration of one turn of the body — Rust's `iter_mut`, not Swift's
 `for var`, which binds a mutable *copy* and is the copy trap of CONCEPT's `var` paths written as a loop:
 
@@ -826,6 +826,29 @@ knows which container it is.
 a list becomes `for index in 0..length()` whose body works on the element's address (the in-place index write of
 PERFORMANCE round P7), and a map walks its entry vector the same way. The keys are taken from the container before
 the first turn only in the sense that rule 2 guarantees they cannot change — no snapshot is made.
+
+**As built** (`compiler/src/semantics/checker/slots.trb`, `lowerForSlots` in `compiler/src/ir/lower/statement.trb`).
+The slot is no binding of the frame. It is an entry of `Lowering.slotAliases`: the container's path, evaluated once
+before the loop - its root and the key of every `a[key]` on it - and `PlaceStep.Index` of the turn's key behind it.
+Every use of the name continues that path, exactly as `container[key].field = x` does: a read takes the element out
+with `Index.at` and puts nothing back, a change is `MutableIndex.set` in the same statement. So every change lands
+where it is written, and `break`, `continue`, `return` and `?` leave nothing to write back. The keys of a `List`
+(any type that implements it, which is the contract of `List.keys()`) and of an `Array` are counted from `0` to
+`length()`, without an iterator; every other container answers `keys()` once and is pulled like any `Iterate`.
+
+What that costs is what the index loop it replaces costs, measured on an 800 by 800 grid of `List<List<Int>>`, six
+rounds, release build: `rows[row][column] = rows[row][column] + 1` 2.1 s, the same change through two nested
+`for var` 1.9 s; over one flat `List<Int>` of 640 000 items, 0.13 s against 0.19 s (noise of ±0.05 s). Both write
+through the round trip of PERFORMANCE finding 3, which `ir/elements.trb` turns into one `Element` step once the
+container is concrete and copies a counted element where it stays trait-typed - `for var` changes nothing about
+that, in either direction. What the built loop does not do yet:
+
+- A closure that captures the slot is refused by the back end ("a closure that captures the slot of a `for var`"),
+  as one that captures a `var` parameter is: rule 3 allows a closure that does not escape, and the lowering has no
+  place to hand it.
+- A `Map`'s keys come from `keys()`, whose iterator keeps a count of the map's storage, so the first change of a
+  value copies the map once per loop. Walking the entry vector directly, as the paragraph above plans, is not built.
+- A debugger shows the key of a turn and not the slot, which is no local of the frame.
 
 *Slice:* C9 in section 5.
 
@@ -991,14 +1014,16 @@ checked script and drops the fallbacks. `Add` is not renamed.
 *Gate:* the four, the fixpoint, and no `Iterable`, `Collection<` or `iterator()` left outside the history of the
 records.
 
-**C9 — `for var`** (section 3.11). The checker: the form in the `for` head, rules 1 to 6, the two rejection messages
-pinned. The standard library: `keys()` on `MutableIndex`, answered by `List`, `Array`, the slices and `Map`. The
-lowering: an index loop whose body works on the element's address, no iterator. It is a syntax change and takes the
-two commits of 6a.
-*Gate:* a conformance program per container (list, array, slice, map values, a user `MutableIndex`), a checker test
-per rejected shape, and `ir` of a list loop showing no iterator and no copy per element.
+**C9 — `for var`** (section 3.11). **Built 2026-09-29.** The checker: the form in the `for` head, rules 1 to 6, the two
+rejection messages pinned. The standard library: `keys()` on `MutableIndex`, answered by `List`, `Array`, the slices and
+`Map`. The lowering: an index loop whose body works on the element's address, no iterator. It is a syntax change, and
+it took one commit and not the two of 6a because nothing the seed compiles writes it yet: the first `for var` in
+`compiler/` or `std/` needs a seed that knows the form first.
+*Gate:* a conformance program per container (list, array, slice, map values, a user `MutableIndex`) -
+`tests/conformance/slot-loops.trb`, natively and in the VM; a checker test per rejected shape -
+`compiler/tests/slot-loops.test.trb`; and the IR of a list loop showing no iterator and no `Option`, pinned there too.
 
-What is left is C2c, then C9, then C7 and C8 whenever there is room. Only C7 adds a type.
+What is left is C2c, then C7 and C8 whenever there is room. Only C7 adds a type.
 
 ## 6a. What a rename of a name the compiler knows costs
 
