@@ -3,7 +3,7 @@
 [TorbScript](https://torb.dev) is a single-language ecosystem: one language for the program, its configuration, its
 build and its tests, with value semantics, run in a VM or compiled to a native binary. This extension brings its
 toolchain, `torb`, into VS Code: the language server that is the compiler itself, the tests in the Test Explorer, the
-formatter, and a walkthrough that installs the toolchain for you.
+debugger, the formatter, and a walkthrough that installs the toolchain for you.
 
 ## Features
 
@@ -22,6 +22,11 @@ formatter, and a walkthrough that installs the toolchain for you.
   natively with the profile "Run Natively" - and a failure shows its message at the line that failed, with the expected
   and the actual value side by side where the failed `assert` compared two. Turn on continuous run (the eye icon) to
   run the chosen tests again on every save.
+- **The debugger**: Debug beside Run for every test and group, a CodeLens "Run | Debug" above an entry file, and F5
+  for the file in the editor. Breakpoints, stepping (F10, F11, Shift+F11), the call stack, the locals of every frame
+  with records, cases, lists and maps to open, values on hover, watch expressions such as `point.x` or `names[2]`, and
+  a stop where a panic begins - a failing `assert` too. The program runs in the VM under `torb debug`, and a test's
+  result lands in the Testing view as for a run.
 - **Format Document** (Shift+Alt+F / Shift+Option+F) with `torb format`: the one layout of the language.
 - **Run File**: the play button of the editor runs the file with `torb run`, in a terminal.
 - **A walkthrough** (Help > Welcome > Walkthroughs > "Get Started with TorbScript"): install the toolchain, create a
@@ -84,6 +89,7 @@ durations - and says so once, with `torb upgrade` a click away.
 | TorbScript: Open the Download Page | [torb.dev/download](https://torb.dev/download) |
 | TorbScript: New Project... | `torb new <name>` in a folder you pick, then opens it |
 | TorbScript: Run File | `torb run <file>` in a terminal |
+| TorbScript: Debug File | The file under `torb debug`: its tests where it is a `*.test.trb`, the program otherwise |
 | TorbScript: Restart Language Server | Starts `torb lsp` again, for example after building a new `torb` |
 
 ## Without the language server
@@ -108,6 +114,8 @@ they are set.
 - [torb.dev](https://torb.dev) - the language, the download, the documentation.
 - [The language server](https://git.torb.dev/torbscript/language/src/branch/main/docs/tooling/torb-lsp.md) - every
   message `torb lsp` answers.
+- [The debugger](https://git.torb.dev/torbscript/language/src/branch/main/docs/tooling/torb-debug.md) - what a
+  `launch` names, and every request `torb debug` answers.
 - [Set up your editor](https://git.torb.dev/torbscript/language/src/branch/main/docs/how-to/set-up-your-editor.md) -
   this extension, and `torb lsp` in Neovim and Helix.
 - [Issues](https://git.torb.dev/torbscript/language/issues) - bugs and wishes, of the extension as well.

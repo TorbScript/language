@@ -9,6 +9,7 @@
 const { startLanguageClient } = require('./lsp-client');
 const { createToolchain } = require('./toolchain');
 const { startTests } = require('./testing');
+const { startDebugging } = require('./debugging');
 const { registerFormatter } = require('./formatting');
 
 const KEYWORDS = new Set([
@@ -458,6 +459,7 @@ async function activate(context) {
 
   registerFormatter(context, vscode, cp, fs, os, path, toolchain, say);
   const tests = startTests(context, vscode, cp, fs, path, toolchain, languageClient, say);
+  startDebugging(context, vscode, path, toolchain, say);
   if (languageClient) {
     languageClient.onDidStart(() => tests.discoverAll(true));
   }

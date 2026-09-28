@@ -12,6 +12,11 @@
 //
 // **Continuous run**: both profiles support it (the eye in the Test Explorer): the chosen tests run again whenever a
 // `.trb` file of the workspace is saved.
+//
+// **Debugging them**: the profile "Debug" starts a session of `torb debug` (./debugging.js, docs/design/DEBUGGER.md)
+// per chosen file, with `test`, the chosen names as `filter` and `report: "json"`; the adapter sends the report's lines
+// as `torbscript/testReport` events, which a tracker maps onto the items exactly as a run's lines are mapped. Every
+// test and group in the gutter and in the Test Explorer gets Debug beside Run.
 
 'use strict';
 
@@ -42,7 +47,14 @@ class TorbTests {
     const native = (request, token) => this.run(request, token, true);
     this.vmProfile = this.controller.createRunProfile('Run', vscode.TestRunProfileKind.Run, run, true, undefined, true);
     this.nativeProfile = this.controller.createRunProfile('Run Natively', vscode.TestRunProfileKind.Run, native, false, undefined, true);
-    context.subscriptions.push(this.controller);
+    // Debug: a session of `torb debug` per file, whose report arrives as `torbscript/testReport` events (./debugging.js)
+    this.debugProfile = this.controller.createRunProfile('Debug', vscode.TestRunProfileKind.Debug, (request, token) => this.debugTests(request, token), true);
+    this.debugRuns = new Map();
+    this.debugSessions = 0;
+    context.subscriptions.push(
+      this.controller,
+      vscode.debug.registerDebugAdapterTrackerFactory('torbscript', { createDebugAdapterTracker: (session) => this.trackerFor(session) })
+    );
 
     const watcher = vscode.workspace.createFileSystemWatcher(FILE_PATTERN);
     context.subscriptions.push(
@@ -592,6 +604,147 @@ class TorbTests {
         resolve({ unsupported: false, events: state.events });
       });
     });
+  }
+
+  // --- Debugging ---------------------------------------------------------------------------------------------------
+
+  /**
+   * The Debug profile: every chosen file debugged in a session of its own - the whole file, or the chosen groups and
+   * tests as filters - with `report: "json"`, so the adapter hands the report to `trackerFor` as events and the run's
+   * items pass and fail as they do in the Run profile. The sessions run one after the other.
+   */
+  async debugTests(request, token) {
+    const { vscode } = this;
+    if (!this.toolchain.isFound()) {
+      await this.toolchain.check();
+    }
+    if (!this.toolchain.isFound()) {
+      vscode.window.showWarningMessage('Debugging tests needs the TorbScript toolchain.', 'Install TorbScript').then((answer) => {
+        if (answer) {
+          vscode.commands.executeCommand('torbscript.installToolchain');
+        }
+      });
+      return;
+    }
+    if (!this.listed && !request.include) {
+      await this.discoverAll(false);
+    }
+    const run = this.controller.createTestRun(request, undefined, true);
+    const excluded = new Set((request.exclude || []).map((item) => item.id));
+    const byFile = new Map(); // file id -> { file, names, whole }
+    for (const item of request.include || this.allItems()) {
+      if (excluded.has(item.id)) {
+        continue;
+      }
+      const file = this.fileOf(item);
+      if (!file || !vscode.workspace.getWorkspaceFolder(file.uri)) {
+        continue;
+      }
+      const entry = byFile.get(file.id) || { file, names: [], whole: false };
+      const kind = kinds.get(item);
+      if (kind.type === 'file' && !this.hasExcludedDescendant(item, excluded)) {
+        entry.whole = true;
+      } else {
+        for (const name of this.namesToRun(item, excluded)) {
+          if (!entry.names.includes(name)) {
+            entry.names.push(name);
+          }
+        }
+      }
+      byFile.set(file.id, entry);
+      this.enqueue(run, item, excluded);
+    }
+    try {
+      for (const [, entry] of byFile) {
+        if (token.isCancellationRequested) {
+          break;
+        }
+        await this.debugFileTests(run, token, entry.file, entry.whole ? [] : entry.names);
+      }
+    } finally {
+      run.end();
+    }
+  }
+
+  /** One session of `torb debug` over one test file, `names` its filters; resolves once the session has ended. */
+  async debugFileTests(run, token, file, names) {
+    const { vscode, path } = this;
+    const folder = vscode.workspace.getWorkspaceFolder(file.uri);
+    this.debugSessions += 1;
+    const key = `torbscript-tests-${this.debugSessions}`;
+    const state = { file, current: undefined, reported: new Set(), events: 0 };
+    const byPath = new Map([[normalized(path, file.uri.fsPath), file]]);
+    this.debugRuns.set(key, { run, state, byPath, folder: folder.uri.fsPath });
+    const configuration = {
+      type: 'torbscript',
+      request: 'launch',
+      name: names.length > 0 ? `Debug ${names.join(', ')}` : `Debug ${vscode.workspace.asRelativePath(file.uri, false)}`,
+      test: file.uri.fsPath,
+      filter: names,
+      cwd: folder.uri.fsPath,
+      report: 'json',
+      torbscriptTestRun: key,
+    };
+    let session;
+    const ended = new Promise((resolve) => {
+      const terminated = vscode.debug.onDidTerminateDebugSession((each) => {
+        if (each.configuration.torbscriptTestRun === key) {
+          terminated.dispose();
+          resolve();
+        }
+      });
+      const started = vscode.debug.onDidStartDebugSession((each) => {
+        if (each.configuration.torbscriptTestRun === key) {
+          started.dispose();
+          session = each;
+        }
+      });
+    });
+    const cancel = token.onCancellationRequested(() => {
+      if (session) {
+        vscode.debug.stopDebugging(session);
+      }
+    });
+    let isStarted = false;
+    try {
+      isStarted = await vscode.debug.startDebugging(folder, configuration, { testRun: run });
+    } catch (error) {
+      this.log(`the debug session of ${file.uri.fsPath} could not be started: ${error.message}`);
+    }
+    if (isStarted) {
+      await ended;
+    }
+    cancel.dispose();
+    this.debugRuns.delete(key);
+    if (!isStarted) {
+      this.fail(run, [file], 'The debug session could not be started: the TorbScript output says why');
+    } else if (state.events === 0 && !token.isCancellationRequested) {
+      this.fail(run, [file], 'The debug session ended before a test ran: what it printed is in the Debug Console');
+    } else if (state.current && !state.reported.has(state.current.id)) {
+      run.errored(state.current, new vscode.TestMessage('The debug session ended inside this test'));
+    }
+  }
+
+  /** What a session of the Debug profile says: its report onto the run's items, its output into the run's output. */
+  trackerFor(session) {
+    const key = session.configuration.torbscriptTestRun;
+    if (!key) {
+      return undefined;
+    }
+    return {
+      onDidSendMessage: (message) => {
+        const entry = this.debugRuns.get(key);
+        if (!entry || !message || message.type !== 'event' || !message.body) {
+          return;
+        }
+        if (message.event === 'torbscript/testReport') {
+          entry.state.events += 1;
+          this.onEvent(entry.run, message.body, entry.state, entry.byPath, entry.folder);
+        } else if (message.event === 'output' && typeof message.body.output === 'string') {
+          entry.run.appendOutput(message.body.output.replace(/\r?\n/g, '\r\n'), undefined, entry.state.current);
+        }
+      },
+    };
   }
 
   onEvent(run, event, state, byPath, folder) {

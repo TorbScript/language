@@ -13,6 +13,8 @@ The first version in the stores.
 - Tests in the Test Explorer: the `group` and `test` calls of every `*.test.trb`, run with `torb test` in the VM or
   natively, with the failure at the line that failed and continuous run on save.
 - Format Document with `torb format`, and "Run File" with `torb run`.
+- The debugger of `torb debug`: breakpoints, stepping, the call stack, locals, hover and watch, a stop at a panic;
+  Debug beside Run for every test in the Test Explorer, "Debug File" and a CodeLens "Run | Debug" on entry files.
 - The walkthrough "Get Started with TorbScript", which installs the toolchain with the official installer in a terminal,
   creates a first program with `torb new`, runs it and points at the documentation; a status bar item and a
   notification while `torb` is missing, and "TorbScript: Install or Update Toolchain".

@@ -33,7 +33,8 @@ anything else, so it runs the compiler of this checkout.
 | `extension.js` | Activation; highlights `trb` blocks in the Markdown preview (highlight.js classes); the semantic tokens of `torb highlight` where the language server does not run; "New Project..." and "Run File" |
 | `lsp-client.js` | The client of `torb lsp`: the Language Server Protocol over the server's standard input and output, with no dependency |
 | `toolchain.js` | Finding `torb` (`torbscript.executablePath`, `build/release`, `PATH`, the installers' places), `torb --version`, the context key `torbscript.toolchainFound`, the status bar item, the installer as a task |
-| `testing.js` | The Test Explorer: discovery through the request `torbscript/tests`, runs through `torb test --report json` |
+| `testing.js` | The Test Explorer: discovery through the request `torbscript/tests`, runs through `torb test --report json`, and the Debug profile |
+| `debugging.js` | The debugger: `torb debug` as the debug adapter, a configuration for F5 without a `launch.json`, "Debug File", the CodeLens "Run \| Debug" of an entry file |
 | `formatting.js` | Format Document through `torb format` over a temporary copy |
 | `syntaxes/trb.tmLanguage.json` | The TextMate grammar for the editor (`source.trb`) |
 | `syntaxes/trb.markdown.tmLanguage.json` | Injects `source.trb` into fenced code blocks in Markdown |
@@ -114,6 +115,16 @@ The extension reads that answer instead of showing it, remembers it for that bin
 writing, so a rebuilt `torb` is asked again), runs the files again as `torb test <file>...` and reads the plain report
 (`  ok      <name>`, `  FAILED  <name>` and the failure's lines indented by ten spaces), and says once that `torb
 upgrade` brings the rest: without `--filter` a single test runs its whole file, and the plain report has no durations.
+
+## The debugger
+
+`torb debug` is the debug adapter (docs/tooling/torb-debug.md): `debugging.js` registers it for the type `torbscript`
+with the `torb` of `toolchain.js`, and fills in a configuration for F5 without a `launch.json` - the file in the
+editor, its tests where it is a test file. The Test Explorer's profile "Debug" starts one session per file with
+`test`, the chosen names as `filter` and `report: "json"`; the adapter hands the report's lines on as
+`torbscript/testReport` events, and a `DebugAdapterTracker` maps them onto the run's items with the same code the
+Run profile reads a report with. The session's `configuration` carries `torbscriptTestRun`, which is how the tracker
+finds its run.
 
 ## Tasks
 

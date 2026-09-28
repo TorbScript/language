@@ -1,7 +1,7 @@
 {
   "name": "torbscript",
   "displayName": "TorbScript",
-  "description": "TorbScript for VS Code: the language server of torb lsp (diagnostics, hover, go to definition, completion, quick fixes, semantic tokens), tests in the Test Explorer, a getting-started walkthrough that installs the toolchain, and syntax highlighting.",
+  "description": "TorbScript for VS Code: the language server of torb lsp (diagnostics, hover, go to definition, completion, quick fixes, semantic tokens), tests in the Test Explorer, the debugger of torb debug (breakpoints, stepping, locals, watch), a getting-started walkthrough that installs the toolchain, and syntax highlighting.",
   "version": "0.1.0",
   "publisher": "torbscript",
   "license": "MIT",
@@ -26,6 +26,7 @@
     "Linters",
     "Formatters",
     "Testing",
+    "Debuggers",
     "Snippets"
   ],
   "keywords": [
@@ -37,7 +38,8 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "workspaceContains:**/*.trb"
+    "workspaceContains:**/*.trb",
+    "onDebugResolve:torbscript"
   ],
   "contributes": {
     "languages": [
@@ -121,12 +123,22 @@
         "title": "Run File",
         "category": "TorbScript",
         "icon": "$(play)"
+      },
+      {
+        "command": "torbscript.debugFile",
+        "title": "Debug File",
+        "category": "TorbScript",
+        "icon": "$(debug-alt)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "torbscript.runFile",
+          "when": "editorLangId == trb"
+        },
+        {
+          "command": "torbscript.debugFile",
           "when": "editorLangId == trb"
         }
       ],
@@ -135,9 +147,133 @@
           "command": "torbscript.runFile",
           "when": "resourceLangId == trb",
           "group": "navigation"
+        },
+        {
+          "command": "torbscript.debugFile",
+          "when": "resourceLangId == trb",
+          "group": "navigation"
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "trb"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "torbscript",
+        "label": "TorbScript",
+        "languages": [
+          "trb"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The file or directory to run, as `torb run` takes it: a file, the only program below a directory, or the program of a project.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The program's arguments: what `Process.arguments()` answers.",
+                "default": []
+              },
+              "test": {
+                "type": "string",
+                "description": "A test file or a directory of tests to debug instead of a program, as `torb test` takes it.",
+                "default": "${file}"
+              },
+              "filter": {
+                "type": [
+                  "string",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "With `test`: the full name of a test or a group (`Group > test`), or a list of them, as `torb test --filter` takes them."
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The working directory of the program. Default: the workspace folder.",
+                "default": "${workspaceFolder}"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables of the program.",
+                "default": {}
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first statement.",
+                "default": false
+              },
+              "justMyCode": {
+                "type": "boolean",
+                "description": "Steps do not stop in the standard library; a breakpoint there still does.",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "torbscript",
+            "request": "launch",
+            "name": "Debug File",
+            "program": "${file}"
+          },
+          {
+            "type": "torbscript",
+            "request": "launch",
+            "name": "Debug Tests of File",
+            "test": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "TorbScript: Debug a Program",
+            "description": "Debug a program in the VM",
+            "body": {
+              "type": "torbscript",
+              "request": "launch",
+              "name": "Debug ${1:src/main.trb}",
+              "program": "^\"\\${workspaceFolder}/${1:src/main.trb}\"",
+              "args": []
+            }
+          },
+          {
+            "label": "TorbScript: Debug the Current File",
+            "description": "Debug the file in the editor",
+            "body": {
+              "type": "torbscript",
+              "request": "launch",
+              "name": "Debug File",
+              "program": "^\"\\${file}\""
+            }
+          },
+          {
+            "label": "TorbScript: Debug Tests",
+            "description": "Debug the tests of a file or a directory, optionally only some of them",
+            "body": {
+              "type": "torbscript",
+              "request": "launch",
+              "name": "Debug Tests",
+              "test": "^\"\\${workspaceFolder}/${1:tests}\"",
+              "filter": []
+            }
+          }
+        ]
+      }
+    ],
     "taskDefinitions": [
       {
         "type": "torbscript",
