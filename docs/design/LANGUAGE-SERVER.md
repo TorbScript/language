@@ -88,8 +88,8 @@ ran are handled before the next step, a `$/cancelRequest` among them, and a chan
 check of the workspace takes its next module. A step that is due later - the check of the workspace begins a while after
 the last change - waits for the clock's timer.
 
-A step is one module of a run of the checker (`run.trb`), or one part of a request - the files an index still has to
-read, the files a search still has to check. The alternative was to run the long work in a task on another worker and
+A step is a slice of a run of the checker - the statements of a module for 40 ms (`run.trb`) - or a part of a request:
+the files an index still has to read, the files a round of the workspace parses before it builds its front. The alternative was to run the long work in a task on another worker and
 answer the messages in parallel. A task that starts on another worker gets a copy of what it captures, and what the
 long work needs is the whole program: its trees, its front, its checker. The steps keep everything in the one heap of
 the server, and every task of it on one worker, and cost no copy at all.
@@ -245,9 +245,10 @@ a function of a hundred lines whose check - with the bodies it asks for on deman
   action on every finding with a fix that touches the range asked about.
 
 **Decision: the files nobody opened are checked in the background, and what `torb check` finds in them is published
-too** (`workspace.trb`). A round checks one module per step on one checker (`ModuleRun` of `run.trb`:
-`preparedChecker`, then `checkNextModule` per module, and the escapes settled as the last step, as `checkTypes` does it),
-over a front of every package of the project. The first round begins a while after `initialized` and checks every
+too** (`workspace.trb`). A round checks a slice of a module per step on one checker (`ModuleRun` of `run.trb`:
+`preparedChecker`, then per module `beginNextModule`, `continueModuleCheck` for 40 ms at a time and `finishModuleCheck`,
+and the escapes settled as the last step, as `checkTypes` does it), over a front of every package of the project, whose
+files it parses a dozen per step first. The first round begins a while after `initialized` and checks every
 module below the root; after files change on disk (`workspace/didChangeWatchedFiles`, a file deleted included) a round
 checks the files that changed and every module that imports one of them, directly or through others, and begins a while
 after the last change, so a burst of changes - a branch checked out - costs one round. A change while a round runs
@@ -306,7 +307,7 @@ its ids into such places; the places it finds are in its own text, and move to w
   of the function, and a link of a doc comment. A field is found by the rename of `torb rename` (`../lint/rename.trb`),
   which knows the labels of constructors, of `copy`, of cases and of patterns, a delegate, and a bare name inside of its
   type. The open documents answer from their views; every file nobody opened whose text has the name as a word is
-  checked, one module per step, and the answer waits for them. A local is found in its document alone.
+  checked, a slice of a module per step, and the answer waits for them. A local is found in its document alone.
 - **A rename is checked before it is made** (`rename.trb`). The files it could touch - every file whose text has the old
   name *or the new one* as a word - are checked before the edits and after them, and what each name there resolves to
   and what is wrong with each file are compared, the places moved by the edits. The rename is answered only where the
@@ -381,8 +382,10 @@ and `.vscode/launch.json` runs the working copy in an Extension Development Host
   cannot change them. They depend on the spans of the changed document, which is what keeps them from being reused.
 - **The semantic tokens of a large document** are the resolver's over the whole file on every request, about 100 ms in
   the largest file of the compiler.
-- **A check of a large module is one step**: `expression.trb` is about a second of the check of the workspace in which
-  no message is answered. A step per declaration would make it several.
+- **A document's check as a whole is one step**: the first check of a document, and one after a change of its interface,
+  run before the next message is read - two to four seconds for the largest file of the compiler when it is opened. The
+  check of the workspace is taken in slices of 40 ms (`ModuleRun`, `beginModuleCheck`/`continueModuleCheck`); a check
+  of a document could be taken the same way, with the requests about it waiting for its last slice.
 - **A rename of a name many files have** checks all of them twice, which takes seconds; the steps keep the server
   answering, and `$/cancelRequest` stops it.
 - **The brand of the published extension**: its icon, gallery banner and walkthrough images are placeholders

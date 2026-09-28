@@ -40,7 +40,8 @@ use diagnosticsJson, rangeJson from "./diagnostics"
 use hoverOf from "./hover"
 use LinkTarget, documentationOf from "./documentation"
 use signatureHelpOf from "./signature-help"
-use Key, Keys, Target, TargetKind, RenameEdit, targetKindOf, sitesIn, fieldEdits, nameSpanAt, problemOfNewName from "./references"
+use Key, Keys, Target, TargetKind, RenameEdit, targetKindOf from "./references"
+use sitesIn, fieldEdits, nameSpanAt, problemOfNewName from "./references"
 use ModuleFacts, factsOf, differenceOf, editedText from "./rename"
 use foundAt, symbolOfResolution from "./lookup"
 use wordOffsets from "../lint/rename"
@@ -394,9 +395,12 @@ public type LanguageServer {
       edited = project.tree.text(path) != onDisk
       project.tree = project.tree.withFile path, onDisk
     }
+    // Changes that were not saved are gone from what every other file sees: what the open documents found with them too
+    if edited {
+      forgetViews project, documents, document.project
+    }
     projects.set document.project, project
-    // What the check of the workspace found about the file is what it shows again, and changes it made that were not
-    // saved are gone from what every other file sees
+    // What the check of the workspace found about the file is what it shows again
     publish(document.uri, projects[document.project].workspace.published.get(path) ?? [])
     if edited {
       scheduleWorkspace document.project, [path]
@@ -438,13 +442,9 @@ public type LanguageServer {
         }
       }
       const _indexed = project.symbolIndex.remove path
-      // Every open document may import what changed; the next run asks all of them again
+      // Every open document may import what changed, and what its last run found may not hold any more
       project.front = None
-      for (open, document) in documents {
-        if document.project == index {
-          project.markChanged open
-        }
-      }
+      forgetViews project, documents, index
       projects.set index, project
       var paths = changedIn.get(index) ?? []
       paths.append path
@@ -604,7 +604,8 @@ public type LanguageServer {
     projects.set index, project
     const finished = Clock.milliseconds()
     const kept = if bodies.isEmpty() { "" } else { ", bodies: {bodies.joined(separator: ", ")}" }
-    log.append "refreshed {updated.length()} document(s) in {checkedAt - started} ms{kept}, published in {finished - checkedAt} ms"
+    const published = finished - checkedAt
+    log.append "refreshed {updated.length()} document(s) in {checkedAt - started} ms{kept}, published in {published} ms"
   }
 
   /** One line of standard error with the cost of every pass of a run. */
@@ -787,7 +788,10 @@ public type LanguageServer {
             const all = projects
             const translate: (String, Span) => Span? = { path, span =>
               const moved = currentSpanIn(project, document, retried, at.layer, at.analysis, path, span)?
-              if path == document.path && moved.start >= cut { Span(moved.start + removed, moved.end + removed) } else { moved }
+              if path != document.path || moved.start < cut {
+                return moved
+              }
+              Span(moved.start + removed, moved.end + removed)
             }
             withCurrentData found, translate, { uriIn all, _ }
           }
@@ -871,7 +875,8 @@ public type LanguageServer {
     const project = projects[document.project]
     const tree = project.tree.withFile document.path, content
     const last = project.front?
-    const current = refreshedFrontOf(tree, last, [document.path])?
+    // The text without the member access may declare something else as well: then only a front from scratch knows it
+    const current = refreshedFrontOf(tree, last, [document.path]) ?? frontOf(tree, [document.path], onlyReached: true)
     if const Some(found) = viewAfterChange(view, tree, current, document.path, comparesFacts: false) {
       return found
     }
@@ -945,8 +950,8 @@ public type LanguageServer {
 
   /**
    * When the next step of the work between messages is due, in the milliseconds of `Clock.milliseconds()`: `0` where it
-   * is due now, `None` where there is nothing to do. The transport comes back for [LanguageServer.step] then, and answers
-   * the messages that arrive in the meantime first.
+   * is due now, `None` where there is nothing to do. The transport comes back for [LanguageServer.step] then, and
+   * answers the messages that arrive in the meantime first.
    */
   fn nextStepAt(): Int64? {
     if phase != Phase.Running {
@@ -1273,7 +1278,7 @@ public type LanguageServer {
   /**
    * `textDocument/rename`: the edits of every place that names what the name at the position is about, once a check of
    * every file that has the old name or the new one as a word, before and after the edits, found that they mean what
-   * they meant (`./rename.trb`). The checks are done one module per step, and the answer waits for them.
+   * they meant (`./rename.trb`). The checks are done a slice of a module per step, and the answer waits for them.
    */
   private var fn rename(id: JsonValue, parameters: JsonValue) {
     const (document, target, _) = match targetAt(parameters) {
@@ -1319,7 +1324,8 @@ public type LanguageServer {
   /** Why what a name is about cannot be renamed at all, where it cannot: it is declared outside of the workspace. */
   private fn renameRefusal(document: Document, target: Target): String? {
     const project = projects[document.project]
-    const inside = if project.loose { target.key.path == document.path } else { project.locations.holds target.key.path }
+    const path = target.key.path
+    const inside = if project.loose { path == document.path } else { project.locations.holds path }
     if !inside {
       return "`{target.name}` is declared outside of the workspace, in {project.tree.display(target.key.path)}"
     }
@@ -1807,7 +1813,7 @@ type RequestWork {
   case Symbols(query: String, pending: List<(Int, String)>)
   /** `textDocument/references`: the files nobody opened that have the name as a word, one per step */
   case References(search: ReferenceSearch)
-  /** `textDocument/rename`: the check before the edits, then the check after them, one module per step */
+  /** `textDocument/rename`: the check before the edits, then the check after them, a slice of a module per step */
   case Rename(search: RenameSearch)
 }
 
@@ -1855,7 +1861,8 @@ fn renameBefore(var search: RenameSearch, run: ModuleRun): String? {
     const keys = keysOfRun checked, shape.path
     const problems = run.diagnosticsOf module
     if !problems.isEmpty() && hasWord(shape.source.text, search.target.name) {
-      return "{shape.path} has a problem, and a use of `{search.target.name}` in it might go unseen: {problems[0].message}"
+      const name = search.target.name
+      return "{shape.path} has a problem, and a use of `{name}` in it might go unseen: {problems[0].message}"
     }
     search.before.set shape.path, factsOf(checked, module, problems.map({ (_.span, _.message) }).toList())
     var edits: List<RenameEdit> = []
@@ -2019,6 +2026,19 @@ fn sitesOfView(project: Project, document: Document, view: DocumentView, target:
     }
   }
   found
+}
+
+/**
+ * Forgets what the runs found about every open document of a project and marks each of them changed, so that the next
+ * run checks them as a whole: a file they may import changed under them - on disk, or by closing it unsaved.
+ */
+fn forgetViews(var project: Project, documents: Map<String, Document>, index: Int) {
+  for (path, document) in documents {
+    if document.project == index {
+      const _view = project.views.remove path
+      project.markChanged path
+    }
+  }
 }
 
 /** Adds a path to a list that does not hold it yet. */

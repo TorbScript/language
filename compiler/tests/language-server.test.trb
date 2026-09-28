@@ -386,6 +386,15 @@ group "Diagnostics of the whole workspace" {
     assert(messagesOf(found.get(mainUri) ?? []) == ["Expected `Int64`, found `String`"])
   }
 
+  test "an open document that imports a file that changed on disk is checked again" {
+    const main = "use value from \"./helper\"\n\nconst total: Int = value()\nprint total\n"
+    var server = started(["app/src/helper.trb": fixed, "app/src/main.trb": main])
+    const _opened = send server, [opened(mainUri, main)]
+    server.writeMemoryFile "app/src/helper.trb", "public fn value(): String \{\n  \"no\"\n\}\n"
+    const answers = send server, [watched(helperUri, 2)]
+    assert(messagesOf(published(answers).get(mainUri) ?? []) == ["Expected `Int64`, found `String`"])
+  }
+
   test "a deleted file has its diagnostics cleared" {
     var server = started(["app/src/helper.trb": broken])
     const _initialized = send server, [message("initialized", "\{\}")]

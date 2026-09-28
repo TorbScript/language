@@ -98,7 +98,7 @@ checker's tables only run on a document the checker found no problem in, as `tor
 
 The files nobody opened are checked in the background: every module of the project a while after `initialized`, and
 after files change on disk the ones that changed and every module that imports one of them. The server answers the
-messages that arrive while it checks - the check takes one module per step - and publishes the problems of each file
+messages that arrive while it checks - it checks for a few dozen milliseconds at a time - and publishes the problems of each file
 where they are not what it published before; a file that never had one is not published at all. The lint rules are
 left to the open documents. Closing a document publishes what the check of the workspace found about it again.
 
