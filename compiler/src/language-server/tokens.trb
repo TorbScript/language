@@ -77,17 +77,17 @@ fn sharpened(var tokens: List<HighlightToken>, checker: Checker, resolutions: Ma
   var lookups = checker
   for index in 0..tokens.length() {
     const token = tokens[index]
-    const isAfterDot = token.span.start > 0 && source.byteAt(token.span.start - 1) == 46
-    if !isAfterDot {
+    const afterDot = token.span.start > 0 && source.byteAt(token.span.start - 1) == 46
+    if !afterDot {
       continue
     }
     var member: Span? = None
     for span in endingAt.get(token.span.end) ?? [] {
-      const isNarrower = match member {
+      const narrower = match member {
         Some(best) => span.start > best.start
         None => true
       }
-      if span.start < token.span.start && isNarrower {
+      if span.start < token.span.start && narrower {
         member = span
       }
     }
@@ -104,8 +104,8 @@ fn sharpened(var tokens: List<HighlightToken>, checker: Checker, resolutions: Ma
     }
   }
   for (span, resolution) in resolutions {
-    const isPlainName = span.end > span.start && nameStartBefore(source, span.end) == span.start
-    if !isPlainName || at.containsKey(span) {
+    const bare = span.end > span.start && nameStartBefore(source, span.end) == span.start
+    if !bare || at.containsKey(span) {
       continue
     }
     if const Some((kind, modifiers)) = classified(lookups, resolution) {
@@ -120,8 +120,8 @@ fn classified(var checker: Checker, resolution: Resolution): (String, List<Strin
   match resolution {
     .Local(binding) => {
       const found = checker.binding binding
-      const kind = if found.isParameter || found.isReceiver { "parameter" } else { "variable" }
-      (kind, if found.isVar { ["mutable"] } else { ["readonly"] })
+      const kind = if found.bindsParameter || found.bindsReceiver { "parameter" } else { "variable" }
+      (kind, if found.var { ["mutable"] } else { ["readonly"] })
     }
     .Callable(symbol, _, _) => {
       if const Some(site) = checker.sites.get(symbol) {
@@ -132,8 +132,8 @@ fn classified(var checker: Checker, resolution: Resolution): (String, List<Strin
       ("function", [])
     }
     .Field(owner, field) => {
-      const isVar = fieldsOf(checker, owner).any({ _.symbol == field && _.isVar })
-      ("property", if isVar { ["mutable"] } else { ["readonly"] })
+      const changeable = fieldsOf(checker, owner).any({ _.symbol == field && _.var })
+      ("property", if changeable { ["mutable"] } else { ["readonly"] })
     }
     .PropertyWrite(_, _) => ("property", ["mutable"])
     .Constant(_, owner) => {

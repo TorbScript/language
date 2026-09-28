@@ -142,8 +142,8 @@ group "The base protocol" {
     reader.add both.bytes().toList()
     expectText nextOf(reader), first
     expectText nextOf(reader), "[]"
-    const isPending = reader.isPending()
-    assert(!isPending)
+    const pending = reader.isPending()
+    assert(!pending)
   }
 
   test "a header without a length is dropped, and the message after it read" {
@@ -215,8 +215,8 @@ group "The life cycle" {
     var server = started()
     const answers = sent server, [message("shutdown", "null", 2)]
     assert(answers == ["\{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":null\}"])
-    const isRunning = !server.hasExited()
-    assert isRunning
+    const running = !server.hasExited()
+    assert running
     const afterExit = sent server, [message("exit", "null")]
     assert afterExit.isEmpty()
     const code = server.exitCode()
@@ -410,7 +410,7 @@ group "Completion" {
     assert(completionContextOf("point.x", 7) == CompletionContext.Member(5, 5, optional: false))
     assert(completionContextOf("point?.", 7) == CompletionContext.Member(5, 6, optional: true))
     assert(completionContextOf("print to", 8) == CompletionContext.Name(6))
-    assert(withoutMemberAccess("print point.xy\n", 11, 14, isOptional: false) == "print point\n")
+    assert(withoutMemberAccess("print point.xy\n", 11, 14, optional: false) == "print point\n")
   }
 
   test "behind a `.` the members of the value's type" {

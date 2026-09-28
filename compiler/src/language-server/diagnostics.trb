@@ -53,10 +53,10 @@ public fn findingsOf(analysis: Analysis, path: String): List<Finding> {
   }
   const checker = analysis.checked.checker
   const shape = analysis.checked.program.graph.at module
-  const isClean = analysis.fileOf(path).map({ _.diagnostics.isEmpty() }) ?? false
-  const plain = if isClean { Some plainBindingStarts(checker, module) } else { None }
+  const clean = analysis.fileOf(path).map({ _.diagnostics.isEmpty() }) ?? false
+  const plain = if clean { Some plainBindingStarts(checker, module) } else { None }
   var findings = lintFindings(shape.source.text, everyLintRule(), plain) ?? []
-  if isClean {
+  if clean {
     findings.appendAll labeledLiteralFindings(checker, module, shape.file)
     findings.appendAll redundantWrapFindings(checker, module, shape.source.text, shape.file)
   }

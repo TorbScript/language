@@ -451,8 +451,8 @@ public type LanguageServer {
   private fn completion(analysis: Analysis, document: Document, offset: Int): JsonValue {
     match completionContextOf(document.text, offset) {
       .Name(_) => nameCompletion analysis, document.path, offset
-      .Member(receiverEnd, dot, isOptional) => {
-        if const Some(found) = memberCompletion(analysis, document.path, receiverEnd, isOptional) {
+      .Member(receiverEnd, dot, optional) => {
+        if const Some(found) = memberCompletion(analysis, document.path, receiverEnd, optional) {
           return found
         }
         const current = match tree {
@@ -461,14 +461,14 @@ public type LanguageServer {
             return JsonValue.Null
           }
         }
-        const patched = withoutMemberAccess document.text, dot, offset, isOptional
+        const patched = withoutMemberAccess document.text, dot, offset, optional
         const patchedTree = current.withFile document.path, patched
         const incremental = match front {
           Some(last) => reanalyze patchedTree, last, [document.path], [document.path]
           None => None
         }
         const retried = incremental ?? analyze(patchedTree, [document.path], [document.path])
-        memberCompletion(retried, document.path, receiverEnd, isOptional) ?? JsonValue.Null
+        memberCompletion(retried, document.path, receiverEnd, optional) ?? JsonValue.Null
       }
     }
   }

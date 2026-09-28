@@ -47,8 +47,8 @@ public fn completionContextOf(source: String, offset: Int): CompletionContext {
 }
 
 /** The text with the `.` at `dot` and the member name typed behind it removed: the receiver alone. */
-public fn withoutMemberAccess(source: String, dot: Int, offset: Int, isOptional: Bool): String {
-  const from = if isOptional { dot - 1 } else { dot }
+public fn withoutMemberAccess(source: String, dot: Int, offset: Int, optional: Bool): String {
+  const from = if optional { dot - 1 } else { dot }
   source.sliceBytes(0, from) + source.sliceBytes(offset, source.byteLength())
 }
 
@@ -56,7 +56,7 @@ public fn withoutMemberAccess(source: String, dot: Int, offset: Int, isOptional:
  * The members of what ends at `receiverEnd`, or `None` where no expression the checker typed ends there - the case
  * for which the server checks the text without the member access.
  */
-public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, isOptional: Bool): JsonValue? {
+public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, optional: Bool): JsonValue? {
   const module = analysis.moduleOf(path)?
   var checker = analysis.checked.checker
   checker.module = module
@@ -66,11 +66,11 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, i
     if span.end != receiverEnd || span.start >= span.end {
       continue
     }
-    const isNarrower = match receiver {
+    const narrower = match receiver {
       Some((best, _)) => span.end - span.start < best.end - best.start
       None => true
     }
-    if isNarrower {
+    if narrower {
       receiver = (span, found)
     }
   }
@@ -95,7 +95,7 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, i
       }
     }
     _ => {
-      const subject = if isOptional { optionalInner(checker, annotation) ?? annotation } else { annotation }
+      const subject = if optional { optionalInner(checker, annotation) ?? annotation } else { annotation }
       for name in unique(memberNames(checker, subject)) {
         if const Some(candidate) = lookupMember(checker, subject, name) {
           if !isInstanceMember(candidate) {
@@ -268,7 +268,7 @@ fn isNameByte(byte: UInt8): Bool {
  */
 public fn localsAt(file: SourceFile, offset: Int): List<Name> {
   var found: List<Name> = []
-  walkStatements found, file.statements, offset, isNested: false
+  walkStatements found, file.statements, offset, nested: false
   found
 }
 
@@ -276,23 +276,23 @@ fn contains(span: Span, offset: Int): Bool {
   span.start <= offset && offset <= span.end
 }
 
-fn walkStatements(var found: List<Name>, statements: List<Statement>, offset: Int, isNested: Bool) {
+fn walkStatements(var found: List<Name>, statements: List<Statement>, offset: Int, nested: Bool) {
   for statement in statements {
     if statement.span.start > offset {
       return
     }
-    walkStatement found, statement, offset, isNested
+    walkStatement found, statement, offset, nested
   }
 }
 
-fn walkStatement(var found: List<Name>, statement: Statement, offset: Int, isNested: Bool) {
-  const isInside = contains statement.span, offset
+fn walkStatement(var found: List<Name>, statement: Statement, offset: Int, nested: Bool) {
+  const inside = contains statement.span, offset
   match statement.kind {
-    .Declare(declaration) => walkDeclaration found, declaration, offset, isNested
+    .Declare(declaration) => walkDeclaration found, declaration, offset, nested
     .Bind(binding) => {
-      if isInside && contains(binding.value.span, offset) {
+      if inside && contains(binding.value.span, offset) {
         walkExpression found, binding.value, offset
-      } else if statement.span.end <= offset && isNested {
+      } else if statement.span.end <= offset && nested {
         found.appendAll boundNamesOf(binding.pattern)
       }
     }
@@ -329,10 +329,10 @@ fn walkStatement(var found: List<Name>, statement: Statement, offset: Int, isNes
   }
 }
 
-fn walkDeclaration(var found: List<Name>, declaration: Declaration, offset: Int, isNested: Bool) {
+fn walkDeclaration(var found: List<Name>, declaration: Declaration, offset: Int, nested: Bool) {
   match declaration.kind {
     .Function(function) => {
-      if isNested {
+      if nested {
         found.append function.name
       }
       if contains(declaration.span, offset) {
@@ -383,7 +383,7 @@ fn walkFunction(var found: List<Name>, function: FunctionDeclaration, offset: In
 }
 
 fn walkBlock(var found: List<Name>, block: Block, offset: Int) {
-  walkStatements found, block.statements, offset, isNested: true
+  walkStatements found, block.statements, offset, nested: true
 }
 
 fn walkCondition(var found: List<Name>, condition: Condition, offset: Int) {
