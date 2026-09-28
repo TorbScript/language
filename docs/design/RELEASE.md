@@ -308,10 +308,11 @@ has no profile file to append to). Both take their base URL, channel and an exac
 which is what the tests below use instead of a second, test-only code path.
 
 **`<base url>/versions.txt`**, decided here since section 7.4's format is for the package index and this is simpler:
-one release per line, `<version> <channel>`, newest first is not required of it - every reader sorts. `release-sync`
-(section 7.11) writes it by rewriting the whole file on every release: the previous line for a version, if any, is
-replaced, and the new one put at the top. `install.sh`/`install.ps1` pick the first line of their channel; `torb
-upgrade --list` (below) sorts every line of the manifest instead, because it shows more than the newest one.
+one release per line, `<version> <channel>`. `release-sync` (section 7.11) writes it by rewriting the whole file on
+every release: the previous line for a version, if any, is replaced, and every channel's lines are kept newest first,
+the stable ones before the nightlies, whatever order the releases were placed in - because `install.sh`/`install.ps1`
+pick the first line of their channel. `torb upgrade` (below) sorts every line of the manifest instead, so it does not
+depend on that order.
 
 **The layout both scripts write, and `torb upgrade` (`compiler/src/cli/upgrade.trb`) manages afterwards**:
 
@@ -790,21 +791,38 @@ and from GitHub only where `RELEASE_SYNC_FORGE=github` says so; the two differ i
    once and syncs in a task of its own: the forge gives a delivery seconds, a download takes longer.
 2. Never trusts the webhook's own asset list: it re-fetches the release from the API (`GET
    /api/v1/repos/<owner>/<name>/releases/tags/<tag>` on Forgejo, `/repos/...` on GitHub), with a read-only token only
-   while the repository is private, which is also what a periodic poll (`RELEASE_SYNC_POLL_SECONDS`, default 300)
-   calls for the newest stable release (`.../releases/latest`), in case a webhook delivery was ever missed. The
-   workflows publish a release as a draft first and make it public once its last asset is uploaded, which is when the
-   forge sends "published" - measured on Forgejo 16.0.5: creating the draft and uploading send nothing.
-3. Downloads every asset into the container's own `/tmp` (`curl`: Forgejo's `browser_download_url`, GitHub's asset API
-   URL with `Accept: application/octet-stream`), verifies every archive against `SHA256SUMS` (`std/digest` over the file's chunks) and verifies
+   while the repository is private. The workflows publish a release as a draft first and make it public once its last
+   asset is uploaded, which is when the forge sends "published" - measured on Forgejo 16.0.5: creating the draft and
+   uploading send nothing. **The forge does not deliver a failed webhook again**, so a periodic check - at the start
+   and every `RELEASE_SYNC_POLL_SECONDS`, default 300 - lists the newest releases (`.../releases?draft=false&limit=50`,
+   `?per_page=50` on GitHub) and syncs every one that is not placed yet of the newest stable release and the nightlies
+   of the thirty days ending with the newest one listed, the thirty days a nightly is kept (section 5, "Channels").
+   Until 2026-09-28 it asked `.../releases/latest`, which is stable releases only and a `404` while there is none: a
+   nightly whose delivery was lost - the first production run lost one while the container was still starting and
+   Traefik had no route to it - was never placed, and the check logged an error every five minutes.
+3. Downloads every asset into a directory of its own below the scratch directory (`curl`: Forgejo's
+   `browser_download_url`, GitHub's asset API URL with `Accept: application/octet-stream`), readable by its owner
+   alone, verifies every archive against `SHA256SUMS` (`std/digest` over the file's chunks) and verifies
    `SHA256SUMS.sig` with `cosign verify-blob --key` against the project's public key, mounted at
    `/etc/release-sync/cosign.pub` (section 13, "Signing"; a release of GitHub: `SHA256SUMS.sigstore.json` against the
    identity of the workflow that made it) - **refusing when `cosign` or the key is not on the machine at all**, the same
-   as a signature that does not verify: a release this program cannot check is not placed as if it had been.
-4. Only then moves the files into `<root>/download/<version>/` (`File.rename`), rewrites
-   `<root>/download/versions.txt` whole or not at all (`File.writeTextAtomically`; that version's old line, if any,
-   replaced; put at the top) and, for a stable release, repoints the `<root>/download/latest` symlink - a new link
-   beside it renamed over the old one, so `latest` is never missing, which `ln -sfn` could not promise. A nightly has no
-   "latest", only `/docs/nightly/` on the site (section 6), which this program does not touch.
+   as a signature that does not verify: a release this program cannot check is not placed as if it had been. The
+   scratch directory is `<root>/download/.incoming` (`RELEASE_SYNC_SCRATCH`): it has to be on the file system of
+   `<root>/download/` for step 4's rename, and the site never serves a hidden entry there. It was the container's own
+   `/tmp` until the first production run found the rename into the mounted download directory failing with
+   `Invalid cross-device link`; a scratch directory on another file system now fails with a message that names the
+   variable.
+4. Only then renames the whole verified directory to `<root>/download/<version>` in one step (`File.rename`), so a
+   directory under a version's name is always complete - the same first run left an empty one behind, which the check,
+   asking only whether the directory existed, took for placed. It then rewrites `<root>/download/versions.txt` whole or
+   not at all (`File.writeTextAtomically`; that version's old line, if any, replaced; each channel newest first, the
+   stable releases before the nightlies, since the installers take the first line of their channel) and, where the
+   release is the newest stable one, repoints the `<root>/download/latest` symlink - a new link beside it renamed over
+   the old one, so `latest` is never missing, which `ln -sfn` could not promise. A placement that fails after the
+   rename is undone, the old directory and `versions.txt` put back, so the check tries it again; a version counts as
+   placed once `<root>/download/<version>/SHA256SUMS` is there. A nightly has no "latest", only `/docs/nightly/` on the
+   site (section 6), which this program does not touch. `tools/release-sync/README.md` has the variables, the webhook's
+   answers and how to run it locally.
 **Why `curl` and not `std/http`'s body all the way to disk**: the download is the one step left outside the language,
 and `File.write(path, response.body)` is its replacement once `std/http`'s client follows the redirects GitHub answers
 an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` on 2026-09-27, when `std/fs` gained
@@ -814,8 +832,9 @@ an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` 
 
 **Tested**: `tools/release-sync/tests` covers the pure decisions - which webhook actions to act on, which signature a
 request claims and whether it matches, reading a hash out of `SHA256SUMS`, the release JSON of both forges, the
-addresses and headers each is asked with - as ordinary TorbScript tests, and `tests/place.test.trb` the placement and
-the hashing in a temporary directory. The whole program ran once against a Forgejo
+addresses and headers each is asked with, which releases the periodic check places, the order of `versions.txt` - as
+ordinary TorbScript tests; `tests/check.test.trb` the periodic check against a fake forge over loopback, and
+`tests/place.test.trb` the placement, the placements that fail and are undone, and the hashing in a temporary directory. The whole program ran once against a Forgejo
 16.0.5 in a local container (2026-09-27): a release published the way `release.yml` publishes one, with `SHA256SUMS`
 signed by a throwaway cosign key, was placed through the webhook, with `versions.txt` and `latest`; a release whose
 archive did not match `SHA256SUMS` and one whose signature did not match were refused and placed nothing.

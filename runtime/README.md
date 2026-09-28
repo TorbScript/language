@@ -224,6 +224,8 @@ What it costs, measured with a release binary printing a million lines of about 
 | Linux, a file (overlay file system of a container) | 0.17 s | 1.1 to 1.3 s |
 | Windows, a pipe to MSYS `cat` | 6.3 s | 2.7 s |
 | Windows, a file on NTFS | 0.6 to 0.7 s | 4.5 s |
+| Windows, the VM (`torb run`, 200 000 lines, compiling included), a pipe | 2.6 s | 2.7 s |
+| Windows, the VM, a file on NTFS | 1.1 s | 2.6 s |
 
 About a microsecond per line on Linux, three to four on Windows into a file: invisible next to a program that computes
 what it prints, and the price of a log that is never behind. Line buffering only where standard output is not a regular

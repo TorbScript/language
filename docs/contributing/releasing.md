@@ -278,10 +278,12 @@ runs on the machine - beside the forge's own stack or in it. Nothing is built on
    `https://torb.dev/webhook`, HTTP method `POST`, POST content type `application/json`, Secret the value of
    `RELEASE_SYNC_WEBHOOK_SECRET`, Trigger on: Custom events -> Releases, Active. The forge refuses to deliver to a
    private address (`[webhook] ALLOWED_HOST_LIST`, `external` by default): where the forge resolves `torb.dev` to one -
-   the same machine behind a hairpin - add `torb.dev` to that list. Verify it with a release, or wait for the periodic
-   check (`RELEASE_SYNC_POLL_SECONDS`, default 300), and look for `/srv/torb/download/<version>/`;
-   `docker compose logs release-sync` says why one is missing - most often a signature that does not verify against
-   `cosign.pub`, which is by design.
+   the same machine behind a hairpin - add `torb.dev` to that list. Verify it with a release, or with the periodic
+   check, which runs when the container starts and every `RELEASE_SYNC_POLL_SECONDS` (default 300) and places the
+   newest stable release and the nightlies of the last thirty days that are missing - the forge never delivers a failed
+   webhook again - and look for `/srv/torb/download/<version>/`; `docker compose logs release-sync` says why one is
+   missing - most often a signature that does not verify against `cosign.pub`, which is by design.
+   `tools/release-sync/README.md` has every variable and the answers of the webhook.
 6. **The first accounts**: with `REGISTRY_ADMINISTRATOR_TOKEN` set,
    `curl -X POST https://packages.torb.dev/api/1/accounts -H "Authorization: Bearer $ADMIN" -d '{"name":"torben"}'`
    answers the account's first token (shown once - keep it); an organisation is
