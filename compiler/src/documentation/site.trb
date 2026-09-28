@@ -11,6 +11,8 @@
  *   tree, and `docs/<version>/search-index.json`, the index the search reads.
  * - `assets/site.css` and `assets/site.js`, one stylesheet and one script; `assets/fonts/`, Chivo and Geist Mono.
  * - The icons, the web manifest and the preview card, copied from `brand/`.
+ * - The playground in `assets/` - its script, worker and stylesheet, and `torb` as WebAssembly - where
+ *   `playground/build.sh` built it ([writePlayground]).
  *
  * [buildSite] is the whole site as a pure function of the [Documentation]; [writeBuiltSite] writes it and copies the
  * files of the brand. Every internal link of the output is checked against the output, so a link that would lead
@@ -81,6 +83,20 @@ public const brandCopies: List<(target: String, source: String)> = [
   (target: "icons/app-icon-maskable-192.png", source: "icons/app-icon-maskable-192.png"),
   (target: "icons/app-icon-maskable-512.png", source: "icons/app-icon-maskable-512.png"),
   (target: "social-card.png", source: "icons/social-card.png"),
+]
+
+/**
+ * The files of the playground (docs/design/RELEASE.md section 6), as `playground/build.sh` writes them: served in
+ * `assets/` beside the site's script, which loads `playground.js` on a page with a mount; the rest is loaded by it,
+ * relative to it. `torb.wasm.gz` is the same toolchain gzipped, for a server that sends a file's `.gz` as it is.
+ */
+public const playgroundFiles: List<String> = [
+  "playground.js",
+  "playground-worker.js",
+  "playground.css",
+  "torb.js",
+  "torb.wasm",
+  "torb.wasm.gz",
 ]
 
 /**
@@ -591,6 +607,17 @@ public fn writeBuiltSite(output: String, brand: String, site: BuiltSite): Result
     count = count + 1
   }
   count
+}
+
+/** Copies the built playground from `playground` into `assets/` of `output`. Answers with the number of files. */
+public fn writePlayground(output: String, playground: String): Result<Int, IoError> {
+  var created: Set<String> = []
+  const assets = joinDocumentationPath output, "assets"
+  ensureDirectory(created, assets)?
+  for name in playgroundFiles {
+    File.copy(joinDocumentationPath(playground, name), joinDocumentationPath(assets, name))?
+  }
+  playgroundFiles.length()
 }
 
 fn ensureDirectory(var created: Set<String>, directory: String): Result<Void, IoError> {

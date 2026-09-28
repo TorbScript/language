@@ -23,7 +23,7 @@ use NativeOptions from "./native"
 use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, staleSkillFiles, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
-use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf from "./site"
+use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf, playgroundFiles, writePlayground from "./site"
 use counted from "../cli/render"
 
 /** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
@@ -43,11 +43,13 @@ public type DocumentationOptions {
   version: String = ""
   /** `--brand` of `docs site`: where `brand/` is. Empty means `<root>/../brand` */
   brand: String = ""
+  /** `--playground` of `docs site`: what `playground/build.sh` wrote. Empty means `<root>/../build/playground` */
+  playground: String = ""
 }
 
 /**
- * Parses `torb docs`'s arguments. `--standard-library`, `--output`, `--version` and `--brand` take the argument after
- * them; `--no-snippets`, `--no-native` and `--check` are flags; everything else is a path.
+ * Parses `torb docs`'s arguments. `--standard-library`, `--output`, `--version`, `--brand` and `--playground` take
+ * the argument after them; `--no-snippets`, `--no-native` and `--check` are flags; everything else is a path.
  */
 public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
   var paths: List<String> = []
@@ -58,6 +60,7 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   var output = ""
   var version = ""
   var brand = ""
+  var playground = ""
   var wanted = ""
   for argument in arguments {
     match wanted {
@@ -81,9 +84,14 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
         wanted = ""
         continue
       }
+      "--playground" => {
+        playground = argument
+        wanted = ""
+        continue
+      }
       _ => {}
     }
-    if argument == "--standard-library" || argument == "--output" || argument == "--version" || argument == "--brand" {
+    if ["--standard-library", "--output", "--version", "--brand", "--playground"].contains(argument) {
       wanted = argument
       continue
     }
@@ -103,7 +111,7 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   }
   const root = paths.get(0) ?? "docs"
   const out = if output.isEmpty() { paths.get(1) ?? "" } else { output }
-  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out, version, brand
+  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out, version, brand, playground
 }
 
 /** Where the standard library is, for the type check of the snippets. */
@@ -236,9 +244,12 @@ public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
 }
 
 /**
- * `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--check]`. Returns the number of problems.
- * With `--check` nothing is written: the site is built and its links are checked, which is the gate that keeps it from
- * rotting between releases.
+ * `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--check]`. Returns the
+ * number of problems. With `--check` nothing is written: the site is built and its links are checked, which is the gate
+ * that keeps it from rotting between releases.
+ *
+ * The playground is copied into `assets/` where it was built (`playground/build.sh`), and left out where it was not:
+ * a page links none of its files, and a mount without it stays the code it was written as.
  */
 public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   if options.out.isEmpty() && !options.onlyCheck {
@@ -270,7 +281,16 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
     print "{pages}, {counted(site.texts.length() + site.copies.length(), "file")}, no broken link"
     return 0
   }
-  const written = writeBuiltSite(options.out, brand, site)?
+  const playground = if options.playground.isEmpty() { "{options.root}/../build/playground" } else { options.playground }
+  const hasPlayground = playgroundFiles.all({ File.exists "{playground}/{_}" })
+  if !hasPlayground && !options.playground.isEmpty() {
+    printError "torb docs site: `{playground}` has no built playground. `sh playground/build.sh` builds it"
+    return 1
+  }
+  var written = writeBuiltSite(options.out, brand, site)?
+  if hasPlayground {
+    written = written + writePlayground(options.out, playground)?
+  }
   print "{pages}: wrote {counted(written, "file")} to {options.out}"
   0
 }
@@ -308,5 +328,6 @@ public fn printDocumentationUsage() {
   printError "  torb docs site <root> --output <dir>  Write the website: the front page, every page, the search"
   printError "                         --version <v>: the version the documentation is of (default: latest)"
   printError "                         --brand <dir>: where brand/ is (default: <root>/../brand)"
+  printError "                         --playground <dir>: the built playground (default: <root>/../build/playground)"
   printError "                         --check: build it and check its links, and write nothing"
 }
