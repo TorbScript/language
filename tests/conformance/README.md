@@ -141,6 +141,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `nested-list-patterns.trb` | A list pattern **inside** another one: in a case field, in a record field, in a tuple, inside another list, with a rest, under a guard, and in an instance of a generic |
 | `states.trb` | A state machine over unit cases, `if const` and `while const` |
 | `adts.trb` | A recursive algebraic data type and the decision trees over it |
+| `case-values.trb` | `case Read = 1`: `rawValue()` and `fromRawValue` both ways, negative and hex numbers, a `match` that stays exhaustive, and `RawValue` as a bound |
 | `optional-chain.trb` | `?.`: the member on the payload, or `None` without touching the member |
 
 **Closures**
@@ -183,6 +184,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `collection-natives.trb` | A native whose result is a collection the runtime owns, behind a trait type |
 | `collection-places.trb` | A `var` path through `a[key]`: assignment, a field of an element, a method on one |
 | `maps-and-sets.trb` | The literals, insertion order, and the cursor that walks them |
+| `flags.trb` | `Flags<Case>`: built from a list literal, changed with the words of a set, iterated in the order of its bits, read back through `fromBits`, which refuses a bit no case stands for, and encoded as its mask |
 | `ranges.trb` | A `Range` as a value: all four spellings, iterated, measured and shown |
 | `sort-stability.trb` | `sort` and `sorted` are stable, and sorting twice by the same key changes nothing |
 | `variadics.trb` | `...items: Item` is one parameter that every positional argument lands in |

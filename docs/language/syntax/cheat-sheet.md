@@ -63,6 +63,7 @@ fn name(var target: Counter) { ... }         a parameter the function may change
 fn name(...rest: Int): Int { ... }           a variadic parameter; `rest` is a `List<Int>`
 type Name { ... }                            a type
 type Name = Other                            an alias for an existing type
+case Name = 1                                inside a type body: a case that stands for a number, `rawValue()`
 type Name with Trait by field { ... }        the trait's required members are forwarded to field
 type Name with (Trait, Trait) by field { ... }  several traits delegated to the same field
 shared type Name { ... }                     a type with an identity instead of a value

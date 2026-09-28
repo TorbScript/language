@@ -1,0 +1,40 @@
+/**
+ * A case that stands for a fixed number (docs/design/FLAGS.md section 1): `rawValue()` answers the number of the case,
+ * `fromRawValue` the case of a number or `None`, and a `match` over such a type stays exhaustive. The numbers may be in
+ * any order, negative, written in hex, and they are used through a bound as well as by name.
+ */
+type Permission {
+  case Read = 1
+  case Write = 2
+  case Execute = 4
+}
+
+type Signal {
+  case Hangup = 0x1
+  case Interrupt = 2
+  case Kill = 9
+  case Unknown = -1
+}
+
+fn number<Code: RawValue>(code: Code): Int {
+  code.rawValue()
+}
+
+fn named(permission: Permission): String {
+  match permission {
+    .Read => "read"
+    .Write => "write"
+    .Execute => "execute"
+  }
+}
+
+for permission in [Permission.Read, .Write, .Execute] {
+  print "{named(permission)} is {permission.rawValue()}"
+}
+print Permission.fromRawValue(4)
+print Permission.fromRawValue(3)
+print Signal.fromRawValue(-1)
+print Signal.Kill.rawValue()
+print number(Signal.Interrupt)
+const parsed = Signal.fromRawValue(9) ?? Signal.Unknown
+print(parsed == Signal.Kill)

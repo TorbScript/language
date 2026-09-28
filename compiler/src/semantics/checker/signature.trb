@@ -19,6 +19,7 @@ use ParameterId, ParameterDeclaration from "./type"
 use Bound, Signature, SignatureId, SignatureState, FieldSignature, CaseSignature, DelegatedTrait from "./type"
 use TypeSignature, TypeSignatureId from "./type"
 use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from "./context"
+use integerOfCase from "./case-value"
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
 use checkFunctionBody, checkInitializer, checkDestructuredBinding, taskValueOf from "./statement"
@@ -1133,7 +1134,12 @@ fn collectMembers(
             const fieldSymbol = defineMember checker, module, field.name, SymbolKind.Field(symbol), member
             fields.append fieldSignature(checker, fieldSymbol, field, member, scope)
           }
-          body.cases.append CaseSignature(symbol, caseDeclaration.name.text, fields)
+          // `case Read = 1`: the number, where it is an integer literal - the rules of it are `case-value.trb`'s
+          const value = match caseDeclaration.value {
+            Some(written) => integerOfCase written
+            None => None
+          }
+          body.cases.append CaseSignature(symbol, caseDeclaration.name.text, fields, value)
         }
       }
     }

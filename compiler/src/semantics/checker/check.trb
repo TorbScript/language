@@ -32,6 +32,7 @@ use scriptReceiverOf, checkReceiverScript from "./receiver"
 use checkShape, requireInhabitedType, checkTypeArgumentBoundsWithin from "./declaration"
 use checkSpelling from "./spelling"
 use checkDeprecations from "./deprecation"
+use checkCaseValues from "./case-value"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -539,6 +540,8 @@ public fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: 
     }
     .Type(typeDeclaration) => {
       checkTypeBody checker, scope, typeDeclaration.name.span, typeDeclaration.members
+      // `case Read = 1`: the numbers the cases stand for
+      checkCaseValues checker, scope.module, typeDeclaration
       if const Some(symbol) = checker.resolvedName(scope.module, typeDeclaration.name.span) {
         requireInhabitedType checker, symbol, typeDeclaration.name.span
       }

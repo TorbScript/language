@@ -189,6 +189,35 @@ one at the front, `peek` looks at the front. Neither has participles - a stack o
 is taken from while the original keeps every item. `ArrayStack` is a `List` underneath; `ArrayQueue` is a ring buffer
 that grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is, order-dependent like a `List`.
 
+### Flags
+
+```trb fragment
+public type Flags<Case: RawValue> with Iterate<Case>, Length, From<Iterate<Case>>, TryFrom<UInt64, FlagsError> {
+  static fn of(...cases: Case): Self
+  static fn fromBits(mask: UInt64): Result<Self, FlagsError>
+  fn bits(): UInt64
+  fn contains(flag: Case): Bool
+  var fn insert(flag: Case)
+  var fn insertAll(flags: Iterate<Case>)
+  var fn remove(flag: Case): Bool
+  var fn removeAll(flags: Iterate<Case>)
+  var fn clear()
+  fn inserted(flag: Case): Self
+  fn removed(flag: Case): Self
+  static fn union(first: Self, second: Self): Self
+  static fn intersection(first: Self, second: Self): Self
+  static fn difference(first: Self, second: Self): Self
+}
+```
+
+A set of the cases of a type whose cases stand for powers of two (`case Read = 1`,
+[Cases that stand for numbers](../language/types/case-values.md)), stored as one bit mask: the flags of a C API, a
+file format or a protocol. A list literal builds one, it has the words of a `Set`, and it iterates over the cases that
+are set in the order of their bits - which is why it is no `Set`, whose order is the insertion order. The checker holds
+every case of the type argument to be a power of two wherever `Flags<Case>` is written. `bits()` and `UInt64.from(flags)`
+write the mask, `fromBits` and `tryFrom` read one back and answer `FlagsError` for a bit no case stands for, and that
+pair is how a value is encoded: as the number. Not in the prelude: `use Flags from "std/collections"`.
+
 ## Related
 
 - [Mutation and var paths](../language/types/var-paths.md) - what has to be `var` for a verb like `append` or `sort`.

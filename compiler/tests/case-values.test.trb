@@ -1,0 +1,181 @@
+/**
+ * `case Read = 1`: the parser reads the number, the checker holds the cases of a type to the rules of
+ * docs/design/FLAGS.md section 1, and a type whose cases all stand for numbers gets `RawValue` generated.
+ */
+
+use test, group from "std/test"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+use problems, problemsOf from "./harness"
+
+group "The value of a case" {
+  test "the parser keeps the number beside the case" {
+    const parsed = parse SourceText.of("type Permission \{\n  case Read = 1\n  case Write = 2\n\}\n")
+    assert parsed.diagnostics.isEmpty()
+    const declaration = match parsed.file.statements[0].kind {
+      .Declare(found) => found
+      _ => {
+        panic "a declaration"
+      }
+    }
+    const members = match declaration.kind {
+      .Type(found) => found.members
+      _ => []
+    }
+    const first = match members[0].kind {
+      .Case(found) => found
+      _ => {
+        panic "a case"
+      }
+    }
+    assert first.value.isSome()
+  }
+
+  test "a type whose cases all stand for numbers answers them both ways" {
+    const source = raw"""
+      type Permission {
+        case Read = 1
+        case Write = 2
+        case Execute = 4
+      }
+
+      const number: Int = Permission.Write.rawValue()
+      const found: Permission? = Permission.fromRawValue(4)
+      print number
+      print found
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "the numbers may be negative and written in hex, and the trait is a bound" {
+    const source = raw"""
+      type Signal {
+        case Hangup = 0x1
+        case Unknown = -1
+      }
+
+      fn number<Code: RawValue>(code: Code): Int {
+        code.rawValue()
+      }
+
+      print number(Signal.Unknown)
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "a type without numbers has no raw value" {
+    const source = raw"""
+      type Marker {
+        case Dot
+        case Cross
+      }
+
+      print Marker.Dot.rawValue()
+      """
+    assert(problems(source).length() == 1)
+  }
+
+  test "every case has a number, or none has" {
+    const source = raw"""
+      type Permission {
+        case Read = 1
+        case Write
+        case Execute = 4
+      }
+
+      print Permission.Read
+      """
+    assert(problems(source) == ["`Write` has no value, and the other cases of `Permission` have one"])
+  }
+
+  test "a case with fields stands for no number" {
+    const source = raw"""
+      type Marker {
+        case Dot = 1
+        case Cross(size: Int)
+      }
+
+      print Marker.Dot
+      """
+    assert(problems(source) == ["`Cross` has fields, so the cases of `Marker` stand for no numbers"])
+    const valued = raw"""
+      type Marker {
+        case Dot = 1
+        case Cross(size: Int) = 2
+      }
+
+      print Marker.Dot
+      """
+    assert(problems(valued) == ["A case with fields stands for no number"])
+  }
+
+  test "a value is an integer literal" {
+    const source = raw"""
+      const two = 2
+
+      type Permission {
+        case Read = 1
+        case Write = two
+      }
+
+      print Permission.Read
+      """
+    assert(problems(source) == ["The value of a case is an integer literal"])
+  }
+
+  test "two cases never stand for the same number" {
+    const source = raw"""
+      type Permission {
+        case Read = 1
+        case Write = 2
+        case All = 2
+      }
+
+      print Permission.Read
+      """
+    assert(problems(source) == ["`All` stands for 2, which `Write` stands for already"])
+  }
+}
+
+group "Flags<Case>" {
+  const collections = [
+    "std/collections/project.trb": "name = \"std/collections\"\n",
+    "std/collections/src/lib.trb": "public type Flags<Case: RawValue> \{\n  mask: Int = 0\n\}\n",
+  ]
+
+  test "every case of a type argument of `Flags` stands for a power of two" {
+    var files = collections
+    files.set("app/src/main.trb", raw"""
+      use Flags from "std/collections"
+
+      type Permission {
+        case Read = 1
+        case Write = 2
+        case Both = 3
+      }
+
+      const access: Flags<Permission> = Flags()
+      print access.mask
+      """)
+    assert(problemsOf(files) == [
+      "`Permission.Both` stands for 3, and `Flags<Permission>` needs a power of two for every case",
+    ])
+  }
+
+  test "powers of two are what a flag is" {
+    var files = collections
+    files.set("app/src/main.trb", raw"""
+      use Flags from "std/collections"
+
+      type Permission {
+        case Read = 1
+        case Write = 2
+        case Delete = 64
+      }
+
+      const access: Flags<Permission> = Flags()
+      print access.mask
+      """)
+    assert problemsOf(files).isEmpty()
+  }
+}

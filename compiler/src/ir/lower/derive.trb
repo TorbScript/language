@@ -156,6 +156,8 @@ fn lowerGeneratedBody(var lowering: Lowering, var builder: FunctionBuilder, requ
     .ArrayStorage(operation) => arrayStorageBody lowering, builder, operation, at
     .Encode | .Decode | .Describe => encodingBody lowering, builder, request, at
     .Delegate => delegateBody lowering, builder, request, at
+    .RawValue => rawValueBody lowering, builder, request.subject, at
+    .FromRawValue => fromRawValueBody lowering, builder, request.subject, at
   }
 }
 
@@ -433,6 +435,144 @@ fn literalParseBody(var lowering: Lowering, var builder: FunctionBuilder, subjec
   const failed = addTemporary builder, result
   emit builder, Instruction.Construct(failed, layout, failure, [borrowed(built)])
   terminate builder, Terminator.Return(borrowed(failed))
+}
+
+/**
+ * The number of every case of a type whose cases stand for numbers (`case Read = 1`), by the name of the case - what the
+ * checker read out of the literals. `None`, with the finding, where a case has none.
+ */
+fn caseValuesOf(var lowering: Lowering, subject: TypeId, at: Span): Map<String, Int>? {
+  const symbol = match lowering.checker.types.form(subject) {
+    .Nominal(found, _) => found
+    _ => {
+      reportUnsupported lowering, "a generated `RawValue` of a type without cases", at
+      return None
+    }
+  }
+  var checker = lowering.checker
+  const identifier = typeSignatureOf checker, symbol
+  var values: Map<String, Int> = [:]
+  for variant in checker.typeSignature(identifier).cases {
+    match variant.value {
+      Some(number) => values.set variant.name, number
+      None => {
+        reportUnsupported lowering, "a generated `RawValue` of a case that stands for no number", at
+        return None
+      }
+    }
+  }
+  values
+}
+
+/** The layout of the cases of a type whose generated member is being built, or `None` with the finding. */
+fn caseLayoutOf(var lowering: Lowering, subject: TypeId, at: Span): LayoutId? {
+  const target = irTypeOfClosed lowering, subject
+  match layoutOfType(lowering.program, target) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `RawValue` of a type without a layout", at
+      None
+    }
+  }
+}
+
+/** `rawValue()`: the tag of the receiver chooses the arm, and every arm answers its case's number. */
+fn rawValueBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const values = match caseValuesOf(lowering, subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const layout = match caseLayoutOf(lowering, subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  if shape.variants.isEmpty() {
+    reportUnsupported lowering, "a generated `rawValue` of a layout without cases", at
+    return
+  }
+  const location = locationOf lowering, at
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
+  const result = builder.function.signature.result
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, Slot(0))
+  const head = builder.currentBlock()
+  var tags: List<Int> = []
+  var targets: List<BlockId> = []
+  var fallback = BlockId 0
+  for index in 0..shape.variants.length() {
+    const arm = addBlock builder, "case {index}", location
+    switchTo builder, arm
+    const answer = integerSlotOf(lowering, builder, values.get(shape.variants[index].name) ?? 0, result)
+    terminate builder, Terminator.Return(borrowed(answer))
+    if index == 0 {
+      fallback = arm
+      continue
+    }
+    tags.append index
+    targets.append arm
+  }
+  terminateBlock builder, head, Terminator.Switch(tag, tags, targets, fallback)
+}
+
+/**
+ * `static fn fromRawValue(value: Int): Self?`: the number itself chooses the arm - the checker holds every number of the
+ * type to be another one - and every arm answers `Some` of its case; any other number answers `None`.
+ */
+fn fromRawValueBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const values = match caseValuesOf(lowering, subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const layout = match caseLayoutOf(lowering, subject, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const result = builder.function.signature.result
+  const option = match lowering.program.typeAt(result) {
+    .Variant(found) => found
+    _ => {
+      reportUnsupported lowering, "a generated `fromRawValue` whose result is not an `Option`", at
+      return
+    }
+  }
+  const some = variantNamed lowering, option, "Some"
+  const none = variantNamed lowering, option, "None"
+  if some < 0 || none < 0 {
+    reportUnsupported lowering, "a generated `fromRawValue` whose result is not an `Option`", at
+    return
+  }
+  const shape = lowering.program.layoutAt layout
+  const target = irTypeOfClosed lowering, subject
+  const location = locationOf lowering, at
+  const head = builder.currentBlock()
+  var numbers: List<Int> = []
+  var targets: List<BlockId> = []
+  for index in 0..shape.variants.length() {
+    const arm = addBlock builder, "case {index}", location
+    switchTo builder, arm
+    const found = addTemporary builder, target
+    emit builder, Instruction.Construct(found, layout, index, [])
+    const answer = addTemporary builder, result
+    emit builder, Instruction.Construct(answer, option, some, [borrowed(found)])
+    terminate builder, Terminator.Return(borrowed(answer))
+    numbers.append(values.get(shape.variants[index].name) ?? 0)
+    targets.append arm
+  }
+  const missing = addBlock builder, "no case", location
+  switchTo builder, missing
+  const nothing = addTemporary builder, result
+  emit builder, Instruction.Construct(nothing, option, none, [])
+  terminate builder, Terminator.Return(borrowed(nothing))
+  terminateBlock builder, head, Terminator.Switch(Slot(0), numbers, targets, missing)
 }
 
 /** A member of a literal type as the text it is written as: `online`, `42`, `a`. */

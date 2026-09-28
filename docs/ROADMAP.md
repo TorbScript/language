@@ -216,7 +216,6 @@ supported, and neither is a dialect with its own name.
 
 | Feature | Record |
 |---|---|
-| Cases with a fixed value, and `Flags<Case>` over a bit mask | [design/FLAGS.md](design/FLAGS.md) |
 | Loops as expressions | [design/LOOPS.md](design/LOOPS.md) |
 | One principle for where a program may panic | [design/PANICS.md](design/PANICS.md) |
 | `for var`, the words per kind of collection | [design/COLLECTIONS.md](design/COLLECTIONS.md) |

@@ -814,7 +814,9 @@ fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
       } else {
         []
       }
-      MemberKind.Case CaseDeclaration(name, fields)
+      // `case Read = 1`: a fixed number, which only the checker holds to its rules
+      const value = if parser.eat(TokenKind.Equal) { Some parseExpression(parser) } else { None }
+      MemberKind.Case CaseDeclaration(name, fields, value)
     }
     _ => {
       const isVar = parser.eatKeyword Keyword.Var

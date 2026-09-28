@@ -487,6 +487,7 @@ public fn generatedKindOf(
 /** The members the language can generate from a layout. Everything else without a body is a program the checker missed. */
 fn isDerivedName(name: String): Bool {
   name == "show" || name == "showNested" || name == "equals" || name == "hash" || name == "compare"
+    || name == "rawValue" || name == "fromRawValue"
 }
 
 /**
@@ -525,6 +526,13 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
   // The conversion from text of a literal type, reached through a bound rather than by name
   if name == "tryFrom" {
     return Generated.LiteralParse
+  }
+  // The two members of `RawValue`, which a type whose cases stand for numbers gets
+  if name == "rawValue" {
+    return Generated.RawValue
+  }
+  if name == "fromRawValue" {
+    return Generated.FromRawValue
   }
   reportUnsupported lowering, "a derived `{name}` the back end does not generate", at
   None

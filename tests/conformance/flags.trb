@@ -1,0 +1,44 @@
+use Flags, FlagsError from "std/collections"
+use Json from "std/json"
+
+/**
+ * `Flags<Case>` (docs/design/FLAGS.md section 2): a set of the cases of a type whose cases stand for powers of two, kept
+ * as one mask. A list literal builds one, the words of a set change it, it iterates over the cases that are set in the
+ * order of their bits, and outside the program it is its mask - read back through `fromBits`, which refuses a bit no
+ * case stands for, and encoded as the number.
+ */
+type Permission {
+  case Read = 1
+  case Write = 2
+  case Execute = 4
+  case Delete = 64
+}
+
+var access: Flags<Permission> = [.Write, .Read]
+print access
+print access.contains(.Write)
+print access.contains(.Execute)
+access.insert(.Execute)
+print access.bits()
+print access.length()
+print access.remove(.Read)
+print access.remove(.Read)
+print access
+const all = access.inserted(.Delete).inserted(.Read)
+print all
+print all.bits()
+for permission in all {
+  print permission
+}
+const reading: Flags<Permission> = [.Read]
+print Flags.union(reading, access)
+print Flags.intersection(all, access)
+print Flags.difference(all, access)
+print(Flags.of(Permission.Delete) == Flags.of(Permission.Delete))
+print Flags<Permission>.fromBits(69)
+print Flags<Permission>.fromBits(8)
+const nothing: Flags<Permission> = []
+print nothing.isEmpty()
+print Json().encode(all)
+const decoded: Result<Flags<Permission>, FlagsError> = Flags<Permission>.tryFrom(3)
+print decoded

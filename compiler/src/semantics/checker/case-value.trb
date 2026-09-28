@@ -1,0 +1,133 @@
+/**
+ * `case Read = 1`: a case that stands for a fixed number (docs/design/FLAGS.md section 1). [checkCaseValues] holds the
+ * cases of one type to the rules - all of them have a value or none, a case with fields has none, every value is an
+ * integer literal and no two are the same - and types the literals; [integerOfCase] reads a value. A type whose cases
+ * all have one gets `RawValue` generated (`derive.trb`): `rawValue()` and `static fn fromRawValue(value: Int): Self?`.
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, TypeDeclaration, CaseDeclaration from "../../syntax/ast"
+use ModuleId from "../module"
+use Checker from "./context"
+use TypeId from "./type"
+use typeSignatureOf from "./signature"
+use literalOf from "./lowering"
+use checkInitializer from "./statement"
+
+/** The number of `case Read = 1`, where it is an integer literal (`-1` included). */
+public fn integerOfCase(value: Expression): Int? {
+  if const Some(.Integer(found)) = literalOf(value) {
+    return found
+  }
+  None
+}
+
+/**
+ * The values of the cases of one type against the rules of docs/design/FLAGS.md section 1, each with a message at the
+ * case that breaks it. Every written value is typed as an `Int`, the one type a value has.
+ */
+public fn checkCaseValues(var checker: Checker, module: ModuleId, declaration: TypeDeclaration) {
+  var cases: List<CaseDeclaration> = []
+  for member in declaration.members {
+    if const .Case(found) = member.kind {
+      cases.append found
+    }
+  }
+  if !cases.any({ _.value.isSome() }) {
+    return
+  }
+  const owner = declaration.name.text
+  const integer = checker.integerType()
+  var seen: List<(Int, String)> = []
+  for variant in cases {
+    const value = match variant.value {
+      Some(found) => found
+      None => {
+        if variant.fields.isEmpty() {
+          const note = "The cases of a type stand for numbers all of them or none: `case {variant.name.text} = ...`"
+          report(
+            checker,
+            module,
+            "`{variant.name.text}` has no value, and the other cases of `{owner}` have one",
+            note,
+            variant,
+          )
+        } else {
+          const note = "Only a type whose cases have no fields gives each of them a fixed number"
+          report(
+            checker,
+            module,
+            "`{variant.name.text}` has fields, so the cases of `{owner}` stand for no numbers",
+            note,
+            variant,
+          )
+        }
+        continue
+      }
+    }
+    const _ = checkInitializer checker, module, value, owner: None, annotation: integer
+    if !variant.fields.isEmpty() {
+      const note = "Only a type whose cases have no fields gives each of them a fixed number"
+      checker.report module, Diagnostic.error("A case with fields stands for no number", value.span).withNote(note)
+      continue
+    }
+    const number = match integerOfCase(value) {
+      Some(found) => found
+      None => {
+        const note = "The compiler reads the number and evaluates nothing: `case {variant.name.text} = 1`"
+        checker.report module, Diagnostic.error("The value of a case is an integer literal", value.span).withNote(note)
+        continue
+      }
+    }
+    if const Some((_, other)) = seen.find({ _.0 == number }) {
+      const note = "Two cases never stand for the same number, or `fromRawValue({number})` could not say which one it means"
+      const message = "`{variant.name.text}` stands for {number}, which `{other}` stands for already"
+      checker.report module, Diagnostic.error(message, value.span).withNote(note)
+      continue
+    }
+    seen.append((number, variant.name.text))
+  }
+}
+
+/**
+ * `Flags<Permission>` written as a type, where a case of `Permission` stands for a number that is no power of two: a
+ * flag is one bit of the mask, so `case All = 3` would be two cases at once (docs/design/FLAGS.md section 2). The first
+ * such case is reported where the type is written.
+ */
+public fn requireFlagBits(var checker: Checker, built: TypeId, at: Span, module: ModuleId) {
+  const flags = match checker.wellKnown.flags {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const argument = match checker.types.form(built) {
+    .Nominal(symbol, arguments) if symbol == flags && arguments.length() == 1 => arguments[0]
+    _ => {
+      return
+    }
+  }
+  const symbol = match checker.types.form(argument) {
+    .Nominal(found, _) => found
+    _ => {
+      return
+    }
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const owner = checker.symbolAt(symbol).name
+  for variant in checker.typeSignature(identifier).cases {
+    if const Some(number) = variant.value {
+      if number <= 0 || (number & (number - 1)) != 0 {
+        const note = "A flag is one bit of the mask: `case {variant.name} = 1`, then `2`, `4`, `8` and so on"
+        const message = "`{owner}.{variant.name}` stands for {number}, and `Flags<{owner}>` needs a power of two for every case"
+        checker.report module, Diagnostic.error(message, at).withNote(note)
+        return
+      }
+    }
+  }
+}
+
+fn report(var checker: Checker, module: ModuleId, message: String, note: String, variant: CaseDeclaration) {
+  checker.report module, Diagnostic.error(message, variant.name.span).withNote(note)
+}

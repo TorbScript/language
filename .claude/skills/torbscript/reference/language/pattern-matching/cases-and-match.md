@@ -270,6 +270,7 @@ differently per case matches on `self`.
 ## Related
 
 - [Declaring a type](../types/declaring-a-type.md) - fields, methods and what is generated.
+- [Cases that stand for numbers](../types/case-values.md) - `case Read = 1`, and the number of a case both ways.
 - [Result](../errors/result.md) - the case pair every fallible function answers with.
 - [use](../../language/index.md) - how a case is imported.
 - [Why a case is never bare](../../explanation/mistakes-models-make.md) - the argument, and the trap it closes.

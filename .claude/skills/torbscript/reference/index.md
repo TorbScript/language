@@ -247,6 +247,7 @@ that answers the question. A page marked (planned) describes a feature that does
 
 ## language/types
 
+- `language/types/case-values.md` - **Cases that stand for numbers** (reference): A type whose cases have no fields may give each of them a fixed number, case Read = 1, and gets rawValue() and fromRawValue generated - the way to a C enum, a protocol code, a column and a Flags mask.
 - `language/types/construction.md` - **Construction** (reference): Every type has exactly one constructor, generated from its fields in declaration order, and it never contains logic - validation and parsing are static factory functions instead.
 - `language/types/conversions.md` - **Conversions** (reference): From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly five coercions that apply only where a type is expected.
 - `language/types/copy-and-equality.md` - **Copy and equality** (reference): Assigning, passing or capturing a value copies it, and Equals, Hash and copy are generated for a type without being written, each only if every field supports it.

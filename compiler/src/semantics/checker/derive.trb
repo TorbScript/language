@@ -102,10 +102,18 @@ fn membersOf(name: String): List<String> {
   if name == "Compare" {
     return ["compare"]
   }
+  // Only for a type whose cases all stand for numbers, see `canDerive`
+  if name == "RawValue" {
+    return ["rawValue", "fromRawValue"]
+  }
   []
 }
 
 fn canDerive(var checker: Checker, target: TypeId, name: String, capability: SymbolId, wanted: TypeId?): Bool {
+  // `case Read = 1`: a type whose cases all stand for numbers, and nothing else (docs/design/FLAGS.md section 1)
+  if name == "RawValue" {
+    return hasCaseValues checker, target
+  }
   // `From` is generated for a case that wraps exactly one value of a type no other case wraps (design 4.6)
   if name == "From" {
     return wrapsExactlyOnce checker, target, wanted
@@ -195,6 +203,27 @@ fn isLiteralTrait(var checker: Checker, name: String, wanted: TypeId?): Bool {
   } else {
     name == "Show" || name == "Equals" || name == "Hash" || isEncoding(name)
   }
+}
+
+/**
+ * Whether every case of a type stands for a number - `case Read = 1` - which is what `RawValue` is generated for. The
+ * checker holds the values to their rules (`case-value.trb`), and a type that breaks one has a message already.
+ */
+public fn hasCaseValues(var checker: Checker, target: TypeId): Bool {
+  const symbol = match checker.types.form(target) {
+    .Nominal(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  if isTrait(checker, symbol) {
+    return false
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  !shape.native
+    && !shape.cases.isEmpty()
+    && shape.cases.all({ variant => variant.value.isSome() && variant.fields.isEmpty() })
 }
 
 fn isTrait(checker: Checker, symbol: SymbolId): Bool {

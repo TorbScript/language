@@ -2652,12 +2652,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   and `Real.exponential`, `naturalLogarithm`, `logarithm(base:)` and `Real.e`, **`std/math` is gone**: every function
   of it was a second spelling of a member of the number, and a free function of `Float64` could not be generic over
   `Real` (docs/standard-library/number.md).
-- **A case may stand for a fixed number, and a set of such cases is `Flags<Case>`** (2026-09-19; planned,
+- **A case may stand for a fixed number, and a set of such cases is `Flags<Case>`** (2026-09-19; built 2026-09-28,
   docs/design/FLAGS.md). A type whose cases have no fields may give all of them a constant (`case Read = 1`), and gets
-  `rawValue()` and `fromRawValue(value)`; `Flags<Case>` in `std/collections` is a set of such cases stored as one
-  `UInt64` mask, with the vocabulary of a `Set`, `bits()` and `fromBits(mask)`, and every value a power of two. Bit
-  masks get no operators and no construct of their own: the two pieces serve C enums, protocol codes and database
-  columns as well.
+  `rawValue()` and `fromRawValue(value)`, the members of the prelude trait `RawValue` it gets generated; `Flags<Case>`
+  in `std/collections` is a set of such cases stored as one mask, with the vocabulary of a `Set`, `bits()` and
+  `fromBits(mask)`, and every value a power of two. Bit masks get no construct of their own: the two pieces serve C
+  enums, protocol codes and database columns as well.
 - **A regular expression is a value of `std/regex`, and there is no literal for it** (2026-09-22;
   docs/design/TEXT-FORMATS.md). A `/.../` literal collides with division, and every tool that reads `.trb` would have
   to repeat the heuristic that tells them apart. The check at compile time comes from the rule that a string literal

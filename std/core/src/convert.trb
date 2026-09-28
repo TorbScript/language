@@ -192,3 +192,34 @@ public shared trait Show {
     show()
   }
 }
+
+/**
+ * A type whose cases stand for fixed numbers - `case Read = 1` - and back: the number of a case for a C enum, a
+ * protocol code, a database column or a bit of a mask, and the case of a number read from one of them. The language
+ * generates it for every type whose cases all carry a value (docs/design/FLAGS.md section 1), so a `match` over such a
+ * type stays exhaustive while the number crosses the boundary.
+ *
+ * # Examples
+ *
+ *     type Permission {
+ *       case Read = 1
+ *       case Write = 2
+ *       case Execute = 4
+ *     }
+ *
+ *     print Permission.Write.rawValue()
+ *     print Permission.fromRawValue(4)
+ *     print Permission.fromRawValue(3)
+ *
+ * # Pitfalls
+ *
+ * `fromRawValue` reads one case, never a combination of them: a mask of several cases is a `Flags<Case>` of
+ * `std/collections`, whose `fromBits` reads one back.
+ */
+public trait RawValue {
+  /** The number the case stands for, as `case Read = 1` wrote it. */
+  fn rawValue(): Int
+
+  /** The case that stands for this number, or `None` where no case does. */
+  static fn fromRawValue(value: Int): Self?
+}

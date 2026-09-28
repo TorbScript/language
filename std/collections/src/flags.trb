@@ -1,0 +1,231 @@
+/**
+ * [Flags]: a set of the cases of a type whose cases stand for powers of two, stored as one bit mask - what a C API, a
+ * file format or a protocol means by flags - and [FlagsError], what reading a mask with a bit that belongs to no case
+ * answers.
+ *
+ * It needs no operator and no native: a case is its `rawValue()` (`case Read = 1`, docs/design/FLAGS.md), and the mask is
+ * the bits of those numbers together.
+ */
+
+use Error, Show, From, TryFrom, RawValue from "std/core"
+use Iterate, Iterator, Length from "std/iteration"
+
+/**
+ * A set of the cases of `Case`, one bit each, with the words a [Set] has: `contains`, `insert` and `inserted`, `remove`
+ * and `removed`, `Flags.union`, `Flags.intersection` and `Flags.difference`. It iterates over the cases that are set,
+ * the lowest bit first, and a list literal builds one wherever one is expected.
+ *
+ * Every case of `Case` stands for a power of two, which the checker holds wherever `Flags<Case>` is written. Outside the
+ * program the value is its mask: [Flags.bits] and `UInt64.from(flags)` write it, [Flags.fromBits] and `tryFrom` read it
+ * back, and that pair is how a value is encoded and decoded.
+ *
+ * # Examples
+ *
+ *     type Permission {
+ *       case Read = 1
+ *       case Write = 2
+ *       case Execute = 4
+ *     }
+ *
+ *     var access: Flags<Permission> = [.Read, .Write]
+ *     access.insert(.Execute)
+ *     print access.contains(.Write)
+ *     print access.bits()
+ *     print Flags<Permission>.fromBits(5)
+ *
+ * # Pitfalls
+ *
+ * The order of iteration is the order of the bits, not the order the cases were inserted in, which is why a `Flags` is
+ * not a [Set]: every set iterates in insertion order.
+ *
+ * # Related
+ *
+ * - [RawValue] - the number a case stands for, which is its bit here.
+ */
+public type Flags<Case: RawValue> with Iterate<Case>, Length, From<Iterate<Case>>, TryFrom<UInt64, FlagsError> {
+  /** The mask: the numbers of the cases that are set, together. Bit 63 is never set, because no case stands for it. */
+  private var value: Int
+
+  /** The flags of these cases: `Flags.of(Permission.Read, Permission.Write)`. */
+  static fn of(...cases: Case): Self {
+    Self.from cases
+  }
+
+  /** The flags of every case of `cases`. This is what a list literal where a `Flags` is expected builds. */
+  static fn from(cases: Iterate<Case>): Self {
+    var mask = 0
+    for found in cases {
+      mask = mask | found.rawValue()
+    }
+    Self mask
+  }
+
+  /**
+   * The flags a mask holds - read from a C API, a file or the network.
+   *
+   * # Errors
+   *
+   * - [FlagsError] where a bit of the mask belongs to no case of `Case`.
+   *
+   * # Examples
+   *
+   *     type Permission {
+   *       case Read = 1
+   *       case Write = 2
+   *     }
+   *
+   *     print Flags<Permission>.fromBits(3)
+   *     print Flags<Permission>.fromBits(4)
+   */
+  static fn fromBits(mask: UInt64): Result<Self, FlagsError> {
+    var known = 0
+    for bit in 0..63 {
+      if const Some(_) = Case.fromRawValue(1 << bit) {
+        known = known | (1 << bit)
+      }
+    }
+    const value = Int.tryFrom(mask).ok() ?? (0 - 1)
+    if value < 0 || (value & ~known) != 0 {
+      return Fail FlagsError(mask)
+    }
+    Self value
+  }
+
+  /** The same as [Flags.fromBits]: the way in of the pair a value is decoded through. */
+  static fn tryFrom(value: UInt64): Result<Self, FlagsError> {
+    Self.fromBits value
+  }
+
+  /** The mask, for a C API, a file or the network: the numbers of the cases that are set, together. */
+  fn bits(): UInt64 {
+    UInt64.tryFrom(value).ok() ?? 0
+  }
+
+  /** Whether `flag` is set. */
+  fn contains(flag: Case): Bool {
+    (value & flag.rawValue()) != 0
+  }
+
+  /** How many cases are set. */
+  fn length(): Int {
+    var count = 0
+    var rest = value
+    while rest != 0 {
+      rest = rest & (rest - 1)
+      count = count + 1
+    }
+    count
+  }
+
+  /** Sets `flag`, in place; does nothing where it is set already. */
+  var fn insert(flag: Case) {
+    value = value | flag.rawValue()
+  }
+
+  /** Sets every flag of `flags`, in place. */
+  var fn insertAll(flags: Iterate<Case>) {
+    for flag in flags {
+      insert flag
+    }
+  }
+
+  /** Clears `flag`, in place, and answers whether it was set. */
+  var fn remove(flag: Case): Bool {
+    const found = contains flag
+    value = value & ~flag.rawValue()
+    found
+  }
+
+  /** Clears every flag of `flags`, in place. */
+  var fn removeAll(flags: Iterate<Case>) {
+    for flag in flags {
+      const _ = remove flag
+    }
+  }
+
+  /** Clears every flag, in place. */
+  var fn clear() {
+    value = 0
+  }
+
+  /** The participle of [Flags.insert]: a changed copy with `flag` set, for a `const` binding. */
+  fn inserted(flag: Case): Self {
+    var result = self
+    result.insert flag
+    result
+  }
+
+  /** The participle of [Flags.remove]: a changed copy with `flag` cleared. */
+  fn removed(flag: Case): Self {
+    var result = self
+    const _ = result.remove flag
+    result
+  }
+
+  /** The flags set in either. A function of the type, because neither operand is the one that changes. */
+  static fn union(first: Self, second: Self): Self {
+    Self(first.value | second.value)
+  }
+
+  /** The flags set in both. */
+  static fn intersection(first: Self, second: Self): Self {
+    Self(first.value & second.value)
+  }
+
+  /** The flags set in `first` and not in `second`. */
+  static fn difference(first: Self, second: Self): Self {
+    Self(first.value & ~second.value)
+  }
+
+  /** A cursor over the cases that are set, the lowest bit first. */
+  fn iterate(): Iterator<Case> {
+    FlagsIterator value
+  }
+}
+
+/** The mask of the flags: the way out of the pair a value is encoded through. */
+extend<Case: RawValue> UInt64 with From<Flags<Case>> {
+  static fn from(value: Flags<Case>): Self {
+    value.bits()
+  }
+}
+
+/** `{Read, Write}` - braces, as a set shows. Empty is `{}`. */
+extend<Case: RawValue & Show> Flags<Case> with Show {
+  fn show(): String {
+    if isEmpty() {
+      return "\{\}"
+    }
+    const parts = map { _.showNested() }
+    "\{{parts.joined(separator: ", ")}\}"
+  }
+}
+
+/** The cursor of [Flags]: the next bit that is set, as its case. */
+public type FlagsIterator<Case: RawValue> with Iterator<Case> {
+  /** The bits that are left, the ones already answered cleared. */
+  var rest: Int
+
+  /** The case of the lowest bit that is left, or `None` once none is. */
+  var fn next(): Case? {
+    while rest != 0 {
+      const lowest = rest & (0 - rest)
+      rest = rest & ~lowest
+      if const Some(found) = Case.fromRawValue(lowest) {
+        return found
+      }
+    }
+    None
+  }
+}
+
+/** A mask with a bit that belongs to no case: what [Flags.fromBits] answers for it. */
+public type FlagsError with Error {
+  /** The whole mask that was read. */
+  mask: UInt64
+
+  /** `the mask 12 has a bit that stands for no case` */
+  fn show(): String {
+    "the mask {mask} has a bit that stands for no case"
+  }
+}

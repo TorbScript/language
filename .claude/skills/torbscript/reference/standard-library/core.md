@@ -119,6 +119,20 @@ value itself. `Show` has `show` and is what string interpolation calls; `showNes
 uses, and only `String` and `Char` override it. `LiteralParseError` is what the generated `TryFrom<String, ...>` of a
 literal type answers.
 
+### RawValue
+
+```trb fragment
+public trait RawValue {
+  fn rawValue(): Int
+  static fn fromRawValue(value: Int): Self?
+}
+```
+
+The number a case stands for and back, generated for every type whose cases all carry one (`case Read = 1`,
+[Cases that stand for numbers](../language/types/case-values.md)): `rawValue()` answers the number of the case,
+`fromRawValue` the case of a number or `None`. It is in the prelude, so it can be a bound without an import, which is
+what `Flags<Case: RawValue>` of `std/collections` is.
+
 ### The operator traits
 
 `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Power`, `Negate`, `OrElse`, `Index`, `MutableIndex`,
