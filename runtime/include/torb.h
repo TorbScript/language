@@ -984,6 +984,14 @@ bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
  */
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
 
+/**
+ * The UTF-8 of `text` appended to `into`, a list of `UInt8`, in one copy: what `String.bytes()` answers its list with.
+ * A loop over `torb_text_byte_at` costs a call and an `Option` per byte, and the storage of a text cannot be handed to a
+ * list instead, because a `torb_bytes` has neither the descriptor nor the length a `torb_list_storage` starts with.
+ * `text` borrowed; `into` is prepared for the write like every other change of a list.
+ */
+void torb_text_copy_bytes(torb_text text, torb_list *into);
+
 /* ------------------------------------------------------------------------------------------------------ char --- */
 
 bool torb_char_is_digit(torb_char character);

@@ -411,6 +411,8 @@ bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
 bool torb_text_char_at_located(torb_text text, int64_t offset, torb_char *out, torb_location at);
 /* String.contains */
 bool torb_text_contains(torb_text text, torb_text part);
+/* String.copyBytes */
+void torb_text_copy_bytes(torb_text text, torb_list *into);
 /* String.endsWith */
 bool torb_text_ends_with(torb_text text, torb_text suffix);
 /* String.hash */

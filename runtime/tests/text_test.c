@@ -169,6 +169,30 @@ TORB_TEST(a_character_of_a_slice_is_read_from_the_slice) {
   torb_text_release(text);
 }
 
+static const torb_element element_byte = { 1u, 1u, NULL, NULL, NULL, NULL };
+
+/** `String.bytes()`: the bytes of a slice, from its own offset, appended behind what the list already holds. */
+TORB_TEST(the_bytes_of_a_text_are_appended_in_one_copy) {
+  torb_text text = text_of("ab\xC3\xA4" "cd");
+  torb_text tail = torb_text_slice(text, 2, 5, somewhere);
+  torb_list bytes = torb_list_with_capacity(&element_byte, 4, somewhere);
+  uint8_t first = 0x2Au;
+  torb_list_add(&bytes, &first);
+  torb_text_copy_bytes(tail, &bytes);
+  TORB_CHECK_INTEGER(torb_list_length(bytes), 4);
+  TORB_CHECK_INTEGER(*(const uint8_t *)torb_list_at(bytes, 0, somewhere), 0x2A);
+  TORB_CHECK_INTEGER(*(const uint8_t *)torb_list_at(bytes, 1, somewhere), 0xC3);
+  TORB_CHECK_INTEGER(*(const uint8_t *)torb_list_at(bytes, 2, somewhere), 0xA4);
+  TORB_CHECK_INTEGER(*(const uint8_t *)torb_list_at(bytes, 3, somewhere), 'c');
+  /* The text is untouched, and nothing of it is shared with the list */
+  TORB_CHECK_INTEGER(text.storage->header.count, 2);
+  torb_text_copy_bytes(torb_text_empty(), &bytes);
+  TORB_CHECK_INTEGER(torb_list_length(bytes), 4);
+  torb_list_release(bytes);
+  torb_text_release(tail);
+  torb_text_release(text);
+}
+
 TORB_TEST(concatenation_is_one_allocation) {
   torb_text parts[3];
   torb_text joined;
@@ -601,6 +625,7 @@ void torb_register_text_tests(void) {
   TORB_ADD(the_characters_of_a_text_come_out_one_by_one);
   TORB_ADD(a_character_and_a_byte_are_read_at_an_offset);
   TORB_ADD(a_character_of_a_slice_is_read_from_the_slice);
+  TORB_ADD(the_bytes_of_a_text_are_appended_in_one_copy);
   TORB_ADD(concatenation_is_one_allocation);
   TORB_ADD(mixed_parts_are_one_allocation_and_the_same_bytes_as_show);
   TORB_ADD(a_mixed_part_writes_what_show_writes);

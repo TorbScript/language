@@ -252,6 +252,10 @@ bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out) {
   return true;
 }
 
+void torb_text_copy_bytes(torb_text text, torb_list *into) {
+  torb_list_add_plain(into, torb_text_data(text), (size_t)text.length);
+}
+
 torb_text torb_text_from_bytes(const uint8_t *bytes, size_t length, torb_location at) {
   size_t bad_offset = 0u;
   torb_text text;
