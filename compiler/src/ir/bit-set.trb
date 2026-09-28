@@ -1,0 +1,99 @@
+/**
+ * [BitSet]: the set a dataflow over one function keeps per block - of its slots, of its counted values - as words of
+ * 64 bits.
+ */
+
+/**
+ * A set of the integers `0..count`, 64 of them to a word: what a dataflow joins and compares once per block and round.
+ * A `List<Bool>` took a step per slot for each of those, and comparing two of them took an iterator and a closure per
+ * slot - a quarter of verifying the compiler's own program.
+ *
+ * Two sets that meet in one operation are of the same `count`; nothing else is asked of them.
+ */
+public type BitSet {
+  private var words: ArrayList<Int>
+
+  /** No integer of `0..count`. */
+  static fn empty(count: Int): Self {
+    Self filledWords(wordCount(count), 0)
+  }
+
+  /** Every integer of `0..count`. */
+  static fn full(count: Int): Self {
+    const allBits = 0 - 1
+    var words = filledWords(count / 64, allBits)
+    const rest = count % 64
+    if rest > 0 {
+      // The low `rest` bits of a word
+      words.append(~(allBits << rest))
+    }
+    Self words
+  }
+
+  fn contains(index: Int): Bool {
+    const word = words.get(index / 64) ?? 0
+    (word >> (index % 64)) & 1 == 1
+  }
+
+  var fn insert(index: Int) {
+    const at = index / 64
+    words.set(at, words[at] | (1 << (index % 64)))
+  }
+
+  var fn remove(index: Int) {
+    const at = index / 64
+    words.set(at, words[at] & ~(1 << (index % 64)))
+  }
+
+  /** Keeps what `other` holds as well. */
+  var fn intersect(other: Self) {
+    for at in 0..words.length() {
+      words.set(at, words[at] & other.words[at])
+    }
+  }
+
+  /** Adds what `other` holds. */
+  var fn unite(other: Self) {
+    for at in 0..words.length() {
+      words.set(at, words[at] | other.words[at])
+    }
+  }
+
+  /** Removes what `other` holds. */
+  var fn subtract(other: Self) {
+    for at in 0..words.length() {
+      words.set(at, words[at] & ~other.words[at])
+    }
+  }
+
+  /** Whether both hold the same integers. */
+  fn isSame(other: Self): Bool {
+    for at in 0..words.length() {
+      if words[at] != other.words[at] {
+        return false
+      }
+    }
+    true
+  }
+
+  /** The same set, one `Bool` per integer of `0..count`. */
+  fn flags(count: Int): List<Bool> {
+    var found: List<Bool> = []
+    for index in 0..count {
+      found.append contains(index)
+    }
+    found
+  }
+}
+
+fn wordCount(count: Int): Int {
+  (count + 63) / 64
+}
+
+fn filledWords(count: Int, value: Int): ArrayList<Int> {
+  var words: ArrayList<Int> = ArrayList.withCapacity count
+  for _ in 0..count {
+    words.append value
+  }
+  words
+}

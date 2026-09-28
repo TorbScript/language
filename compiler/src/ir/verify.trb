@@ -24,6 +24,7 @@ use FunctionId, IrSignatureId from "./ir"
 use isManagedType, containsCountedType, textPartKindOf from "./layout"
 use isEnvironmentLayout from "./capture"
 use describeIrType, describeIntrinsic, describeNumericKind from "./print"
+use BitSet from "./bit-set"
 
 /**
  * Every finding against one function: its parameters, its graph, that every block is reachable, that every slot is
@@ -267,11 +268,11 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   const predecessors = predecessorsOf function
   // What a block writes, so that what leaves it is what arrived plus that - the loop below needs both ends of a block
   const defines = definitionsOf program, function, slotCount
-  var definedIn: List<List<Bool>> = []
-  for index in 0..blockCount {
-    definedIn.append filledBooleans(slotCount, index != 0)
+  var definedIn: ArrayList<BitSet> = ArrayList.withCapacity blockCount
+  definedIn.append parameterSlots(function, slotCount)
+  for _ in 1..blockCount {
+    definedIn.append BitSet.full(slotCount)
   }
-  definedIn.set 0, parameterSlots(function, slotCount)
   var rounds = 0
   var isChanged = true
   while isChanged {
@@ -286,7 +287,7 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
         continue
       }
       const incoming = intersected definedIn, defines, predecessors[index], slotCount
-      if incoming != definedIn[index] {
+      if !incoming.isSame(definedIn[index]) {
         definedIn.set index, incoming
         isChanged = true
       }
@@ -313,12 +314,12 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
       }
       if const Some(target) = definedSlot(instruction) {
         if function.hasSlot(target) {
-          defined.set target.value, true
+          defined.insert target.value
         }
       }
       for slot in outs {
         if function.hasSlot(slot) {
-          defined.set slot.value, true
+          defined.insert slot.value
         }
       }
     }
@@ -328,24 +329,24 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   }
 }
 
-fn checkDefined(function: IrFunction, var found: List<String>, defined: List<Bool>, at: String, slot: Slot) {
+fn checkDefined(function: IrFunction, var found: List<String>, defined: BitSet, at: String, slot: Slot) {
   if !function.hasSlot(slot) {
     found.append "{at}: there is no slot %{slot.value}"
     return
   }
-  if defined[slot.value] {
+  if defined.contains(slot.value) {
     return
   }
   found.append "{at}: %{slot.value} is used before it is defined on every path"
 }
 
-fn parameterSlots(function: IrFunction, slotCount: Int): List<Bool> {
-  var defined = filledBooleans slotCount, false
+fn parameterSlots(function: IrFunction, slotCount: Int): BitSet {
+  var defined = BitSet.empty slotCount
   for index in 0..function.slots.length() {
     match function.slots[index].role {
-      .Parameter(_) => defined.set index, true
+      .Parameter(_) => defined.insert index
       // The place a `.ByPointer` result is written to is the caller's, so it arrives defined as well
-      .ResultPointer => defined.set index, true
+      .ResultPointer => defined.insert index
       _ => {}
     }
   }
@@ -368,19 +369,19 @@ fn predecessorsOf(function: IrFunction): List<List<Int>> {
 }
 
 /** Which slots a block writes, whatever arrived in it: what leaves the block is the union of the two. */
-fn definitionsOf(program: IrProgram, function: IrFunction, slotCount: Int): List<List<Bool>> {
-  var defines: List<List<Bool>> = []
+fn definitionsOf(program: IrProgram, function: IrFunction, slotCount: Int): ArrayList<BitSet> {
+  var defines: ArrayList<BitSet> = ArrayList.withCapacity function.blocks.length()
   for block in function.blocks {
-    var written = filledBooleans slotCount, false
+    var written = BitSet.empty slotCount
     for instruction in block.instructions {
       if const Some(target) = definedSlot(instruction) {
         if target.value >= 0 && target.value < slotCount {
-          written.set target.value, true
+          written.insert target.value
         }
       }
       for slot in outParameterSlotsOf(program, instruction) {
         if slot.value >= 0 && slot.value < slotCount {
-          written.set slot.value, true
+          written.insert slot.value
         }
       }
     }
@@ -428,34 +429,24 @@ public fn outParameterSlotsOf(program: IrProgram, instruction: Instruction): Lis
  * lowering makes.
  */
 fn intersected(
-  definedIn: List<List<Bool>>,
-  defines: List<List<Bool>>,
+  definedIn: ArrayList<BitSet>,
+  defines: ArrayList<BitSet>,
   predecessors: List<Int>,
   slotCount: Int,
-): List<Bool> {
+): BitSet {
   if predecessors.isEmpty() {
-    return filledBooleans slotCount, false
+    return BitSet.empty slotCount
   }
-  var common = leaving definedIn, defines, predecessors[0], slotCount
+  var common = leaving definedIn, defines, predecessors[0]
   for index in 1..predecessors.length() {
-    const other = leaving definedIn, defines, predecessors[index], slotCount
-    for slot in 0..slotCount {
-      if !other[slot] {
-        common.set slot, false
-      }
-    }
+    common.intersect leaving(definedIn, defines, predecessors[index])
   }
   common
 }
 
-fn leaving(definedIn: List<List<Bool>>, defines: List<List<Bool>>, block: Int, slotCount: Int): List<Bool> {
+fn leaving(definedIn: ArrayList<BitSet>, defines: ArrayList<BitSet>, block: Int): BitSet {
   var found = definedIn[block]
-  const written = defines[block]
-  for slot in 0..slotCount {
-    if written[slot] {
-      found.set slot, true
-    }
-  }
+  found.unite defines[block]
   found
 }
 

@@ -23,6 +23,7 @@
 use IrProgram, IrFunction, Ownership, Slot, SlotRole, Instruction from "./ir"
 use containsCountedType from "./layout"
 use usedSlots, definedSlot, usedByTerminator, successorsOf, outParameterSlotsOf from "./verify"
+use BitSet from "./bit-set"
 
 /**
  * Which slots of one function carry a count the frame is responsible for, and where each of them sits in a live set.
@@ -238,15 +239,6 @@ public fn filledFlags(count: Int, value: Bool): List<Bool> {
   filled
 }
 
-/** Everything of `other` into `target`. */
-public fn unionFlags(var target: List<Bool>, other: List<Bool>) {
-  for index in 0..target.length() {
-    if other[index] {
-      target.set index, true
-    }
-  }
-}
-
 /**
  * The blocks the entry block reaches, in postorder: a depth-first walk that takes the successors of a terminator in the
  * order they are written, so the answer is a function of the graph and never of a traversal that could differ.
@@ -289,23 +281,24 @@ public fn postorderOf(function: IrFunction): List<Int> {
 
 /**
  * The liveness of one function. `gen` and `kill` are computed once per block by walking it backwards, and then only the
- * two sets per block move - which is what keeps the fixpoint near-linear on an interpreter.
+ * two sets per block move - which is what keeps the fixpoint near-linear on an interpreter. They move as a [BitSet] each,
+ * and become flags once they settled.
  */
 public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted): LiveSets {
   const blockCount = function.blocks.length()
   const width = counted.width()
   const postorder = postorderOf function
-  var liveIn: List<List<Bool>> = []
-  var liveOut: List<List<Bool>> = []
+  var liveIn: ArrayList<BitSet> = ArrayList.withCapacity blockCount
+  var liveOut: ArrayList<BitSet> = ArrayList.withCapacity blockCount
   for _ in 0..blockCount {
-    liveIn.append filledFlags(width, false)
-    liveOut.append filledFlags(width, false)
+    liveIn.append BitSet.empty(width)
+    liveOut.append BitSet.empty(width)
   }
   if width == 0 || blockCount == 0 {
-    return LiveSets liveIn, liveOut, postorder, 0
+    return LiveSets flagsOf(liveIn, width), flagsOf(liveOut, width), postorder, 0
   }
-  var generated: List<List<Bool>> = []
-  var killed: List<List<Bool>> = []
+  var generated: ArrayList<BitSet> = ArrayList.withCapacity blockCount
+  var killed: ArrayList<BitSet> = ArrayList.withCapacity blockCount
   for index in 0..blockCount {
     const (upward, written) = effectOfBlock function, counted, index, width
     generated.append upward
@@ -317,31 +310,34 @@ public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted)
     isChanged = false
     rounds = rounds + 1
     for block in postorder {
-      var leaving = filledFlags width, false
+      var leaving = BitSet.empty width
       for target in successorsOf(function.blocks[block]) {
         if target >= 0 && target < blockCount {
-          unionFlags leaving, liveIn[target]
+          leaving.unite liveIn[target]
         }
       }
-      var arriving = filledFlags width, false
-      const kills = killed[block]
-      for position in 0..width {
-        if leaving[position] && !kills[position] {
-          arriving.set position, true
-        }
-      }
-      unionFlags arriving, generated[block]
-      if leaving != liveOut[block] {
+      var arriving = leaving
+      arriving.subtract killed[block]
+      arriving.unite generated[block]
+      if !leaving.isSame(liveOut[block]) {
         liveOut.set block, leaving
         isChanged = true
       }
-      if arriving != liveIn[block] {
+      if !arriving.isSame(liveIn[block]) {
         liveIn.set block, arriving
         isChanged = true
       }
     }
   }
-  LiveSets liveIn, liveOut, postorder, rounds
+  LiveSets flagsOf(liveIn, width), flagsOf(liveOut, width), postorder, rounds
+}
+
+fn flagsOf(sets: ArrayList<BitSet>, width: Int): List<List<Bool>> {
+  var found: List<List<Bool>> = []
+  for set in sets {
+    found.append set.flags(width)
+  }
+  found
 }
 
 /**
@@ -349,15 +345,15 @@ public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted)
  * without needing them (`killed`). Walked backwards, terminator first, and per instruction the definition before the
  * uses - the order of the transfer function.
  */
-fn effectOfBlock(function: IrFunction, counted: Counted, index: Int, width: Int): (List<Bool>, List<Bool>) {
-  var generated = filledFlags width, false
-  var killed = filledFlags width, false
+fn effectOfBlock(function: IrFunction, counted: Counted, index: Int, width: Int): (BitSet, BitSet) {
+  var generated = BitSet.empty width
+  var killed = BitSet.empty width
   const block = function.blocks[index]
   for slot in usedByTerminator(block.terminator) {
     const position = counted.positionOf slot
     if position >= 0 {
-      generated.set position, true
-      killed.set position, false
+      generated.insert position
+      killed.remove position
     }
   }
   var at = block.instructions.length() - 1
@@ -366,15 +362,15 @@ fn effectOfBlock(function: IrFunction, counted: Counted, index: Int, width: Int)
     if const Some(target) = definedSlot(instruction) {
       const position = counted.positionOf target
       if position >= 0 {
-        generated.set position, false
-        killed.set position, true
+        generated.remove position
+        killed.insert position
       }
     }
     for slot in usedSlots(instruction) {
       const position = counted.positionOf slot
       if position >= 0 {
-        generated.set position, true
-        killed.set position, false
+        generated.insert position
+        killed.remove position
       }
     }
     at = at - 1
