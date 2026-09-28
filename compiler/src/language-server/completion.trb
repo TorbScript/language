@@ -1,0 +1,460 @@
+/**
+ * `textDocument/completion`: after a `.`, the members of what stands in front of it - the fields, methods and
+ * extensions of a value's type, the cases and `static` members of a type, the exports of a module - and everywhere
+ * else the names in scope: the locals bound above the cursor, the declarations and imports of the file, its prelude,
+ * and the keywords.
+ *
+ * The type in front of the `.` comes from the checker's tables of the text as it is. Where the text around it does not
+ * parse, so that no expression ends at the `.`, the server checks the text once more without the `.` and what follows
+ * it on the line ([withoutMemberAccess]), which is the expression alone, and asks that run.
+ */
+
+use JsonValue from "std/json"
+use Span from "../syntax/source"
+use Name, SourceFile, Statement, Declaration, Member, Block, Expression, Condition, FunctionDeclaration from "../syntax/ast"
+use Argument from "../syntax/ast"
+use boundNamesOf, SymbolId, SymbolKind from "../semantics/symbols"
+
+use Checker, CandidateKind from "../semantics/checker/context"
+use TypeId from "../semantics/checker/type"
+use lookupMember, lookupStaticMember, memberNames, caseNamesOf from "../semantics/checker/member"
+use Analysis from "./analysis"
+use kindWord from "./lookup"
+use object, integer, text, array from "./json"
+
+/** Where the cursor stands, for a completion. */
+public type CompletionContext {
+  /** Behind `receiver.` or `receiver?.`, with what is typed of the member name so far */
+  case Member(receiverEnd: Int, dot: Int, isOptional: Bool)
+  /** Anywhere else */
+  case Name(prefixStart: Int)
+}
+
+/** What the text says about the cursor at `offset`. */
+public fn completionContextOf(source: String, offset: Int): CompletionContext {
+  var start = offset.min source.byteLength()
+  while start > 0 && isNameByte(source.byteAt(start - 1) ?? 0) {
+    start = start - 1
+  }
+  if start > 0 && source.sliceBytes(start - 1, start) == "." {
+    const dot = start - 1
+    if dot > 0 && source.sliceBytes(dot - 1, dot) == "?" {
+      return CompletionContext.Member(dot - 1, dot, true)
+    }
+    return CompletionContext.Member dot, dot, false
+  }
+  CompletionContext.Name start
+}
+
+/** The text with the `.` at `dot` and the member name typed behind it removed: the receiver alone. */
+public fn withoutMemberAccess(source: String, dot: Int, offset: Int, isOptional: Bool): String {
+  const from = if isOptional { dot - 1 } else { dot }
+  source.sliceBytes(0, from) + source.sliceBytes(offset, source.byteLength())
+}
+
+/**
+ * The members of what ends at `receiverEnd`, or `None` where no expression the checker typed ends there - the case
+ * for which the server checks the text without the member access.
+ */
+public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, isOptional: Bool): JsonValue? {
+  const module = analysis.moduleOf(path)?
+  var checker = analysis.checked.checker
+  checker.module = module
+  const tables = checker.tables[module.value]
+  var receiver: (Span, TypeId)? = None
+  for (span, found) in tables.expressionTypes {
+    if span.end != receiverEnd || span.start >= span.end {
+      continue
+    }
+    const isNarrower = match receiver {
+      Some((best, _)) => span.end - span.start < best.end - best.start
+      None => true
+    }
+    if isNarrower {
+      receiver = Some((span, found))
+    }
+  }
+  const (span, annotation) = receiver?
+  var items: List<JsonValue> = []
+  match tables.resolutions.get(span) {
+    Some(.TypeOf(owner)) => {
+      var names = caseNamesOf checker, owner
+      names.appendAll memberNames(checker, owner)
+      for name in unique(names) {
+        if const Some(candidate) = lookupStaticMember(checker, owner, name) {
+          items.append memberItem(name, candidate.kind, checker.describe(candidate.annotation))
+        }
+      }
+    }
+    Some(.Namespace(target)) => {
+      for (name, symbol) in analysis.checked.program.scopes[target.value].exported {
+        items.append symbolItem(analysis, name, symbol, "1")
+      }
+    }
+    _ => {
+      const subject = if isOptional { optionalInner(checker, annotation) ?? annotation } else { annotation }
+      for name in unique(memberNames(checker, subject)) {
+        if const Some(candidate) = lookupMember(checker, subject, name) {
+          items.append memberItem(name, candidate.kind, checker.describe(candidate.annotation))
+        }
+      }
+    }
+  }
+  object([("isIncomplete", JsonValue.Bool(false)), ("items", array(items))])
+}
+
+/** The names in scope at `offset`: locals, the file's own names and imports, the prelude, the keywords. */
+public fn nameCompletion(analysis: Analysis, path: String, offset: Int): JsonValue {
+  const module = match analysis.moduleOf(path) {
+    Some(found) => found
+    None => {
+      return object([("isIncomplete", JsonValue.Bool(false)), ("items", array([]))])
+    }
+  }
+  const program = analysis.checked.program
+  const checker = analysis.checked.checker
+  var items: List<JsonValue> = []
+  var seen: Set<String> = Set.of()
+  const file = program.graph.at(module).file
+  const source = program.graph.at(module).source.text
+  for local in localsAt(file, offset) {
+    if seen.contains(local.text) || local.text.startsWith("_") {
+      continue
+    }
+    seen.insert local.text
+    var detail = ""
+    for binding in checker.bindings {
+      if binding.at == local.span && binding.at.end <= source.byteLength() && binding.name == local.text {
+        detail = checker.describe binding.annotation
+      }
+    }
+    items.append item(local.text, 6, detail, "0")
+  }
+  for (name, symbol) in program.scopes[module.value].names {
+    if !seen.contains(name) {
+      seen.insert name
+      items.append symbolItem(analysis, name, symbol, "1")
+    }
+  }
+  for (name, symbol) in program.preludeOf(module) {
+    if !seen.contains(name) {
+      seen.insert name
+      items.append symbolItem(analysis, name, symbol, "2")
+    }
+  }
+  for (name, symbol) in program.builtins {
+    if !seen.contains(name) {
+      seen.insert name
+      items.append symbolItem(analysis, name, symbol, "2")
+    }
+  }
+  for word in keywords() {
+    if !seen.contains(word) {
+      items.append item(word, 14, "", "3")
+    }
+  }
+  object([("isIncomplete", JsonValue.Bool(false)), ("items", array(items))])
+}
+
+/** The words of the language, as the lexer knows them, and the three that are words only where they stand. */
+fn keywords(): List<String> {
+  [
+    "if", "else", "match", "for", "in", "while", "loop", "break", "continue", "return", "const", "var", "static", "fn",
+    "type", "trait", "extend", "foreign", "case", "use", "from", "as", "public", "private", "protected", "native",
+    "shared", "lazy", "with", "where", "by", "using", "true", "false", "void", "self", "Self",
+  ]
+}
+
+fn item(label: String, kind: Int, detail: String, group: String): JsonValue {
+  var entries = [("label", text(label)), ("kind", integer(kind)), ("sortText", text("{group}{label}"))]
+  if !detail.isEmpty() {
+    entries.append(("detail", text(detail)))
+  }
+  object entries
+}
+
+fn symbolItem(analysis: Analysis, name: String, symbol: SymbolId, group: String): JsonValue {
+  const kind = analysis.checked.checker.symbolAt(symbol).kind
+  item name, itemKindOf(kind), kindWord(kind), group
+}
+
+fn memberItem(name: String, kind: CandidateKind, detail: String): JsonValue {
+  const itemKind = match kind {
+    .Field(_, _) => 5
+    .Constant(_, _) => 21
+    .Method(_, _) => 2
+    .CaseConstructor(_, _) => 20
+    .Construct(_) => 4
+    .Copy(_) => 2
+    .TupleField(_, _) => 5
+  }
+  item name, itemKind, detail, "0"
+}
+
+/** The kind of a completion item of the protocol for a kind of declaration. */
+fn itemKindOf(kind: SymbolKind): Int {
+  match kind {
+    .Function => 3
+    .Type => 7
+    .Alias => 7
+    .Trait => 8
+    .Constant => 21
+    .Case(_) => 20
+    .Field(_) => 5
+    .Namespace(_) => 9
+    .GenericParameter => 25
+    .Builtin => 7
+  }
+}
+
+/** The one type argument of an `Option`, for the members behind a `?.`. */
+fn optionalInner(checker: Checker, annotation: TypeId): TypeId? {
+  match checker.types.form(annotation) {
+    .Nominal(symbol, arguments) => {
+      if checker.symbolAt(symbol).name == "Option" && arguments.length() == 1 {
+        return arguments[0]
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+fn unique(names: List<String>): List<String> {
+  var seen: Set<String> = Set.of()
+  var found: List<String> = []
+  for name in names {
+    if !seen.contains(name) {
+      seen.insert name
+      found.append name
+    }
+  }
+  found
+}
+
+fn isNameByte(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
+}
+
+// --- The locals in scope at a position -------------------------------------------------------------------------------
+
+/**
+ * The names bound in the bodies around `offset` and above it: the parameters of the functions and closures it is in,
+ * the bindings of the blocks before it, the pattern of the `for`, `if const`, `while const` and `match` arm it is in.
+ * Read from the syntax tree, so it answers inside of code the checker has not reached as well.
+ */
+public fn localsAt(file: SourceFile, offset: Int): List<Name> {
+  var found: List<Name> = []
+  walkStatements found, file.statements, offset, isNested: false
+  found
+}
+
+fn contains(span: Span, offset: Int): Bool {
+  span.start <= offset && offset <= span.end
+}
+
+fn walkStatements(var found: List<Name>, statements: List<Statement>, offset: Int, isNested: Bool) {
+  for statement in statements {
+    if statement.span.start > offset {
+      return
+    }
+    walkStatement found, statement, offset, isNested
+  }
+}
+
+fn walkStatement(var found: List<Name>, statement: Statement, offset: Int, isNested: Bool) {
+  const isInside = contains statement.span, offset
+  match statement.kind {
+    .Declare(declaration) => walkDeclaration found, declaration, offset, isNested
+    .Bind(binding) => {
+      if isInside && contains(binding.value.span, offset) {
+        walkExpression found, binding.value, offset
+      } else if statement.span.end <= offset && isNested {
+        found.appendAll boundNamesOf(binding.pattern)
+      }
+    }
+    .For(pattern, iterable, body) => {
+      if contains(body.span, offset) {
+        found.appendAll boundNamesOf(pattern)
+        walkBlock found, body, offset
+      } else if contains(iterable.span, offset) {
+        walkExpression found, iterable, offset
+      }
+    }
+    .While(condition, body) => {
+      if contains(body.span, offset) {
+        if const .Bind(_, pattern, _) = condition {
+          found.appendAll boundNamesOf(pattern)
+        }
+        walkBlock found, body, offset
+      } else {
+        walkCondition found, condition, offset
+      }
+    }
+    .Loop(body) => walkBlock found, body, offset
+    .Assign(target, value) => {
+      walkExpression found, target, offset
+      walkExpression found, value, offset
+    }
+    .Return(value) => {
+      if const Some(returned) = value {
+        walkExpression found, returned, offset
+      }
+    }
+    .Evaluate(expression) => walkExpression found, expression, offset
+    .Break | .Continue => {}
+  }
+}
+
+fn walkDeclaration(var found: List<Name>, declaration: Declaration, offset: Int, isNested: Bool) {
+  match declaration.kind {
+    .Function(function) => {
+      if isNested {
+        found.append function.name
+      }
+      if contains(declaration.span, offset) {
+        walkFunction found, function, offset
+      }
+    }
+    .Type(written) => walkMembers found, written.members, offset
+    .Trait(written) => walkMembers found, written.members, offset
+    .Extend(written) => walkMembers found, written.members, offset
+    .Constant(binding) => {
+      if contains(binding.value.span, offset) {
+        walkExpression found, binding.value, offset
+      }
+    }
+    _ => {}
+  }
+}
+
+fn walkMembers(var found: List<Name>, members: List<Member>, offset: Int) {
+  for member in members {
+    if !contains(member.span, offset) {
+      continue
+    }
+    match member.kind {
+      .Function(function) => walkFunction found, function, offset
+      .Constant(binding) => walkExpression found, binding.value, offset
+      .Field(field) => {
+        if const Some(value) = field.default {
+          walkExpression found, value, offset
+        }
+      }
+      .Case(_) => {}
+    }
+  }
+}
+
+fn walkFunction(var found: List<Name>, function: FunctionDeclaration, offset: Int) {
+  for parameter in function.parameters {
+    if !parameter.name.text.isEmpty() {
+      found.append parameter.name
+    }
+  }
+  if const Some(body) = function.body {
+    if contains(body.span, offset) {
+      walkBlock found, body, offset
+    }
+  }
+}
+
+fn walkBlock(var found: List<Name>, block: Block, offset: Int) {
+  walkStatements found, block.statements, offset, isNested: true
+}
+
+fn walkCondition(var found: List<Name>, condition: Condition, offset: Int) {
+  match condition {
+    .Test(expression) => walkExpression found, expression, offset
+    .Bind(_, _, value) => walkExpression found, value, offset
+  }
+}
+
+fn walkExpression(var found: List<Name>, expression: Expression, offset: Int) {
+  if !contains(expression.span, offset) {
+    return
+  }
+  match expression.kind {
+    .Closure(closure) => {
+      for parameter in closure.parameters {
+        found.appendAll boundNamesOf(parameter.pattern)
+      }
+      walkBlock found, closure.body, offset
+    }
+    .If(condition, thenBlock, elseBranch) => {
+      if contains(thenBlock.span, offset) {
+        if const .Bind(_, pattern, _) = condition {
+          found.appendAll boundNamesOf(pattern)
+        }
+        walkBlock found, thenBlock, offset
+      } else if const Some(branch) = elseBranch {
+        if contains(branch.span, offset) {
+          walkExpression found, branch, offset
+        } else {
+          walkCondition found, condition, offset
+        }
+      } else {
+        walkCondition found, condition, offset
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression found, subject, offset
+      for arm in arms {
+        if arm.pattern.span.start <= offset && offset <= arm.body.span.end {
+          found.appendAll boundNamesOf(arm.pattern)
+          if const Some(guard) = arm.guard {
+            walkExpression found, guard, offset
+          }
+          walkExpression found, arm.body, offset
+        }
+      }
+    }
+    .Block(block) => walkBlock found, block, offset
+    .Call(callee, arguments, _) => {
+      walkExpression found, callee, offset
+      walkArguments found, arguments, offset
+    }
+    .Member(target, _, _) => walkExpression found, target, offset
+    .Index(target, index) => {
+      walkExpression found, target, offset
+      walkExpression found, index, offset
+    }
+    .Unary(_, operand) => walkExpression found, operand, offset
+    .Binary(_, left, right) => {
+      walkExpression found, left, offset
+      walkExpression found, right, offset
+    }
+    .Try(inner) => walkExpression found, inner, offset
+    .Generic(target, _) => walkExpression found, target, offset
+    .TupleLiteral(items) => walkArguments found, items, offset
+    .ListLiteral(items) => walkArguments found, items, offset
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression found, key, offset
+        walkExpression found, value, offset
+      }
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(low) = start {
+        walkExpression found, low, offset
+      }
+      if const Some(high) = end {
+        walkExpression found, high, offset
+      }
+    }
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          walkExpression found, inner, offset
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
+fn walkArguments(var found: List<Name>, arguments: List<Argument>, offset: Int) {
+  for argument in arguments {
+    walkExpression found, argument.value, offset
+  }
+}

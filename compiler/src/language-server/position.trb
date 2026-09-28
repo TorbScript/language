@@ -1,0 +1,127 @@
+/**
+ * Positions in the coordinates of the protocol: a 0-based line and a 0-based character that counts **UTF-16 code
+ * units**, which is what an editor written in JavaScript counts. The compiler counts bytes, so [LineMap] translates
+ * both ways. A character takes two code units exactly where UTF-8 takes four bytes for it.
+ */
+
+use Span from "../syntax/source"
+
+/** A position of the protocol. */
+public type Position {
+  line: Int
+  character: Int
+}
+
+/** A range of the protocol: from `start` up to, but not including, `end`. */
+public type Range {
+  start: Position
+  end: Position
+}
+
+/** Byte offsets to protocol positions and back, for one text. */
+public type LineMap {
+  text: String
+  /** The byte offset every line starts at, the first one included. */
+  lineStarts: List<Int>
+
+  static fn of(text: String): Self {
+    var lineStarts = [0]
+    const length = text.byteLength()
+    var offset = 0
+    while const Some(found) = text.sliceBytes(offset, length).byteOffsetOf("\n") {
+      offset = offset + found + 1
+      lineStarts.append offset
+    }
+    Self text, lineStarts
+  }
+
+  /** The position of a byte offset; an offset past the end is the end. */
+  fn positionOf(offset: Int): Position {
+    const target = offset.max(0).min(text.byteLength())
+    const line = lineAt target
+    const start = lineStarts[line]
+    Position line, utf16Units(text.sliceBytes(start, characterStart(target)))
+  }
+
+  fn rangeOf(span: Span): Range {
+    Range positionOf(span.start), positionOf(span.end)
+  }
+
+  /**
+   * The byte offset of a position. A line past the last is the end of the text, a character past the end of its line
+   * is the end of the line, and a character inside of a character that takes two code units is its start.
+   */
+  fn offsetOf(position: Position): Int {
+    if position.line < 0 {
+      return 0
+    }
+    if position.line >= lineStarts.length() {
+      return text.byteLength()
+    }
+    const start = lineStarts[position.line]
+    const end = lineEndOf position.line
+    var units = 0
+    var offset = start
+    while offset < end && units < position.character {
+      const width = (text.charAtByte(offset) ?? ' ').byteLength()
+      units = units + if width == 4 { 2 } else { 1 }
+      offset = offset + width
+    }
+    offset
+  }
+
+  /** How many lines the text has: one more than it has line breaks. */
+  fn lineCount(): Int {
+    lineStarts.length()
+  }
+
+  /** The index of the last line that starts at or before `offset`. */
+  fn lineAt(offset: Int): Int {
+    var low = 0
+    var high = lineStarts.length()
+    while low + 1 < high {
+      const middle = (low + high) / 2
+      if lineStarts[middle] <= offset {
+        low = middle
+      } else {
+        high = middle
+      }
+    }
+    low
+  }
+
+  /** Where the line ends, before its `\r\n` or `\n`. */
+  fn lineEndOf(line: Int): Int {
+    var end = lineStarts.get(line + 1) ?? text.byteLength()
+    if end > lineStarts[line] && text.sliceBytes(end - 1, end) == "\n" {
+      end = end - 1
+    }
+    if end > lineStarts[line] && text.sliceBytes(end - 1, end) == "\r" {
+      end = end - 1
+    }
+    end
+  }
+
+  /** The offset itself where a character starts there, and the start of the character it is inside of otherwise. */
+  private fn characterStart(offset: Int): Int {
+    var at = offset
+    while at > 0 && at < text.byteLength() && isContinuation(text.byteAt(at) ?? 0) {
+      at = at - 1
+    }
+    at
+  }
+}
+
+/** How many UTF-16 code units a text takes. */
+public fn utf16Units(text: String): Int {
+  var units = 0
+  for character in text.chars() {
+    units = units + if character.byteLength() == 4 { 2 } else { 1 }
+  }
+  units
+}
+
+/** A byte that continues a character of UTF-8 rather than starting one: `10xxxxxx`. */
+fn isContinuation(byte: UInt8): Bool {
+  byte >= 128 && byte < 192
+}

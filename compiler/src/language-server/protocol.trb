@@ -1,0 +1,131 @@
+/**
+ * The base protocol of the Language Server Protocol: every message is a header - `Content-Length: <bytes>` and
+ * optionally a `Content-Type`, each line ended by `\r\n` - then an empty line, then exactly that many bytes of JSON.
+ *
+ * [FrameReader] takes the bytes as they come off standard input, in chunks whose borders nobody chose, and hands out
+ * the bodies that are complete; [framed] is the other direction. Both are pure, so the tests feed them bytes.
+ */
+
+use ArrayList from "std/collections"
+use textOf from "std/stream"
+
+/** A message the header of which said nothing usable: skipped, and said on standard error. */
+public type FrameProblem {
+  message: String
+}
+
+/** The bytes that arrived so far, and the messages they complete. */
+public type FrameReader {
+  private var buffer: ArrayList<UInt8>
+  /** Where the next message starts in `buffer`: what was taken is dropped once it is most of the buffer. */
+  private var start: Int = 0
+
+  /** A reader that has read nothing yet. */
+  static fn empty(): Self {
+    Self ArrayList.withCapacity(65536)
+  }
+
+  /** Appends a chunk of standard input. */
+  var fn add(chunk: List<UInt8>) {
+    buffer.appendAll chunk
+  }
+
+  /**
+   * The body of the next complete message, taken out of the buffer: `Ok(None)` until one is whole, and a problem for a
+   * header without a `Content-Length` or a body that is not UTF-8 - that message is dropped, and the next one read.
+   */
+  var fn next(): Result<String?, FrameProblem> {
+    const headerEnd = match headerEndOf(buffer, start) {
+      Some(found) => found
+      None => {
+        return Ok None
+      }
+    }
+    const header = textBetween buffer, start, headerEnd
+    const length = match contentLengthOf(header) {
+      Some(found) => found
+      None => {
+        start = headerEnd + 4
+        compact()
+        return Fail FrameProblem("a header without a `Content-Length`: {header}")
+      }
+    }
+    const bodyStart = headerEnd + 4
+    if buffer.length() - bodyStart < length {
+      return Ok None
+    }
+    var bytes: List<UInt8> = []
+    for index in bodyStart..bodyStart + length {
+      bytes.append buffer[index]
+    }
+    start = bodyStart + length
+    compact()
+    match textOf(bytes) {
+      Ok(body) => Ok Some(body)
+      Fail(problem) => Fail FrameProblem("a message that is not UTF-8: {problem}")
+    }
+  }
+
+  /** Whether bytes of a message that is not complete yet are waiting. */
+  fn isPending(): Bool {
+    start < buffer.length()
+  }
+
+  /** Drops what was taken once it is more than what is left, so the buffer does not grow with every message. */
+  private var fn compact() {
+    if start == 0 || start < buffer.length() - start {
+      return
+    }
+    var rest: ArrayList<UInt8> = ArrayList.withCapacity 65536
+    for index in start..buffer.length() {
+      rest.append buffer[index]
+    }
+    buffer = rest
+    start = 0
+  }
+}
+
+/** A message as it goes out: the header with the length of the body in bytes, the empty line, the body. */
+public fn framed(body: String): String {
+  "Content-Length: {body.byteLength()}\r\n\r\n{body}"
+}
+
+/** Where the `\r\n\r\n` that ends the header starts, searched from `from`. */
+fn headerEndOf(buffer: ArrayList<UInt8>, from: Int): Int? {
+  var index = from
+  const last = buffer.length() - 4
+  while index <= last {
+    if buffer[index] == 13 && buffer[index + 1] == 10 && buffer[index + 2] == 13 && buffer[index + 3] == 10 {
+      return index
+    }
+    index = index + 1
+  }
+  None
+}
+
+/** The header as text. It is ASCII by the protocol; a byte that is not reads as a question mark. */
+fn textBetween(buffer: ArrayList<UInt8>, from: Int, to: Int): String {
+  var bytes: List<UInt8> = []
+  for index in from..to {
+    bytes.append buffer[index]
+  }
+  textOf(bytes).ok() ?? "?"
+}
+
+/** The value of the `Content-Length` line of a header, whatever the case of its name. */
+fn contentLengthOf(header: String): Int? {
+  for line in header.split("\r\n") {
+    const colon = match line.byteOffsetOf(":") {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const name = line.sliceBytes(0, colon).trim().toLowerCase()
+    if name == "content-length" {
+      const value = line.sliceBytes(colon + 1, line.byteLength()).trim()
+      return Int.tryFrom(value).ok()
+    }
+  }
+  None
+}

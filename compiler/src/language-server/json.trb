@@ -1,0 +1,85 @@
+/**
+ * Reading and writing the JSON of the protocol over `std/json`'s [JsonValue]: a member of an object by its path, a
+ * number as an `Int`, and the objects the server answers with, built from a list of entries so that the order of
+ * their members is the order they are written in (a `Map` keeps the order of insertion).
+ */
+
+use Json, JsonValue from "std/json"
+
+/** The member at `path` below `value`: `None` where a step is missing or is not an object. */
+public fn memberAt(value: JsonValue, path: List<String>): JsonValue? {
+  var current = value
+  for name in path {
+    current = match current {
+      .Object(entries) => entries.get(name)?
+      _ => {
+        return None
+      }
+    }
+  }
+  current
+}
+
+/** The text at `path`, or `None` where there is none or it is not a text. */
+public fn textAt(value: JsonValue, path: List<String>): String? {
+  match memberAt(value, path)? {
+    .String(text) => text
+    _ => None
+  }
+}
+
+/** The whole number at `path`, or `None` where there is none or it is not one. */
+public fn integerAt(value: JsonValue, path: List<String>): Int? {
+  match memberAt(value, path)? {
+    .Number(number) => Int64.tryFrom(number).ok()
+    _ => None
+  }
+}
+
+/** The truth value at `path`, or `None` where there is none. */
+public fn booleanAt(value: JsonValue, path: List<String>): Bool? {
+  match memberAt(value, path)? {
+    .Bool(truth) => truth
+    _ => None
+  }
+}
+
+/** The items of the array at `path`, and none where it is missing or not an array. */
+public fn itemsAt(value: JsonValue, path: List<String>): List<JsonValue> {
+  match memberAt(value, path) {
+    Some(.Array(items)) => items
+    _ => []
+  }
+}
+
+/** An object with these members, in this order. */
+public fn object(entries: List<(String, JsonValue)>): JsonValue {
+  var members: Map<String, JsonValue> = [:]
+  for (name, value) in entries {
+    members.set name, value
+  }
+  JsonValue.Object members
+}
+
+/** A whole number. JSON has one kind of number, and every one the protocol sends is small enough to be exact. */
+public fn integer(value: Int): JsonValue {
+  JsonValue.Number Float64.from(value)
+}
+
+public fn text(value: String): JsonValue {
+  JsonValue.String value
+}
+
+public fn array(items: List<JsonValue>): JsonValue {
+  JsonValue.Array items
+}
+
+/** The JSON text of a value, on one line. */
+public fn encoded(value: JsonValue): String {
+  Json().encode(value)
+}
+
+/** A JSON text read into a value: `None` for text that is not JSON. */
+public fn decoded(body: String): JsonValue? {
+  Json().parse(body).ok()
+}

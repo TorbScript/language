@@ -181,6 +181,18 @@ public type SourceTree {
     Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue
   }
 
+  /**
+   * The same tree with these parses kept, each for the file at its path: what a language server parsed once and reads
+   * again for as long as the file does not change. A parse of a file whose text is replaced later is forgotten there.
+   */
+  fn withParsed(parsed: Map<String, (SourceText, Parsed)>): SourceTree {
+    var kept = parsedFiles
+    for (path, found) in parsed {
+      kept.set normalizePath(path), found
+    }
+    Self files, sortedPaths, base, standardLibraryValue, kept, disk, otherPaths, cacheValue
+  }
+
   /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */
   fn parsedAt(path: String): (SourceText, Parsed) {
     const normalized = normalizePath path

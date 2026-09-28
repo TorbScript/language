@@ -1,0 +1,38 @@
+/**
+ * The quick fixes of `textDocument/codeAction`: the fix of every finding of `torb lint`'s rules that touches the range
+ * the editor asks about, as the same edits `torb lint --fix` writes. One action per finding, so each can be taken on
+ * its own; a finding whose rule knows no certain fix offers none.
+ */
+
+use JsonValue from "std/json"
+use Finding from "../lint/finding"
+use Span from "../syntax/source"
+use Document from "./server"
+use LineMap from "./position"
+use findingOf, rangeJson from "./diagnostics"
+use object, text, array from "./json"
+
+/** The actions for the findings of a document that touch the bytes `from` to `to`. */
+public fn codeActionsOf(findings: List<Finding>, document: Document, from: Int, to: Int): JsonValue {
+  const lines = LineMap.of document.text
+  var actions: List<JsonValue> = []
+  for finding in findings {
+    if !finding.hasFix() || finding.span.start > to || finding.span.end < from {
+      continue
+    }
+    var edits: List<JsonValue> = []
+    for edit in finding.fix {
+      const range = lines.rangeOf Span(edit.start, edit.end)
+      edits.append object([("range", rangeJson(range)), ("newText", text(edit.text))])
+    }
+    const changes = object([(document.uri, array(edits))])
+    actions.append(object([
+      ("title", text("Fix `{finding.rule.id()}`: {finding.message}")),
+      ("kind", text("quickfix")),
+      ("isPreferred", JsonValue.Bool(true)),
+      ("diagnostics", array([findingOf(lines, finding)])),
+      ("edit", object([("changes", changes)])),
+    ]))
+  }
+  array actions
+}

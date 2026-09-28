@@ -1,0 +1,518 @@
+/**
+ * The language server itself, without its transport: [LanguageServer.receive] takes the bodies of the messages that
+ * arrived together and answers every message the server sends in return - the responses to the requests, in the order
+ * they came, and the diagnostics it publishes. Nothing here reads standard input or writes standard output
+ * (`./command.trb` does), so the tests hold a whole session in memory.
+ *
+ * **A batch is the unit of work.** A change of a document marks it; the checker runs once at the end of the batch, or
+ * earlier where a request of the batch needs its answer. A client that sends a change per keystroke while the checker
+ * is busy has its changes read together once the checker is done, and they cost one run.
+ *
+ * **A run checks what a change can have changed**: the documents that changed, and every open document that imports
+ * one of them. The others keep what their last run found.
+ */
+
+use File from "std/fs"
+use Clock from "std/time"
+use JsonValue from "std/json"
+use SourceTree from "../project/source-tree"
+use readSourceTree from "../project/read"
+use Finding from "../lint/finding"
+use Analysis, analyze, parsesOf, dependentsOf from "./analysis"
+use memberAt, textAt, integerAt, itemsAt, object, integer, text, array, decoded from "./json"
+use LineMap, Position, Range from "./position"
+use Locations, absolutePathOf from "./uri"
+use diagnosticsOf, findingsOf from "./diagnostics"
+use hoverOf from "./hover"
+use definitionOf from "./definition"
+use completionContextOf, memberCompletion, nameCompletion, withoutMemberAccess from "./completion"
+use semanticTokensOf, tokenTypes, tokenModifiers from "./tokens"
+use codeActionsOf from "./actions"
+
+/** Where the server is in the life cycle the protocol prescribes. */
+public type Phase {
+  /** Before `initialize`: every request but that one is refused. */
+  case Starting
+  case Running
+  /** After `shutdown`: nothing but `exit` is answered. */
+  case ShuttingDown
+  /** After `exit`, with the exit code: 0 where `shutdown` came first, 1 where it did not. */
+  case Exited(code: Int)
+}
+
+/** A document the client opened, with the text it holds now. */
+public type Document {
+  uri: String
+  path: String
+  version: Int
+  text: String
+}
+
+/** The state of one session: the workspace, the open documents, and what the checker last found about them. */
+public type LanguageServer {
+  /** The files of the workspace, with the text of every open document in place of the disk's. `None` until known. */
+  var tree: SourceTree? = None
+  var locations: Locations = Locations "", "."
+  /** By normalized path */
+  var documents: Map<String, Document> = [:]
+  /** The last run that checked each open document, by its path */
+  var analyses: Map<String, Analysis> = [:]
+  /** What `torb lint`'s rules find in each open document, from the same run */
+  var findings: Map<String, List<Finding>> = [:]
+  /** The open documents whose text changed since their last run */
+  var changed: List<String> = []
+  var phase: Phase = Phase.Starting
+  /** Lines for standard error: what the server did and what it refused, taken by whoever writes them. */
+  var log: List<String> = []
+  /** Whether the tree is read from disk at `initialize`, or was handed in (a test) */
+  private readsDisk: Bool = true
+  /** The messages the batch that is being handled sends */
+  private var outgoing: List<JsonValue> = []
+
+  /** A server over a tree built in memory, whose root is `rootUri`: nothing is read from disk. */
+  static fn over(tree: SourceTree, rootUri: String): Self {
+    Self tree: Some(tree), locations: Locations.of(rootUri, "."), readsDisk: false
+  }
+
+  fn hasExited(): Bool {
+    match phase {
+      .Exited(_) => true
+      _ => false
+    }
+  }
+
+  /** The code `exit` asked for: 0 after a `shutdown`, 1 otherwise. */
+  fn exitCode(): Int {
+    match phase {
+      .Exited(code) => code
+      _ => 1
+    }
+  }
+
+  /**
+   * Handles the messages that arrived together, in order, and answers what the server sends: the responses and the
+   * diagnostics of every document it checked.
+   */
+  var fn receive(bodies: List<String>): List<JsonValue> {
+    outgoing = []
+    for body in bodies {
+      if hasExited() {
+        break
+      }
+      match decoded(body) {
+        Some(message) => handle message
+        None => respondError(JsonValue.Null, -32700, "the message is not JSON")
+      }
+    }
+    if !hasExited() && phase == Phase.Running && !changed.isEmpty() {
+      refresh None
+    }
+    const sent = outgoing
+    outgoing = []
+    sent
+  }
+
+  private var fn handle(message: JsonValue) {
+    const method = match textAt(message, ["method"]) {
+      Some(name) => name
+      None => {
+        // A response to a request of the server's: it sends none
+        return
+      }
+    }
+    const params = memberAt(message, ["params"]) ?? JsonValue.Null
+    match memberAt(message, ["id"]) {
+      Some(id) => request id, method, params
+      None => notify method, params
+    }
+  }
+
+  private var fn request(id: JsonValue, method: String, params: JsonValue) {
+    if phase == Phase.Starting && method != "initialize" {
+      respondError(id, -32002, "the server is not initialized")
+      return
+    }
+    if phase == Phase.ShuttingDown {
+      respondError(id, -32600, "the server is shutting down")
+      return
+    }
+    match method {
+      "initialize" => respond id, initialize(params)
+      "shutdown" => {
+        phase = Phase.ShuttingDown
+        respond id, JsonValue.Null
+      }
+      "textDocument/hover" => {
+        const result = match located(params) {
+          Some((analysis, document, offset)) => hoverOf analysis, document.path, offset
+          None => JsonValue.Null
+        }
+        respond id, result
+      }
+      "textDocument/definition" => {
+        const result = match located(params) {
+          Some((analysis, document, offset)) => definitionOf analysis, locations, document.path, offset
+          None => JsonValue.Null
+        }
+        respond id, result
+      }
+      "textDocument/completion" => {
+        const result = match located(params) {
+          Some((analysis, document, offset)) => completion analysis, document, offset
+          None => JsonValue.Null
+        }
+        respond id, result
+      }
+      "textDocument/semanticTokens/full" => {
+        const result = match located(params) {
+          Some((analysis, document, _)) => semanticTokensOf analysis, document.path
+          None => JsonValue.Null
+        }
+        respond id, result
+      }
+      "textDocument/codeAction" => codeActions id, params
+      _ => respondError(id, -32601, "`{method}` is not a request this server answers")
+    }
+  }
+
+  private var fn notify(method: String, params: JsonValue) {
+    match method {
+      "exit" => {
+        phase = Phase.Exited(if phase == Phase.ShuttingDown { 0 } else { 1 })
+      }
+      "textDocument/didOpen" => opened params
+      "textDocument/didChange" => changedDocument params
+      "textDocument/didClose" => closed params
+      "workspace/didChangeWatchedFiles" => watchedFilesChanged params
+      // `initialized`, `$/cancelRequest`, `$/setTrace`, `textDocument/didSave`, `workspace/didChangeConfiguration`:
+      // nothing to do. A request is answered before the next message is read, so none is ever cancelled in flight
+      _ => {}
+    }
+  }
+
+  // --- The life cycle --------------------------------------------------------------------------------------------------
+
+  private var fn initialize(params: JsonValue): JsonValue {
+    const rootUri = textAt(params, ["rootUri"]) ?? rootUriOfFolders(params)
+    if readsDisk && !rootUri.isEmpty() {
+      if const Some(root) = absolutePathOf(rootUri) {
+        locations = Locations.of rootUri, root
+        tree = readTreeOf root
+      }
+    }
+    phase = Phase.Running
+    object([
+      ("capabilities", capabilities()),
+      ("serverInfo", object([("name", text("torb")), ("version", text("0.1.0"))])),
+    ])
+  }
+
+  /** What the client is told the server does. */
+  private fn capabilities(): JsonValue {
+    const legend = object([
+      ("tokenTypes", array(tokenTypes().map(text).toList())),
+      ("tokenModifiers", array(tokenModifiers().map(text).toList())),
+    ])
+    object([
+      ("positionEncoding", text("utf-16")),
+      // 2: incremental changes, each a range and its new text
+      ("textDocumentSync", object([("openClose", JsonValue.Bool(true)), ("change", integer(2))])),
+      ("hoverProvider", JsonValue.Bool(true)),
+      ("definitionProvider", JsonValue.Bool(true)),
+      ("completionProvider", object([("triggerCharacters", array([text(".")]))])),
+      ("semanticTokensProvider", object([("legend", legend), ("full", JsonValue.Bool(true))])),
+      ("codeActionProvider", object([("codeActionKinds", array([text("quickfix")]))])),
+    ])
+  }
+
+  // --- Documents -------------------------------------------------------------------------------------------------------
+
+  private var fn opened(params: JsonValue) {
+    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+    const path = match locations.pathOf(uri) {
+      Some(found) => found
+      None => {
+        log.append "not a file, not checked: {uri}"
+        return
+      }
+    }
+    const content = textAt(params, ["textDocument", "text"]) ?? ""
+    const version = integerAt(params, ["textDocument", "version"]) ?? 0
+    documents.set path, Document(uri, path, version, content)
+    if tree.isNone() {
+      tree = readTreeOf path
+    }
+    tree = tree?.withFile(path, content)
+    markChanged path
+  }
+
+  private var fn changedDocument(params: JsonValue) {
+    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+    const path = match locations.pathOf(uri) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    const document = match documents.get(path) {
+      Some(found) => found
+      None => {
+        log.append "a change of a document that is not open: {uri}"
+        return
+      }
+    }
+    var content = document.text
+    for change in itemsAt(params, ["contentChanges"]) {
+      const replacement = textAt(change, ["text"]) ?? ""
+      content = match rangeAt(change, ["range"]) {
+        Some(range) => {
+          const lines = LineMap.of content
+          const start = lines.offsetOf range.start
+          const end = lines.offsetOf(range.end).max(start)
+          content.sliceBytes(0, start) + replacement + content.sliceBytes(end, content.byteLength())
+        }
+        None => replacement
+      }
+    }
+    const version = integerAt(params, ["textDocument", "version"]) ?? document.version
+    documents.set path, Document(uri, path, version, content)
+    tree = tree?.withFile(path, content)
+    markChanged path
+  }
+
+  private var fn closed(params: JsonValue) {
+    const uri = textAt(params, ["textDocument", "uri"]) ?? ""
+    const path = match locations.pathOf(uri) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    const _document = documents.remove path
+    const _analysis = analyses.remove path
+    const _findings = findings.remove path
+    changed = changed.filter({ _ != path }).toList()
+    // What the disk holds is what everybody else sees again
+    if readsDisk {
+      if const Ok(onDisk) = File.readText(path) {
+        tree = tree?.withFile(path, onDisk)
+      }
+    }
+    publish uri, []
+  }
+
+  /** A file the client watches changed on disk: an open document keeps its own text, every other file is read again. */
+  private var fn watchedFilesChanged(params: JsonValue) {
+    if !readsDisk {
+      return
+    }
+    var any = false
+    for change in itemsAt(params, ["changes"]) {
+      const path = match locations.pathOf(textAt(change, ["uri"]) ?? "") {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      if documents.containsKey(path) {
+        continue
+      }
+      if const Ok(onDisk) = File.readText(path) {
+        tree = tree?.withFile(path, onDisk)
+        any = true
+      }
+    }
+    // Every open document may import what changed; the next run asks all of them again
+    if any {
+      for (path, _) in documents {
+        markChanged path
+      }
+    }
+  }
+
+  private var fn markChanged(path: String) {
+    if !changed.contains(path) {
+      changed.append path
+    }
+  }
+
+  // --- The checker -----------------------------------------------------------------------------------------------------
+
+  /**
+   * Checks every document that changed, every open document that imports one of them, and `also` (the document a
+   * request is about, where no run has checked it yet), then publishes what each of them has now.
+   */
+  private var fn refresh(also: String?) {
+    const current = match tree {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    var paths: List<String> = []
+    var openPaths: List<String> = []
+    for (path, _) in documents {
+      openPaths.append path
+    }
+    for path in changed {
+      if documents.containsKey(path) && !paths.contains(path) {
+        paths.append path
+      }
+      if const Some(previous) = analyses.get(path) {
+        for dependent in dependentsOf(previous, path, openPaths) {
+          if !paths.contains(dependent) {
+            paths.append dependent
+          }
+        }
+      }
+    }
+    if const Some(wanted) = also {
+      if documents.containsKey(wanted) && !paths.contains(wanted) {
+        paths.append wanted
+      }
+    }
+    changed = []
+    if paths.isEmpty() {
+      return
+    }
+    const started = Clock.milliseconds()
+    const analysis = analyze current, paths
+    tree = Some current.withParsed(parsesOf(analysis.checked))
+    const checkedAt = Clock.milliseconds()
+    for path in paths {
+      analyses.set path, analysis
+      const document = match documents.get(path) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const found = findingsOf analysis, path
+      findings.set path, found
+      publish document.uri, diagnosticsOf(analysis, path, document.text, found)
+    }
+    const finished = Clock.milliseconds()
+    var passes: List<String> = []
+    for timing in analysis.checked.checker.timings {
+      if timing.milliseconds > 0 {
+        passes.append "{timing.pass} {timing.milliseconds}"
+      }
+    }
+    const spent = checkedAt - started
+    const listed = passes.joined separator: ", "
+    log.append "checked {paths.length()} document(s) in {spent} ms ({listed}), published in {finished - checkedAt} ms"
+  }
+
+  /**
+   * The run, the document and the byte offset a request about a position names, once the document's run is current.
+   * `None` for a document that is not open, and for one no run could check.
+   */
+  private var fn located(params: JsonValue): (Analysis, Document, Int)? {
+    const document = documentOf(params)?
+    const analysis = analysisOf(document.path)?
+    const position = positionAt(params, ["position"]) ?? Position(0, 0)
+    (analysis, document, LineMap.of(document.text).offsetOf(position))
+  }
+
+  /**
+   * The completion at a byte offset. Behind a `.` where no expression of the run ends at it - the text around it does
+   * not parse yet - the text without the member access is checked once more, and its run answers.
+   */
+  private fn completion(analysis: Analysis, document: Document, offset: Int): JsonValue {
+    match completionContextOf(document.text, offset) {
+      .Name(_) => nameCompletion analysis, document.path, offset
+      .Member(receiverEnd, dot, isOptional) => {
+        if const Some(found) = memberCompletion(analysis, document.path, receiverEnd, isOptional) {
+          return found
+        }
+        const current = match tree {
+          Some(found) => found
+          None => {
+            return JsonValue.Null
+          }
+        }
+        const patched = withoutMemberAccess document.text, dot, offset, isOptional
+        const retried = analyze current.withFile(document.path, patched), [document.path]
+        memberCompletion(retried, document.path, receiverEnd, isOptional) ?? JsonValue.Null
+      }
+    }
+  }
+
+  private var fn codeActions(id: JsonValue, params: JsonValue) {
+    const document = match documentOf(params) {
+      Some(found) => found
+      None => {
+        respond id, array([])
+        return
+      }
+    }
+    const _analysis = analysisOf document.path
+    const range = rangeAt(params, ["range"]) ?? Range(Position(0, 0), Position(0, 0))
+    const lines = LineMap.of document.text
+    const from = lines.offsetOf range.start
+    const to = lines.offsetOf range.end
+    respond id, codeActionsOf(findings.get(document.path) ?? [], document, from, to)
+  }
+
+  /** The open document a request names. */
+  private fn documentOf(params: JsonValue): Document? {
+    const path = locations.pathOf(textAt(params, ["textDocument", "uri"]) ?? "")?
+    documents.get path
+  }
+
+  /** The run of a document, checked now where its text changed since or no run has checked it. */
+  private var fn analysisOf(path: String): Analysis? {
+    if changed.contains(path) || !analyses.containsKey(path) {
+      refresh Some(path)
+    }
+    analyses.get path
+  }
+
+  // --- Messages --------------------------------------------------------------------------------------------------------
+
+  private var fn respond(id: JsonValue, result: JsonValue) {
+    outgoing.append object([("jsonrpc", text("2.0")), ("id", id), ("result", result)])
+  }
+
+  private var fn respondError(id: JsonValue, code: Int, message: String) {
+    log.append "error {code}: {message}"
+    const problem = object([("code", integer(code)), ("message", text(message))])
+    outgoing.append object([("jsonrpc", text("2.0")), ("id", id), ("error", problem)])
+  }
+
+  private var fn publish(uri: String, diagnostics: List<JsonValue>) {
+    const params = object([("uri", text(uri)), ("diagnostics", array(diagnostics))])
+    outgoing.append(object([
+      ("jsonrpc", text("2.0")),
+      ("method", text("textDocument/publishDiagnostics")),
+      ("params", params),
+    ]))
+  }
+}
+
+/** The first workspace folder, for a client that sends those instead of `rootUri`; empty where there is none. */
+fn rootUriOfFolders(params: JsonValue): String {
+  for folder in itemsAt(params, ["workspaceFolders"]) {
+    if const Some(uri) = textAt(folder, ["uri"]) {
+      return uri
+    }
+  }
+  ""
+}
+
+/** The files of the workspace around a path, read the way `torb check` reads them; an empty tree where that fails. */
+fn readTreeOf(path: String): SourceTree? {
+  readSourceTree([path]).ok()
+}
+
+fn positionAt(value: JsonValue, path: List<String>): Position? {
+  const line = integerAt(value, path.appended("line"))?
+  const character = integerAt(value, path.appended("character"))?
+  Position line, character
+}
+
+fn rangeAt(value: JsonValue, path: List<String>): Range? {
+  const start = positionAt(value, path.appended("start"))?
+  const end = positionAt(value, path.appended("end"))?
+  Range start, end
+}

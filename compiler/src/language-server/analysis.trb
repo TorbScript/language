@@ -1,0 +1,133 @@
+/**
+ * One run of the checker for the language server, and what makes the next one cheap.
+ *
+ * The server holds one [SourceTree] of the workspace for as long as it runs, with the text of every open document in
+ * place of what the disk holds. Every run parses only what changed: the parses of a run are kept in the tree
+ * ([parsesOf], `SourceTree.withParsed`), and `SourceTree.withFile` forgets the parse of the one file whose text it
+ * replaces. A run checks the bodies of the documents it is asked about and of nothing else - the checker's on-demand
+ * bodies of `torb run` - and parses only the packages their program reaches (`check`'s `onlyReached`).
+ */
+
+use SourceText from "../syntax/source"
+use Parsed from "../syntax/parser/parser"
+use SourceTree from "../project/source-tree"
+use normalizePath from "../project/path"
+use check, Checked, CheckedFile from "../semantics/check"
+use ModuleId from "../semantics/module"
+use Program from "../semantics/scope"
+use resolveImport from "../semantics/graph"
+
+/** What one run of the checker found, and which documents it was asked about. */
+public type Analysis {
+  checked: Checked
+  /** The normalized paths of the documents the run checked the bodies of */
+  paths: List<String>
+
+  /** The module a path became in this run, if the run reached it at all. */
+  fn moduleOf(path: String): ModuleId? {
+    checked.program.graph.moduleAt path
+  }
+
+  /** What the run reports about one of its documents, sorted by position. */
+  fn fileOf(path: String): CheckedFile? {
+    const module = moduleOf(path)?
+    const shown = checked.program.graph.at(module).shownPath
+    checked.files.find({ _.path == shown })
+  }
+
+  /** The text of a document as this run read it. */
+  fn textOf(path: String): String? {
+    const module = moduleOf(path)?
+    checked.program.graph.at(module).source.text
+  }
+}
+
+/**
+ * Checks the documents at `paths`, which are normalized: their bodies, the signatures of everything their program
+ * reaches, and nothing else.
+ */
+public fn analyze(tree: SourceTree, paths: List<String>): Analysis {
+  const checked = check tree, paths, withTimings: true, onlyReached: true, onlyNamed: true
+  Analysis checked, paths
+}
+
+/** Every parse the run made or reused, by path: what the tree keeps for the next run. */
+public fn parsesOf(checked: Checked): Map<String, (SourceText, Parsed)> {
+  var found: Map<String, (SourceText, Parsed)> = [:]
+  for module in checked.program.graph.modules {
+    // A receiver script is checked with a receiver the file does not say, and is parsed again where it is needed
+    if module.receiver.isSome() {
+      continue
+    }
+    found.set module.path, (module.source, Parsed(module.file, module.diagnostics, module.deferred))
+  }
+  found
+}
+
+/**
+ * The documents of `open` that import the file at `changed`, directly or through other modules, in the program of
+ * `analysis`: the ones whose diagnostics a change of that file may change. A document the run did not reach imports
+ * nothing it knows of.
+ */
+public fn dependentsOf(analysis: Analysis, changed: String, open: List<String>): List<String> {
+  const target = match analysis.moduleOf(changed) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  var found: List<String> = []
+  for path in open {
+    if path == changed {
+      continue
+    }
+    if const Some(start) = analysis.moduleOf(path) {
+      if reaches(analysis.checked.program, start, target) {
+        found.append path
+      }
+    }
+  }
+  found
+}
+
+/** Whether `from` imports `target`, directly or through the modules it imports. */
+fn reaches(program: Program, from: ModuleId, target: ModuleId): Bool {
+  var seen: Set<Int> = Set.of()
+  var pending = [from]
+  while !pending.isEmpty() {
+    const module = pending.removeAt(pending.length() - 1) ?? from
+    if seen.contains(module.value) {
+      continue
+    }
+    seen.insert module.value
+    for imported in importsOf(program, module) {
+      if imported == target {
+        return true
+      }
+      pending.append imported
+    }
+  }
+  false
+}
+
+/** The modules a module's `use` declarations name. */
+fn importsOf(program: Program, module: ModuleId): List<ModuleId> {
+  var found: List<ModuleId> = []
+  for statement in program.graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(path) = usage.source {
+          if const .Found(imported) = resolveImport(program.graph, program.workspace, module, path) {
+            found.append imported
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+/** A path the way the tree keys it. */
+public fn keyOf(path: String): String {
+  normalizePath path
+}

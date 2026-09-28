@@ -1,0 +1,290 @@
+/**
+ * What stands at a byte offset of a module, as the checker's tables say - the question hover and go to definition
+ * both start from - and how a declaration reads in a hover: its signature as the source writes it, and its doc comment.
+ *
+ * The tables are keyed by span, so the answer is the **smallest** span that contains the offset: of `a.b.c` with the
+ * offset on `b`, that is `a.b`, whose resolution is the member `b`. An offset right behind the last character of a name
+ * still counts as on it, which is where an editor's cursor stands after typing it.
+ */
+
+use Span, SourceText from "../syntax/source"
+use lex from "../syntax/lexer"
+use Token from "../syntax/token"
+use SourceFile, Statement, Declaration, Member, Pattern from "../syntax/ast"
+use ItemKind, signatureOf from "../reference/model"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use SymbolId, SymbolKind from "../semantics/symbols"
+use Resolution, BindingId from "../semantics/checker/context"
+use TypeId from "../semantics/checker/type"
+
+/** One thing the tables know at an offset. */
+public type Found {
+  /** A name, a member, a call or a constructor in an expression, and what it resolved to */
+  case Resolved(span: Span, resolution: Resolution)
+  /** A name in a type position */
+  case TypeName(span: Span, symbol: SymbolId)
+  /** The name of a declaration: a `fn`, a `type` and its fields, cases and members, a module constant */
+  case Declared(span: Span, symbol: SymbolId)
+  /** The name of a local binding where it is bound: a `const`, a parameter, a pattern */
+  case Bound(span: Span, binding: BindingId)
+  /** An expression the checker typed, where nothing above says more */
+  case Typed(span: Span, result: TypeId)
+
+  fn span(): Span {
+    match self {
+      .Resolved(span, _) => span
+      .TypeName(span, _) => span
+      .Declared(span, _) => span
+      .Bound(span, _) => span
+      .Typed(span, _) => span
+    }
+  }
+}
+
+/** Whether the span holds the offset, the position right behind its last byte included. */
+fn holds(span: Span, offset: Int): Bool {
+  span.start <= offset && offset <= span.end
+}
+
+/** Whether `span` is a better answer than `best`: it holds the offset and is smaller. */
+fn isNarrower(span: Span, best: Found?): Bool {
+  match best {
+    Some(found) => span.end - span.start < found.span().end - found.span().start
+    None => true
+  }
+}
+
+/** What stands at `offset` in `module`: the narrowest thing the tables know there. */
+public fn foundAt(checked: Checked, module: ModuleId, offset: Int): Found? {
+  const checker = checked.checker
+  const tables = checker.tables[module.value]
+  var best: Found? = None
+  for (span, resolution) in tables.resolutions {
+    if holds(span, offset) && resolution != Resolution.Deferred && isNarrower(span, best) {
+      best = Found.Resolved span, resolution
+    }
+  }
+  if const Some(names) = checked.resolutions.get(module.value) {
+    for (span, symbol) in names {
+      if holds(span, offset) && isNarrower(span, best) {
+        best = Found.TypeName span, symbol
+      }
+    }
+  }
+  for (index, symbol) in checker.symbols.all.indexed() {
+    if symbol.module == Some(module) && holds(symbol.span, offset) && isNarrower(symbol.span, best) {
+      best = Found.Declared symbol.span, SymbolId(index)
+    }
+  }
+  const text = checked.program.graph.at(module).source.text
+  for (index, binding) in checker.bindings.indexed() {
+    if holds(binding.at, offset) && isNarrower(binding.at, best) && binding.at.end <= text.byteLength() {
+      // The bindings of every body checked share one list; the name at the span says which module it belongs to
+      if text.sliceBytes(binding.at.start, binding.at.end) == binding.name {
+        best = Found.Bound binding.at, BindingId(index)
+      }
+    }
+  }
+  if best.isSome() {
+    return best
+  }
+  for (span, result) in tables.expressionTypes {
+    if holds(span, offset) && isNarrower(span, best) {
+      best = Found.Typed span, result
+    }
+  }
+  best
+}
+
+/** The symbol a resolution leads to, where it leads to a declaration. */
+public fn symbolOfResolution(checked: Checked, resolution: Resolution): SymbolId? {
+  match resolution {
+    .Callable(symbol, _, _) => symbol
+    .Field(_, field) => field
+    .Constant(symbol, _) => symbol
+    .CaseOf(_, variant) => variant
+    .PropertyWrite(_, field) => field
+    .Construct(owner) => nominalSymbolOf checked, owner
+    .CopyOf(owner) => nominalSymbolOf checked, owner
+    .TypeOf(owner) => nominalSymbolOf checked, owner
+    _ => None
+  }
+}
+
+/** The declaration behind a type, where it has one. */
+public fn nominalSymbolOf(checked: Checked, annotation: TypeId): SymbolId? {
+  match checked.checker.types.form(annotation) {
+    .Nominal(symbol, _) => symbol
+    _ => None
+  }
+}
+
+/** How a declaration reads in a hover. */
+public type Description {
+  /** One line, as the source writes the declaration up to its body */
+  signature: String
+  /** The doc comment, Markdown; empty where there is none */
+  documentation: String
+}
+
+/** The signature and the doc comment of the declaration of a symbol, found in the syntax tree of its module. */
+public fn describeSymbol(checked: Checked, symbol: SymbolId): Description? {
+  const found = checked.checker.symbolAt symbol
+  const module = found.module?
+  const shape = checked.program.graph.at module
+  const written = writtenDeclarationOf(shape.file, shape.source.text, found.span)?
+  const lexed = lex shape.source
+  var tokens: List<Token> = []
+  for token in lexed.tokens {
+    tokens.append token
+  }
+  const signature = signatureOf tokens, shape.source.text, written.start, written.end, written.kind
+  Description signature, written.documentation
+}
+
+/** Where a declaration's signature is in the text, what kind of declaration it is, and its doc comment. */
+type Written {
+  start: Int
+  end: Int
+  kind: ItemKind
+  documentation: String
+}
+
+/** The declaration whose name is at `name`: a top-level one, or a member, case or field inside of one. */
+fn writtenDeclarationOf(file: SourceFile, text: String, name: Span): Written? {
+  for statement in file.statements {
+    if const Some(found) = writtenInStatement(statement, text, name) {
+      return found
+    }
+  }
+  None
+}
+
+fn writtenInStatement(statement: Statement, text: String, name: Span): Written? {
+  match statement.kind {
+    .Declare(declaration) => writtenInDeclaration declaration, text, name
+    .Bind(binding) => {
+      if patternNames(binding.pattern, name) {
+        return Written(statement.span.start, statement.span.end, ItemKind.Constant, binding.doc ?? "")
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+fn writtenInDeclaration(declaration: Declaration, text: String, name: Span): Written? {
+  const documentation = declaration.doc ?? ""
+  const start = declaration.span.start
+  match declaration.kind {
+    .Function(function) => {
+      if function.name.span == name {
+        const end = function.body.map({ _.span.start }) ?? declaration.span.end
+        return Written start, end, ItemKind.Function, documentation
+      }
+      None
+    }
+    .Type(written) => {
+      if written.name.span == name {
+        return Written start, headerEnd(text, name.end, declaration.span.end), ItemKind.Type, documentation
+      }
+      writtenInMembers written.members, text, name
+    }
+    .Trait(written) => {
+      if written.name.span == name {
+        return Written start, headerEnd(text, name.end, declaration.span.end), ItemKind.Trait, documentation
+      }
+      writtenInMembers written.members, text, name
+    }
+    .Alias(written) => {
+      if written.name.span == name {
+        return Written start, declaration.span.end, ItemKind.Alias, documentation
+      }
+      None
+    }
+    .Extend(written) => writtenInMembers written.members, text, name
+    .Foreign(written) => writtenInMembers written.members, text, name
+    .Constant(binding) => {
+      if patternNames(binding.pattern, name) {
+        return Written start, declaration.span.end, ItemKind.Constant, documentation
+      }
+      None
+    }
+    .Use(_) => None
+  }
+}
+
+fn writtenInMembers(members: List<Member>, text: String, name: Span): Written? {
+  for member in members {
+    const documentation = member.doc ?? ""
+    const start = member.span.start
+    match member.kind {
+      .Field(field) => {
+        if field.name.span == name {
+          return Written start, member.span.end, ItemKind.Field, documentation
+        }
+      }
+      .Constant(binding) => {
+        if patternNames(binding.pattern, name) {
+          return Written start, member.span.end, ItemKind.Constant, documentation
+        }
+      }
+      .Function(function) => {
+        if function.name.span == name {
+          const end = function.body.map({ _.span.start }) ?? member.span.end
+          return Written start, end, ItemKind.Function, documentation
+        }
+      }
+      .Case(written) => {
+        if written.name.span == name {
+          return Written start, member.span.end, ItemKind.Case, documentation
+        }
+        for field in written.fields {
+          if field.name.span == name {
+            return Written(
+              field.name.span.start,
+              member.span.end.min(field.name.span.end),
+              ItemKind.Field,
+              field.doc ?? "",
+            )
+          }
+        }
+      }
+    }
+  }
+  None
+}
+
+/** Whether the pattern binds the name at `name`. */
+fn patternNames(pattern: Pattern, name: Span): Bool {
+  match pattern.kind {
+    .Binding(_) => pattern.span == name
+    .TuplePattern(items) => items.any({ patternNames _, name })
+    _ => false
+  }
+}
+
+/** Where the header of a type or a trait ends: at the `{` of its members, or at its end where it has none. */
+fn headerEnd(text: String, after: Int, end: Int): Int {
+  match text.sliceBytes(after, end).byteOffsetOf("\{") {
+    Some(found) => after + found
+    None => end
+  }
+}
+
+/** How a symbol is named in a completion or a hover: the word the source writes in front of it. */
+public fn kindWord(kind: SymbolKind): String {
+  match kind {
+    .Function => "fn"
+    .Type => "type"
+    .Alias => "type"
+    .Trait => "trait"
+    .Constant => "const"
+    .Case(_) => "case"
+    .Field(_) => "field"
+    .Namespace(_) => "module"
+    .GenericParameter => "type parameter"
+    .Builtin => "type"
+  }
+}

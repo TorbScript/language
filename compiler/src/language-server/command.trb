@@ -1,0 +1,96 @@
+/**
+ * `torb lsp`: the language server of docs/design/LANGUAGE-SERVER.md over standard input and standard output, the
+ * transport every editor speaks. What it logs goes to standard error, which an editor shows in its output panel.
+ *
+ * ```text
+ * torb lsp [--stdio]
+ * ```
+ *
+ * **The server is a task.** Standard input is read through `std/io`'s `standardInput()`, whose reads are tasks, so the
+ * loop that reads it returns a `Task`. The top level of `torb` does not wait for it: an `await()` there would make the
+ * whole entry file a task, and the VM that `torb run` and `torb test` start refuses to run its scheduler from inside
+ * one. A task the entry starts and does not wait for runs once the entry has finished (`torb_scheduler_run` after the
+ * entry, docs/design/CONCURRENCY.md), and the loop ends the process itself with `Process.exit`.
+ */
+
+use standardInput, standardOutput from "std/io"
+use Process from "std/process"
+use LanguageServer from "./server"
+use FrameReader, framed from "./protocol"
+use encoded from "./json"
+
+/** `torb lsp --help` */
+public fn lspUsage(): String {
+  const lines = [
+    "torb lsp - the language server, over standard input and standard output",
+    "",
+    "Usage:",
+    "  torb lsp [--stdio]",
+    "",
+    "  --stdio   Accepted and ignored: standard input and output are the only transport",
+    "",
+    "An editor starts it and speaks the Language Server Protocol to it; nothing reads its standard output but the",
+    "editor. What it does and what it refuses goes to standard error.",
+  ]
+  lines.joined separator: "\n"
+}
+
+/** Whether the arguments are ones `torb lsp` takes. */
+public fn isLspArguments(arguments: List<String>): Bool {
+  arguments.all({ _ == "--stdio" })
+}
+
+/**
+ * Starts the server. It runs as a task once `torb`'s top level has finished, and it ends the process itself: with 0
+ * after `shutdown` and `exit`, with 1 after an `exit` without `shutdown` or at the end of standard input.
+ */
+public fn startLanguageServer() {
+  const _session = serve()
+}
+
+/** Reads messages until `exit`, answers each batch that arrived together, and writes every answer framed. */
+fn serve(): Task<Void> {
+  var server = LanguageServer()
+  var reader = FrameReader.empty()
+  var input = standardInput()
+  var output = standardOutput()
+  loop {
+    var bodies: List<String> = []
+    loop {
+      match reader.next() {
+        Ok(Some(body)) => bodies.append body
+        Ok(None) => {
+          break
+        }
+        Fail(problem) => printError "torb lsp: {problem.message}"
+      }
+    }
+    if !bodies.isEmpty() {
+      const replies = server.receive bodies
+      for line in server.log {
+        printError "torb lsp: {line}"
+      }
+      server.log = []
+      for reply in replies {
+        if const Fail(problem) = output.addText(framed(encoded(reply))).await() {
+          printError "torb lsp: standard output failed: {problem}"
+          Process.exit 1
+        }
+      }
+      if server.hasExited() {
+        Process.exit server.exitCode()
+      }
+    }
+    match input.next().await() {
+      Ok(Some(chunk)) => reader.add chunk
+      Ok(None) => {
+        printError "torb lsp: standard input ended before `exit`"
+        Process.exit 1
+      }
+      Fail(problem) => {
+        printError "torb lsp: standard input failed: {problem}"
+        Process.exit 1
+      }
+    }
+  }
+}

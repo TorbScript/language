@@ -1,0 +1,141 @@
+/**
+ * `textDocument/hover`: what the name or expression under the cursor is. A declaration shows its signature as the
+ * source writes it and its doc comment; a local binding its type; any other expression the type the checker gave it.
+ */
+
+use JsonValue from "std/json"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use Resolution, BindingId from "../semantics/checker/context"
+use TypeId from "../semantics/checker/type"
+use SymbolId from "../semantics/symbols"
+use Analysis from "./analysis"
+use Found, foundAt, symbolOfResolution, describeSymbol, kindWord from "./lookup"
+use LineMap from "./position"
+use rangeJson from "./diagnostics"
+use object, text from "./json"
+
+/** The hover at a byte offset of a document, or `null` where there is nothing to say. */
+public fn hoverOf(analysis: Analysis, path: String, offset: Int): JsonValue {
+  const module = match analysis.moduleOf(path) {
+    Some(found) => found
+    None => {
+      return JsonValue.Null
+    }
+  }
+  const found = match foundAt(analysis.checked, module, offset) {
+    Some(thing) => thing
+    None => {
+      return JsonValue.Null
+    }
+  }
+  const markdown = markdownOf analysis.checked, module, found
+  if markdown.isEmpty() {
+    return JsonValue.Null
+  }
+  const lines = LineMap.of(analysis.textOf(path) ?? "")
+  object([
+    ("contents", object([("kind", text("markdown")), ("value", text(markdown))])),
+    ("range", rangeJson(lines.rangeOf(found.span()))),
+  ])
+}
+
+/** What a hover says about one thing the tables know. */
+fn markdownOf(checked: Checked, module: ModuleId, found: Found): String {
+  match found {
+    .Resolved(span, resolution) => {
+      const described = match resolution {
+        .Local(binding) => bindingText checked, binding
+        // A constant says its type, which its declaration need not write
+        .Constant(symbol, _) => constantText(
+          checked,
+          symbol,
+          checked.checker.tables[module.value].expressionTypes.get(span),
+        )
+        .Namespace(target) => code "module {checked.program.graph.at(target).shownPath}"
+        .TupleField(_, index) => code ".{index}"
+        _ => symbolText checked, symbolOfResolution(checked, resolution)
+      }
+      if !described.isEmpty() {
+        return described
+      }
+      typeText checked, checked.checker.tables[module.value].expressionTypes.get(span)
+    }
+    .TypeName(_, symbol) => symbolText checked, Some(symbol)
+    .Declared(_, symbol) => symbolText checked, Some(symbol)
+    .Bound(_, binding) => bindingText checked, binding
+    .Typed(_, result) => typeText checked, Some(result)
+  }
+}
+
+/** A declaration: its signature, and its doc comment under it. */
+fn symbolText(checked: Checked, symbol: SymbolId?): String {
+  const found = match symbol {
+    Some(known) => known
+    None => {
+      return ""
+    }
+  }
+  match describeSymbol(checked, found) {
+    Some(description) => {
+      const signature = code description.signature
+      if description.documentation.isEmpty() {
+        signature
+      } else {
+        "{signature}\n\n{description.documentation}"
+      }
+    }
+    None => {
+      const declared = checked.checker.symbolAt found
+      code "{kindWord(declared.kind)} {declared.name}"
+    }
+  }
+}
+
+/** A constant of a module or of a type, with the type of its value, and its doc comment. */
+fn constantText(checked: Checked, symbol: SymbolId, found: TypeId?): String {
+  const known = match found {
+    Some(annotation) => annotation
+    None => {
+      return symbolText checked, Some(symbol)
+    }
+  }
+  const name = checked.checker.symbolAt(symbol).name
+  const signature = code "const {name}: {checked.checker.describe(known)}"
+  const documentation = describeSymbol(checked, symbol).map({ _.documentation }) ?? ""
+  if documentation.isEmpty() {
+    signature
+  } else {
+    "{signature}\n\n{documentation}"
+  }
+}
+
+/** A local binding: `const`, `var` or a parameter, with its type. */
+fn bindingText(checked: Checked, binding: BindingId): String {
+  const found = checked.checker.binding binding
+  const word = if found.isParameter {
+    if found.isVar { "var " } else { "" }
+  } else if found.isVar {
+    "var "
+  } else {
+    "const "
+  }
+  code "{word}{found.name}: {checked.checker.describe(bindingType(checked, binding))}"
+}
+
+/** The type the checker gave a binding. */
+fn bindingType(checked: Checked, binding: BindingId): TypeId {
+  checked.checker.binding(binding).annotation
+}
+
+fn typeText(checked: Checked, found: TypeId?): String {
+  match found {
+    Some(known) => code checked.checker.describe(known)
+    None => ""
+  }
+}
+
+/** A block of TorbScript in the Markdown of a hover. */
+fn code(source: String): String {
+  "```trb\n{source}\n```"
+}

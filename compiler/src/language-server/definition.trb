@@ -1,0 +1,64 @@
+/**
+ * `textDocument/definition`: where the name under the cursor is declared - a local binding where it is bound, a
+ * function, type, field, case or constant at its name, a module at its first line - in whatever file of the program
+ * that is, the standard library included.
+ */
+
+use JsonValue from "std/json"
+use Span from "../syntax/source"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use SymbolId from "../semantics/symbols"
+use Analysis from "./analysis"
+use Found, foundAt, symbolOfResolution from "./lookup"
+use LineMap from "./position"
+use Locations from "./uri"
+use rangeJson from "./diagnostics"
+use object, text from "./json"
+
+/** The location of the declaration of what stands at a byte offset, or `null` where it has none. */
+public fn definitionOf(analysis: Analysis, locations: Locations, path: String, offset: Int): JsonValue {
+  const module = match analysis.moduleOf(path) {
+    Some(found) => found
+    None => {
+      return JsonValue.Null
+    }
+  }
+  const found = match foundAt(analysis.checked, module, offset) {
+    Some(thing) => thing
+    None => {
+      return JsonValue.Null
+    }
+  }
+  const (target, span) = match declarationOf(analysis.checked, module, found) {
+    Some(location) => location
+    None => {
+      return JsonValue.Null
+    }
+  }
+  const shape = analysis.checked.program.graph.at target
+  const lines = LineMap.of shape.source.text
+  object([("uri", text(locations.uriOf(shape.path))), ("range", rangeJson(lines.rangeOf(span)))])
+}
+
+/** The module and the span of the name a thing the tables know is declared under. */
+fn declarationOf(checked: Checked, module: ModuleId, found: Found): (ModuleId, Span)? {
+  match found {
+    .Resolved(_, resolution) => {
+      match resolution {
+        .Local(binding) => (module, checked.checker.binding(binding).at)
+        .Namespace(target) => (target, Span(0, 0))
+        _ => symbolLocation(checked, symbolOfResolution(checked, resolution)?)
+      }
+    }
+    .TypeName(_, symbol) => symbolLocation checked, symbol
+    .Declared(_, symbol) => symbolLocation checked, symbol
+    .Bound(span, _) => (module, span)
+    .Typed(_, _) => None
+  }
+}
+
+fn symbolLocation(checked: Checked, symbol: SymbolId): (ModuleId, Span)? {
+  const found = checked.checker.symbolAt symbol
+  (found.module?, found.span)
+}

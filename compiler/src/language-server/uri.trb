@@ -1,0 +1,150 @@
+/**
+ * Documents are named by `file:` URIs in the protocol and by normalized paths in the compiler. [Locations] translates
+ * between the two: a URI below the root of the workspace becomes a path below the root the tree was read from, and
+ * every other `file:` URI becomes its absolute path. The translation is text alone and the same on every system - a
+ * drive letter is recognized by its shape (`/c:/...` or `/c%3A/...`) and written in capitals, which is how
+ * `File.absolutePath` spells it.
+ */
+
+use textOf from "std/stream"
+use normalizePath, isInside, relativePath from "../project/path"
+
+/** The root of the workspace as a URI and as the path the tree knows it under. */
+public type Locations {
+  /** Without a trailing `/`, or empty where the client named no root */
+  rootUri: String
+  /** Normalized; `.` for a tree built in memory whose paths are relative */
+  rootPath: String
+
+  static fn of(rootUri: String, rootPath: String): Self {
+    const uri = rootUri.withoutSuffix("/") ?? rootUri
+    Self uri, normalizePath(rootPath)
+  }
+
+  /** The path of the document a URI names, or `None` for a URI that is not a file (`untitled:`). */
+  fn pathOf(uri: String): String? {
+    if !rootUri.isEmpty() {
+      if const Some(below) = uri.withoutPrefix("{rootUri}/") {
+        return normalizePath "{rootPath}/{decoded(below)}"
+      }
+      if uri == rootUri {
+        return rootPath
+      }
+    }
+    absolutePathOf uri
+  }
+
+  /** The URI of a path: below the root where the path is, and a `file:` URI of the absolute path otherwise. */
+  fn uriOf(path: String): String {
+    const normalized = normalizePath path
+    if !rootUri.isEmpty() && isInside(normalized, rootPath) {
+      const relative = relativePath rootPath, normalized
+      if relative == "." {
+        return rootUri
+      }
+      return "{rootUri}/{encoded(relative)}"
+    }
+    fileUriOf normalized
+  }
+}
+
+/** The absolute path a `file:` URI names: its percent escapes decoded, a drive letter in capitals. */
+public fn absolutePathOf(uri: String): String? {
+  const rest = uri.withoutPrefix("file://")?
+  // `file://host/share/...` names a share of another machine; only the local form has a path that starts with `/`
+  if !rest.startsWith("/") {
+    return None
+  }
+  var path = decoded rest
+  if isDrivePath(path) {
+    path = path.sliceBytes(1, 2).toUpperCase() + path.sliceBytes(2, path.byteLength())
+  }
+  normalizePath path
+}
+
+/** The `file:` URI of an absolute path. */
+public fn fileUriOf(path: String): String {
+  if path.startsWith("/") {
+    return "file://{encoded(path)}"
+  }
+  "file:///{encoded(path)}"
+}
+
+/** `/c:/...`: a path of a drive of Windows behind the slash every `file:` URI puts in front of it. */
+fn isDrivePath(path: String): Bool {
+  if path.byteLength() < 3 || !path.startsWith("/") || path.sliceBytes(2, 3) != ":" {
+    return false
+  }
+  const letter = path.charAtByte(1) ?? ' '
+  (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z')
+}
+
+/** `%3A` to `:`, byte by byte; an escape that is not two hexadecimal digits stays as it is written. */
+fn decoded(text: String): String {
+  if !text.contains("%") {
+    return text
+  }
+  var bytes: List<UInt8> = []
+  const all: List<UInt8> = text.bytes().toList()
+  var index = 0
+  while index < all.length() {
+    const byte = all[index]
+    if byte == 37 && index + 2 < all.length() {
+      if const (Some(high), Some(low)) = (hexadecimal(all[index + 1]), hexadecimal(all[index + 2])) {
+        bytes.append(high * 16 + low)
+        index = index + 3
+        continue
+      }
+    }
+    bytes.append byte
+    index = index + 1
+  }
+  textOf(bytes).ok() ?? text
+}
+
+fn hexadecimal(byte: UInt8): UInt8? {
+  if byte >= 48 && byte <= 57 {
+    return byte - 48
+  }
+  if byte >= 65 && byte <= 70 {
+    return byte - 55
+  }
+  if byte >= 97 && byte <= 102 {
+    return byte - 87
+  }
+  None
+}
+
+/**
+ * The characters of a path a URI may carry as they are, and every other byte as its percent escape - the way VS Code
+ * writes a URI, colon included, so that a URI the server sends compares equal to the one the client sent.
+ */
+fn encoded(path: String): String {
+  var pieces: List<String> = []
+  for byte in path.bytes() {
+    if isUnreserved(byte) || byte == 47 {
+      pieces.append String.from([Char.tryFrom(Int64.from(byte)).ok() ?? '?'])
+    } else {
+      pieces.append "%{hexadecimalText(byte)}"
+    }
+  }
+  pieces.joined separator: ""
+}
+
+/** `A`-`Z`, `a`-`z`, `0`-`9`, `-`, `.`, `_` and `~`: what RFC 3986 never escapes. */
+fn isUnreserved(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90)
+    || (byte >= 97 && byte <= 122)
+    || (byte >= 48 && byte <= 57)
+    || byte == 45
+    || byte == 46
+    || byte == 95
+    || byte == 126
+}
+
+fn hexadecimalText(byte: UInt8): String {
+  const digits = "0123456789ABCDEF"
+  const high = Int64.from(byte / 16)
+  const low = Int64.from(byte % 16)
+  digits.sliceBytes(high, high + 1) + digits.sliceBytes(low, low + 1)
+}

@@ -46,6 +46,7 @@ use docOptionsOf, runDoc, printDocUsage from "./reference/command"
 use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format/command"
 use lintUsage, lintOptionsOf, runLint from "./lint/command"
 use renameUsage, renameOptionsOf, runRename from "./lint/rename-command"
+use lspUsage, isLspArguments, startLanguageServer from "./language-server/command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 use packageOptionsOf, runPackageCommand from "./cli/packages"
 
@@ -122,6 +123,7 @@ fn printUsage() {
   printError "  torb lint [path]...    The style rules the checker leaves alone (`torb lint --help`)"
   printError "                         --fix: write the fixes, then lint again"
   printError "  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"
+  printError "  torb lsp               The language server, over standard input and output, for an editor"
   printDocUsage()
   printDocumentationUsage()
 }
@@ -927,6 +929,15 @@ match Process.arguments() {
         Process.exit 2
       }
     }
+  }
+  ["lsp", "--help"] | ["lsp", "help"] => print lspUsage()
+  // The server runs as a task once this top level is done, and ends the process itself (`./language-server/command`)
+  ["lsp", ...more] => {
+    if !isLspArguments(more) {
+      printError lspUsage()
+      Process.exit 2
+    }
+    startLanguageServer()
   }
   ["lint", "--help"] | ["lint", "help"] => print lintUsage()
   ["lint", ...more] => {

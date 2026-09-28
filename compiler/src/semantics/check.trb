@@ -51,7 +51,9 @@ public type Checked {
  *
  * `scripts` are files a program run by the VM loads from paths only known while it runs, each checked against the
  * receiver it names and reported as a requested file (docs/design/SCRIPTS.md slice 7). `onlyReached` parses the packages
- * the program of the paths reaches and nothing else (`buildGraph`), which is what a run needs.
+ * the program of the paths reaches and nothing else (`buildGraph`), which is what a run needs. `onlyNamed` checks and
+ * reports the files the paths name and not the files they import through a relative path, which is what the language
+ * server needs: the document that changed, not the modules it stands on.
  */
 public fn check(
   tree: SourceTree,
@@ -60,6 +62,7 @@ public fn check(
   checksEveryBody: Bool = false,
   scripts: List<RuntimeScript> = [],
   onlyReached: Bool = false,
+  onlyNamed: Bool = false,
 ): Checked {
   var clock = Stopwatch withTimings
   clock.start()
@@ -98,7 +101,7 @@ public fn check(
     }
   }
   before.append Timing("names in type positions", clock.taken())
-  const reported = withRelativeImports graph, workspace, requested
+  const reported = if onlyNamed { requested } else { withRelativeImports graph, workspace, requested }
   const resolvedProgram = program.copy symbols: symbols
   // A lowering may reach the body of any module of the program - a default member of a trait of `std/prelude`, a
   // generic function of another package - and a body whose tables were never filled cannot be lowered at all. The

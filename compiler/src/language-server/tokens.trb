@@ -1,0 +1,220 @@
+/**
+ * `textDocument/semanticTokens/full`: the tokens `torb highlight` gives a file, sharpened by the checker. The syntax
+ * resolver of `../highlight` decides every name it can place from the file alone; where the checker knows more - the
+ * member behind a `.` of a value whose type the file does not say, a name another module declares - its resolution
+ * decides instead. That is the seam `memberTargetOf` of the resolver names, answered by the checker's tables.
+ *
+ * The legend is the one the editor extension has always declared for `torb highlight`, in the same order.
+ */
+
+use JsonValue from "std/json"
+use Span from "../syntax/source"
+use HighlightToken from "../highlight/token"
+use resolveFile from "../highlight/resolve"
+use Checker, Resolution from "../semantics/checker/context"
+use SymbolKind from "../semantics/symbols"
+use fieldsOf from "../semantics/checker/member"
+use Analysis from "./analysis"
+use LineMap, utf16Units from "./position"
+use object, integer, array from "./json"
+
+/** The token types of the legend, in the order their indices mean. */
+public fn tokenTypes(): List<String> {
+  [
+    "type",
+    "interface",
+    "typeParameter",
+    "enumMember",
+    "namespace",
+    "function",
+    "method",
+    "parameter",
+    "variable",
+    "property",
+  ]
+}
+
+/** The token modifiers of the legend: bit `n` of a token's modifiers is the `n`-th of these. */
+public fn tokenModifiers(): List<String> {
+  ["declaration", "readonly", "static", "defaultLibrary", "mutable"]
+}
+
+/** The semantic tokens of one document of a run, encoded as the protocol wants them. */
+public fn semanticTokensOf(analysis: Analysis, path: String): JsonValue {
+  const module = match analysis.moduleOf(path) {
+    Some(found) => found
+    None => {
+      return object([("data", array([]))])
+    }
+  }
+  const shape = analysis.checked.program.graph.at module
+  const source = shape.source.text
+  var tokens = resolveFile shape.file
+  var checker = analysis.checked.checker
+  checker.module = module
+  const resolutions = checker.tables[module.value].resolutions
+  sharpened tokens, checker, resolutions, source
+  object([("data", array(encoded(tokens, source).map(integer).toList()))])
+}
+
+/**
+ * The tokens with what the checker resolved: the member behind every `.` classified by the member it is, and every
+ * plain name the resolver placed nowhere added. A resolution is recorded at the span of the expression that names it -
+ * `a.b` for the member `b`, and the whole call for a call - so the member behind a `.` is the one of the smallest
+ * span that ends with it, and a plain name is a span that is one name and nothing else.
+ */
+fn sharpened(var tokens: List<HighlightToken>, checker: Checker, resolutions: Map<Span, Resolution>, source: String) {
+  var at: Map<Span, Int> = [:]
+  for (index, token) in tokens.indexed() {
+    at.set token.span, index
+  }
+  var endingAt: Map<Int, List<Span>> = [:]
+  for (span, _) in resolutions {
+    var spans = endingAt.get(span.end) ?? []
+    spans.append span
+    endingAt.set span.end, spans
+  }
+  var lookups = checker
+  for index in 0..tokens.length() {
+    const token = tokens[index]
+    const isAfterDot = token.span.start > 0 && source.sliceBytes(token.span.start - 1, token.span.start) == "."
+    if !isAfterDot {
+      continue
+    }
+    var member: Span? = None
+    for span in endingAt.get(token.span.end) ?? [] {
+      const isNarrower = match member {
+        Some(best) => span.start > best.start
+        None => true
+      }
+      if span.start < token.span.start && isNarrower {
+        member = Some span
+      }
+    }
+    const resolution = match member {
+      Some(span) => resolutions.get(span) ?? Resolution.Deferred
+      None => {
+        continue
+      }
+    }
+    if const Some((kind, modifiers)) = classified(lookups, resolution) {
+      // The resolver placed a member of a receiver it knew nothing about; the checker knows it
+      const kept = if token.kind == kind { token.modifiers } else { modifiers }
+      tokens.set index, HighlightToken(token.span, kind, kept)
+    }
+  }
+  for (span, resolution) in resolutions {
+    const isPlainName = span.end > span.start && nameStartBefore(source, span.end) == span.start
+    if !isPlainName || at.containsKey(span) {
+      continue
+    }
+    if const Some((kind, modifiers)) = classified(lookups, resolution) {
+      at.set span, tokens.length()
+      tokens.append HighlightToken(span, kind, modifiers)
+    }
+  }
+}
+
+/** The kind and the modifiers of a token for what a name resolved to; `None` where it says nothing a token could. */
+fn classified(var checker: Checker, resolution: Resolution): (String, List<String>)? {
+  match resolution {
+    .Local(binding) => {
+      const found = checker.binding binding
+      const kind = if found.isParameter || found.isReceiver { "parameter" } else { "variable" }
+      (kind, if found.isVar { ["mutable"] } else { ["readonly"] })
+    }
+    .Callable(symbol, _, _) => {
+      if const Some(site) = checker.sites.get(symbol) {
+        if const .Owned(_, _, _) = site.kind {
+          return ("method", [])
+        }
+      }
+      ("function", [])
+    }
+    .Field(owner, field) => {
+      const isVar = fieldsOf(checker, owner).any({ _.symbol == field && _.isVar })
+      ("property", if isVar { ["mutable"] } else { ["readonly"] })
+    }
+    .PropertyWrite(_, _) => ("property", ["mutable"])
+    .Constant(_, owner) => {
+      if owner.isSome() {
+        ("property", ["static", "readonly"])
+      } else {
+        ("variable", ["readonly"])
+      }
+    }
+    .CaseOf(_, _) => ("enumMember", [])
+    .TypeOf(owner) | .Construct(owner) => {
+      if const .Nominal(symbol, _) = checker.types.form(owner) {
+        if checker.symbolAt(symbol).kind == SymbolKind.Trait {
+          return ("interface", [])
+        }
+      }
+      ("type", [])
+    }
+    .CopyOf(_) => ("method", [])
+    .TupleField(_, _) => ("property", ["readonly"])
+    .Namespace(_) => ("namespace", [])
+    .Deferred => None
+  }
+}
+
+/** Where the name that ends at `end` starts: the bytes of a name before it. */
+fn nameStartBefore(source: String, end: Int): Int {
+  var start = end.min source.byteLength()
+  while start > 0 && isNameByte(source.byteAt(start - 1) ?? 0) {
+    start = start - 1
+  }
+  start
+}
+
+fn isNameByte(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
+}
+
+/**
+ * The tokens as the protocol's integers: five per token - the line relative to the token before, the character
+ * relative to it where both are on one line, the length, the index of the type and the bits of the modifiers. Sorted
+ * by position; a token on the span of one before it, one that overlaps it and one that crosses a line break are
+ * dropped, which keeps the promises of the protocol whatever the resolvers produced.
+ */
+fn encoded(tokens: List<HighlightToken>, source: String): List<Int> {
+  var ordered = tokens
+  ordered.sort({ (_.span.start, _.span.end) })
+  const lines = LineMap.of source
+  const types = tokenTypes()
+  const modifiers = tokenModifiers()
+  var data: List<Int> = []
+  var previousLine = 0
+  var previousCharacter = 0
+  var previousEnd = -1
+  for token in ordered {
+    if token.span.start < previousEnd || token.span.end <= token.span.start {
+      continue
+    }
+    const kind = match types.indexOf(token.kind) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const piece = source.sliceBytes token.span.start, token.span.end
+    if piece.contains("\n") {
+      continue
+    }
+    var bits = 0
+    for modifier in token.modifiers {
+      if const Some(index) = modifiers.indexOf(modifier) {
+        bits = bits | (1 << index)
+      }
+    }
+    const position = lines.positionOf token.span.start
+    const deltaLine = position.line - previousLine
+    const deltaCharacter = if deltaLine == 0 { position.character - previousCharacter } else { position.character }
+    data.appendAll([deltaLine, deltaCharacter, utf16Units(piece), kind, bits])
+    previousLine = position.line
+    previousCharacter = position.character
+    previousEnd = token.span.end
+  }
+  data
+}
