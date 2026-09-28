@@ -27,6 +27,7 @@ documents:
   - WEB.md
   - REPL.md
   - LANGUAGE-SERVER.md
+  - DEBUGGER.md
   - PANICS.md
   - FLAGS.md
   - TEXT-FORMATS.md
@@ -50,7 +51,7 @@ implemented, or done - so a reader knows how much of what follows exists yet.
 The specification of a feature that spans several packages or several `language/` pages: collections, streams,
 concurrency, encoding, paths, URIs, linear algebra, entities and components, resources, the project file,
 destructors, the operating system, the VM, the sandbox of receiver scripts, the REPL, networking with TLS and HTTP, the
-Domain Name System, the web layer on top of the network, the language server, the public release with its website and package registry,
+Domain Name System, the web layer on top of the network, the language server, the debugger, the public release with its website and package registry,
 where a program may panic, cases with fixed values and bit flags, YAML and regular expressions, random numbers, command
 lines, tensors and gradients, the application framework, the JavaScript and PHP back ends, and the brand: the logo,
 the colours, the type and how the toolchain colours its output. Each is plain Markdown without front
@@ -88,6 +89,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Web: Handlers, HTML and a Live UI**
 - **The REPL**
 - **The language server**
+- **The Debugger**
 - **Panics**
 - **Cases with Fixed Values and Flags**
 - **YAML, Regular Expressions and Markdown**
