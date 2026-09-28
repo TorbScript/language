@@ -25,8 +25,8 @@
 # runtime's own tests.
 #
 # **Side by side.** Once the binary exists every gate only reads it, and none of them depends on another, so the gates
-# run in lanes at the same time: tier A in four (the compiler's own suite, which is one test binary on one processor for
-# most of its time; the checks, the packages and the lock files; the REPL sessions and `format --check`; the docs), tier
+# run in lanes at the same time: tier A in four (the compiler's own suite, one test binary run as up to four shards at
+# once; the checks, the packages and the lock files; the REPL sessions and `format --check`; the docs), tier
 # B in two (the conformance suite natively and then in the VM, each on every processor the run has; the runtime's tests,
 # then the programs that embed the VM). A lane runs its gates one after another. A gate prints its line when it ends;
 # a red one says so at once and its output follows once every lane has ended, so a run reports every red gate and not
@@ -139,6 +139,20 @@ if [ -n "${TORB_CONFORMANCE_JOBS-}" ]; then
 fi
 if [ -n "${TORB_REPL_JOBS-}" ]; then
   repl_jobs=$TORB_REPL_JOBS
+fi
+
+# The compiler's suite is one test binary, built once and run as that many shards at the same time (`torb test
+# --shards`): a quarter of the run's share side by side, and never more than four, because the shard that holds
+# types.test.trb - minutes of the suite on its own - sets the time from there on. One gate after another it is one
+# process. `TORB_COMPILER_TEST_SHARDS` set by hand wins.
+compiler_shards=1
+if [ "$parallel" -eq 1 ]; then
+  compiler_shards=$((jobs / 4))
+  [ "$compiler_shards" -le 4 ] || compiler_shards=4
+  [ "$compiler_shards" -ge 1 ] || compiler_shards=1
+fi
+if [ -n "${TORB_COMPILER_TEST_SHARDS-}" ]; then
+  compiler_shards=$TORB_COMPILER_TEST_SHARDS
 fi
 
 # ----------------------------------------------------------------------------- gates and lanes -----------------------
@@ -404,7 +418,7 @@ lane_checks() {
 
 # Natively: the compiler's own suite checks whole programs in every test, which the VM runs too slowly for a gate
 lane_compiler_tests() {
-  gate "test compiler/tests (native)" "$torb" test --native compiler/tests
+  gate "test compiler/tests (native)" "$torb" test --native compiler/tests --shards "$compiler_shards"
 }
 
 lane_sessions() {
