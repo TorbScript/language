@@ -12,6 +12,7 @@ keywords:
   - C back end
   - emit-c
   - TORB_CC
+  - TORB_CFLAGS
   - TORB_RUNTIME
   - TORB_MEMORY_LIMIT
 source:
@@ -224,6 +225,13 @@ after the hash of everything that decides it, so a file that did not change is n
 only links, and the runtime is compiled once and not with every program. `$TORB_OBJECT_CACHE_MB` (default 2048) bounds
 that directory. Without `sh` (`tools/build-units.sh` runs the compiles) or with MSVC, `program.c` and the runtime are
 compiled in one call of the C compiler instead.
+
+`$TORB_CFLAGS` adds flags to every compile and to the link, apart by white space, and is empty in every build that
+does not set it: `TORB_CFLAGS="-fsanitize=address,undefined -g"` builds a binary under AddressSanitizer and
+UndefinedBehaviorSanitizer, `-fsanitize=thread` one under ThreadSanitizer. The flags are part of the key of every
+object, so a build with them never links an object that was compiled without them; mbedTLS, which a program that
+speaks TLS links, is compiled once without them. A sanitized binary enforces `TORB_MEMORY_LIMIT` by counting its own
+allocations, because the shadow memory a sanitizer reserves would count against a limit the system holds.
 
 When what is compiled is 8 MB or more, the whole batch holds one of `$TORB_BUILD_SLOTS` (default 3) machine-wide build
 slots, through `tools/build-slot.sh` beside the runtime, so that several builds of that size at once do not run the
