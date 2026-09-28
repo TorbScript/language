@@ -73,7 +73,7 @@ durations - and says so once, with `torb upgrade` a click away.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
-| `torbscript.executablePath` | `""` | The `torb` to run. Empty searches the places above, in that order |
+| `torbscript.executablePath` | `""` | The `torb` to run; on Windows `.exe` may be left out. Empty searches the places above, in that order |
 | `torbscript.languageServer.enabled` | `true` | Start `torb lsp`. Read when the window loads |
 | `torbscript.semanticHighlighting.enabled` | `true` | Semantic colors, from the language server or from `torb highlight`; off leaves the grammar's colors alone |
 | `torbscript.toolchain.offerInstall` | `true` | Offer the installer in a notification when `torb` is not found. The status bar item shows either way |

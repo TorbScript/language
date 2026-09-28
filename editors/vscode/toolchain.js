@@ -68,6 +68,19 @@ function onPath(fs, path, names = process.platform === 'win32' ? ['torb.exe', 't
 }
 
 /**
+ * The executable a configured path names, or `null`. On Windows it is resolved the way Windows resolves one: the path
+ * as given, then with `.exe` appended - so `C:/torbscript/build/release/torb`, the path `sh tools/bootstrap.sh` prints,
+ * finds `torb.exe` beside it. Elsewhere the path as given is the only candidate.
+ */
+function executableAt(fs, configured) {
+  const candidates = [configured];
+  if (process.platform === 'win32' && !configured.toLowerCase().endsWith('.exe')) {
+    candidates.push(`${configured}.exe`);
+  }
+  return candidates.find((candidate) => isFile(fs, candidate)) || null;
+}
+
+/**
  * Where `torb` is, and how that was decided: `torbscript.executablePath` where it is set (and nothing else, so a
  * setting that points nowhere says so instead of quietly starting another `torb`), then `build/release/torb` below an
  * open workspace folder (what `sh tools/bootstrap.sh` writes in a checkout of the TorbScript repository), then `PATH`,
@@ -76,10 +89,10 @@ function onPath(fs, path, names = process.platform === 'win32' ? ['torb.exe', 't
 function locate(vscode, fs, path, os) {
   const configured = (vscode.workspace.getConfiguration('torbscript').get('executablePath') || '').trim();
   if (configured) {
-    // A bare command name is looked up on `PATH`; a path has to exist
+    // A bare command name is looked up on `PATH`; a path has to exist, on Windows with or without its `.exe`
     const bare = !configured.includes('/') && !configured.includes('\\');
     const names = process.platform === 'win32' && !configured.includes('.') ? [`${configured}.exe`, configured] : [configured];
-    const executable = bare ? onPath(fs, path, names) : isFile(fs, configured) ? configured : null;
+    const executable = bare ? onPath(fs, path, names) : executableAt(fs, configured);
     return { executable, source: 'setting', configured };
   }
   for (const folder of vscode.workspace.workspaceFolders || []) {
