@@ -169,7 +169,6 @@ public fn reachStatement(
     debugger.countdown = pollInterval
     debugger.poll()
   }
-  const location = locationOfStatement program, chunk, statement
   var reason = ""
   if debugger.pauseRequested {
     reason = "pause"
@@ -177,7 +176,7 @@ public fn reachStatement(
     reason = "entry"
   } else if debugger.breakpoints.contains(pc) {
     reason = "breakpoint"
-  } else if stepEnds(debugger, location, below + depth + 1, chunk, base, returnOf(first, base, depth), depth, pc) {
+  } else if stepEnds(debugger, program, statement, below + depth + 1, chunk, base, first, depth, pc) {
     reason = "step"
   }
   if reason.isEmpty() {
@@ -215,21 +214,24 @@ fn returnOf(first: Int, base: Int, depth: Int): Int {
 /**
  * Whether the step in progress ends at a statement of this location and frame (docs/design/DEBUGGER.md section 8).
  * The same frame is the same height, chunk and base - and, above the bottom of a loop, the same return address, so a
- * sibling the caller calls next at the same height is another frame.
+ * sibling the caller calls next at the same height is another frame. A run without a step in progress reads nothing
+ * but the stepping: the location and the return address are looked up for a step alone.
  */
 fn stepEnds(
   debugger: Debugger,
-  location: Int,
+  program: BytecodeProgram,
+  statement: Int,
   height: Int,
   chunk: Int,
   base: Int,
-  returned: Int,
+  first: Int,
   depth: Int,
   pc: Int,
 ): Bool {
   if const .Running = debugger.stepping {
     return false
   }
+  const location = locationOfStatement program, chunk, statement
   if debugger.skipped.get(location) ?? false {
     return false
   }
@@ -240,7 +242,7 @@ fn stepEnds(
     return false
   }
   const isSameFrame = height == debugger.startHeight && chunk == debugger.startChunk && base == debugger.startBase
-    && (depth == 0 || returned == debugger.startReturn)
+    && (depth == 0 || returnOf(first, base, depth) == debugger.startReturn)
   const isSameLine = (debugger.lineKeys.get(location) ?? (0 - 1)) == debugger.startLine
   // A loop that jumped back comes to the same line again, and that is a step too
   const isFurtherOnLine = isSameFrame && isSameLine && pc > debugger.startPc
