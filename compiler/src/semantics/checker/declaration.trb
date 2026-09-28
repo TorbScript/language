@@ -1450,7 +1450,9 @@ public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
  *
  * This is the checker's half of the `containsShared` the layout computes (BACKEND 1.3), and it is memoized the same
  * way. A type that contains itself answers `false` while its own answer is being worked out, and an answer that was
- * reached through such a cycle is given and not kept.
+ * reached through such a cycle is given and not kept - until the walk is back at its top: a `false` there is final for
+ * every type the walk answered `false` for, because a `true` anywhere below would have made the top `true`. Without it
+ * every question about a type of a recursive family - the syntax tree of the compiler - walked the whole family again.
  */
 public fn containsShared(var checker: Checker, annotation: TypeId): Bool {
   if const Some(known) = checker.sharedContents.get(annotation.value) {
@@ -1460,12 +1462,23 @@ public fn containsShared(var checker: Checker, annotation: TypeId): Bool {
     checker.sharedCycles = checker.sharedCycles + 1
     return false
   }
+  const isTop = checker.sharedRunning.isEmpty()
   checker.sharedRunning.set annotation.value, true
   const cycles = checker.sharedCycles
   const found = sharedInside checker, annotation
   checker.sharedRunning.remove annotation.value
   if checker.sharedCycles == cycles {
     checker.sharedContents.set annotation.value, found
+  } else if !found {
+    checker.sharedEntered.append annotation.value
+  }
+  if isTop {
+    if !found {
+      for entered in checker.sharedEntered {
+        checker.sharedContents.set entered, false
+      }
+    }
+    checker.sharedEntered = []
   }
   found
 }
@@ -1542,6 +1555,8 @@ fn sharedInside(var checker: Checker, annotation: TypeId): Bool {
  * takes only what it can see is a value (CONCEPT, "Concurrency"), so `spawn` asks this before [containsShared].
  *
  * `Task` and `Channel` are skipped for the reason [containsShared] skips them, and the first thing found is the answer.
+ * It is memoized as [containsShared] is: nothing found at the top of a walk is final for every type the walk found
+ * nothing in.
  */
 public fn unseenInside(var checker: Checker, annotation: TypeId): Unseen {
   if const Some(known) = checker.unseenContents.get(annotation.value) {
@@ -1551,12 +1566,23 @@ public fn unseenInside(var checker: Checker, annotation: TypeId): Unseen {
     checker.unseenCycles = checker.unseenCycles + 1
     return Unseen.Nothing
   }
+  const isTop = checker.unseenRunning.isEmpty()
   checker.unseenRunning.set annotation.value, true
   const cycles = checker.unseenCycles
   const found = unseenOf checker, annotation
   checker.unseenRunning.remove annotation.value
   if checker.unseenCycles == cycles {
     checker.unseenContents.set annotation.value, found
+  } else if isNothingUnseen(found) {
+    checker.unseenEntered.append annotation.value
+  }
+  if isTop {
+    if isNothingUnseen(found) {
+      for entered in checker.unseenEntered {
+        checker.unseenContents.set entered, Unseen.Nothing
+      }
+    }
+    checker.unseenEntered = []
   }
   found
 }
