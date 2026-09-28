@@ -17,8 +17,9 @@ use LineMap, Position from "../src/language-server/position"
 use Locations, absolutePathOf, fileUriOf from "../src/language-server/uri"
 use completionContextOf, CompletionContext, withoutMemberAccess from "../src/language-server/completion"
 use outlineOf from "../src/language-server/analysis"
+use SpanMapping, mappingBetween from "../src/language-server/mapping"
 use TestItem, testItemsOf, testTreeOf from "../src/language-server/test-tree"
-use SourceText from "../src/syntax/source"
+use Span, SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
 
 const root = "file:///workspace"
@@ -340,6 +341,109 @@ group "A change redoes the front of its file" {
     assert(published(answers).get(mainUri) == [])
     const answer = only server, [at("textDocument/hover", 21, mainUri, 4, 7)]
     expectText(textAt(answer, ["result", "contents", "value"]) ?? "", "```trb\nfn double(value: Int): Int\n```")
+  }
+}
+
+/** The mapping between two texts of one file, parsed. */
+fn mappingOf(before: String, after: String): SpanMapping? {
+  mappingBetween parse(SourceText.of(before)).file, before, parse(SourceText.of(after)).file, after
+}
+
+/** The span of the first `written` in `text`. */
+fn spanIn(text: String, written: String): Span {
+  const start = text.byteOffsetOf(written) ?? -1
+  Span(start, start + written.byteLength())
+}
+
+group "A keystroke in a body checks that body" {
+  test "two texts that differ inside of one body: the body changed, everything else moved" {
+    const before = "fn one(): Int \{\n  1\n\}\n\nfn two(): Int \{\n  2\n\}\n"
+    const after = "fn one(): Int \{\n  1 + 10\n\}\n\nfn two(): Int \{\n  2\n\}\n"
+    const mapping = mappingOf(before, after) ?? SpanMapping.identity(0)
+    assert(mapping.changed.length() == 1)
+    assert(mapping.changed[0].earlier == spanIn(before, "\{\n  1\n\}"))
+    assert(mapping.changed[0].current == spanIn(after, "\{\n  1 + 10\n\}"))
+    assert(mapping.changed[0].name == spanIn(after, "one"))
+    assert(mapping.toCurrent(spanIn(before, "two")) == spanIn(after, "two"))
+    assert(mapping.toEarlier(spanIn(after, "two")) == spanIn(before, "two"))
+    // Inside of the changed body there is no counterpart; its borders are each other's
+    assert(mapping.offsetToCurrent(spanIn(before, "1").start) == None)
+    assert(mapping.toCurrent(mapping.changed[0].earlier) == mapping.changed[0].current)
+    const inside = mapping.isChangedAt spanIn(after, "10").start
+    assert inside
+  }
+
+  test "a function of a type whose body changed" {
+    const before = "type Point \{\n  x: Int\n\n  fn doubled(): Int \{\n    x * 2\n  \}\n\}\n"
+    const after = "type Point \{\n  x: Int\n\n  fn doubled(): Int \{\n    x + x\n  \}\n\}\n"
+    const mapping = mappingOf(before, after) ?? SpanMapping.identity(0)
+    assert(mapping.changed.length() == 1)
+    assert(mapping.changed[0].name == spanIn(after, "doubled"))
+    assert(mapping.toCurrent(spanIn(before, "x: Int")) == spanIn(after, "x: Int"))
+  }
+
+  test "a change of a signature, a field or a declaration has no mapping" {
+    const before = "type Point \{\n  x: Int\n\}\n\nfn one(): Int \{\n  1\n\}\n"
+    assert(mappingOf(before, "type Point \{\n  x: Int\n\}\n\nfn one(): Float \{\n  1\n\}\n") == None)
+    assert(mappingOf(before, "type Point \{\n  y: Int\n\}\n\nfn one(): Int \{\n  1\n\}\n") == None)
+    assert(mappingOf(before, "type Point \{\n  x: Int\n\}\n\nfn one(): Int \{\n  1\n\}\n\nfn two() \{\}\n") == None)
+    // Comments and blank lines between declarations only move them
+    const moved = mappingOf before, "// a point\n\ntype Point \{\n  x: Int\n\}\n\n\nfn one(): Int \{\n  1\n\}\n"
+    assert(moved.map({ _.changed.isEmpty() }) == true)
+  }
+
+  test "a change inside of a body publishes what a check of the whole document finds" {
+    var server = started()
+    const source = "fn one(): Int \{\n  1\n\}\n\nfn two(): Int \{\n  2\n\}\n\nprint one() + two()\n"
+    const _first = send server, [opened(mainUri, source)]
+    const broken = "fn one(): Int \{\n  1\n\}\n\nfn two(): Int \{\n  \"two\"\n\}\n\nprint one() + two()\n"
+    const answers = send server, [replaced(mainUri, 2, broken)]
+    assert(messagesOf(published(answers).get(mainUri) ?? []) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a change inside of the body of a module's function keeps the check of every other body" {
+    const helperUri = "file:///workspace/app/src/helper.trb"
+    const helper = "public fn double(value: Int): Int \{\n  value * 2\n\}\n\npublic fn triple(value: Int): Int \{\n  value * 3\n\}\n"
+    const main = "use double, triple from \"./helper\"\n\nprint double(21) + triple(1)\n"
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main])
+    const _first = send server, [opened(mainUri, main), opened(helperUri, helper)]
+    const edited = "public fn double(value: Int): Int \{\n  value * 2 + missing\n\}\n\npublic fn triple(value: Int): Int \{\n  value * 3\n\}\n"
+    const answers = send server, [replaced(helperUri, 2, edited)]
+    const found = published answers
+    // The body changed and the signature did not: the document that imports it is not checked again
+    assert(found.get(mainUri) == None)
+    assert(messagesOf(found.get(helperUri) ?? []) == ["Cannot find `missing` here"])
+    // What moved behind the changed body is found where it is now
+    const answer = only server, [at("textDocument/definition", 30, helperUri, 5, 3)]
+    expectText(
+      encoded(memberAt(answer, ["result", "range"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":4,\"character\":17\},\"end\":\{\"line\":4,\"character\":22\}\}",
+    )
+  }
+
+  test "a body whose inferred result changes checks the bodies that call it" {
+    var server = started()
+    const source = "fn helper() \{\n  1\n\}\n\nfn total(): Int \{\n  helper()\n\}\n\nprint total()\n"
+    const _first = send server, [opened(mainUri, source)]
+    const changed = "fn helper() \{\n  \"one\"\n\}\n\nfn total(): Int \{\n  helper()\n\}\n\nprint total()\n"
+    const answers = send server, [replaced(mainUri, 2, changed)]
+    assert(messagesOf(published(answers).get(mainUri) ?? []) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "hover and tokens inside and outside of a changed body" {
+    var server = started()
+    const source = "fn one(): Int \{\n  const a = 1\n  a\n\}\n\nfn two(): Int \{\n  const b = 2\n  b\n\}\n\nprint one() + two()\n"
+    const _first = send server, [opened(mainUri, source)]
+    const edited = "fn one(): Int \{\n  const a = 1\n  const more = a + 1\n  more\n\}\n\nfn two(): Int \{\n  const b = 2\n  b\n\}\n\nprint one() + two()\n"
+    const _second = send server, [replaced(mainUri, 2, edited)]
+    const inside = only server, [at("textDocument/hover", 31, mainUri, 3, 3)]
+    expectText(textAt(inside, ["result", "contents", "value"]) ?? "", "```trb\nconst more: Int64\n```")
+    const outside = only server, [at("textDocument/hover", 32, mainUri, 8, 2)]
+    expectText(textAt(outside, ["result", "contents", "value"]) ?? "", "```trb\nconst b: Int64\n```")
+    expectText(
+      encoded(memberAt(outside, ["result", "range"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":8,\"character\":2\},\"end\":\{\"line\":8,\"character\":3\}\}",
+    )
   }
 }
 

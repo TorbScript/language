@@ -1,0 +1,53 @@
+/**
+ * One root of the workspace, as the language server holds it: a [Project] has the files below a folder of the client
+ * (or around a file that belongs to no folder), the front of its last run, and what the checker found about each open
+ * document below it. Every folder of a workspace with several of them is a project of its own, read and checked as
+ * `torb check <folder>` reads and checks it.
+ */
+
+use SourceTree from "../project/source-tree"
+use Finding from "../lint/finding"
+use Front from "../semantics/check"
+use Locations from "./uri"
+use DocumentView from "./view"
+
+/** A document the client opened, with the text it holds now, and the project it belongs to. */
+public type Document {
+  uri: String
+  path: String
+  version: Int
+  text: String
+  /** The index of its project in `LanguageServer.projects` */
+  project: Int = 0
+}
+
+/** One root of the workspace and everything the server knows below it. */
+public type Project {
+  /** The root as the client names it and as the tree knows it */
+  locations: Locations
+  /** The files below the root, with the text of every open document in place of the disk's */
+  var tree: SourceTree
+  /** What the last run of the checker started from: the next one redoes the part of the files that changed */
+  var front: Front? = None
+  /** How many runs the front has served since it was built from scratch */
+  var frontRuns: Int = 0
+  /** What the checker knows about each open document of the project, by its path */
+  var views: Map<String, DocumentView> = [:]
+  /** What `torb lint`'s rules find in each open document, from the same runs */
+  var findings: Map<String, List<Finding>> = [:]
+  /** The open documents whose text changed since their last run */
+  var changed: List<String> = []
+  /** Whether the project is a folder of the client, rather than the surroundings of a file that belongs to none */
+  isFolder: Bool = true
+
+  /** Whether a normalized path lies below the root of the project, or is a file of its tree. */
+  fn holds(path: String): Bool {
+    locations.holds(path) || tree.exists(path)
+  }
+
+  var fn markChanged(path: String) {
+    if !changed.contains(path) {
+      changed.append path
+    }
+  }
+}

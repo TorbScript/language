@@ -114,9 +114,22 @@ public fn lintFindings(source: String, rules: List<LintRule>, plain: Set<Int>? =
   if !parsed.diagnostics.isEmpty() {
     return None
   }
+  lintFindingsOf source, parsed.file, rules, plain
+}
+
+/**
+ * What the rules that read the syntax tree find in a source that parsed without a problem, from the tree that parse
+ * made: [lintFindings] without a second parse, for a caller that has the tree already (the language server).
+ */
+public fn lintFindingsOf(
+  source: String,
+  file: SourceFile,
+  rules: List<LintRule>,
+  plain: Set<Int>? = None,
+): List<Finding> {
   var findings: List<Finding> = []
   for rule in rules {
-    findings.appendAll findingsOf(rule, source, parsed.file, plain)
+    findings.appendAll findingsOf(rule, source, file, plain)
   }
   findings.sort({ _.span.start })
   findings

@@ -14,7 +14,8 @@ use resolveFile from "../highlight/resolve"
 use Checker, Resolution from "../semantics/checker/context"
 use SymbolKind from "../semantics/symbols"
 use fieldsOf from "../semantics/checker/member"
-use Analysis from "./analysis"
+use Front from "../semantics/check"
+use DocumentView from "./view"
 use LineMap, utf16Units from "./position"
 use object, integer, array from "./json"
 
@@ -39,21 +40,48 @@ public fn tokenModifiers(): List<String> {
   ["declaration", "readonly", "static", "defaultLibrary", "mutable"]
 }
 
-/** The semantic tokens of one document of a run, encoded as the protocol wants them. */
-public fn semanticTokensOf(analysis: Analysis, path: String): JsonValue {
-  const module = match analysis.moduleOf(path) {
+/**
+ * The semantic tokens of an open document as it is now, encoded as the protocol wants them: the resolver's tokens of
+ * the current parse, sharpened by the base's resolutions outside of the changed bodies - moved to where their code is
+ * now - and by the overlay's inside of them.
+ */
+public fn semanticTokensOf(view: DocumentView, current: Front): JsonValue {
+  const module = match current.program.graph.moduleAt(view.path) {
     Some(found) => found
     None => {
       return object([("data", array([]))])
     }
   }
-  const shape = analysis.checked.program.graph.at module
+  const shape = current.program.graph.at module
   const source = shape.source.text
   var tokens = resolveFile shape.file
-  var checker = analysis.checked.checker
-  checker.module = module
-  const resolutions = checker.tables[module.value].resolutions
-  sharpened tokens, checker, resolutions, source
+  if const Some(earlier) = view.base.moduleOf(view.path) {
+    var checker = view.base.checked.checker
+    checker.module = earlier
+    var moved: Map<Span, Resolution> = [:]
+    for (span, resolution) in checker.tables[earlier.value].resolutions {
+      if view.mapping.touchesChangedEarlier(span) {
+        continue
+      }
+      if const Some(now) = view.mapping.toCurrent(span) {
+        moved.set now, resolution
+      }
+    }
+    sharpened tokens, checker, moved, source
+  }
+  if const Some(changed) = view.overlay {
+    if const Some(now) = changed.moduleOf(view.path) {
+      var checker = changed.checked.checker
+      checker.module = now
+      var inside: Map<Span, Resolution> = [:]
+      for (span, resolution) in checker.tables[now.value].resolutions {
+        if view.mapping.isInsideChanged(span) {
+          inside.set span, resolution
+        }
+      }
+      sharpened tokens, checker, inside, source
+    }
+  }
   object([("data", array(encoded(tokens, source).map(integer).toList()))])
 }
 

@@ -8,28 +8,34 @@
  * earlier where a request of the batch needs its answer. A client that sends a change per keystroke while the checker
  * is busy has its changes read together once the checker is done, and they cost one run.
  *
- * **A run checks what a change can have changed**: the documents that changed, and every open document that imports
- * one of them. The others keep what their last run found.
+ * **A run checks what a change can have changed.** Every folder of the workspace is a [Project] of its own. A change
+ * inside of the bodies of functions checks those bodies again and keeps the check of the rest of the document
+ * (`./view.trb`); a change of what other bodies see - a declaration, a signature, a `use` - checks the document as a
+ * whole, and every open document that imports it. The others keep what their last run found.
  */
 
 use File from "std/fs"
 use Clock from "std/time"
 use JsonValue from "std/json"
+use Span from "../syntax/source"
 use SourceTree from "../project/source-tree"
 use readSourceTree from "../project/read"
-use Finding from "../lint/finding"
-use Analysis, analyze, reanalyze, parsesOf, dependentsOf from "./analysis"
-use Front from "../semantics/check"
+use normalizePath from "../project/path"
+use Front, frontOf from "../semantics/check"
+use Analysis, analyzeOver, refreshedFrontOf, parsesOfProgram, dependentsOf from "./analysis"
+use DocumentView, Layer, Located, documentDiagnostics, documentFindings, viewAfterChange from "./view"
+use Document, Project from "./projects"
 use memberAt, textAt, integerAt, itemsAt, object, integer, text, array, decoded from "./json"
 use LineMap, Position, Range from "./position"
-use Locations, absolutePathOf from "./uri"
-use diagnosticsOf, findingsOf from "./diagnostics"
+use Locations, absolutePathOf, fileUriOf from "./uri"
+use diagnosticsJson, rangeJson from "./diagnostics"
 use hoverOf from "./hover"
 use definitionOf from "./definition"
 use completionContextOf, memberCompletion, nameCompletion, withoutMemberAccess from "./completion"
 use semanticTokensOf, tokenTypes, tokenModifiers from "./tokens"
 use codeActionsOf from "./actions"
 use testTreeOf from "./test-tree"
+use SpanMapping, mappingBetween from "./mapping"
 use languageVersion from "../package/version"
 
 /** Where the server is in the life cycle the protocol prescribes. */
@@ -43,42 +49,23 @@ public type Phase {
   case Exited(code: Int)
 }
 
-/** A document the client opened, with the text it holds now. */
-public type Document {
-  uri: String
-  path: String
-  version: Int
-  text: String
-}
-
-/** The state of one session: the workspace, the open documents, and what the checker last found about them. */
+/** The state of one session: the projects of the workspace, the open documents, and what the checker found. */
 public type LanguageServer {
-  /** The files of the workspace, with the text of every open document in place of the disk's. `None` until known. */
-  var tree: SourceTree? = None
-  var locations: Locations = Locations "", "."
+  /** One per folder of the workspace, and one per file that belongs to no folder */
+  var projects: List<Project> = []
   /** By normalized path */
   var documents: Map<String, Document> = [:]
-  /** The last run that checked each open document, by its path */
-  var analyses: Map<String, Analysis> = [:]
-  /** What `torb lint`'s rules find in each open document, from the same run */
-  var findings: Map<String, List<Finding>> = [:]
-  /** The open documents whose text changed since their last run */
-  var changed: List<String> = []
   var phase: Phase = Phase.Starting
   /** Lines for standard error: what the server did and what it refused, taken by whoever writes them. */
   var log: List<String> = []
-  /** Whether the tree is read from disk at `initialize`, or was handed in (a test) */
+  /** Whether the trees are read from disk, or were handed in (a test) */
   private readsDisk: Bool = true
-  /** What the last run of the checker started from: the next one redoes the part of the files that changed */
-  private var front: Front? = None
-  /** How many runs the front has served since it was built from scratch */
-  private var frontRuns: Int = 0
   /** The messages the batch that is being handled sends */
   private var outgoing: List<JsonValue> = []
 
   /** A server over a tree built in memory, whose root is `rootUri`: nothing is read from disk. */
   static fn over(tree: SourceTree, rootUri: String): Self {
-    Self tree: tree, locations: Locations.of(rootUri, "."), readsDisk: false
+    Self projects: [Project(Locations.of(rootUri, "."), tree)], readsDisk: false
   }
 
   fn hasExited(): Bool {
@@ -111,8 +98,12 @@ public type LanguageServer {
         None => respondError(JsonValue.Null, -32700, "the message is not JSON")
       }
     }
-    if !hasExited() && phase == Phase.Running && !changed.isEmpty() {
-      refresh None
+    if !hasExited() && phase == Phase.Running {
+      for index in 0..projects.length() {
+        if !projects[index].changed.isEmpty() {
+          refresh index, None
+        }
+      }
     }
     const sent = outgoing
     outgoing = []
@@ -149,35 +140,11 @@ public type LanguageServer {
         phase = Phase.ShuttingDown
         respond id, JsonValue.Null
       }
-      "textDocument/hover" => {
-        const result = match located(parameters) {
-          Some((analysis, document, offset)) => hoverOf analysis, document.path, offset
-          None => JsonValue.Null
-        }
-        respond id, result
-      }
-      "textDocument/definition" => {
-        const result = match located(parameters) {
-          Some((analysis, document, offset)) => definitionOf analysis, locations, document.path, offset
-          None => JsonValue.Null
-        }
-        respond id, result
-      }
-      "textDocument/completion" => {
-        const result = match located(parameters) {
-          Some((analysis, document, offset)) => completion analysis, document, offset
-          None => JsonValue.Null
-        }
-        respond id, result
-      }
-      "textDocument/semanticTokens/full" => {
-        const result = match located(parameters) {
-          Some((analysis, document, _)) => semanticTokensOf analysis, document.path
-          None => JsonValue.Null
-        }
-        respond id, result
-      }
-      "textDocument/codeAction" => codeActions id, parameters
+      "textDocument/hover" => respond id, hover(parameters)
+      "textDocument/definition" => respond id, definition(parameters)
+      "textDocument/completion" => respond id, completion(parameters)
+      "textDocument/semanticTokens/full" => respond id, semanticTokens(parameters)
+      "textDocument/codeAction" => respond id, codeActions(parameters)
       // Of this server's own, and `experimental` in the capabilities says so: the tests of a file, for an editor
       "torbscript/tests" => respond id, testsOf(parameters)
       _ => respondError(id, -32601, "`{method}` is not a request this server answers")
@@ -202,11 +169,20 @@ public type LanguageServer {
   // --- The life cycle --------------------------------------------------------------------------------------------------
 
   private var fn initialize(parameters: JsonValue): JsonValue {
-    const rootUri = textAt(parameters, ["rootUri"]) ?? rootUriOfFolders(parameters)
-    if readsDisk && !rootUri.isEmpty() {
-      if const Some(root) = absolutePathOf(rootUri) {
-        locations = Locations.of rootUri, root
-        tree = readTreeOf root
+    if readsDisk {
+      var roots: List<String> = []
+      for folder in itemsAt(parameters, ["workspaceFolders"]) {
+        if const Some(uri) = textAt(folder, ["uri"]) {
+          roots.append uri
+        }
+      }
+      if roots.isEmpty() {
+        if const Some(uri) = textAt(parameters, ["rootUri"]) {
+          roots.append uri
+        }
+      }
+      for uri in roots {
+        addFolder uri
       }
     }
     phase = Phase.Running
@@ -214,6 +190,21 @@ public type LanguageServer {
       ("capabilities", capabilities()),
       ("serverInfo", object([("name", text("torb")), ("version", text(languageVersion))])),
     ])
+  }
+
+  /** A folder of the workspace, read the way `torb check` reads it, as a project of its own. */
+  private var fn addFolder(uri: String) {
+    const root = match absolutePathOf(uri) {
+      Some(found) => found
+      None => {
+        log.append "not a folder on disk, not read: {uri}"
+        return
+      }
+    }
+    match readTreeOf(root) {
+      Some(tree) => projects.append Project(Locations.of(uri, root), tree)
+      None => log.append "the folder could not be read: {root}"
+    }
   }
 
   /** What the client is told the server does. */
@@ -236,11 +227,60 @@ public type LanguageServer {
     ])
   }
 
-  // --- Documents -------------------------------------------------------------------------------------------------------
+  // --- Projects and documents ------------------------------------------------------------------------------------------
+
+  /**
+   * The project a URI belongs to and the path it names there: the innermost folder whose root holds it, a project whose
+   * tree holds the file, or - for a file of no folder - a project of its own surroundings. `None` for a URI that is no
+   * file.
+   */
+  private var fn placeOf(uri: String): (Int, String)? {
+    var found: (Int, String)? = None
+    var longest = -1
+    for (index, project) in projects.indexed() {
+      if const Some(path) = project.locations.pathBelow(uri) {
+        if project.locations.rootUri.byteLength() > longest {
+          longest = project.locations.rootUri.byteLength()
+          found = (index, path)
+        }
+      }
+    }
+    if found.isSome() {
+      return found
+    }
+    const path = absolutePathOf(uri)?
+    for (index, project) in projects.indexed() {
+      if project.holds(path) {
+        return (index, path)
+      }
+    }
+    if !readsDisk {
+      return None
+    }
+    const tree = readTreeOf(path)?
+    projects.append Project(Locations.of("", "."), tree, isFolder: false)
+    (projects.length() - 1, path)
+  }
+
+  /** The URI of a path, in the spelling of the folder that holds it. */
+  private fn uriOf(path: String): String {
+    var best: Locations? = None
+    var longest = -1
+    for project in projects {
+      if project.locations.holds(path) && project.locations.rootUri.byteLength() > longest {
+        longest = project.locations.rootUri.byteLength()
+        best = project.locations
+      }
+    }
+    match best {
+      Some(locations) => locations.uriOf path
+      None => fileUriOf normalizePath(path)
+    }
+  }
 
   private var fn opened(parameters: JsonValue) {
     const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
-    const path = match locations.pathOf(uri) {
+    const (index, path) = match placeOf(uri) {
       Some(found) => found
       None => {
         log.append "not a file, not checked: {uri}"
@@ -249,26 +289,18 @@ public type LanguageServer {
     }
     const content = textAt(parameters, ["textDocument", "text"]) ?? ""
     const version = integerAt(parameters, ["textDocument", "version"]) ?? 0
-    documents.set path, Document(uri, path, version, content)
-    if tree.isNone() {
-      tree = readTreeOf path
-    }
-    tree = tree?.withFile(path, content)
-    markChanged path
+    documents.set path, Document(uri, path, version, content, index)
+    var project = projects[index]
+    project.tree = project.tree.withFile path, content
+    project.markChanged path
+    projects.set index, project
   }
 
   private var fn changedDocument(parameters: JsonValue) {
-    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
-    const path = match locations.pathOf(uri) {
+    const document = match documentOf(parameters) {
       Some(found) => found
       None => {
-        return
-      }
-    }
-    const document = match documents.get(path) {
-      Some(found) => found
-      None => {
-        log.append "a change of a document that is not open: {uri}"
+        log.append "a change of a document that is not open: {textAt(parameters, ["textDocument", "uri"]) ?? ""}"
         return
       }
     }
@@ -286,32 +318,35 @@ public type LanguageServer {
       }
     }
     const version = integerAt(parameters, ["textDocument", "version"]) ?? document.version
-    documents.set path, Document(uri, path, version, content)
-    tree = tree?.withFile(path, content)
-    markChanged path
+    documents.set document.path, document.copy(version: version, text: content)
+    var project = projects[document.project]
+    project.tree = project.tree.withFile document.path, content
+    project.markChanged document.path
+    projects.set document.project, project
   }
 
   private var fn closed(parameters: JsonValue) {
-    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
-    const path = match locations.pathOf(uri) {
+    const document = match documentOf(parameters) {
       Some(found) => found
       None => {
         return
       }
     }
+    const path = document.path
     const _document = documents.remove path
-    const _analysis = analyses.remove path
-    const _findings = findings.remove path
+    var project = projects[document.project]
+    const _view = project.views.remove path
+    const _findings = project.findings.remove path
     // The front holds the text of the document, and the disk holds the text everybody else sees now
-    front = None
-    changed = changed.filter({ _ != path }).toList()
-    // What the disk holds is what everybody else sees again
+    project.front = None
+    project.changed = project.changed.filter({ _ != path }).toList()
     if readsDisk {
       if const Ok(onDisk) = File.readText(path) {
-        tree = tree?.withFile(path, onDisk)
+        project.tree = project.tree.withFile path, onDisk
       }
     }
-    publish uri, []
+    projects.set document.project, project
+    publish document.uri, []
   }
 
   /** A file the client watches changed on disk: an open document keeps its own text, every other file is read again. */
@@ -319,9 +354,9 @@ public type LanguageServer {
     if !readsDisk {
       return
     }
-    var any = false
     for change in itemsAt(parameters, ["changes"]) {
-      const path = match locations.pathOf(textAt(change, ["uri"]) ?? "") {
+      const uri = textAt(change, ["uri"]) ?? ""
+      const (index, path) = match placeOf(uri) {
         Some(found) => found
         None => {
           continue
@@ -331,168 +366,358 @@ public type LanguageServer {
         continue
       }
       if const Ok(onDisk) = File.readText(path) {
-        tree = tree?.withFile(path, onDisk)
-        any = true
+        var project = projects[index]
+        project.tree = project.tree.withFile path, onDisk
+        // Every open document may import what changed; the next run asks all of them again
+        project.front = None
+        for (open, document) in documents {
+          if document.project == index {
+            project.markChanged open
+          }
+        }
+        projects.set index, project
       }
-    }
-    // Every open document may import what changed; the next run asks all of them again
-    if any {
-      front = None
-      for (path, _) in documents {
-        markChanged path
-      }
-    }
-  }
-
-  private var fn markChanged(path: String) {
-    if !changed.contains(path) {
-      changed.append path
     }
   }
 
   // --- The checker -----------------------------------------------------------------------------------------------------
 
   /**
-   * Checks every document that changed, every open document that imports one of them, and `also` (the document a
-   * request is about, where no run has checked it yet), then publishes what each of them has now.
+   * Brings the views of a project up to date: every document that changed, every open document that imports one whose
+   * interface changed, and `also` (the document a request is about, where no run has checked it yet). Publishes what
+   * each document it touched has now.
    */
-  private var fn refresh(also: String?) {
-    const current = match tree {
-      Some(found) => found
-      None => {
-        return
+  private var fn refresh(index: Int, also: String?) {
+    var project = projects[index]
+    const tree = project.tree
+    var open: List<String> = []
+    for (path, document) in documents {
+      if document.project == index {
+        open.append path
       }
     }
-    var paths: List<String> = []
-    var openPaths: List<String> = []
-    for (path, _) in documents {
-      openPaths.append path
-    }
-    for path in changed {
-      if documents.containsKey(path) && !paths.contains(path) {
-        paths.append path
-      }
-      if const Some(previous) = analyses.get(path) {
-        for dependent in dependentsOf(previous, path, openPaths) {
-          if !paths.contains(dependent) {
-            paths.append dependent
-          }
-        }
+    var changed: List<String> = []
+    for path in project.changed {
+      if open.contains(path) {
+        changed.append path
       }
     }
-    if const Some(wanted) = also {
-      if documents.containsKey(wanted) && !paths.contains(wanted) {
-        paths.append wanted
-      }
+    project.changed = []
+    const wanted = match also {
+      Some(path) => if open.contains(path) && !project.views.containsKey(path) { Some path } else { None }
+      None => None
     }
-    var changedPaths: List<String> = []
-    for path in changed {
-      if documents.containsKey(path) {
-        changedPaths.append path
-      }
-    }
-    changed = []
-    if paths.isEmpty() {
+    if changed.isEmpty() && wanted.isNone() {
+      projects.set index, project
       return
     }
     const started = Clock.milliseconds()
-    // The front of the last run, with the changed documents read again - or, where that is not right or it has served
+    // The front of the last run with the changed documents read again - or, where that is not right or it has served
     // long enough (each such run adds the symbols of a file's type parameters once more), a front from scratch
-    const incremental = match front {
-      Some(last) => if frontRuns < frontRunLimit { reanalyze current, last, changedPaths, paths } else { None }
-      None => None
+    var refreshed: Front? = None
+    if const Some(last) = project.front {
+      if project.frontRuns < frontRunLimit && open.all({ last.program.graph.moduleAt(_).isSome() }) {
+        refreshed = refreshedFrontOf tree, last, changed
+      }
     }
-    const analysis = match incremental {
+    var current = match refreshed {
       Some(found) => {
-        frontRuns = frontRuns + 1
+        project.frontRuns = project.frontRuns + 1
         found
       }
       None => {
-        frontRuns = 0
-        analyze current, openPaths, paths
+        project.frontRuns = 0
+        frontOf tree, open, withTimings: true, onlyReached: true
       }
     }
-    front = analysis.front
-    tree = current.withParsed parsesOf(analysis.checked)
+    var whole: List<String> = []
+    var interfaces: List<String> = []
+    var updated: List<String> = []
+    var bodies: List<String> = []
+    for path in changed {
+      const view = match project.views.get(path) {
+        Some(found) => found
+        None => {
+          addPath whole, path
+          continue
+        }
+      }
+      match viewAfterChange(view, tree, current, path) {
+        Some(next) => {
+          project.views.set path, next
+          addPath updated, path
+          if const Some(overlay) = next.overlay {
+            bodies.append "{next.mapping.changed.length()} of {path}"
+            logTimings "checked the changed bodies", overlay
+          }
+        }
+        None => {
+          addPath whole, path
+          interfaces.append path
+        }
+      }
+    }
+    // A document whose interface changed may change what every document that imports it finds
+    for path in interfaces {
+      if const Some(view) = project.views.get(path) {
+        for dependent in dependentsOf(view.base, path, open) {
+          addPath whole, dependent
+        }
+      }
+    }
+    if const Some(path) = wanted {
+      addPath whole, path
+    }
+    if !whole.isEmpty() {
+      var analysis = analyzeOver tree, current, whole
+      if analysis.isNone() && refreshed.isSome() {
+        // A document the front of the last run did not reach
+        project.frontRuns = 0
+        current = frontOf tree, open, withTimings: true, onlyReached: true
+        analysis = analyzeOver tree, current, whole
+      }
+      if const Some(found) = analysis {
+        logTimings "checked {whole.length()} document(s)", found
+        for path in whole {
+          project.views.set path, DocumentView.of(path, found)
+          addPath updated, path
+        }
+      }
+    }
+    project.front = current
+    project.tree = tree.withParsed parsesOfProgram(current.program)
     const checkedAt = Clock.milliseconds()
-    for path in paths {
-      analyses.set path, analysis
+    for path in updated {
       const document = match documents.get(path) {
         Some(found) => found
         None => {
           continue
         }
       }
-      const found = findingsOf analysis, path
-      findings.set path, found
-      publish document.uri, diagnosticsOf(analysis, path, document.text, found)
+      const view = match project.views.get(path) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const problems = documentDiagnostics view, current
+      const found = documentFindings view, current, clean: problems.isEmpty()
+      project.findings.set path, found
+      publish document.uri, diagnosticsJson(LineMap.of(document.text), problems, found)
     }
+    projects.set index, project
     const finished = Clock.milliseconds()
+    const kept = if bodies.isEmpty() { "" } else { ", bodies: {bodies.joined(separator: ", ")}" }
+    log.append "refreshed {updated.length()} document(s) in {checkedAt - started} ms{kept}, published in {finished - checkedAt} ms"
+  }
+
+  /** One line of standard error with the cost of every pass of a run. */
+  private var fn logTimings(what: String, analysis: Analysis) {
     var passes: List<String> = []
     for timing in analysis.checked.checker.timings {
       if timing.milliseconds > 0 {
         passes.append "{timing.pass} {timing.milliseconds}"
       }
     }
-    const spent = checkedAt - started
-    const listed = passes.joined separator: ", "
-    log.append "checked {paths.length()} document(s) in {spent} ms ({listed}), published in {finished - checkedAt} ms"
+    log.append "{what}: {passes.joined(separator: ", ")}"
+  }
+
+  /** The open document a request names, with its project. */
+  private var fn documentOf(parameters: JsonValue): Document? {
+    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
+    const (_, path) = placeOf(uri)?
+    documents.get path
+  }
+
+  /** The view of a document, brought up to date where its text changed since its last run or none has checked it. */
+  private var fn viewOf(document: Document): DocumentView? {
+    const project = projects[document.project]
+    if project.changed.contains(document.path) || !project.views.containsKey(document.path) {
+      refresh document.project, document.path
+    }
+    projects[document.project].views.get document.path
   }
 
   /**
-   * The run, the document and the byte offset a request about a position names, once the document's run is current.
-   * `None` for a document that is not open, and for one no run could check.
+   * The document a request about a position names, its view, the run that knows the code at the position and the offset
+   * there. `None` for a document that is not open, one no run could check, and a position no run knows.
    */
-  private var fn located(parameters: JsonValue): (Analysis, Document, Int)? {
+  private var fn located(parameters: JsonValue): (Document, DocumentView, Located)? {
     const document = documentOf(parameters)?
-    const analysis = analysisOf(document.path)?
+    const view = viewOf(document)?
     const position = positionAt(parameters, ["position"]) ?? Position(0, 0)
-    (analysis, document, LineMap.of(document.text).offsetOf(position))
+    const offset = LineMap.of(document.text).offsetOf(position)
+    (document, view, view.layerAt(offset)?)
   }
 
   /**
-   * The completion at a byte offset. Behind a `.` where no expression of the run ends at it - the text around it does
-   * not parse yet - the text without the member access is checked once more, and its run answers.
+   * Where a span of the file at `path` in the text the run `analysis` read is now: through the view of the document
+   * where it is the open one a question was about, through a mapping of the two texts where the file changed since the
+   * run, and as it is where it did not. `None` where the code it was about changed.
    */
-  private fn completion(analysis: Analysis, document: Document, offset: Int): JsonValue {
+  private fn currentSpanOf(
+    document: Document,
+    view: DocumentView,
+    layer: Layer,
+    analysis: Analysis,
+    path: String,
+    span: Span,
+  ): Span? {
+    if path == document.path {
+      return view.currentSpan layer, span
+    }
+    const project = projects[document.project]
+    const now = project.tree.text(path) ?? ""
+    const module = analysis.moduleOf(path)?
+    const earlier = analysis.checked.program.graph.at module
+    if earlier.source.text == now {
+      return span
+    }
+    const front = project.front?
+    const currentModule = front.program.graph.moduleAt(path)?
+    const current = front.program.graph.at currentModule
+    const mapping = mappingBetween(earlier.file, earlier.source.text, current.file, current.source.text)?
+    mapping.toCurrent span
+  }
+
+  // --- Requests about a position ---------------------------------------------------------------------------------------
+
+  private var fn hover(parameters: JsonValue): JsonValue {
+    const (document, view, at) = match located(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const found = match hoverOf(at.analysis, document.path, at.offset) {
+      Some(thing) => thing
+      None => {
+        return JsonValue.Null
+      }
+    }
+    var entries = [("contents", object([("kind", text("markdown")), ("value", text(found.markdown))]))]
+    if const Some(span) = view.currentSpan(at.layer, found.span) {
+      entries.append(("range", rangeJson(LineMap.of(document.text).rangeOf(span))))
+    }
+    object entries
+  }
+
+  private var fn definition(parameters: JsonValue): JsonValue {
+    const (document, view, at) = match located(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const place = match definitionOf(at.analysis, document.path, at.offset) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const span = match currentSpanOf(document, view, at.layer, at.analysis, place.path, place.span) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const project = projects[document.project]
+    const lines = LineMap.of(
+      if place.path == document.path { document.text } else { project.tree.text(place.path) ?? "" },
+    )
+    object([("uri", text(uriOf(place.path))), ("range", rangeJson(lines.rangeOf(span)))])
+  }
+
+  /**
+   * The completion at a position. Behind a `.` where no expression of the run ends at it - the text around it does not
+   * parse yet - the text without the member access is checked once more, and its run answers.
+   */
+  private var fn completion(parameters: JsonValue): JsonValue {
+    const document = match documentOf(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const view = match viewOf(document) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const offset = LineMap.of(document.text).offsetOf(positionAt(parameters, ["position"]) ?? Position(0, 0))
     match completionContextOf(document.text, offset) {
-      .Name(_) => nameCompletion analysis, document.path, offset
-      .Member(receiverEnd, dot, optional) => {
-        if const Some(found) = memberCompletion(analysis, document.path, receiverEnd, optional) {
-          return found
+      .Name(_) => {
+        match view.layerAt(offset) {
+          Some(at) => nameCompletion at.analysis, document.path, at.offset
+          None => JsonValue.Null
         }
-        const current = match tree {
+      }
+      .Member(receiverEnd, dot, optional) => {
+        if const Some(at) = view.layerAt(receiverEnd) {
+          if const Some(found) = memberCompletion(at.analysis, document.path, at.offset, optional) {
+            return found
+          }
+        }
+        const retried = match viewOfText(document, view, withoutMemberAccess(document.text, dot, offset, optional)) {
           Some(found) => found
           None => {
             return JsonValue.Null
           }
         }
-        const patched = withoutMemberAccess document.text, dot, offset, optional
-        const patchedTree = current.withFile document.path, patched
-        const incremental = match front {
-          Some(last) => reanalyze patchedTree, last, [document.path], [document.path]
-          None => None
+        match retried.layerAt(receiverEnd) {
+          Some(at) => memberCompletion(at.analysis, document.path, at.offset, optional) ?? JsonValue.Null
+          None => JsonValue.Null
         }
-        const retried = incremental ?? analyze(patchedTree, [document.path], [document.path])
-        memberCompletion(retried, document.path, receiverEnd, optional) ?? JsonValue.Null
       }
     }
   }
 
-  private var fn codeActions(id: JsonValue, parameters: JsonValue) {
+  /** A view of the document with another text, which nobody keeps: what a completion behind a `.` asks once more. */
+  private fn viewOfText(document: Document, view: DocumentView, content: String): DocumentView? {
+    const project = projects[document.project]
+    const tree = project.tree.withFile document.path, content
+    const last = project.front?
+    const current = refreshedFrontOf(tree, last, [document.path])?
+    if const Some(found) = viewAfterChange(view, tree, current, document.path, comparesFacts: false) {
+      return found
+    }
+    DocumentView.of(document.path, analyzeOver(tree, current, [document.path])?)
+  }
+
+  private var fn semanticTokens(parameters: JsonValue): JsonValue {
     const document = match documentOf(parameters) {
       Some(found) => found
       None => {
-        respond id, array([])
-        return
+        return JsonValue.Null
       }
     }
-    const _analysis = analysisOf document.path
+    const view = match viewOf(document) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    match projects[document.project].front {
+      Some(current) => semanticTokensOf view, current
+      None => JsonValue.Null
+    }
+  }
+
+  private var fn codeActions(parameters: JsonValue): JsonValue {
+    const document = match documentOf(parameters) {
+      Some(found) => found
+      None => {
+        return array([])
+      }
+    }
+    const _view = viewOf document
     const range = rangeAt(parameters, ["range"]) ?? Range(Position(0, 0), Position(0, 0))
     const lines = LineMap.of document.text
     const from = lines.offsetOf range.start
     const to = lines.offsetOf range.end
-    respond id, codeActionsOf(findings.get(document.path) ?? [], document, from, to)
+    const findings = projects[document.project].findings.get(document.path) ?? []
+    codeActionsOf findings, document, from, to
   }
 
   /**
@@ -500,8 +725,9 @@ public type LanguageServer {
    * the document and from the disk where it did not - a parse, and no run of the checker. A URI that is no file, or a
    * file that cannot be read, has none: the answer is an empty array and never an error.
    */
-  private fn testsOf(parameters: JsonValue): JsonValue {
-    const path = match locations.pathOf(textAt(parameters, ["textDocument", "uri"]) ?? "") {
+  private var fn testsOf(parameters: JsonValue): JsonValue {
+    const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
+    const (index, path) = match placeOf(uri) {
       Some(found) => found
       None => {
         return array([])
@@ -509,7 +735,7 @@ public type LanguageServer {
     }
     const source: String? = match documents.get(path) {
       Some(document) => document.text
-      None => textOnDisk path
+      None => textOnDisk index, path
     }
     match source {
       Some(found) => testTreeOf found
@@ -518,25 +744,11 @@ public type LanguageServer {
   }
 
   /** What the disk holds now, and not what the tree read of it before; a tree built in memory is its own disk. */
-  private fn textOnDisk(path: String): String? {
+  private fn textOnDisk(project: Int, path: String): String? {
     if readsDisk {
       return File.readText(path).ok()
     }
-    tree?.text(path)
-  }
-
-  /** The open document a request names. */
-  private fn documentOf(parameters: JsonValue): Document? {
-    const path = locations.pathOf(textAt(parameters, ["textDocument", "uri"]) ?? "")?
-    documents.get path
-  }
-
-  /** The run of a document, checked now where its text changed since or no run has checked it. */
-  private var fn analysisOf(path: String): Analysis? {
-    if changed.contains(path) || !analyses.containsKey(path) {
-      refresh path
-    }
-    analyses.get path
+    projects[project].tree.text path
   }
 
   // --- Messages --------------------------------------------------------------------------------------------------------
@@ -567,17 +779,14 @@ public type LanguageServer {
  */
 const frontRunLimit = 200
 
-/** The first workspace folder, for a client that sends those instead of `rootUri`; empty where there is none. */
-fn rootUriOfFolders(parameters: JsonValue): String {
-  for folder in itemsAt(parameters, ["workspaceFolders"]) {
-    if const Some(uri) = textAt(folder, ["uri"]) {
-      return uri
-    }
+/** Adds a path to a list that does not hold it yet. */
+fn addPath(var paths: List<String>, path: String) {
+  if !paths.contains(path) {
+    paths.append path
   }
-  ""
 }
 
-/** The files of the workspace around a path, read the way `torb check` reads them; an empty tree where that fails. */
+/** The files of the workspace around a path, read the way `torb check` reads them; `None` where that fails. */
 fn readTreeOf(path: String): SourceTree? {
   readSourceTree([path]).ok()
 }

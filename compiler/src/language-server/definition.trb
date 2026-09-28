@@ -4,45 +4,30 @@
  * that is, the standard library included.
  */
 
-use JsonValue from "std/json"
 use Span from "../syntax/source"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use SymbolId from "../semantics/symbols"
 use Analysis from "./analysis"
 use Found, foundAt, symbolOfResolution from "./lookup"
-use LineMap from "./position"
-use Locations from "./uri"
-use rangeJson from "./diagnostics"
-use object, text from "./json"
 
-/** The location of the declaration of what stands at a byte offset, or `null` where it has none. */
-public fn definitionOf(analysis: Analysis, locations: Locations, path: String, offset: Int): JsonValue {
-  const module = match analysis.moduleOf(path) {
-    Some(found) => found
-    None => {
-      return JsonValue.Null
-    }
-  }
-  const found = match foundAt(analysis.checked, module, offset) {
-    Some(thing) => thing
-    None => {
-      return JsonValue.Null
-    }
-  }
-  const (target, span) = match declarationOf(analysis.checked, module, found) {
-    Some(location) => location
-    None => {
-      return JsonValue.Null
-    }
-  }
-  const shape = analysis.checked.program.graph.at target
-  const lines = LineMap.of shape.source.text
-  object([("uri", text(locations.uriOf(shape.path))), ("range", rangeJson(lines.rangeOf(span)))])
+/** A place in a file of the program, in the text of the run that found it. */
+public type Place {
+  /** The normalized path of the file */
+  path: String
+  span: Span
+}
+
+/** Where what stands at a byte offset of a document is declared, in the texts of the run: `None` where it has no declaration. */
+public fn definitionOf(analysis: Analysis, path: String, offset: Int): Place? {
+  const module = analysis.moduleOf(path)?
+  const found = foundAt(analysis.checked, module, offset)?
+  const (target, span) = declarationOf(analysis.checked, module, found)?
+  Place analysis.checked.program.graph.at(target).path, span
 }
 
 /** The module and the span of the name a thing the tables know is declared under. */
-fn declarationOf(checked: Checked, module: ModuleId, found: Found): (ModuleId, Span)? {
+public fn declarationOf(checked: Checked, module: ModuleId, found: Found): (ModuleId, Span)? {
   match found {
     .Resolved(_, resolution) => {
       match resolution {
@@ -58,7 +43,8 @@ fn declarationOf(checked: Checked, module: ModuleId, found: Found): (ModuleId, S
   }
 }
 
-fn symbolLocation(checked: Checked, symbol: SymbolId): (ModuleId, Span)? {
+/** The module and the span of a symbol's name. */
+public fn symbolLocation(checked: Checked, symbol: SymbolId): (ModuleId, Span)? {
   const found = checked.checker.symbolAt symbol
   (found.module?, found.span)
 }

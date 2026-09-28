@@ -1,0 +1,306 @@
+/**
+ * Where the spans of a file in an earlier text lie in its current text, as long as only bodies of functions changed:
+ * what lets the language server keep the check of every body a keystroke did not touch (docs/design/LANGUAGE-SERVER.md
+ * section 6).
+ *
+ * Two parses of a file are compared statement by statement, in order ([mappingBetween]). A declaration whose text is
+ * the same in both moved as a whole, by the difference of its starts. A function whose text in front of its body is the
+ * same and whose body is not has a **changed body**: what stands in front of the body moved, the body itself has no
+ * counterpart, and its borders are each other's. The members of a type, a trait and an `extend` are compared the same
+ * way, behind a header that has to be the same. Anything else - a declaration more or less, a signature, a field, a
+ * `use`, a statement of a script - and there is no mapping: the file changed in a way other bodies can see.
+ *
+ * What stands between two declarations - comments, blank lines - is no part of either, and nothing the checker knows
+ * lies there.
+ */
+
+use Span from "../syntax/source"
+use SourceFile, Statement, Declaration, Member, FunctionDeclaration from "../syntax/ast"
+
+/** A piece of text that is the same in both texts: where it is in the earlier one, and where it starts now. */
+public type Piece {
+  earlier: Span
+  currentStart: Int
+
+  /** Where the piece is now. */
+  fn current(): Span {
+    Span(currentStart, currentStart + earlier.end - earlier.start)
+  }
+}
+
+/** A body of a function that changed: where it was, where it is now, and where the name of its function is now. */
+public type ChangedBody {
+  earlier: Span
+  current: Span
+  name: Span
+}
+
+/** How the spans of an earlier text of a file lie in its current text. */
+public type SpanMapping {
+  /** In the order of the text, which is the same in both texts */
+  pieces: List<Piece>
+  /** In the order of the text */
+  changed: List<ChangedBody>
+
+  /** The mapping of a text of `length` bytes onto itself. */
+  static fn identity(length: Int): Self {
+    Self([Piece(Span(0, length), 0)], [])
+  }
+
+  /** Where the changed bodies are now: the spans only a check of the current text knows anything about. */
+  fn changedRegions(): List<Span> {
+    changed.map({ _.current }).toList()
+  }
+
+  /** Whether an offset of the current text lies inside of a changed body, between its braces. */
+  fn isChangedAt(offset: Int): Bool {
+    changed.any({ _.current.start < offset && offset < _.current.end })
+  }
+
+  /** Whether a span of the earlier text reaches into a changed body. */
+  fn touchesChangedEarlier(span: Span): Bool {
+    changed.any({ span.start < _.earlier.end && _.earlier.start < span.end })
+  }
+
+  /** Whether a span of the current text lies inside of a changed body. */
+  fn isInsideChanged(span: Span): Bool {
+    changed.any({ _.current.start <= span.start && span.end <= _.current.end })
+  }
+
+  /** Where an offset of the earlier text is now: `None` inside of a changed body, and outside of every piece. */
+  fn offsetToCurrent(offset: Int): Int? {
+    if const Some(piece) = pieceHolding(offset, earlier: true) {
+      return offset - piece.earlier.start + piece.currentStart
+    }
+    for body in changed {
+      if offset == body.earlier.start {
+        return body.current.start
+      }
+      if offset == body.earlier.end {
+        return body.current.end
+      }
+    }
+    None
+  }
+
+  /** Where an offset of the current text was in the earlier one: the other direction of [SpanMapping.offsetToCurrent]. */
+  fn offsetToEarlier(offset: Int): Int? {
+    if const Some(piece) = pieceHolding(offset, earlier: false) {
+      return offset - piece.currentStart + piece.earlier.start
+    }
+    for body in changed {
+      if offset == body.current.start {
+        return body.earlier.start
+      }
+      if offset == body.current.end {
+        return body.earlier.end
+      }
+    }
+    None
+  }
+
+  /** Where a span of the earlier text is now, where both of its ends have a place there. */
+  fn toCurrent(span: Span): Span? {
+    const start = offsetToCurrent(span.start)?
+    const end = offsetToCurrent(span.end)?
+    Span start, end
+  }
+
+  /** Where a span of the current text was. */
+  fn toEarlier(span: Span): Span? {
+    const start = offsetToEarlier(span.start)?
+    const end = offsetToEarlier(span.end)?
+    Span start, end
+  }
+
+  /** The last piece that starts at or before the offset, where it holds the offset, its end included. */
+  private fn pieceHolding(offset: Int, earlier: Bool): Piece? {
+    var low = 0
+    var high = pieces.length()
+    while low < high {
+      const middle = (low + high) / 2
+      const start = if earlier { pieces[middle].earlier.start } else { pieces[middle].currentStart }
+      if start <= offset {
+        low = middle + 1
+      } else {
+        high = middle
+      }
+    }
+    if low == 0 {
+      return None
+    }
+    const piece = pieces[low - 1]
+    const span = if earlier { piece.earlier } else { piece.current() }
+    if offset <= span.end {
+      return piece
+    }
+    None
+  }
+}
+
+/**
+ * How the spans of `earlier` lie in `current`, two parses of one file: `None` where more than bodies of functions
+ * changed. Two equal texts map onto each other as they are.
+ */
+public fn mappingBetween(
+  earlier: SourceFile,
+  earlierText: String,
+  current: SourceFile,
+  currentText: String,
+): SpanMapping? {
+  if earlierText == currentText {
+    return SpanMapping.identity currentText.byteLength()
+  }
+  if earlier.statements.length() != current.statements.length() {
+    return None
+  }
+  var builder = MappingBuilder earlierText, currentText
+  for (index, statement) in earlier.statements.indexed() {
+    if !builder.statement(statement, current.statements[index]) {
+      return None
+    }
+  }
+  SpanMapping builder.pieces, builder.changed
+}
+
+/** The pieces and changed bodies found so far, and the two texts they are read from. */
+type MappingBuilder {
+  earlierText: String
+  currentText: String
+  var pieces: List<Piece> = []
+  var changed: List<ChangedBody> = []
+
+  /** Whether the two spans hold the same text. */
+  fn isSame(earlier: Span, current: Span): Bool {
+    if earlier.end - earlier.start != current.end - current.start {
+      return false
+    }
+    earlierText.sliceBytes(earlier.start, earlier.end) == currentText.sliceBytes(current.start, current.end)
+  }
+
+  /** Records the spans as one piece where they hold the same text. */
+  var fn same(earlier: Span, current: Span): Bool {
+    if !isSame(earlier, current) {
+      return false
+    }
+    pieces.append Piece(earlier, current.start)
+    true
+  }
+
+  var fn statement(earlier: Statement, current: Statement): Bool {
+    if same(earlier.span, current.span) {
+      return true
+    }
+    match (earlier.kind, current.kind) {
+      (.Declare(first), .Declare(second)) => declaration first, second
+      _ => false
+    }
+  }
+
+  var fn declaration(earlier: Declaration, current: Declaration): Bool {
+    match (earlier.kind, current.kind) {
+      (.Function(first), .Function(second)) => function earlier.span.start, first, current.span.start, second
+      (.Type(first), .Type(second)) => {
+        container earlier.span, first.name.span.end, first.members, current.span, second.name.span.end, second.members
+      }
+      (.Trait(first), .Trait(second)) => {
+        container earlier.span, first.name.span.end, first.members, current.span, second.name.span.end, second.members
+      }
+      (.Extend(first), .Extend(second)) => {
+        container(
+          earlier.span,
+          first.target.span.end,
+          first.members,
+          current.span,
+          second.target.span.end,
+          second.members,
+        )
+      }
+      _ => same earlier.span, current.span
+    }
+  }
+
+  /** A function: the same text in front of its body, and a body that may have changed. */
+  var fn function(
+    earlierStart: Int,
+    earlier: FunctionDeclaration,
+    currentStart: Int,
+    current: FunctionDeclaration,
+  ): Bool {
+    const (first, second) = match (earlier.body, current.body) {
+      (Some(one), Some(two)) => (one, two)
+      _ => {
+        return false
+      }
+    }
+    if !same(Span(earlierStart, first.span.start), Span(currentStart, second.span.start)) {
+      return false
+    }
+    if !same(first.span, second.span) {
+      changed.append ChangedBody(first.span, second.span, current.name.span)
+    }
+    true
+  }
+
+  /**
+   * A type, a trait or an `extend`: the same header up to its `{`, as many members, each of them the same or a function
+   * whose body changed, and the closing brace.
+   */
+  var fn container(
+    earlier: Span,
+    earlierAfter: Int,
+    earlierMembers: List<Member>,
+    current: Span,
+    currentAfter: Int,
+    currentMembers: List<Member>,
+  ): Bool {
+    if earlierMembers.length() != currentMembers.length()
+      || earlier.end <= earlier.start
+      || current.end <= current.start {
+      return false
+    }
+    const earlierOpen = match braceAfter(earlierText, earlierAfter, earlier.end) {
+      Some(found) => found
+      None => {
+        return false
+      }
+    }
+    const currentOpen = match braceAfter(currentText, currentAfter, current.end) {
+      Some(found) => found
+      None => {
+        return false
+      }
+    }
+    if !same(Span(earlier.start, earlierOpen + 1), Span(current.start, currentOpen + 1)) {
+      return false
+    }
+    for (index, member) in earlierMembers.indexed() {
+      if !memberOf(member, currentMembers[index]) {
+        return false
+      }
+    }
+    same Span(earlier.end - 1, earlier.end), Span(current.end - 1, current.end)
+  }
+
+  var fn memberOf(earlier: Member, current: Member): Bool {
+    if same(earlier.span, current.span) {
+      return true
+    }
+    match (earlier.kind, current.kind) {
+      (.Function(first), .Function(second)) => function earlier.span.start, first, current.span.start, second
+      _ => false
+    }
+  }
+}
+
+/** Where the first `{` behind `after` is, before `end`. */
+fn braceAfter(text: String, after: Int, end: Int): Int? {
+  var at = after
+  while at < end {
+    if text.byteAt(at) == 123 {
+      return at
+    }
+    at = at + 1
+  }
+  None
+}

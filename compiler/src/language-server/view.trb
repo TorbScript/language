@@ -1,0 +1,277 @@
+/**
+ * What the language server knows about one open document: a [DocumentView] of two runs of the checker. The **base**
+ * checked every body of the document, over the text it had then; the **overlay** checked the bodies that changed since,
+ * over the text it has now; and a [SpanMapping] says where everything else of the base's text lies in the current one.
+ * A keystroke inside of a function checks that function again and keeps the base (docs/design/LANGUAGE-SERVER.md,
+ * section 6).
+ *
+ * Whatever a view answers is in the coordinates of the current text: the diagnostics of the base outside of the changed
+ * bodies moved to where their code is now, and the overlay's inside of them ([documentDiagnostics]); the findings of the
+ * lint rules the same way ([documentFindings]); and a question about a position goes to the run that knows the code
+ * there ([DocumentView.layerAt]), in that run's coordinates, and its answer comes back through
+ * [DocumentView.currentSpan].
+ */
+
+use Span from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use Statement from "../syntax/ast"
+use SourceTree from "../project/source-tree"
+use Front from "../semantics/check"
+use checkNames from "../semantics/scope"
+use Finding, TextEdit, everyLintRule from "../lint/finding"
+use lintFindingsOf from "../lint/command"
+use labeledLiteralFindings from "../lint/labeled-literal"
+use redundantWrapFindings from "../lint/redundant-wrap"
+use plainBindingStarts from "../lint/plain-values"
+use Analysis, analyzeBodies, bodyFactsOf from "./analysis"
+use SpanMapping, mappingBetween from "./mapping"
+
+/** Which run of a view answers. */
+public type Layer {
+  /** The run over an earlier text, whose spans move through the mapping */
+  case Base
+  /** The run over the current text, for the changed bodies */
+  case Overlay
+}
+
+/** The run a question about a position goes to, and the offset in that run's text. */
+public type Located {
+  layer: Layer
+  analysis: Analysis
+  offset: Int
+}
+
+/** One open document, as the two runs of the checker know it. */
+public type DocumentView {
+  /** The normalized path */
+  path: String
+  base: Analysis
+  /** Where the base's text of the document lies in its current text */
+  mapping: SpanMapping
+  /** The run over the current text that checked the bodies `mapping` says changed; `None` where none did */
+  overlay: Analysis? = None
+
+  /** A view of a document whose every body `analysis` checked over the current text. */
+  static fn of(path: String, analysis: Analysis): Self {
+    const length = (analysis.textOf(path) ?? "").byteLength()
+    Self path, analysis, SpanMapping.identity(length)
+  }
+
+  /** The run that knows the code at an offset of the current text, and where that offset is in its text. */
+  fn layerAt(offset: Int): Located? {
+    if const Some(changed) = overlay {
+      if mapping.isChangedAt(offset) {
+        return Located Layer.Overlay, changed, offset
+      }
+    }
+    const earlier = mapping.offsetToEarlier(offset)?
+    Located Layer.Base, base, earlier
+  }
+
+  /** Where a span of this document in the text of `layer` is now. */
+  fn currentSpan(layer: Layer, span: Span): Span? {
+    match layer {
+      .Base => mapping.toCurrent span
+      .Overlay => span
+    }
+  }
+
+  /** Whether the checker read a string literal at a span of the current text verbatim. */
+  fn isReadVerbatim(literal: Span): Bool {
+    if const Some(changed) = overlay {
+      if mapping.isInsideChanged(literal) {
+        return changed.moduleOf(path).map({ changed.checked.checker.isReadVerbatim _, literal }) ?? false
+      }
+    }
+    const earlier = match mapping.toEarlier(literal) {
+      Some(found) => found
+      None => {
+        return false
+      }
+    }
+    base.moduleOf(path).map({ base.checked.checker.isReadVerbatim _, earlier }) ?? false
+  }
+
+  /** What the checker found in the document: the base's outside of the changed bodies, the overlay's inside of them. */
+  fn checkerDiagnostics(): List<Diagnostic> {
+    var found: List<Diagnostic> = []
+    if const Some(module) = base.moduleOf(path) {
+      for diagnostic in base.checked.checker.diagnostics[module.value] {
+        if mapping.touchesChangedEarlier(diagnostic.span) {
+          continue
+        }
+        if const Some(span) = mapping.toCurrent(diagnostic.span) {
+          found.append diagnostic.copy(span: span)
+        }
+      }
+    }
+    if const Some(changed) = overlay {
+      if const Some(module) = changed.moduleOf(path) {
+        for diagnostic in changed.checked.checker.diagnostics[module.value] {
+          if mapping.isInsideChanged(diagnostic.span) {
+            found.append diagnostic
+          }
+        }
+      }
+    }
+    found
+  }
+
+  /** The start of every binding of the document whose value certainly holds nothing with a `close()`, now. */
+  fn plainStarts(): Set<Int> {
+    var starts: Set<Int> = Set.of()
+    if const Some(module) = base.moduleOf(path) {
+      for start in plainBindingStarts(base.checked.checker, module) {
+        if mapping.touchesChangedEarlier(Span(start, start + 1)) {
+          continue
+        }
+        if const Some(now) = mapping.offsetToCurrent(start) {
+          starts.insert now
+        }
+      }
+    }
+    if const Some(changed) = overlay {
+      if const Some(module) = changed.moduleOf(path) {
+        for start in plainBindingStarts(changed.checked.checker, module) {
+          if mapping.isChangedAt(start) {
+            starts.insert start
+          }
+        }
+      }
+    }
+    starts
+  }
+}
+
+/**
+ * Every problem of the document as it is now: what the parser, name resolution and the names in type positions of the
+ * current front say about it, and what the checker says ([DocumentView.checkerDiagnostics]), sorted by position - the
+ * list `torb check` prints for the file.
+ */
+public fn documentDiagnostics(view: DocumentView, current: Front): List<Diagnostic> {
+  var found = view.checkerDiagnostics()
+  if const Some(module) = current.program.graph.moduleAt(view.path) {
+    const shape = current.program.graph.at module
+    found.appendAll shape.diagnostics
+    // What is wrong with the `String` reading of a literal is no problem where the checker read the literal verbatim
+    for deferred in shape.deferred {
+      if !view.isReadVerbatim(deferred.literal) {
+        found.append deferred.diagnostic
+      }
+    }
+    found.appendAll checkNames(current.program, module)
+    found.appendAll current.unresolved[module.value]
+  }
+  found.sort({ (_.span.start, _.span.end) })
+  found
+}
+
+/**
+ * What the rules of `torb lint` find in the document as it is now: the rules that read the syntax tree wherever it
+ * parses, and the rules that read the checker's tables only where `clean` says the checker found no problem - as
+ * `torb lint` does, because the tables of a file with a problem are not whole. The findings of the rules that read the
+ * tables come from the run that knows the code they are about.
+ */
+public fn documentFindings(view: DocumentView, current: Front, clean: Bool): List<Finding> {
+  const module = match current.program.graph.moduleAt(view.path) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  const shape = current.program.graph.at module
+  if !shape.diagnostics.isEmpty() {
+    return []
+  }
+  const plain = if clean { Some view.plainStarts() } else { None }
+  var findings = lintFindingsOf shape.source.text, shape.file, everyLintRule(), plain
+  if clean {
+    if const Some(earlier) = view.base.moduleOf(view.path) {
+      const checker = view.base.checked.checker
+      const file = view.base.checked.program.graph.at(earlier).file
+      const text = view.base.checked.program.graph.at(earlier).source.text
+      var typed = labeledLiteralFindings checker, earlier, file
+      typed.appendAll redundantWrapFindings(checker, earlier, text, file)
+      for finding in typed {
+        if view.mapping.touchesChangedEarlier(finding.span) {
+          continue
+        }
+        if const Some(moved) = movedFinding(finding, view.mapping) {
+          findings.append moved
+        }
+      }
+    }
+    if const Some(changed) = view.overlay {
+      if const Some(now) = changed.moduleOf(view.path) {
+        const checker = changed.checked.checker
+        var typed = labeledLiteralFindings checker, now, shape.file
+        typed.appendAll redundantWrapFindings(checker, now, shape.source.text, shape.file)
+        for finding in typed {
+          if view.mapping.isInsideChanged(finding.span) {
+            findings.append finding
+          }
+        }
+      }
+    }
+  }
+  findings.sort({ _.span.start })
+  findings
+}
+
+/** A finding of the base's text where its code is now, its fix included; `None` where a part of it has no place there. */
+fn movedFinding(finding: Finding, mapping: SpanMapping): Finding? {
+  const span = mapping.toCurrent(finding.span)?
+  var fix: List<TextEdit> = []
+  for edit in finding.fix {
+    const start = mapping.offsetToCurrent(edit.start)?
+    const end = mapping.offsetToCurrent(edit.end)?
+    fix.append TextEdit(start, end, edit.text)
+  }
+  finding.copy span: span, fix: fix
+}
+
+/**
+ * The view of a document after its text changed, over a front that is current for it, where the change left everything
+ * other bodies see alone: the base stays, the mapping says where its text went, and the overlay checks the bodies that
+ * changed. `None` where the change reached further - a declaration, a signature, a `use`, top-level code - or where a
+ * changed body now shows the rest of the program something else (`bodyFactsOf`, unless `comparesFacts` is off for a
+ * view nobody keeps); then the document is checked as a whole, and the documents that import it with it.
+ */
+public fn viewAfterChange(
+  view: DocumentView,
+  tree: SourceTree,
+  current: Front,
+  path: String,
+  comparesFacts: Bool = true,
+): DocumentView? {
+  const earlierModule = view.base.moduleOf(path)?
+  const earlier = view.base.checked.program.graph.at earlierModule
+  const nowModule = current.program.graph.moduleAt(path)?
+  const now = current.program.graph.at nowModule
+  // The statements of a script are one body, and a function of one may read what they change
+  if now.file.statements.any({ !isDeclaration(_) }) {
+    return None
+  }
+  const mapping = mappingBetween(earlier.file, earlier.source.text, now.file, now.source.text)?
+  if mapping.changed.isEmpty() {
+    return view.copy mapping: mapping, overlay: None
+  }
+  const overlay = analyzeBodies(tree, current, path, mapping.changedRegions())?
+  if comparesFacts {
+    for body in mapping.changed {
+      const earlierName = mapping.toEarlier(body.name)?
+      if bodyFactsOf(view.base, path, earlierName) != bodyFactsOf(overlay, path, body.name) {
+        return None
+      }
+    }
+  }
+  view.copy mapping: mapping, overlay: overlay
+}
+
+/** Whether a statement of a file declares something: a declaration, or a top-level `const`. */
+fn isDeclaration(statement: Statement): Bool {
+  match statement.kind {
+    .Declare(_) | .Bind(_) => true
+    _ => false
+  }
+}

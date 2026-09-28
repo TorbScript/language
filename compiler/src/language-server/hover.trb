@@ -3,7 +3,7 @@
  * source writes it and its doc comment; a local binding its type; any other expression the type the checker gave it.
  */
 
-use JsonValue from "std/json"
+use Span from "../syntax/source"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Resolution, BindingId from "../semantics/checker/context"
@@ -11,33 +11,22 @@ use TypeId from "../semantics/checker/type"
 use SymbolId from "../semantics/symbols"
 use Analysis from "./analysis"
 use Found, foundAt, symbolOfResolution, describeSymbol, kindWord from "./lookup"
-use LineMap from "./position"
-use rangeJson from "./diagnostics"
-use object, text from "./json"
 
-/** The hover at a byte offset of a document, or `null` where there is nothing to say. */
-public fn hoverOf(analysis: Analysis, path: String, offset: Int): JsonValue {
-  const module = match analysis.moduleOf(path) {
-    Some(found) => found
-    None => {
-      return JsonValue.Null
-    }
-  }
-  const found = match foundAt(analysis.checked, module, offset) {
-    Some(thing) => thing
-    None => {
-      return JsonValue.Null
-    }
-  }
+/** What a hover says, and the span of the document it is about, in the text of the run that answered. */
+public type Hover {
+  markdown: String
+  span: Span
+}
+
+/** The hover at a byte offset of a document, in the text of the run: `None` where there is nothing to say. */
+public fn hoverOf(analysis: Analysis, path: String, offset: Int): Hover? {
+  const module = analysis.moduleOf(path)?
+  const found = foundAt(analysis.checked, module, offset)?
   const markdown = markdownOf analysis.checked, module, found
   if markdown.isEmpty() {
-    return JsonValue.Null
+    return None
   }
-  const lines = LineMap.of(analysis.textOf(path) ?? "")
-  object([
-    ("contents", object([("kind", text("markdown")), ("value", text(markdown))])),
-    ("range", rangeJson(lines.rangeOf(found.span()))),
-  ])
+  Hover markdown, found.span()
 }
 
 /** What a hover says about one thing the tables know. */

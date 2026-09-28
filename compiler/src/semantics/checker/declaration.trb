@@ -476,6 +476,19 @@ fn checkTypeArgumentBounds(var checker: Checker, module: ModuleId) {
   }
 }
 
+/**
+ * The bounds of [checkTypeArgumentBounds] for the type positions inside of `within` alone: what a language server
+ * asks of the bodies it checked again, whose type positions are the only ones that can have changed.
+ */
+public fn checkTypeArgumentBoundsWithin(var checker: Checker, module: ModuleId, within: List<Span>) {
+  const positions = checker.typePositions[module.value]
+  for (at, annotation) in positions {
+    if within.any({ _.start <= at.start && at.end <= _.end }) {
+      checkAppliedBounds checker, module, annotation, at
+    }
+  }
+}
+
 fn checkAppliedBounds(var checker: Checker, module: ModuleId, annotation: TypeId, at: Span) {
   // A trait type is one form around the `Nominal`s of its traits, and those have no span of their own: `Table<Float,
   // String>` as an annotation is `Traits([Table<Float, String>])`, so the walk goes one step in

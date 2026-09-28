@@ -23,15 +23,29 @@ public type Locations {
 
   /** The path of the document a URI names, or `None` for a URI that is not a file (`untitled:`). */
   fn pathOf(uri: String): String? {
-    if !rootUri.isEmpty() {
-      if const Some(below) = uri.withoutPrefix("{rootUri}/") {
-        return normalizePath "{rootPath}/{decoded(below)}"
-      }
-      if uri == rootUri {
-        return rootPath
-      }
+    if const Some(found) = pathBelow(uri) {
+      return found
     }
     absolutePathOf uri
+  }
+
+  /** The path of a URI below the root, spelled as the root is: `None` for any other URI. */
+  fn pathBelow(uri: String): String? {
+    if rootUri.isEmpty() {
+      return None
+    }
+    if const Some(below) = uri.withoutPrefix("{rootUri}/") {
+      return normalizePath "{rootPath}/{decoded(below)}"
+    }
+    if uri == rootUri {
+      return rootPath
+    }
+    None
+  }
+
+  /** Whether a normalized path lies below the root. */
+  fn holds(path: String): Bool {
+    !rootUri.isEmpty() && isInside(normalizePath(path), rootPath)
   }
 
   /** The URI of a path: below the root where the path is, and a `file:` URI of the absolute path otherwise. */

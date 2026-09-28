@@ -17,7 +17,7 @@ use RuntimeScript from "./scripts"
 use Program, resolveNames, checkNames from "./scope"
 use resolveTypes from "./resolve-types"
 use Checker, Timing from "./checker/context"
-use checkTypes, Stopwatch from "./checker/check"
+use checkTypes, checkBodiesWithin, Stopwatch from "./checker/check"
 
 /** One file that was checked, with everything that is wrong in it, sorted by position. */
 public type CheckedFile {
@@ -211,6 +211,30 @@ public fn checkFront(
   }
   files.sort({ _.path })
   Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
+}
+
+/**
+ * The type checker over a [Front] for the bodies of one file that lie inside of `within` and nothing else
+ * (`checkBodiesWithin`): what a language server asks after a keystroke that changed these bodies and left everything
+ * another body sees alone. The file is the one requested and reported; its diagnostics are the checker's alone, all of
+ * them, and the caller keeps what lies inside of `within`. `None` where the path is no module of the front.
+ */
+public fn checkBodiesOfFront(
+  tree: SourceTree,
+  front: Front,
+  path: String,
+  within: List<Span>,
+  withTimings: Bool = false,
+): Checked? {
+  const graph = front.program.graph
+  const module = graph.moduleAt(normalizePath(path))?
+  var checker = checkBodiesWithin front.program, front.resolutions, module, within, withTimings
+  if withTimings {
+    checker.timings = front.timings.appendedAll checker.timings
+  }
+  const shape = graph.at module
+  const files = [CheckedFile(tree.display(shape.path), shape.source.text, checker.diagnostics[module.value])]
+  Checked front.program.copy(symbols: checker.symbols), files, front.problems, front.resolutions, [module], checker
 }
 
 /**

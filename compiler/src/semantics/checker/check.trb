@@ -29,7 +29,7 @@ use settleEscapes from "./escape"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use checkMemberImports from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
-use checkShape, requireInhabitedType from "./declaration"
+use checkShape, requireInhabitedType, checkTypeArgumentBoundsWithin from "./declaration"
 use checkSpelling from "./spelling"
 
 /**
@@ -79,6 +79,174 @@ public fn checkTypes(
   checker.timings.append Timing("bodies", bodies - shape)
   checker.timings.append Timing("program shape and constant folding", shape)
   checker
+}
+
+/**
+ * The bodies of the functions of one module that lie inside of `within`, and nothing else of that module: what a
+ * language server checks after a keystroke that changed these bodies and nothing another body can see
+ * (docs/design/LANGUAGE-SERVER.md section 6). The declaration sites and the implementation index are built for the
+ * whole program as [checkTypes] builds them, because a body may call anything; the spelling of the module's names,
+ * the escapes of what the bodies hand on and the bounds of their type positions are checked as a whole module would
+ * be. Everything the checker reports outside of `within` - a callee's body checked on demand, a name spelled wrong in
+ * a signature - is the business of a check of the whole module, and the caller drops it.
+ *
+ * A body is a pure function of the signatures (docs/TYPECHECKER.md 7.3), so its tables and diagnostics are what a
+ * check of the whole module would have found for it.
+ */
+public fn checkBodiesWithin(
+  program: Program,
+  resolutions: List<Map<Span, SymbolId>>,
+  module: ModuleId,
+  within: List<Span>,
+  withTimings: Bool = false,
+): Checker {
+  var checker = newChecker program, resolutions
+  checker.withTimings = withTimings
+  var clock = Stopwatch withTimings
+  clock.start()
+  for each in program.graph.modules {
+    declareSites checker, each.id, each.file.statements
+  }
+  checker.timings.append Timing("declaration sites", clock.taken())
+  buildImplementations checker
+  checker.timings.append Timing("the implementation index", clock.taken())
+  checkSpelling checker, module
+  for statement in program.graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      checkBodiesOfDeclaration checker, module, declaration, within
+    }
+  }
+  settleEscapes checker
+  checkTypeArgumentBoundsWithin checker, module, within
+  checker.timings.append Timing("bodies", clock.taken())
+  checker
+}
+
+/** Whether a body lies inside of one of the spans. */
+fn isBodyWithin(function: FunctionDeclaration, within: List<Span>): Bool {
+  match function.body {
+    Some(body) => within.any({ _.start <= body.span.start && body.span.end <= _.end })
+    None => false
+  }
+}
+
+/** The bodies of one declaration that lie inside of `within`: a function's, or those of the members of a type. */
+fn checkBodiesOfDeclaration(var checker: Checker, module: ModuleId, declaration: Declaration, within: List<Span>) {
+  match declaration.kind {
+    .Function(function) => {
+      if isBodyWithin(function, within) {
+        if const Some(symbol) = checker.resolvedName(module, function.name.span) {
+          checkBodyOf checker, symbol
+        }
+      }
+    }
+    .Type(written) => checkMemberBodiesWithin checker, module, written.name.span, written.members, within
+    .Trait(written) => checkMemberBodiesWithin checker, module, written.name.span, written.members, within
+    .Extend(extension) => {
+      if const Some(implementation) = extensionAt(checker, module, extension.target.span) {
+        checkKnownBodiesWithin checker, implementation.members, extension.members, within
+      }
+    }
+    _ => {}
+  }
+}
+
+/** The bodies of the members of a `type` or a `trait` named at `at` that lie inside of `within`. */
+fn checkMemberBodiesWithin(
+  var checker: Checker,
+  module: ModuleId,
+  at: Span,
+  members: List<Member>,
+  within: List<Span>,
+) {
+  if !members.any({ member => functionOfMember(member).map({ isBodyWithin _, within }) ?? false }) {
+    return
+  }
+  if const Some(symbol) = checker.resolvedName(module, at) {
+    const identifier = typeSignatureOf checker, symbol
+    const known = checker.typeSignature(identifier).members
+    checkKnownBodiesWithin checker, known, members, within
+  }
+}
+
+fn checkKnownBodiesWithin(
+  var checker: Checker,
+  known: Map<String, SymbolId>,
+  members: List<Member>,
+  within: List<Span>,
+) {
+  for member in members {
+    if const Some(function) = functionOfMember(member) {
+      if isBodyWithin(function, within) {
+        if const Some(symbol) = known.get(function.name.text) {
+          checkBodyOf checker, symbol
+        }
+      }
+    }
+  }
+}
+
+/**
+ * The symbol of the function whose name is written at `name` in `module`: a function of the file, or a member of one
+ * of its types, traits and `extend`s. What a language server compares two runs by, for a function whose body changed.
+ */
+public fn functionSymbolAt(var checker: Checker, module: ModuleId, name: Span): SymbolId? {
+  for statement in checker.program.graph.at(module).file.statements {
+    const declaration = match statement.kind {
+      .Declare(found) => found
+      _ => {
+        continue
+      }
+    }
+    match declaration.kind {
+      .Function(function) => {
+        if function.name.span == name {
+          return checker.resolvedName module, name
+        }
+      }
+      .Type(written) => {
+        if const Some(text) = memberNamedAt(written.members, name) {
+          const owner = checker.resolvedName(module, written.name.span)?
+          const identifier = typeSignatureOf checker, owner
+          return checker.typeSignature(identifier).members.get(text)
+        }
+      }
+      .Trait(written) => {
+        if const Some(text) = memberNamedAt(written.members, name) {
+          const owner = checker.resolvedName(module, written.name.span)?
+          const identifier = typeSignatureOf checker, owner
+          return checker.typeSignature(identifier).members.get(text)
+        }
+      }
+      .Extend(extension) => {
+        if const Some(text) = memberNamedAt(extension.members, name) {
+          const implementation = extensionAt(checker, module, extension.target.span)?
+          return implementation.members.get text
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+/** The name of the member function named at `at`, where one is. */
+fn memberNamedAt(members: List<Member>, at: Span): String? {
+  for member in members {
+    if const Some(function) = functionOfMember(member) {
+      if function.name.span == at {
+        return function.name.text
+      }
+    }
+  }
+  None
+}
+
+fn functionOfMember(member: Member): FunctionDeclaration? {
+  if const .Function(function) = member.kind {
+    return function
+  }
+  None
 }
 
 /**

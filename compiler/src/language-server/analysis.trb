@@ -16,12 +16,12 @@
  */
 
 use Clock from "std/time"
-use SourceText from "../syntax/source"
+use Span, SourceText from "../syntax/source"
 use SourceFile, Pattern, UseDeclaration from "../syntax/ast"
 use Parsed from "../syntax/parser/parser"
 use SourceTree from "../project/source-tree"
 use normalizePath from "../project/path"
-use Checked, CheckedFile, Front, frontOf, checkFront from "../semantics/check"
+use Checked, CheckedFile, Front, frontOf, checkFront, checkBodiesOfFront from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Graph, resolveImport from "../semantics/graph"
 use Program from "../semantics/scope"
@@ -29,6 +29,8 @@ use Symbols, Definition, declareModule, boundNamesOf from "../semantics/symbols"
 use resolveTypes from "../semantics/resolve-types"
 use scriptLoadsOf from "../semantics/scripts"
 use Timing from "../semantics/checker/context"
+use functionSymbolAt from "../semantics/checker/check"
+use signatureOf from "../semantics/checker/signature"
 
 /** What one run of the checker found, and which documents it was asked about. */
 public type Analysis {
@@ -86,6 +88,64 @@ public fn reanalyze(tree: SourceTree, front: Front, changed: List<String>, paths
   current = current.copy timings: [Timing("the changed files of the last front", spent)]
   const checked = checkFront tree, current, paths, withTimings: true, onlyNamed: true
   Analysis checked, paths, current
+}
+
+/**
+ * A run over a front that is current for the document at `path`, which checks the bodies of that document inside of
+ * `within` and nothing else (`checkBodiesOfFront`): the overlay of a view (`./view.trb`). `None` where the path is no
+ * module of the front.
+ */
+public fn analyzeBodies(tree: SourceTree, front: Front, path: String, within: List<Span>): Analysis? {
+  const checked = checkBodiesOfFront(tree, front, path, within, withTimings: true)?
+  Analysis checked, [path], front
+}
+
+/**
+ * The front of the last run brought up to date with the documents at `changed`: `None` where one of them is no module
+ * of that front or changed what other modules see of it, and only a front from scratch is right.
+ */
+public fn refreshedFrontOf(tree: SourceTree, front: Front, changed: List<String>): Front? {
+  const started = Clock.milliseconds()
+  var current = front
+  for path in changed {
+    current = refreshedFront(current, tree, path)?
+  }
+  const spent = Clock.milliseconds() - started
+  current.copy timings: [Timing("the changed files of the last front", spent)]
+}
+
+/** A run of the checker over a front that is current already, for the bodies of the documents at `paths`. */
+public fn analyzeOver(tree: SourceTree, front: Front, paths: List<String>): Analysis? {
+  for path in paths {
+    if front.program.graph.moduleAt(path).isNone() {
+      return None
+    }
+  }
+  const checked = checkFront tree, front, paths, withTimings: true, onlyNamed: true
+  Analysis checked, paths, front
+}
+
+/**
+ * What the other bodies of the program can see of the body of the function named at `name` in the document at `path`,
+ * as a text two runs can compare: its result - which a body decides where the declaration writes none - and, for every
+ * parameter, whether the body keeps what it is handed and whether it hands it to a task (`escape.trb`). Where two runs
+ * agree on it for every function whose body changed, no other body has to be checked again. `None` where the run has no
+ * such function.
+ */
+public fn bodyFactsOf(analysis: Analysis, path: String, name: Span): String? {
+  const module = analysis.moduleOf(path)?
+  var checker = analysis.checked.checker
+  const symbol = functionSymbolAt(checker, module, name)?
+  const identifier = signatureOf checker, symbol
+  const signature = checker.signature identifier
+  var parts = [checker.describe(signature.form.result)]
+  for position in 0..signature.form.parameters.length() {
+    const key = (symbol.value, position)
+    const kept = checker.keptParameters.get(key) ?? false
+    const crossing = checker.crossingParameters.get(key) ?? false
+    parts.append "{kept}/{crossing}"
+  }
+  parts.joined separator: " "
 }
 
 /**
@@ -214,8 +274,13 @@ fn namesOf(pattern: Pattern): String {
 
 /** Every parse the run made or reused, by path: what the tree keeps for the next run. */
 public fn parsesOf(checked: Checked): Map<String, (SourceText, Parsed)> {
+  parsesOfProgram checked.program
+}
+
+/** Every parse of a program, by path. */
+public fn parsesOfProgram(program: Program): Map<String, (SourceText, Parsed)> {
   var found: Map<String, (SourceText, Parsed)> = [:]
-  for module in checked.program.graph.modules {
+  for module in program.graph.modules {
     // A receiver script is checked with a receiver the file does not say, and is parsed again where it is needed
     if module.receiver.isSome() {
       continue

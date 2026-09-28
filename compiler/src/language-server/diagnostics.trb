@@ -7,12 +7,7 @@
 
 use JsonValue from "std/json"
 use Diagnostic from "../syntax/diagnostic"
-use Finding, LintRule, everyLintRule from "../lint/finding"
-use lintFindings from "../lint/command"
-use labeledLiteralFindings from "../lint/labeled-literal"
-use redundantWrapFindings from "../lint/redundant-wrap"
-use plainBindingStarts from "../lint/plain-values"
-use Analysis from "./analysis"
+use Finding, LintRule from "../lint/finding"
 use LineMap, Range from "./position"
 use object, integer, text, array from "./json"
 
@@ -23,15 +18,11 @@ const hintSeverity = 4
 /** The tag of a diagnostic about code nothing needs, which an editor fades. */
 const unnecessaryTag = 1
 
-/** The diagnostics of one document: the checker's problems, then the findings of the lint rules. */
-public fn diagnosticsOf(analysis: Analysis, path: String, current: String, findings: List<Finding>): List<JsonValue> {
-  const source = analysis.textOf(path) ?? current
-  const lines = LineMap.of source
+/** The diagnostics of one document in the protocol's form: the checker's problems, then the findings of the lint rules. */
+public fn diagnosticsJson(lines: LineMap, problems: List<Diagnostic>, findings: List<Finding>): List<JsonValue> {
   var found: List<JsonValue> = []
-  if const Some(file) = analysis.fileOf(path) {
-    for diagnostic in file.diagnostics {
-      found.append problemOf(lines, diagnostic)
-    }
+  for diagnostic in problems {
+    found.append problemOf(lines, diagnostic)
   }
   for finding in findings {
     found.append findingOf(lines, finding)
@@ -39,32 +30,8 @@ public fn diagnosticsOf(analysis: Analysis, path: String, current: String, findi
   found
 }
 
-/**
- * What the rules of `torb lint` find in one document of a run: the rules that read the syntax tree wherever the file
- * parses, and the rules that read the checker's tables only where the checker found no problem - as `torb lint` does,
- * because the tables of a file with a problem are not whole.
- */
-public fn findingsOf(analysis: Analysis, path: String): List<Finding> {
-  const module = match analysis.moduleOf(path) {
-    Some(found) => found
-    None => {
-      return []
-    }
-  }
-  const checker = analysis.checked.checker
-  const shape = analysis.checked.program.graph.at module
-  const clean = analysis.fileOf(path).map({ _.diagnostics.isEmpty() }) ?? false
-  const plain = if clean { Some plainBindingStarts(checker, module) } else { None }
-  var findings = lintFindings(shape.source.text, everyLintRule(), plain) ?? []
-  if clean {
-    findings.appendAll labeledLiteralFindings(checker, module, shape.file)
-    findings.appendAll redundantWrapFindings(checker, module, shape.source.text, shape.file)
-  }
-  findings.sort({ _.span.start })
-  findings
-}
-
-fn problemOf(lines: LineMap, diagnostic: Diagnostic): JsonValue {
+/** A problem of `torb check` as an error of the protocol, its notes on lines of their own below the message. */
+public fn problemOf(lines: LineMap, diagnostic: Diagnostic): JsonValue {
   var message = diagnostic.message
   for note in diagnostic.notes {
     message = "{message}\n{note}"
