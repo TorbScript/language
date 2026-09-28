@@ -101,26 +101,26 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
-  fn parent(): Path? {
+  fn parent(): Self? {
     if componentValues.isEmpty() {
       return None
     }
-    Path rootValue, componentValues.take(componentValues.length() - 1).toList()
+    Self rootValue, componentValues.take(componentValues.length() - 1).toList()
   }
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
-  fn joined(relative: Path): Path {
-    Path rootValue, componentValues.appendedAll(relative.componentValues)
+  fn joined(relative: Self): Self {
+    Self rootValue, componentValues.appendedAll(relative.componentValues)
   }
 
   /** The same path with its last component replaced. `None` where there is no name to replace. */
-  fn withName(name: String): Path? {
+  fn withName(name: String): Self? {
     const above = parent()?
-    above.joined Path(None, [name])
+    above.joined Self(None, [name])
   }
 
   /** The same path with a different extension, added where there was none. An empty `extension` removes it. */
-  fn withExtension(extension: String): Path? {
+  fn withExtension(extension: String): Self? {
     const stem = nameWithoutExtension()?
     if extension.isEmpty() {
       return withName stem
@@ -129,7 +129,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** Whether this path starts at the same root and with the same components as `prefix`. */
-  fn startsWith(prefix: Path): Bool {
+  fn startsWith(prefix: Self): Bool {
     if rootValue != prefix.rootValue || prefix.componentValues.length() > componentValues.length() {
       return false
     }
@@ -146,7 +146,7 @@ public type Path with Show, Equals, Hash, Compare {
    * roots differ - today's equivalent answers the absolute path there, and `None` lets the caller decide instead of
    * guessing for it.
    */
-  fn relativeTo(base: Path): Path? {
+  fn relativeTo(base: Self): Self? {
     if rootValue != base.rootValue {
       return None
     }
@@ -162,7 +162,7 @@ public type Path with Show, Equals, Hash, Compare {
     for index in common..componentValues.length() {
       walked.append componentValues[index]
     }
-    Path None, walked
+    Self None, walked
   }
 
   /**
@@ -170,7 +170,7 @@ public type Path with Show, Equals, Hash, Compare {
    * relative path it stays. It reads no disk and follows no link, so `a/../b` normalized to `b` is a different file
    * wherever `a` is a symlink.
    */
-  fn normalized(): Path {
+  fn normalized(): Self {
     var kept: List<String> = []
     for component in componentValues {
       if component.isEmpty() || component == "." {
@@ -189,7 +189,7 @@ public type Path with Show, Equals, Hash, Compare {
         kept.append ".."
       }
     }
-    Path rootValue, kept
+    Self rootValue, kept
   }
 
   /**
@@ -209,7 +209,7 @@ public type Path with Show, Equals, Hash, Compare {
    *   check and the open all defeat it. Closing that gap needs the operating system asked while it opens, which is
    *   `std/fs`'s business and not this package's.
    */
-  fn resolved(inside: Path): Result<Path, PathError> {
+  fn resolved(inside: Self): Result<Self, PathError> {
     const base = inside.normalized()
     if base.isRelative() {
       return Fail PathError.NoBase(base)
@@ -231,7 +231,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** Root first, then component by component, then by the number of components. Case sensitive everywhere. */
-  fn compare(other: Path): Ordering {
+  fn compare(other: Self): Ordering {
     const here = rankOf rootValue
     const there = rankOf other.rootValue
     if here != there {
@@ -258,8 +258,8 @@ public type Path with Show, Equals, Hash, Compare {
    * The value of a literal the compiler read where a `Path` is expected (docs/design/URI.md section 9): [Path.from]
    * of it, which cannot fail. The lowering calls this once per literal and program.
    */
-  private static fn literal(text: String): Path {
-    Path.from text
+  private static fn literal(text: String): Self {
+    Self.from text
   }
 }
 
@@ -286,19 +286,19 @@ public type Path with Show, Equals, Hash, Compare {
  * - [Path.show] - the way back out, and the other half of the conversion pair `Encode` and `Decode` go through.
  */
 extend Path with From<String> {
-  static fn from(value: String): Path {
+  static fn from(value: String): Self {
     const slashed = value.replace "\\", "/"
     if const Some((root, rest)) = shareRootOf(slashed) {
-      return Path root, rest
+      return Self root, rest
     }
     if slashed.dropping(characters: 1).startsWith(":") {
       const letter = slashed.chars().first() ?? 'C'
-      return Path Root.Drive(letter.toUpperCase()), componentsOf(slashed.dropping(characters: 2))
+      return Self Root.Drive(letter.toUpperCase()), componentsOf(slashed.dropping(characters: 2))
     }
     if slashed.startsWith("/") {
-      return Path Root.Unix, componentsOf(slashed)
+      return Self Root.Unix, componentsOf(slashed)
     }
-    Path None, componentsOf(slashed)
+    Self None, componentsOf(slashed)
   }
 }
 
@@ -317,7 +317,7 @@ extend Path with From<String> {
  * - [Path.show] - the same text, and what this conversion is written in terms of.
  */
 extend String with From<Path> {
-  static fn from(value: Path): String {
+  static fn from(value: Path): Self {
     value.show()
   }
 }

@@ -35,26 +35,26 @@ public type CExpression {
   /** A token that is already C: a number, a string literal, `true`, `NULL`. */
   case Literal(text: String)
   /** `value.member` */
-  case Member(value: CExpression, member: String)
+  case Member(value: Self, member: String)
   /** `value[index]`: one entry of an array, which is what a member of a witness table is. */
-  case Index(value: CExpression, index: CExpression)
+  case Index(value: Self, index: Self)
   /** `value->member` */
-  case PointerMember(value: CExpression, member: String)
-  case AddressOf(value: CExpression)
-  case Dereference(value: CExpression)
-  case Call(callee: CExpression, arguments: List<CExpression>)
+  case PointerMember(value: Self, member: String)
+  case AddressOf(value: Self)
+  case Dereference(value: Self)
+  case Call(callee: Self, arguments: List<Self>)
   /** `(int64_t)value`. The spelling of the type is text, which is what `type.trb` answers. */
-  case Cast(annotation: String, value: CExpression)
+  case Cast(annotation: String, value: Self)
   /** A prefix operator: `!`, `-`, `~`. */
-  case Unary(operator: String, value: CExpression)
-  case Binary(left: CExpression, operator: String, right: CExpression)
-  case Conditional(condition: CExpression, then: CExpression, otherwise: CExpression)
+  case Unary(operator: String, value: Self)
+  case Binary(left: Self, operator: String, right: Self)
+  case Conditional(condition: Self, then: Self, otherwise: Self)
   /** `{ a, b }`: the members in order. An empty one is `{ 0 }`, because an empty initializer is not C. */
-  case Initializer(values: List<CExpression>)
+  case Initializer(values: List<Self>)
   /** `{ .tag = 1, .payload = { .v0 = { x } } }` */
   case Designated(parts: List<CDesignatedField>)
   /** `(T_x){ ... }`: an unnamed value of a named type. */
-  case CompoundLiteral(annotation: String, value: CExpression)
+  case CompoundLiteral(annotation: String, value: Self)
 }
 
 /** The limit that allows every expression, which is what an argument and the right side of an assignment are. */
@@ -202,26 +202,26 @@ public type CStatement {
   /** An expression statement: a call whose result nobody takes, a `(void)` that silences an unread slot. */
   case Evaluate(value: CExpression)
   /** `if (c) { ... }`. A body of one line shares the line, which is what every branch of the lowering is. */
-  case If(condition: CExpression, then: List<CStatement>)
-  case Switch(scrutinee: CExpression, cases: List<CSwitchCase>, otherwise: List<CStatement>)
+  case If(condition: CExpression, then: List<Self>)
+  case Switch(scrutinee: CExpression, cases: List<CSwitchCase>, otherwise: List<Self>)
   case Goto(label: String)
   /** The label of a block, with the label the IR gave it written after it as a comment. */
   case Label(label: String, comment: String = "")
   case Return(value: CExpression? = None)
   case Break
   /** Braces of their own, for a temporary that must not outlive the statement that needs it. */
-  case Block(body: List<CStatement>)
+  case Block(body: List<Self>)
   /**
    * `for (int64_t counter = 0; counter < count; counter++) { ... }`: the one loop the emitter writes itself, over the
    * slots of an `Array<Item, Size>` whose items are counted - a retain, a release, a fill. Everything else loops through
    * the blocks of the IR.
    */
-  case Loop(counter: String, count: Int, body: List<CStatement>)
+  case Loop(counter: String, count: Int, body: List<Self>)
   /**
    * Several statements on one line. It is what the `(void)` casts of every slot nothing reads are: one per slot would
    * be a screen of them in front of every body, and together they are one line a reader skips.
    */
-  case Joined(statements: List<CStatement>)
+  case Joined(statements: List<Self>)
   /** `#line 12 "src/main.trb"`: what makes a C compiler error and a debugger point into the TorbScript source. */
   case LineDirective(line: Int, path: String)
   case Comment(text: String)
@@ -308,9 +308,9 @@ fn isAtMargin(statement: CStatement): Bool {
 public type CMember {
   case Field(annotation: String, name: String)
   /** `struct { ... } v0;`: one group of a variant layout. */
-  case Group(name: String, members: List<CMember>)
+  case Group(name: String, members: List<Self>)
   /** The groups of a variant layout together, under one name: `union { ... } payload;`. */
-  case Union(name: String, members: List<CMember>)
+  case Union(name: String, members: List<Self>)
 }
 
 // --- Declarations ---------------------------------------------------------------------------------------------------

@@ -43,12 +43,7 @@ public type SourceTree {
    */
   private cacheValue: String = ""
 
-  static fn of(
-    files: Map<String, String>,
-    base: String = ".",
-    standardLibrary: String = "",
-    cache: String = "",
-  ): SourceTree {
+  static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = "", cache: String = ""): Self {
     var normalized: Map<String, String> = [:]
     for (path, text) in files {
       normalized.set normalizePath(path), text
@@ -71,8 +66,8 @@ public type SourceTree {
     standardLibrary: String,
     others: List<String> = [],
     cache: String = "",
-  ): SourceTree {
-    const tree = SourceTree.of read, base, standardLibrary, cache
+  ): Self {
+    const tree = Self.of read, base, standardLibrary, cache
     var paths = tree.sortedPaths
     var names: Set<String> = Set.of()
     for path in listed {
@@ -160,7 +155,7 @@ public type SourceTree {
   }
 
   /** The same tree with one file added, or its text replaced; a parse the tree kept of it is forgotten. */
-  fn withFile(path: String, text: String): SourceTree {
+  fn withFile(path: String, text: String): Self {
     const normalized = normalizePath path
     var texts = files
     var paths = sortedPaths
@@ -175,7 +170,7 @@ public type SourceTree {
   }
 
   /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
-  fn parsedEverything(): SourceTree {
+  fn parsedEverything(): Self {
     var parsed = parsedFiles
     for path in sortedPaths {
       if !parsed.containsKey(path) {

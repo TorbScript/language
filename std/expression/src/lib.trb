@@ -51,7 +51,7 @@ public type TypeReference with Show {
   /** The type's name, without its arguments. */
   name: String
   /** The type arguments, empty for a type with none. */
-  arguments: List<TypeReference> = []
+  arguments: List<Self> = []
 
   /** `name`, or `name<arguments>` when there are any. */
   fn show(): String {
@@ -130,32 +130,26 @@ public type ExpressionNode {
   /** A binding from outside the quoted expression, captured by value. */
   case Captured(index: Int, name: String, of: TypeReference)
   /** A field read off `target`, or a receiver method turned into a field access. */
-  case Field(target: ExpressionNode, name: String, of: TypeReference)
+  case Field(target: Self, name: String, of: TypeReference)
   /** A method call on `target`, or a free function call when `target` is `None`. */
-  case Call(
-    target: ExpressionNode?,
-    owner: TypeReference,
-    method: String,
-    arguments: List<ExpressionNode>,
-    of: TypeReference,
-  )
+  case Call(target: Self?, owner: TypeReference, method: String, arguments: List<Self>, of: TypeReference)
   /** A constructor call for the type `of`. */
-  case Construct(arguments: List<ExpressionNode>, of: TypeReference)
+  case Construct(arguments: List<Self>, of: TypeReference)
   /** A prefix operator applied to `operand`. */
-  case Unary(operator: UnaryOperator, operand: ExpressionNode, of: TypeReference)
+  case Unary(operator: UnaryOperator, operand: Self, of: TypeReference)
   /** An infix operator applied to `left` and `right`. */
-  case Binary(operator: BinaryOperator, left: ExpressionNode, right: ExpressionNode, of: TypeReference)
+  case Binary(operator: BinaryOperator, left: Self, right: Self, of: TypeReference)
   /** An `if`/`else` expression. */
-  case Conditional(condition: ExpressionNode, then: ExpressionNode, otherwise: ExpressionNode, of: TypeReference)
+  case Conditional(condition: Self, then: Self, otherwise: Self, of: TypeReference)
   /** A closure literal, with its parameter names and its body. */
-  case Lambda(parameters: List<String>, body: ExpressionNode, of: TypeReference)
+  case Lambda(parameters: List<String>, body: Self, of: TypeReference)
   /** A list or tuple literal. */
-  case Items(items: List<ExpressionNode>, of: TypeReference)
+  case Items(items: List<Self>, of: TypeReference)
   /** `"{a} and {b}"`: literals and expressions in order. `?.` and `??` have no nodes, they are calls on `Option`. */
-  case Interpolation(parts: List<ExpressionNode>)
+  case Interpolation(parts: List<Self>)
 
   /** All `Captured` nodes below this node, e.g. to explain a failed assertion. */
-  fn capturedNodes(): List<ExpressionNode> {
+  fn capturedNodes(): List<Self> {
     match self {
       .Captured(_, _, _) => [self]
       .Field(target, _, _) => target.capturedNodes()

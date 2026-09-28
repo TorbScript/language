@@ -58,8 +58,8 @@ public shared type Child with Close {
   private program: String
 
   /** A child over a handle the runtime answered. */
-  static fn of(handle: Int, program: String): Child {
-    Child handle, program
+  static fn of(handle: Int, program: String): Self {
+    Self handle, program
   }
 
   /** What the child reads. `end()` closes its standard input, which is how most filters learn that they are done. */
@@ -133,8 +133,8 @@ public shared type Child with Close {
 shared type ChildInput with Sink<Bytes, IoError> {
   private child: Child
 
-  static fn of(child: Child): ChildInput {
-    ChildInput child
+  static fn of(child: Child): Self {
+    Self child
   }
 
   var fn add(item: Bytes): Task<Result<Void, IoError>> {
@@ -154,8 +154,8 @@ shared type ChildOutput with Source<Bytes, IoError> {
   private child: Child
   private which: Int
 
-  static fn of(child: Child, which: Int): ChildOutput {
-    ChildOutput child, which
+  static fn of(child: Child, which: Int): Self {
+    Self child, which
   }
 
   var fn next(): Task<Result<Bytes?, IoError>> {
@@ -228,7 +228,7 @@ public native type Process {
    * - [Process.start] - a program whose output is read while it runs.
    */
   static fn run(program: String, arguments: List<String>, input: String = ""): Task<Result<ProcessOutput, IoError>> {
-    offload({ Process.fed program, arguments, input }).await()
+    offload({ Self.fed program, arguments, input }).await()
   }
 
   /** The body of [Process.run], on the thread `offload` hands it. */
@@ -236,7 +236,7 @@ public native type Process {
     var output = ""
     var failure = ""
     const collected: ArrayList<String> = ArrayList.from arguments
-    const code = Process.runFeeding program, collected, input, output, failure
+    const code = Self.runFeeding program, collected, input, output, failure
     if code < 0 {
       return Fail IoError(program, failure)
     }
@@ -263,7 +263,7 @@ public native type Process {
     // The runtime has one list, and it takes it as the buffer it is: a trait-typed `List<String>` says nothing about
     // which implementation carries it, so the concrete one is what crosses the boundary
     const collected: ArrayList<String> = ArrayList.from arguments
-    const code = Process.runCollecting program, collected, output, failure
+    const code = Self.runCollecting program, collected, output, failure
     if code < 0 {
       return Fail IoError(program, failure)
     }
@@ -322,7 +322,7 @@ public native type Process {
   static fn runPassingThrough(program: String, arguments: List<String>): Result<Int, IoError> {
     var failure = ""
     const collected: ArrayList<String> = ArrayList.from arguments
-    const code = Process.runInheriting program, collected, failure
+    const code = Self.runInheriting program, collected, failure
     if code < 0 {
       return Fail IoError(program, failure)
     }

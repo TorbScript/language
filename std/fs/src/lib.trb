@@ -31,8 +31,8 @@ public type IoError with Show, Error {
 
 /** Bytes off a disk are not always UTF-8, and a `String` always is - so decoding is one of the ways reading fails. */
 extend IoError with From<Utf8Error> {
-  static fn from(value: Utf8Error): IoError {
-    IoError "", value.show()
+  static fn from(value: Utf8Error): Self {
+    Self "", value.show()
   }
 }
 
@@ -58,10 +58,10 @@ extend IoError with From<Utf8Error> {
  */
 public native shared type File with Close, Sink<Bytes, IoError> {
   /** Opens an existing file for reading. */
-  native static fn open(path: String): Result<File, IoError>
+  native static fn open(path: String): Result<Self, IoError>
 
   /** Creates the file, or empties it if it is there. The counterpart of `open`, for the writing side. */
-  native static fn create(path: String): Result<File, IoError>
+  native static fn create(path: String): Result<Self, IoError>
 
   /** The rest of the file as text, from wherever the cursor is. Fails if the bytes are not UTF-8. */
   native var fn readAll(): Result<String, IoError>
@@ -159,7 +159,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
    */
   static fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
-    var target = File.create(path)?
+    var target = Self.create(path)?
     target.fill(source).await()
   }
 
@@ -368,8 +368,8 @@ shared type FileChunks with Source<Bytes, IoError> {
   private size: Int
 
   /** The chunks of `file`: what [File.chunks] answers. */
-  static fn of(file: File, size: Int): FileChunks {
-    FileChunks file, size
+  static fn of(file: File, size: Int): Self {
+    Self file, size
   }
 
   var fn next(): Task<Result<Bytes?, IoError>> {

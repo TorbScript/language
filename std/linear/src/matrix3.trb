@@ -38,14 +38,14 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   zAxis: Vector3<Scalar>
 
   /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix3<Int>.identity`. */
-  static identity: Matrix3<Scalar> = Matrix3(
+  static identity: Self = Matrix3(
     Vector3(Scalar.one, Scalar.zero, Scalar.zero),
     Vector3(Scalar.zero, Scalar.one, Scalar.zero),
     Vector3(Scalar.zero, Scalar.zero, Scalar.one),
   )
 
   /** A diagonal matrix: each axis scaled on its own. */
-  static fn scaling(by: Vector3<Scalar>): Matrix3<Scalar> {
+  static fn scaling(by: Vector3<Scalar>): Self {
     const nothing = Scalar.zero
     Matrix3 Vector3(by.x, nothing, nothing), Vector3(nothing, by.y, nothing), Vector3(nothing, nothing, by.z)
   }
@@ -61,7 +61,7 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The rows read as columns. */
-  fn transposed(): Matrix3<Scalar> {
+  fn transposed(): Self {
     Matrix3 Vector3(xAxis.x, yAxis.x, zAxis.x), Vector3(xAxis.y, yAxis.y, zAxis.y), Vector3(xAxis.z, yAxis.z, zAxis.z)
   }
 
@@ -93,17 +93,17 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
-  fn add(other: Matrix3<Scalar>): Matrix3<Scalar> {
+  fn add(other: Self): Self {
     Matrix3 xAxis.add(other.xAxis), yAxis.add(other.yAxis), zAxis.add(other.zAxis)
   }
 
   /** Cell by cell. */
-  fn subtract(other: Matrix3<Scalar>): Matrix3<Scalar> {
+  fn subtract(other: Self): Self {
     Matrix3 xAxis.subtract(other.xAxis), yAxis.subtract(other.yAxis), zAxis.subtract(other.zAxis)
   }
 
   /** The composition: `self` after `other`. */
-  fn multiply(other: Matrix3<Scalar>): Matrix3<Scalar> {
+  fn multiply(other: Self): Self {
     Matrix3 applied(to: other.xAxis), applied(to: other.yAxis), applied(to: other.zAxis)
   }
 
@@ -130,7 +130,7 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
    *     const move = Matrix3.affine Matrix2<Float>.identity, by: Vector2(1.0, 2.0)
    *     print move.translationPart()
    */
-  static fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Matrix3<Scalar> {
+  static fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Self {
     const nothing = Scalar.zero
     Matrix3(
       Vector3(linear.xAxis.x, linear.xAxis.y, nothing),
@@ -149,7 +149,7 @@ public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
 /** Every cell turned around. */
 extend<Scalar: Signed> Matrix3<Scalar> with Negate {
   /** Every cell with its sign flipped. */
-  fn negate(): Matrix3<Scalar> {
+  fn negate(): Self {
     Matrix3 xAxis.negate(), yAxis.negate(), zAxis.negate()
   }
 }
@@ -157,7 +157,7 @@ extend<Scalar: Signed> Matrix3<Scalar> with Negate {
 /** What an angle and a division buy: the three rotations, and the way back. */
 extend<Scalar: Real> Matrix3<Scalar> {
   /** The rotation of space around the first axis. */
-  static fn rotationAroundX(by: Angle<Scalar>): Matrix3<Scalar> {
+  static fn rotationAroundX(by: Angle<Scalar>): Self {
     const sine = by.sine()
     const cosine = by.cosine()
     const nothing = Scalar.zero
@@ -165,7 +165,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   }
 
   /** The rotation of space around the second axis. */
-  static fn rotationAroundY(by: Angle<Scalar>): Matrix3<Scalar> {
+  static fn rotationAroundY(by: Angle<Scalar>): Self {
     const sine = by.sine()
     const cosine = by.cosine()
     const nothing = Scalar.zero
@@ -173,7 +173,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   }
 
   /** The rotation of space around the third axis, which is the rotation of the plane. */
-  static fn rotationAroundZ(by: Angle<Scalar>): Matrix3<Scalar> {
+  static fn rotationAroundZ(by: Angle<Scalar>): Self {
     const sine = by.sine()
     const cosine = by.cosine()
     const nothing = Scalar.zero
@@ -181,7 +181,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   }
 
   /** The transformation that undoes this one, or `None` where the determinant is zero and there is none. */
-  fn inverse(): Matrix3<Scalar>? {
+  fn inverse(): Self? {
     const scale: Scalar = self.determinant()
     if scale == Scalar.zero {
       return None
@@ -194,7 +194,7 @@ extend<Scalar: Real> Matrix3<Scalar> {
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */
-  fn isCloseTo(other: Matrix3<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Self, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance)
       && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
       && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
@@ -211,11 +211,11 @@ extend<Scalar: Numeric> Matrix3<Scalar> with Power<Int64> {
    * On a negative exponent, which is a power of the inverse: a matrix has one only over a `Real` scalar and only where
    * its determinant is not zero, so the caller asks for `inverse()` and raises that.
    */
-  fn power(exponent: Int64): Matrix3<Scalar> {
+  fn power(exponent: Int64): Self {
     if exponent < 0 {
       panic "a matrix to the power of {exponent} is a power of its inverse: raise `inverse()` instead"
     }
-    var result = Matrix3<Scalar>.identity
+    var result = Self.identity
     var factor = self
     var left = exponent
     while left > 0 {

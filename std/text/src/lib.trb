@@ -42,9 +42,9 @@ public native type Char with Equals, Compare, Hash, Show {
    * Upper-casing a text character by character is therefore not the same as a full Unicode mapping, and is what
    * [String.toUpperCase] does today.
    */
-  native fn toUpperCase(): Char
+  native fn toUpperCase(): Self
   /** The same character in lower case, or itself where there is none. The mirror of [Char.toUpperCase]. */
-  native fn toLowerCase(): Char
+  native fn toLowerCase(): Self
 
   /** `'A'`: inside of another value a character is written in single quotes, with escapes. */
   native fn showNested(): String
@@ -81,7 +81,7 @@ public type TextIndex with Equals, Compare, Hash, Show {
   private offset: Int
 
   /** The order of two positions in one text: the earlier one first. */
-  fn compare(other: TextIndex): Ordering {
+  fn compare(other: Self): Ordering {
     offset.compare other.offset
   }
 
@@ -123,8 +123,8 @@ public native type String
    * a witness table, which C code cannot do. So it collects the characters and hands them to [concatenated]: a `String`
    * is a value, so appending to one in a loop copies everything that is already in it, which is `O(n²)` in the bytes.
    */
-  static fn from(value: Iterate<Char>): String {
-    var pieces: List<String> = []
+  static fn from(value: Iterate<Char>): Self {
+    var pieces: List<Self> = []
     for character in value {
       pieces.append character.show()
     }
@@ -210,7 +210,7 @@ public native type String
   native fn isEmpty(): Bool
 
   /** `"a\nb"`: inside of another value a string is quoted, with escapes. `show()` is the text itself. */
-  native fn showNested(): String
+  native fn showNested(): Self
 
   /**
    * `text[from..to]` between two positions of this text. A position of another text that is past the end of this one
@@ -219,7 +219,7 @@ public native type String
    * What an **open end** means is the receiver's decision (`std/core`'s `Bounds` says so), and for a text it is its
    * start and its end. An inclusive range (`from..=to`) takes the character that begins at `to` as well.
    */
-  fn slice(range: Bounds<TextIndex>): String {
+  fn slice(range: Bounds<TextIndex>): Self {
     const from = range.lowest()?.offset ?? 0
     const written = range.highest()?.offset ?? byteLength()
     const to = if range.includesHighest() { endOfCharacter self, written } else { written }
@@ -236,7 +236,7 @@ public native type String
    *     const at = text.indexOf("ß") ?? text.end()
    *     print text.part(text.start()..at)
    */
-  fn part(range: Bounds<TextIndex>): String? {
+  fn part(range: Bounds<TextIndex>): Self? {
     const from = range.lowest()?.offset ?? 0
     const written = range.highest()?.offset ?? byteLength()
     if range.includesHighest() && written >= byteLength() {
@@ -253,14 +253,14 @@ public native type String
   }
 
   /** The bytes from one offset to another. The one form the runtime has, and what `slice` decides its offsets for. */
-  native fn sliceBytes(from: Int, to: Int): String
+  native fn sliceBytes(from: Int, to: Int): Self
 
   /** Whether `part` occurs anywhere in the text. */
-  native fn contains(part: String): Bool
+  native fn contains(part: Self): Bool
   /** Whether the text begins with `prefix`. */
-  native fn startsWith(prefix: String): Bool
+  native fn startsWith(prefix: Self): Bool
   /** Whether the text ends with `suffix`. */
-  native fn endsWith(suffix: String): Bool
+  native fn endsWith(suffix: Self): Bool
   /**
    * Where the first occurrence of `part` begins, or `None` if it does not occur. An empty part is at the start.
    *
@@ -271,7 +271,7 @@ public native type String
    *       print path[..at]
    *     }
    */
-  fn indexOf(part: String): TextIndex? {
+  fn indexOf(part: Self): TextIndex? {
     byteOffsetOf(part).map { TextIndex _ }
   }
 
@@ -283,23 +283,23 @@ public native type String
    *
    * - [String.indexOf] - the same search from the front.
    */
-  fn lastIndexOf(part: String): TextIndex? {
+  fn lastIndexOf(part: Self): TextIndex? {
     lastByteOffsetOf(part).map { TextIndex _ }
   }
 
   /** The byte offset of the first occurrence of `part`: [String.indexOf] for a format that counts bytes. */
-  native fn byteOffsetOf(part: String): Int?
+  native fn byteOffsetOf(part: Self): Int?
 
   /** The byte offset of the last occurrence of `part`: [String.lastIndexOf] for a format that counts bytes. */
-  native fn lastByteOffsetOf(part: String): Int?
+  native fn lastByteOffsetOf(part: Self): Int?
 
   /** Everything before the first occurrence of `part`, or `None` if it does not occur. */
-  fn substringBefore(part: String): String? {
+  fn substringBefore(part: Self): Self? {
     byteOffsetOf(part).map { sliceBytes 0, _ }
   }
 
   /** Everything after the first occurrence of `part`, or `None` if it does not occur. */
-  fn substringAfter(part: String): String? {
+  fn substringAfter(part: Self): Self? {
     byteOffsetOf(part).map { sliceBytes(_ + part.byteLength(), byteLength()) }
   }
 
@@ -316,7 +316,7 @@ public native type String
    * - [String.withoutSuffix] - the same at the end.
    * - [String.dropping] - a number of characters instead of a text.
    */
-  fn withoutPrefix(part: String): String? {
+  fn withoutPrefix(part: Self): Self? {
     if !startsWith(part) {
       return None
     }
@@ -330,7 +330,7 @@ public native type String
    *
    *     print("main.trb".withoutSuffix(".trb") ?? "main")
    */
-  fn withoutSuffix(part: String): String? {
+  fn withoutSuffix(part: Self): Self? {
     if !endsWith(part) {
       return None
     }
@@ -353,7 +353,7 @@ public native type String
    * - [String.split] - at every occurrence.
    * - [String.substringBefore], [String.substringAfter] - one of the two halves.
    */
-  fn splitOnce(separator: String): (before: String, after: String)? {
+  fn splitOnce(separator: Self): (before: Self, after: Self)? {
     const at = byteOffsetOf(separator)?
     const before = sliceBytes 0, at
     const after = sliceBytes(at + separator.byteLength(), byteLength())
@@ -375,7 +375,7 @@ public native type String
    * - [String.prefix] - the characters this drops.
    * - [String.droppingLast] - the same at the end.
    */
-  fn dropping(characters: Int): String {
+  fn dropping(characters: Int): Self {
     sliceBytes offsetAfter(self, characters), byteLength()
   }
 
@@ -387,7 +387,7 @@ public native type String
    *
    *     print "Grüße".droppingLast(characters: 2)
    */
-  fn droppingLast(characters: Int): String {
+  fn droppingLast(characters: Int): Self {
     sliceBytes 0, offsetBefore(self, characters)
   }
 
@@ -403,7 +403,7 @@ public native type String
    *
    * - [String.suffix] - the last ones.
    */
-  fn prefix(characters: Int): String {
+  fn prefix(characters: Int): Self {
     sliceBytes 0, offsetAfter(self, characters)
   }
 
@@ -415,12 +415,12 @@ public native type String
    *
    *     print "Grüße".suffix(characters: 2)
    */
-  fn suffix(characters: Int): String {
+  fn suffix(characters: Int): Self {
     sliceBytes offsetBefore(self, characters), byteLength()
   }
 
   /** The text with leading and trailing whitespace removed. */
-  native fn trim(): String
+  native fn trim(): Self
   /**
    * The text in upper case: [Char.toUpperCase] for every character, and nothing more.
    *
@@ -428,13 +428,13 @@ public native type String
    * the text. A full Unicode mapping may make a text *longer* (`ß` becomes `SS`), and this one therefore leaves such a
    * character alone.
    */
-  native fn toUpperCase(): String
+  native fn toUpperCase(): Self
   /** The text in lower case: [Char.toLowerCase] for every character. The mirror of [String.toUpperCase]. */
-  native fn toLowerCase(): String
+  native fn toLowerCase(): Self
   /** Every occurrence of `part`, replaced with `replacement`. */
-  native fn replace(part: String, replacement: String): String
+  native fn replace(part: Self, replacement: Self): Self
   /** The text cut apart at every occurrence of `separator`, which is dropped. */
-  native fn split(separator: String): List<String>
+  native fn split(separator: Self): List<Self>
   /**
    * The text, written after itself `times` times: `"ab".repeat(3)` is `"ababab"`.
    *
@@ -443,7 +443,7 @@ public native type String
    * When `times` is negative, and with `a text longer than 4 GiB is not supported` when the result would be longer
    * than a text can be.
    */
-  native fn repeat(times: Int): String
+  native fn repeat(times: Int): Self
 
   /** Whether the text is empty or holds nothing but whitespace. */
   fn isBlank(): Bool {
@@ -451,7 +451,7 @@ public native type String
   }
 
   /** The text cut apart at every `\n`. */
-  fn lines(): List<String> {
+  fn lines(): List<Self> {
     split "\n"
   }
 }
@@ -592,5 +592,5 @@ type TextByteIterator with Iterator<UInt8> {
 
 /** Not every number is a Unicode scalar value (surrogates, everything above 0x10FFFF). */
 extend Char with TryFrom<Int64, NumberRangeError> {
-  native static fn tryFrom(value: Int64): Result<Char, NumberRangeError>
+  native static fn tryFrom(value: Int64): Result<Self, NumberRangeError>
 }

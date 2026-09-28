@@ -47,23 +47,23 @@ public type Method with Show, Equals, Hash {
    * The method of that name. A name that is not a token of RFC 9110 - empty, with a space, a control character or a
    * separator - is no method.
    */
-  static fn of(name: String): Result<Method, HttpError> {
+  static fn of(name: String): Result<Self, HttpError> {
     if !isToken(name) {
       return Fail HttpError.malformed("`{name}` is not a method: a method is a token")
     }
     const method = match name {
-      "GET" => Method.Get
-      "HEAD" => Method.Head
-      "POST" => Method.Post
-      "PUT" => Method.Put
-      "DELETE" => Method.Delete
-      "PATCH" => Method.Patch
-      "OPTIONS" => Method.Options
-      "TRACE" => Method.Trace
-      "CONNECT" => Method.Connect
-      "QUERY" => Method.Query
-      "SEARCH" => Method.Search
-      _ => Method.Other name
+      "GET" => Self.Get
+      "HEAD" => Self.Head
+      "POST" => Self.Post
+      "PUT" => Self.Put
+      "DELETE" => Self.Delete
+      "PATCH" => Self.Patch
+      "OPTIONS" => Self.Options
+      "TRACE" => Self.Trace
+      "CONNECT" => Self.Connect
+      "QUERY" => Self.Query
+      "SEARCH" => Self.Search
+      _ => Self.Other name
     }
     method
   }
@@ -102,7 +102,7 @@ public type Method with Show, Equals, Hash {
    * section 9.2.2), so a client may send it again where the connection failed before an answer arrived.
    */
   fn isIdempotent(): Bool {
-    isSafe() || self == Method.Put || self == Method.Delete
+    isSafe() || self == Self.Put || self == Self.Delete
   }
 
   /** `POST`, `PUT`, `PATCH`, `QUERY` and `SEARCH`: a request of these carries content, and announces even an empty one. */
@@ -126,45 +126,45 @@ public type Method with Show, Equals, Hash {
 public type Status with Show, Equals, Hash, Compare {
   private storedCode: Int
 
-  static ok = Status 200
-  static created = Status 201
-  static accepted = Status 202
-  static noContent = Status 204
-  static movedPermanently = Status 301
-  static found = Status 302
-  static seeOther = Status 303
-  static notModified = Status 304
-  static temporaryRedirect = Status 307
-  static permanentRedirect = Status 308
-  static badRequest = Status 400
-  static unauthorized = Status 401
-  static forbidden = Status 403
-  static notFound = Status 404
-  static methodNotAllowed = Status 405
-  static notAcceptable = Status 406
-  static requestTimeout = Status 408
-  static conflict = Status 409
-  static gone = Status 410
-  static lengthRequired = Status 411
-  static contentTooLarge = Status 413
-  static uriTooLong = Status 414
-  static unsupportedMediaType = Status 415
-  static unprocessableContent = Status 422
-  static tooManyRequests = Status 429
-  static requestHeaderFieldsTooLarge = Status 431
-  static internalServerError = Status 500
-  static notImplemented = Status 501
-  static badGateway = Status 502
-  static serviceUnavailable = Status 503
-  static gatewayTimeout = Status 504
-  static httpVersionNotSupported = Status 505
+  static ok = Self 200
+  static created = Self 201
+  static accepted = Self 202
+  static noContent = Self 204
+  static movedPermanently = Self 301
+  static found = Self 302
+  static seeOther = Self 303
+  static notModified = Self 304
+  static temporaryRedirect = Self 307
+  static permanentRedirect = Self 308
+  static badRequest = Self 400
+  static unauthorized = Self 401
+  static forbidden = Self 403
+  static notFound = Self 404
+  static methodNotAllowed = Self 405
+  static notAcceptable = Self 406
+  static requestTimeout = Self 408
+  static conflict = Self 409
+  static gone = Self 410
+  static lengthRequired = Self 411
+  static contentTooLarge = Self 413
+  static uriTooLong = Self 414
+  static unsupportedMediaType = Self 415
+  static unprocessableContent = Self 422
+  static tooManyRequests = Self 429
+  static requestHeaderFieldsTooLarge = Self 431
+  static internalServerError = Self 500
+  static notImplemented = Self 501
+  static badGateway = Self 502
+  static serviceUnavailable = Self 503
+  static gatewayTimeout = Self 504
+  static httpVersionNotSupported = Self 505
 
   /** The status of that code: 100 to 599, which is every code HTTP can carry. */
-  static fn of(code: Int): Result<Status, HttpError> {
+  static fn of(code: Int): Result<Self, HttpError> {
     if code < 100 || code > 599 {
       return Fail HttpError.malformed("{code} is not a status: a status is from 100 to 599")
     }
-    Status code
+    Self code
   }
 
   /** `404`. */
@@ -259,7 +259,7 @@ public type Status with Show, Equals, Hash, Compare {
     "{storedCode} {phrase}"
   }
 
-  fn compare(other: Status): Ordering {
+  fn compare(other: Self): Ordering {
     storedCode.compare other.storedCode
   }
 }
@@ -368,8 +368,8 @@ public type Headers with Show, Equals {
 
 /** `Headers.from(["Accept": "application/json"])`: the entries of a map, in its order. */
 extend Headers with From<Map<String, String>> {
-  static fn from(value: Map<String, String>): Headers {
-    var headers = Headers()
+  static fn from(value: Map<String, String>): Self {
+    var headers = Self()
     for (name, text) in value {
       headers.add name, text
     }
@@ -416,7 +416,7 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
-  var fn bytes(limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
+  var fn bytes(limit: Int = Self.defaultLimit): Task<Result<Bytes, HttpError>> {
     var collected: Bytes = []
     while const Some(chunk) = next().await()? {
       if collected.length() + chunk.length() > limit {
@@ -428,13 +428,13 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
-  var fn text(limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
+  var fn text(limit: Int = Self.defaultLimit): Task<Result<String, HttpError>> {
     const raw = bytes(limit: limit).await()?
     textOf(raw).mapError(HttpError.invalidText)
   }
 
   /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
-  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+  var fn json<Value: Decode>(limit: Int = Self.defaultLimit): Task<Result<Value, HttpError>> {
     const document = text(limit: limit).await()?
     Json().decode<Value>(document).mapError(HttpError.decodeFailed)
   }
@@ -449,36 +449,36 @@ public shared type Body with Source<Bytes, HttpError> {
    * `Body.from(source)`: `From.from` takes its argument by value, and handing a stream over needs the permission to
    * read it (`var`), because the `Body` reads it from now on.
    */
-  static fn of(var source: Source<Bytes, HttpError>, length: Int? = None): Body {
-    Body source, length
+  static fn of(var source: Source<Bytes, HttpError>, length: Int? = None): Self {
+    Self source, length
   }
 
   /** A body with nothing in it, e.g. for a `GET` request. */
-  static fn empty(): Body {
+  static fn empty(): Self {
     const nothing: List<Bytes> = []
-    Body Source.from(nothing), 0
+    Self Source.from(nothing), 0
   }
 
   /**
    * An `Encode` value as a JSON body. Not `Body.json(value)`: a type has one namespace for its members, and `json` is
    * taken by the reading side, where it matters more (`body.json<User>()`).
    */
-  static fn jsonOf<Value: Encode>(value: Value): Body {
-    Body.from Json().encode(value)
+  static fn jsonOf<Value: Encode>(value: Value): Self {
+    Self.from Json().encode(value)
   }
 }
 
 /** `Body.from("hello")` - the text as UTF-8. */
 extend Body with From<String> {
-  static fn from(value: String): Body {
-    Body.from value.bytes().toList()
+  static fn from(value: String): Self {
+    Self.from value.bytes().toList()
   }
 }
 
 /** `Body.from(bytes)` - one chunk, already in memory. */
 extend Body with From<Bytes> {
-  static fn from(value: Bytes): Body {
-    Body Source.from([value]), value.length()
+  static fn from(value: Bytes): Self {
+    Self Source.from([value]), value.length()
   }
 }
 
@@ -539,22 +539,22 @@ public shared type Response {
   var body: Body
 
   /** A response of `status` with no body: `Response.of(Status.notFound)`. */
-  static fn of(status: Status): Response {
-    Response status, Headers(), Body.empty()
+  static fn of(status: Status): Self {
+    Self status, Headers(), Body.empty()
   }
 
   /** A text as UTF-8, with `Content-Type: text/plain; charset=utf-8`. */
-  static fn text(content: String, status: Status = Status.ok): Response {
+  static fn text(content: String, status: Status = Status.ok): Self {
     var headers = Headers()
     headers.set "Content-Type", "text/plain; charset=utf-8"
-    Response status, headers, Body.from(content)
+    Self status, headers, Body.from(content)
   }
 
   /** An `Encode` value as JSON, with `Content-Type: application/json`. */
-  static fn jsonOf<Value: Encode>(value: Value, status: Status = Status.ok): Response {
+  static fn jsonOf<Value: Encode>(value: Value, status: Status = Status.ok): Self {
     var headers = Headers()
     headers.set "Content-Type", "application/json"
-    Response status, headers, Body.jsonOf(value)
+    Self status, headers, Body.jsonOf(value)
   }
 
   /**

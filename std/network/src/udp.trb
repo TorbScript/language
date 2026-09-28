@@ -38,14 +38,14 @@ public shared type UdpSocket with Close {
    *
    * - [NetworkError] that `isAddressInUse()` where another socket has the address.
    */
-  static fn bind(address: SocketAddress): Result<UdpSocket, NetworkError> {
+  static fn bind(address: SocketAddress): Result<Self, NetworkError> {
     const (family, high, low) = numbersOf address.address
     const handle = networkBind family, high, low, address.port
     if handle < 0 {
       return Fail NetworkError.of(handle).about("binding {address}")
     }
     match socketAddressOf(handle, false) {
-      Ok(bound) => UdpSocket handle, bound
+      Ok(bound) => Self handle, bound
       Fail(problem) => {
         networkClose handle
         Fail problem

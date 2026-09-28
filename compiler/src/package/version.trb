@@ -15,34 +15,34 @@ public type Version with Compare, Show {
   /** The dot-separated identifiers after `-`; empty for a release. */
   preRelease: List<String> = []
 
-  static fn of(major: Int, minor: Int, patch: Int): Version {
-    Version major, minor, patch
+  static fn of(major: Int, minor: Int, patch: Int): Self {
+    Self major, minor, patch
   }
 
   /** The lowest version of all, `0.0.0-0`: below every release and every pre-release. */
-  static lowest = Version 0, 0, 0, preRelease: ["0"]
+  static lowest = Self 0, 0, 0, preRelease: ["0"]
 
   fn isPreRelease(): Bool {
     !preRelease.isEmpty()
   }
 
   /** The same numbers without the pre-release: `1.2.3-beta.1` is a pre-release of `1.2.3`. */
-  fn release(): Version {
-    Version major, minor, patch
+  fn release(): Self {
+    Self major, minor, patch
   }
 
   /**
    * The next version after this one in the order, with nothing between the two: the next patch of a release, and for a
    * pre-release the same identifiers with `.0` after them. `[version, version.successor())` is the version alone.
    */
-  fn successor(): Version {
+  fn successor(): Self {
     if isPreRelease() {
       return copy preRelease: preRelease.appended("0")
     }
-    Version(major, minor, patch + 1)
+    Self(major, minor, patch + 1)
   }
 
-  fn compare(other: Version): Ordering {
+  fn compare(other: Self): Ordering {
     for (mine, theirs) in [(major, other.major), (minor, other.minor), (patch, other.patch)] {
       if mine != theirs {
         return mine.compare theirs
@@ -86,7 +86,7 @@ public type Version with Compare, Show {
  * - A text that is not a version, with what is wrong with it.
  */
 extend Version with TryFrom<String, String> {
-  static fn tryFrom(text: String): Result<Version, String> {
+  static fn tryFrom(text: String): Result<Self, String> {
     if text.contains("+") {
       return Fail "`{text}` has build metadata, which a package version does not have"
     }
@@ -114,7 +114,7 @@ extend Version with TryFrom<String, String> {
         identifiers.append identifier
       }
     }
-    Version values[0], values[1], values[2], preRelease: identifiers
+    Self values[0], values[1], values[2], preRelease: identifiers
   }
 }
 

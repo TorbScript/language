@@ -102,8 +102,8 @@ public type JsonValue {
   /** JSON does not distinguish integers from floating point, so every number is a `Float64` here. */
   case Number(value: Float64)
   case String(value: String)
-  case Array(items: List<JsonValue>)
-  case Object(entries: Map<String, JsonValue>)
+  case Array(items: List<Self>)
+  case Object(entries: Map<String, Self>)
 }
 
 /** A `JsonValue` writes itself into any `Encoder`, not only `Json`'s own. A whole number is written as one. */
@@ -167,17 +167,17 @@ public type JsonError with Show, Error {
   private kind: JsonErrorKind
 
   /** The text was not well-formed JSON. */
-  static fn syntax(line: Int, message: String): JsonError {
+  static fn syntax(line: Int, message: String): Self {
     Self kind: .Syntax(line, message)
   }
 
   /** The text was well-formed JSON, but `Decode` rejected it. */
-  static fn decodeFailed(cause: DecodeError): JsonError {
+  static fn decodeFailed(cause: DecodeError): Self {
     Self kind: .Decode(cause)
   }
 
   /** JSON is text, and the bytes that arrived are not UTF-8 - so there was no text to parse in the first place. */
-  static fn invalidText(cause: Utf8Error): JsonError {
+  static fn invalidText(cause: Utf8Error): Self {
     Self kind: .Text(cause)
   }
 
@@ -209,8 +209,8 @@ public type JsonError with Show, Error {
 
 /** What `checked()` needs to lift a broken byte sequence into the failure of a JSON stream. */
 extend JsonError with From<Utf8Error> {
-  static fn from(value: Utf8Error): JsonError {
-    JsonError.invalidText value
+  static fn from(value: Utf8Error): Self {
+    Self.invalidText value
   }
 }
 
@@ -764,12 +764,12 @@ fn hexValueOf(character: Char): Int64 {
  */
 extend Json with Format<JsonError> {
   static fn encodeAll<Value: Encode>(value: Value): Bytes {
-    Json().encode(value).bytes().toList()
+    Self().encode(value).bytes().toList()
   }
 
   static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, JsonError> {
     const text = textOf(bytes).mapError(JsonError.invalidText)?
-    Json().decode<Value>(text)
+    Self().decode<Value>(text)
   }
 
   /**
@@ -788,7 +788,7 @@ extend Json with Format<JsonError> {
    * written, and a reader would have to hold the whole thing to find one.
    */
   static fn encoded<Item: Encode>(): Stage<Item, Bytes> {
-    mapping { "{Json().encode(_)}\n".bytes().toList() }
+    mapping { "{Self().encode(_)}\n".bytes().toList() }
   }
 }
 

@@ -16,47 +16,47 @@ public type HttpError with Show, Error {
   private kind: HttpErrorKind
 
   /** The server did not respond in time, or the client did not send its request in time. */
-  static fn timeout(): HttpError {
+  static fn timeout(): Self {
     Self kind: .Timeout
   }
 
   /** The request never reached a server (DNS, refused connection, broken transport, ...). */
-  static fn connectionFailed(message: String): HttpError {
+  static fn connectionFailed(message: String): Self {
     Self kind: .ConnectionFailed(message)
   }
 
   /** The network failed under the message: the failure of `std/network`, kept. */
-  static fn network(cause: NetworkError): HttpError {
+  static fn network(cause: NetworkError): Self {
     Self kind: .Network(cause)
   }
 
   /** The server responded, but not with success. */
-  static fn status(code: Int, message: String): HttpError {
+  static fn status(code: Int, message: String): Self {
     Self kind: .Status(code, message)
   }
 
   /** `Response.json` failed: the body was not the JSON `Value` expected. */
-  static fn decodeFailed(cause: JsonError): HttpError {
+  static fn decodeFailed(cause: JsonError): Self {
     Self kind: .Decode(cause)
   }
 
   /** A body that was read in one piece was longer than the limit that was given. */
-  static fn tooLarge(limit: Int): HttpError {
+  static fn tooLarge(limit: Int): Self {
     Self kind: .TooLarge(limit)
   }
 
   /** The bytes of the body are not UTF-8, so they are not a `String`. */
-  static fn invalidText(cause: Utf8Error): HttpError {
+  static fn invalidText(cause: Utf8Error): Self {
     Self kind: .InvalidText(cause)
   }
 
   /** A message that breaks the syntax of HTTP/1.1: a server answers it with `400 Bad Request`. */
-  static fn malformed(message: String): HttpError {
+  static fn malformed(message: String): Self {
     Self kind: .Malformed(message)
   }
 
   /** A head longer than `limit` bytes, or with more fields than allowed: `431 Request Header Fields Too Large`. */
-  static fn headTooLarge(limit: Int): HttpError {
+  static fn headTooLarge(limit: Int): Self {
     Self kind: .HeadTooLarge(limit)
   }
 
@@ -64,22 +64,22 @@ public type HttpError with Show, Error {
    * A feature of HTTP this implementation does not have, such as a transfer coding: `501 Not Implemented`. The client
    * answers it for a URI it does not reach, too: another scheme, an empty host, user information.
    */
-  static fn unsupported(message: String): HttpError {
+  static fn unsupported(message: String): Self {
     Self kind: .Unsupported(message)
   }
 
   /** A version other than HTTP/1.0 and HTTP/1.1: `505 HTTP Version Not Supported`. */
-  static fn unsupportedVersion(version: String): HttpError {
+  static fn unsupportedVersion(version: String): Self {
     Self kind: .UnsupportedVersion(version)
   }
 
   /** The connection ended in the middle of a message. */
-  static fn incomplete(): HttpError {
+  static fn incomplete(): Self {
     Self kind: .Incomplete
   }
 
   /** A `Client` was redirected more than `limit` times for one request, which its redirect policy allows. */
-  static fn tooManyRedirects(limit: Int): HttpError {
+  static fn tooManyRedirects(limit: Int): Self {
     Self kind: .TooManyRedirects(limit)
   }
 
@@ -180,21 +180,21 @@ type HttpErrorKind {
 
 /** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */
 extend HttpError with From<Utf8Error> {
-  static fn from(value: Utf8Error): HttpError {
-    HttpError.invalidText value
+  static fn from(value: Utf8Error): Self {
+    Self.invalidText value
   }
 }
 
 /** ...and what makes `body.through(Json.items<User>()).checked()` work without naming a second failure type. */
 extend HttpError with From<JsonError> {
-  static fn from(value: JsonError): HttpError {
-    HttpError.decodeFailed value
+  static fn from(value: JsonError): Self {
+    Self.decodeFailed value
   }
 }
 
 /** A failure of the connection under a message is the message's failure. */
 extend HttpError with From<NetworkError> {
-  static fn from(value: NetworkError): HttpError {
-    HttpError.network value
+  static fn from(value: NetworkError): Self {
+    Self.network value
   }
 }

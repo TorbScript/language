@@ -34,7 +34,7 @@ public type Box<Scalar: Numeric = Float> {
   size: Vector3<Scalar>
 
   /** The smallest box with those two points as corners. Either point may be either corner. */
-  static fn between(first: Vector3<Scalar>, second: Vector3<Scalar>): Box<Scalar> {
+  static fn between(first: Vector3<Scalar>, second: Vector3<Scalar>): Self {
     const low = first.min second
     Box low, first.max(second).subtract(low)
   }
@@ -72,7 +72,7 @@ public type Box<Scalar: Numeric = Float> {
   }
 
   /** Whether the other box is inside this one, faces included. An empty box is inside everything. */
-  fn encloses(other: Box<Scalar>): Bool {
+  fn encloses(other: Self): Bool {
     if other.isEmpty() {
       return true
     }
@@ -87,19 +87,19 @@ public type Box<Scalar: Numeric = Float> {
   }
 
   /** Whether the two boxes share at least one point. */
-  fn intersects(other: Box<Scalar>): Bool {
+  fn intersects(other: Self): Bool {
     !intersection(other).isEmpty()
   }
 
   /** The box both cover, which is empty where they do not overlap. */
-  fn intersection(other: Box<Scalar>): Box<Scalar> {
+  fn intersection(other: Self): Self {
     const low = origin.max other.origin
     const high = maximum().min(other.maximum())
     Box low, high.subtract(low)
   }
 
   /** The smallest box that covers both. An empty box contributes nothing. */
-  fn combined(other: Box<Scalar>): Box<Scalar> {
+  fn combined(other: Self): Self {
     if isEmpty() {
       return other
     }
@@ -116,7 +116,7 @@ public type Box<Scalar: Numeric = Float> {
    * Like `bounds`, it answers the **closed** hull: the point can come to lie exactly on the maximum face, and
    * [Box.contains] then answers `false` for it.
    */
-  fn covering(point: Vector3<Scalar>): Box<Scalar> {
+  fn covering(point: Vector3<Scalar>): Self {
     const nothing = Scalar.zero
     if isEmpty() {
       return Box point, Vector3(nothing, nothing, nothing)
@@ -126,12 +126,12 @@ public type Box<Scalar: Numeric = Float> {
   }
 
   /** The same box moved. */
-  fn translated(by: Vector3<Scalar>): Box<Scalar> {
+  fn translated(by: Vector3<Scalar>): Self {
     Box origin.add(by), size
   }
 
   /** The same box with every side grown by that much on both ends. A negative amount shrinks it. */
-  fn grown(by: Vector3<Scalar>): Box<Scalar> {
+  fn grown(by: Vector3<Scalar>): Self {
     Box origin.subtract(by), size.add(by).add(by)
   }
 
@@ -141,7 +141,7 @@ public type Box<Scalar: Numeric = Float> {
   }
 
   /** The box itself: what every shape in space answers, so that one broad phase can hold all of them. */
-  fn bounds(): Box<Scalar> {
+  fn bounds(): Self {
     self
   }
 }
@@ -157,7 +157,7 @@ extend<Scalar: Signed> Box<Scalar> {
 /** What a root and a halving buy: the midpoint and the euclidean distance. */
 extend<Scalar: Real> Box<Scalar> {
   /** The box of that size whose midpoint is the point given. */
-  static fn centered(at: Vector3<Scalar>, size: Vector3<Scalar>): Box<Scalar> {
+  static fn centered(at: Vector3<Scalar>, size: Vector3<Scalar>): Self {
     Box at.subtract(Vector3(size.x.halved(), size.y.halved(), size.z.halved())), size
   }
 

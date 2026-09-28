@@ -82,28 +82,28 @@ public type YamlNode {
   column: Int = 0
 
   /** A scalar node, plain unless a style is given. */
-  static fn scalar(text: String, style: ScalarStyle = ScalarStyle.Plain): YamlNode {
-    YamlNode YamlContent.Scalar(text, style)
+  static fn scalar(text: String, style: ScalarStyle = ScalarStyle.Plain): Self {
+    Self YamlContent.Scalar(text, style)
   }
 
   /** A sequence node, in block style unless a style is given. */
-  static fn sequence(items: List<YamlNode>, style: CollectionStyle = CollectionStyle.Block): YamlNode {
-    YamlNode YamlContent.Sequence(items, style)
+  static fn sequence(items: List<Self>, style: CollectionStyle = CollectionStyle.Block): Self {
+    Self YamlContent.Sequence(items, style)
   }
 
   /** A mapping node, in block style unless a style is given. */
-  static fn mapping(entries: List<YamlEntry>, style: CollectionStyle = CollectionStyle.Block): YamlNode {
-    YamlNode YamlContent.Mapping(entries, style)
+  static fn mapping(entries: List<YamlEntry>, style: CollectionStyle = CollectionStyle.Block): Self {
+    Self YamlContent.Mapping(entries, style)
   }
 
   /** `*name`. */
-  static fn alias(name: String): YamlNode {
-    YamlNode YamlContent.Alias(name)
+  static fn alias(name: String): Self {
+    Self YamlContent.Alias(name)
   }
 
   /** The empty plain scalar, which every schema but the failsafe one reads as null. */
-  static fn empty(): YamlNode {
-    YamlNode.scalar ""
+  static fn empty(): Self {
+    Self.scalar ""
   }
 
   /** The text of a scalar, or `None` for a collection and an alias. */
@@ -115,7 +115,7 @@ public type YamlNode {
   }
 
   /** The items of a sequence; empty for everything else. */
-  fn items(): List<YamlNode> {
+  fn items(): List<Self> {
     match content {
       .Sequence(items, _) => items
       _ => []
@@ -139,7 +139,7 @@ public type YamlNode {
   }
 
   /** The value of the first entry whose key is a scalar with the text `key`. */
-  fn at(key: String): YamlNode? {
+  fn at(key: String): Self? {
     for entry in entries() {
       if entry.key.text() == key {
         return entry.value
@@ -153,7 +153,7 @@ public type YamlNode {
    * entry keeps its key, its comments and its position among the others, and `value` keeps the comments of the value it
    * replaces where it has none of its own.
    */
-  fn updated(key: String, value: YamlNode): YamlNode {
+  fn updated(key: String, value: Self): Self {
     const style = match content {
       .Mapping(_, style) => style
       _ => CollectionStyle.Block
@@ -167,7 +167,7 @@ public type YamlNode {
         return copy content: YamlContent.Mapping(entries, style)
       }
     }
-    entries.append YamlEntry(YamlNode.scalar(key), value)
+    entries.append YamlEntry(Self.scalar(key), value)
     copy content: YamlContent.Mapping(entries, style)
   }
 }

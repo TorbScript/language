@@ -34,16 +34,16 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   yAxis: Vector2<Scalar>
 
   /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix2<Int>.identity`. */
-  static identity: Matrix2<Scalar> = Matrix2 Vector2(Scalar.one, Scalar.zero), Vector2(Scalar.zero, Scalar.one)
+  static identity: Self = Matrix2 Vector2(Scalar.one, Scalar.zero), Vector2(Scalar.zero, Scalar.one)
 
   /** A diagonal matrix: each axis scaled on its own, and nothing mixed. */
-  static fn scaling(by: Vector2<Scalar>): Matrix2<Scalar> {
+  static fn scaling(by: Vector2<Scalar>): Self {
     const nothing = Scalar.zero
     Matrix2 Vector2(by.x, nothing), Vector2(nothing, by.y)
   }
 
   /** The two rows read as columns: the inverse of a rotation, and half of the inverse of anything else. */
-  fn transposed(): Matrix2<Scalar> {
+  fn transposed(): Self {
     Matrix2 Vector2(xAxis.x, yAxis.x), Vector2(xAxis.y, yAxis.y)
   }
 
@@ -59,17 +59,17 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
-  fn add(other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn add(other: Self): Self {
     Matrix2 xAxis.add(other.xAxis), yAxis.add(other.yAxis)
   }
 
   /** Cell by cell. */
-  fn subtract(other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn subtract(other: Self): Self {
     Matrix2 xAxis.subtract(other.xAxis), yAxis.subtract(other.yAxis)
   }
 
   /** The composition: `self` after `other`. */
-  fn multiply(other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn multiply(other: Self): Self {
     Matrix2 applied(to: other.xAxis), applied(to: other.yAxis)
   }
 
@@ -87,7 +87,7 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
 /** Every cell turned around. */
 extend<Scalar: Signed> Matrix2<Scalar> with Negate {
   /** Every cell with its sign flipped. */
-  fn negate(): Matrix2<Scalar> {
+  fn negate(): Self {
     Matrix2 xAxis.negate(), yAxis.negate()
   }
 }
@@ -95,7 +95,7 @@ extend<Scalar: Signed> Matrix2<Scalar> with Negate {
 /** What an angle and a division buy: rotations and the way back. */
 extend<Scalar: Real> Matrix2<Scalar> {
   /** The rotation by that angle, from the first axis towards the second. */
-  static fn rotation(by: Angle<Scalar>): Matrix2<Scalar> {
+  static fn rotation(by: Angle<Scalar>): Self {
     const sine = by.sine()
     const cosine = by.cosine()
     Matrix2 Vector2(cosine, sine), Vector2(-sine, cosine)
@@ -105,7 +105,7 @@ extend<Scalar: Real> Matrix2<Scalar> {
    * The transformation that undoes this one, or `None` where there is none - which is exactly where the determinant is
    * zero and the plane has been collapsed onto a line.
    */
-  fn inverse(): Matrix2<Scalar>? {
+  fn inverse(): Self? {
     const scale: Scalar = self.determinant()
     if scale == Scalar.zero {
       return None
@@ -114,7 +114,7 @@ extend<Scalar: Real> Matrix2<Scalar> {
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */
-  fn isCloseTo(other: Matrix2<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Self, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance) && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
   }
 }
@@ -129,11 +129,11 @@ extend<Scalar: Numeric> Matrix2<Scalar> with Power<Int64> {
    * On a negative exponent, which is a power of the inverse: a matrix has one only over a `Real` scalar and only where
    * its determinant is not zero, so the caller asks for `inverse()` and raises that.
    */
-  fn power(exponent: Int64): Matrix2<Scalar> {
+  fn power(exponent: Int64): Self {
     if exponent < 0 {
       panic "a matrix to the power of {exponent} is a power of its inverse: raise `inverse()` instead"
     }
-    var result = Matrix2<Scalar>.identity
+    var result = Self.identity
     var factor = self
     var left = exponent
     while left > 0 {

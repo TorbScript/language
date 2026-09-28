@@ -140,16 +140,16 @@ public type Uri with Show, Equals, Hash, Compare {
   }
 
   /** The same URI with its query written from `parameters`, and with none where `parameters` is empty. */
-  fn withQueryParameters(parameters: Map<String, List<String>>): Uri {
-    Uri components.copy(query: queryOf(parameters))
+  fn withQueryParameters(parameters: Map<String, List<String>>): Self {
+    Self components.copy(query: queryOf(parameters))
   }
 
   /**
    * The same URI with its fragment replaced by `fragment`, and with none where it is `None`. The text is written as it
    * is: every character a fragment cannot hold is percent-encoded, `%` among them.
    */
-  fn withFragment(fragment: String?): Uri {
-    Uri components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
+  fn withFragment(fragment: String?): Self {
+    Self components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
   }
 
   /**
@@ -162,8 +162,8 @@ public type Uri with Show, Equals, Hash, Compare {
    *     const base: Uri = "https://example.test/users"
    *     print base.joined("Ada Lovelace/posts")
    */
-  fn joined(relative: String): Uri {
-    Uri joinedComponents(components, relative)
+  fn joined(relative: String): Self {
+    Self joinedComponents(components, relative)
   }
 
   /**
@@ -171,7 +171,7 @@ public type Uri with Show, Equals, Hash, Compare {
    * path under an authority becomes `/`. It is a member and not part of construction, because the default port of a
    * scheme is a fact about five schemes and not a fact about URIs.
    */
-  fn normalized(): Uri {
+  fn normalized(): Self {
     var authority = components.authority
     if const Some(found) = authority {
       if found.port.isSome() && found.port == defaultPort() {
@@ -179,14 +179,14 @@ public type Uri with Show, Equals, Hash, Compare {
       }
     }
     const path = if components.path.isEmpty() && authority.isSome() { "/" } else { components.path }
-    Uri components.copy(authority: authority, path: path)
+    Self components.copy(authority: authority, path: path)
   }
 
   /**
    * This URI as seen from `base`: the shortest reference that [UriReference.resolved] turns back into this one. Where
    * the schemes differ it is the whole URI, and where the authorities differ it starts with `//`.
    */
-  fn relativeTo(base: Uri): UriReference {
+  fn relativeTo(base: Self): UriReference {
     UriReference relativeComponents(components, base.components)
   }
 
@@ -214,7 +214,7 @@ public type Uri with Show, Equals, Hash, Compare {
   }
 
   /** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
-  fn compare(other: Uri): Ordering {
+  fn compare(other: Self): Ordering {
     compareComponents components, other.components
   }
 
@@ -222,8 +222,8 @@ public type Uri with Show, Equals, Hash, Compare {
    * The value of a literal the compiler read where a `Uri` is expected (docs/design/URI.md section 9). The lowering
    * calls this once per literal and program, with a text the checker already read with [Uri.tryFrom].
    */
-  private static fn literal(text: String): Uri {
-    match Uri.tryFrom(text) {
+  private static fn literal(text: String): Self {
+    match Self.tryFrom(text) {
       Ok(uri) => uri
       Fail(problem) => panic "The compiler read the `Uri` literal `{text}`, and this `std/uri` refuses it: {problem}"
     }
@@ -244,12 +244,12 @@ public type Uri with Show, Equals, Hash, Compare {
  *   [UriError.InvalidPort] for a text that is no URI reference at all.
  */
 extend Uri with TryFrom<String, UriError> {
-  static fn tryFrom(value: String): Result<Uri, UriError> {
+  static fn tryFrom(value: String): Result<Self, UriError> {
     const parsed = componentsOf(value)?
     if parsed.scheme.isNone() {
       return Fail UriError.Relative(value)
     }
-    Uri parsed
+    Self parsed
   }
 }
 
@@ -259,7 +259,7 @@ extend Uri with TryFrom<String, UriError> {
  * its password is a configuration that stopped working.
  */
 extend String with From<Uri> {
-  static fn from(value: Uri): String {
+  static fn from(value: Uri): Self {
     value.text()
   }
 }
@@ -364,8 +364,8 @@ public type UriReference with Show, Equals, Hash, Compare {
   }
 
   /** The same reference with its fragment replaced by `fragment`, written as it is, and with none where it is `None`. */
-  fn withFragment(fragment: String?): UriReference {
-    UriReference components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
+  fn withFragment(fragment: String?): Self {
+    Self components.copy(fragment: fragment.map({ encodedComponent _, Component.Fragment }))
   }
 
   /** The canonical text, with every part of it. */
@@ -384,13 +384,13 @@ public type UriReference with Show, Equals, Hash, Compare {
   }
 
   /** Scheme, then authority, then path, then query, then fragment, each `None` before every `Some`. */
-  fn compare(other: UriReference): Ordering {
+  fn compare(other: Self): Ordering {
     compareComponents components, other.components
   }
 
   /** The value of a literal the compiler read where a `UriReference` is expected, as [Uri.literal] is for a `Uri`. */
-  private static fn literal(text: String): UriReference {
-    match UriReference.tryFrom(text) {
+  private static fn literal(text: String): Self {
+    match Self.tryFrom(text) {
       Ok(reference) => reference
       Fail(problem) => {
         panic "The compiler read the `UriReference` literal `{text}`, and this `std/uri` refuses it: {problem}"
@@ -409,21 +409,21 @@ public type UriReference with Show, Equals, Hash, Compare {
  * - [UriError.InvalidEscape], [UriError.InvalidHost], [UriError.NonAsciiHost] and [UriError.InvalidPort].
  */
 extend UriReference with TryFrom<String, UriError> {
-  static fn tryFrom(value: String): Result<UriReference, UriError> {
-    UriReference(componentsOf(value)?)
+  static fn tryFrom(value: String): Result<Self, UriError> {
+    Self(componentsOf(value)?)
   }
 }
 
 /** Every URI is a reference. The way back is [UriReference.uri], and deliberately not a `TryFrom` on `Uri`. */
 extend UriReference with From<Uri> {
-  static fn from(value: Uri): UriReference {
-    UriReference value.components
+  static fn from(value: Uri): Self {
+    Self value.components
   }
 }
 
 /** The way back out of [UriReference], and with [UriReference.tryFrom] its conversion pair. */
 extend String with From<UriReference> {
-  static fn from(value: UriReference): String {
+  static fn from(value: UriReference): Self {
     value.text()
   }
 }
@@ -808,8 +808,8 @@ fn defaultPortOf(scheme: String): Int? {
  * - [UriError.InvalidHost] for a UNC share whose server name IDNA refuses.
  */
 extend UriReference with TryFrom<Path, UriError> {
-  static fn tryFrom(value: Path): Result<UriReference, UriError> {
-    UriReference.tryFrom textOfPath(value)
+  static fn tryFrom(value: Path): Result<Self, UriError> {
+    Self.tryFrom textOfPath(value)
   }
 }
 
@@ -822,8 +822,8 @@ extend UriReference with TryFrom<Path, UriError> {
  * - [UriError.InvalidHost] for a UNC share whose server name IDNA refuses.
  */
 extend Uri with TryFrom<Path, UriError> {
-  static fn tryFrom(value: Path): Result<Uri, UriError> {
-    Uri.tryFrom textOfPath(value)
+  static fn tryFrom(value: Path): Result<Self, UriError> {
+    Self.tryFrom textOfPath(value)
   }
 }
 
@@ -839,7 +839,7 @@ extend Uri with TryFrom<Path, UriError> {
  * - [UriError.NotText] for escapes whose bytes are not UTF-8.
  */
 extend Path with TryFrom<Uri, UriError> {
-  static fn tryFrom(value: Uri): Result<Path, UriError> {
+  static fn tryFrom(value: Uri): Result<Self, UriError> {
     if value.scheme() != "file" {
       return Fail UriError.NotAFile(value.show(), "the scheme is not `file`")
     }
@@ -858,9 +858,9 @@ extend Path with TryFrom<Uri, UriError> {
  * - [UriError.NotText] for escapes whose bytes are not UTF-8.
  */
 extend Path with TryFrom<UriReference, UriError> {
-  static fn tryFrom(value: UriReference): Result<Path, UriError> {
+  static fn tryFrom(value: UriReference): Result<Self, UriError> {
     if const Some(uri) = value.uri() {
-      return Path.tryFrom uri
+      return Self.tryFrom uri
     }
     if value.authority().isSome() {
       return Fail UriError.NotAFile(value.show(), "a network-path reference has no scheme to say it is a file")

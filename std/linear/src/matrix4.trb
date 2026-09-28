@@ -41,7 +41,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   wAxis: Vector4<Scalar>
 
   /** The transformation that changes nothing, over whichever scalar is asked for: `Matrix4<Int>.identity`. */
-  static identity: Matrix4<Scalar> = Matrix4(
+  static identity: Self = Matrix4(
     Vector4(Scalar.one, Scalar.zero, Scalar.zero, Scalar.zero),
     Vector4(Scalar.zero, Scalar.one, Scalar.zero, Scalar.zero),
     Vector4(Scalar.zero, Scalar.zero, Scalar.one, Scalar.zero),
@@ -59,7 +59,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The rows read as columns. */
-  fn transposed(): Matrix4<Scalar> {
+  fn transposed(): Self {
     Matrix4(
       Vector4(xAxis.x, yAxis.x, zAxis.x, wAxis.x),
       Vector4(xAxis.y, yAxis.y, zAxis.y, wAxis.y),
@@ -97,12 +97,12 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
-  fn add(other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn add(other: Self): Self {
     Matrix4 xAxis.add(other.xAxis), yAxis.add(other.yAxis), zAxis.add(other.zAxis), wAxis.add(other.wAxis)
   }
 
   /** Cell by cell. */
-  fn subtract(other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn subtract(other: Self): Self {
     Matrix4(
       xAxis.subtract(other.xAxis),
       yAxis.subtract(other.yAxis),
@@ -112,7 +112,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The composition: `self` after `other`. */
-  fn multiply(other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn multiply(other: Self): Self {
     Matrix4 applied(to: other.xAxis), applied(to: other.yAxis), applied(to: other.zAxis), applied(to: other.wAxis)
   }
 
@@ -143,7 +143,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
-  static fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn scaling(by: Vector3<Scalar>): Self {
     const nothing = Scalar.zero
     Matrix4(
       Vector4(by.x, nothing, nothing, nothing),
@@ -159,7 +159,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
    *     const move = Matrix4.translation of: Vector3(1.0, 0.0, 0.0)
    *     print move.translationPart()
    */
-  static fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn translation(of: Vector3<Scalar>): Self {
     const nothing = Scalar.zero
     const whole = Scalar.one
     Matrix4(
@@ -171,7 +171,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The affine transformation that applies the linear part and then moves by `by`. */
-  static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Self {
     const nothing = Scalar.zero
     Matrix4(
       Vector4.of(linear.xAxis, nothing),
@@ -253,7 +253,7 @@ fn minorsOf<Scalar: Numeric>(matrix: Matrix4<Scalar>): Minors<Scalar> {
 /** Every cell turned around. */
 extend<Scalar: Signed> Matrix4<Scalar> with Negate {
   /** Every cell with its sign flipped. */
-  fn negate(): Matrix4<Scalar> {
+  fn negate(): Self {
     Matrix4 xAxis.negate(), yAxis.negate(), zAxis.negate(), wAxis.negate()
   }
 }
@@ -266,7 +266,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *
    * It answers nothing about the bottom row, which an affine transformation has as `(0, 0, 0, 1)` by construction.
    */
-  fn inverseAffine(): Matrix4<Scalar>? {
+  fn inverseAffine(): Self? {
     const linear = linearPart()
     match linear.inverse() {
       Some(undone) => {
@@ -289,7 +289,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *     const move = Matrix4.translation of: Vector3(1.0, 2.0, 3.0)
    *     print move.inverse()?.translationPart()
    */
-  fn inverse(): Matrix4<Scalar>? {
+  fn inverse(): Self? {
     const blocks = minorsOf self
     const scale = blocks.determinant()
     if scale == Scalar.zero {
@@ -327,7 +327,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */
-  fn isCloseTo(other: Matrix4<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Self, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance)
       && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
       && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
@@ -345,11 +345,11 @@ extend<Scalar: Numeric> Matrix4<Scalar> with Power<Int64> {
    * On a negative exponent, which is a power of the inverse: a matrix has one only over a `Real` scalar and only where
    * its determinant is not zero, so the caller asks for `inverse()` and raises that.
    */
-  fn power(exponent: Int64): Matrix4<Scalar> {
+  fn power(exponent: Int64): Self {
     if exponent < 0 {
       panic "a matrix to the power of {exponent} is a power of its inverse: raise `inverse()` instead"
     }
-    var result = Matrix4<Scalar>.identity
+    var result = Self.identity
     var factor = self
     var left = exponent
     while left > 0 {

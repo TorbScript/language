@@ -54,7 +54,7 @@ public type Rectangle<Scalar: Numeric = Float> {
    *
    *     print Rectangle.between Vector2(4, 4), Vector2(1, 2)
    */
-  static fn between(first: Vector2<Scalar>, second: Vector2<Scalar>): Rectangle<Scalar> {
+  static fn between(first: Vector2<Scalar>, second: Vector2<Scalar>): Self {
     const low = first.min second
     Rectangle low, first.max(second).subtract(low)
   }
@@ -87,7 +87,7 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** Whether the other rectangle is inside this one, edges included. An empty rectangle is inside everything. */
-  fn encloses(other: Rectangle<Scalar>): Bool {
+  fn encloses(other: Self): Bool {
     if other.isEmpty() {
       return true
     }
@@ -97,7 +97,7 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** Whether the two rectangles share at least one point. Touching along an edge is not sharing a point. */
-  fn intersects(other: Rectangle<Scalar>): Bool {
+  fn intersects(other: Self): Bool {
     !intersection(other).isEmpty()
   }
 
@@ -107,14 +107,14 @@ public type Rectangle<Scalar: Numeric = Float> {
    *     const first = Rectangle Vector2(0, 0), Vector2(4, 4)
    *     print first.intersection(Rectangle(Vector2(2, 2), Vector2(4, 4)))
    */
-  fn intersection(other: Rectangle<Scalar>): Rectangle<Scalar> {
+  fn intersection(other: Self): Self {
     const low = origin.max other.origin
     const high = maximum().min(other.maximum())
     Rectangle low, high.subtract(low)
   }
 
   /** The smallest rectangle that covers both. An empty rectangle contributes nothing. */
-  fn combined(other: Rectangle<Scalar>): Rectangle<Scalar> {
+  fn combined(other: Self): Self {
     if isEmpty() {
       return other
     }
@@ -131,7 +131,7 @@ public type Rectangle<Scalar: Numeric = Float> {
    * Like `bounds`, it answers the **closed** hull: the point can come to lie exactly on the maximum edge, and
    * [Rectangle.contains] then answers `false` for it. A bounding rectangle is a bound and not a membership test.
    */
-  fn covering(point: Vector2<Scalar>): Rectangle<Scalar> {
+  fn covering(point: Vector2<Scalar>): Self {
     const nothing = Scalar.zero
     if isEmpty() {
       return Rectangle point, Vector2(nothing, nothing)
@@ -141,17 +141,17 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** The same rectangle moved. */
-  fn translated(by: Vector2<Scalar>): Rectangle<Scalar> {
+  fn translated(by: Vector2<Scalar>): Self {
     Rectangle origin.add(by), size
   }
 
   /** The same rectangle with every side grown by that much on both ends. A negative amount shrinks it. */
-  fn grown(by: Vector2<Scalar>): Rectangle<Scalar> {
+  fn grown(by: Vector2<Scalar>): Self {
     Rectangle origin.subtract(by), size.add(by).add(by)
   }
 
   /** The same rectangle with another size, from the same origin. */
-  fn withSize(value: Vector2<Scalar>): Rectangle<Scalar> {
+  fn withSize(value: Vector2<Scalar>): Self {
     Rectangle origin, value
   }
 
@@ -161,7 +161,7 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** The rectangle itself: what every shape of this package answers, so that one broad phase can hold all of them. */
-  fn bounds(): Rectangle<Scalar> {
+  fn bounds(): Self {
     self
   }
 }
@@ -177,7 +177,7 @@ extend<Scalar: Signed> Rectangle<Scalar> {
 /** What a root and a halving buy: the midpoint, a rectangle written from one, and the euclidean distance. */
 extend<Scalar: Real> Rectangle<Scalar> {
   /** The rectangle of that size whose midpoint is the point given. */
-  static fn centered(at: Vector2<Scalar>, size: Vector2<Scalar>): Rectangle<Scalar> {
+  static fn centered(at: Vector2<Scalar>, size: Vector2<Scalar>): Self {
     Rectangle at.subtract(Vector2(size.x.halved(), size.y.halved())), size
   }
 

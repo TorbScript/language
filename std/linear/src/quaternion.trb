@@ -53,7 +53,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   w: Scalar
 
   /** No rotation, over whichever scalar is asked for: `Quaternion<Fixed>.identity`. */
-  static identity: Quaternion<Scalar> = Quaternion Scalar.zero, Scalar.zero, Scalar.zero, Scalar.one
+  static identity: Self = Quaternion Scalar.zero, Scalar.zero, Scalar.zero, Scalar.one
 
   /**
    * The rotation by that angle around that axis. The axis is normalized first, so it may have any length; a zero axis
@@ -61,7 +61,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    *
    *     print Quaternion.rotation(around: Vector3(0.0, 1.0, 0.0), by: Angle.degrees(180.0)).w
    */
-  static fn rotation(around: Vector3<Scalar>, by: Angle<Scalar>): Quaternion<Scalar> {
+  static fn rotation(around: Vector3<Scalar>, by: Angle<Scalar>): Self {
     const axis = around.normalized()
     if axis.isZero() {
       const nothing = Scalar.zero
@@ -78,12 +78,12 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The rotation that undoes this one, for a quaternion of length one. */
-  fn conjugate(): Quaternion<Scalar> {
+  fn conjugate(): Self {
     Quaternion(-x, -y, -z, w)
   }
 
   /** Every number with its sign flipped, which turns space the same way and is therefore not the inverse. */
-  fn negate(): Quaternion<Scalar> {
+  fn negate(): Self {
     Quaternion(-x, -y, -z, -w)
   }
 
@@ -98,7 +98,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The same rotation with the length put back to one. A zero quaternion answers no rotation. */
-  fn normalized(): Quaternion<Scalar> {
+  fn normalized(): Self {
     const size: Scalar = self.length()
     if size == Scalar.zero {
       const nothing = Scalar.zero
@@ -108,7 +108,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The composition: `self` after `other`, the same order [Matrix3] composes in. */
-  fn multiply(other: Quaternion<Scalar>): Quaternion<Scalar> {
+  fn multiply(other: Self): Self {
     Quaternion(
       w * other.x + x * other.w + y * other.z - z * other.y,
       w * other.y - x * other.z + y * other.w + z * other.x,
@@ -146,7 +146,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    * The rotation `factor` of the way from here to there, along the straight line between the four numbers and then
    * back onto the sphere. It takes the shorter of the two ways around, which is what an animation means by it.
    */
-  fn interpolated(toward: Quaternion<Scalar>, by: Scalar): Quaternion<Scalar> {
+  fn interpolated(toward: Self, by: Scalar): Self {
     const nearest = if dot(toward) < Scalar.zero { toward.negate() } else { toward }
     const mixed = Quaternion(
       x + (nearest.x - x) * by,
@@ -158,12 +158,12 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The dot product of the four numbers: the cosine of half the rotation between the two. */
-  fn dot(other: Quaternion<Scalar>): Scalar {
+  fn dot(other: Self): Scalar {
     x * other.x + y * other.y + z * other.z + w * other.w
   }
 
   /** Whether every number is within `tolerance` of the other quaternion's. */
-  fn isCloseTo(other: Quaternion<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Self, tolerance: Scalar): Bool {
     (x - other.x).absolute() <= tolerance
       && (y - other.y).absolute() <= tolerance
       && (z - other.z).absolute() <= tolerance

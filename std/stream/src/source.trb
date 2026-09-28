@@ -259,7 +259,7 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
   private var above: Close? = None
 
   /** Wraps `step` as a source, and `above` as what releasing it releases. */
-  static fn of(step: () => Task<Result<Item?, Failure>>, above: Close? = None): Pulling<Item, Failure> {
+  static fn of(step: () => Task<Result<Item?, Failure>>, above: Close? = None): Self {
     Pulling step, above
   }
 
@@ -276,7 +276,7 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
 shared type Iterating<Item, Failure> with Source<Item, Failure> {
   private var cursor: Iterator<Item>
 
-  static fn of(items: Iterate<Item>): Iterating<Item, Failure> {
+  static fn of(items: Iterate<Item>): Self {
     Iterating items.iterate()
   }
 
@@ -295,10 +295,7 @@ shared type Stepping<Input, Item, Failure> with Source<Item, Failure> {
   private var upstream: Source<Input, Failure>
   private step: (value: Input) => Task<Result<Item, Failure>>
 
-  static fn of(
-    var upstream: Source<Input, Failure>,
-    step: (value: Input) => Task<Result<Item, Failure>>,
-  ): Stepping<Input, Item, Failure> {
+  static fn of(var upstream: Source<Input, Failure>, step: (value: Input) => Task<Result<Item, Failure>>): Self {
     Stepping upstream, step
   }
 
@@ -318,10 +315,7 @@ shared type Remapped<Item, Failure, Other> with Source<Item, Other> {
   private var upstream: Source<Item, Failure>
   private transform: (failure: Failure) => Other
 
-  static fn of(
-    var upstream: Source<Item, Failure>,
-    transform: (failure: Failure) => Other,
-  ): Remapped<Item, Failure, Other> {
+  static fn of(var upstream: Source<Item, Failure>, transform: (failure: Failure) => Other): Self {
     Remapped upstream, transform
   }
 
@@ -357,7 +351,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   private var taken: Int = 0
 
   /** Wraps `upstream` with `stage`, and sets up the queue `next()` reads from. */
-  static fn of(var upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
+  static fn of(var upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Self {
     var box: Shared<List<Item>> = Shared([])
     Staged upstream, stage, box, stage.onto(Queueing(box))
   }
@@ -430,7 +424,7 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
   private var writing: Sink<Item, ChannelClosed>
   private producer: Task<Result<Void, Failure>>
 
-  static fn of(relay: Channel<Item>, producer: Task<Result<Void, Failure>>): Produced<Item, Failure> {
+  static fn of(relay: Channel<Item>, producer: Task<Result<Void, Failure>>): Self {
     Produced relay, relay.source(), relay.sink(), producer
   }
 
@@ -474,7 +468,7 @@ extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Fail
 shared type Checked<Item, Problem, Failure: From<Problem>> with Source<Item, Failure> {
   private var upstream: Source<Result<Item, Problem>, Failure>
 
-  static fn of(var upstream: Source<Result<Item, Problem>, Failure>): Checked<Item, Problem, Failure> {
+  static fn of(var upstream: Source<Result<Item, Problem>, Failure>): Self {
     Checked upstream
   }
 

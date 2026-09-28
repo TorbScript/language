@@ -39,31 +39,31 @@ public type VersionSet with Show {
   preReleases: List<Interval>
 
   /** Every version, releases and pre-releases alike. */
-  static any = VersionSet([Interval(releaseStart, None)], [Interval(Version.lowest, None)])
+  static any = Self([Interval(releaseStart, None)], [Interval(Version.lowest, None)])
 
   /** No version at all. */
-  static none = VersionSet([], [])
+  static none = Self([], [])
 
   /** Every release and no pre-release: the requirement `*`, and a dependency written without one. */
-  static everyRelease = VersionSet([Interval(releaseStart, None)], [])
+  static everyRelease = Self([Interval(releaseStart, None)], [])
 
   /** The one version. */
-  static fn exactly(version: Version): VersionSet {
+  static fn exactly(version: Version): Self {
     const interval = Interval version, version.successor()
     if version.isPreRelease() {
-      return VersionSet([], [interval])
+      return Self([], [interval])
     }
-    VersionSet([interval], [])
+    Self([interval], [])
   }
 
   /** The releases from `low` up to and without `high`; a pre-release as a bound stands for its release. */
-  static fn releasesBetween(low: Version, high: Version?): VersionSet {
-    VersionSet normalized([Interval(low.release(), high.map({ _.release() }))]), []
+  static fn releasesBetween(low: Version, high: Version?): Self {
+    Self normalized([Interval(low.release(), high.map({ _.release() }))]), []
   }
 
   /** The pre-releases from `low` up to and without `high`. */
-  static fn preReleasesBetween(low: Version, high: Version?): VersionSet {
-    VersionSet([], normalized([Interval(low, high)]))
+  static fn preReleasesBetween(low: Version, high: Version?): Self {
+    Self([], normalized([Interval(low, high)]))
   }
 
   fn contains(version: Version): Bool {
@@ -76,34 +76,34 @@ public type VersionSet with Show {
   }
 
   fn isAny(): Bool {
-    self == VersionSet.any
+    self == Self.any
   }
 
-  fn union(other: VersionSet): VersionSet {
-    VersionSet unionOf(releases, other.releases), unionOf(preReleases, other.preReleases)
+  fn union(other: Self): Self {
+    Self unionOf(releases, other.releases), unionOf(preReleases, other.preReleases)
   }
 
-  fn intersection(other: VersionSet): VersionSet {
+  fn intersection(other: Self): Self {
     const releaseHalf = intersectionOf releases, other.releases, releaseStart
-    VersionSet releaseHalf, intersectionOf(preReleases, other.preReleases, Version.lowest)
+    Self releaseHalf, intersectionOf(preReleases, other.preReleases, Version.lowest)
   }
 
-  fn complement(): VersionSet {
-    VersionSet complementOf(releases, releaseStart), complementOf(preReleases, Version.lowest)
+  fn complement(): Self {
+    Self complementOf(releases, releaseStart), complementOf(preReleases, Version.lowest)
   }
 
   /** What is in this set and not in `other`. */
-  fn difference(other: VersionSet): VersionSet {
+  fn difference(other: Self): Self {
     intersection other.complement()
   }
 
   /** Whether every version of `other` is in this set. */
-  fn includesAll(other: VersionSet): Bool {
+  fn includesAll(other: Self): Bool {
     other.difference(self).isEmpty()
   }
 
   /** Whether some version is in both sets. */
-  fn overlaps(other: VersionSet): Bool {
+  fn overlaps(other: Self): Bool {
     !intersection(other).isEmpty()
   }
 

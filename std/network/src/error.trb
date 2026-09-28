@@ -75,51 +75,51 @@ public type NetworkError with Show, Error {
   }
 
   /** A failure a native of the runtime answered: its kind packed into the number, its words from the runtime. */
-  static fn of(failure: Int): NetworkError {
-    NetworkError kindOf(failure), networkErrorText(failure)
+  static fn of(failure: Int): Self {
+    Self kindOf(failure), networkErrorText(failure)
   }
 
   /**
    * A failure a native of `std/tls` answered, with the words that package's runtime found for it: the kind is read out
    * of the number as [NetworkError.of] reads it, and the words are not the IO core's, which knows nothing of TLS.
    */
-  static fn withWords(failure: Int, words: String): NetworkError {
-    NetworkError kindOf(failure), words
+  static fn withWords(failure: Int, words: String): Self {
+    Self kindOf(failure), words
   }
 
   /** The socket is closed: an operation on a stream or a listener after its `close()`. */
-  static fn closed(): NetworkError {
-    NetworkError(.Closed, "the socket is closed")
+  static fn closed(): Self {
+    Self(.Closed, "the socket is closed")
   }
 
   /** Nobody answered in time: `message` says who and how long. */
-  static fn timedOut(message: String): NetworkError {
-    NetworkError(.TimedOut, message)
+  static fn timedOut(message: String): Self {
+    Self(.TimedOut, message)
   }
 
   /** A name server failed a lookup, as `message` says. */
-  static fn nameServerFailed(message: String): NetworkError {
-    NetworkError(.NameServer, message)
+  static fn nameServerFailed(message: String): Self {
+    Self(.NameServer, message)
   }
 
   /** `host` resolved to no address. */
-  static fn hostNotFound(host: String): NetworkError {
-    NetworkError(.HostNotFound, "the host `{host}` was not found")
+  static fn hostNotFound(host: String): Self {
+    Self(.HostNotFound, "the host `{host}` was not found")
   }
 
   /** An argument the operation cannot take: an address of the wrong IP version, a socket that is not connected. */
-  static fn invalid(message: String): NetworkError {
-    NetworkError(.Invalid, message)
+  static fn invalid(message: String): Self {
+    Self(.Invalid, message)
   }
 
   /** An address that is none, where one was read from text. */
-  static fn invalidAddress(cause: AddressError): NetworkError {
-    NetworkError(.Invalid, cause.show())
+  static fn invalidAddress(cause: AddressError): Self {
+    Self(.Invalid, cause.show())
   }
 
   /** The same failure, with what the operation was about in front: `"connecting to 127.0.0.1:9: ..."`. */
-  fn about(subject: String): NetworkError {
-    NetworkError kind, "{subject}: {message}"
+  fn about(subject: String): Self {
+    Self kind, "{subject}: {message}"
   }
 }
 
@@ -161,15 +161,15 @@ fn kindOf(failure: Int): NetworkErrorKind {
 
 /** An address read from text that is none. */
 extend NetworkError with From<AddressError> {
-  static fn from(value: AddressError): NetworkError {
-    NetworkError.invalidAddress value
+  static fn from(value: AddressError): Self {
+    Self.invalidAddress value
   }
 }
 
 /** A name that is no domain name, where a lookup was asked for one: `lookup(DomainName.tryFrom(text)?, ...)`. */
 extend NetworkError with From<DnsError> {
-  static fn from(value: DnsError): NetworkError {
-    NetworkError(.Invalid, value.show())
+  static fn from(value: DnsError): Self {
+    Self(.Invalid, value.show())
   }
 }
 

@@ -139,7 +139,7 @@ public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriE
    *   `varchar`, a prefix outside 1 to 9999, a reserved operator (`=`, `,`, `!`, `@`, `|`), and a literal character no
    *   URI may hold.
    */
-  static fn tryFrom(value: String): Result<UriTemplate<Variables>, UriError> {
+  static fn tryFrom(value: String): Result<Self, UriError> {
     Ok Self(value, piecesOf(value)?)
   }
 
@@ -148,7 +148,7 @@ public type UriTemplate<Variables> with Show, Equals, Hash, TryFrom<String, UriE
    * lowering calls this once per literal and program, with a template the checker already read with
    * [UriTemplate.tryFrom] and checked against `Variables`.
    */
-  private static fn literal(text: String): UriTemplate<Variables> {
+  private static fn literal(text: String): Self {
     match piecesOf(text) {
       Ok(pieces) => Self text, pieces
       Fail(problem) => panic "The compiler read the template literal `{text}`, and this `std/uri` refuses it: {problem}"
@@ -418,7 +418,7 @@ public type TemplateValues = Map<String, TemplateValue>
  * none: an extension cannot be generic, so `show()` is its text.
  */
 extend String with From<UriTemplate<TemplateValues>> {
-  static fn from(value: UriTemplate<TemplateValues>): String {
+  static fn from(value: UriTemplate<TemplateValues>): Self {
     value.show()
   }
 }

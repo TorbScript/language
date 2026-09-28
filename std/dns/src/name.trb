@@ -35,7 +35,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
   private value: List<Bytes>
 
   /** The root, `.`: the name without labels. */
-  static root = DomainName([])
+  static root = Self([])
 
   /**
    * A host name as a person writes it, after the lookup processing of UTS #46 as far as this package covers it
@@ -75,7 +75,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
     }
     pieces.append current
     if pieces.length() == 2 && pieces[0].isEmpty() && pieces[1].isEmpty() {
-      return DomainName.root
+      return Self.root
     }
     if pieces.length() > 1 && pieces[pieces.length() - 1].isEmpty() {
       pieces = pieces[0..(pieces.length() - 1)]
@@ -85,7 +85,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       labels.append(asciiLabel(text, piece)?)
     }
     checkedLength(text, labels)?
-    DomainName labels
+    Self labels
   }
 
   /**
@@ -104,7 +104,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       return Fail DnsError.InvalidName(text, "an empty text is no name - the root is `.`")
     }
     if text == "." {
-      return DomainName.root
+      return Self.root
     }
     const codes = text.bytes().map({ Int.from _ }).toList()
     var labels: List<Bytes> = []
@@ -164,7 +164,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       }
     }
     checkedLength(text, labels)?
-    DomainName labels
+    Self labels
   }
 
   /**
@@ -185,7 +185,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
       }
     }
     checkedLength(shown, labels)?
-    DomainName labels
+    Self labels
   }
 
   /** The labels, most specific first, as bytes. The root has none. */
@@ -216,11 +216,11 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
     if value.isEmpty() {
       return None
     }
-    DomainName value[1..]
+    Self value[1..]
   }
 
   /** The name is `of` or lies below it: `www.example.test` is a subdomain of `example.test` and of itself. */
-  fn isSubdomain(of: DomainName): Bool {
+  fn isSubdomain(of: Self): Bool {
     const skipped = value.length() - of.value.length()
     if skipped < 0 {
       return false
@@ -267,7 +267,7 @@ public type DomainName with Show, Equals, Hash, TryFrom<String, DnsError> {
   }
 
   /** Label by label, with the ASCII letters compared without their case (RFC 4343). */
-  fn equals(other: DomainName): Bool {
+  fn equals(other: Self): Bool {
     if value.length() != other.value.length() {
       return false
     }

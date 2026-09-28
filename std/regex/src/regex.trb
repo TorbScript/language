@@ -31,10 +31,10 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
    * A [RegexError] with the byte offset of what is wrong: a syntax error, a backreference or a lookaround, a
    * repetition above 1000, or a pattern that compiles to more than 100000 instructions.
    */
-  static fn tryFrom(text: String): Result<Regex, RegexError> {
+  static fn tryFrom(text: String): Result<Self, RegexError> {
     const parsed = parsedPattern(text)?
     match compiled(parsed.root, parsed.names.length()) {
-      Some(program) => Regex text, program, parsed.names
+      Some(program) => Self text, program, parsed.names
       None => Fail RegexError(text, 0, "the pattern is too large")
     }
   }
@@ -48,7 +48,7 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
     pattern
   }
 
-  fn equals(other: Regex): Bool {
+  fn equals(other: Self): Bool {
     pattern == other.pattern
   }
 
@@ -188,8 +188,8 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
    * lowering calls this once per literal and program, with a pattern the checker already compiled with
    * [Regex.tryFrom].
    */
-  private static fn literal(text: String): Regex {
-    match Regex.tryFrom(text) {
+  private static fn literal(text: String): Self {
+    match Self.tryFrom(text) {
       Ok(regex) => regex
       Fail(problem) => panic "The compiler read the `Regex` literal `{text}`, and this `std/regex` refuses it: {problem}"
     }
@@ -198,7 +198,7 @@ public type Regex with Show, Equals, TryFrom<String, RegexError> {
 
 /** A pattern is its text wherever a `Regex` is written or read: `Encode` and `Decode` go through this pair. */
 extend String with From<Regex> {
-  static fn from(value: Regex): String {
+  static fn from(value: Regex): Self {
     value.text()
   }
 }

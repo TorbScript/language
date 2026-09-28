@@ -47,9 +47,9 @@ public type EncodedValue with Show {
   /** Raw bytes. */
   case Bytes(value: List<UInt8>)
   /** The items of a sequence, in order. */
-  case Sequence(items: List<EncodedValue>)
+  case Sequence(items: List<Self>)
   /** The entries of a map, flat: a key, then its value, then the next key. */
-  case Mapping(entries: List<EncodedValue>)
+  case Mapping(entries: List<Self>)
   /** A record, with the qualified name of its type and its fields in declaration order. */
   case Record(typeName: String, fields: List<EncodedField>)
   /** One case of a type with cases, with the fields of that case. */
@@ -59,7 +59,7 @@ public type EncodedValue with Show {
    * `EncodedValue.of(user)`: the value, written by [Values]. With `privateFields`, a `private` field with a default
    * is written as well, so the value is the whole value and not only its data ([Encoder.writesPrivateFields]).
    */
-  static fn of<Value: Encode>(value: Value, privateFields: Bool = false): EncodedValue {
+  static fn of<Value: Encode>(value: Value, privateFields: Bool = false): Self {
     var builder = Values privateFields: privateFields
     value.encode builder
     builder.result()
@@ -375,7 +375,7 @@ public type ValueDecoder with Decoder {
     naming: Naming = Naming.Unchanged,
     strict: Bool = false,
     privateFields: Bool = false,
-  ): ValueDecoder {
+  ): Self {
     Self root: value, lenient: lenient, naming: naming, strict: strict, privateFields: privateFields
   }
 

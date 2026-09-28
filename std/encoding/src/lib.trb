@@ -116,12 +116,12 @@ public type DecodeError with Show, Error {
   path: List<String> = []
 
   /** `error.inside("email")`: an error collects its path on the way out, outermost segment first. */
-  fn inside(segment: String): DecodeError {
+  fn inside(segment: String): Self {
     copy path: path.inserted(0, segment)
   }
 
   /** `error.at(2)`: the position of a sequence or a tuple the error happened in, shown as `[2]`. */
-  fn at(position: Int): DecodeError {
+  fn at(position: Int): Self {
     inside "[{position}]"
   }
 
@@ -319,7 +319,7 @@ extend Bool with Encode, Decode, Describe {
     target.bool self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Bool, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.bool()
   }
 
@@ -334,7 +334,7 @@ extend Int64 with Encode, Decode, Describe {
     target.int self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Int64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.int()
   }
 
@@ -349,9 +349,9 @@ extend Int8 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Int8, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    Int8.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int8" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int8" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -365,9 +365,9 @@ extend Int16 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Int16, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    Int16.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int16" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int16" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -381,9 +381,9 @@ extend Int32 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Int32, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    Int32.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int32" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into an Int32" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -399,9 +399,9 @@ extend UInt8 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<UInt8, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    UInt8.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt8" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt8" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -417,9 +417,9 @@ extend UInt16 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<UInt16, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    UInt16.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt16" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt16" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -435,9 +435,9 @@ extend UInt32 with Encode, Decode, Describe {
     target.int Int64.from(self)
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<UInt32, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const wide = source.int()?
-    UInt32.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt32" }
+    Self.tryFrom(wide).mapError { _ => DecodeError "{wide} does not fit into a UInt32" }
   }
 
   static fn describe<Target: Describer>(var target: Target) {
@@ -451,7 +451,7 @@ extend UInt64 with Encode, Decode, Describe {
     target.unsigned self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<UInt64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.unsigned()
   }
 
@@ -479,7 +479,7 @@ extend Float64 with Encode, Decode, Describe {
     target.float self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Float64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.float()
   }
 
@@ -494,7 +494,7 @@ extend Decimal with Encode, Decode, Describe {
     target.decimal self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Decimal, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.decimal()
   }
 
@@ -509,7 +509,7 @@ extend Char with Encode, Decode, Describe {
     target.string show()
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<Char, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const text = source.string()?
     var characters = text.chars().iterate()
     const first = match characters.next() {
@@ -535,7 +535,7 @@ extend String with Encode, Decode, Describe {
     target.string self
   }
 
-  static fn decode<Source: Decoder>(var source: Source): Result<String, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     source.string()
   }
 
@@ -586,9 +586,9 @@ extend<Item: Encode> List<Item> with Encode {
 
 /** A sequence, item by item, each through the item's own `decode`. An error names the position it happened at. */
 extend<Item: Decode> List<Item> with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<List<Item>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const _length = source.sequence()?
-    var items: List<Item> = []
+    var items: Self = []
     while source.hasNext()? {
       const position = items.length()
       const item = Item.decode(source).mapError({ _.at position })?
@@ -614,7 +614,7 @@ extend<Item: Describe> List<Item> with Describe {
  * `encode` of `List`.
  */
 extend<Item: Decode> ArrayList<Item> with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<ArrayList<Item>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const items = List<Item>.decode(source)?
     ArrayList.from items
   }
@@ -642,7 +642,7 @@ extend<Item: Encode> Set<Item> with Encode {
 
 /** A sequence read into a set: an item that is there twice is there once. */
 extend<Item: Decode & Hash> Set<Item> with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<Set<Item>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const items = List<Item>.decode(source)?
     items.toSet()
   }
@@ -671,9 +671,9 @@ extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
 
 /** A map, entry by entry: a key, then its value. An error in a value names the key it belongs to. */
 extend<Key: Decode & Hash & Show, Value: Decode> Map<Key, Value> with Decode {
-  static fn decode<Source: Decoder>(var source: Source): Result<Map<Key, Value>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError> {
     const _length = source.map()?
-    var entries: Map<Key, Value> = [:]
+    var entries: Self = [:]
     while source.hasNext()? {
       const key = Key.decode(source)?
       if !source.hasNext()? {

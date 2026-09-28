@@ -46,12 +46,12 @@ public shared type ServerIdentity with Close {
    * - [NetworkError] that `isTlsFailure()` where a certificate or the key cannot be read, or the key is not the
    *   certificate's.
    */
-  static fn of(certificates: String, privateKey: String): Result<ServerIdentity, NetworkError> {
+  static fn of(certificates: String, privateKey: String): Result<Self, NetworkError> {
     const handle = tlsIdentity certificates, privateKey
     if handle < 0 {
       return Fail NetworkError.withWords(handle, tlsErrorText(handle))
     }
-    ServerIdentity handle
+    Self handle
   }
 
   var fn close() {
@@ -81,23 +81,23 @@ public shared type TlsStream with Close {
     stream: TcpStream,
     serverName: String,
     settings: TlsSettings = TlsSettings(),
-  ): Task<Result<TlsStream, NetworkError>> {
+  ): Task<Result<Self, NetworkError>> {
     const session = tlsClient serverName, settings.trusted.joined(separator: "\n")
     if session < 0 {
       return Fail NetworkError.withWords(session, tlsErrorText(session))
     }
-    var connection = TlsStream stream, session
+    var connection = Self stream, session
     connection.handshake().await()?
     connection
   }
 
   /** The server's side: a handshake over an accepted `stream`, proving `identity`. */
-  static fn accept(stream: TcpStream, identity: ServerIdentity): Task<Result<TlsStream, NetworkError>> {
+  static fn accept(stream: TcpStream, identity: ServerIdentity): Task<Result<Self, NetworkError>> {
     const session = tlsServer identity.handle
     if session < 0 {
       return Fail NetworkError.withWords(session, tlsErrorText(session))
     }
-    var connection = TlsStream stream, session
+    var connection = Self stream, session
     connection.handshake().await()?
     connection
   }
@@ -249,8 +249,8 @@ public shared type TlsSource with Source<Bytes, NetworkError> {
   private chunk: Int
 
   /** The source of `stream`: what [TlsStream.source] answers. */
-  static fn of(stream: TlsStream, chunk: Int): TlsSource {
-    TlsSource stream, chunk
+  static fn of(stream: TlsStream, chunk: Int): Self {
+    Self stream, chunk
   }
 
   var fn next(): Task<Result<Bytes?, NetworkError>> {
@@ -266,8 +266,8 @@ public shared type TlsSink with Sink<Bytes, NetworkError> {
   private stream: TlsStream
 
   /** The sink of `stream`: what [TlsStream.sink] answers. */
-  static fn of(stream: TlsStream): TlsSink {
-    TlsSink stream
+  static fn of(stream: TlsStream): Self {
+    Self stream
   }
 
   var fn add(item: Bytes): Task<Result<Void, NetworkError>> {

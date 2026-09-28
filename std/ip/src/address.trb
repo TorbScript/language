@@ -21,13 +21,13 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
   private value: Int
 
   /** `127.0.0.1`. */
-  static loopback = Ipv4Address 2130706433
+  static loopback = Self 2130706433
   /** `0.0.0.0`, which a listener binds to for every interface. */
-  static unspecified = Ipv4Address 0
+  static unspecified = Self 0
 
   /** The address of four octets, most significant first: `Ipv4Address.of(127, 0, 0, 1)`. */
-  static fn of(first: UInt8, second: UInt8, third: UInt8, fourth: UInt8): Ipv4Address {
-    Ipv4Address(Int.from(first) << 24 | Int.from(second) << 16 | Int.from(third) << 8 | Int.from(fourth))
+  static fn of(first: UInt8, second: UInt8, third: UInt8, fourth: UInt8): Self {
+    Self(Int.from(first) << 24 | Int.from(second) << 16 | Int.from(third) << 8 | Int.from(fourth))
   }
 
   /** The address as the number it is, from 0 to 4294967295: what the runtime is handed. */
@@ -73,7 +73,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
   }
 
   /** In the order of their numbers. */
-  fn compare(other: Ipv4Address): Ordering {
+  fn compare(other: Self): Ordering {
     value.compare other.value
   }
 
@@ -81,7 +81,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
    * Four decimal parts from 0 to 255, separated by dots. A part with a leading zero is refused, because some systems
    * read `010` as octal and some as decimal, and an address two readers disagree on is no address.
    */
-  static fn tryFrom(text: String): Result<Ipv4Address, AddressError> {
+  static fn tryFrom(text: String): Result<Self, AddressError> {
     const parts = text.split "."
     if parts.length() != 4 {
       return Fail AddressError(text, "an IPv4 address has four parts separated by dots")
@@ -91,7 +91,7 @@ public type Ipv4Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
       const number = decimalPart(text, part)?
       value = value << 8 | number
     }
-    Ipv4Address value
+    Self value
   }
 }
 
@@ -126,12 +126,12 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
   private storedLow: Int
 
   /** `::1`. */
-  static loopback = Ipv6Address 0, 1
+  static loopback = Self 0, 1
   /** `::`, which a listener binds to for every interface. */
-  static unspecified = Ipv6Address 0, 0
+  static unspecified = Self 0, 0
 
   /** The address of eight segments, most significant first. Each is taken modulo 65536. */
-  static fn of(segments: List<Int>): Result<Ipv6Address, AddressError> {
+  static fn of(segments: List<Int>): Result<Self, AddressError> {
     if segments.length() != 8 {
       return Fail AddressError("{segments}", "an IPv6 address has eight segments")
     }
@@ -144,12 +144,12 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
         low = low << 16 | segment & 65535
       }
     }
-    Ipv6Address high, low
+    Self high, low
   }
 
   /** The address of its two halves, as the runtime hands them over. */
-  static fn ofHalves(high: Int, low: Int): Ipv6Address {
-    Ipv6Address high, low
+  static fn ofHalves(high: Int, low: Int): Self {
+    Self high, low
   }
 
   /** Segments 0 to 3 as the bits of an `Int`: what the runtime is handed. */
@@ -241,7 +241,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
   }
 
   /** Half by half, as the numbers they are without a sign. */
-  fn compare(other: Ipv6Address): Ordering {
+  fn compare(other: Self): Ordering {
     const first = compareUnsigned storedHigh, other.storedHigh
     if first != .Equal {
       return first
@@ -253,7 +253,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
    * RFC 4291 section 2.2: up to eight segments of one to four hexadecimal digits, one `::` for a run of zeros, and an
    * IPv4 address in place of the last two. A zone (`fe80::1%eth0`) is not part of an address and is refused.
    */
-  static fn tryFrom(text: String): Result<Ipv6Address, AddressError> {
+  static fn tryFrom(text: String): Result<Self, AddressError> {
     if text.contains("%") {
       return Fail AddressError(text, "a zone is not part of an address")
     }
@@ -266,7 +266,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
       if head.length() != 8 {
         return Fail AddressError(text, "an IPv6 address without `::` has eight segments")
       }
-      return Ipv6Address.of head
+      return Self.of head
     }
     const tail = segmentsOf(text, halves[1], true)?
     if head.length() + tail.length() > 7 {
@@ -278,7 +278,7 @@ public type Ipv6Address with Show, Equals, Hash, Compare, TryFrom<String, Addres
       all.append 0
     }
     all.appendAll tail
-    Ipv6Address.of all
+    Self.of all
   }
 }
 
@@ -365,7 +365,7 @@ public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressE
   case Version6(address: Ipv6Address)
 
   /** `127.0.0.1`. */
-  static loopback = IpAddress.Version4 Ipv4Address.loopback
+  static loopback = Self.Version4 Ipv4Address.loopback
 
   /** The loopback address of either version. */
   fn isLoopback(): Bool {
@@ -399,7 +399,7 @@ public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressE
   }
 
   /** Every IPv4 address before every IPv6 address, and each version in the order of its numbers. */
-  fn compare(other: IpAddress): Ordering {
+  fn compare(other: Self): Ordering {
     match (self, other) {
       (.Version4(first), .Version4(second)) => first.compare second
       (.Version6(first), .Version6(second)) => first.compare second
@@ -408,11 +408,11 @@ public type IpAddress with Show, Equals, Hash, Compare, TryFrom<String, AddressE
     }
   }
 
-  static fn tryFrom(text: String): Result<IpAddress, AddressError> {
+  static fn tryFrom(text: String): Result<Self, AddressError> {
     if text.contains(":") {
-      return IpAddress.Version6(Ipv6Address.tryFrom(text)?)
+      return Self.Version6(Ipv6Address.tryFrom(text)?)
     }
-    IpAddress.Version4(Ipv4Address.tryFrom(text)?)
+    Self.Version4(Ipv4Address.tryFrom(text)?)
   }
 }
 
@@ -431,7 +431,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
   }
 
   /** `host:port` with an IPv4 address, `[host]:port` with an IPv6 one. */
-  static fn tryFrom(text: String): Result<SocketAddress, AddressError> {
+  static fn tryFrom(text: String): Result<Self, AddressError> {
     if text.startsWith("[") {
       const closing = text.byteOffsetOf("]:") ?? -1
       if closing < 0 {
@@ -439,7 +439,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
       }
       const inside = Ipv6Address.tryFrom(text.sliceBytes(1, closing))?
       const port = portOf(text, text.sliceBytes(closing + 2, text.byteLength()))?
-      return SocketAddress IpAddress.Version6(inside), port
+      return Self IpAddress.Version6(inside), port
     }
     const colon = text.lastByteOffsetOf(":") ?? -1
     if colon < 0 {
@@ -450,7 +450,7 @@ public type SocketAddress with Show, Equals, Hash, TryFrom<String, AddressError>
     }
     const inside = Ipv4Address.tryFrom(text.sliceBytes(0, colon))?
     const port = portOf(text, text.sliceBytes(colon + 1, text.byteLength()))?
-    SocketAddress IpAddress.Version4(inside), port
+    Self IpAddress.Version4(inside), port
   }
 }
 

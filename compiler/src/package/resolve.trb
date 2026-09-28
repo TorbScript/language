@@ -82,12 +82,12 @@ type Term {
   versions: VersionSet
   positive: Bool
 
-  fn inverse(): Term {
-    Term(package, versions, !positive)
+  fn inverse(): Self {
+    Self(package, versions, !positive)
   }
 
   /** Both at once; `None` where nothing satisfies both. */
-  fn intersection(other: Term): Term? {
+  fn intersection(other: Self): Self? {
     if positive != other.positive {
       const (yes, no) = if positive { (self, other) } else { (other, self) }
       return nonEmpty yes.versions.difference(no.versions), true
@@ -95,27 +95,27 @@ type Term {
     if positive {
       return nonEmpty versions.intersection(other.versions), true
     }
-    Term package, versions.union(other.versions), false
+    Self package, versions.union(other.versions), false
   }
 
   /** This term and not `other`. */
-  fn difference(other: Term): Term? {
+  fn difference(other: Self): Self? {
     intersection other.inverse()
   }
 
-  fn nonEmpty(found: VersionSet, isPositive: Bool): Term? {
+  fn nonEmpty(found: VersionSet, isPositive: Bool): Self? {
     if isPositive && found.isEmpty() {
       return None
     }
-    Term package, found, isPositive
+    Self package, found, isPositive
   }
 
   /** Whether everything this term allows is allowed by `other`. */
-  fn satisfies(other: Term): Bool {
+  fn satisfies(other: Self): Bool {
     relation(other) == Relation.Subset
   }
 
-  fn relation(other: Term): Relation {
+  fn relation(other: Self): Relation {
     if other.positive {
       if positive {
         if other.versions.includesAll(versions) {

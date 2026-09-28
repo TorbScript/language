@@ -72,14 +72,14 @@ public shared type TcpListener with Close {
    *
    * - [NetworkError] that `isAddressInUse()` where another socket has the address.
    */
-  static fn listen(address: SocketAddress, backlog: Int = 128): Result<TcpListener, NetworkError> {
+  static fn listen(address: SocketAddress, backlog: Int = 128): Result<Self, NetworkError> {
     const (family, high, low) = numbersOf address.address
     const handle = networkListen family, high, low, address.port, backlog
     if handle < 0 {
       return Fail NetworkError.of(handle).about("listening on {address}")
     }
     match socketAddressOf(handle, false) {
-      Ok(bound) => TcpListener handle, bound
+      Ok(bound) => Self handle, bound
       Fail(problem) => {
         networkClose handle
         Fail problem
@@ -167,8 +167,8 @@ public shared type TcpStream with Close {
   private handle: Int
 
   /** A stream over a handle the runtime answered. */
-  static fn of(handle: Int): TcpStream {
-    TcpStream handle
+  static fn of(handle: Int): Self {
+    Self handle
   }
 
   /**
@@ -178,24 +178,24 @@ public shared type TcpStream with Close {
    *
    * - [NetworkError] that `isConnectionRefused()` where nothing listens there.
    */
-  static fn connect(address: SocketAddress): Task<Result<TcpStream, NetworkError>> {
+  static fn connect(address: SocketAddress): Task<Result<Self, NetworkError>> {
     const (family, high, low) = numbersOf address.address
     const answer = networkConnect(family, high, low, address.port).await()
     if answer < 0 {
       return Fail NetworkError.of(answer).about("connecting to {address}")
     }
-    TcpStream answer
+    Self answer
   }
 
   /**
    * A connection to `port` of `host`: the host is resolved, and each of its addresses is tried in turn until one
    * connects. The failure of the last one is the failure.
    */
-  static fn connectTo(host: String, port: Int): Task<Result<TcpStream, NetworkError>> {
+  static fn connectTo(host: String, port: Int): Task<Result<Self, NetworkError>> {
     const addresses = resolve(host).await()?
     var last = NetworkError.hostNotFound host
     for address in addresses {
-      match TcpStream.connect(SocketAddress(address, port)).await() {
+      match Self.connect(SocketAddress(address, port)).await() {
         Ok(stream) => {
           return stream
         }
@@ -292,8 +292,8 @@ public shared type TcpSource with Source<Bytes, NetworkError> {
   private chunk: Int
 
   /** The source of `stream`: what [TcpStream.source] answers. */
-  static fn of(stream: TcpStream, chunk: Int): TcpSource {
-    TcpSource stream, chunk
+  static fn of(stream: TcpStream, chunk: Int): Self {
+    Self stream, chunk
   }
 
   var fn next(): Task<Result<Bytes?, NetworkError>> {
@@ -309,8 +309,8 @@ public shared type TcpSink with Sink<Bytes, NetworkError> {
   private stream: TcpStream
 
   /** The sink of `stream`: what [TcpStream.sink] answers. */
-  static fn of(stream: TcpStream): TcpSink {
-    TcpSink stream
+  static fn of(stream: TcpStream): Self {
+    Self stream
   }
 
   var fn add(item: Bytes): Task<Result<Void, NetworkError>> {
