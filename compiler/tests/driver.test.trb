@@ -1,11 +1,13 @@
 /**
  * What the driver hands on to the programs it starts: a C compiler gets its arguments on the command line while they are
  * short, and a response file in their place once Windows' limit of 32767 characters comes near - a checkout with a long
- * path lists every file of the runtime and every object of mbedTLS with that path in front.
+ * path lists every file of the runtime and every object of mbedTLS with that path in front. A test binary gets the
+ * shard of the files it runs, `--shard 2/4`.
  */
 
 use test, group from "std/test"
 use isLongerThan, responseFileText from "../src/cli/build"
+use TestShard, testShardNamed from "../src/cli/test"
 
 group "The response file of a long command line" {
   test "an argument counts with its two quotes and the space in front of it" {
@@ -23,5 +25,19 @@ group "The response file of a long command line" {
   test "a backslash becomes a slash, which every C compiler reads in a path, and a quote is escaped" {
     assert(responseFileText(["C:\\torb\\runtime\\memory.c"]) == "\"C:/torb/runtime/memory.c\"\n")
     assert(responseFileText(["-DNAME=\"torb\""]) == "\"-DNAME=\\\"torb\\\"\"\n")
+  }
+}
+
+group "The shard of a test run" {
+  test "`2/4` is the second of every four files" {
+    assert(testShardNamed("2/4") == Some(TestShard(2, 4)))
+    assert(testShardNamed("1/1") == Some(TestShard(1, 1)))
+    assert(testShardNamed("2/4").map({ _.written() }) == Some("2/4"))
+  }
+
+  test "an index outside of the count, or anything but two numbers, is no shard" {
+    for written in ["0/4", "5/4", "2", "2/4/8", "a/4", "2/", "/4", "-1/4", ""] {
+      assert(testShardNamed(written) == None)
+    }
   }
 }

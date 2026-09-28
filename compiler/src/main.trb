@@ -27,7 +27,7 @@ use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
 use RunOptions, runProgram from "./cli/run"
-use TestOptions, runTests, defaultTestPath from "./cli/test"
+use TestOptions, TestShard, testShardNamed, runTests, defaultTestPath from "./cli/test"
 use NewOptions, runNew from "./cli/new"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
@@ -81,6 +81,7 @@ fn printUsage() {
   printError "  torb test [path]...    Run every *.test.trb below the paths as one program in the bytecode VM"
   printError "                         --native: build them into one binary and run it instead"
   printError "                         --profile dev|release, --release: build them natively with that profile"
+  printError "                         --shard k/n: only the k-th of every n files, so n processes run one suite"
   printError "                         --jobs N: accepted and ignored - one program is one process"
   printError "  torb new <name>        Scaffold a package: project.trb, src/main.trb, tests/main.test.trb"
   printError "                         refuses if <name> already exists"
@@ -513,19 +514,42 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions? {
 }
 
 /**
- * `torb test [path]... [--native] [--profile dev|release] [--jobs N]`: in the VM unless told otherwise, and a profile
- * says to build natively, because only a binary has one. `--jobs` means nothing here: one program holds every test
- * file, so there is one process whatever the number says. It is accepted and ignored.
+ * `torb test [path]... [--native] [--profile dev|release] [--shard k/n] [--jobs N]`: in the VM unless told otherwise,
+ * and a profile says to build natively, because only a binary has one. `--jobs` means nothing here: one program holds
+ * every test file, so there is one process whatever the number says. It is accepted and ignored. `--shard 2/4` runs the
+ * second of every four files, so several processes can run one suite at once ([TestShard]).
  */
 fn testOptionsOf(arguments: List<String>): TestOptions? {
   const choice = profileChoiceOf(arguments, Profile.Dev)?
   var paths: List<String> = []
   var wantsJobs = false
+  var wantsShard = false
+  var shard: TestShard? = None
   var usesMachine = choice.rest.length() == arguments.length()
   for argument in choice.rest {
     if wantsJobs {
       wantsJobs = false
       continue
+    }
+    if wantsShard {
+      wantsShard = false
+      shard = match testShardNamed(argument) {
+        Some(found) => found
+        None => {
+          printError "error: `--shard` takes `<index>/<count>`, an index from 1 to the count: `--shard 2/4`"
+          return None
+        }
+      }
+      continue
+    }
+    if argument == "--shard" {
+      wantsShard = true
+      continue
+    }
+    // The runtime reads the shard off the command line as two arguments, the VM inside `torb` as well
+    if argument.startsWith("--shard=") {
+      printError "error: the shard is an argument of its own: `--shard 2/4`"
+      return None
     }
     if argument == "--vm" {
       usesMachine = true
@@ -544,8 +568,12 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
     }
     paths.append argument
   }
+  if wantsShard {
+    printError "error: `--shard` needs `<index>/<count>`: `--shard 2/4`"
+    return None
+  }
   const given = if paths.isEmpty() { [defaultTestPath()] } else { paths }
-  TestOptions given, choice.profile, usesMachine
+  TestOptions given, choice.profile, usesMachine, shard
 }
 
 /**

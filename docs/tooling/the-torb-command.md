@@ -185,7 +185,8 @@ where nothing failed and 1 otherwise.
 whatever it tests: one binary per file would be one C compile of a translation unit that size per file, and the C
 compiler is where the time of a build goes. The whole suite together is about the size of one such translation unit.
 That is also why `--jobs` means nothing here - one binary is one process - and it is accepted and ignored rather than
-rejected.
+rejected. What runs a suite on several cores is `--shard k/n`: the k-th of every n files, so n processes of the one
+binary run it between them ([torb test](torb-test.md)).
 
 `test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and the report comes
 from one place - one line per test, `  ok      ` or `  FAILED  ` with the group names in front of it, and the counts

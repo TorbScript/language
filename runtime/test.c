@@ -26,6 +26,11 @@
  * live here as well: `torb_test_file` writes the name of the file whose tests come next and `torb_test_finish` writes
  * the blank line, `N passed, M failed (K files)`, and the exit code. A test file that fails does not stop the file
  * after it - that is what the recovery point is for - so the counts are what say whether the run was green.
+ *
+ * **A shard runs a part of the files**, so a suite can run in several processes at once: `--shard 2/4` on the command
+ * line runs the second of every four files, counted in the order they come, and the summary says which shard it was.
+ * A file of another shard is passed over whole - its name is not printed, and `test` and `group` return at once - and
+ * only the top-level code of its entry still runs, which in a test file declares constants.
  */
 
 #include "torb.h"
@@ -48,6 +53,59 @@ static uint32_t torb_test_depth = 0;
 static int64_t torb_test_passed = 0;
 static int64_t torb_test_failed = 0;
 static int64_t torb_test_files = 0;
+
+/**
+ * The shard of the run, `--shard <index>/<count>` (torb.h, `torb_test_file`): the files whose position counted from 0
+ * leaves `index - 1` divided by `count` run, and the others are passed over. A count of 0 is a run of every file, the
+ * default; it is read once, at the first file.
+ */
+static int64_t torb_test_shard_index = 0;
+static int64_t torb_test_shard_count = 0;
+static bool torb_test_shard_read = false;
+/** How many files came so far, of every shard, and whether the one whose tests come now is of this one. */
+static int64_t torb_test_seen = 0;
+static bool torb_test_selected = true;
+
+/** `2/4` as index 2 of 4, or false for anything else: an index from 1 to the count, both written in decimal digits. */
+static bool torb_test_parse_shard(const char *text, int64_t *index, int64_t *count) {
+  int64_t numbers[2] = {0, 0};
+  int part = 0;
+  bool digits = false;
+  for (; *text != '\0'; text += 1) {
+    if (*text >= '0' && *text <= '9') {
+      if (numbers[part] > 100000) {
+        return false;
+      }
+      numbers[part] = numbers[part] * 10 + (*text - '0');
+      digits = true;
+    } else if (*text == '/' && part == 0 && digits) {
+      part = 1;
+      digits = false;
+    } else {
+      return false;
+    }
+  }
+  if (part != 1 || !digits || numbers[0] < 1 || numbers[0] > numbers[1]) {
+    return false;
+  }
+  *index = numbers[0];
+  *count = numbers[1];
+  return true;
+}
+
+/** Reads `--shard` off the command line, once. One that says nothing a shard could be is a mistake of the caller. */
+static void torb_test_read_shard(void) {
+  const char *given;
+  if (torb_test_shard_read) {
+    return;
+  }
+  torb_test_shard_read = true;
+  given = torb_process_option("--shard");
+  if (given != NULL && !torb_test_parse_shard(given, &torb_test_shard_index, &torb_test_shard_count)) {
+    torb_panic_text("`--shard` takes `<index>/<count>`, an index from 1 to the count: `--shard 2/4`",
+                    torb_location_unknown);
+  }
+}
 
 /** Appends the bytes of a text to `buffer`, which stays NUL terminated whatever it does not fit. */
 static void torb_test_append(char *buffer, size_t size, size_t *length, const char *bytes, size_t count) {
@@ -116,6 +174,9 @@ void torb_test_case(torb_text name, torb_closure body) {
   torb_recovery point;
   torb_recovery *previous;
   bool scoped;
+  if (!torb_test_selected) {
+    return;
+  }
   torb_test_full_name(full, sizeof full, name);
   scoped = torb_test_tasks_begin();
   previous = torb_begin_recovery(&point);
@@ -150,20 +211,35 @@ void torb_test_case(torb_text name, torb_closure body) {
 }
 
 void torb_test_file(const char *path, size_t length) {
+  torb_test_read_shard();
+  torb_test_selected =
+    torb_test_shard_count == 0 || torb_test_seen % torb_test_shard_count == torb_test_shard_index - 1;
+  torb_test_seen += 1;
+  if (!torb_test_selected) {
+    return;
+  }
   torb_test_files += 1;
   torb_write_line_out(path, length);
 }
 
 int torb_test_finish(void) {
-  char summary[128];
-  snprintf(summary, sizeof summary, "\n%lld passed, %lld failed (%lld %s)", (long long)torb_test_passed,
-           (long long)torb_test_failed, (long long)torb_test_files, torb_test_files == 1 ? "file" : "files");
+  char shard[64] = "";
+  char summary[192];
+  if (torb_test_shard_count != 0) {
+    snprintf(shard, sizeof shard, ", shard %lld of %lld", (long long)torb_test_shard_index,
+             (long long)torb_test_shard_count);
+  }
+  snprintf(summary, sizeof summary, "\n%lld passed, %lld failed (%lld %s%s)", (long long)torb_test_passed,
+           (long long)torb_test_failed, (long long)torb_test_files, torb_test_files == 1 ? "file" : "files", shard);
   torb_write_line_out(summary, strlen(summary));
   fflush(stdout);
   return torb_test_failed == 0 ? 0 : 1;
 }
 
 void torb_test_group(torb_text name, torb_closure body) {
+  if (!torb_test_selected) {
+    return;
+  }
   if (torb_test_depth >= TORB_TEST_GROUP_DEPTH) {
     torb_panic_text("a group inside more than 32 groups", torb_location_unknown);
   }

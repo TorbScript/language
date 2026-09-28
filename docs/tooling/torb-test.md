@@ -8,6 +8,7 @@ keywords:
   - torb test
   - test runner
   - jobs
+  - shard
   - assert
   - memory limit
 source:
@@ -15,6 +16,7 @@ source:
   - compiler/src/cli/build.trb
   - std/test/src/lib.trb
   - runtime/memory.c
+  - runtime/test.c
 ---
 
 A `.test.trb` file is an ordinary script: `test` and `group` are calls, not a keyword, and a test fails when its body
@@ -27,6 +29,7 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
     --native                        Build them into one binary and run it instead
     --profile dev|release           Build natively, this hard does the C compiler optimize (default: dev)
     --release                       The same as --profile release
+    --shard k/n                     Only the k-th of every n files, so n processes run the suite between them
     --vm                            The default, accepted
 ```
 
@@ -109,6 +112,28 @@ set on the binary: `TORB_MEMORY_LIMIT=2G tests/build/dev/tests`.
 
 `test` **accepts `--jobs` and ignores it**: one binary is one process, so there is nothing to spread over cores that
 the one C compile in front of it did not already dominate.
+
+### `--shard`
+
+`--shard k/n` runs **a part of the files**: the k-th of every n, counted from 1 in the order the files come, so n
+processes that each run another shard run the whole suite between them at the same time. The report of a shard names
+only its own files, and its summary says which shard it was:
+
+```console
+$ torb test --native compiler/tests --shard 2/4
+...
+515 passed, 0 failed (20 files, shard 2 of 4)
+```
+
+The runtime chooses the files, in the binary and in the VM alike: it reads `--shard` off the command line of the
+process - `test` hands it to the binary, and the VM runs inside `torb`, whose command line has it already - so a test
+binary started by hand takes it too: `tests/build/dev/tests --shard 2/4`. A file of another shard prints nothing and
+none of its tests run; only its top-level code does, which in a test file declares constants. A native shard is built
+into `<first path>/build/<profile>/shard-<k>-of-<n>/`, so shards that are built at the same time never write one file;
+their C is the same, and the object cache compiles and links it once for all of them while the others wait for it.
+
+The files are dealt out in turn, not by how long they take, so the shard that holds the slowest file takes at least as
+long as that file alone.
 
 ### What the run forwards
 

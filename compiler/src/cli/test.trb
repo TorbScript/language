@@ -12,6 +12,8 @@
  * What that costs is `--jobs`. Inside one process there is nothing to spread over cores: the files share one heap,
  * the report is one stream of lines in the order of the files, and threads would buy the run nothing that the one C
  * compile did not already dominate. The flag is accepted and ignored, and `docs/tooling/the-torb-command.md` says so.
+ * What spreads a suite over cores is several processes of the one binary, each running a part of the files
+ * ([TestShard], `--shard 2/4`).
  *
  * The report itself is not written here at all - `runtime/test.c` writes every line of it, including the counts and
  * the summary.
@@ -42,6 +44,48 @@ public type TestOptions {
    * `--native` or a profile builds one binary instead - the compiler's own suite, which the VM runs too slowly.
    */
   usesMachine: Bool = true
+  /** `--shard 2/4`: a part of the files, or `None` for all of them. */
+  shard: TestShard? = None
+}
+
+/**
+ * `--shard <index>/<count>`: the files whose position in the run, counted from 0, leaves `index - 1` divided by
+ * `count`. Several processes that each run one shard run the whole suite between them at once, which is how a gate
+ * splits the compiler's suite, whose files take from a second to minutes each.
+ *
+ * `runtime/test.c` chooses the files, in the binary and in the VM alike: it reads `--shard` off the command line of the
+ * process, which for a native run is the binary's - handed to it here - and for a run in the VM is `torb`'s own. A native
+ * shard is built into a directory of its own (`build/dev/shard-2-of-4/`), so shards that are built at the same time
+ * never write one file; their C is the same, and the object cache compiles and links it once for all of them.
+ *
+ * # Pitfalls
+ *
+ * The files are dealt out in turn, not by how long they take: the shard that holds the slowest file takes at least as
+ * long as that file alone.
+ */
+public type TestShard {
+  /** From 1 to [TestShard.count]. */
+  index: Int
+  count: Int
+
+  /** `2/4`, as the command line writes it. */
+  fn written(): String {
+    "{index}/{count}"
+  }
+}
+
+/** The shard `2/4` names, or `None` for anything else: an index from 1 to the count. */
+public fn testShardNamed(text: String): TestShard? {
+  const parts = text.split("/").toList()
+  if parts.length() != 2 {
+    return None
+  }
+  const index = Int.tryFrom(parts[0]).ok()?
+  const count = Int.tryFrom(parts[1]).ok()?
+  if index < 1 || index > count {
+    return None
+  }
+  TestShard index, count
 }
 
 /**
@@ -78,7 +122,13 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   } else {
     normalizePath first
   }
-  const output = joinPath directory, "build/{options.profile.name()}/tests"
+  const profile = options.profile.name()
+  var arguments: List<String> = []
+  var output = joinPath directory, "build/{profile}/tests"
+  if const Some(shard) = options.shard {
+    output = joinPath directory, "build/{profile}/shard-{shard.index}-of-{shard.count}/tests"
+    arguments = ["--shard", shard.written()]
+  }
   const built = build(BuildOptions(
     options.paths,
     output: output,
@@ -94,7 +144,7 @@ public fn runTests(options: TestOptions): Result<Int, IoError> {
   // The report is the binary's own output and is not touched on its way out: the binary is handed this process's three
   // streams, so every line appears while the suite runs instead of after it, and a panic that escaped every recovery
   // point stays on standard error where the binary put it
-  match Process.runPassingThrough(binary, []) {
+  match Process.runPassingThrough(binary, arguments) {
     Ok(code) => code
     Fail(problem) => {
       printError "error: the test binary `{binary}` could not be started: {problem.message}"

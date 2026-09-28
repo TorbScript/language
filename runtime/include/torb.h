@@ -1271,12 +1271,22 @@ void torb_test_group(torb_text name, torb_closure body);
  * `torb test` prints in front of them - and `torb_test_finish` at the end, which writes the blank line and
  * `N passed, M failed (K files)` and answers the exit code of the run: 0 where nothing failed and 1 otherwise.
  * `path` borrowed.
+ *
+ * `--shard <k>/<n>` on the command line of the process runs a part of the files: the k-th of every n, counted from 1
+ * in the order the files come - `torb test --shard 2/4` hands it to the binary, and the VM inside `torb` reads it off
+ * `torb`'s own. A file of another shard prints nothing, counts for nothing, and its tests and groups do not run.
  */
 void torb_test_file(const char *path, size_t length);
 int torb_test_finish(void);
 
 /** Called by the generated `main` before anything else. `argument_values` borrowed for the whole run. */
 void torb_process_start(int argument_count, char **argument_values);
+/**
+ * The argument behind `name` on the command line of the process (`--shard 2/4`), or NULL where `name` is not among the
+ * arguments or is the last one. The runtime reads its own options with it (`runtime/test.c`); the program reads its
+ * arguments through `torb_process_arguments`. Borrowed.
+ */
+const char *torb_process_option(const char *name);
 /**
  * Called where the program ends normally, and by `torb_process_exit`. With `TORB_REPORT_LEAKS=1` in the environment it
  * writes the live block count to stderr, which is the leak gate of the conformance suite.
