@@ -15,6 +15,7 @@ keywords:
   - lint
   - rename
   - lsp
+  - debug
   - canon
   - highlight
 source:
@@ -26,6 +27,7 @@ source:
   - compiler/src/lint/command.trb
   - compiler/src/lint/rename-command.trb
   - compiler/src/language-server/command.trb
+  - compiler/src/debugger/adapter.trb
   - CONCEPT.md#toolchain
 ---
 
@@ -52,6 +54,7 @@ torb format [path]...  Write sources in the layout of the language; --check only
 torb lint [path]...    The rules of style the checker leaves alone; --fix writes their fixes
 torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them
 torb lsp               The language server, over standard input and output, for an editor
+torb debug             The debugger, over standard input and output (the Debug Adapter Protocol)
 torb canon [path]...   Deprecated: runs torb format
 torb test [path]...    Run the *.test.trb files below the paths in the VM; --native builds them
 torb add <package>...  Add a dependency to project.trb, resolve, lock and install it
@@ -218,6 +221,13 @@ ranges, hover, go to definition, completion, semantic tokens, and the fixes of `
 checks the file that changed and the open files that import it, not the workspace ([torb lsp](torb-lsp.md),
 [Set up your editor](../how-to/set-up-your-editor.md)).
 
+### `debug`
+
+The debugger: the Debug Adapter Protocol over standard input and output, which is what an editor starts for its Debug
+buttons. A `launch` names a program or tests, which run in the VM in a process of their own, and the program stops at
+breakpoints, after a step, on a pause and where a panic begins; the editor reads the call stack, the locals of every
+frame and the answers of `evaluate` ([torb debug](torb-debug.md), [the design record](../design/DEBUGGER.md)).
+
 ### `format`
 
 Writes the one layout of the language over the syntax tree, never with a regular expression: first every rule of the
@@ -351,6 +361,6 @@ wrote ../build/dev/scratch.exe
 - [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
   [torb test](torb-test.md), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb lsp](torb-lsp.md),
-  [torb doc](torb-doc.md) - one page per command, in depth.
+  [torb debug](torb-debug.md), [torb doc](torb-doc.md) - one page per command, in depth.
 - [Command calls](../language/syntax/command-calls.md) - the rule of the canon that `format` writes first.
 - [The docs commands](../contributing/checks.md) - the four `docs` subcommands.

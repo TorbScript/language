@@ -1,6 +1,6 @@
 # The Debugger
 
-**Status: decided on 2026-09-28; the VM half is being built** (section 18). The goal is the owner's: in VS Code every
+**Status: decided and built on 2026-09-28 for the VM; native programs are open** (sections 18 and 20). The goal is the owner's: in VS Code every
 `test` block and every entry file gets a **Debug** button next to its Run button, and debugging works as in any
 mainstream language - breakpoints, stepping, the call stack, locals, watch and evaluate. This record decides how, one
 table of options per decision, and says what was chosen and why.
@@ -108,6 +108,12 @@ What the program gives up is its standard input: a program that reads it under t
 requests. `runInTerminal` - the editor's terminal as the program's streams, the control channel a loopback socket - is
 section 20's.
 
+**Where the adapter's own input ends**, it hands the debuggee one more line, `torbscript/endOfInput`, after every request
+before it: nothing more comes. The debuggee answers what it still holds, lets the program run to its end without
+stopping again - the breakpoints gone, the filter off - and the adapter ends once it has. An editor that crashed leaves
+no program waiting at a breakpoint forever, and a session written down in advance (`tests/debug/`) is piped in whole.
+`TORB_DEBUG_TRACE` makes the adapter write a line per message and per step to standard error.
+
 ## 4. The VM first; native programs later
 
 | Option | For | Against |
@@ -148,8 +154,8 @@ true)`).** `at` is the statement's location. `visible` is every binding of the s
 scope where the statement begins: the lowering knows it exactly, because it keeps the stack of open scopes anyway
 (`ir/lower/scope.trb`), and a list per statement answers "which locals does this line show" without a live range or
 a liveness question. Parameters and a closure's captures are in sight for the whole body and are not listed. A marker
-is written before every statement of a block and before the body of every arm of a `match`; a declaration inside a
-block writes none.
+is written before every statement of a block, of the top level of an entry file, a test file and a receiver script,
+and before the body of every arm of a `match`; a declaration inside a block writes none.
 
 The bytecode emitter writes a `statement` instruction for it (`Opcode.Statement`, its tail the index of the statement
 in the chunk's table) and one entry in the chunk's statement table: the code offset, the location, and the register,
@@ -171,11 +177,22 @@ inside the debugger, not only a wrong value.
 | **`KeepAlive(slot)` at the end of every scope, for every binding in it, in a debugged program only** | An ordinary borrowed use: the ownership pass puts the release after it and turns an earlier move into a copy, so a binding holds its value to the end of its block, as in the `-O0` build of any compiled language | A debugged program holds values longer, which only a leak report's peak can tell |
 
 **Decision: `Instruction.KeepAlive(slot)`**, written by a debugged lowering where a scope closes, for every binding of
-that scope, the last declared first. Nothing else about the program changes: a `Close` value is released at the end of
-its scope already, so no destructor runs at another line; the back ends write nothing for it. Where a scope is left by
-`return`, `break` or `?`, nothing is written: the bindings go out of sight there. Together with the `visible` list of
-section 5 this is the one guarantee the debugger reads values by: **a binding in sight holds a value it owns, or
-borrows from a binding or temporary that outlives it.**
+that scope, the last declared first, and where a body ends for its parameters and captures, which every frame shows.
+Nothing else about the program changes: the back ends write nothing for it. Where a scope is left by `return`, `break`
+or `?`, nothing is written: the bindings go out of sight there.
+
+**A binding whose value may hold a `Close` object** keeps the end of scope it has (`EndOfScope`, docs/design/
+DESTRUCTORS.md 2a) and gets no `KeepAlive`: keeping it alive would turn the move that hands it on into a copy, and move
+its `close()` to another line. Where such a binding is moved, the bytecode emitter of a debugged chunk zeroes its slot
+after the instruction (`emptyMovedBindings`), so it reads as empty and never as the words of a value somebody else owns
+now.
+
+Together with the `visible` list of section 5 this is the one guarantee the debugger reads values by: **a binding in
+sight holds a value it owns, borrows from a binding or temporary that outlives it, or is empty.**
+
+`TORB_VM_DEBUGGED=1 torb run` lowers a program for the debugger and runs it without one - the markers do nothing, the
+bindings live longer - which has to change nothing the program prints; `tools/conformance.sh --vm` under it holds the
+whole suite to that (section 19).
 
 ## 7. Breakpoints, and zero cost without a debugger
 
@@ -188,7 +205,8 @@ borrows from a binding or temporary that outlives it.**
 **Decision: the `statement` instruction, only in a debugged program.** `torb run`, `torb test` and every other host of
 the VM lower without markers, and the loop's only change is one more arm of its `match` and a test of
 `Registers.debugger` where an `execute` begins (per call back, never per instruction) - section 19 has the measurement.
-In a debugged program the arm calls `reachStatement` (`compiler/src/vm/debug.trb`), which notes where the loop is,
+The arm is one call to `atStatement` (`compiler/src/vm/debug.trb`), so that the loop keeps its shape; in a debugged
+program that hands the statement to `reachStatement`, which notes where the loop is,
 counts down to the next look at the channel (section 9), and stops for a pause, for a breakpoint - a set of code
 offsets of the image - or for the step in progress (section 8).
 
@@ -227,9 +245,11 @@ every statement), so the height is known at every statement without walking anyt
 | **A look at the channel every 1000 statements of a debugged program** | The requests are on the channel anyway (section 3); `DebugPending` is one `PeekNamedPipe` or `poll` | A program blocked in a native call - `readLine`, a sleep, a wait for a task - pauses when it runs its next statement |
 
 **Decision: the look at the channel.** Every thousandth statement the debuggee reads what arrived: `pause` stops at
-the next statement with the reason `pause`; `setBreakpoints` and `setExceptionBreakpoints` take effect at once;
-`disconnect` and `terminate` end the process. A request that needs a stopped program - `stackTrace`, `variables` - is
-answered with an error while it runs, as the protocol allows.
+the next statement with the reason `pause`; `setBreakpoints`, `setExceptionBreakpoints` and `threads` are answered at
+once; `disconnect` and `terminate` end the process. **A request that needs a stopped program** - `stackTrace`,
+`variables`, `continue` - **waits**, with every request after it, until the program stops, and is answered first then.
+A client never sends one while the program runs; a session written down in advance does, and reads as the editor would
+have sent it. A pause, `disconnect` and `terminate` pass the requests that wait.
 
 ## 10. Frames and locals
 
@@ -348,16 +368,43 @@ sessions of both kinds (section 18).
 
 | # | Scope | State |
 |---|---|---|
-| 1 | `Instruction.Statement` and `Instruction.KeepAlive` in the IR, a debugged lowering (`debugging: true`), the chunk's statement table, `Opcode.Statement` | In progress |
-| 2 | The VM's hooks: `Registers.debugger`, the loop records, `reachStatement`, stepping, breakpoints, pause; the panic hook; one worker; measured | In progress |
-| 3 | `torb debug`: the adapter and the debuggee, the kernel operations of `runtime/debug.c`, frames, locals, values, evaluate | In progress |
-| 4 | VS Code: the debugger contribution, launch snippets, the Debug test profile, Debug File and the CodeLens | In progress |
-| 5 | Tests: `tests/debug/` sessions (`tools/debug.sh`, a gate of tier A), `compiler/tests/debugger.test.trb` | In progress |
-| 6 | Docs: `docs/tooling/torb-debug.md`, `docs/how-to/set-up-your-editor.md` | In progress |
+| 1 | `Instruction.Statement` and `Instruction.KeepAlive` in the IR, a debugged lowering (`debugging: true`), the chunk's statement table, `Opcode.Statement` | Done |
+| 2 | The VM's hooks: `Registers.debugger`, the loop records, `reachStatement`, stepping, breakpoints, pause; the panic hook; one worker; measured | Done |
+| 3 | `torb debug`: the adapter and the debuggee, the kernel operations of `runtime/debug.c`, frames, locals, values, evaluate | Done |
+| 4 | VS Code: the debugger contribution, launch snippets, the Debug test profile, Debug File and the CodeLens; `tools/vscode-test.sh` drives them in a real VS Code | Done |
+| 5 | Tests: `tests/debug/` sessions (`tools/debug.sh`, a gate of tier A), `compiler/tests/debugger.test.trb` | Done |
+| 6 | Docs: `docs/tooling/torb-debug.md`, `docs/how-to/set-up-your-editor.md` | Done |
 
 ## 19. What it costs
 
-Measured when slice 2 is in (the numbers follow).
+Measured on 2026-09-28 on the owner's Windows machine while other builds ran on it, so every number is the CPU time
+of the whole process (`TotalProcessorTime`: reading, checking and lowering the file included), the best and the
+median of 11 runs, each program's runs of all four kinds interleaved. The baseline is the `torb` of `main` before
+the debugger; the other three are the `torb` with it. The programs are a recursive `fibonacci(32)` (calls), a list
+of 200 000 records summed ten times (loops, fields) and `print "hello"` (what a run costs besides its program).
+
+| Program | Baseline | With the debugger, not debugged | Lowered for the debugger, none attached | `torb debug`, attached, no breakpoint |
+|---|---|---|---|---|
+| fibonacci | 1078 / 1203 ms | 1156 / 1250 ms | 1453 / 1484 ms | 3812 / 3938 ms |
+| loops | 1516 / 1594 ms | 1469 / 1641 ms | 1703 / 1781 ms | 3156 / 3297 ms |
+| hello | 188 / 234 ms | 203 / 219 ms | 188 / 219 ms | 188 / 219 ms |
+
+- **Not debugged**: the bytecode of both programs is the same instruction for instruction (`torb ir --bytecode`), and
+  no instruction does more work: the arm for `statement` is one call (`atStatement`) that no program that is not
+  debugged reaches, and `Registers.debugger` is tested once per `execute`, not per instruction. What differs is the
+  machine code of `executeLoop`, which gcc lays out anew (with link-time optimization, `atStatement` is inlined into
+  it). Across four series of 11 to 21 runs the loops program's best moved between 3% faster and 1% slower, its median
+  between the same and 8% slower on the busy machine, hello not at all; fibonacci's best was 4 to 7% slower in all
+  four, and 3% faster in a series before the arm became one call.
+- **Lowered for the debugger** (`TORB_VM_DEBUGGED=1`): a `statement` per statement, which reaches `atStatement` and
+  finds no debugger, and the bindings that live to the end of their blocks: 12% on the loops, 23 to 35% on the calls,
+  whose every body is two statements.
+- **Attached**: every statement writes the record of its loop, counts down to the next look at the channel and looks
+  into the breakpoints - two to three and a half times the baseline. The location of a statement is looked up only
+  while a step runs.
+- **The conformance suite** lowered for the debugger (`TORB_VM_DEBUGGED=1 sh tools/conformance.sh --vm`) passes all
+  of its 252 programs with the leak gate: the longer lives of section 6 change nothing a program prints. It is a run,
+  not a gate.
 
 ## 20. Open
 
@@ -367,3 +414,7 @@ Measured when slice 2 is in (the numbers follow).
 - **Conditional breakpoints, hit counts and logpoints**: a condition is an expression of section 12.
 - **`setVariable`**: a write through the same places `variables` reads.
 - **Native programs** (section 4).
+- **A cheaper attached run**: the record of a loop written only where a call back begins, and the breakpoints as a
+  bit per statement of the chunk rather than a set of code offsets.
+- **The debugged conformance run as a gate** of tier B, once its time allows.
+- **Test names on closure frames**: a test body's frame is named after its chunk, not after the test.

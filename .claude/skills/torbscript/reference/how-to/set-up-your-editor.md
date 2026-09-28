@@ -1,6 +1,6 @@
 ---
 title: Set up your editor
-summary: Install the VS Code extension from the Marketplace, Open VSX or a .vsix - it installs a missing toolchain and brings the language server, the Test Explorer and the formatter - or point any language server client at torb lsp.
+summary: Install the VS Code extension from the Marketplace, Open VSX or a .vsix - it installs a missing toolchain and brings the language server, the Test Explorer, the debugger and the formatter - or point an editor at torb lsp and torb debug.
 kind: how-to
 status: stable
 order: 5
@@ -14,6 +14,9 @@ keywords:
   - language server
   - torb lsp
   - Test Explorer
+  - debugger
+  - breakpoint
+  - torb debug
   - walkthrough
   - Neovim
   - Helix
@@ -21,8 +24,10 @@ source:
   - editors/vscode/package.json
   - editors/vscode/toolchain.js
   - editors/vscode/testing.js
+  - editors/vscode/debugging.js
   - editors/vscode/lsp-client.js
   - compiler/src/language-server/command.trb
+  - compiler/src/debugger/adapter.trb
 ---
 
 An editor understands TorbScript through [`torb lsp`](../tooling/torb-lsp.md), the language server that is the compiler
@@ -68,11 +73,24 @@ the Visual Studio Marketplace and to Open VSX; every other editor with a client 
    at the line that failed, with the expected and the actual value side by side where the `assert` compared two with
    `==`; continuous run (the eye icon) runs the chosen tests again on every save.
 
-6. **Format with Shift+Alt+F** (Shift+Option+F): "Format Document" runs [`torb format`](../tooling/torb-format.md)
+6. **Debug a test or a program.** Every test and group has **Debug** beside Run - in the gutter's menu and in the
+   Testing view - and an entry file has a CodeLens **Run | Debug** above its first line and "Debug File" beside "Run
+   File" in the editor's run menu; F5 debugs the file in the editor where there is no `launch.json`. Click in the gutter
+   left of a line number to set a breakpoint. The program runs in the VM under [`torb debug`](../tooling/torb-debug.md)
+   and stops there: Run and Debug shows the call stack and the locals of every frame, a hover over a name shows its
+   value, and the Watch view and the Debug Console answer `point.x` or `names[2]`. F10 steps over a line, F11 into a
+   call, Shift+F11 out of it, F5 goes on. A panic stops the program where it begins - a failing `assert` too - with
+   its message; the filter "Panics" in the Breakpoints view turns that off. What the program prints is in the Debug
+   Console, and a test's pass or failure in the Testing view, as for a run. A `launch.json` names `program` or `test`
+   (with `filter`), `args`, `cwd`, `env`, `stopOnEntry` and `justMyCode`; "Add Configuration..." writes one.
+
+7. **Format with Shift+Alt+F** (Shift+Option+F): "Format Document" runs [`torb format`](../tooling/torb-format.md)
    over the text in the editor.
 
-7. **In another editor, register `torb lsp` for `.trb` files.** It needs no argument (`--stdio` is accepted), speaks
-   over standard input and output, and takes the root of the workspace from `initialize`. The file type is `trb`.
+8. **In another editor, register `torb lsp` for `.trb` files, and `torb debug` as the debug adapter.** `torb lsp` needs
+   no argument (`--stdio` is accepted), speaks over standard input and output, and takes the root of the workspace from
+   `initialize`. The file type is `trb`. `torb debug` takes no argument either and speaks the Debug Adapter Protocol
+   over standard input and output; its `launch` arguments are the ones of the `launch.json` above.
 
 ## Settings
 
@@ -99,6 +117,8 @@ as a whole.
   editor's text; any other file changed by a `git checkout` or a formatter is read again once the client reports it
   (`workspace/didChangeWatchedFiles`), which the extension does for every `.trb` of the workspace. A client of another
   editor that does not watch files should restart the server after such a change.
+- **A debugged program has no standard input.** Its standard input carries the debugger's requests; a program that
+  reads standard input is run with `torb run` in a terminal instead.
 - **The installer extends `PATH` for new terminals, not for VS Code.** The extension finds the new `torb` in the
   installer's own directory anyway; a terminal VS Code opened before the install needs to be opened again for `torb`
   to be a command there.
@@ -133,6 +153,40 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 ```
 
+A `launch.json` of VS Code that debugs a program with an argument, and the tests of one group:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "torbscript",
+      "request": "launch",
+      "name": "Debug the shop",
+      "program": "${workspaceFolder}/src/main.trb",
+      "args": ["--verbose"]
+    },
+    {
+      "type": "torbscript",
+      "request": "launch",
+      "name": "Debug the cart tests",
+      "test": "${workspaceFolder}/tests/cart.test.trb",
+      "filter": ["Cart"]
+    }
+  ]
+}
+```
+
+The debugger in Neovim, with nvim-dap, in `init.lua`:
+
+```text
+local dap = require("dap")
+dap.adapters.torbscript = { type = "executable", command = "torb", args = { "debug" } }
+dap.configurations.trb = {
+  { type = "torbscript", request = "launch", name = "Debug File", program = "${file}" },
+}
+```
+
 And in Helix, in `languages.toml`:
 
 ```text
@@ -151,6 +205,7 @@ language-servers = ["torb"]
 ## Related
 
 - [torb lsp](../tooling/torb-lsp.md) - every message the server answers, and what a keystroke costs.
+- [torb debug](../tooling/torb-debug.md) - the debug adapter: what a launch names, every request it answers.
 - [torb test](../tooling/torb-test.md) - the report the Test Explorer reads, and `--filter`.
 - [torb lint](../tooling/torb-lint.md) - the rules whose fixes are the quick fixes.
 - The language server - the design record, and why the extension is published as it is.
