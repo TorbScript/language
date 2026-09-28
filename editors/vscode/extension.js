@@ -439,7 +439,14 @@ async function activate(context) {
   languageClient = startLanguageClient(context, vscode, cp, () => toolchain.command(), say, toolchain.isFound());
   provider.languageClient = languageClient;
   context.subscriptions.push(
-    vscode.languages.registerDocumentSemanticTokensProvider({ language: 'trb' }, provider, provider.legend)
+    vscode.languages.registerDocumentSemanticTokensProvider(
+      [
+        { language: 'trb', scheme: 'file' },
+        { language: 'trb', scheme: 'untitled' },
+      ],
+      provider,
+      provider.legend
+    )
   );
   if (!languageClient) {
     context.subscriptions.push(
