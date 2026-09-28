@@ -49,6 +49,7 @@ use renameUsage, renameOptionsOf, runRename from "./lint/rename-command"
 use languageServerUsage, isLanguageServerArguments, startLanguageServer from "./language-server/command"
 use UpgradeOptions, runUpgrade from "./cli/upgrade"
 use packageOptionsOf, runPackageCommand from "./cli/packages"
+use languageVersion from "./package/version"
 
 /** Leaves with the code a command answered, where it is not 0. */
 fn exitWith(code: Int) {
@@ -124,6 +125,7 @@ fn printUsage() {
   printError "                         --fix: write the fixes, then lint again"
   printError "  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"
   printError "  torb lsp               The language server, over standard input and output, for an editor"
+  printError "  torb --version         `torb <version>`: the one number of the toolchain, the language and std"
   printDocUsage()
   printDocumentationUsage()
 }
@@ -744,6 +746,8 @@ fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering)
 }
 
 match Process.arguments() {
+  // docs/design/RELEASE.md section 3: one number for the toolchain, the language and the standard library
+  ["--version"] => print "torb {languageVersion}"
   ["check", ...more] => {
     const withStatistics = more.contains "--statistics"
     const withTimings = more.contains "--timings"

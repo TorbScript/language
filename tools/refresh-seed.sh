@@ -7,7 +7,8 @@
 # its files into `seed/`. The commit in the name is the one the seed was built from, which `seed/commit` records.
 #
 # Run it after a merge whose tier A is green, from the checkout that has `seed/` (the main checkout, not a worktree).
-# Nothing is copied unless the new binary runs: `torb --version` does not exist, so it has to check a one-line program.
+# Nothing is copied unless the new binary runs: `torb --version` would not show that its checker works, so it has to
+# check a one-line program.
 #
 #   sh tools/refresh-seed.sh                    # build/release -> seed/
 #   sh tools/refresh-seed.sh /some/other/seed   # the same into another seed directory (a test of this script)
