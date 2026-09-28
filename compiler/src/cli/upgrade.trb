@@ -16,17 +16,20 @@
  * `torb.exe` cannot be replaced in place - `%LOCALAPPDATA%\Programs\torb` is a copy instead of a symlink, and
  * upgrading it renames the running executable out of the way first.
  *
- * Only downloading and unpacking run programs: `curl` (or `wget`) and `tar`, on every target including Windows (both
- * have shipped with it since 1803) - the same tools `tools/fetch-seed.sh` already assumes. `std/http` answers a task,
- * which the compiler cannot wait for, and `std/archive` reads the ustar of a package, not the GNU `tar` of a release
- * (its paths of more than 100 bytes, the executable bit of `bin/torb`). Everything else is the standard library, the
- * same code on every system: `std/digest` hashes the archive, the unpacked toolchain is renamed into
+ * Only downloading runs a program: `curl` (or `wget`), on every target including Windows (it has shipped with it since
+ * 1803) - the tool `tools/fetch-seed.sh` already assumes. `std/http` answers a task, which the compiler cannot wait
+ * for. Everything else is the standard library, the same code on every system: `std/digest` hashes the archive,
+ * `std/compression` and `std/archive` unpack its gzip and its GNU `tar` - paths of more than 100 bytes, the executable
+ * bit of `bin/torb`, and nothing written outside of the toolchain - the unpacked toolchain is renamed into
  * `<home>/toolchains` whole, the symbolic link is replaced by renaming a new one over it (POSIX) or the copy is
  * mirrored file by file (Windows), and `active` and `install.trb` are replaced atomically.
  */
 
 use File, IoError from "std/fs"
 use Sha256 from "std/digest"
+use untarred from "std/archive"
+use extract from "std/archive/extract"
+use gunzipped from "std/compression"
 use Process from "std/process"
 use Environment, OsError from "std/os"
 use hostTarget from "../project/target"
@@ -284,13 +287,19 @@ fn download(url: String, destination: String): Result<Void, String> {
 }
 
 /**
- * `<archive>` (already downloaded to `path`) unpacked to `destination`, its one top-level directory stripped - by the
- * system's `tar`, which on Windows is the `bsdtar` of `System32`, found before any other on the `PATH`.
+ * The archive of a release (already downloaded to `path`) unpacked to `destination`, its one top-level directory
+ * stripped: the gzip by `std/compression`, the GNU `tar` inside by `std/archive`, every file with its mode - `bin/torb`
+ * stays executable - and an entry that would land outside of `destination` refused before anything is written.
+ *
+ * # Pitfalls
+ *
+ * - The archive is read and unpacked whole, in memory: some megabytes, and a few seconds of inflating.
  */
-public fn extract(path: String, destination: String): Result<Void, String> {
-  File.createDirectory(destination).mapError({ _.show() })?
-  const _ = captured("tar", ["-xzf", path, "--strip-components=1", "-C", destination])?
-  Ok void
+public fn unpack(path: String, destination: String): Result<Void, String> {
+  const compressed = File.readBytes(path).mapError({ "{path} could not be read: {_.show()}" })?
+  const archive = gunzipped(compressed).mapError({ "{path} is not gzip: {_.show()}" })?
+  const entries = untarred(archive).mapError({ "{path} is not a tar archive: {_.show()}" })?
+  extract(entries, into: destination, stripComponents: 1).mapError({ "{path} could not be unpacked: {_.show()}" })
 }
 
 /** The SHA-256 of `file` inside `sums` (the text of `SHA256SUMS`), a leading `*` (binary mode) stripped. */
@@ -565,7 +574,7 @@ fn install(home: String, version: String, scratch: String): Result<Void, String>
   }
   print "sha256 verified"
   const unpacked = "{scratch}/toolchain"
-  extract(archivePath, unpacked)?
+  unpack(archivePath, unpacked)?
   placeToolchain(unpacked, "{home}/toolchains/{version}").mapError({ _.show() })
 }
 

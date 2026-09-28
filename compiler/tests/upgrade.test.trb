@@ -1,7 +1,7 @@
 /**
  * Tests for `torb upgrade` (compiler/src/cli/upgrade.trb): the pure parts - the `install.trb` format, the
  * `versions.txt` manifest, version comparison and sorting, picking a hash out of `SHA256SUMS` - and, each in a
- * temporary directory of its own, what it does to files: hashing one, unpacking an archive with the system's `tar` and
+ * temporary directory of its own, what it does to files: hashing one, unpacking an archive with `std/archive` and
  * placing the toolchain, switching the symbolic link of POSIX, and setting the running `torb.exe` aside and mirroring
  * the copy of Windows.
  *
@@ -12,7 +12,7 @@
 
 use test, group from "std/test"
 use File from "std/fs"
-use TarEntry, tarred from "std/archive"
+use TarEntry, TarKind, tarred from "std/archive"
 use gzipped from "std/compression"
 use hostTarget, TargetSystem from "../src/project/target"
 use parentPath from "../src/project/path"
@@ -20,7 +20,7 @@ use InstallInfo, ReleaseEntry from "../src/cli/upgrade"
 use parseInstallInfo, renderInstallInfo from "../src/cli/upgrade"
 use parseVersionsManifest, compareVersions, releasesOf, newestOf from "../src/cli/upgrade"
 use packageManagerCommand, expectedHash from "../src/cli/upgrade"
-use sha256Of, extract, placeToolchain, linkActive, setAsideExecutable, mirrorDirectory from "../src/cli/upgrade"
+use sha256Of, unpack, placeToolchain, linkActive, setAsideExecutable, mirrorDirectory from "../src/cli/upgrade"
 
 /** A new, empty directory in the system's directory for temporary files, for one test, which removes it again. */
 fn scratch(): String {
@@ -170,26 +170,50 @@ group "hashing a download" {
 group "unpacking and placing a toolchain" {
   test "the archive loses its top directory and the toolchain is moved into place whole" {
     const directory = scratch()
+    // The path of a header of mbedTLS in a release of a long version is more than 100 bytes long
+    const header = "runtime/vendor/mbedtls/include/mbedtls/{"x".repeat(60)}.h"
     const entries = [
-      TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList()),
+      TarEntry.directory("torb-9.9.9-test"),
+      TarEntry.directory("torb-9.9.9-test/bin"),
+      TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList(), TarKind.File, 0b111_101_101),
       TarEntry("torb-9.9.9-test/std/prelude/project.trb", "name = \"std/prelude\"\n".bytes().toList()),
+      TarEntry("torb-9.9.9-test/{header}", "#define LONG 1\n".bytes().toList()),
     ]
     File.writeBytes("{directory}/archive.tar.gz", gzipped(tarred(entries).expect("an archive"))).expect("the archive")
-    extract("{directory}/archive.tar.gz", "{directory}/unpacked").expect("the archive unpacked")
+    unpack("{directory}/archive.tar.gz", "{directory}/unpacked").expect("the archive unpacked")
     const toolchain = "{directory}/home/toolchains/9.9.9"
     placeToolchain("{directory}/unpacked", toolchain).expect("the toolchain placed")
     assert(!File.exists("{directory}/unpacked"))
-    assert(File.walk(toolchain) == ["bin", "bin/torb", "std", "std/prelude", "std/prelude/project.trb"])
     assert(File.readText("{toolchain}/bin/torb") == "binary")
+    assert(File.readText("{toolchain}/{header}") == "#define LONG 1\n")
+    assert(File.readText("{toolchain}/std/prelude/project.trb") == "name = \"std/prelude\"\n")
+    const mode = File.metadata("{toolchain}/bin/torb").expect("the program").permissions.mode
+    match hostTarget().system {
+      // Windows makes the bits up from the name and the read-only attribute
+      .Windows => assert(mode & 0b010_000_000 != 0)
+      .Linux | .MacOs | .FreeBsd => assert(mode == 0b111_101_101)
+    }
     File.removeDirectory(directory).expect("the directory removed")
   }
 
-  test "an archive that is no archive fails and names tar" {
+  test "an entry that would land outside of the toolchain is refused, and nothing is unpacked" {
+    const directory = scratch()
+    const entries = [TarEntry("torb-9.9.9-test/bin/torb", "binary".bytes().toList()), TarEntry("../evil", [])]
+    File.writeBytes("{directory}/archive.tar.gz", gzipped(tarred(entries).expect("an archive"))).expect("the archive")
+    match unpack("{directory}/archive.tar.gz", "{directory}/unpacked") {
+      Ok(_) => panic "unpacked an entry outside"
+      Fail(message) => assert message.contains("`../evil` is refused")
+    }
+    assert(!File.exists("{directory}/unpacked"))
+    File.removeDirectory(directory).expect("the directory removed")
+  }
+
+  test "an archive that is no archive fails and says so" {
     const directory = scratch()
     File.writeText("{directory}/archive.tar.gz", "not gzip").expect("the file")
-    match extract("{directory}/archive.tar.gz", "{directory}/unpacked") {
+    match unpack("{directory}/archive.tar.gz", "{directory}/unpacked") {
       Ok(_) => panic "unpacked what is no archive"
-      Fail(message) => assert message.startsWith("tar ")
+      Fail(message) => assert message.startsWith("{directory}/archive.tar.gz is not gzip: ")
     }
     File.removeDirectory(directory).expect("the directory removed")
   }
