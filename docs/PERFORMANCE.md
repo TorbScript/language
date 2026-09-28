@@ -194,6 +194,7 @@ worth, what it risks, and the test that pins it.
 | 14 | A module `const` rebuilt where it is read | 63% of a read, already fixed | recorded, not open | - |
 | 15 | The stack check | 1-3% on a recursion of three operations; a frame counter was 1.74x | one comparison with the stack limit at entry | **done** |
 | 16 | A range of a trait-typed list runs the default `slice` | was a copy of the range, one call per item, where `ArrayList` shares the storage in O(1) | a slot for a member that answers `Self`, added once it is called | **done** |
+| 17 | The return trace of `?` in the `dev` profile | nothing in release; about 5.5 ns per `?` in dev, was 2x | the trace looked up once per function, macros only `dev` expands | **done** |
 
 ### F1. `x = f(x)` is a move, because the assignment defines the slot
 
@@ -931,6 +932,32 @@ or the devirtualization of F2 turns the call into the direct one where the paylo
 what `torb_list_compact` is for.
 
 ---
+
+### F17. The return trace of `?` costs nothing in release and a load per `?` in dev
+
+**Pattern.** In the `dev` profile every `?` takes part in the return trace (docs/language/errors/top-level-errors.md,
+rules 5 and 6): a mark before its operand, a rewind when the operand succeeded, a record when it hands a failure on. The
+C names `TORB_RETURN_TRACE_*` macros that only `TORB_PROFILE_DEV` makes code of; a function that has a `?` looks the
+trace of its thread up once, at its entry, so the mark and the rewind are a load and a comparison and only the lookup is
+a call - MinGW's `_Thread_local` is emulated TLS, one call per access. The VM writes the four operations as kernel calls,
+and only for a run in the `dev` profile.
+
+**What it costs.** Windows, gcc 13, a machine with other builds running, so the minimum of the runs counts:
+
+| Workload | without the trace | with the trace |
+|----------|-------------------|----------------|
+| 30 million `?` on their success path, `release` (twelve runs) | 185 ms | 192 ms - the machine code of the function with the `?`s is the same, instruction for instruction |
+| the same, `dev` (twelve runs) | 783 ms | 949 ms: about 5.5 ns per `?` |
+| `torb check .` with a `dev` build of the compiler (five runs) | 27.8 s | 25.0 s: inside this machine's band |
+| 3 million `?` in the VM (six runs) | 1113 ms | 1589 ms: two kernel calls per `?` |
+| `torb test std/yaml/tests` in the VM (three runs) | 7.7 s | 8.1 s: inside the band |
+
+**The first version called a function for every mark and every rewind** and doubled the `dev` loop (1520 ms against
+637 ms): two emulated TLS accesses per `?`. Looking the trace up at the entry of the function is what made it a load.
+
+**What it risks.** A program that does nothing but `?` in the VM pays about 160 ns per `?`; an interpreter that kept the
+counter in a register of its own would pay nothing, at the price of an operation the interpreter handles apart from the
+kernel.
 
 ## 4. The benchmark table
 

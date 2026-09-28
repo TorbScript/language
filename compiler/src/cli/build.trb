@@ -273,14 +273,15 @@ fn buildProgram(
   const paths = pathsOfModules checked
   var checker = checked.checker
   checker.checksOnDemand = true
-  // Only what the entry files reach: nothing unreachable is emitted
-  var lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target
+  // Only what the entry files reach: nothing unreachable is emitted. Every `?` writes the return trace, which the C of
+  // the `dev` profile records and every other profile compiles to nothing
+  var lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target, returnTraces: true
   if !isLowered(lowering) {
     // A refusal is about the program as a whole: every body of it checked, and lowered again, so what is reported is
     // what it always was
     checker = checked.checker
     checkBodiesOf checker, modulesOfProgram(checked.program.graph, checked.program.workspace, checked.requested)
-    lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target
+    lowering = lowerWorkspace checker, paths, modules, seedsEverything: false, target: target, returnTraces: true
   }
   // A program that loads receiver scripts carries its files for the script host it links (docs/design/SCRIPTS.md slice
   // 8): only such a program is lowered a second time, with the text
@@ -295,6 +296,7 @@ fn buildProgram(
       target: target,
       scriptSources: sources,
       scriptRoot: root,
+      returnTraces: true,
     )
   }
   noteTiming options, "lowering", clock.taken()

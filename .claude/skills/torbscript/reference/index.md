@@ -150,7 +150,7 @@ that answers the question. A page marked (planned) describes a feature that does
 - `language/errors/question-mark.md` - **The question mark operator** (reference): A postfix ? unwraps an Ok or a Some and returns the Fail or None from the surrounding function early, converting the error type through From when they differ.
 - `language/errors/result.md` - **Result** (reference): A function that can fail answers Result<Value, Failure>, whose cases are Ok and Fail. The postfix question mark unwraps an Ok or returns the Fail from the surrounding function.
 - `language/errors/the-error-trait.md` - **The Error trait** (reference): Error is a trait, not a base type; a failure that implements it fits into Result<Value, Error> for the layers that only need to report it, and cause() gives the chain.
-- `language/errors/top-level-errors.md` - **Errors at the top level** (reference): A ? at the top level of an entry file or a script is not a panic; it is specified to print the error and exit with 1, walking cause() one line per link.
+- `language/errors/top-level-errors.md` - **Errors at the top level** (reference): A ? at the top level of an entry file or a script is not a panic; it prints the error and exits with 1, walking cause() one line per link, and in the dev profile names every ? the failure went through.
 
 ## language/execution
 

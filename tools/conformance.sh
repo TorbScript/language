@@ -6,7 +6,8 @@
 # line of `std/` reads `path:_:_` instead of its real position), `.exit` (the exit code) and `.leaks` (why the leak
 # gate does not apply); `.environment` (`NAME=value` lines) is set for every run of the binary, and `.input` is its
 # standard input (otherwise it reads an empty one). A file that is missing means "nothing to check" for
-# `.expected`/`.exit`, and "must be empty" for `.stderr`. `tests/conformance/README.md` is the contract.
+# `.expected`/`.exit`, and "must be empty" for `.stderr`. Every program is built and run in the `release` profile
+# unless a `.profile` file says `dev`. `tests/conformance/README.md` is the contract.
 #
 # Two more things are asserted per program:
 #   - the generated C names no absolute path of this machine
@@ -27,7 +28,8 @@
 #   sh tools/conformance.sh --torb build/x/torb  # another compiler than build/release/torb
 #
 # `--vm` is the second leg of docs/design/VM.md section 8: every program of the suite, `binary-only/` included, is run
-# with `torb run --vm` and compared against the same `.expected`/`.stderr`/`.exit` as its native run, byte for byte,
+# with `torb run --vm --profile <its profile>` and compared against the same `.expected`/`.stderr`/`.exit` as its native
+# run, byte for byte,
 # and so is every program of `vm-only/` (one with an `.expected` file: the others are the receiver scripts it loads),
 # which only the VM runs. The leak gate applies as it does natively - the kernel counts the
 # program's blocks apart from torb's own - and so does a `.workers` file: the VM's tasks run on the pool of `torb`,
@@ -106,7 +108,8 @@ run_one() {
   began=$(date +%s)
 
   target="$work/prog"
-  if ! "$CONFORMANCE_TORB" build "$program" --output "$target" >"$work/build.log" 2>&1; then
+  profile=$(profile_of "$program")
+  if ! "$CONFORMANCE_TORB" build --profile "$profile" "$program" --output "$target" >"$work/build.log" 2>&1; then
     {
       echo "FAIL"
       echo "torb build $program failed:"
@@ -313,6 +316,16 @@ input_of() {
   fi
 }
 
+# The profile a program is built and run in: `release`, unless a `.profile` file says `dev` - which records the return
+# trace of `?` and prints it under the report of a top-level one, natively and in the VM alike.
+profile_of() {
+  if [ -f "${1%.trb}.profile" ]; then
+    tr -d ' \t\r\n' <"${1%.trb}.profile"
+  else
+    printf '%s\n' release
+  fi
+}
+
 # The same comparison for `--vm`: the program is run by `torb run --vm` in a work directory of its own, and its three
 # outputs are compared with the expectation files of its native run. Nothing is built, so there is no C to check.
 run_one_vm() {
@@ -348,10 +361,11 @@ run_one_vm() {
     settings=$(sed 's/\r$//; s/#.*//; /^[[:space:]]*$/d' "$environment_file" | tr '\n' ' ')
   fi
   input=$(input_of "$program")
+  profile=$(profile_of "$program")
 
   set +e
   # shellcheck disable=SC2086
-  (cd "$work/run" && env $settings "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/stdout" 2>"$work/stderr")
+  (cd "$work/run" && env $settings "$CONFORMANCE_TORB" run --vm --profile "$profile" "$absolute" <"$input" >"$work/stdout" 2>"$work/stderr")
   code=$?
   set -e
   fold_library_positions <"$work/stderr" >"$work/stderr.folded"
@@ -373,7 +387,7 @@ $(diff -u "$work/expected.norm" "$work/stdout" 2>&1 || true)"
   if [ -f "$workers_file" ] && [ "$workers" != "1" ] && [ -f "$expected_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/stdout.one" 2>"$work/stderr.one")
+    (cd "$work/run" && env $settings TORB_WORKERS=1 "$CONFORMANCE_TORB" run --vm --profile "$profile" "$absolute" <"$input" >"$work/stdout.one" 2>"$work/stderr.one")
     set -e
     if ! cmp -s "$work/expected.norm" "$work/stdout.one"; then
       problems="$problems
@@ -412,7 +426,7 @@ $(cat "$work/stderr.folded")"
   if [ "$is_binary_only" -eq 0 ] && [ ! -f "$stderr_file" ] && [ ! -f "$leaks_file" ]; then
     set +e
     # shellcheck disable=SC2086
-    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm "$absolute" <"$input" >"$work/leak.stdout" 2>"$work/leak.stderr")
+    (cd "$work/run" && env $settings TORB_REPORT_LEAKS=1 "$CONFORMANCE_TORB" run --vm --profile "$profile" "$absolute" <"$input" >"$work/leak.stdout" 2>"$work/leak.stderr")
     set -e
     if ! grep -q 'live blocks at exit: 0$' "$work/leak.stderr"; then
       problems="$problems

@@ -717,15 +717,18 @@ fn testOptionsOf(arguments: List<String>): TestOptions? {
 }
 
 /**
- * `torb run [--native] [--profile dev|release] [<path> | <name>] [argument]...`: in the VM unless told otherwise;
- * `--native` or a profile builds the program, `dev` unless the profile says `release`. The flags of `run` come in
- * front of the path, because everything behind it is the program's. Without a path it runs the only program below the
- * working directory, and a name that is no path is a program's (docs/design/PROJECT.md section 4). `None` for a name
- * that is no profile.
+ * `torb run [--vm | --native] [--profile dev|release] [<path> | <name>] [argument]...`: in the VM unless told
+ * otherwise; `--native` or a profile builds the program, `dev` unless the profile says `release`. `--vm` with a profile
+ * runs the program in the VM in that profile, which decides whether the return trace of `?` is recorded. The flags of
+ * `run` come in front of the path, because everything behind it is the program's. Without a path it runs the only
+ * program below the working directory, and a name that is no path is a program's (docs/design/PROJECT.md section 4).
+ * `None` for a name that is no profile.
  */
 fn runOptionsOf(arguments: List<String>): RunOptions? {
   var profile = Profile.Dev
   var usesMachine = true
+  // `--vm` or `--native` said where the program runs, and a profile does not say it again
+  var chosen = false
   var withTimings = false
   var index = 0
   while index < arguments.length() {
@@ -737,17 +740,21 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     }
     if argument == "--vm" {
       usesMachine = true
+      chosen = true
       index = index + 1
       continue
     }
     if argument == "--native" {
       usesMachine = false
+      chosen = true
       index = index + 1
       continue
     }
     if argument == "--release" {
       profile = Profile.Release
-      usesMachine = false
+      if !chosen {
+        usesMachine = false
+      }
       index = index + 1
       continue
     }
@@ -757,7 +764,9 @@ fn runOptionsOf(arguments: List<String>): RunOptions? {
     const name = arguments.get(index + 1) ?? ""
     const choice = profileChoiceOf(["--profile", name], profile)?
     profile = choice.profile
-    usesMachine = false
+    if !chosen {
+      usesMachine = false
+    }
     index = index + 2
   }
   const given = arguments.get(index) ?? "."

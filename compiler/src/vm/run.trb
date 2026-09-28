@@ -44,13 +44,15 @@ const refusedCode = 1
 /**
  * Runs the program at `path` in the VM: the file, or the only program below the directory, or the one called
  * `program` (docs/design/PROJECT.md section 4). Answers the exit code when the program ends by running off the end of
- * its top-level code; `Process.exit` and a panic end the process directly.
+ * its top-level code; `Process.exit` and a panic end the process directly. `returnTraces` records the return trace of
+ * `?` and prints it under the report of a top-level one, which is what a run in the `dev` profile does.
  */
 public fn runInMachine(
   path: String,
   program: String,
   arguments: List<String>,
   withTimings: Bool = false,
+  returnTraces: Bool = false,
 ): Result<Int, IoError> {
   const clock = RunClock(enabled: withTimings, last: if withTimings { Clock.milliseconds() } else { 0 })
   const tree = readSourceTree([path])?
@@ -96,6 +98,7 @@ public fn runInMachine(
     executable: executable,
     requested: requested,
     clock: clock,
+    returnTraces: returnTraces,
   )
 }
 
@@ -137,9 +140,9 @@ public shared type RunClock {
 /**
  * `torb test --vm`: every `*.test.trb` below the paths an entry of one program, as `torb test` builds them into one
  * binary, run in the VM with the report `runtime/test.c` writes - the file in front of its tests, the summary, the exit
- * code.
+ * code. `returnTraces` is what it is for [runInMachine].
  */
-public fn testInMachine(paths: List<String>): Result<Int, IoError> {
+public fn testInMachine(paths: List<String>, returnTraces: Bool = false): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const requested = absolutePaths(paths)?
   const checked = check tree, requested, onlyReached: true
@@ -162,6 +165,7 @@ public fn testInMachine(paths: List<String>): Result<Int, IoError> {
     executable: "",
     requested: requested,
     clock: RunClock(enabled: false, last: 0),
+    returnTraces: returnTraces,
   )
 }
 
@@ -264,6 +268,7 @@ fn runModules(
   executable: String,
   requested: List<String>,
   clock: RunClock,
+  returnTraces: Bool,
 ): Result<Int, IoError> {
   const pool = match poolOf(checked, modules[0]) {
     Ok(found) => found
@@ -274,7 +279,16 @@ fn runModules(
   }
   // `TORB_VM_DEBUGGED`: lowered as for the debugger and run without one, which has to change nothing the program does
   const debugging = Environment.get("TORB_VM_DEBUGGED").isSome()
-  const program = match bytecodeOf(checked, tree, modules, isTestRun, clock, onDemand: true, debugging: debugging) {
+  const program = match bytecodeOf(
+    checked,
+    tree,
+    modules,
+    isTestRun,
+    clock,
+    onDemand: true,
+    debugging: debugging,
+    returnTraces: returnTraces,
+  ) {
     Some(found) => found
     None => {
       return refusedCode
@@ -289,7 +303,7 @@ fn runModules(
 /**
  * The entry files lowered for the VM, owned, verified and encoded as bytecode; a test run with the file of every entry.
  * `None` where the lowering or the emitter refused the program, which is printed. `debugging` lowers it for the
- * debugger (docs/design/DEBUGGER.md section 5).
+ * debugger (docs/design/DEBUGGER.md section 5), `returnTraces` with the return trace of `?`.
  */
 public fn bytecodeOf(
   checked: Checked,
@@ -299,8 +313,9 @@ public fn bytecodeOf(
   clock: RunClock = RunClock(enabled: false, last: 0),
   onDemand: Bool = false,
   debugging: Bool = false,
+  returnTraces: Bool = false,
 ): BytecodeProgram? {
-  const lowered = machineLoweringOf(checked, tree, modules, isTestRun, clock, onDemand, debugging)?
+  const lowered = machineLoweringOf(checked, tree, modules, isTestRun, clock, onDemand, debugging, returnTraces)?
   lowered.program
 }
 
@@ -319,6 +334,7 @@ public fn machineLoweringOf(
   clock: RunClock = RunClock(enabled: false, last: 0),
   onDemand: Bool = false,
   debugging: Bool = false,
+  returnTraces: Bool = false,
 ): MachineLowering? {
   var checker = checked.checker
   checker.checksOnDemand = onDemand
@@ -331,6 +347,7 @@ public fn machineLoweringOf(
     target: hostTarget(),
     forMachine: true,
     debugging: debugging,
+    returnTraces: returnTraces,
   )
   if onDemand && !isLowered(lowering) {
     // A refusal is about the program as a native build sees it: every body of the program checked, and lowered again
@@ -344,6 +361,7 @@ public fn machineLoweringOf(
       target: hostTarget(),
       forMachine: true,
       debugging: debugging,
+      returnTraces: returnTraces,
     )
   }
   clock.lap "lowering"

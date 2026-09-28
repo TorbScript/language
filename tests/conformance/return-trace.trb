@@ -1,0 +1,53 @@
+/**
+ * The `?` return trace of the `dev` profile: under the report of a top-level `?`, one `  at` line for every `?` the
+ * failure went through, the innermost first - here `valueOf` fails, the `?` in `setting` hands it on, the one in
+ * `address` hands it on, and the top-level one reports it. The `.profile` file builds the program in `dev` and runs it in
+ * the VM in `dev`; every other program of the suite runs in `release`, where nothing is recorded or printed.
+ *
+ * Two failures are handled on the way, and neither is in the chain: the one `handled` turns into a fallback, which the
+ * `?` around `handled()` drops when it succeeds, and the one `address` matches on itself, which was recorded before the
+ * `?` whose failure is reported began to run.
+ */
+type ConfigError with Show {
+  key: String
+
+  fn show(): String {
+    "there is no value for `{key}`"
+  }
+}
+
+fn valueOf(key: String): Result<String, ConfigError> {
+  if key == "port" {
+    return "8080"
+  }
+  Fail ConfigError(key)
+}
+
+fn setting(key: String): Result<String, ConfigError> {
+  const value = valueOf(key)?
+  Ok value
+}
+
+fn handled(): Result<String, ConfigError> {
+  const colour = match setting("colour") {
+    Ok(found) => found
+    Fail(_) => "blue"
+  }
+  Ok colour
+}
+
+fn address(): Result<String, ConfigError> {
+  const colour = handled()?
+  const size = match setting("size") {
+    Ok(found) => found
+    Fail(_) => "large"
+  }
+  const port = setting("port")?
+  const host = setting("host")?
+  Ok "{host}:{port}, {colour} and {size}"
+}
+
+const port = setting("port")?
+print port
+const shown = address()?
+print shown

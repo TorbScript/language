@@ -28,11 +28,12 @@ way when it is shipped.
 ## Synopsis
 
 ```text
-torb run [--native] [--profile dev|release] [path | name] [arguments]   Run a file or a program
+torb run [--vm | --native] [--profile dev|release] [path | name] [arguments]   Run a file or a program
     --native                In front of the path: build it natively and run the binary
-    --profile dev|release   In front of the path: build it natively, this hard does the C compiler optimize
+    --profile dev|release   In front of the path: build it natively, this hard does the C compiler optimize;
+                            with --vm, run it in the VM in that profile
     --release               The same as --profile release
-    --vm                    The default, accepted: run it in the bytecode VM
+    --vm                    The default, accepted: run it in the bytecode VM, whatever profile is named
     --timings               In front of the path: what every step up to the first instruction took, on standard error
 ```
 
@@ -107,6 +108,11 @@ core count by default - under the rules of a native binary's. A program that use
 refused before anything runs, with a message that names what is missing. Two things answer differently because the
 program runs inside `torb`: `Process.executablePath()` is the path of the entry file, which is what executes, and a
 recursion reaches the `stack overflow` panic at a depth of its own.
+
+**It runs in the `dev` profile**, as `--native` builds, and the profile decides one thing in the VM: the return trace
+of `?`, which the report of a top-level `?` prints under the error, one `  at` line per `?` the failure went through
+([Errors at the top level](../language/errors/top-level-errors.md)). `torb run --vm --release` runs it without the
+trace, as a release binary runs - which is how the conformance suite compares a program with its release build.
 
 **It starts at once**, because it does only what the program needs: the files of the workspace are listed and only the
 ones the program reaches are read and parsed - the packages its entry imports, depends on and names as its prelude -

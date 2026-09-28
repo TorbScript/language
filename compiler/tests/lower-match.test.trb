@@ -632,6 +632,55 @@ group "`?` at the top level walking the `cause()` chain of a trait-typed `Error`
   }
 }
 
+/**
+ * The return trace of the debug profile (docs/language/errors/top-level-errors.md, rules 5 and 6): a `?` takes a mark
+ * before its operand, drops what the operand recorded when it succeeds, and records itself when it hands a failure on;
+ * the top-level one prints the chain under the report. The C of a release build compiles all of it to nothing and the
+ * VM of a release run is lowered without it, which `tests/conformance/return-trace.trb` pins in both back ends.
+ */
+group "The return trace of `?`" {
+  const source = raw"""
+    fn valueOf(key: String): Result<String, String> {
+      Fail key
+    }
+
+    fn setting(key: String): Result<String, String> {
+      const value = valueOf(key)?
+      Ok value
+    }
+
+    const port = setting("port")?
+
+    print port
+    """
+
+  test "a `?` inside a function marks, records where it fails and rewinds where it succeeds" {
+    const text = irOf source, "t_acme_x2f_app_main_setting", returnTraces: true
+    // The mark comes before the call of the operand, the rewind in the block of its value
+    assert text.contains("%2 = intrinsic returnTraceMark  at acme/app/src/main.trb:6:17")
+    assert text.contains("b1: # acme/app/src/main.trb:6 value\n  intrinsic returnTraceRewind %2")
+    // The record, at the `?` itself, before the failure is handed on in the block that hands it on
+    const failed = text
+      .byteOffsetOf("intrinsic returnTraceRecord %2 at acme/app/src/main.trb:6:29")
+      .expect("the record")
+    const rest = text.sliceBytes failed, text.byteLength()
+    assert rest.contains("return ")
+  }
+
+  test "the top-level `?` prints the chain under the report" {
+    const text = irOf source, "t_acme_x2f_app_main", returnTraces: true
+    assert text.contains("intrinsic returnTraceRecord")
+    const printed = text.byteOffsetOf("intrinsic returnTracePrint").expect("the print of the chain")
+    const ended = text.byteOffsetOf("intrinsic exitWithCode").expect("the end of the program")
+    assert(printed < ended)
+  }
+
+  test "a lowering without the trace writes none of it" {
+    const text = irOf source, "t_acme_x2f_app_main_setting"
+    assert(!text.contains("returnTrace"))
+  }
+}
+
 group "`if var`" {
   /**
    * The names of an `if var` are paths into the subject: `inner` is read as the payload of `current` where it stands,

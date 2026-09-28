@@ -18,8 +18,13 @@ use verifyOwnedProgram from "../src/ir/ownership-verify"
 use Lowering from "../src/ir/lower/context"
 use lowerChecked, loweredText from "../src/ir/lower/lower"
 
-public fn lowered(source: String, extra: Map<String, String> = [:], debugging: Bool = false): Lowering {
-  loweredWith source, [], extra, debugging: debugging
+public fn lowered(
+  source: String,
+  extra: Map<String, String> = [:],
+  debugging: Bool = false,
+  returnTraces: Bool = false,
+): Lowering {
+  loweredWith source, [], extra, debugging: debugging, returnTraces: returnTraces
 }
 
 /**
@@ -35,6 +40,7 @@ public fn loweredWith(
   expected: List<String>,
   extra: Map<String, String> = [:],
   debugging: Bool = false,
+  returnTraces: Bool = false,
 ): Lowering {
   var files = extra
   files.set "app/src/main.trb", source
@@ -51,12 +57,12 @@ public fn loweredWith(
     }
   }
   assert(found == expected)
-  lowerChecked checked, debugging: debugging
+  lowerChecked checked, debugging: debugging, returnTraces: returnTraces
 }
 
 /** One function of the program, with the verifier's findings in its place if it has any. */
-public fn irOf(source: String, name: String, extra: Map<String, String> = [:]): String {
-  var found = lowered source, extra
+public fn irOf(source: String, name: String, extra: Map<String, String> = [:], returnTraces: Bool = false): String {
+  var found = lowered source, extra, returnTraces: returnTraces
   const problems = verifyProgram found.program
   if !problems.isEmpty() {
     return problems.joined separator: "\n"

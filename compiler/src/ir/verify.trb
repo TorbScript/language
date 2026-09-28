@@ -1386,6 +1386,7 @@ fn isTextPartsOperation(operation: IntrinsicOperation): Bool {
 public fn producesNoValue(operation: IntrinsicOperation): Bool {
   match operation {
     .PrintParts | .PrintErrorParts | .ExitWithCode => true
+    .ReturnTraceRewind | .ReturnTraceRecord | .ReturnTracePrint => true
     _ => false
   }
 }
@@ -1444,6 +1445,7 @@ fn verifyIntrinsicResult(
     .Convert(to) => expectNumeric program, function, found, at, slot, to, name
     .TextCompare => expectInteger program, found, at, actual, what
     .TextByteLength => expectInteger program, found, at, actual, what
+    .ReturnTraceMark => expectInteger program, found, at, actual, what
     .TextConcat => {
       if !isTextType(program, actual) {
         found.append "{at}: {what} is a `String`, and %{slot.value} is `{describeIrType(program, actual)}`"
@@ -1508,6 +1510,10 @@ public fn operandCountOf(operation: IntrinsicOperation): Int {
     .PrintParts => 0 - 1
     .PrintErrorParts => 0 - 1
     .ExitWithCode => 1
+    .ReturnTraceMark => 0
+    .ReturnTraceRewind => 1
+    .ReturnTraceRecord => 1
+    .ReturnTracePrint => 0
     _ => 2
   }
 }
@@ -1533,6 +1539,7 @@ fn allowsNumericKind(operation: IntrinsicOperation): Bool {
     .PrintParts => false
     .PrintErrorParts => false
     .ExitWithCode => false
+    .ReturnTraceMark | .ReturnTraceRewind | .ReturnTraceRecord | .ReturnTracePrint => false
     .TextEqual => false
     .TextCompare => false
     .TextByteLength => false

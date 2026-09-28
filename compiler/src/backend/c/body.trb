@@ -2281,6 +2281,10 @@ fn intrinsicStatements(
     statements.append CStatement.Evaluate(call)
     return statements
   }
+  if const Some(traced) = returnTraceStatement(program, body, place, intrinsic, arguments, at) {
+    statements.append traced
+    return statements
+  }
   const expression = intrinsicExpression emission, program, body, intrinsic, arguments, at
   const found = match expression {
     Some(inner) => inner
@@ -2293,6 +2297,41 @@ fn intrinsicStatements(
     None => statements.append CStatement.Evaluate(CExpression.Cast("void", found))
   }
   statements
+}
+
+/**
+ * The return trace of `?`: the four macros of `runtime/include/torb.h`, which only the `dev` profile makes calls, so
+ * the C is the same under every profile and a release binary pays nothing. A record carries the location of the `?`
+ * itself, never the caller's site a function that tracks its caller hands on. `None` for every other operation.
+ */
+fn returnTraceStatement(
+  program: IrProgram,
+  body: Body,
+  place: CExpression?,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  at: LocationId,
+): CStatement? {
+  var operands: List<CExpression> = []
+  for slot in arguments {
+    operands.append slotExpression(body, slot)
+  }
+  match intrinsic.operation {
+    .ReturnTraceMark => {
+      const mark = CExpression.Call CExpression.Name("TORB_RETURN_TRACE_MARK"), []
+      match place {
+        Some(inner) => CStatement.Assignment inner, mark
+        None => CStatement.Evaluate CExpression.Cast("void", mark)
+      }
+    }
+    .ReturnTraceRewind => CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_RETURN_TRACE_REWIND"), operands)
+    .ReturnTraceRecord => {
+      const recorded = operands.appended locationExpression(program, at)
+      CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_RETURN_TRACE_RECORD"), recorded)
+    }
+    .ReturnTracePrint => CStatement.Evaluate CExpression.Call(CExpression.Name("TORB_RETURN_TRACE_PRINT"), [])
+    _ => None
+  }
 }
 
 /**

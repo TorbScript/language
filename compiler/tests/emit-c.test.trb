@@ -1021,3 +1021,48 @@ group "The frames of the dev profile" {
     assert body.contains("TORB_FRAME_SITE(TORB_LOCATION(\"acme/app/src/main.trb\", 2, 3));")
   }
 }
+
+/**
+ * The return trace of `?` names the macros of `runtime/include/torb.h`, which only the `dev` profile makes code of: the
+ * C is the same under every profile, and a release binary's machine code is what it would be without them.
+ */
+group "The return trace of `?`" {
+  test "a function with a `?` looks the trace up once, and marks, rewinds and records through macros" {
+    const source = raw"""
+      fn valueOf(key: String): Result<String, String> {
+        Fail key
+      }
+
+      fn setting(key: String): Result<String, String> {
+        const value = valueOf(key)?
+        Ok value
+      }
+
+      print setting("port")
+      """
+    var found = lowered source, returnTraces: true
+    const text = emittedProgramText found.program, entryName
+    var body: List<String> = []
+    var isInside = false
+    for line in text.lines() {
+      if line == "/* t_acme_x2f_app_main_setting */" {
+        isInside = true
+        continue
+      }
+      if isInside {
+        body.append line
+        if line == "\}" {
+          break
+        }
+      }
+    }
+    const setting = body.joined separator: "\n"
+    assert setting.contains("TORB_RETURN_TRACE_ENTER();")
+    assert setting.contains("= TORB_RETURN_TRACE_MARK();")
+    assert setting.contains("TORB_RETURN_TRACE_REWIND(")
+    assert setting.contains("TORB_RETURN_TRACE_RECORD(")
+    assert setting.contains("TORB_LOCATION(\"acme/app/src/main.trb\", 6, 29)")
+    // `valueOf` has no `?`, so it looks nothing up
+    assert(!functionOf(source, "t_acme_x2f_app_main_valueOf").contains("TORB_RETURN_TRACE"))
+  }
+}

@@ -2157,6 +2157,26 @@ fn emitIntrinsic(
       emitKernel emitter, body, kernelNumberOf(KernelOperation.Exit), [first]
       return
     }
+    // The return trace of `?`, which the lowering writes only for a run in the `dev` profile
+    .ReturnTraceMark => {
+      if const Some(slot) = target {
+        const mark = targetOf emitter, body, slot
+        emitKernel emitter, body, kernelNumberOf(KernelOperation.ReturnTraceMark), [mark]
+      }
+      return
+    }
+    .ReturnTraceRewind => {
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ReturnTraceRewind), [first]
+      return
+    }
+    .ReturnTraceRecord => {
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ReturnTraceRecord), [first, location]
+      return
+    }
+    .ReturnTracePrint => {
+      emitKernel emitter, body, kernelNumberOf(KernelOperation.ReturnTracePrint), []
+      return
+    }
     _ => {}
   }
   const slot = match target {

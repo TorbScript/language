@@ -12,6 +12,7 @@ compiler (`torb build <program>`), run, and compared against what is written dow
 | how many workers it runs with | `<program>.workers`: a number, or `all` for one per processor; no file means one |
 | what else its environment holds | `<program>.environment`: one `NAME=value` per line (no spaces, `#` starts a comment), set for every run of the binary and never for its build - `TORB_MEMORY_LIMIT=64M` limits the program and not the compiler |
 | what it reads on standard input | `<program>.input`; no file means an empty standard input, never the one the suite was started with |
+| which profile it is built and run in | `<program>.profile`: `dev` builds it with `--profile dev` and runs it in the VM with `--profile dev`, which records the return trace of `?`; no file means `release` for both |
 
 **One worker unless a program says otherwise.** Every program runs with `TORB_WORKERS=1`, the order the task programs
 pin: one worker runs one task at a time in the order they became ready. A program with a `.workers` file runs with that
@@ -111,7 +112,7 @@ a program there has an `.expected` file and no native run, and the scripts besid
 of their own. `sandbox-crossing.trb` loads its scripts in both back ends - a native binary through the script host it
 links (slice 8) - and its scripts are in `crossing/`, which no run lists; its native build is the one that compiles the
 script host of the checkout once, into `build/script-host/`, which every later run reuses. A directory named after a
-program (`protected-field/`) holds the modules only that program imports, which no run lists either. The leak gate applies to a VM run as it does natively, and so do `.environment` and `.workers`; the two
+program (`protected-field/`, `deprecated/`) holds the modules only that program imports, which no run lists either. The leak gate applies to a VM run as it does natively, and so do `.environment`, `.workers` and `.profile`; the two
 checks of the C do not. There is no list of what the VM runs: it runs everything (docs/design/VM.md section 8).
 
 ## The programs
@@ -223,6 +224,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `keyword-members.trb` | A field, a method, a `var fn`, a `static fn` and a case field named after a reserved word: declared in the type body, reached after a `.`, as a label and in a pattern, `self.type` inside the type, and derived JSON that uses the name as the key |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 | `protected-field.trb` | A `protected var` field of a type declared in `protected-field/server.trb` is read from the program's file and written only by that file - its `var fn` and a function of it - while the constructor and `copy` still take it from outside; a field named `protected` is an ordinary name. The refused write is a checker error, so it is pinned in `compiler/tests/visibility.test.trb` and not here |
+| `deprecated.trb` | Every kind of deprecated declaration of `deprecated/geometry.trb` still works: a field read beside the method of its name that replaces it, a renamed method and constant, a function of the module, a case matched and constructed, a type. The warnings are `torb check`'s, pinned in `compiler/tests/deprecation.test.trb` |
 
 **Paths** - `std/path`'s `Path`: a capsule over a root and a list of components, never a string, and nothing about a disk.
 
@@ -256,6 +258,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | `wrap-coercion.trb` | A value where an `Option` or a `Result` of its type is expected becomes `Some(value)` or `Ok(value)` - a body and `return`, an annotated binding of every literal kind, an argument, a field and its default, a position of a tuple, a collection element, a closure's declared result, a generic body, a short case resolved against the inner type, a trait coercion first; an `Int?` into the `Ok` of a `Result<Int?, _>`, a `Result<Void, _>` ending in a call, and the inner `Some` of an `Int??` written |
 | `top-level-error.trb` | A top-level `?` that fails: `error: <the error through Show>` and exit code **1** - not a panic |
 | `error-chain.trb` | A top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`, until `cause()` answers `None` |
+| `return-trace.trb` | In the `dev` profile (its `.profile`), the report of a top-level `?` names every `?` the failure went through, the innermost first, and none of the failures that were handled on the way - one dropped by the `?` around a call that succeeded, one matched on before the reported `?` began |
 
 **Panics** - `panic: <message>`, the site, exit code **101**, and nothing else runs.
 

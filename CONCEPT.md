@@ -1848,7 +1848,9 @@ panic "unreachable"                                      // Bugs. Not catchable,
 
   In the **debug profile** every `?` that hands an error on also records where it did, and those locations are printed
   under the chain (`  at src/config.trb:12:31`), the way Zig's error return traces work. The release profile emits
-  nothing for it, so it is free there and no error type has to change.
+  nothing for it, so it is free there and no error type has to change. Only the `?`s of the reported failure are
+  printed: a `?` whose operand succeeds drops what the operand recorded, and a failure a `match` handled was recorded
+  before the `?` above the next one began (docs/language/errors/top-level-errors.md, rules 5 and 6).
 
 ## Collections and Iteration
 

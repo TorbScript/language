@@ -15,7 +15,7 @@ use findCompilerSources from "../project/toolchain"
 use check from "../semantics/check"
 use programText from "../vm/embed"
 use bytecodeOf, reportChecked from "../vm/run"
-use BuildOptions, buildTree, buildFailedCode, chosenPrograms, nameOne, poolOf from "./build"
+use BuildOptions, Profile, buildTree, buildFailedCode, chosenPrograms, nameOne, poolOf from "./build"
 use printErrorMessage from "./render"
 
 /** The exit code of `torb build --embed-vm`: `build`'s own for the binary of the VM, or why nothing was built. */
@@ -54,7 +54,7 @@ public fn buildEmbedded(options: BuildOptions): Result<Int, IoError> {
       return buildFailedCode
     }
   }
-  const program = match bytecodeOf(checked, tree, modules) {
+  const program = match bytecodeOf(checked, tree, modules, returnTraces: options.profile == Profile.Dev) {
     Some(found) => found
     None => {
       return buildFailedCode

@@ -1729,7 +1729,11 @@ enum {
   TORB_OPERATION_DEBUG_PANIC_MESSAGE = 78,
   TORB_OPERATION_DEBUG_CONTAINER = 79,
   TORB_OPERATION_FLAG_ACQUIRE = 80,
-  TORB_OPERATION_FLAG_PUBLISH = 81
+  TORB_OPERATION_FLAG_PUBLISH = 81,
+  TORB_OPERATION_RETURN_TRACE_MARK = 82,
+  TORB_OPERATION_RETURN_TRACE_REWIND = 83,
+  TORB_OPERATION_RETURN_TRACE_RECORD = 84,
+  TORB_OPERATION_RETURN_TRACE_PRINT = 85
 };
 
 /*
@@ -2079,6 +2083,19 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       return 0;
     case TORB_OPERATION_EXIT:
       torb_process_exit(words[base + o[0]]);
+      return 0;
+    /* The return trace of `?` (torb.h), which the emitter writes only for a run in the `dev` profile */
+    case TORB_OPERATION_RETURN_TRACE_MARK:
+      words[base + o[0]] = torb_return_trace_mark();
+      return 0;
+    case TORB_OPERATION_RETURN_TRACE_REWIND:
+      torb_return_trace_rewind(words[base + o[0]]);
+      return 0;
+    case TORB_OPERATION_RETURN_TRACE_RECORD:
+      torb_return_trace_record(words[base + o[0]], torb_machine_location(o[1]));
+      return 0;
+    case TORB_OPERATION_RETURN_TRACE_PRINT:
+      torb_return_trace_print();
       return 0;
     case TORB_OPERATION_BLOCK_NEW: {
       /* target, shape, kind, words, count, then (offset, register, width) per field */

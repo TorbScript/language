@@ -59,6 +59,13 @@ __declspec(thread) uintptr_t torb_thread_stack_floor = 0u;
 _Thread_local uintptr_t torb_thread_stack_floor = 0u;
 #  endif
 #endif
+/* The `?` return trace of the running thread (`torb_return_trace_mark` in torb.h). */
+#if defined(_MSC_VER)
+static __declspec(thread) torb_return_trace torb_trace;
+#else
+static _Thread_local torb_return_trace torb_trace;
+#endif
+
 static torb_panic_hook torb_hook = NULL;
 static torb_debug_panic_hook torb_debug_hook = NULL;
 /** Set by the first thread that panics: a second panic on another worker waits for the first to end the process. */
@@ -204,6 +211,71 @@ static TORB_NORETURN void torb_end_with_panic(const char *message, torb_location
   torb_write_line_error(buffer, strlen(buffer));
   fflush(stderr);
   TORB_EXIT_IMMEDIATELY(code);
+}
+
+torb_return_trace *torb_return_trace_current(void) {
+  return &torb_trace;
+}
+
+int64_t torb_return_trace_mark(void) {
+  return torb_trace.next;
+}
+
+void torb_return_trace_rewind(int64_t mark) {
+  torb_return_trace_rewind_in(&torb_trace, mark);
+}
+
+void torb_return_trace_record_in(torb_return_trace *trace, int64_t mark, torb_location at) {
+  torb_return_trace_entry *entry = &trace->entries[(uint64_t)trace->next % TORB_RETURN_TRACE_ENTRIES];
+  entry->at = at;
+  entry->mark = mark;
+  trace->next = trace->next + 1;
+}
+
+void torb_return_trace_record(int64_t mark, torb_location at) {
+  torb_return_trace_record_in(&torb_trace, mark, at);
+}
+
+int64_t torb_return_trace_chain_start(const torb_return_trace *trace) {
+  int64_t newest = trace->next - 1;
+  int64_t kept = trace->next - (int64_t)TORB_RETURN_TRACE_ENTRIES;
+  int64_t first = newest;
+  if (newest < 0) {
+    return -1;
+  }
+  while (first - 1 >= 0 && first - 1 >= kept
+         && first - 1 >= trace->entries[(uint64_t)first % TORB_RETURN_TRACE_ENTRIES].mark) {
+    first = first - 1;
+  }
+  return first;
+}
+
+void torb_return_trace_print(void) {
+  int64_t newest = torb_trace.next - 1;
+  int64_t kept = torb_trace.next - (int64_t)TORB_RETURN_TRACE_ENTRIES;
+  int64_t first = torb_return_trace_chain_start(&torb_trace);
+  char line[TORB_MESSAGE_BUFFER_SIZE];
+  if (first < 0) {
+    return;
+  }
+  fflush(stdout);
+  /* The chain goes on beyond what the ring still holds */
+  if (first - 1 >= 0 && first - 1 < kept
+      && first - 1 >= torb_trace.entries[(uint64_t)first % TORB_RETURN_TRACE_ENTRIES].mark) {
+    static const char dropped[] = "  ... the innermost ones were not kept";
+    torb_write_line_error(dropped, sizeof dropped - 1u);
+  }
+  for (int64_t index = first; index <= newest; index++) {
+    torb_location at = torb_trace.entries[(uint64_t)index % TORB_RETURN_TRACE_ENTRIES].at;
+    if (at.path == NULL) {
+      continue;
+    }
+    int length = snprintf(line, sizeof line, "  at %s:%u:%u", at.path, at.line, at.column);
+    if (length > 0) {
+      torb_write_line_error(line, (size_t)length < sizeof line ? (size_t)length : sizeof line - 1u);
+    }
+  }
+  fflush(stderr);
 }
 
 static TORB_NORETURN void torb_finish_panic(const char *message, torb_location at) {

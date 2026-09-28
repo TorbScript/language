@@ -39,7 +39,8 @@ torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: 
     --filter <name>                 Only the test of this full name, or every test of the group of this name; repeatable
     --report json                   JSON Lines on standard output instead of the report a person reads
     --color auto|always|never       Colour `ok`, `FAILED` and the summary (default: where the output is a terminal)
-    --vm                            The default, accepted
+    --vm                            The default, accepted; with a profile, the VM runs in it (dev records the return
+                                    trace of `?`)
 torb test --help                 Every flag, and what a path is
 ```
 

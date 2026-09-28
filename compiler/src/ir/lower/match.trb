@@ -42,6 +42,8 @@ use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
 use referenceAt, PlacePath from "./place"
 use showSlot from "./text"
+use isWaitingName from "./task"
+use nodesOfExpression from "../../syntax/nodes"
 use endEveryScope, openScope, closeScope, declareScopedBetween, markStatement from "./scope"
 
 /** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
@@ -1538,6 +1540,8 @@ public fn lowerTry(
   inner: Expression,
   annotation: IrTypeId,
 ): Slot {
+  // Where the return trace stands before the operand runs: what the operand records belongs to this `?` only if it fails
+  const mark = returnTraceMark lowering, builder, inner, expression.span
   const subject = lowerValue lowering, builder, inner
   if !lowering.supported {
     return abandonedSlot lowering, builder, destination
@@ -1558,7 +1562,17 @@ public fn lowerTry(
   const resultLayout = match variantLayoutOfType(lowering, result) {
     Some(found) => found
     None => {
-      return lowerTopLevelTry lowering, builder, destination, inner, subject, subjectLayout, annotation
+      return lowerTopLevelTry(
+        lowering,
+        builder,
+        destination,
+        expression,
+        inner,
+        subject,
+        subjectLayout,
+        annotation,
+        mark,
+      )
     }
   }
   const isResult = variantNamed(lowering, subjectLayout, "Ok") >= 0
@@ -1581,9 +1595,11 @@ public fn lowerTry(
   if carriesNever(lowering, subjectLayout, failure) {
     finishBlock lowering, builder, Terminator.Unreachable
   } else {
+    recordReturnTrace lowering, builder, mark, expression.span
     emitFailure lowering, builder, subject, subjectLayout, failure, resultLayout, wantedFailure, result, expression.span
   }
   continueIn lowering, builder, value
+  rewindReturnTrace lowering, builder, mark, expression.span
   const step = PathStep.Variant subjectLayout, success, 0
   emit builder, Instruction.Read(target, Reference(subject, [step]))
   target
@@ -1604,18 +1620,20 @@ public fn lowerTry(
  * - **Ending the program is an intrinsic and not a call of `Process.exit`.** An entry file that never imports
  *   `std/process` has no name for that function, and what happens here is the language's own behaviour - so both back
  *   ends get it out of the IR (`IntrinsicOperation.ExitWithCode`).
- * - **The `?` return trace of the debug profile is not here.** It is a per-task ring buffer of locations that the report
- *   prints under the chain (BACKEND 5.3), which needs the profiles the driver does not have yet - and it changes no
- *   error type, so it can be added to exactly this block later. Stated as planned rather than half built.
+ * - **The `?` return trace of the debug profile is printed under the chain.** This `?` is the last entry of the trace,
+ *   and `IntrinsicOperation.ReturnTracePrint` writes the chain that leads to it, the innermost first - which is nothing
+ *   at all in a release build, and nothing where the lowering writes no trace ([returnTraceMark]).
  */
 fn lowerTopLevelTry(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   destination: Slot?,
+  expression: Expression,
   inner: Expression,
   subject: Slot,
   subjectLayout: LayoutId,
   annotation: IrTypeId,
+  mark: Slot?,
 ): Slot {
   // The span of what stands *before* the `?`, because the error type is the second argument of its `Result` - the type
   // recorded at the `?` itself is the type of the value it answers
@@ -1639,12 +1657,59 @@ fn lowerTopLevelTry(
   if carriesNever(lowering, subjectLayout, failure) {
     finishBlock lowering, builder, Terminator.Unreachable
   } else {
-    reportFailure lowering, builder, subject, subjectLayout, failure, at
+    recordReturnTrace lowering, builder, mark, expression.span
+    reportFailure lowering, builder, subject, subjectLayout, failure, at, traced: mark.isSome()
   }
   continueIn lowering, builder, value
+  rewindReturnTrace lowering, builder, mark, expression.span
   const step = PathStep.Variant subjectLayout, success, 0
   emit builder, Instruction.Read(target, Reference(subject, [step]))
   target
+}
+
+/**
+ * Where the return trace of the thread stands before the operand of a `?` runs (`IntrinsicOperation.ReturnTraceMark`),
+ * or `None` where the `?` takes no part in it: a lowering without the trace, and an operand of a task's body that waits
+ * for another task - its failure was recorded on the thread that task ran on, and the body may go on on another one.
+ */
+fn returnTraceMark(var lowering: Lowering, var builder: FunctionBuilder, inner: Expression, at: Span): Slot? {
+  if !lowering.returnTraces || (lowering.suspendable && waitsForTask(inner)) {
+    return None
+  }
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
+  Some intrinsicSlot(lowering, builder, None, IntrinsicOperation.ReturnTraceMark, None, [], integer, at)
+}
+
+/** Whether an expression waits for a task somewhere in it: `task.await()`, `task.result()`. */
+fn waitsForTask(expression: Expression): Bool {
+  for found in nodesOfExpression(expression).expressions {
+    if const .Call(callee, _, _) = found.kind {
+      if const .Member(_, name, _) = callee.kind {
+        if isWaitingName(name.text) {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+/**
+ * A `?` hands a failure on: its entry of the return trace, at the `?` itself, with the mark it took. Nothing where it
+ * took none.
+ */
+fn recordReturnTrace(var lowering: Lowering, var builder: FunctionBuilder, mark: Slot?, at: Span) {
+  if const Some(taken) = mark {
+    const site = Span((at.end - 1).max(at.start), at.end)
+    emitIntrinsic lowering, builder, None, IntrinsicOperation.ReturnTraceRecord, None, [taken], site
+  }
+}
+
+/** The operand of a `?` succeeded: what it recorded belongs to failures that were handled below it. */
+fn rewindReturnTrace(var lowering: Lowering, var builder: FunctionBuilder, mark: Slot?, at: Span) {
+  if const Some(taken) = mark {
+    emitIntrinsic lowering, builder, None, IntrinsicOperation.ReturnTraceRewind, None, [taken], at
+  }
 }
 
 /**
@@ -1664,8 +1729,8 @@ fn carriesNever(var lowering: Lowering, layout: LayoutId, variant: Int): Bool {
 
 /**
  * `error: <the error>` to stderr, then one `  caused by: <the cause>` line per link of `cause()` where the error is
- * the trait-typed `Error` (the doc comment of [lowerTopLevelTry] says why only that case walks). Exit code 1 and
- * nothing follows it, so the block ends `unreachable`.
+ * the trait-typed `Error` (the doc comment of [lowerTopLevelTry] says why only that case walks), then the return trace
+ * where the `?` is `traced`. Exit code 1 and nothing follows it, so the block ends `unreachable`.
  */
 fn reportFailure(
   var lowering: Lowering,
@@ -1674,6 +1739,7 @@ fn reportFailure(
   subjectLayout: LayoutId,
   failure: Int,
   at: Span,
+  traced: Bool,
 ) {
   const text = lowering.program.internType IrType.Text
   const shape = lowering.program.layoutAt subjectLayout
@@ -1728,6 +1794,9 @@ fn reportFailure(
     if !lowering.supported {
       return
     }
+  }
+  if traced {
+    emitIntrinsic lowering, builder, None, IntrinsicOperation.ReturnTracePrint, None, [], at
   }
   const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const code = integerSlot lowering, builder, 1, integer

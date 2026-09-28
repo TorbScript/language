@@ -2401,6 +2401,12 @@ fn emitDefinitions(
       sited.appendAll statements
       statements = sited
     }
+    // A function that has a `?` looks the return trace of its thread up once, where the `dev` profile keeps one
+    if usesReturnTrace(function) {
+      var traced = [CStatement.Evaluate(CExpression.Call(CExpression.Name("TORB_RETURN_TRACE_ENTER"), []))]
+      traced.appendAll statements
+      statements = traced
+    }
     // First of all, so that every label and every `goto` of the body is inside the scope of the frame
     var framed = [frameEntryOf(frameNames.get(function.name) ?? function.name)]
     framed.appendAll statements
@@ -2423,6 +2429,26 @@ fn frameNamesByFunction(program: IrProgram): Map<String, String> {
     }
   }
   names
+}
+
+/**
+ * Whether a function takes part in the return trace of `?` (`IntrinsicOperation.ReturnTraceMark`), which is what
+ * `TORB_RETURN_TRACE_ENTER();` at its start is for: its mark, rewind and record then use the trace it looked up.
+ */
+fn usesReturnTrace(function: IrFunction): Bool {
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Intrinsic(_, intrinsic, _, _) = instruction {
+        match intrinsic.operation {
+          .ReturnTraceMark | .ReturnTraceRewind | .ReturnTraceRecord => {
+            return true
+          }
+          _ => {}
+        }
+      }
+    }
+  }
+  false
 }
 
 /**

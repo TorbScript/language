@@ -333,6 +333,80 @@ static inline void torb_leave_frame(torb_frame *frame) {
 #endif
 
 /**
+ * The `?` return trace of the `dev` profile: the `?`s a failure went through on its way to a top-level `?`, printed
+ * under its report, the innermost first (docs/language/errors/top-level-errors.md, rule 5).
+ *
+ *     error: there is no value for `host`
+ *       at src/config.trb:12:31
+ *       at src/main.trb:4:30
+ *
+ * Every thread keeps the last `TORB_RETURN_TRACE_ENTRIES` entries in a ring, each with the number it was recorded
+ * under and the **mark** of its `?`: where the trace stood before the operand of that `?` was evaluated. A `?` takes a
+ * mark before its operand, drops everything recorded since when the operand succeeds - a failure that was recorded and
+ * then handled below it is no part of any chain - and records itself with the mark when it hands a failure on. The
+ * entry before one belongs to its chain when it was recorded after that entry's mark, which is what keeps an entry of a
+ * failure that was handled by a `match` out of the chain of the next one. No frame and no error value knows about it.
+ *
+ * The VM calls the four functions directly and only for a program it runs in the `dev` profile. The C of a native
+ * program names the macros instead, which only `TORB_PROFILE_DEV` makes code of: a function that has a `?` starts with
+ * `TORB_RETURN_TRACE_ENTER()`, which looks the trace of its thread up once, and a mark and a rewind are then a load and
+ * a comparison - a thread-local variable costs a call on some systems (MinGW's emulated TLS), and a `?` on its success
+ * path is far more frequent than a call of a function that has one. A release binary pays nothing.
+ */
+#define TORB_RETURN_TRACE_ENTRIES 64u
+/** One entry: where a `?` handed a failure on, and the mark it took before its operand. */
+typedef struct torb_return_trace_entry {
+  torb_location at;
+  int64_t mark;
+} torb_return_trace_entry;
+/** The trace of one thread. Entry `n` lives at `n % TORB_RETURN_TRACE_ENTRIES`. */
+typedef struct torb_return_trace {
+  /** The number the next entry is recorded under */
+  int64_t next;
+  torb_return_trace_entry entries[TORB_RETURN_TRACE_ENTRIES];
+} torb_return_trace;
+/** The trace of the running thread. */
+torb_return_trace *torb_return_trace_current(void);
+/** Where the trace of the running thread stands: the mark a `?` takes before its operand. */
+int64_t torb_return_trace_mark(void);
+/** The operand succeeded: every entry recorded since the mark is dropped. */
+void torb_return_trace_rewind(int64_t mark);
+/** A `?` hands a failure on at `at`: one entry more, with the mark it took. */
+void torb_return_trace_record(int64_t mark, torb_location at);
+/** The same for a trace looked up already. */
+void torb_return_trace_record_in(torb_return_trace *trace, int64_t mark, torb_location at);
+/**
+ * The number of the innermost entry of the chain that ends in the last one: the entry before an entry belongs to its
+ * chain when it was recorded at or after that entry's mark and the ring still holds it. -1 for an empty trace.
+ */
+int64_t torb_return_trace_chain_start(const torb_return_trace *trace);
+/** The chain of the last entry, the innermost first, as `  at <path>:<line>:<column>` lines on stderr. */
+void torb_return_trace_print(void);
+
+/** Never forward: a mark past the end was taken on another thread, by a task that moved, and says nothing here. */
+static inline void torb_return_trace_rewind_in(torb_return_trace *trace, int64_t mark) {
+  if (mark >= 0 && mark < trace->next) {
+    trace->next = mark;
+  }
+}
+
+#if defined(TORB_PROFILE_DEV)
+#  define TORB_RETURN_TRACE_ENTER()                                                                                \
+    torb_return_trace *const torb_trace_here = torb_return_trace_current();                                       \
+    (void)torb_trace_here
+#  define TORB_RETURN_TRACE_MARK() (torb_trace_here->next)
+#  define TORB_RETURN_TRACE_REWIND(mark) torb_return_trace_rewind_in(torb_trace_here, (mark))
+#  define TORB_RETURN_TRACE_RECORD(mark, location) torb_return_trace_record_in(torb_trace_here, (mark), (location))
+#  define TORB_RETURN_TRACE_PRINT() torb_return_trace_print()
+#else
+#  define TORB_RETURN_TRACE_ENTER() ((void)0)
+#  define TORB_RETURN_TRACE_MARK() ((int64_t)0)
+#  define TORB_RETURN_TRACE_REWIND(mark) ((void)(mark))
+#  define TORB_RETURN_TRACE_RECORD(mark, location) ((void)(mark))
+#  define TORB_RETURN_TRACE_PRINT() ((void)0)
+#endif
+
+/**
  * A test build replaces what a panic does with this. The hook receives the whole message as it would have been
  * printed (without the trailing newline), borrowed, and is expected not to return - `runtime/tests` longjmps out of
  * it. If it does return anyway, the panic leaves with `TORB_PANIC_EXIT_CODE` after all.
