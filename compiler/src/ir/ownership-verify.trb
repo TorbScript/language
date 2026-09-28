@@ -254,8 +254,7 @@ fn verifyFlow(program: IrProgram, function: IrFunction, facts: SlotFacts, counte
           continue
         }
         var merged = entry[target]
-        mergeStates merged, state
-        if merged != entry[target] {
+        if mergeStates(merged, state) {
           entry.set target, merged
           isChanged = true
         }
@@ -298,20 +297,26 @@ fn reverseOf(order: List<Int>): List<Int> {
   reversed
 }
 
-/** Owning on one path and empty on another is `conflict`, which is how a leak on one path is found. */
-fn mergeStates(var target: List<Int>, other: List<Int>) {
+/**
+ * Owning on one path and empty on another is `conflict`, which is how a leak on one path is found. Answers whether any
+ * position changed, which is what comparing the two lists afterwards answered - through `List.equals`, an iterator and
+ * a closure per position, for every edge of every round.
+ */
+fn mergeStates(var target: List<Int>, other: List<Int>): Bool {
+  var isChanged = false
   for position in 0..target.length() {
     const arriving = other[position]
     const known = target[position]
     if known == arriving || arriving == unknownState {
       continue
     }
-    if known == unknownState {
-      target.set position, arriving
-      continue
+    const merged = if known == unknownState { arriving } else { conflictState }
+    if merged != known {
+      target.set position, merged
+      isChanged = true
     }
-    target.set position, conflictState
   }
+  isChanged
 }
 
 fn runBlock(
@@ -325,7 +330,8 @@ fn runBlock(
   reports: Bool,
   conditional: List<Bool>,
 ) {
-  const at = "{function.name} b{block}"
+  // Where a finding is, which only the round that reports needs: the rounds of the fixpoint drop what they find
+  const at = if reports { "{function.name} b{block}" } else { "" }
   const instructions = function.blocks[block].instructions
   for instruction in instructions {
     runInstruction program, counted, at, instruction, state, found, reports
@@ -388,12 +394,15 @@ fn runInstruction(
     state.set position, emptyState
     return
   }
-  for slot in usedSlots(instruction) {
-    const position = counted.positionOf slot
-    if position < 0 || !reports || outs.contains(slot) {
-      continue
+  // What an instruction reads changes no state: only the round that reports lists it
+  if reports {
+    for slot in usedSlots(instruction) {
+      const position = counted.positionOf slot
+      if position < 0 || outs.contains(slot) {
+        continue
+      }
+      reportUse at, slot, state[position], found
     }
-    reportUse at, slot, state[position], found
   }
   for slot in consumedSlotsOf(instruction) {
     const position = counted.positionOf slot
@@ -433,10 +442,12 @@ fn runTerminator(
   if isUnreachable(terminator) {
     return
   }
-  for slot in usedByTerminator(terminator) {
-    const position = counted.positionOf slot
-    if position >= 0 && reports {
-      reportUse at, slot, state[position], found
+  if reports {
+    for slot in usedByTerminator(terminator) {
+      const position = counted.positionOf slot
+      if position >= 0 {
+        reportUse at, slot, state[position], found
+      }
     }
   }
   // A task that stops as cancelled leaves exactly as one that returns nothing: with nothing of its frame still owned

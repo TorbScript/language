@@ -79,8 +79,9 @@ public fn verifyFunction(program: IrProgram, function: IrFunction): List<String>
   if !found.isEmpty() {
     return found
   }
-  verifyReachability program, function, found
-  verifyDefinedness program, function, found
+  const reachable = reachableBlocks function
+  verifyReachability function, reachable, found
+  verifyDefinedness program, function, reachable, found
   verifyTypes program, function, found
   found
 }
@@ -153,8 +154,7 @@ fn verifyGraph(program: IrProgram, function: IrFunction, var found: List<String>
 }
 
 /** A block nothing reaches is a bug of the lowering, unless it is deliberately an empty `unreachable` marker. */
-fn verifyReachability(program: IrProgram, function: IrFunction, var found: List<String>) {
-  const reachable = reachableBlocks function
+fn verifyReachability(function: IrFunction, reachable: List<Bool>, var found: List<String>) {
   for index in 1..function.blocks.length() {
     if reachable[index] {
       continue
@@ -261,10 +261,9 @@ fn filledBooleans(count: Int, value: Bool): List<Bool> {
  * "Defined on every path": the intersection over the predecessors, iterated until nothing changes. A slot that is
  * written in one arm of an `if` and read after it is exactly what this catches, and it is the mistake a lowering makes.
  */
-fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<String>) {
+fn verifyDefinedness(program: IrProgram, function: IrFunction, reachable: List<Bool>, var found: List<String>) {
   const slotCount = function.slots.length()
   const blockCount = function.blocks.length()
-  const reachable = reachableBlocks function
   const predecessors = predecessorsOf function
   // What a block writes, so that what leaves it is what arrived plus that - the loop below needs both ends of a block
   const defines = definitionsOf program, function, slotCount
@@ -272,6 +271,11 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   definedIn.append parameterSlots(function, slotCount)
   for _ in 1..blockCount {
     definedIn.append BitSet.full(slotCount)
+  }
+  // What leaves each block, kept beside what arrives and changed with it: every block of every round reads it
+  var definedOut: ArrayList<BitSet> = ArrayList.withCapacity blockCount
+  for index in 0..blockCount {
+    definedOut.append leaving(definedIn[index], defines[index])
   }
   var rounds = 0
   var isChanged = true
@@ -286,9 +290,10 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
       if !reachable[index] {
         continue
       }
-      const incoming = intersected definedIn, defines, predecessors[index], slotCount
+      const incoming = intersected definedOut, predecessors[index], slotCount
       if !incoming.isSame(definedIn[index]) {
         definedIn.set index, incoming
+        definedOut.set index, leaving(incoming, defines[index])
         isChanged = true
       }
     }
@@ -428,25 +433,21 @@ public fn outParameterSlotsOf(program: IrProgram, instruction: Instruction): Lis
  * A slot that one arm of an `if` writes and the other does not is exactly what this catches, and it is the mistake a
  * lowering makes.
  */
-fn intersected(
-  definedIn: ArrayList<BitSet>,
-  defines: ArrayList<BitSet>,
-  predecessors: List<Int>,
-  slotCount: Int,
-): BitSet {
+fn intersected(definedOut: ArrayList<BitSet>, predecessors: List<Int>, slotCount: Int): BitSet {
   if predecessors.isEmpty() {
     return BitSet.empty slotCount
   }
-  var common = leaving definedIn, defines, predecessors[0]
+  var common = definedOut[predecessors[0]]
   for index in 1..predecessors.length() {
-    common.intersect leaving(definedIn, defines, predecessors[index])
+    common.intersect definedOut[predecessors[index]]
   }
   common
 }
 
-fn leaving(definedIn: ArrayList<BitSet>, defines: ArrayList<BitSet>, block: Int): BitSet {
-  var found = definedIn[block]
-  found.unite defines[block]
+/** What leaves a block: what arrived in it, and what it writes itself. */
+fn leaving(arriving: BitSet, written: BitSet): BitSet {
+  var found = arriving
+  found.unite written
   found
 }
 
