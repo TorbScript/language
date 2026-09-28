@@ -2244,11 +2244,16 @@ fn executeLoop(
       }
       .EntryCell => {
         const cell = pool + 8 * Machine.load(code + 8 * (pc + 1))
-        for offset in 0..b {
-          if c == 0 {
-            Machine.store(frame + 8 * (a + offset), Machine.load(cell + 8 * offset))
-          } else {
-            Machine.store(cell + 8 * offset, Machine.load(frame + 8 * (a + offset)))
+        if c == 2 {
+          // Its address, for the kernel, which reads and writes a cell's flag with an acquire and a release
+          Machine.store(frame + 8 * a, cell)
+        } else {
+          for offset in 0..b {
+            if c == 0 {
+              Machine.store(frame + 8 * (a + offset), Machine.load(cell + 8 * offset))
+            } else {
+              Machine.store(cell + 8 * offset, Machine.load(frame + 8 * (a + offset)))
+            }
           }
         }
         pc = pc + 2

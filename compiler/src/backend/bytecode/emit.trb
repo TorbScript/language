@@ -1164,7 +1164,17 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
   const cell = emitter.bytecode.constantWords
   emitter.bytecode.constants.append ConstantPart.Gap(1 + width)
   emitter.bytecode.constantWords = cell + 1 + width
-  var code: ArrayList<Int> = ArrayList.withCapacity 8
+  var code: ArrayList<Int> = ArrayList.withCapacity 12
+  // The flag is read with an acquire first, by the kernel at its address: another worker may have built the value an
+  // instant ago, and `cell` reads the flag and the value as plain words - which come after the acquire, so a flag seen
+  // set there is one whose value is seen as well, on a machine that reorders memory too (`torb_constant_ready`)
+  const flag = if width < 1 { 1 } else { width }
+  code.append headWord(Opcode.EntryCell, flag, 1, 2)
+  code.append cell
+  code.append headWord(Opcode.Kernel, 3, 0, 0)
+  code.append kernelNumberOf(KernelOperation.FlagAcquire)
+  code.append flag
+  code.append flag
   code.append headWord(Opcode.Cell, 0, width, 0)
   code.append cell
   code.append built
@@ -1174,7 +1184,7 @@ fn cellChunk(var emitter: Emitter, program: IrProgram, function: IrFunction, ini
     [],
     width,
     takesEnvironment: false,
-    frameWords: width,
+    frameWords: flag + 1,
     location: 0 - 1,
     slots: [],
     code: code,
@@ -1215,6 +1225,47 @@ fn entryCellChunk(
   }
   var code: ArrayList<Int> = ArrayList.withCapacity 8
   var parameters: List<ParameterEntry> = []
+  // The flag beside a cell (`{cell}_set`, `ir/lower/cell.trb`) is published with a release once the value is in place and
+  // read with an acquire, by the kernel at its address, as the C back end's `torb_constant_publish` and
+  // `torb_constant_ready`: a worker that sees it set sees the value, on a machine that reorders memory too
+  if cell.endsWith("_set") && width == 1 {
+    const address = 1
+    match access {
+      .Read => {
+        code.append headWord(Opcode.EntryCell, address, 1, 2)
+        code.append offset
+        code.append headWord(Opcode.Kernel, 3, 0, 0)
+        code.append kernelNumberOf(KernelOperation.FlagAcquire)
+        code.append 0
+        code.append address
+        code.append headWord(Opcode.Return, 0, width, 0)
+      }
+      .Write => {
+        parameters.append ParameterEntry(0, width, byReference: false)
+        code.append headWord(Opcode.EntryCell, address, 1, 2)
+        code.append offset
+        code.append headWord(Opcode.Kernel, 3, 0, 0)
+        code.append kernelNumberOf(KernelOperation.FlagPublish)
+        code.append address
+        code.append 0
+        code.append headWord(Opcode.Return, 0, 0, 0)
+      }
+    }
+    const result = if const .Read = access { width } else { 0 }
+    return Chunk(
+      function.name,
+      parameters,
+      result,
+      takesEnvironment: false,
+      frameWords: address + 1,
+      location: 0 - 1,
+      slots: [],
+      code: code,
+      places: [],
+      witnesses: [],
+      blockStarts: [0],
+    )
+  }
   match access {
     .Read => {
       code.append headWord(Opcode.EntryCell, 0, width, 0)

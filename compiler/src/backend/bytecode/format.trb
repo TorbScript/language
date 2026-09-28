@@ -123,6 +123,8 @@ public type Opcode {
   /**
    * `A` = register, `B` = width, `C` = 0 to read the cell and 1 to write it, `T0` = its first word, a gap of the constant
    * pool: an entry cell, the one value a top-level `const` of the entry file holds for every function that names it.
+   * `C` = 2 puts the address of that word into the register instead, for the kernel's [KernelOperation.FlagAcquire] and
+   * [KernelOperation.FlagPublish] of a cell's flag.
    */
   case EntryCell
   /**
@@ -653,6 +655,13 @@ public type KernelOperation {
    * `target + 2`. Answers 1 where `index` is inside it.
    */
   case DebugContainer
+  /**
+   * `target, address`: the word at the address in the register, read with an acquire - the flag of a cell, which a
+   * worker that sees set also sees the value it guards with (docs/BACKEND.md, "The entry cell").
+   */
+  case FlagAcquire
+  /** `address, value`: the word in the register `value` written with a release to the address in the register. */
+  case FlagPublish
 
   /** The name the disassembly writes. */
   fn spelling(): String {
@@ -737,6 +746,8 @@ public type KernelOperation {
       .DebugPanics => "debug.panics"
       .DebugPanicMessage => "debug.panic.message"
       .DebugContainer => "debug.container"
+      .FlagAcquire => "flag.acquire"
+      .FlagPublish => "flag.publish"
     }
   }
 }
@@ -823,6 +834,8 @@ public const allKernelOperations: List<KernelOperation> = [
   KernelOperation.DebugPanics,
   KernelOperation.DebugPanicMessage,
   KernelOperation.DebugContainer,
+  KernelOperation.FlagAcquire,
+  KernelOperation.FlagPublish,
 ]
 
 /**

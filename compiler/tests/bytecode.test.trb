@@ -452,10 +452,12 @@ group "Module constants" {
     assert findingsOf(source, extra).isEmpty()
     assert(
       chunkOf(source, "t_acme_x2f_app_table_entry", extra) == raw"""
-        chunk 2 t_acme_x2f_app_table_entry() -> 1 word, frame of 1 word, at -
+        chunk 2 t_acme_x2f_app_table_entry() -> 1 word, frame of 2 words, at -
         b0:
-          0: cell r0, 1 word, cell at 0, built by t_constant__t_acme_x2f_app_table_entry
-          3: return r0, 1 word
+          0: entry.cell address r1, cell at 0
+          2: kernel flag.acquire 1, 1
+          6: cell r0, 1 word, cell at 0, built by t_constant__t_acme_x2f_app_table_entry
+          9: return r0, 1 word
         """,
     )
   }
@@ -495,13 +497,24 @@ group "Module constants" {
           2: return
         """,
     )
-    // The flag the read looks at first, a cell of its own
+    // The flag the read looks at first, a cell of its own, which the kernel reads with an acquire at its address
     assert(
       chunkOf(source, "t_cellIsSet__t_acme_x2f_app_main_answer") == raw"""
-        chunk 3 t_cellIsSet__t_acme_x2f_app_main_answer() -> 1 word, frame of 1 word, at -
+        chunk 3 t_cellIsSet__t_acme_x2f_app_main_answer() -> 1 word, frame of 2 words, at -
         b0:
-          0: entry.cell read r0, 1 word, cell at 5
-          2: return r0, 1 word
+          0: entry.cell address r1, cell at 5
+          2: kernel flag.acquire 0, 1
+          6: return r0, 1 word
+        """,
+    )
+    // ... and the entry sets with a release, once the value is in place
+    assert(
+      chunkOf(source, "t_cellMark__t_acme_x2f_app_main_answer") == raw"""
+        chunk 4 t_cellMark__t_acme_x2f_app_main_answer(r0) -> 0 words, frame of 2 words, at -
+        b0:
+          0: entry.cell address r1, cell at 5
+          2: kernel flag.publish 1, 0
+          6: return
         """,
     )
   }

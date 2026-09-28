@@ -41,6 +41,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(__STDC_NO_ATOMICS__) && !defined(_MSC_VER)
+#  include <stdatomic.h>
+#endif
 
 /* ------------------------------------------------------------------------------------------ registers and words --- */
 
@@ -1724,16 +1727,40 @@ enum {
   TORB_OPERATION_DEBUG_VARIABLE = 76,
   TORB_OPERATION_DEBUG_PANICS = 77,
   TORB_OPERATION_DEBUG_PANIC_MESSAGE = 78,
-  TORB_OPERATION_DEBUG_CONTAINER = 79
+  TORB_OPERATION_DEBUG_CONTAINER = 79,
+  TORB_OPERATION_FLAG_ACQUIRE = 80,
+  TORB_OPERATION_FLAG_PUBLISH = 81
 };
+
+/*
+ * The flag of a cell - a module constant's, an entry cell's - is a word of the constant pool, which several workers read
+ * while the one that builds or writes the value sets it. It is written with a release once the value is in place and
+ * read with an acquire, so a worker that sees it set also sees the value, on a machine that reorders memory as well
+ * (arm64): C11's atomics on the word, which has the size and the alignment of an `_Atomic int64_t` on every target the
+ * toolchain builds for. A C compiler without them (MSVC before C11 atomics) takes the interlocked operations, full
+ * barriers, which order at least as much.
+ */
+#if !defined(__STDC_NO_ATOMICS__) && !defined(_MSC_VER)
+static int64_t torb_machine_acquire(const int64_t *flag) {
+  return atomic_load_explicit((const _Atomic int64_t *)(const void *)flag, memory_order_acquire);
+}
+
+static void torb_machine_release(int64_t *flag, int64_t value) {
+  atomic_store_explicit((_Atomic int64_t *)(void *)flag, value, memory_order_release);
+}
+#else
+static int64_t torb_machine_acquire(const int64_t *flag) {
+  return _InterlockedCompareExchange64((volatile long long *)(intptr_t)flag, 0, 0);
+}
+
+static void torb_machine_release(int64_t *flag, int64_t value) {
+  (void)_InterlockedExchange64((volatile long long *)flag, value);
+}
+#endif
 
 /* A module constant's flag set with a release, so a thread that reads it set also sees the value it guards. */
 static void torb_machine_publish(int64_t *flag) {
-#if defined(__GNUC__) || defined(__clang__)
-  __atomic_store_n(flag, (int64_t)1, __ATOMIC_RELEASE);
-#else
-  *(volatile int64_t *)flag = 1;
-#endif
+  torb_machine_release(flag, 1);
 }
 
 /* The kinds of a crossing test of `TaskNew`, as the emitter writes them (`crossingTestsOf` of bytecode/emit.trb). */
@@ -2408,6 +2435,14 @@ static int64_t torb_machine_dispatch(torb_list *list, int64_t base, torb_list co
       torb_machine_stop_kind = 0;
       return kind;
     }
+    case TORB_OPERATION_FLAG_ACQUIRE:
+      /* target, the register of a cell's address: its flag, read with an acquire */
+      words[base + o[0]] = torb_machine_acquire((const int64_t *)(intptr_t)words[base + o[1]]);
+      return 0;
+    case TORB_OPERATION_FLAG_PUBLISH:
+      /* the register of a cell's address, the register of the flag: written with a release */
+      torb_machine_release((int64_t *)(intptr_t)words[base + o[0]], words[base + o[1]]);
+      return 0;
     case TORB_OPERATION_IMMORTAL_COPY: {
       /*
        * register, shape: what an entry cell holds, as the C back end's `immortalCopyOf` makes it - one more count on

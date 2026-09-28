@@ -3306,12 +3306,15 @@ workers reading `const prefix = names[1]` from a closure corrupted the heap (`te
   files and the standard streams still go through `runtime/stream.c` (`tests/conformance/confined-child.trb`).
 - **The read copies the cell into a local before it retains**, so no worker ever writes the cell, and its flag is
   published with a release and read with an acquire (`torb_constant_publish`, `torb_constant_ready`): a worker that
-  sees it set sees the value. In the VM the flag is a word of the constant pool like the value, which a machine that
-  orders its stores - x86-64 - reads in order; the release and the acquire of it are open.
+  sees it set sees the value. In the VM the flag is a word of the constant pool like the value, and the kernel reads
+  and writes it with C11's atomics at its address (`flag.acquire`, `flag.publish`; `entry.cell` with `C` = 2 puts the
+  address into a register), so that a machine that reorders memory - arm64 - sees the value once it sees the flag. The
+  flag of a module constant is read the same way before `cell` reads it again as a plain word.
 
 Tests: `tests/conformance/entry-cell-workers.trb` (a text, a record and a variant read by tasks on four workers, and by
-a closure), `entry-cell-confined.trb` (a shared object and a `List`: forty tasks count exactly forty) and
-`confined-child.trb` (a timer of the confined worker fires while a read of a child and the wait for one wait).
+a closure), `entry-cell-trait.trb` (a `List`, a `Map` and a `List` of records, the same), `entry-cell-confined.trb` (a
+shared object: forty tasks count exactly forty) and `confined-child.trb` (a timer of the confined worker fires while a
+read of a child and the wait for one wait); `compiler/tests/crossing.test.trb` pins which cells confine.
 
 ### What 5.11 needs, measured before it is written
 
