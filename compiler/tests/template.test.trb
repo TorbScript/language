@@ -1,12 +1,14 @@
 /**
  * Tests for the template machinery behind `torb new` and `torb init` (compiler/src/cli/template.trb): the shared
- * flags, `sanitizedOwner`, reading a `template.trb`, applying its drops and substitutions, and the whole
- * `attemptScaffold` - from a local directory, and from a `.tar.gz` (`file://` and a bare path), each built with
- * `std/archive` the way `compiler/tests/upgrade.test.trb` builds one for `torb upgrade`.
+ * flags, `sanitizedOwner`, reading a `template.trb`, applying its drops and substitutions, the six questions of
+ * `answersFor` and `confirmed` fed scripted lines instead of a real terminal's, and the whole `attemptScaffold` -
+ * from a local directory, and from a `.tar.gz` (`file://` and a bare path), each built with `std/archive` the way
+ * `compiler/tests/upgrade.test.trb` builds one for `torb upgrade`.
  *
- * Not here: a real download, and the interactive prompts of a real terminal - `answersFor` is exercised directly with
- * `interactive: false` and with the flags of `ScaffoldChoices`, which is what `TORB_INIT_INTERACTIVE` and scripted
- * standard input are a seam for rather than a pseudo-terminal (docs/tooling/torb-new.md, "Writing a template").
+ * Not here: a real download, and `isInteractive` itself - a live terminal cannot be faked from inside a test, and
+ * `TORB_INIT_INTERACTIVE` is read from the real environment of the process, which nothing here may change for just
+ * one test. What both are a seam for is `nextLine`, scripted below with [ScriptedLines] instead of a pseudo-terminal
+ * (docs/tooling/torb-new.md, "The six questions").
  */
 
 use test, group from "std/test"
@@ -21,6 +23,24 @@ use TemplateManifest, TemplateReplacement, TemplateDrop from "../src/cli/templat
 use readTemplateManifest, templateManifestOf, appliedEntries from "../src/cli/template"
 use TemplateLocation, templateLocationOf from "../src/cli/template"
 use conflictingPaths, attemptScaffold from "../src/cli/template"
+use answersFor, confirmed from "../src/cli/template"
+
+/**
+ * A scripted standard input for `answersFor` and `confirmed`'s `nextLine`: the lines given, one per call, `None`
+ * once they run out - the seam this file drives instead of a pseudo-terminal.
+ */
+type ScriptedLines {
+  var lines: List<String>
+
+  var fn next(): String? {
+    if lines.isEmpty() {
+      return None
+    }
+    const line = lines[0]
+    lines = lines[1..lines.length()]
+    Some line
+  }
+}
 
 /** A new, empty directory in the system's directory for temporary files, for one test, which removes it again. */
 fn scratch(): String {
@@ -107,6 +127,65 @@ group "scaffoldChoicesOf" {
       Ok(_) => panic "accepted a --template with no value"
       Fail(message) => assert(message == "`--template` needs a value")
     }
+  }
+}
+
+group "answersFor and confirmed, interactively, scripted" {
+  test "asks the six questions in order, and takes what each line answers" {
+    var lines = ScriptedLines(["2", "myname", "myowner", "forgejo", "apache-2.0", "n"])
+    const answers = answersFor("hello", ScaffoldChoices(), true, { lines.next() })
+    assert(answers.kind == "app")
+    assert(answers.template == "app")
+    assert(answers.name == "myname")
+    assert(answers.owner == "myowner")
+    assert(answers.ci == "forgejo")
+    assert(answers.license == "apache-2.0")
+    assert(!answers.git)
+  }
+
+  test "an empty line takes the default of its own question" {
+    // owner and git are given as flags, so those two questions are never asked and consume no line
+    const choices = ScaffoldChoices owner: Some("fixed-owner"), git: Some(true)
+    var lines = ScriptedLines(["", "", "", ""])
+    const answers = answersFor("hello", choices, true, { lines.next() })
+    assert(answers.kind == "package")
+    assert(answers.name == "hello")
+    assert(answers.owner == "fixed-owner")
+    assert(answers.ci == "github")
+    assert(answers.license == "mit")
+    assert answers.git
+  }
+
+  test "a flag skips its question outright, asking only the rest" {
+    const choices = ScaffoldChoices(
+      template: Some("app"),
+      name: Some("fixed"),
+      owner: Some("acme"),
+      ci: Some("both"),
+      license: Some("none"),
+      git: Some(false),
+    )
+    // Every question is answered by a flag, so nextLine is never called - a call would panic and fail the test
+    const answers = answersFor("hello", choices, true, { panic "a question was asked" })
+    assert(answers.kind == "app")
+    assert(answers.template == "app")
+    assert(answers.name == "fixed")
+    assert(answers.owner == "acme")
+    assert(answers.ci == "both")
+    assert(answers.license == "none")
+    assert(!answers.git)
+  }
+
+  test "confirmed asks Create? and a no answer is false" {
+    assert(!confirmed("hello", answers("dir"), true, { "n" }))
+  }
+
+  test "confirmed's default (an empty line) is yes" {
+    assert confirmed("hello", answers("dir"), true, { "" })
+  }
+
+  test "confirmed is true at once, without asking, when it is not interactive" {
+    assert confirmed("hello", answers("dir"), false, { panic "Create? was asked without a terminal" })
   }
 }
 
