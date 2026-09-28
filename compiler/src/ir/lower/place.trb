@@ -223,7 +223,7 @@ public fn pathPreludeAt(
  */
 fn temporaryPrelude(var lowering: Lowering, var builder: FunctionBuilder, target: Expression): PathPrelude? {
   const slot = lowerValue lowering, builder, target
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   PathPrelude PlacePath(Reference(slot, []), builder.typeOfSlot(slot))
@@ -550,7 +550,7 @@ fn loweredKeys(
   var found: List<Slot> = []
   for key in keys {
     const slot = lowerValue lowering, builder, key
-    if !lowering.isSupported {
+    if !lowering.supported {
       return None
     }
     found.append slot
@@ -605,7 +605,7 @@ fn takenElement(
   const element = addTemporary builder, spelling
   const places: List<Reference?> = []
   const _ = lowerDispatched lowering, builder, element, at, reader, [receiver, key], places, spelling
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   if kind.takesWindow {
@@ -696,7 +696,7 @@ fn indexedMemberOf(
  * what the container had there.
  */
 public fn putBackElements(var lowering: Lowering, var builder: FunctionBuilder, taken: List<TakenElement>) {
-  if taken.isEmpty() || !lowering.isSupported || lowering.isDiverged {
+  if taken.isEmpty() || !lowering.supported || lowering.diverged {
     return
   }
   const voidType = voidTypeOf lowering
@@ -706,7 +706,7 @@ public fn putBackElements(var lowering: Lowering, var builder: FunctionBuilder, 
     const places: List<Reference?> = [entry.container, None, None]
     const operands = [entry.container.base, entry.key, entry.element]
     const _ = lowerDispatched lowering, builder, None, entry.at, entry.setter, operands, places, voidType
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
   }
@@ -767,7 +767,7 @@ public fn argumentReference(
   if isTemporaryPlace(lowering, value.span) {
     const slot = addTemporary builder, annotation
     const _ = lowerExpression lowering, builder, value, slot
-    if !lowering.isSupported {
+    if !lowering.supported {
       return None
     }
     return PlacePath Reference(slot, []), annotation
@@ -833,7 +833,7 @@ public fn lowerPlaceAssignment(
     }
   }
   const written = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const path = match referenceFrom(lowering, builder, prelude, what, target.span) {
@@ -913,7 +913,7 @@ fn lowerIndexAssignment(
     }
   }
   const written = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const path = match steppedFrom(lowering, builder, root, steps[0..last], keys[0..keys.length() - 1], what, at) {
@@ -936,7 +936,7 @@ fn lowerIndexAssignment(
  */
 fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: PlacePath, value: Expression) {
   const slot = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   emit builder, Instruction.Write(path.reference, borrowed(slot))
@@ -958,7 +958,7 @@ public fn lowerPropertyWrite(
   value: Expression,
 ): Slot {
   const holder = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const path = match referenceAt(lowering, builder, callee, "a property command") {

@@ -261,7 +261,7 @@ public type VariableState {
   /** What it was solved with. A variable is solved by an exact type only, never by a coercion. */
   var solution: TypeId? = None
   /** One message per variable, however often it is mentioned. */
-  var isReported: Bool = false
+  var reported: Bool = false
   /**
    * What solves it where nothing else did by the end of its statement: the declared default of the parameter it
    * stands for, for the bare `Vector2` of `Vector2.zero` (`noteDeclaredDefaults`).
@@ -586,7 +586,7 @@ public type ValueUse {
   changing: Bool
   at: Span
   /** A change a loop brings a read back around to is alive, whatever stands after it. */
-  var isLive: Bool = false
+  var live: Bool = false
   /** The member that changed it, `""` for an assignment: the note names the path that was probably meant. */
   changedBy: String = ""
 }
@@ -788,7 +788,7 @@ public type BodyState {
   locals: List<Local>
   scopeStarts: List<Int>
   resultType: TypeId
-  isResultInferred: Bool
+  resultInferred: Bool
   returnTypes: List<TypeId>
   loopDepth: Int
   receiverType: TypeId?
@@ -940,7 +940,7 @@ public type Checker {
   /** The declared or inferred result of the function whose body is being checked. */
   var resultType: TypeId
   /** Without a declared result, `return` and the last expression *are* the result, so nothing is checked against it. */
-  var isResultInferred: Bool = false
+  var resultInferred: Bool = false
   /** Whether the declaration may infer its result at all: a `public fn` and a trait method may not. */
   var resultRule: ResultRule = ResultRule.Ordinary
   /** What every `return` of the body produced, for the result of a function that does not declare one. */
@@ -1706,7 +1706,7 @@ public type Checker {
   }
 
   var fn markReported(variable: VariableId) {
-    const reported = variables[variable.value].copy(isReported: true)
+    const reported = variables[variable.value].copy(reported: true)
     variables.set variable.value, reported
   }
 
@@ -1827,7 +1827,7 @@ public type Checker {
       locals,
       scopeStarts,
       resultType,
-      isResultInferred,
+      resultInferred,
       returnTypes,
       loopDepth,
       receiverType,
@@ -1851,7 +1851,7 @@ public type Checker {
     locals = []
     scopeStarts = []
     resultType = result
-    isResultInferred = isInferred
+    resultInferred = isInferred
     resultRule = rule
     returnTypes = []
     loopDepth = 0
@@ -1878,7 +1878,7 @@ public type Checker {
     locals = saved.locals
     scopeStarts = saved.scopeStarts
     resultType = saved.resultType
-    isResultInferred = saved.isResultInferred
+    resultInferred = saved.resultInferred
     resultRule = saved.resultRule
     returnTypes = saved.returnTypes
     loopDepth = saved.loopDepth

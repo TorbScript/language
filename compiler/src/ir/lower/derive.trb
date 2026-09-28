@@ -110,7 +110,7 @@ public fn lowerGenerated(var lowering: Lowering, request: GeneratedRequest) {
   const location = locationOf lowering, at
   setBlockLocation builder, BlockId(0), location
   lowerGeneratedBody lowering, builder, request, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
     return
   }
@@ -127,8 +127,8 @@ fn resetForGenerated(var lowering: Lowering, module: ModuleId) {
   lowering.inlinedThunks = [:]
   lowering.shownParts = [:]
   lowering.substitution = [:]
-  lowering.isSupported = true
-  lowering.isDiverged = false
+  lowering.supported = true
+  lowering.diverged = false
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
@@ -841,7 +841,7 @@ fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Typ
 /** The two tags, compared: a value of another case is never equal, whatever the fields say. Answers the tag of `self`. */
 fn sameTagBlock(var lowering: Lowering, var builder: FunctionBuilder, failed: BlockId, at: Span): Slot {
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const left = addTemporary builder, integer
   const right = addTemporary builder, integer
   emit builder, Instruction.Tag(left, Slot(0))
@@ -869,7 +869,7 @@ fn compareFields(
     const left = readField lowering, builder, Slot(0), field.step, field.annotation
     const right = readField lowering, builder, Slot(1), field.step, field.annotation
     const equal = fieldEquality lowering, builder, field, left, right, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return false
     }
     const next = addBlock builder, "equal", location
@@ -930,7 +930,7 @@ fn fieldEquality(
  * nothing a program can observe depends on one.
  */
 fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const annotation = builder.function.signature.parameters[0].annotation
   const accumulated = zeroSlot lowering, builder, integer
   const layout = match layoutOfType(lowering.program, annotation) {
@@ -958,7 +958,7 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     }
   }
   hashFields lowering, builder, common, accumulated, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   if !isVariant {
@@ -983,7 +983,7 @@ fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     const arm = addBlock builder, "case {index}", location
     switchTo builder, arm
     hashFields lowering, builder, fields, accumulated, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
     terminate builder, Terminator.Jump(exit)
@@ -1005,7 +1005,7 @@ fn hashFields(
   for field in fields {
     const value = readField lowering, builder, Slot(0), field.step, field.annotation
     const hashed = fieldHash lowering, builder, field, value, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
     mixInto lowering, builder, accumulated, hashed, at
@@ -1014,7 +1014,7 @@ fn hashFields(
 
 /** One field's hash: the field type's own `hash`, whatever shape that member has. */
 fn fieldHash(var lowering: Lowering, var builder: FunctionBuilder, field: DerivedField, value: Slot, at: Span): Slot {
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const target = addTemporary builder, integer
   const location = locationOf lowering, at
   const called = match traitMemberFunction(lowering, field.subject, "Hash", "hash", at) {
@@ -1030,7 +1030,7 @@ fn fieldHash(var lowering: Lowering, var builder: FunctionBuilder, field: Derive
 
 /** `accumulated = (accumulated ^ value) ^ ((accumulated ^ value) << 17)`: three intrinsics, and nothing can overflow. */
 fn mixInto(var lowering: Lowering, var builder: FunctionBuilder, accumulated: Slot, value: Slot, at: Span) {
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const kind = NumericKind.Signed 64
   const location = locationOf lowering, at
   const combined = addTemporary builder, integer
@@ -1185,7 +1185,7 @@ fn compareTupleBody(
     return
   }
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const boolean = booleanTypeOf lowering
   const result = builder.function.signature.result
   const empty: List<WitnessSource> = []
@@ -1254,7 +1254,7 @@ fn emitOrdering(
     return true
   }
   if isTextType(lowering, annotation) {
-    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+    const integer = lowering.program.internType IrType.Integer(64, signed: true)
     const order = addTemporary builder, integer
     const compared = Intrinsic IntrinsicOperation.TextCompare, kind: None
     emit builder, Instruction.Intrinsic(order, compared, [Slot(0), Slot(1)], location)
@@ -1342,7 +1342,7 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
   }
   var parts: List<Slot> = []
   addShownFields(lowering, builder, parts, fields, "{name}(", at, labeled: !isTuple)
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   concatenateInto lowering, builder, parts, at
@@ -1351,7 +1351,7 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
 /** A variant layout: one `TextConcat` per case, chosen by the tag. */
 fn showVariantBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, layout: LayoutId, at: Span) {
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, Slot(0))
   const shape = lowering.program.layoutAt layout
@@ -1380,7 +1380,7 @@ fn showVariantBody(var lowering: Lowering, var builder: FunctionBuilder, subject
     } else {
       var parts: List<Slot> = []
       addShownFields lowering, builder, parts, fields, "{group.name}(", at
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       concatenateInto lowering, builder, parts, at
@@ -1416,7 +1416,7 @@ fn addShownFields(
     parts.append textSlot(lowering, builder, "{separator}{label}")
     const value = readField lowering, builder, Slot(0), field.step, field.annotation
     const shown = fieldShown lowering, builder, field, value, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
     parts.append shown

@@ -192,7 +192,7 @@ fn lowerCallable(
     if const Some(value) = written {
       const _ = lowerValue lowering, builder, value
     }
-    if !lowering.isDiverged {
+    if !lowering.diverged {
       finishBlock lowering, builder, Terminator.Unreachable
     }
     return abandonedSlot lowering, builder, destination
@@ -266,7 +266,7 @@ fn lowerCallable(
   const plan = dispatched.mapping
   const shifted = receiverWritten && signature.takesSelf
   const written = lowerArgumentSlots lowering, builder, expression, arguments, signature, plan, receiverWritten: shifted
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   operands.appendAll written.slots
@@ -337,7 +337,7 @@ public fn lowerDispatched(
 ): Slot {
   // An operand did not return - `take(fail())` - so the call is never made, and its callee is not instantiated for it:
   // an instance nothing calls is a `static` function the C compiler refuses
-  if lowering.isDiverged {
+  if lowering.diverged {
     return abandonedSlot lowering, builder, destination
   }
   const member = dispatched.member
@@ -378,7 +378,7 @@ public fn lowerDispatched(
     if const Some(generated) = generatedMemberFor(lowering, dispatched, at) {
       return emitCall lowering, builder, destination, generated, operands, annotation, at, places
     }
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
   }
@@ -476,7 +476,7 @@ public fn lowerConversionCall(
     }
   }
   const value = lowerValue lowering, builder, base
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const dispatched = match dispatchedOn(lowering, conversion.target, conversion.bound, name, at) {
@@ -705,7 +705,7 @@ fn lowerWitnessCall(
   } else {
     memberInValue lowering, bounds, subject, receiver, member
   }
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const found = match located {
@@ -805,7 +805,7 @@ fn lowerNativeCall(
       const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
         Some(found) => found
         None => {
-          if !lowering.isSupported {
+          if !lowering.supported {
             return abandonedSlot lowering, builder, destination
           }
           const what = "`{entry.name}`, whose declaration is not monomorphic"
@@ -1149,7 +1149,7 @@ public fn lowerArgumentSlots(
     const value = arguments[index].value
     const lowered = lowerValue lowering, builder, value
     const slot = snapshotted lowering, builder, value, lowered, spanOfArguments(arguments, index + 1)
-    if !lowering.isSupported {
+    if !lowering.supported {
       return CallOperands([], [])
     }
     filled.set position, slot
@@ -1202,7 +1202,7 @@ fn lowerVariadicArgument(
   }
   const annotation = irTypeOfClosed lowering, lowering.checker.types.intern(TypeForm.Traits([bound]))
   const slot = lowerItemList lowering, builder, None, collected, item, [bound], annotation, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   slot
@@ -1373,7 +1373,7 @@ fn lowerDefaults(
       }
     }
     const slot = lowerForeignExpression lowering, builder, signature.symbol, value, mapping
-    if !lowering.isSupported {
+    if !lowering.supported {
       return CallOperands([], [])
     }
     found.set index, slot
@@ -1511,7 +1511,7 @@ fn lowerConstructorCall(
   // `Channel<Item>(capacity:)` is a block of the runtime, which only the runtime can make
   if const Some(item) = channelItemOf(lowering, annotation) {
     const fields = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver: None
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
     const capacity = match fields.first() {
@@ -1540,7 +1540,7 @@ fn lowerConstructorCall(
     return unsupportedSlot lowering, builder, destination, "a constructor of a variant type", expression.span
   }
   const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver: None
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const target = valueSlot lowering, builder, destination, annotation
@@ -1617,7 +1617,7 @@ fn lowerCopyCall(
     }
   }
   const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, receiver
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const target = valueSlot lowering, builder, destination, annotation
@@ -1658,7 +1658,7 @@ fn lowerFieldArguments(
       return []
     }
     const slot = lowerValue lowering, builder, arguments[index].value
-    if !lowering.isSupported {
+    if !lowering.supported {
       return []
     }
     filled.set position, slot
@@ -1705,7 +1705,7 @@ fn completeFields(
     const field = fields[index]
     if const Some(base) = receiver {
       const slot = readFieldOf lowering, builder, base, index, expression.span
-      if !lowering.isSupported {
+      if !lowering.supported {
         return []
       }
       found.set index, slot
@@ -1719,7 +1719,7 @@ fn completeFields(
       }
     }
     const slot = lowerForeignExpression lowering, builder, field.symbol, value, substitution
-    if !lowering.isSupported {
+    if !lowering.supported {
       return []
     }
     found.set index, slot
@@ -1843,7 +1843,7 @@ fn lowerCaseCall(
   const signature = lowering.checker.signature identifier
   // A case is a function from its own fields, and a field is a value: no position of one is ever a place
   const written = lowerArgumentSlots lowering, builder, expression, arguments, signature
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   constructedCase lowering, builder, destination, expression, annotation, variant, written.slots
@@ -1951,7 +1951,7 @@ public fn lowerOperator(
   memberName: String = "",
 ): Slot {
   // An operand did not return (`1 + fail()`), so the operator is never applied (`lowerDispatched` says why)
-  if lowering.isDiverged {
+  if lowering.diverged {
     return abandonedSlot lowering, builder, destination
   }
   const module = lowering.module
@@ -1994,7 +1994,7 @@ public fn lowerOperator(
     if const Some(generated) = generatedMemberFor(lowering, dispatched, at) {
       return emitCall lowering, builder, destination, generated, operands, annotation, at
     }
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
   }
@@ -2157,7 +2157,7 @@ fn lowerNativeOperator(
       const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
         Some(found) => found
         None => {
-          if !lowering.isSupported {
+          if !lowering.supported {
             return abandonedSlot lowering, builder, destination
           }
           return unsupportedSlot lowering, builder, destination, "`{entry.name}`", at

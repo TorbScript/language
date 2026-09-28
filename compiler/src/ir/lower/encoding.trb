@@ -128,7 +128,7 @@ type EncodedFieldOf {
   symbol: SymbolId
   hasDefault: Bool
   /** Whether it is a parameter of the constructor from outside. A field that is not takes its default on the way in. */
-  isPassable: Bool
+  passable: Bool
 }
 
 /** One group of fields: the record's own, or one case's. `variant` is -1 for a record. */
@@ -201,7 +201,7 @@ fn fieldGroupsOf(
         step,
         field.symbol,
         field.hasDefault,
-        isPassable: true,
+        passable: true,
       ))
     }
     groups.append FieldGroup(declared.name, variant, fields)
@@ -341,7 +341,7 @@ fn encodeFields(
   }
   // A type with cases: one block per case, chosen by the tag
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, Slot(0))
   const impossible = addBlock builder, "no such case", location
@@ -376,7 +376,7 @@ fn encodeGroup(
   for field in group.fields {
     // A `private` field with a default is written only for a target that asks for the whole value, and only where its
     // type is `Encode` at all - nothing else about the type asked it to be
-    const isPrivate = !everyField && !field.isPassable
+    const isPrivate = !everyField && !field.passable
     if isPrivate && !isEncodable(lowering, field.subject) {
       continue
     }
@@ -597,7 +597,7 @@ fn decodeGroup(
   var values: List<Slot> = []
   for field in group.fields {
     const name = textSlot lowering, builder, field.name
-    if !field.isPassable && (!field.hasDefault || !isDecodable(lowering, field.subject)) {
+    if !field.passable && (!field.hasDefault || !isDecodable(lowering, field.subject)) {
       const taken = defaultOf(lowering, builder, symbol, arguments, field, at)?
       values.append taken
       continue
@@ -614,7 +614,7 @@ fn decodeGroup(
       values.append read
       continue
     }
-    const asked = if field.isPassable { "decodeHasField" } else { "decodeHasPrivateField" }
+    const asked = if field.passable { "decodeHasField" } else { "decodeHasPrivateField" }
     const present = checkedStep(lowering, builder, asked, [source], [borrowed(name), place], at)?
     const value = addLocal builder, field.annotation, field.name
     const given = addBlock builder, "{field.name} given", location
@@ -665,7 +665,7 @@ fn defaultOf(
     mapping.set shape.generics[index], arguments[index]
   }
   const slot = lowerForeignExpression lowering, builder, field.symbol, written, mapping
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   slot
@@ -789,7 +789,7 @@ fn checkedStep(
     return None
   }
   const location = locationOf lowering, at
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, answer)
   const succeeded = addBlock builder, "{name} succeeded", location
@@ -922,7 +922,7 @@ fn describeGroup(
 ) {
   const place = referenced Reference(Slot(0), [])
   for field in group.fields {
-    if !field.isPassable {
+    if !field.passable {
       continue
     }
     const name = textSlot lowering, builder, field.name
@@ -1100,7 +1100,7 @@ fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String)
 }
 
 fn integerSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Int): Slot {
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const target = addTemporary builder, integer
   const contents = StaticContents.Literal LiteralValue.Integer(value)
   const found = internStatic lowering, contents, integer

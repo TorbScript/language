@@ -64,7 +64,7 @@ public fn lowerTextLiteral(
       }
       .Interpolated(inner) => {
         const part = partSlotOf lowering, builder, inner
-        if !lowering.isSupported {
+        if !lowering.supported {
           return abandonedSlot lowering, builder, destination
         }
         parts.append part
@@ -148,7 +148,7 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
   const subject = substituted lowering, source
   lowering.shownParts.set at, true
   const value = lowerUncoercedValue lowering, builder, expression
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination: None
   }
   if raw && textPartKindOf(lowering.program, builder.typeOfSlot(value)).isSome() {
@@ -160,7 +160,7 @@ fn loweredPart(var lowering: Lowering, var builder: FunctionBuilder, expression:
 /** The same for a value that is already in a slot: what `print` and an interpolated part share. */
 public fn showSlot(var lowering: Lowering, var builder: FunctionBuilder, value: Slot, subject: TypeId, at: Span): Slot {
   // A part before this one did not return: nothing is shown, and no `show` is instantiated for it
-  if lowering.isDiverged {
+  if lowering.diverged {
     return abandonedSlot lowering, builder, destination: None
   }
   // `"{item}"` with an `item: Never` - inside `List<Never>.show`, say - is never reached, and `Never` has no `show`
@@ -235,7 +235,7 @@ public fn describedKeySlot(
   const describe = instanceOfSymbol(lowering, describer)?
   const at = expression.span
   const value = lowerValue lowering, builder, written
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const showNested = match memberOfType(lowering, subject, bound, "showNested", at) {
@@ -317,7 +317,7 @@ public fn lowerPrint(
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
     const shown = shownSlotOf lowering, builder, written.value
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
     parts.append shown

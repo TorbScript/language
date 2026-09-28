@@ -231,7 +231,7 @@ public fn lowerBoxedBinding(
 ) {
   const inner = addTemporary builder, annotation
   const _ = lowerExpression lowering, builder, value, inner
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const layout = boxLayoutOf lowering.program, annotation
@@ -334,7 +334,7 @@ public fn lowerLazyArgument(
   }
   const source = ClosureSource.Thunk value
   const thunk = closureValueOf lowering, builder, None, value.span, source, thunkSignature, thunkType
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   const empty = match emptyOptionSlot(lowering, builder, optional, value.span) {
@@ -386,7 +386,7 @@ public fn lowerForcedRead(
   const target = valueSlot lowering, builder, destination, annotation
   const held = addTemporary builder, optional
   emit builder, Instruction.Read(held, Reference(cell, [PathStep.Field(layout, 0)]))
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, held)
   const forced = addBlock builder, "forced", location
@@ -563,7 +563,7 @@ fn lowerBoundMethodValue(
     }
   }
   const receiver = lowerValue lowering, builder, base
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const held = builder.typeOfSlot receiver
@@ -749,7 +749,7 @@ public fn lowerClosureCall(
   annotation: IrTypeId,
 ): Slot {
   const holder = lowerValue lowering, builder, callee
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const held = builder.typeOfSlot holder
@@ -786,7 +786,7 @@ public fn lowerClosureCall(
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
     const bound = lowerValue lowering, builder, receiver
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
     slots.set 0, bound
@@ -817,13 +817,13 @@ public fn lowerClosureCall(
       continue
     }
     const slot = lowerValue lowering, builder, value
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination
     }
     slots.set position, slot
   }
   const filled = closureDefaults lowering, builder, callee, slots, expression.span
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const site = locationOf lowering, expression.span
@@ -990,7 +990,7 @@ type CapturePlan {
   field: FieldLayout
   /** The span the binding is declared under, which is how the body reaches it. */
   declared: Span
-  isBoxed: Bool
+  boxed: Bool
 }
 
 /**
@@ -1007,7 +1007,7 @@ fn closureValueOf(
   annotation: IrTypeId,
 ): Slot {
   const plans = capturePlansOf lowering, builder, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const index = lowering.closureCount
@@ -1066,7 +1066,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
     const name = if binding.name.isEmpty() { "captured" } else { binding.name }
     if const Some(box) = lowering.boxes.get(declared) {
       const annotation = builder.typeOfSlot box
-      plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, symbol: None), declared, isBoxed: true)
+      plans.append CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, symbol: None), declared, boxed: true)
       continue
     }
     const slot = match lowering.slots.get(declared) {
@@ -1082,7 +1082,7 @@ fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span
       return []
     }
     const annotation = builder.typeOfSlot slot
-    plans.append CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, symbol: None), declared, isBoxed: false)
+    plans.append CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, symbol: None), declared, boxed: false)
   }
   plans
 }
@@ -1180,14 +1180,14 @@ fn loweredClosureBody(
   lowering.suspendable = isSpawned || isTaskClosure
   bindCaptures lowering, inner, environment, plans
   bindClosureParameters lowering, inner, at, source, environment.isSome(), shape.parameters.length()
-  if lowering.isSupported {
+  if lowering.supported {
     lowerClosureBody lowering, inner, source, bodySignature.result
   }
   numberSuspensions inner
-  const isSupported = lowering.isSupported
+  const isSupported = lowering.supported
   restoreFrame lowering, saved
   if !isSupported {
-    lowering.isSupported = false
+    lowering.supported = false
     var stub = newFunction name, None, built, "not supported yet"
     return finishFunction lowering.program, stub
   }
@@ -1219,7 +1219,7 @@ public fn lowerSpawnedClosure(
 ): Slot {
   const at = expression.span
   const plans = capturePlansOf lowering, builder, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   var fields: List<FieldLayout> = []
@@ -1245,7 +1245,7 @@ public fn lowerSpawnedClosure(
   const signature = lowering.program.internSignature IrSignature([], value)
   const source = ClosureSource.Written closure
   const resume = loweredClosureBody lowering, name, at, source, signature, environment, plans, isSpawned: true
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   var arguments: List<IrArgument> = []
@@ -1267,7 +1267,7 @@ fn lowerClosureBody(var lowering: Lowering, var builder: FunctionBuilder, source
       // The very `Adaptation.Lazy` that made this body a function of its own may not refuse the body itself
       lowering.inlinedThunks.set value.span, true
       const slot = lowerValue lowering, builder, value
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       if isVoidType(lowering, result) {
@@ -1301,7 +1301,7 @@ fn bindCaptures(
     const annotation = plan.field.annotation
     const held = addLocal builder, annotation, plan.field.name
     emit builder, Instruction.Read(held, Reference(slot, [PathStep.Field(layout, index)]))
-    if plan.isBoxed {
+    if plan.boxed {
       lowering.boxes.set plan.declared, held
       continue
     }
@@ -1368,7 +1368,7 @@ fn bindClosureParameters(
       continue
     }
     lowerPatternBinding lowering, builder, pattern, slot, pattern.span
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
   }
@@ -1391,7 +1391,7 @@ public type SavedFrame {
   references: Map<Span, Reference>
   closureParameters: List<Slot>
   hole: Slot?
-  isDiverged: Bool
+  diverged: Bool
   suspendable: Bool
   breakTargets: List<BlockId>
   continueTargets: List<BlockId>
@@ -1424,7 +1424,7 @@ public fn savedFrame(var lowering: Lowering): SavedFrame {
     lowering.references,
     lowering.closureParameters,
     lowering.hole,
-    lowering.isDiverged,
+    lowering.diverged,
     lowering.suspendable,
     lowering.breakTargets,
     lowering.continueTargets,
@@ -1463,7 +1463,7 @@ public fn enterBody(var lowering: Lowering, name: String) {
   lowering.references = [:]
   lowering.closureParameters = []
   lowering.hole = None
-  lowering.isDiverged = false
+  lowering.diverged = false
   lowering.suspendable = false
   lowering.breakTargets = []
   lowering.continueTargets = []
@@ -1489,7 +1489,7 @@ public fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
   lowering.references = saved.references
   lowering.closureParameters = saved.closureParameters
   lowering.hole = saved.hole
-  lowering.isDiverged = saved.isDiverged
+  lowering.diverged = saved.diverged
   lowering.suspendable = saved.suspendable
   lowering.breakTargets = saved.breakTargets
   lowering.continueTargets = saved.continueTargets

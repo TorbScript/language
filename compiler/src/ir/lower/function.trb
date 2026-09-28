@@ -92,7 +92,7 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   }
   declareParameterSlots lowering, symbol, declaration
   lowerBody lowering, builder, body, signature.result
-  if !lowering.isSupported {
+  if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
     return
   }
@@ -147,7 +147,7 @@ fn lowerTaskInstance(
   lowering.suspendable = true
   lowerBody lowering, resume, body, value
   numberSuspensions resume
-  if !lowering.isSupported {
+  if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
     return
   }
@@ -172,8 +172,8 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.quotedCaptures = [:]
   lowering.shownParts = [:]
   lowering.substitution = [:]
-  lowering.isSupported = true
-  lowering.isDiverged = false
+  lowering.supported = true
+  lowering.diverged = false
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
@@ -196,17 +196,17 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
 public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: Block, result: IrTypeId) {
   if isVoidType(lowering, result) {
     lowerBlockInto lowering, builder, body, destination: None
-    if !lowering.isDiverged {
+    if !lowering.diverged {
       finishBlock lowering, builder, Terminator.Return(None)
     }
     return
   }
   if isNeverType(lowering, result) {
     lowerBlockInto lowering, builder, body, destination: None
-    if !lowering.isDiverged {
+    if !lowering.diverged {
       // A generic body instantiated with `Never` ends in a value of it: `Some(value) => value` of
       // `Option<Never>.expect`. There is no value of `Never`, so the end of that body is never reached
-      if lowering.isSupported && endsInNever(lowering, body) {
+      if lowering.supported && endsInNever(lowering, body) {
         finishBlock lowering, builder, Terminator.Unreachable
         return
       }
@@ -223,7 +223,7 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
     return
   }
   const found = lowerBlockValue lowering, builder, body
-  if lowering.isDiverged {
+  if lowering.diverged {
     return
   }
   match found {
@@ -314,20 +314,20 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   // The top level of an entry file is the block of its entry function: its bindings end where the file does
   openScope lowering
   for statement in statements {
-    if lowering.isDiverged || !lowering.isSupported {
+    if lowering.diverged || !lowering.supported {
       break
     }
     lowerTopLevel lowering, builder, statement
   }
   closeScope lowering, builder
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Return(None)
   }
   if hasSuspension(builder) {
     setFunctionKind builder, FunctionKind.TaskResume
     numberSuspensions builder
   }
-  if !lowering.isSupported {
+  if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
     var stub = newFunction name, None, signature, "not supported yet"
     return finishFunction lowering.program, stub
@@ -427,12 +427,12 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   const signature = lowering.program.signatureAt identifier
   // A script is asked for where its value is made, which may be in the middle of another body
   const saved = savedFrame lowering
-  const savedSupport = lowering.isSupported
-  const savedDivergence = lowering.isDiverged
+  const savedSupport = lowering.supported
+  const savedDivergence = lowering.diverged
   enterBody lowering, name
   enterModule lowering, module
   lowering.substitution = [:]
-  lowering.isSupported = true
+  lowering.supported = true
   lowering.capturedVariables = capturedVariablesIn lowering, statements
   var builder = newFunction name, None, signature, "script"
   for statement in statements {
@@ -446,7 +446,7 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
   openScope lowering
   var isFirst = true
   for statement in statements {
-    if lowering.isDiverged || !lowering.isSupported {
+    if lowering.diverged || !lowering.supported {
       break
     }
     if isImport(statement) {
@@ -463,13 +463,13 @@ public fn lowerScriptFunction(var lowering: Lowering, module: ModuleId, receiver
     lowerStatement lowering, builder, statement
   }
   closeScope lowering, builder
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Return(None)
   }
-  const isSupported = lowering.isSupported
+  const isSupported = lowering.supported
   restoreFrame lowering, saved
-  lowering.isSupported = savedSupport
-  lowering.isDiverged = savedDivergence
+  lowering.supported = savedSupport
+  lowering.diverged = savedDivergence
   if !isSupported {
     lowering.stubbed = lowering.stubbed + 1
     var stub = newFunction name, None, signature, "not supported yet"
@@ -645,8 +645,8 @@ fn countUnbuildable(var lowering: Lowering, symbol: SymbolId, what: String) {
   if const Some(module) = declared.module {
     enterModule lowering, module
   }
-  lowering.isSupported = true
+  lowering.supported = true
   reportUnsupported lowering, what, declared.span
-  lowering.isSupported = true
+  lowering.supported = true
   lowering.stubbed = lowering.stubbed + 1
 }

@@ -26,7 +26,7 @@ fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>)
 
 /** Five `Int64` fields are 40 bytes, which is over the inline limit, so the layout is `Boxed` and carries a count. */
 fn boxedLayout(var program: IrProgram, name: String): LayoutId {
-  const int64 = program.internType IrType.Integer(64, isSigned: true)
+  const int64 = program.internType IrType.Integer(64, signed: true)
   var fields: List<FieldLayout> = []
   for index in 0..5 {
     fields.append FieldLayout("f{index}", int64)
@@ -55,7 +55,7 @@ fn ownedTextOfFunction(program: IrProgram, identifier: FunctionId): String {
 group "Make unique before a write" {
   test "a write through a boxed owner makes it unique first" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int64 = program.internType IrType.Integer(64, signed: true)
     const big = boxedLayout program, "T_Big"
     const bigType = program.internType IrType.Record(big)
     const signature = IrSignature([IrParameter("self", bigType), IrParameter("value", int64)], bigType)
@@ -83,7 +83,7 @@ group "Make unique before a write" {
   test "the counted owner inside an inline one is made unique, and the inline slot itself is not" {
     var program = IrProgram()
     const text = program.internType IrType.Text
-    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int64 = program.internType IrType.Integer(64, signed: true)
     const big = boxedLayout program, "T_Big"
     const bigType = program.internType IrType.Record(big)
     const outer = recordLayout program, "T_Outer", [FieldLayout("inner", bigType), FieldLayout("name", text)]
@@ -110,7 +110,7 @@ group "Make unique before a write" {
   test "a write to a field of an inline record in a slot needs nothing at all" {
     var program = IrProgram()
     const text = program.internType IrType.Text
-    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int64 = program.internType IrType.Integer(64, signed: true)
     const small = recordLayout program, "T_Small", [FieldLayout("name", text), FieldLayout("size", int64)]
     const smallType = program.internType IrType.Record(small)
     const signature = IrSignature([IrParameter("self", smallType), IrParameter("value", int64)], smallType)
@@ -133,7 +133,7 @@ group "Make unique before a write" {
   /** The lowering of 5.9 forms the path and knows more about it than this pass can see, so its answer wins. */
   test "a write the lowering already made unique is left exactly as it is" {
     var program = IrProgram()
-    const int64 = program.internType IrType.Integer(64, isSigned: true)
+    const int64 = program.internType IrType.Integer(64, signed: true)
     const big = boxedLayout program, "T_Big"
     const bigType = program.internType IrType.Record(big)
     const signature = IrSignature([IrParameter("self", bigType), IrParameter("value", int64)], bigType)

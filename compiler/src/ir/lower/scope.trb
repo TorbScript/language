@@ -41,7 +41,7 @@ public fn closeScope(var lowering: Lowering, var builder: FunctionBuilder) {
   if last < 0 {
     return
   }
-  if !lowering.isDiverged && lowering.isSupported {
+  if !lowering.diverged && lowering.supported {
     endBindings builder, lowering.scopes[last]
   }
   const _ = lowering.scopes.removeAt last
@@ -90,7 +90,7 @@ public fn declareScopedBetween(var lowering: Lowering, var builder: FunctionBuil
  * its drop flag, which the ownership pass clears on the paths that never made it (`withClearedTemporaries`).
  */
 public fn endTemporaries(var lowering: Lowering, var builder: FunctionBuilder, from: Int, except: Slot? = None) {
-  if lowering.isDiverged || !lowering.isSupported {
+  if lowering.diverged || !lowering.supported {
     return
   }
   var index = builder.slotCount() - 1
@@ -111,7 +111,7 @@ public fn endTemporaries(var lowering: Lowering, var builder: FunctionBuilder, f
 
 /** A `return`, a `?` that leaves the function, the `stop` of a task: every open scope ends, the innermost first. */
 public fn endEveryScope(var lowering: Lowering, var builder: FunctionBuilder) {
-  if lowering.isDiverged {
+  if lowering.diverged {
     return
   }
   var index = lowering.scopes.length() - 1
@@ -123,7 +123,7 @@ public fn endEveryScope(var lowering: Lowering, var builder: FunctionBuilder) {
 
 /** A `break` or a `continue`: the scopes opened inside the innermost loop end, the innermost first. */
 public fn endLoopScopes(var lowering: Lowering, var builder: FunctionBuilder) {
-  if lowering.isDiverged {
+  if lowering.diverged {
     return
   }
   const depth = lowering.loopScopes.last() ?? 0
@@ -324,7 +324,7 @@ public fn requestCloseFunctions(var lowering: Lowering): Bool {
     if const Some(module) = declared.module {
       enterModule lowering, module
     }
-    lowering.isSupported = true
+    lowering.supported = true
     const empty: Map<ParameterId, TypeId> = [:]
     lowering.substitution = empty
     const bound = lowering.checker.nominal close, []

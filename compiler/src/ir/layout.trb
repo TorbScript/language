@@ -133,7 +133,7 @@ public type Layout {
   containsShared: Bool = false
   containsCounted: Bool = false
   /** On a cycle of the field graph: every layout of the cycle is `Boxed`, which is what makes a tree work. */
-  isRecursive: Bool = false
+  recursive: Bool = false
   /** `false` while the layout is only reserved and its fields are not built yet. */
   built: Bool = false
 
@@ -557,7 +557,7 @@ fn updateLayout(var program: IrProgram, id: LayoutId, objects: Set<Int>): Bool {
   // A payload, an environment, a box and a cell are blocks whatever they cost: every one of them is shared
   if isAlwaysBoxedKind(before.kind) || objects.contains(id.value) {
     representation = Representation.Boxed
-  } else if before.isRecursive {
+  } else if before.recursive {
     representation = Representation.Boxed
   } else if const Some(found) = niche {
     representation = found
@@ -667,8 +667,8 @@ fn markRecursiveLayouts(var program: IrProgram) {
       continue
     }
     const layout = program.layouts[index]
-    if !layout.isRecursive {
-      program.setLayout LayoutId(index), layout.copy(isRecursive: true)
+    if !layout.recursive {
+      program.setLayout LayoutId(index), layout.copy(recursive: true)
     }
   }
 }

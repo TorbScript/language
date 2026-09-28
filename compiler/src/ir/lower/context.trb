@@ -258,7 +258,7 @@ public type Lowering {
   var optionalReceivers: Map<Span, Slot> = [:]
   var optionalReceiverTypes: Map<Span, TypeId> = [:]
   /** `false` once the function that is being lowered hit a construct the back end does not support yet. */
-  var isSupported: Bool = true
+  var supported: Bool = true
   /**
    * Whether a finding is swallowed. Exactly one thing sets it: the **nested** tables of a witness table, which are built
    * because some *other* coercion might narrow through one and may therefore not blame the value that is being boxed
@@ -266,7 +266,7 @@ public type Lowering {
    */
   var silent: Bool = false
   /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */
-  var isDiverged: Bool = false
+  var diverged: Bool = false
   /**
    * Whether the body being lowered is the body of a task - a function or a closure that answers a `Task`, a `spawn`
    * closure, the top-level code of an entry file - where an `await()` is a suspension point (`ir/lower/task.trb`).
@@ -489,10 +489,10 @@ public fn newLowering(checker: Checker, paths: List<String>, target: BuildTarget
  * [unsupportedMessage]'s, and the C emitter's findings go through the same one.
  */
 public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, because: String = "") {
-  if lowering.silent || !lowering.isSupported {
+  if lowering.silent || !lowering.supported {
     return
   }
-  lowering.isSupported = false
+  lowering.supported = false
   const message = unsupportedMessage what, because
   if const Some(index) = lowering.unsupportedIndex.get(message) {
     const entry = lowering.unsupported[index]
@@ -776,13 +776,13 @@ public fn finishBlock(var lowering: Lowering, var builder: FunctionBuilder, term
   } else {
     terminate builder, terminator
   }
-  lowering.isDiverged = true
+  lowering.diverged = true
 }
 
 /** Where the next instructions go. Control reaches the beginning of a block that was just opened. */
 public fn continueIn(var lowering: Lowering, var builder: FunctionBuilder, block: BlockId) {
   switchTo builder, block
-  lowering.isDiverged = false
+  lowering.diverged = false
 }
 
 // --- Loops ----------------------------------------------------------------------------------------------------------

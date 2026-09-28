@@ -64,7 +64,7 @@ public fn lowerAssertion(
   }
   lowering.inlinedQuotations.set written.span, true
   const condition = lowerValue lowering, builder, written
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const location = locationOf lowering, at
@@ -73,7 +73,7 @@ public fn lowerAssertion(
   finishBlock lowering, builder, Terminator.Branch(condition, held, failed)
   continueIn lowering, builder, failed
   const message = assertionMessage lowering, builder, written, quotation.captures
-  if lowering.isSupported {
+  if lowering.supported {
     emit builder, Instruction.Panic(borrowed(message), location)
   }
   finishBlock lowering, builder, Terminator.Unreachable
@@ -106,7 +106,7 @@ fn assertionMessage(
       }
     }
     parts.appendAll describedCapture(lowering, builder, capture, value, written.span)
-    if !lowering.isSupported {
+    if !lowering.supported {
       return abandonedSlot lowering, builder, destination: None
     }
   }
@@ -136,7 +136,7 @@ fn describedCapture(
     return [textSlot(lowering, builder, "\n  {name}: {shown}")]
   }
   const shown = showSlot lowering, builder, value, annotation, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return []
   }
   const quotes = quotesOfKind kind

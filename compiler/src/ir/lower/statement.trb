@@ -36,7 +36,7 @@ use openScope, closeScope, declareScoped, declareScopedFrom, endEveryScope, endL
 public fn lowerBlockInto(var lowering: Lowering, var builder: FunctionBuilder, block: Block, destination: Slot?) {
   const found = lowerStatements lowering, builder, block, destination
   // A block that does not end in an expression is worth `Void`, and somebody may still be taking that value
-  if found.isSome() || lowering.isDiverged || destination.isNone() {
+  if found.isSome() || lowering.diverged || destination.isNone() {
     return
   }
   const _ = voidSlot lowering, builder, destination
@@ -70,7 +70,7 @@ fn lowerStatementsOfScope(
 ): Slot? {
   const last = block.statements.length() - 1
   for index in 0..block.statements.length() {
-    if lowering.isDiverged || !lowering.isSupported {
+    if lowering.diverged || !lowering.supported {
       return None
     }
     const statement = block.statements[index]
@@ -136,7 +136,7 @@ fn discardsLastValue(
  * statement ends, the last made first (`endTemporaries`), and never in the middle of it.
  */
 public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const firstSlot = builder.slotCount()
@@ -176,7 +176,7 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
     Some(found) => found
     None => {
       const source = lowerValue lowering, builder, binding.value
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       const first = builder.slotCount()
@@ -297,7 +297,7 @@ fn lowerAssignment(
   // A captured `var` binding is a shared box, so an assignment to it writes through that box and both sides see it
   if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
     const slot = lowerValue lowering, builder, value
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
     emit builder, Instruction.Write(place, borrowed(slot))
@@ -352,7 +352,7 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
     return
   }
   const slot = lowerValue lowering, builder, expression
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   // The value is produced before the scopes end, so a binding that is returned is moved out and not released
@@ -403,7 +403,7 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const scrutinee = lowerValue lowering, builder, test
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
@@ -411,7 +411,7 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
   enterLoop lowering, done, check
   lowerBlockInto lowering, builder, body, destination: None
   const _ = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
@@ -430,12 +430,12 @@ fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, 
   enterLoop lowering, done, inner
   lowerBlockInto lowering, builder, body, destination: None
   const broke = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(inner)
   }
   continueIn lowering, builder, done
   if !broke {
-    lowering.isDiverged = true
+    lowering.diverged = true
   }
 }
 
@@ -501,7 +501,7 @@ fn lowerFor(
   const _ = lowerExpression lowering, builder, start, counter
   const limit = addTemporary builder, item
   const _ = lowerExpression lowering, builder, end, limit
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   if !name.isEmpty() {
@@ -525,7 +525,7 @@ fn lowerFor(
   }
   lowerBlockInto lowering, builder, body, destination: None
   const _ = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(step)
   }
   continueIn lowering, builder, step
@@ -578,7 +578,7 @@ fn lowerForIterate(
     }
   }
   const subject = lowerValue lowering, builder, iterable
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const cursor = match lowerCursor(lowering, builder, subject, subjectType, iterateBound, at) {
@@ -636,13 +636,13 @@ fn lowerForIterate(
   const inner = addBlock builder, "body", location
   const done = addBlock builder, "done", location
   const pulled = addTemporary builder, option
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const places = [Some(Reference(cursor.slot, []))]
   const _ = lowerDispatched lowering, builder, pulled, at, pull, [cursor.slot], places, option
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   emit builder, Instruction.Tag(tag, pulled)
@@ -661,7 +661,7 @@ fn lowerForIterate(
   lowerBlockInto lowering, builder, body, destination: None
   closeScope lowering, builder
   const _ = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
@@ -691,7 +691,7 @@ fn lowerCursor(
   const slot = addLocal builder, spelling, "iterator"
   const places: List<Reference?> = []
   const _ = lowerDispatched lowering, builder, slot, at, made, [subject], places, spelling
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   Cursor slot, annotation

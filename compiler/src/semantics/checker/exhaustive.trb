@@ -34,7 +34,7 @@ public type MatchPlan {
   /** The arms in source order. An `if const` and a `while const` have exactly one. */
   arms: List<MatchArmPlan>
   /** Whether the arms without a guard cover every value of `subject`. */
-  isExhaustive: Bool
+  exhaustive: Bool
   /** Up to three values no arm covers, as a message writes them (`.Rectangle(_, _)`). Empty when exhaustive. */
   witnesses: List<String>
 }
@@ -51,7 +51,7 @@ public type MatchArmPlan {
   /** An arm with a guard matches only when the guard holds, so it never makes a `match` exhaustive. */
   hasGuard: Bool
   /** Whether any value at all reaches this arm. An arm that none does is an error. */
-  isReachable: Bool = true
+  reachable: Bool = true
 }
 
 /** One alternative of one pattern: what has to hold for it, and what it binds when it does. */
@@ -74,7 +74,7 @@ public type PatternCheck {
   case IsCase(owner: TypeId, variant: SymbolId)
   case IsLiteral(literal: PatternLiteral)
   /** `4..=9`: the value lies between the two literals. */
-  case IsInRange(low: PatternLiteral, high: PatternLiteral, isInclusive: Bool)
+  case IsInRange(low: PatternLiteral, high: PatternLiteral, inclusive: Bool)
   case HasLength(length: Int)
   /** `[first, ...rest]`: at least this many items. */
   case HasAtLeast(length: Int)
@@ -159,7 +159,7 @@ public fn checkExhaustive(
     if !isBroken && !isAnyUseful(checker, Matrix([subject], rows), own) {
       const shown = coveringPattern checker, subject, rows, own
       reportUnreachable checker, arm.pattern.span, shown
-      reachable.set index, plans[index].copy(isReachable: false)
+      reachable.set index, plans[index].copy(reachable: false)
     }
     for row in own {
       rows.append row
@@ -262,7 +262,7 @@ fn listOfWitnesses(witnesses: List<String>): String {
 public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isLoop: Bool) {
   const plan = onePatternPlan checker, pattern, subject
   checker.recordMatch pattern.span, plan
-  if checker.absorbs(subject) || !plan.isExhaustive {
+  if checker.absorbs(subject) || !plan.exhaustive {
     return
   }
   const message = if isLoop {

@@ -348,7 +348,7 @@ fn blockShapeIndex(var emitter: Emitter, program: IrProgram, layout: LayoutId): 
     Some(function) => emitter.chunks.get(function.value) ?? (0 - 1)
     None => 0 - 1
   }
-  built = Shape built.name, built.width, built.counted, built.tag, built.groups, built.isReversed, closer
+  built = Shape built.name, built.width, built.counted, built.tag, built.groups, built.reversed, closer
   emitter.bytecode.shapes.set index, built
   index
 }
@@ -2089,7 +2089,7 @@ fn emitArithmetic(
     }
   }
   if kind == NumericKind.Signed(64) {
-    if !intrinsic.isChecked {
+    if !intrinsic.checked {
       const unchecked = match intrinsic.operation {
         .Add => Some Opcode.AddUnchecked
         .Subtract => Some Opcode.SubtractUnchecked
@@ -2127,7 +2127,7 @@ fn emitArithmetic(
     report emitter, "an intrinsic the VM does not execute"
     return
   }
-  const checkedFlag = if intrinsic.isChecked { 1 } else { 0 }
+  const checkedFlag = if intrinsic.checked { 1 } else { 0 }
   emitKernel(emitter, body, kernelNumberOf(KernelOperation.Arithmetic), [
     result,
     first,

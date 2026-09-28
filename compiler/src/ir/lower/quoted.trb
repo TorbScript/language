@@ -127,7 +127,7 @@ public fn lowerQuotation(
       return abandonedSlot lowering, builder, destination
     }
   }
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const target = valueSlot lowering, builder, destination, annotation
@@ -317,7 +317,7 @@ fn nameNode(
       .Parameter(position) => ("Parameter", position)
       .Captured(position) => ("Captured", position)
     }
-    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+    const integer = lowering.program.internType IrType.Integer(64, signed: true)
     const position = integerSlot lowering, builder, index, integer
     const written = textSlot lowering, builder, text
     const of = typeOfNode(lowering, builder, tree, at)?
@@ -535,7 +535,7 @@ fn literalNode(var lowering: Lowering, var builder: FunctionBuilder, tree: TreeB
     }
   }
   const encoded = if const Some(number) = integerOf(value) {
-    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+    const integer = lowering.program.internType IrType.Integer(64, signed: true)
     encodedCase(lowering, builder, tree, "Int", [integerSlot(lowering, builder, number, integer)], at)?
   } else if const Some(number) = floatOf(value) {
     const floating = lowering.program.internType IrType.Floating(64)
@@ -568,7 +568,7 @@ fn readConstantNode(
 ): Slot? {
   const at = expression.span
   const slot = lowerValue lowering, builder, expression
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   const name = encodedCaseOfType lowering, builder.typeOfSlot(slot)
@@ -630,7 +630,7 @@ fn caseNode(
   // Interned first: the receiver of `locationAt` is read before its argument runs
   const interned = locationOf lowering, at
   const location = lowering.program.locationAt interned
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   var given: List<IrArgument> = []
   // The place a node stands at is three fields every case has, where the layout carries them in front of its own
   const shape = lowering.program.layoutAt tree.nodeLayout
@@ -761,7 +761,7 @@ fn sourceLocationOf(var lowering: Lowering, var builder: FunctionBuilder, layout
   // Interned first: the receiver of `locationAt` is read before its argument runs
   const interned = locationOf lowering, at
   const location = lowering.program.locationAt interned
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const fields = [
     borrowed(textSlot(lowering, builder, location.path)),
     borrowed(integerSlot(lowering, builder, location.line, integer)),

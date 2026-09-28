@@ -98,7 +98,7 @@ public fn lowerMatch(
     }
   }
   const scrutinee = lowerValue lowering, builder, subject
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const target = valueSlot lowering, builder, destination, annotation
@@ -107,7 +107,7 @@ public fn lowerMatch(
   var guards: List<Expression?> = []
   for index in 0..arms.length() {
     // An arm no value reaches got a message from the checker; a block nothing jumps to is not a block
-    if plan.arms[index].isReachable {
+    if plan.arms[index].reachable {
       armBlocks.append addBlock(builder, "arm", location)
     } else {
       armBlocks.append BlockId(0)
@@ -127,7 +127,7 @@ public fn lowerMatch(
   emitWalk lowering, builder, walk
   var reaches = false
   for index in 0..arms.length() {
-    if !lowering.isSupported || !plan.arms[index].isReachable {
+    if !lowering.supported || !plan.arms[index].reachable {
       continue
     }
     continueIn lowering, builder, armBlocks[index]
@@ -135,13 +135,13 @@ public fn lowerMatch(
     declareScopedBetween lowering, builder, firstSlots[index], firstSlots[index + 1]
     const _ = lowerExpression lowering, builder, arms[index].body, target
     closeScope lowering, builder
-    if !lowering.isDiverged {
+    if !lowering.diverged {
       finishBlock lowering, builder, Terminator.Jump(join)
       reaches = true
     }
   }
   continueIn lowering, builder, join
-  lowering.isDiverged = !reaches
+  lowering.diverged = !reaches
   target
 }
 
@@ -191,11 +191,11 @@ fn bindSelected(
   const lastSlot = builder.slotCount()
   if lastSlot > firstSlot {
     const scrutinee = lowerValue lowering, builder, subject
-    if !lowering.isSupported {
+    if !lowering.supported {
       return None
     }
     emitBindings lowering, builder, plan, arm, branch, scrutinee, subject.span
-    if !lowering.isSupported {
+    if !lowering.supported {
       return None
     }
   }
@@ -255,7 +255,7 @@ public fn lowerIfBinding(
     }
   }
   const scrutinee = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const location = locationOf lowering, expression.span
@@ -285,7 +285,7 @@ public fn lowerIfBinding(
   declareScopedBetween lowering, builder, firstSlot, lastSlot
   lowerBlockInto lowering, builder, then, wanted
   closeScope lowering, builder
-  const thenDiverged = lowering.isDiverged
+  const thenDiverged = lowering.diverged
   if !thenDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
@@ -293,13 +293,13 @@ public fn lowerIfBinding(
   var elseDiverged = false
   if const Some(alternative) = otherwise {
     const _ = lowerExpression lowering, builder, alternative, target
-    elseDiverged = lowering.isDiverged
+    elseDiverged = lowering.diverged
   }
   if !elseDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
   continueIn lowering, builder, join
-  lowering.isDiverged = thenDiverged && elseDiverged
+  lowering.diverged = thenDiverged && elseDiverged
   target
 }
 
@@ -389,7 +389,7 @@ fn lowerIfVarBinding(
   for (declared, _) in named {
     const _ = lowering.references.remove declared
   }
-  const thenDiverged = lowering.isDiverged
+  const thenDiverged = lowering.diverged
   if !thenDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
@@ -397,13 +397,13 @@ fn lowerIfVarBinding(
   var elseDiverged = false
   if const Some(alternative) = otherwise {
     const _ = lowerExpression lowering, builder, alternative, target
-    elseDiverged = lowering.isDiverged
+    elseDiverged = lowering.diverged
   }
   if !elseDiverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
   continueIn lowering, builder, join
-  lowering.isDiverged = thenDiverged && elseDiverged
+  lowering.diverged = thenDiverged && elseDiverged
   target
 }
 
@@ -460,7 +460,7 @@ public fn lowerWhileBinding(
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, check
   const scrutinee = lowerValue lowering, builder, value
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   const graph = decisionTreeOf plan
@@ -474,7 +474,7 @@ public fn lowerWhileBinding(
   lowerBlockInto lowering, builder, body, destination: None
   closeScope lowering, builder
   const _ = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
@@ -558,7 +558,7 @@ fn lowerWhileVarBinding(
     const _ = lowering.references.remove declared
   }
   const _ = leaveLoop lowering
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
@@ -664,7 +664,7 @@ fn emitBindings(
       }
     }
     readPathInto lowering, builder, plan, subject, binding.path, slot, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
   }
@@ -690,7 +690,7 @@ fn emitWalk(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk) {
   }
   finishBlock lowering, builder, Terminator.Jump(blocks[root.value])
   for index in 0..filled.graph.nodes.length() {
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
     continueIn lowering, builder, blocks[index]
@@ -723,7 +723,7 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
           return
         }
       }
-      const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+      const integer = lowering.program.internType IrType.Integer(64, signed: true)
       const tag = addTemporary builder, integer
       emit builder, Instruction.Tag(tag, value)
       var values: List<Int> = []
@@ -753,14 +753,14 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
     }
     .Arm(arm, branch) => {
       emitBindings lowering, builder, walk.plan, arm, branch, walk.subject, walk.at
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       finishBlock lowering, builder, Terminator.Jump(walk.armBlocks[arm])
     }
     .Guarded(arm, branch, otherwise) => {
       emitBindings lowering, builder, walk.plan, arm, branch, walk.subject, walk.at
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       const guard = match walk.guards.get(arm) ?? None {
@@ -772,7 +772,7 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
       }
       // The guard sees the names of its own arm, which the bindings above have just put in their slots
       const condition = lowerValue lowering, builder, guard
-      if !lowering.isSupported {
+      if !lowering.supported {
         return
       }
       const fallback = walk.blocks[otherwise.value]
@@ -983,11 +983,11 @@ fn lengthSlotOf(
       return None
     }
   }
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const target = addTemporary builder, integer
   const places: List<Reference?> = []
   const found = lowerDispatched lowering, builder, target, at, dispatched, [container], places, integer
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   found
@@ -1024,7 +1024,7 @@ fn itemSlotOf(
   const places: List<Reference?> = []
   const slots = [container, index]
   const found = lowerDispatched lowering, builder, target, at, dispatched, slots, places, annotation
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   found
@@ -1087,12 +1087,12 @@ fn restSlotOf(
   }
   const stage = resultTypeOf lowering, skipped
   const stageAnnotation = irTypeOfClosed lowering, stage
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const amount = integerSlot lowering, builder, index, integer
   const rest = addTemporary builder, stageAnnotation
   const places: List<Reference?> = []
   const _ = lowerDispatched lowering, builder, rest, at, skipped, [container, amount], places, stageAnnotation
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   var last = stage
@@ -1135,7 +1135,7 @@ fn restSlotOf(
     None => addTemporary builder, annotation
   }
   const found = lowerDispatched lowering, builder, target, at, collected, [taken], places, annotation
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   found
@@ -1168,7 +1168,7 @@ fn takenBefore(
   const shortened = addTemporary builder, annotation
   const places: List<Reference?> = []
   const _ = lowerDispatched lowering, builder, shortened, at, dispatched, [stage, amount], places, annotation
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   (shortened, shortenedType)
@@ -1196,7 +1196,7 @@ fn itemStepOf(
   }
   match step {
     .Item(index) => {
-      const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+      const integer = lowering.program.internType IrType.Integer(64, signed: true)
       const position = integerSlot lowering, builder, index, integer
       itemSlotOf lowering, builder, base, containerType, position, destination, at
     }
@@ -1248,7 +1248,7 @@ fn literalComparison(
       const equals = IntrinsicOperation.TextEqual
       return intrinsicSlot lowering, builder, None, equals, None, [value, other], boolean, at
     }
-    const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+    const integer = lowering.program.internType IrType.Integer(64, signed: true)
     const order = addTemporary builder, integer
     emitIntrinsic lowering, builder, order, IntrinsicOperation.TextCompare, None, [value, other], at
     const zero = constantSlot lowering, builder, None, StaticContents.Literal(LiteralValue.Integer(0)), integer
@@ -1441,7 +1441,7 @@ public fn lowerTry(
   annotation: IrTypeId,
 ): Slot {
   const subject = lowerValue lowering, builder, inner
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const subjectLayout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
@@ -1475,7 +1475,7 @@ public fn lowerTry(
   const location = locationOf lowering, expression.span
   const value = addBlock builder, "value", location
   const failed = addBlock builder, "failed", location
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
@@ -1533,7 +1533,7 @@ fn lowerTopLevelTry(
   const location = locationOf lowering, at
   const value = addBlock builder, "value", location
   const failed = addBlock builder, "failed", location
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
@@ -1604,11 +1604,11 @@ fn reportFailure(
   emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
   if const Some((current, failed)) = chain {
     lowerCauseChain lowering, builder, current, failed, at
-    if !lowering.isSupported {
+    if !lowering.supported {
       return
     }
   }
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const code = integerSlot lowering, builder, 1, integer
   emitIntrinsic lowering, builder, None, IntrinsicOperation.ExitWithCode, None, [code], at
   finishBlock lowering, builder, Terminator.Unreachable
@@ -1653,7 +1653,7 @@ fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current
     return
   }
   const text = lowering.program.internType IrType.Text
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const location = locationOf lowering, at
   const check = addBlock builder, "cause", location
   const inner = addBlock builder, "caused", location
@@ -1664,7 +1664,7 @@ fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current
   continueIn lowering, builder, check
   const places: List<Reference?> = [None]
   const _ = lowerDispatched lowering, builder, pulled, at, dispatched, [current], places, option
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   emit builder, Instruction.Tag(tag, pulled)
@@ -1674,7 +1674,7 @@ fn lowerCauseChain(var lowering: Lowering, var builder: FunctionBuilder, current
   var parts: List<Slot> = []
   parts.append constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("  caused by: ")), text)
   const shown = showSlot lowering, builder, current, failed, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return
   }
   parts.append shown
@@ -1706,7 +1706,7 @@ fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: S
   }
   const failed = errorTypeOf lowering, written
   const shown = showSlot lowering, builder, carried, failed, at
-  if !lowering.isSupported {
+  if !lowering.supported {
     return None
   }
   (shown, failed)
@@ -1856,7 +1856,7 @@ public fn lowerCoalesce(
   annotation: IrTypeId,
 ): Slot {
   const subject = lowerValue lowering, builder, left
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const layout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
@@ -1877,7 +1877,7 @@ public fn lowerCoalesce(
   const value = addBlock builder, "value", location
   const fallback = addBlock builder, "fallback", location
   const join = addBlock builder, "join", location
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], fallback)
@@ -1888,7 +1888,7 @@ public fn lowerCoalesce(
   // The thunk the checker asked for is this block: the fallback runs only here, and nothing is captured
   lowering.inlinedThunks.set right.span, true
   const _ = lowerExpression lowering, builder, right, target
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
   continueIn lowering, builder, join
@@ -1927,7 +1927,7 @@ public fn lowerOptionalMember(
     }
   }
   const subject = lowerValue lowering, builder, base
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   const subjectLayout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
@@ -1959,7 +1959,7 @@ public fn lowerOptionalMember(
   const present = addBlock builder, "present", location
   const absent = addBlock builder, "absent", location
   const join = addBlock builder, "join", location
-  const integer = lowering.program.internType IrType.Integer(64, isSigned: true)
+  const integer = lowering.program.internType IrType.Integer(64, signed: true)
   const tag = addTemporary builder, integer
   emit builder, Instruction.Tag(tag, subject)
   finishBlock lowering, builder, Terminator.Switch(tag, [some], [present], absent)
@@ -1986,7 +1986,7 @@ public fn lowerOptionalMember(
     const what = "`?.` whose member lowered something else"
     return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  if !lowering.isSupported {
+  if !lowering.supported {
     return abandonedSlot lowering, builder, destination
   }
   if flattened {
@@ -1994,7 +1994,7 @@ public fn lowerOptionalMember(
   } else {
     emit builder, Instruction.Construct(target, resultLayout, resultSome, [borrowed(answered)])
   }
-  if !lowering.isDiverged {
+  if !lowering.diverged {
     finishBlock lowering, builder, Terminator.Jump(join)
   }
   continueIn lowering, builder, join
