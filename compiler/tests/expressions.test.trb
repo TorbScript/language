@@ -455,6 +455,15 @@ group "One root cause, one message" {
     assert problems(source).isEmpty()
   }
 
+  test "a modifier is a field's name where a `:` follows it, `public` as much as the others" {
+    const source = "type Symbol \{\n  public: Bool\n  private: Bool\n  native: Bool\n  shared: Bool\n\n"
+      + "  fn exported(): Bool \{\n    self.public && !self.private\n  \}\n\}\n\n"
+      + "fn probe(): Bool \{\n  const symbol = Symbol(public: true, private: false, native: false, shared: false)\n"
+      + "  symbol.exported() && symbol.public\n\}"
+    assert problems(source).isEmpty()
+    assert(problems("type Point \{\n  public x: Int\n\}") == ["`public` is what a member is without it"])
+  }
+
   test "a bare keyword stays the keyword: a field named after one is assigned through `self`" {
     const source = "type Event \{\n  var type: String\n\n  var fn reset() \{\n    type = \"\"\n  \}\n\}"
     assert(problems(source) == ["`type` is a keyword and cannot be assigned bare"])
