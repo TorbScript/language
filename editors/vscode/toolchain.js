@@ -267,7 +267,7 @@ class Toolchain {
   async installOrUpdate() {
     await this.check();
     if (this.executable) {
-      return this.runTask('Update Toolchain', new this.vscode.ProcessExecution(this.executable, ['upgrade']));
+      return this.runVisibly('Update Toolchain', this.executable, ['upgrade']);
     }
     return this.install();
   }
@@ -278,54 +278,73 @@ class Toolchain {
    * the task runs, since a person may close its terminal before it ends.
    */
   async install() {
-    const { vscode } = this;
-    let execution;
     if (process.platform === 'win32') {
-      execution = new vscode.ProcessExecution('powershell.exe', [
+      return this.runVisibly('Install Toolchain', 'powershell.exe', [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
         `irm ${INSTALL_SCRIPT_WINDOWS} | iex`,
       ]);
-    } else {
-      const script =
-        `if command -v curl >/dev/null 2>&1; then curl -fsSL ${INSTALL_SCRIPT_POSIX} | sh; ` +
-        `else wget -qO- ${INSTALL_SCRIPT_POSIX} | sh; fi`;
-      execution = new vscode.ProcessExecution('/bin/sh', ['-c', script]);
     }
-    return this.runTask('Install Toolchain', execution);
+    const script =
+      `if command -v curl >/dev/null 2>&1; then curl -fsSL ${INSTALL_SCRIPT_POSIX} | sh; ` +
+      `else wget -qO- ${INSTALL_SCRIPT_POSIX} | sh; fi`;
+    return this.runVisibly('Install Toolchain', '/bin/sh', ['-c', script]);
   }
 
-  async runTask(name, execution) {
+  /**
+   * Runs a command as a task, whose terminal shows the command line and keeps its output until it is closed - in the
+   * first workspace folder, or in the home directory of an empty window. Where the window cannot run a task, it runs in
+   * a terminal of its own instead. Either way the toolchain is looked for again while it runs and once it has ended.
+   */
+  async runVisibly(name, command, args) {
     const { vscode } = this;
-    const task = new vscode.Task({ type: 'torbscript', task: name }, vscode.TaskScope.Global, name, 'TorbScript', execution, []);
+    const folder = (vscode.workspace.workspaceFolders || [])[0];
+    const execution = new vscode.ProcessExecution(command, args, { cwd: folder ? folder.uri.fsPath : this.os.homedir() });
+    const task = new vscode.Task(
+      { type: 'torbscript', task: name },
+      folder || vscode.TaskScope.Workspace,
+      name,
+      'TorbScript',
+      execution,
+      []
+    );
     task.presentationOptions = {
       reveal: vscode.TaskRevealKind.Always,
       focus: true,
       panel: vscode.TaskPanelKind.Dedicated,
       clear: true,
     };
-    const started = await vscode.tasks.executeTask(task);
     this.startPolling();
+    let started;
+    try {
+      started = await vscode.tasks.executeTask(task);
+    } catch (error) {
+      this.log(`${name} could not run as a task (${error.message}); it runs in a terminal instead`);
+      const terminal = vscode.window.createTerminal({ name: `TorbScript: ${name}`, shellPath: command, shellArgs: args });
+      terminal.show();
+      return undefined;
+    }
     const ended = vscode.tasks.onDidEndTaskProcess((event) => {
-      if (event.execution === started) {
-        ended.dispose();
-        this.check().then(() => {
-          if (event.exitCode === 0 && this.executable) {
-            vscode.window.showInformationMessage(`TorbScript is ready: ${this.describe()}`);
-          } else if (!this.executable) {
-            vscode.window.showWarningMessage(
-              `${name} ended with ${event.exitCode}, and no torb was found. The terminal says why.`,
-              'Open Download Page'
-            ).then((answer) => {
+      const same = event.execution === started || (event.execution.task.definition.type === 'torbscript' && event.execution.task.name === name);
+      if (!same) {
+        return;
+      }
+      ended.dispose();
+      this.check().then(() => {
+        if (event.exitCode === 0 && this.executable) {
+          vscode.window.showInformationMessage(`TorbScript is ready: ${this.describe()}`);
+        } else if (!this.executable) {
+          vscode.window
+            .showWarningMessage(`${name} ended with ${event.exitCode}, and no torb was found. The terminal says why.`, 'Open Download Page')
+            .then((answer) => {
               if (answer) {
                 vscode.env.openExternal(vscode.Uri.parse(DOWNLOAD_PAGE));
               }
             });
-          }
-        });
-      }
+        }
+      });
     });
     this.context.subscriptions.push(ended);
     return started;

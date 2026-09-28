@@ -561,6 +561,10 @@ class TorbTests {
           return;
         }
         flush();
+        this.log(
+          `torb test${json ? ' --report json' : ''}${native ? ' --native' : ''} of ${files.length} file(s)` +
+            `${names.length && json ? `, ${names.length} filter(s)` : ''}: exit ${code}, ${state.reported.size} test(s) reported`
+        );
         if (failedToRun) {
           // Reported by `error` already
         } else if (state.events === 0 && code !== 0 && !token.isCancellationRequested) {
