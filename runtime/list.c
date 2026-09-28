@@ -11,6 +11,9 @@
  * a shared list copy exactly once.
  *
  * An empty list still has a storage of capacity zero, because `torb_list` has no room for the descriptor.
+ *
+ * The reads of a list and the append to a storage only it holds, whole and with room, are `static inline` in torb.h,
+ * because a loop over the bytes of a `List<UInt8>` calls them once a byte; what is here is everything else.
  */
 
 #include "torb.h"
@@ -19,14 +22,27 @@
 #include <stddef.h>
 #include <string.h>
 
-size_t torb_list_storage_data_offset(const torb_element *element) {
-  size_t base = sizeof(torb_list_storage);
-  size_t align = element->align == 0u ? 1u : (size_t)element->align;
-  return (base + align - 1u) / align * align;
-}
-
-void *torb_list_storage_data(torb_list_storage *storage) {
-  return (void *)((uint8_t *)storage + torb_list_storage_data_offset(storage->element));
+void torb_element_copy_sized(void *to, const void *from, uint32_t size) {
+  switch (size) {
+    case 1u:
+      memcpy(to, from, 1u);
+      return;
+    case 2u:
+      memcpy(to, from, 2u);
+      return;
+    case 4u:
+      memcpy(to, from, 4u);
+      return;
+    case 8u:
+      memcpy(to, from, 8u);
+      return;
+    case 16u:
+      memcpy(to, from, 16u);
+      return;
+    default:
+      memcpy(to, from, (size_t)size);
+      return;
+  }
 }
 
 static uint8_t *torb_list_bytes(torb_list list) {
@@ -161,29 +177,6 @@ const torb_element *torb_list_element(torb_list list) {
   return list.storage->element;
 }
 
-int64_t torb_list_length(torb_list list) {
-  return (int64_t)list.length;
-}
-
-const void *torb_list_at(torb_list list, int64_t index, torb_location at) {
-  if (index < 0 || index >= (int64_t)list.length) {
-    torb_panic_index_out_of_bounds(index, (int64_t)list.length, at);
-  }
-  return torb_list_bytes(list) + (size_t)index * (size_t)list.storage->element->size;
-}
-
-bool torb_list_get(torb_list list, int64_t index, void *out) {
-  const torb_element *element = list.storage->element;
-  if (index < 0 || index >= (int64_t)list.length) {
-    return false;
-  }
-  memcpy(out, torb_list_bytes(list) + (size_t)index * (size_t)element->size, (size_t)element->size);
-  if (element->retain != NULL) {
-    torb_element_retain(element, out);
-  }
-  return true;
-}
-
 void torb_list_make_unique(torb_list *list) {
   torb_list_prepare(list, 0u);
 }
@@ -243,7 +236,7 @@ void *torb_list_element_reference(torb_list *list, int64_t index, torb_text miss
   return torb_list_element_address(list, index, at);
 }
 
-void torb_list_add(torb_list *list, const void *value) {
+void torb_list_add_prepared(torb_list *list, const void *value) {
   const torb_element *element = list->storage->element;
   torb_list_prepare(list, 1u);
   memcpy(torb_list_bytes(*list) + (size_t)list->length * (size_t)element->size, value, (size_t)element->size);

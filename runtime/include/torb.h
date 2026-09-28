@@ -1046,10 +1046,47 @@ bool torb_parse_bool(torb_text text, bool *out);
 
 /* ------------------------------------------------------------------------------------------------------ list --- */
 
-/** Where the elements of a storage begin: the struct's size rounded up to the element's alignment. */
-size_t torb_list_storage_data_offset(const torb_element *element);
+/*
+ * The reads of a list and its append are `static inline` here, and not calls into list.c: a loop over the bytes of a
+ * `List<UInt8>` - what inflate and deflate are - paid a call, a second call for where the elements begin and a
+ * `memcpy` of a size the compiler did not know for every byte (about 13 ns an append, docs/PERFORMANCE.md 4.2). The
+ * declarations `torb_natives.h` writes after these take their internal linkage (C11 6.2.2), as `torb_machine_load`'s
+ * does, so the natives table and the VM call them the same way. Only the append's slow half stays in list.c.
+ */
+
+/**
+ * Where the elements of a storage begin: the struct's size rounded up to the element's alignment, which is a power of
+ * two as every alignment of C is (C11 6.2.8).
+ */
+static inline size_t torb_list_storage_data_offset(const torb_element *element) {
+  size_t align = element->align == 0u ? 1u : (size_t)element->align;
+  return (sizeof(torb_list_storage) + align - 1u) & ~(align - 1u);
+}
+
 /** `storage` borrowed, the pointer borrowed with it. */
-void *torb_list_storage_data(torb_list_storage *storage);
+static inline void *torb_list_storage_data(torb_list_storage *storage) {
+  return (void *)((uint8_t *)storage + torb_list_storage_data_offset(storage->element));
+}
+
+/**
+ * One element of `size` bytes from `from` to `to`, out of line in list.c: one load and one store for the sizes of a
+ * scalar, `memcpy` otherwise.
+ */
+void torb_element_copy_sized(void *to, const void *from, uint32_t size);
+
+/*
+ * The same, with a byte - the element of `List<UInt8>` - copied inline. Only the smallest size is: inlined where the
+ * value is a local of one known type, a copy of a larger constant size is one GCC sees run past that local - on a path
+ * that never runs, since `size` is the size of that very type - and it says so under `-Werror`, where no pragma reaches
+ * the link of a program optimized across its units.
+ */
+static inline void torb_element_copy_bytes(void *to, const void *from, uint32_t size) {
+  if (size == 1u) {
+    *(uint8_t *)to = *(const uint8_t *)from;
+    return;
+  }
+  torb_element_copy_sized(to, from, size);
+}
 
 /** An empty list over `element`. `element` must be static data. Result owned. */
 torb_list torb_list_new(const torb_element *element);
@@ -1061,16 +1098,44 @@ torb_list torb_list_retained(torb_list list);
 void torb_list_release(torb_list list);
 
 const torb_element *torb_list_element(torb_list list);
-int64_t torb_list_length(torb_list list);
+
+static inline int64_t torb_list_length(torb_list list) {
+  return (int64_t)list.length;
+}
+
+/**
+ * The item at an index the compiler proved inside the list (`compiler/src/ir/bounds.trb`): no comparison and no copy,
+ * because it is only read. Inline, so that a loop over a list is a loop over its storage.
+ */
+static inline const void *torb_list_item(torb_list list, int64_t index) {
+  return (const uint8_t *)torb_list_storage_data(list.storage)
+    + ((size_t)list.offset + (size_t)index) * (size_t)list.storage->element->size;
+}
 
 /**
  * A borrowed pointer to the element at `index`, bounds checked. Valid until the list is written through. This is
  * what a read of `list[i]` compiles to.
  */
-const void *torb_list_at(torb_list list, int64_t index, torb_location at);
+static inline const void *torb_list_at(torb_list list, int64_t index, torb_location at) {
+  if ((uint64_t)index >= (uint64_t)list.length) {
+    torb_panic_index_out_of_bounds(index, (int64_t)list.length, at);
+  }
+  return torb_list_item(list, index);
+}
 
 /** `get(index): Item?`: false when out of range, otherwise `*out` is a retained copy the caller owns. */
-bool torb_list_get(torb_list list, int64_t index, void *out);
+static inline bool torb_list_get(torb_list list, int64_t index, void *out) {
+  const torb_element *element;
+  if ((uint64_t)index >= (uint64_t)list.length) {
+    return false;
+  }
+  element = list.storage->element;
+  torb_element_copy_bytes(out, torb_list_item(list, index), element->size);
+  if (element->retain != NULL) {
+    torb_element_retain(element, out);
+  }
+  return true;
+}
 
 /**
  * Make unique and answer a writable interior pointer to the element at `index`. This is the `Element` path step: the
@@ -1084,15 +1149,6 @@ bool torb_list_get(torb_list list, int64_t index, void *out);
 void *torb_list_element_address(torb_list *list, int64_t index, torb_location at);
 
 /**
- * The item at an index the compiler proved inside the list (`compiler/src/ir/bounds.trb`): no comparison and no copy,
- * because it is only read. Inline, so that a loop over a list is a loop over its storage.
- */
-static inline const void *torb_list_item(torb_list list, int64_t index) {
-  return (const uint8_t *)torb_list_storage_data(list.storage)
-    + ((size_t)list.offset + (size_t)index) * (size_t)list.storage->element->size;
-}
-
-/**
  * The same with the message of an index out of range handed in: what the C of a compiler before the `at` of `ArrayList`
  * called, and what the seed's C still calls. It goes once the seed is past that change.
  */
@@ -1101,8 +1157,30 @@ void *torb_list_element_reference(torb_list *list, int64_t index, torb_text miss
 /** Make the list's storage unique so a write may go through in place. */
 void torb_list_make_unique(torb_list *list);
 
-/** `value` consumed: the list takes over its count. */
-void torb_list_add(torb_list *list, const void *value);
+/**
+ * The half of `torb_list_add` that is not inline: the write is prepared first - a storage of its own where somebody
+ * else holds this one or the list is a slice of it, more room where it is full - and then the value appended.
+ */
+void torb_list_add_prepared(torb_list *list, const void *value);
+
+/**
+ * `value` consumed: the list takes over its count. A storage only this list holds, whole and with room, takes the
+ * value in place; everything else goes through `torb_list_add_prepared`. A storage's count is read plainly, as
+ * `torb_is_unique` reads it: a list storage is never a shared block.
+ */
+static inline void torb_list_add(torb_list *list, const void *value) {
+  torb_list_storage *storage = list->storage;
+  if (storage->header.count == 1u && list->offset == 0u && list->length == storage->length
+      && storage->length < storage->capacity) {
+    uint32_t size = storage->element->size;
+    torb_element_copy_bytes((uint8_t *)torb_list_storage_data(storage) + (size_t)storage->length * (size_t)size,
+                            value, size);
+    storage->length += 1u;
+    list->length = storage->length;
+    return;
+  }
+  torb_list_add_prepared(list, value);
+}
 /** `values` borrowed; each element is retained into the list. */
 void torb_list_add_all(torb_list *list, torb_list values);
 /**

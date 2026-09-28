@@ -1089,6 +1089,28 @@ candidate, up to 64 of them per position; the input is a trait-typed `Bytes`, wh
 slower rather than faster (7.4 s against 4.7 s). A bulk append of a range of the list itself - what a match is - or an
 inline fast path of `torb_list_add` for a unique list with room would be the next step, and both are the runtime's.
 
+**The inline fast path (2026-09-28).** `torb_list_add`, `torb_list_get`, `torb_list_at`, `torb_list_length` and where
+the elements of a storage begin are `static inline` in `torb.h` now, and no native changed: the declarations
+`torb_natives.h` writes after them take their internal linkage, as `torb_machine_load`'s does. An append to a storage
+only this list holds, whole and with room, is a comparison of the count, a store and two increments, and a byte is
+copied inline; everything else goes through `torb_list_add_prepared` in list.c as before. What it was: a call, a
+second call to `torb_is_unique` in memory.c, a third for where the elements begin - which divided by the alignment -
+and a `memcpy` of a size the compiler did not know. A copy of a larger constant size is out of line
+(`torb_element_copy_sized`): inlined where the value is a local of one known type, GCC sees it run past that local on a
+path that never runs, and says so under `-Werror` at the link of a program optimized across its units, where no pragma
+reaches. The same 30 MB of C, `torb build`, the compiler of the same commit, fastest of three on a machine other gate
+runs shared:
+
+| 30 MB of C (1.96 MB deflated) | before | after | `gzip` 1.13, user |
+|---|---:|---:|---:|
+| thirty million appends of a constant byte to an `ArrayList<UInt8>` | 0.27-0.33 s | 0.09-0.12 s | |
+| `gunzipped` | 0.43-0.52 s | **0.22-0.25 s** | 0.11 s (`-d`) |
+| `gzipped` | 2.77-3.10 s | **1.87-2.25 s** | 0.38 s (`-6`) |
+
+Deflating is faster because every read of the input and of the chains is `torb_list_get` inlined behind one call of the
+witness table; reading the trait-typed input into a concrete `ArrayList<UInt8>` first made it no faster (2.4 to 3.8 s in
+the same runs), so the input stays as it is. What is left of deflating is that one indirect call per byte read.
+
 ---
 
 ## 5. The plan
