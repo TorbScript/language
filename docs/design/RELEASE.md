@@ -896,7 +896,8 @@ publisher has that a GitHub one has not; 75 tests, natively and in the VM, with 
 the release makes it (a Linux `torb` compiled from the fixpoint's `program.c`, the toolchain laid out, the source
 packed): the registry's container answered, created an account and took a `torb publish` from the Windows host, writing
 the index, the archive and a WAL-mode database; the site served `install.sh` and the reference read-only, split by host
-name. `linux/arm64` has not been built outside CI.
+name. `linux/arm64` has not been built outside CI. Since 2026-09-28 the release binary's smoke test writes the
+registry's C before a release or a nightly is published (section 14, "What the first nightly reported").
 
 **Not built yet**: sign-in and a second factor, the documentation
 worker, search, verified domains, "elsewhere" owners, the similarity rule against packages with many dependents, an
@@ -1615,3 +1616,31 @@ runner reached the forge at https://git.torb.dev, and the bootstrap failed where
 private API for the seed (401) - the reason seeds come from the forge now - and `actions/upload-artifact` v4 refused
 with "not currently supported on GHES", the reason for Forgejo's forks. The workflows of `.forgejo/` pass
 `forgejo-runner validate` (runner 13); they had not run on the forge when this was written.
+
+### What the first nightly reported (2026-09-28)
+
+Run 21 of `nightly.yml` (main at `f67f6c34`) published `nightly-20260928` and failed all three image jobs, for two
+reasons:
+
+- **`site` and `release-sync`: no ID token.** The key `enable-openid-connect` stood on the job of `images.yml`, which
+  the forge drops when it expands a reusable workflow into the calling run (the bullet in "Writing from a workflow"
+  above). It stands at the workflow's top level since, and `.forgejo/actions/token` names that place when it fails.
+- **`registry`: the released `torb` crashed** in the image's build stage, `torb build tools/registry/src/main.trb`,
+  about three seconds in, with a segmentation fault - the previous nightly's as well. Under gdb in `debian:bookworm`
+  it died in musl's `fmt_fp` with the stack pointer 17 KB below the top of the main thread's stack, writing past it:
+  the digit loop of `printf("%g")` never ended, because its `long double` was NaN. At `fmt_fp`'s second call the x87
+  status word held a stack fault and all eight x87 registers were marked in use. The one function of the binary with
+  MMX instructions was the compiler's own `lowerComparison` (`movq (%rsp),%mm0` and two `movq2dq`), which gcc 13.3
+  (Ubuntu 24.04, `musl-gcc -static`, as `gates.yml` builds the release binary) chose for a 64-bit move and never
+  followed with `emms`. An MMX instruction marks the x87 stack full, the next x87 load reads NaN, and musl formats
+  every float with `long double` on the x87 - so any order comparison of a type with `Compare` (`<`, `>=` on a
+  record), followed by printing a float, killed the static binary; glibc's `printf` does not use the x87, which is why
+  no bootstrapped `torb` ever showed it, and `torb doc std`, the site image's one command, never took that path.
+  Fifteen lines reproduce it in `torb run`.
+  The fix is `#pragma GCC target("no-mmx")` at the top of `runtime/include/torb.h`, for gcc on x86-64: it reaches every
+  translation unit the compiler emits and every one of the runtime, whichever script compiles them - `build-seed.sh`,
+  `torb build`, a user's program on a musl system - where a flag in one build script would have covered the release
+  binary alone. Built again from the same seed with it, the release binary holds no MMX instruction and builds the
+  registry in `debian:bookworm`. Three checks keep it: the release-binary step of `gates.yml` fails on any MMX
+  instruction in the binary, and `tools/smoke-test.sh` runs that comparison with floats and writes the C of
+  `tools/registry` with the release binary, before anything is published.

@@ -18,6 +18,21 @@
 #ifndef TORB_H
 #define TORB_H
 
+/*
+ * gcc on x86-64: no MMX registers. gcc 13 moved a 64-bit value through `%mm0` (`movq2dq`) in the compiler's own
+ * `lowerComparison`, and MMX shares its registers with the x87: the first MMX instruction marks all eight x87 registers
+ * in use, and without an `emms` - which gcc does not write for code it chose MMX for itself - every later x87 load
+ * finds the stack full and reads NaN. musl formats a `Float` with `long double` on the x87, so after an order
+ * comparison of a type with `Compare`, printing any float looped over its digit buffer until it ran off the stack: the
+ * static release `torb` segfaulted building tools/registry (docs/design/RELEASE.md section 7.11). Nothing TorbScript
+ * emits has a use for MMX, and SSE2 is part of x86-64. It stands before the first `#include` because a function
+ * compiled without MMX cannot inline an `always_inline` one compiled with it, such as a `_FORTIFY_SOURCE` `memcpy`:
+ * every translation unit of the runtime and every generated one includes this header first.
+ */
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+#  pragma GCC target("no-mmx")
+#endif
+
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
