@@ -107,7 +107,13 @@ A closing fence is at least as long as the one it closes, so a block that shows 
 | `trb run` | The same, and is built natively and run; its output has to be what its `// prints` comments say |
 | `trb fragment` | Lexes without a diagnostic. For a signature or a shape that is not a whole program |
 | `trb error` | Produces exactly the diagnostics the block declares in its `// error:` lines, and no other |
+| `trb exercise` | Parses, is in the canon and type checks: the starting code of an exercise, whose output is not compared |
+| `trb exercise incomplete` | Lexes without a diagnostic: the starting code of an exercise, with a gap on purpose |
 | `trb skip <reason>` | Nothing. The reason is required and the gate prints every skip |
+
+An exercise is followed by its solution: the first `trb run` block after it and before the next exercise, whose
+`// prints` comments are the output the exercise asks for. An exercise without one is a problem
+([the contract](../tooling/torb-docs-site.md#runnable-blocks-and-exercises)).
 
 A `trb error` block writes what it expects into the code, as a comment:
 
@@ -194,6 +200,17 @@ folder, and `## Design documents` for what the `documents` field names. A child 
 `status: draft` is marked in its entry.
 
 `--check` reports every index whose body is not what it would write, and writes nothing. That is the form the gate uses.
+
+### The translations
+
+A page below `translations/<language>/` translates the English page at the rest of its path, and is checked beside it:
+its front matter, with the kind of its original and a `translates` field; its headings, but not the English names of
+the sections a kind requires; its links, resolved from the folder of its original; and its `trb` blocks. The
+`strings.json` of a language is one JSON object of texts whose keys are the keys of the site's interface, with the
+language's own name as `language`.
+
+A translation whose original changed since it was made is no problem. The check lists it after the problems, on a line
+that starts with `outdated:` and names the value `translates` gets once the translation is brought up to date.
 
 ## Examples
 

@@ -98,8 +98,8 @@ Six things about the mechanics of a page.
 11. **Every `trb` block is verified by the compiler.** By default it has to parse and be in the formatter canon. Ask for
     more or less in the info string: `trb check` type checks it against the real `std/`, `trb run` also builds and runs
     it and compares the output with its `// prints` comments, `trb fragment` is a signature rather than a program,
-    `trb error` is wrong on purpose and names every diagnostic it produces, `trb skip <reason>` is verified by nothing
-    and the reason is printed by the gate. A claim about what a program prints belongs in a `trb run` block, not in the
+    `trb error` is wrong on purpose and names every diagnostic it produces, `trb exercise` is the starting code of an
+    exercise in a lesson, `trb skip <reason>` is verified by nothing and the reason is printed by the gate. A claim about what a program prints belongs in a `trb run` block, not in the
     prose around it. See [the checks](checks.md).
 12. **A wrong example is always paired with the right one, and the right one comes first.** A bare prohibition loses
     against what a model already believes; a correct line next to the incorrect one does not. This is why

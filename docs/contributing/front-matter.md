@@ -88,10 +88,10 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 |-------|------|----------|------|
 | `title` | scalar | reader, index generator, skill navigation | At most 60 characters, no full stop at the end. It is the `#` heading of the page, so the body starts at `##`. |
 | `summary` | scalar | index generator, skill, and an agent deciding whether to open the page | 40 to 240 characters, one or two whole sentences, ends with `.`, `?` or `!`. It must not contain `this page`: a summary is about the subject. |
-| `kind` | scalar | checker (section order), template, skill builder, site generator | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`, `site`. A `site` page is left out of the skill and the bundle. |
+| `kind` | scalar | checker (section order), template, skill builder, site generator | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`, `site`, `lesson`. A `site` page and a `lesson` are left out of the skill and the bundle. |
 | `status` | scalar | reader, skill builder | One of `stable`, `draft`, `planned`. |
 
-### The five optional fields
+### The seven optional fields
 
 | Field | Type | Consumer | Rule |
 |-------|------|----------|------|
@@ -101,6 +101,7 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 | `prerequisites` | list | reader, learning path | Paths of pages to read first. Only a `guide` page has it. |
 | `documents` | list | index generator, checker | Plain Markdown files without front matter that this index links, relative to the index. Only an `index.md` has it. |
 | `skill` | scalar | skill builder | One of `model`, `cheat-sheet`, `mistakes`, `verify`, `omit`. The first four each belong to exactly one page in the tree; `omit` keeps a page out of the skill. |
+| `translates` | scalar | checker, site generator | The version of its English original a translation below `translations/<language>/` was made from: the twelve hexadecimal digits `docs check` names. Only a translation has it, and every translation does. |
 
 ### The two status banners
 
