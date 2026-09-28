@@ -41,6 +41,8 @@ public type LintRule {
   case RedundantWrap
   /** `private(var) count: Int`, the spelling `protected var count: Int` replaces */
   case ProtectedField
+  /** A use of a deprecated declaration, rewritten to the replacement its clause names */
+  case Deprecated
 
   /** The name of the rule on the command line and in every finding. */
   fn id(): String {
@@ -51,6 +53,7 @@ public type LintRule {
       .LabeledLiteral => "labeled-literal"
       .RedundantWrap => "redundant-wrap"
       .ProtectedField => "protected-field"
+      .Deprecated => "deprecated"
     }
   }
 
@@ -63,19 +66,21 @@ public type LintRule {
       .LabeledLiteral => "`true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)"
       .RedundantWrap => "No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)"
       .ProtectedField => "A field only its own file writes is `protected var`, not `private(var)` (fix)"
+      .Deprecated => "A use of a deprecated declaration becomes the replacement it names (fix; runs the checker)"
     }
   }
 
   /**
    * Whether the rule reads the checker's tables, so that a run with it checks the projects of the paths first:
    * `labeled-literal` and `redundant-wrap` for all they find, `unread-binding` for which of its findings may be fixed,
-   * `question-field` for the uses its rename reaches.
+   * `question-field` for the uses its rename reaches, `deprecated` for the uses the checker resolved.
    */
   fn needsTheChecker(): Bool {
     self == Self.LabeledLiteral
       || self == Self.UnreadBinding
       || self == Self.RedundantWrap
       || self == Self.QuestionField
+      || self == Self.Deprecated
   }
 
   static fn named(id: String): Self? {
@@ -92,5 +97,6 @@ public fn everyLintRule(): List<LintRule> {
     LintRule.LabeledLiteral,
     LintRule.RedundantWrap,
     LintRule.ProtectedField,
+    LintRule.Deprecated,
   ]
 }

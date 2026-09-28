@@ -51,13 +51,60 @@ public type Visibility {
   }
 }
 
-/** The modifiers a declaration or a member can carry, besides its kind: `public`, `native`, `shared`. */
+/** The modifiers a declaration or a member can carry, besides its kind: `public`, `native`, `shared`, `deprecated`. */
 public type Modifiers {
   visibility: Visibility = Visibility.Default
   /** Where the visibility is written, `private(var)` from its first character to its last; `None` for the default */
   visibilitySpan: Span? = None
   native: Bool = false
   shared: Bool = false
+  /** The `deprecated(...)` clause on the line above the declaration, below its doc comment. */
+  deprecation: Deprecation? = None
+}
+
+/**
+ * `deprecated("it is computed now", replacement: "x()", since: "0.4")`: a declaration that stays for the
+ * callers that have not moved yet, and says why, what to write instead and since when. The checker warns at every use
+ * outside the file that declares it, `torb doc` and the language server show it, and `torb lint --fix` rewrites a use
+ * to the replacement (docs/design/DEPRECATION.md).
+ *
+ * Every argument is a string literal the compiler reads; nothing of it is evaluated.
+ */
+public type Deprecation {
+  /** Why, in a sentence: what a warning says after "is deprecated". */
+  reason: String
+  /**
+   * What to write instead: a name the declaration's own scope has - a member of the same type for a member, a name of
+   * the same module otherwise - followed by `()` where the use becomes a call without arguments (a field that turned
+   * into a method). Its span is the one of the string literal.
+   */
+  replacement: Name? = None
+  /** The version the declaration became deprecated in: `"0.4"` or `"0.4.1"`. */
+  since: String? = None
+  /** From `deprecated` to the closing parenthesis. */
+  span: Span
+
+  /** The name the replacement is written with, without the `()` of a call. */
+  fn replacementName(): String? {
+    const written = match replacement {
+      Some(found) => found.text
+      None => {
+        return None
+      }
+    }
+    if written.endsWith("()") {
+      return written.droppingLast characters: 2
+    }
+    Some written
+  }
+
+  /** Whether the replacement is a call without arguments: `"x()"`. */
+  fn replacementCalls(): Bool {
+    match replacement {
+      Some(found) => found.text.endsWith "()"
+      None => false
+    }
+  }
 }
 
 /** One top-level construct of a file: what it is ([DeclarationKind]), its modifiers, and its doc comment. */

@@ -17,7 +17,7 @@
 use Span, SourceText, LineIndex from "../syntax/source"
 use Token, TokenKind from "../syntax/token"
 use lex from "../syntax/lexer"
-use Statement, Declaration, Member, Field, Parameter, Visibility, TypeReference, Block from "../syntax/ast"
+use Statement, Declaration, Member, Field, Parameter, Visibility, TypeReference, Block, Deprecation from "../syntax/ast"
 use joinPath, isInside, normalizePath from "../project/path"
 use Package from "../project/workspace"
 use libraryEntry, defaultEntry from "../project/programs"
@@ -114,10 +114,24 @@ public type DocumentedItem {
   line: Int
   /** Whether the standard of `compiler/CONTRIBUTING.md` asks for a doc comment here */
   required: Bool
+  /** What its `deprecated` clause says, where it has one */
+  deprecation: DocumentedDeprecation? = None
 
   /** Whether it has a doc comment of its own. */
   fn isDocumented(): Bool {
     !doc.isEmpty() || !sections.isEmpty()
+  }
+}
+
+/** The `deprecated(...)` clause of a construct: why, what to write instead, and since which version. */
+public type DocumentedDeprecation {
+  reason: String
+  /** `origin`, or `x()` where the use becomes a call */
+  replacement: String?
+  since: String?
+
+  static fn of(clause: Deprecation): Self {
+    Self clause.reason, clause.replacement.map({ _.text }), clause.since
   }
 }
 
@@ -486,7 +500,17 @@ type ModuleReader {
         }
         const end = bodyStart function.body, span.end
         const parameters = parametersOf function.parameters
-        const found = item ItemKind.Function, function.name.text, "", span, end, parameters, [], isRequired: true
+        const found = item(
+          ItemKind.Function,
+          function.name.text,
+          "",
+          span,
+          end,
+          parameters,
+          [],
+          isRequired: true,
+          deprecation: declaration.modifiers.deprecation,
+        )
         located found, function.name.span
       }
       .Type(declared) => {
@@ -496,7 +520,11 @@ type ModuleReader {
         const name = declared.name.text
         const members = membersOf declared.members, name, isAsked: true
         const header = headerEnd declared.name.span.end, span.end
-        located item(ItemKind.Type, name, "", span, header, [], members, isRequired: true), declared.name.span
+        const clause = declaration.modifiers.deprecation
+        located(
+          item(ItemKind.Type, name, "", span, header, [], members, isRequired: true, deprecation: clause),
+          declared.name.span,
+        )
       }
       .Trait(declared) => {
         if !isIncluded(declared.name.span, visibility) {
@@ -505,14 +533,28 @@ type ModuleReader {
         const name = declared.name.text
         const members = membersOf declared.members, name, isAsked: true
         const header = headerEnd declared.name.span.end, span.end
-        located item(ItemKind.Trait, name, "", span, header, [], members, isRequired: true), declared.name.span
+        const clause = declaration.modifiers.deprecation
+        located(
+          item(ItemKind.Trait, name, "", span, header, [], members, isRequired: true, deprecation: clause),
+          declared.name.span,
+        )
       }
       .Alias(declared) => {
         if !isIncluded(declared.name.span, visibility) {
           return None
         }
         located(
-          item(ItemKind.Alias, declared.name.text, "", span, span.end, [], [], isRequired: true),
+          item(
+            ItemKind.Alias,
+            declared.name.text,
+            "",
+            span,
+            span.end,
+            [],
+            [],
+            isRequired: true,
+            deprecation: declaration.modifiers.deprecation,
+          ),
           declared.name.span,
         )
       }
@@ -522,7 +564,11 @@ type ModuleReader {
         if !isIncluded(binding.pattern.span, visibility) {
           return None
         }
-        located item(ItemKind.Constant, name, "", span, span.end, [], [], isRequired: true), binding.pattern.span
+        const clause = declaration.modifiers.deprecation
+        located(
+          item(ItemKind.Constant, name, "", span, span.end, [], [], isRequired: true, deprecation: clause),
+          binding.pattern.span,
+        )
       }
       .Extend(extension) => {
         const target = typeNameOf extension.target
@@ -561,6 +607,7 @@ type ModuleReader {
         }
       }
       const span = declaration.span
+      const clause = declaration.modifiers.deprecation
       match declaration.kind {
         .Function(function) => {
           if function.name.span == name {
@@ -574,13 +621,24 @@ type ModuleReader {
               parameters,
               [],
               isRequired: false,
+              deprecation: clause,
             )
           }
         }
         .Type(declared) => {
           if declared.name.span == name {
             const header = headerEnd declared.name.span.end, span.end
-            return item ItemKind.Type, declared.name.text, "", span, header, [], [], isRequired: false
+            return item(
+              ItemKind.Type,
+              declared.name.text,
+              "",
+              span,
+              header,
+              [],
+              [],
+              isRequired: false,
+              deprecation: clause,
+            )
           }
           if const Some(found) = memberNamedAt(declared.members, declared.name.text, name) {
             return found
@@ -589,7 +647,17 @@ type ModuleReader {
         .Trait(declared) => {
           if declared.name.span == name {
             const header = headerEnd declared.name.span.end, span.end
-            return item ItemKind.Trait, declared.name.text, "", span, header, [], [], isRequired: false
+            return item(
+              ItemKind.Trait,
+              declared.name.text,
+              "",
+              span,
+              header,
+              [],
+              [],
+              isRequired: false,
+              deprecation: clause,
+            )
           }
           if const Some(found) = memberNamedAt(declared.members, declared.name.text, name) {
             return found
@@ -597,13 +665,23 @@ type ModuleReader {
         }
         .Alias(declared) => {
           if declared.name.span == name {
-            return item ItemKind.Alias, declared.name.text, "", span, span.end, [], [], isRequired: false
+            return item(
+              ItemKind.Alias,
+              declared.name.text,
+              "",
+              span,
+              span.end,
+              [],
+              [],
+              isRequired: false,
+              deprecation: clause,
+            )
           }
         }
         .Constant(binding) => {
           if boundNamesOf(binding.pattern).any({ _.span == name }) {
             const text = module.source.text.sliceBytes name.start, name.end
-            return item ItemKind.Constant, text, "", span, span.end, [], [], isRequired: false
+            return item ItemKind.Constant, text, "", span, span.end, [], [], isRequired: false, deprecation: clause
           }
         }
         .Extend(extension) => {
@@ -626,10 +704,21 @@ type ModuleReader {
   var fn memberNamedAt(members: List<Member>, owner: String, name: Span): DocumentedItem? {
     for member in members {
       const span = member.span
+      const clause = member.modifiers.deprecation
       match member.kind {
         .Field(field) => {
           if field.name.span == name {
-            return item ItemKind.Field, field.name.text, owner, span, span.end, [], [], isRequired: false
+            return item(
+              ItemKind.Field,
+              field.name.text,
+              owner,
+              span,
+              span.end,
+              [],
+              [],
+              isRequired: false,
+              deprecation: clause,
+            )
           }
         }
         .Case(declared) => {
@@ -643,6 +732,7 @@ type ModuleReader {
               fieldsOf(declared.fields),
               [],
               isRequired: false,
+              deprecation: clause,
             )
           }
         }
@@ -658,13 +748,14 @@ type ModuleReader {
               parameters,
               [],
               isRequired: false,
+              deprecation: clause,
             )
           }
         }
         .Constant(binding) => {
           if boundNamesOf(binding.pattern).any({ _.span == name }) {
             const text = module.source.text.sliceBytes name.start, name.end
-            return item ItemKind.Constant, text, owner, span, span.end, [], [], isRequired: false
+            return item ItemKind.Constant, text, owner, span, span.end, [], [], isRequired: false, deprecation: clause
           }
         }
       }
@@ -711,22 +802,23 @@ type ModuleReader {
         continue
       }
       const span = member.span
+      const clause = member.modifiers.deprecation
       match member.kind {
         .Field(field) => {
-          found.append item(ItemKind.Field, field.name.text, owner, span, span.end, [], [], isAsked)
+          found.append item(ItemKind.Field, field.name.text, owner, span, span.end, [], [], isAsked, clause)
         }
         .Case(declared) => {
           const parameters = fieldsOf declared.fields
-          found.append item(ItemKind.Case, declared.name.text, owner, span, span.end, parameters, [], isAsked)
+          found.append item(ItemKind.Case, declared.name.text, owner, span, span.end, parameters, [], isAsked, clause)
         }
         .Function(function) => {
           const end = bodyStart function.body, span.end
           const parameters = parametersOf function.parameters
-          found.append item(ItemKind.Function, function.name.text, owner, span, end, parameters, [], isAsked)
+          found.append item(ItemKind.Function, function.name.text, owner, span, end, parameters, [], isAsked, clause)
         }
         .Constant(binding) => {
           const name = bindingNames(binding.pattern).first() ?? ""
-          found.append item(ItemKind.Constant, name, owner, span, span.end, [], [], isAsked)
+          found.append item(ItemKind.Constant, name, owner, span, span.end, [], [], isAsked, clause)
         }
       }
     }
@@ -743,8 +835,14 @@ type ModuleReader {
     parameters: List<DocumentedParameter>,
     members: List<DocumentedItem>,
     isRequired: Bool,
+    deprecation: Deprecation? = None,
   ): DocumentedItem {
-    const block = blockBefore span.start
+    // The doc comment stands above the `deprecated` clause, which stands above the declaration
+    const start = match deprecation {
+      Some(clause) => clause.span.start
+      None => span.start
+    }
+    const block = blockBefore start
     const parts = partsOf block
     const wanted = if kind == ItemKind.Extension {
       "extend-{name}"
@@ -773,6 +871,7 @@ type ModuleReader {
       members,
       line,
       isRequired,
+      deprecation: deprecation.map({ DocumentedDeprecation.of _ }),
     )
   }
 

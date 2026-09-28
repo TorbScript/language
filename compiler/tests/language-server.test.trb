@@ -312,6 +312,41 @@ group "Diagnostics" {
     assert(textAt(diagnostics[0], ["code"]) == "self-name")
     assert(textAt(diagnostics[0], ["source"]) == "torb lint")
   }
+
+  test "a use of a deprecated declaration is a warning with the tag an editor strikes it through for" {
+    const helperUri = "file:///workspace/app/src/helper.trb"
+    const helper = "deprecated(\"why\", replacement: \"fresh\")\npublic fn old(): Int \{\n  1\n\}\n\npublic fn fresh(): Int \{\n  2\n\}\n"
+    const main = "use old from \"./helper\"\n\nprint old()\n"
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main])
+    const answers = send server, [opened(mainUri, main), opened(helperUri, helper)]
+    const diagnostics = published(answers).get(mainUri) ?? []
+    assert(messagesOf(diagnostics) == ["`old` is deprecated: why", "`old` is deprecated: why"])
+    for diagnostic in diagnostics {
+      assert(integerAt(diagnostic, ["severity"]) == 2)
+      assert(textAt(diagnostic, ["code"]) == "deprecated")
+      assert(textAt(diagnostic, ["source"]) == "torb")
+      expectText encoded(memberAt(diagnostic, ["tags"]) ?? JsonValue.Null), "[2]"
+    }
+  }
+
+  test "a use inside of a body that a keystroke checked again is still a warning, and one outside of it stays" {
+    const helper = "deprecated(\"why\")\npublic fn old(): Int \{\n  1\n\}\n"
+    const source = "use old from \"./helper\"\n\nfn one(): Int \{\n  old()\n\}\n\nfn two(): Int \{\n  old()\n\}\n\nprint one() + two()\n"
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": source])
+    const first = send server, [opened(mainUri, source)]
+    assert(messagesOf(published(first).get(mainUri) ?? []).length() == 2)
+    const edited = source.replace(
+      "fn one(): Int \{\n  old()\n",
+      "fn one(): Int \{\n  const more = old()\n  more + old()\n",
+    )
+    const answers = send server, [replaced(mainUri, 2, edited)]
+    const diagnostics = published(answers).get(mainUri) ?? []
+    // The two uses in the changed body, from the check of that body, and the one in the body the keystroke left alone
+    assert(messagesOf(diagnostics).length() == 3)
+    for diagnostic in diagnostics {
+      assert(textAt(diagnostic, ["code"]) == "deprecated")
+    }
+  }
 }
 
 group "A change redoes the front of its file" {
@@ -649,6 +684,22 @@ group "Semantic tokens" {
     // `total` declared (line 0, character 6, a readonly variable), `print` (a function), `total` used (readonly)
     expectText encoded(memberAt(answer, ["result"]) ?? JsonValue.Null), "\{\"data\":[0,6,5,8,3,1,0,5,5,0,0,6,5,8,2]\}"
   }
+
+  test "a deprecated declaration and every use of it carry the modifier `deprecated`" {
+    const source = "deprecated(\"why\")\nfn old(): Int \{\n  1\n\}\n\nprint old()\n"
+    var server = started()
+    const _first = send server, [opened(mainUri, source)]
+    const answer = only(
+      server,
+      [message("textDocument/semanticTokens/full", "\{\"textDocument\":\{\"uri\":\"{mainUri}\"\}\}", 15)],
+    )
+    // `old` declared (line 1, a function, `declaration` and `deprecated`: 1 + 32), `Int`, `print`, and `old` called in
+    // the file that declares it, which is no use of it and carries no modifier
+    expectText(
+      encoded(memberAt(answer, ["result"]) ?? JsonValue.Null),
+      "\{\"data\":[1,3,3,5,33,0,7,3,0,8,4,0,5,5,0,0,6,3,5,0]\}",
+    )
+  }
 }
 
 /** A request about a whole document. */
@@ -931,6 +982,26 @@ group "The documentation of a declaration" {
     const resolved = only server, [message("completionItem/resolve", encoded(item), 72)]
     assert(textAt(resolved, ["result", "detail"]) == "fn triple(value: Int): Int")
     assert(textAt(resolved, ["result", "documentation", "value"]) == "Three times the value.")
+  }
+
+  test "a hover over a deprecated declaration says so above its comment, and what to write instead" {
+    var server = started()
+    const deprecated = "/** One, the old way. */\ndeprecated(\"the name says too little\", replacement: \"one\", since: \"0.4\")\nfn old(): Int \{\n  1\n\}\n\nfn one(): Int \{\n  1\n\}\n\nprint old() + one()\n"
+    const answers = send server, [opened(mainUri, deprecated), at("textDocument/hover", 74, mainUri, 10, 7)]
+    const markdown = textAt(answerOf(answers, 74), ["result", "contents", "value"]) ?? ""
+    expectContains(
+      markdown,
+      "**Deprecated since 0.4:** the name says too little. Write `one` instead.\n\nOne, the old way.",
+    )
+  }
+
+  test "a completion item of a deprecated declaration carries the tag an editor strikes it through for" {
+    var server = started()
+    const typing = "deprecated(\"why\")\nfn older(): Int \{\n  1\n\}\n\nprint old\n"
+    const answers = send server, [opened(mainUri, typing), at("textDocument/completion", 75, mainUri, 5, 9)]
+    const items = itemsAt answerOf(answers, 75), ["result", "items"]
+    const item = items.find({ textAt(_, ["label"]) == "older" }) ?? JsonValue.Null
+    expectText encoded(memberAt(item, ["tags"]) ?? JsonValue.Null), "[1]"
   }
 
   test "a call of a generic function says what its type parameters are there" {

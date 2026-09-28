@@ -34,6 +34,7 @@ use unreadBindingFindings from "./unread-binding"
 use labeledLiteralFindings from "./labeled-literal"
 use redundantWrapFindings from "./redundant-wrap"
 use protectedFieldFindings from "./protected-field"
+use deprecatedFindings from "./deprecated"
 use plainBindingStarts from "./plain-values"
 
 /** `torb lint --help` */
@@ -142,7 +143,7 @@ fn findingsOf(rule: LintRule, source: String, file: SourceFile, plain: Set<Int>?
     .UnreadBinding => unreadBindingFindings source, file, plain
     .ProtectedField => protectedFieldFindings file
     // Read from the checker's tables instead, by [typedFactsOf]
-    .LabeledLiteral | .RedundantWrap => []
+    .LabeledLiteral | .RedundantWrap | .Deprecated => []
   }
 }
 
@@ -182,6 +183,9 @@ fn typedFactsOf(paths: List<String>, rules: List<LintRule>, fixing: Bool): Resul
     }
     if rules.contains(LintRule.RedundantWrap) {
       findings.appendAll redundantWrapFindings(checked.checker, module, shape.source.text, shape.file)
+    }
+    if rules.contains(LintRule.Deprecated) {
+      findings.appendAll deprecatedFindings(checked, module)
     }
     findings.appendAll(renames.get(module.value) ?? [])
     found.set shape.path, TypedFacts(findings, plainBindingStarts(checked.checker, module))

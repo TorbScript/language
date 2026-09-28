@@ -37,6 +37,7 @@ use substitute from "./unify"
 use typeFromReference from "./lowering"
 use implementsBound from "./implementation"
 use checkConstantInitializer from "./constant"
+use isFieldBecomingMethod from "./deprecation"
 
 // --- Visibility of a member -----------------------------------------------------------------------------------------
 
@@ -857,6 +858,11 @@ fn requireOneNamespace(
     if name.text.isEmpty() {
       continue
     }
+    // `deprecated("...", replacement: "x()") x: Int` beside `fn x()`: a field that became a method keeps its callers
+    // for as long as it is deprecated, `x` reading the field and `x()` calling the method
+    if declared.containsKey(name.text) && sharesNameWithMethod(members, name.text) {
+      continue
+    }
     if declared.containsKey(name.text) {
       var problem = Diagnostic.error("`{name.text}` is already declared in `{owner}`", name.span)
         .withNote("A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name")
@@ -884,6 +890,30 @@ fn requireOneNamespace(
       fields.set name.text, true
     }
   }
+}
+
+/**
+ * Whether the members of this name are exactly the pair that may share one: a deprecated field whose replacement is the
+ * method of its own name, and that method, which takes nothing.
+ */
+fn sharesNameWithMethod(members: List<Member>, name: String): Bool {
+  var named: List<Member> = []
+  for member in members {
+    if memberNameOf(member).text == name {
+      named.append member
+    }
+  }
+  if named.length() != 2 {
+    return false
+  }
+  for member in named {
+    if const Some(deprecation) = member.modifiers.deprecation {
+      if isFieldBecomingMethod(member, named, deprecation) {
+        return true
+      }
+    }
+  }
+  false
 }
 
 fn isFunctionMember(member: Member): Bool {

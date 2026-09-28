@@ -31,6 +31,7 @@ use checkMemberImports from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
 use checkShape, requireInhabitedType, checkTypeArgumentBoundsWithin from "./declaration"
 use checkSpelling from "./spelling"
+use checkDeprecations from "./deprecation"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -428,6 +429,8 @@ public fn finishModuleCheck(var checker: Checker, progress: ModuleCheck) {
   var clock = Stopwatch withTimings
   clock.start()
   checkShape checker, module
+  // Every `deprecated` clause of the file: where it stands, and what its replacement names
+  checkDeprecations checker, module
   // `use String.shout from "acme/text"`: whether that package really adds such a member
   checkMemberImports checker, module
   const spent = clock.taken()

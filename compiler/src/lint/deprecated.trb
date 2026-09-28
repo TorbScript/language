@@ -1,0 +1,125 @@
+/**
+ * The rule `deprecated`: every use of a deprecated declaration, which is the warning `torb check` prints, with the use
+ * of its replacement as the fix where the clause names one - `point.x` becomes `point.x()` for `replacement: "x()"`,
+ * `parse(text)` becomes `parseText(text)` for `replacement: "parseText"` - and the `use` that imports the declaration
+ * renamed with it. It is how a deprecation moves the code of its users (docs/design/DEPRECATION.md).
+ *
+ * Which names are uses is the checker's answer (`deprecatedUsesOf`). A use has no fix where the replacement cannot stand
+ * in its place: a method written `x()` as the target of an assignment or as the label of a constructor, and a name the
+ * file imported under another one, whose `use` is renamed instead.
+ */
+
+use Span from "../syntax/source"
+use Checked from "../semantics/check"
+use DeprecatedUse, DeprecatedUseForm, DeprecatedDeclaration, deprecationsOf, deprecationKey from "../semantics/checker/deprecation"
+use ModuleId from "../semantics/module"
+use Finding, LintRule, TextEdit from "./finding"
+
+/** The findings of one module: one per use, and one per `use` of the file that imports a deprecated declaration. */
+public fn deprecatedFindings(checked: Checked, module: ModuleId): List<Finding> {
+  var findings: List<Finding> = []
+  const uses = checked.deprecatedUses.filter({ _.module == module }).toList()
+  if uses.isEmpty() {
+    return findings
+  }
+  const source = checked.program.graph.at(module).source.text
+  for found in uses {
+    const warning = found.warning()
+    findings.append Finding(LintRule.Deprecated, warning.message, found.span, fixOf(checked, source, found))
+  }
+  findings.appendAll importFindings(checked, module)
+  findings.sort({ _.span.start })
+  findings
+}
+
+/** The edit that writes the replacement at one use, or none where it cannot stand there. */
+fn fixOf(checked: Checked, source: String, found: DeprecatedUse): List<TextEdit> {
+  const deprecation = found.declaration.deprecation
+  const name = match deprecation.replacementName() {
+    Some(written) => written
+    None => {
+      return []
+    }
+  }
+  // `use parse as read from "..."`: the use writes the file's own name, and the `use` is what is renamed
+  const written = source.sliceBytes found.span.start, found.span.end
+  if written != checked.checker.symbolAt(found.symbol).name {
+    return []
+  }
+  const calls = deprecation.replacementCalls()
+  const text = match found.form {
+    .Read => if calls { "{name}()" } else { name }
+    .Called | .TypeName => name
+    .Assigned | .Label => {
+      if calls {
+        return []
+      }
+      name
+    }
+  }
+  [TextEdit(found.span.start, found.span.end, text)]
+}
+
+/**
+ * `use parse from "std/json"` in a file that uses a deprecated `parse`: the `use` names the replacement once the uses
+ * do, unless the file sees the replacement already.
+ */
+fn importFindings(checked: Checked, module: ModuleId): List<Finding> {
+  var findings: List<Finding> = []
+  const deprecations = deprecationsOf checked.program.graph
+  const scope = checked.program.scopes[module.value]
+  for statement in checked.program.graph.at(module).file.statements {
+    const declaration = match statement.kind {
+      .Declare(found) => found
+      _ => {
+        continue
+      }
+    }
+    const items = match declaration.kind {
+      .Use(usage) => {
+        match usage.items {
+          .Names(found) => found
+          .All(_) => []
+        }
+      }
+      _ => {
+        continue
+      }
+    }
+    for item in items {
+      const symbol = match scope.names.get(item.localName().text) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const declared = checked.checker.symbolAt symbol
+      const home = match declared.module {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      if home == module {
+        continue
+      }
+      const entry: DeprecatedDeclaration = match deprecations.get(deprecationKey(home, declared.span)) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      // Only where there is something to write: the uses say the rest
+      const name = match entry.deprecation.replacementName() {
+        Some(found) if !scope.names.containsKey(found) => found
+        _ => {
+          continue
+        }
+      }
+      const imported = item.name()
+      const fix = [TextEdit(imported.span.start, imported.span.end, name)]
+      findings.append Finding(LintRule.Deprecated, entry.message(), imported.span, fix)
+    }
+  }
+  findings
+}

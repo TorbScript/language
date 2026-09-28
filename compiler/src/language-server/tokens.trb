@@ -15,6 +15,8 @@ use Checker, Resolution from "../semantics/checker/context"
 use SymbolKind from "../semantics/symbols"
 use fieldsOf from "../semantics/checker/member"
 use Front from "../semantics/check"
+use ModuleId from "../semantics/module"
+use DeprecatedUseForm, deprecatedNamesOf from "../semantics/checker/deprecation"
 use DocumentView from "./view"
 use LineMap, utf16Units from "./position"
 use object, integer, array from "./json"
@@ -37,7 +39,7 @@ public fn tokenTypes(): List<String> {
 
 /** The token modifiers of the legend: bit `n` of a token's modifiers is the `n`-th of these. */
 public fn tokenModifiers(): List<String> {
-  ["declaration", "readonly", "static", "defaultLibrary", "mutable"]
+  ["declaration", "readonly", "static", "defaultLibrary", "mutable", "deprecated"]
 }
 
 /**
@@ -82,7 +84,77 @@ public fn semanticTokensOf(view: DocumentView, current: Front): JsonValue {
       sharpened tokens, checker, inside, source
     }
   }
+  markDeprecated tokens, deprecatedSpansOf(view, current, module)
   object([("data", array(encoded(tokens, source).map(integer).toList()))])
+}
+
+/**
+ * Every name of the document as it is now that is deprecated: each use of a deprecated declaration, from the run that
+ * knows the code there - the base's moved to where they are now, the overlay's inside of the changed bodies - with the
+ * kind of token it gets where the resolver placed none, and the name of every declaration of the file that is
+ * deprecated itself.
+ */
+fn deprecatedSpansOf(view: DocumentView, current: Front, module: ModuleId): List<(Span, String)> {
+  var spans: List<(Span, String)> = []
+  if const Some(earlier) = view.base.moduleOf(view.path) {
+    for found in view.base.checked.deprecatedUses {
+      if found.module != earlier || view.mapping.touchesChangedEarlier(found.span) {
+        continue
+      }
+      if const Some(now) = view.mapping.toCurrent(found.span) {
+        spans.append((now, kindOfUse(found.form)))
+      }
+    }
+  }
+  if const Some(changed) = view.overlay {
+    if const Some(now) = changed.moduleOf(view.path) {
+      for found in changed.checked.deprecatedUses {
+        if found.module == now && view.mapping.isInsideChanged(found.span) {
+          spans.append((found.span, kindOfUse(found.form)))
+        }
+      }
+    }
+  }
+  for name in deprecatedNamesOf(current.program.graph.at(module).file) {
+    spans.append((name.span, ""))
+  }
+  spans
+}
+
+/**
+ * The modifier `deprecated` on every token of these spans, which an editor strikes through. A use the resolver placed no
+ * token on gets one of the kind it is paired with.
+ */
+fn markDeprecated(var tokens: List<HighlightToken>, spans: List<(Span, String)>) {
+  if spans.isEmpty() {
+    return
+  }
+  var wanted: Map<Span, String> = [:]
+  for (span, kind) in spans {
+    wanted.set span, kind
+  }
+  var marked: Set<Span> = Set.of()
+  for index in 0..tokens.length() {
+    const token = tokens[index]
+    if wanted.containsKey(token.span) {
+      tokens.set index, token.copy(modifiers: token.modifiers.appended("deprecated"))
+      marked.insert token.span
+    }
+  }
+  for (span, kind) in wanted {
+    if !marked.contains(span) && !kind.isEmpty() {
+      tokens.append HighlightToken(span, kind, ["deprecated"])
+    }
+  }
+}
+
+/** The kind of token a use gets where the resolver placed none: a type for a name in a type position. */
+fn kindOfUse(form: DeprecatedUseForm): String {
+  match form {
+    .TypeName => "type"
+    .Called => "function"
+    .Read | .Assigned | .Label => "property"
+  }
 }
 
 /**

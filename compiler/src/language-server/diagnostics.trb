@@ -1,8 +1,9 @@
 /**
  * What `textDocument/publishDiagnostics` says about a document: every problem `torb check` reports for it, as an error
  * with its range, and every finding of `torb lint`'s rules, as a hint that names its rule - a hint, because the rules
- * are the style the checker leaves alone and `torb lint` is no gate. A finding with a fix is where the quick fix of
- * `./actions.trb` is offered.
+ * are the style the checker leaves alone and `torb lint` is no gate. The one rule that is more is `deprecated`: a use of
+ * a deprecated declaration is the warning `torb check` prints, so it is a warning with the tag that strikes the name
+ * through. A finding with a fix is where the quick fix of `./actions.trb` is offered.
  */
 
 use JsonValue from "std/json"
@@ -13,10 +14,14 @@ use object, integer, text, array from "./json"
 
 /** The severities of the protocol that the server uses. */
 const errorSeverity = 1
+const warningSeverity = 2
 const hintSeverity = 4
 
 /** The tag of a diagnostic about code nothing needs, which an editor fades. */
 const unnecessaryTag = 1
+
+/** The tag of a diagnostic about a use of a deprecated declaration, which an editor strikes through. */
+const deprecatedTag = 2
 
 /** The diagnostics of one document in the protocol's form: the checker's problems, then the lint rules' findings. */
 public fn diagnosticsJson(lines: LineMap, problems: List<Diagnostic>, findings: List<Finding>): List<JsonValue> {
@@ -44,17 +49,24 @@ public fn problemOf(lines: LineMap, diagnostic: Diagnostic): JsonValue {
   ])
 }
 
-/** A finding, with the id of its rule as the code, which is also what finds its fix again. */
+/**
+ * A finding, with the id of its rule as the code, which is also what finds its fix again. A use of a deprecated
+ * declaration is the warning of `torb check` and not a hint, and carries the tag an editor strikes the name through for.
+ */
 public fn findingOf(lines: LineMap, finding: Finding): JsonValue {
+  const deprecated = finding.rule == LintRule.Deprecated
   var entries = [
     ("range", rangeJson(lines.rangeOf(finding.span))),
-    ("severity", integer(hintSeverity)),
-    ("source", text("torb lint")),
+    ("severity", integer(if deprecated { warningSeverity } else { hintSeverity })),
+    ("source", text(if deprecated { "torb" } else { "torb lint" })),
     ("code", text(finding.rule.id())),
     ("message", text(finding.message)),
   ]
   if finding.rule == LintRule.UnreadBinding {
     entries.append(("tags", array([integer(unnecessaryTag)])))
+  }
+  if deprecated {
+    entries.append(("tags", array([integer(deprecatedTag)])))
   }
   object entries
 }

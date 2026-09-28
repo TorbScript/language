@@ -1,0 +1,792 @@
+/**
+ * `deprecated(...)`, as the checker reads it: [checkDeprecations] holds every clause of a module to its rules - it marks
+ * a declaration of the module or a member of one, and its replacement is a name the declaration's own scope has - and
+ * [deprecatedUsesOf] finds every use of a deprecated declaration in a module once its bodies are checked, which is what
+ * the warnings of `torb check`, the rule `deprecated` of `torb lint` and the language server read.
+ *
+ * A use is a name the checker resolved to the declaration: a member behind a `.`, a bare name, a case, a label of a
+ * constructor, a `copy` or a case, a name in a type position. Three kinds of place are no use: the file that declares
+ * it, which keeps its own implementation and its examples; a declaration that is deprecated itself; and a pattern,
+ * because a `match` has to name every case for as long as the case exists.
+ *
+ * # Related
+ *
+ * - [Deprecation] - the clause as the parser reads it.
+ * - docs/design/DEPRECATION.md - the design, and the options it was chosen from.
+ */
+
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Declaration, Member, Deprecation, Name, Expression, SourceFile, TypeKind, Argument from "../../syntax/ast"
+use TypeReference, GenericParameter, WhereClause from "../../syntax/ast"
+use everyNodeOf from "../../syntax/nodes"
+use ModuleId from "../module"
+use Graph from "../graph"
+use SymbolId, SymbolKind, boundNamesOf from "../symbols"
+use Checker, Resolution, Candidate from "./context"
+use TypeId, FieldSignature from "./type"
+use lookupMember, lookupStaticMember, fieldsOf, caseNamed from "./member"
+use selfTypeOf from "./signature"
+
+/** A declaration that carries a `deprecated` clause, with how a message names it. */
+public type DeprecatedDeclaration {
+  deprecation: Deprecation
+  /** `Point.x` for a member, `parse` for a declaration of a module */
+  described: String
+
+  /** What a warning about a use says: `` `Point.x` is deprecated since 0.4: why ``. */
+  fn message(): String {
+    const since = match deprecation.since {
+      Some(version) => " since {version}"
+      None => ""
+    }
+    "`{described}` is deprecated{since}: {deprecation.reason}"
+  }
+}
+
+/**
+ * Every deprecated declaration and member of the program, by `"<module>:<start of its name>"` - which is where the
+ * symbol of each one says it is declared, so a resolution finds its clause without a table of its own.
+ */
+public fn deprecationsOf(graph: Graph): Map<String, DeprecatedDeclaration> {
+  var found: Map<String, DeprecatedDeclaration> = [:]
+  for module in graph.modules {
+    for statement in module.file.statements {
+      if const .Declare(declaration) = statement.kind {
+        collectDeclaration found, module.id, declaration
+      }
+    }
+  }
+  found
+}
+
+/**
+ * The clause of the declaration a symbol names, where it has one: what a hover and a completion show. Only the file
+ * that declares it is read.
+ */
+public fn deprecationOfSymbol(checker: Checker, symbol: SymbolId): DeprecatedDeclaration? {
+  const declared = checker.symbolAt symbol
+  const module = declared.module?
+  var found: Map<String, DeprecatedDeclaration> = [:]
+  for statement in checker.program.graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      collectDeclaration found, module, declaration
+    }
+  }
+  found.get deprecationKey(module, declared.span)
+}
+
+/** How a hover says it: `**Deprecated since 0.4:** why. Write `x()` instead.` */
+public fn deprecationMarkdown(deprecation: Deprecation): String {
+  deprecationNotice deprecation.reason, deprecation.replacement.map({ _.text }), deprecation.since
+}
+
+/** The Markdown a hover and a page of `torb doc` say a deprecation in, from the three parts of its clause. */
+public fn deprecationNotice(reason: String, replacement: String?, since: String?): String {
+  const version = match since {
+    Some(found) => " since {found}"
+    None => ""
+  }
+  const ending = if reason.endsWith(".") || reason.endsWith("!") || reason.endsWith("?") { "" } else { "." }
+  var text = "**Deprecated{version}:** {reason}{ending}"
+  if const Some(written) = replacement {
+    text = "{text} Write `{written}` instead."
+  }
+  text
+}
+
+/** The names of the declarations and members of one file that are deprecated, where each is declared. */
+public fn deprecatedNamesOf(file: SourceFile): List<Name> {
+  var names: List<Name> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if declaration.modifiers.deprecation.isSome() {
+        names.appendAll declaredNamesOf(declaration)
+      }
+      for member in membersOf(declaration) {
+        if member.modifiers.deprecation.isSome() {
+          if const Some(name) = memberNameOf(member) {
+            names.append name
+          }
+        }
+      }
+    }
+  }
+  names
+}
+
+fn membersOf(declaration: Declaration): List<Member> {
+  match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    .Foreign(inner) => inner.members
+    _ => []
+  }
+}
+
+/** The key of a declaration in [deprecationsOf]: its module and where its name starts. */
+public fn deprecationKey(module: ModuleId, at: Span): String {
+  "{module.value}:{at.start}"
+}
+
+fn collectDeclaration(var found: Map<String, DeprecatedDeclaration>, module: ModuleId, declaration: Declaration) {
+  if const Some(deprecation) = declaration.modifiers.deprecation {
+    for name in declaredNamesOf(declaration) {
+      found.set deprecationKey(module, name.span), DeprecatedDeclaration(deprecation, name.text)
+    }
+  }
+  const (owner, members) = match declaration.kind {
+    .Type(inner) => (inner.name.text, inner.members)
+    .Trait(inner) => (inner.name.text, inner.members)
+    .Extend(inner) => (extendedName(inner.target.kind), inner.members)
+    .Foreign(inner) => ("", inner.members)
+    _ => {
+      return
+    }
+  }
+  for member in members {
+    if const Some(deprecation) = member.modifiers.deprecation {
+      if const Some(name) = memberNameOf(member) {
+        const described = if owner.isEmpty() { name.text } else { "{owner}.{name.text}" }
+        found.set deprecationKey(module, name.span), DeprecatedDeclaration(deprecation, described)
+      }
+    }
+  }
+}
+
+/** The names a declaration of a module introduces: one, or every name a destructuring `const` binds. */
+fn declaredNamesOf(declaration: Declaration): List<Name> {
+  match declaration.kind {
+    .Function(inner) => [inner.name]
+    .Type(inner) => [inner.name]
+    .Alias(inner) => [inner.name]
+    .Trait(inner) => [inner.name]
+    .Constant(binding) => boundNamesOf binding.pattern
+    .Use(_) | .Extend(_) | .Foreign(_) => []
+  }
+}
+
+/** The name of a member: a field, a method, a constant of the type, a case. */
+fn memberNameOf(member: Member): Name? {
+  match member.kind {
+    .Field(field) => field.name
+    .Function(function) => function.name
+    .Case(declaration) => declaration.name
+    .Constant(binding) => boundNamesOf(binding.pattern).first()
+  }
+}
+
+/** `Point` of `extend Point with Show`, for a message; empty where the target has no name. */
+fn extendedName(kind: TypeKind): String {
+  match kind {
+    .Named(path, _) => path.last().map({ _.text }) ?? ""
+    _ => ""
+  }
+}
+
+// --- The rules of a clause ----------------------------------------------------------------------------------------
+
+/**
+ * Every `deprecated` clause of one module against its rules: it stands on a declaration of the module or on a member
+ * of one - never on a `use`, an `extend` or a `foreign` block, which are no names anybody calls - and its replacement
+ * is a name the declaration's own scope has: a member of the same type for a member, a name of the module otherwise,
+ * with `()` only behind a function.
+ */
+public fn checkDeprecations(var checker: Checker, module: ModuleId) {
+  const statements = checker.program.graph.at(module).file.statements
+  for statement in statements {
+    if const .Declare(declaration) = statement.kind {
+      checkDeclarationClause checker, module, declaration
+    }
+  }
+}
+
+fn checkDeclarationClause(var checker: Checker, module: ModuleId, declaration: Declaration) {
+  if const Some(deprecation) = declaration.modifiers.deprecation {
+    match declaration.kind {
+      .Use(_) => {
+        const note = "Deprecate the declaration it imports, where that is declared"
+        report checker, module, "`deprecated` marks a declaration, and a `use` is none", note, deprecation.span
+      }
+      .Extend(_) => {
+        const note = "Mark each of its members that is deprecated"
+        report checker, module, "`deprecated` marks a declaration, and an `extend` is none", note, deprecation.span
+      }
+      .Foreign(_) => {
+        const note = "Mark each of its functions that is deprecated"
+        report(
+          checker,
+          module,
+          "`deprecated` marks a declaration, and a `foreign` block is none",
+          note,
+          deprecation.span,
+        )
+      }
+      _ => checkModuleReplacement checker, module, declaration, deprecation
+    }
+  }
+  const members = match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    .Foreign(inner) => inner.members
+    _ => []
+  }
+  const owner = ownerOf checker, module, declaration
+  for member in members {
+    if const Some(deprecation) = member.modifiers.deprecation {
+      checkMemberReplacement checker, module, owner, members, member, deprecation
+    }
+  }
+}
+
+/** The type whose members a declaration holds, and its name: the one it declares, or the one an `extend` names. */
+fn ownerOf(var checker: Checker, module: ModuleId, declaration: Declaration): (TypeId, String)? {
+  const name = match declaration.kind {
+    .Type(inner) => inner.name
+    .Trait(inner) => inner.name
+    .Extend(inner) => {
+      match inner.target.kind {
+        .Named(path, _) => path.last()?
+        _ => {
+          return None
+        }
+      }
+    }
+    _ => {
+      return None
+    }
+  }
+  const symbol = checker.resolvedName(module, name.span)?
+  match checker.symbolAt(symbol).kind {
+    .Type | .Trait => (selfTypeOf(checker, symbol), name.text)
+    _ => None
+  }
+}
+
+/** The replacement of a declaration of the module: a name the module declares or imports. */
+fn checkModuleReplacement(var checker: Checker, module: ModuleId, declaration: Declaration, deprecation: Deprecation) {
+  const written = match deprecation.replacement {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const name = deprecation.replacementName() ?? ""
+  if declaredNamesOf(declaration).any({ _.text == name }) {
+    report(
+      checker,
+      module,
+      "A declaration is not its own replacement",
+      "Name the declaration a caller moves to",
+      written.span,
+    )
+    return
+  }
+  const symbol = match checker.program.lookUp(module, name) {
+    Some(found) => found
+    None => {
+      const note = "The replacement of a declaration is a name of its own module, which `torb lint --fix` writes at every use"
+      report checker, module, "`{name}` is not declared or imported here", note, written.span
+      return
+    }
+  }
+  if deprecation.replacementCalls() && checker.symbolAt(symbol).kind != SymbolKind.Function {
+    report(
+      checker,
+      module,
+      "`{name}` is not a function, so `{name}()` does not call it",
+      "Write `\"{name}\"`",
+      written.span,
+    )
+  }
+}
+
+/**
+ * The replacement of a member: another member of the same type. The one member that may share its name with it is a
+ * method without parameters that replaces a field, which is the form of a field that became a method: the field stays
+ * for its callers, `x` reads it, and `x()` calls the method.
+ */
+fn checkMemberReplacement(
+  var checker: Checker,
+  module: ModuleId,
+  owner: (TypeId, String)?,
+  members: List<Member>,
+  member: Member,
+  deprecation: Deprecation,
+) {
+  const written = match deprecation.replacement {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const name = deprecation.replacementName() ?? ""
+  const own = memberNameOf(member).map({ _.text }) ?? ""
+  if name == own {
+    if !isFieldBecomingMethod(member, members, deprecation) {
+      const note = "Name the member a caller moves to. A field may name a method of its own name, `\"{own}()\"`, when"
+        + " the method takes nothing"
+      report checker, module, "A member is not its own replacement", note, written.span
+    }
+    return
+  }
+  const (receiver, shown) = match owner {
+    Some(found) => found
+    None => {
+      // A function of a `foreign` block is a function of the module
+      if members.any({ other => memberNameOf(other).map({ found => found.text }) == name }) {
+        return
+      }
+      checkModuleReplacementName checker, module, written, name
+      return
+    }
+  }
+  const found = match memberNamed(checker, receiver, name) {
+    Some(found) => found
+    None => {
+      const note = "The replacement of a member is another member of the same type, which `torb lint --fix` writes at"
+        + " every use"
+      report checker, module, "`{name}` is no member of `{shown}`", note, written.span
+      return
+    }
+  }
+  if deprecation.replacementCalls() {
+    if const .Method(_, _) = found.kind {
+      return
+    }
+    report(
+      checker,
+      module,
+      "`{name}` is not a method, so `{name}()` does not call it",
+      "Write `\"{name}\"`",
+      written.span,
+    )
+  }
+}
+
+/** A member of a value of the type, or else one of the type itself: a field, a method, a constant, a case. */
+fn memberNamed(var checker: Checker, receiver: TypeId, name: String): Candidate? {
+  if const Some(found) = lookupMember(checker, receiver, name) {
+    return found
+  }
+  lookupStaticMember checker, receiver, name
+}
+
+fn checkModuleReplacementName(var checker: Checker, module: ModuleId, written: Name, name: String) {
+  if checker.program.lookUp(module, name).isNone() {
+    const note = "The replacement of a declaration is a name of its own module, which `torb lint --fix` writes at every use"
+    report checker, module, "`{name}` is not declared or imported here", note, written.span
+  }
+}
+
+/**
+ * A field whose replacement is the method of its own name, `x` replaced by `x()`, where the type declares such a method
+ * and it takes nothing: the one pair of members that shares a name (CONCEPT, "Members").
+ */
+public fn isFieldBecomingMethod(member: Member, members: List<Member>, deprecation: Deprecation): Bool {
+  const field = match member.kind {
+    .Field(found) => found
+    _ => {
+      return false
+    }
+  }
+  if !deprecation.replacementCalls() || deprecation.replacementName() != field.name.text {
+    return false
+  }
+  members.any({ other => isMethodWithoutParameters other, field.name.text })
+}
+
+fn isMethodWithoutParameters(member: Member, name: String): Bool {
+  const function = match member.kind {
+    .Function(found) => found
+    _ => {
+      return false
+    }
+  }
+  // The receiver is put back by the parser, so a method that takes nothing has one parameter: `self`
+  function.name.text == name && function.parameters.length() == 1 && function.parameters[0].name.text == "self"
+}
+
+/**
+ * A `deprecated` clause on a declaration inside a body, or on a member of one: nothing outside the body names it, so
+ * there is nobody to warn.
+ */
+public fn refuseLocalDeprecation(var checker: Checker, module: ModuleId, declaration: Declaration) {
+  const note = "Only a declaration of a module, and a member of one, has callers outside of the body it is written in"
+  if const Some(deprecation) = declaration.modifiers.deprecation {
+    report checker, module, "A declaration inside a body cannot be deprecated", note, deprecation.span
+  }
+  const members = match declaration.kind {
+    .Type(inner) => inner.members
+    .Trait(inner) => inner.members
+    .Extend(inner) => inner.members
+    _ => []
+  }
+  for member in members {
+    if const Some(deprecation) = member.modifiers.deprecation {
+      report checker, module, "A member of a declaration inside a body cannot be deprecated", note, deprecation.span
+    }
+  }
+}
+
+fn report(var checker: Checker, module: ModuleId, message: String, note: String, at: Span) {
+  checker.report module, Diagnostic.error(message, at).withNote(note)
+}
+
+// --- Uses ----------------------------------------------------------------------------------------------------------
+
+/** How a use of a deprecated declaration is written, which decides what its replacement looks like there. */
+public type DeprecatedUseForm {
+  /** `point.x`, `x`, `.Circle`: a name read as a value */
+  case Read
+  /** `point.area()`, `parse(text)`, `Point(1, 2)`: the callee of a call */
+  case Called
+  /** `point.x = 1`: the target of an assignment */
+  case Assigned
+  /** `Point(x: 1)`, `point.copy(x: 1)`: the label of a constructor, a `copy` or a case */
+  case Label
+  /** `origin: OldPoint`: a name in a type position */
+  case TypeName
+}
+
+/** One use of a deprecated declaration: where its name is written, and what the declaration says about itself. */
+public type DeprecatedUse {
+  module: ModuleId
+  /** The name as the use writes it, and nothing around it */
+  span: Span
+  symbol: SymbolId
+  declaration: DeprecatedDeclaration
+  form: DeprecatedUseForm
+
+  /** The warning `torb check` prints for it. */
+  fn warning(): Diagnostic {
+    var warning = Diagnostic.warning declaration.message(), span
+    if const Some(replacement) = declaration.deprecation.replacement {
+      warning = warning.withNote "Write `{replacement.text}` instead; `torb lint --fix --rule deprecated` rewrites it"
+    }
+    warning
+  }
+}
+
+/**
+ * Every use of a deprecated declaration in one module, sorted by position, after its bodies were checked. A use in the
+ * file that declares it, inside a declaration that is deprecated itself, and in a pattern is none (the module comment
+ * says why).
+ */
+public fn deprecatedUsesOf(
+  var checker: Checker,
+  module: ModuleId,
+  deprecations: Map<String, DeprecatedDeclaration>,
+): List<DeprecatedUse> {
+  var uses: List<DeprecatedUse> = []
+  if deprecations.isEmpty() {
+    return uses
+  }
+  const file = checker.program.graph.at(module).file
+  const nodes = everyNodeOf file
+  const exempt = deprecatedSpansOf file, nodes.declarations
+  var callees: Set<Span> = Set.of()
+  for expression in nodes.expressions {
+    if const .Call(callee, _, _) = expression.kind {
+      callees.insert callee.span
+    }
+  }
+  var assigned: Set<Span> = Set.of()
+  for target in nodes.assignedTargets {
+    assigned.insert target
+  }
+  var seen: Set<Int> = Set.of()
+  var found: List<DeprecatedUse> = []
+  for expression in nodes.expressions {
+    match expression.kind {
+      .Call(callee, arguments, _) => {
+        const resolution = match checker.resolutionAt(module, expression.span) {
+          Some(found) => Some found
+          None => checker.resolutionAt module, callee.span
+        }
+        if const Some(resolved) = resolution {
+          if const Some(name) = nameSpanOf(callee) {
+            addUse found, checker, deprecations, module, resolved, name, DeprecatedUseForm.Called
+          }
+          addLabels found, checker, deprecations, module, resolved, arguments
+        }
+      }
+      .Member(_, name, _) => {
+        if callees.contains(expression.span) {
+          continue
+        }
+        if const Some(resolved) = checker.resolutionAt(module, expression.span) {
+          const form = if assigned.contains(expression.span) { DeprecatedUseForm.Assigned } else { DeprecatedUseForm.Read }
+          addUse found, checker, deprecations, module, resolved, name.span, form
+        }
+      }
+      .Name(_) => {
+        if callees.contains(expression.span) {
+          continue
+        }
+        if const Some(resolved) = checker.resolutionAt(module, expression.span) {
+          const form = if assigned.contains(expression.span) { DeprecatedUseForm.Assigned } else { DeprecatedUseForm.Read }
+          addUse found, checker, deprecations, module, resolved, expression.span, form
+        }
+      }
+      .ImplicitMember(name) => {
+        if callees.contains(expression.span) {
+          continue
+        }
+        if const Some(resolved) = checker.resolutionAt(module, expression.span) {
+          addUse found, checker, deprecations, module, resolved, name.span, DeprecatedUseForm.Read
+        }
+      }
+      _ => {}
+    }
+  }
+  var references = nodes.types
+  for declaration in topLevelDeclarationsOf(file).appendedAll(nodes.declarations) {
+    references.appendAll headTypesOf(declaration)
+  }
+  for reference in everyNamedType(references) {
+    if const .Named(path, _) = reference.kind {
+      for segment in path {
+        if const Some(symbol) = checker.resolvedName(module, segment.span) {
+          addSymbolUse found, checker, deprecations, module, symbol, segment.span, DeprecatedUseForm.TypeName
+        }
+      }
+    }
+  }
+  found.sort({ _.span.start })
+  for candidate in found {
+    const at = candidate.span
+    if seen.contains(at.start) || exempt.any({ span => span.start <= at.start && at.end <= span.end }) {
+      continue
+    }
+    seen.insert at.start
+    uses.append candidate
+  }
+  uses
+}
+
+fn topLevelDeclarationsOf(file: SourceFile): List<Declaration> {
+  var found: List<Declaration> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      found.append declaration
+    }
+  }
+  found
+}
+
+/**
+ * The types a declaration names in its head, which the walk over its nodes does not reach: a `with` clause, the
+ * supertraits of a trait, the target and the traits of an `extend`, the target of a type alias, and the bounds and the
+ * `where` clauses of its generic parameters and of those of its methods.
+ */
+fn headTypesOf(declaration: Declaration): List<TypeReference> {
+  var found: List<TypeReference> = []
+  match declaration.kind {
+    .Type(inner) => {
+      for clause in inner.traits {
+        found.append clause.trait
+      }
+      addGenerics found, inner.generics, inner.whereClauses
+    }
+    .Trait(inner) => {
+      found.appendAll inner.supertraits
+      addGenerics found, inner.generics, []
+    }
+    .Extend(inner) => {
+      found.append inner.target
+      found.appendAll inner.traits
+      addGenerics found, inner.generics, inner.whereClauses
+    }
+    .Alias(inner) => {
+      found.append inner.target
+      addGenerics found, inner.generics, []
+    }
+    .Function(inner) => addGenerics found, inner.generics, inner.whereClauses
+    .Use(_) | .Foreign(_) | .Constant(_) => {}
+  }
+  for member in membersOf(declaration) {
+    if const .Function(function) = member.kind {
+      addGenerics found, function.generics, function.whereClauses
+    }
+  }
+  found
+}
+
+fn addGenerics(var found: List<TypeReference>, generics: List<GenericParameter>, clauses: List<WhereClause>) {
+  for parameter in generics {
+    found.appendAll parameter.bounds
+    if const Some(fallback) = parameter.default {
+      found.append fallback
+    }
+  }
+  for clause in clauses {
+    found.append clause.subject
+    found.appendAll clause.bounds
+  }
+}
+
+/** Every named type of these references and of the types they are made of: `Map<Key, List<Item>>` is three. */
+fn everyNamedType(references: List<TypeReference>): List<TypeReference> {
+  var found: List<TypeReference> = []
+  var pending = references
+  var index = 0
+  while index < pending.length() {
+    const reference = pending[index]
+    index = index + 1
+    match reference.kind {
+      .Named(_, arguments) => {
+        found.append reference
+        pending.appendAll arguments
+      }
+      .Optional(inner) | .Lazy(inner) => pending.append inner
+      .TupleType(fields) => {
+        for field in fields {
+          pending.append field.type
+        }
+      }
+      .Intersection(members) => pending.appendAll members
+      .FunctionType(parameters, result) => {
+        for parameter in parameters {
+          pending.append parameter.type
+        }
+        pending.append result
+      }
+      .Literals(_) | .Invalid => {}
+    }
+  }
+  found
+}
+
+/** The span of the name a callee writes: the member behind the `.`, the bare name, the case after `.`. */
+fn nameSpanOf(callee: Expression): Span? {
+  match callee.kind {
+    .Name(_) => callee.span
+    .Member(_, name, _) => name.span
+    .ImplicitMember(name) => name.span
+    .Generic(inner, _) => nameSpanOf inner
+    _ => None
+  }
+}
+
+/** The declaration a resolution names, where it names one a use can point at. */
+fn symbolOfResolution(checker: Checker, resolution: Resolution): SymbolId? {
+  match resolution {
+    .Callable(symbol, _, _) => symbol
+    .Field(_, field) | .PropertyWrite(_, field) => field
+    .Constant(symbol, _) => symbol
+    .CaseOf(_, variant) => variant
+    .Construct(owner) | .TypeOf(owner) => {
+      match checker.types.form(owner) {
+        .Nominal(symbol, _) => symbol
+        _ => None
+      }
+    }
+    .Local(_) | .CopyOf(_) | .TupleField(_, _) | .Namespace(_) | .Deferred => None
+  }
+}
+
+fn addUse(
+  var found: List<DeprecatedUse>,
+  checker: Checker,
+  deprecations: Map<String, DeprecatedDeclaration>,
+  module: ModuleId,
+  resolution: Resolution,
+  at: Span,
+  form: DeprecatedUseForm,
+) {
+  if const Some(symbol) = symbolOfResolution(checker, resolution) {
+    addSymbolUse found, checker, deprecations, module, symbol, at, form
+  }
+}
+
+fn addSymbolUse(
+  var found: List<DeprecatedUse>,
+  checker: Checker,
+  deprecations: Map<String, DeprecatedDeclaration>,
+  module: ModuleId,
+  symbol: SymbolId,
+  at: Span,
+  form: DeprecatedUseForm,
+) {
+  const declared = checker.symbolAt symbol
+  const home = match declared.module {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  // The file that declares it keeps its implementation, its examples and the members that stand in for it
+  if home == module {
+    return
+  }
+  if const Some(declaration) = deprecations.get(deprecationKey(home, declared.span)) {
+    found.append DeprecatedUse(module, at, symbol, declaration, form)
+  }
+}
+
+/** `Point(x: 1)`, `point.copy(x: 1)`, `.Circle(radius: 2.0)`: the labels that name a deprecated field. */
+fn addLabels(
+  var found: List<DeprecatedUse>,
+  var checker: Checker,
+  deprecations: Map<String, DeprecatedDeclaration>,
+  module: ModuleId,
+  resolution: Resolution,
+  arguments: List<Argument>,
+) {
+  if !arguments.any({ _.label.isSome() }) {
+    return
+  }
+  const fields: List<FieldSignature> = match resolution {
+    .Construct(owner) | .CopyOf(owner) => fieldsOf checker, owner
+    .CaseOf(owner, variant) => {
+      match caseNamed(checker, owner, checker.symbolAt(variant).name) {
+        Some(found) => found.fields
+        None => []
+      }
+    }
+    _ => []
+  }
+  for argument in arguments {
+    if const Some(label) = argument.label {
+      if const Some(field) = fields.find({ _.name == label.text }) {
+        addSymbolUse found, checker, deprecations, module, field.symbol, label.span, DeprecatedUseForm.Label
+      }
+    }
+  }
+}
+
+/**
+ * The spans of the declarations and members of a file that are deprecated themselves, however deep: a use inside one of
+ * them is no use, because the code that stays for old callers may lean on what stays with it.
+ */
+fn deprecatedSpansOf(file: SourceFile, nested: List<Declaration>): List<Span> {
+  var spans: List<Span> = []
+  var declarations: List<Declaration> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      declarations.append declaration
+    }
+  }
+  declarations.appendAll nested
+  for declaration in declarations {
+    if declaration.modifiers.deprecation.isSome() {
+      spans.append declaration.span
+    }
+    const members = match declaration.kind {
+      .Type(inner) => inner.members
+      .Trait(inner) => inner.members
+      .Extend(inner) => inner.members
+      .Foreign(inner) => inner.members
+      _ => []
+    }
+    for member in members {
+      if member.modifiers.deprecation.isSome() {
+        spans.append member.span
+      }
+    }
+  }
+  spans
+}

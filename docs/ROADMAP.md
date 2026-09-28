@@ -52,10 +52,11 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   `torb canon` is a deprecated alias of it ([tooling/torb-format.md](tooling/torb-format.md)).
 - **`torb lint`** - **built**, with `--fix` as the migration tool for every breaking change before 1.0 and for every
   deprecation after it: the rules `self-name`, `question-field`, `unread-binding` and `labeled-literal`, swept over the
-  standard library and the compiler, and `torb rename` for a field renamed at every use the checker resolves
-  ([tooling/torb-rename.md](tooling/torb-rename.md)). **Left:** a place in the manifest to choose rules (only
+  standard library and the compiler, `deprecated`, which moves every use of a deprecated declaration to its replacement
+  ([design/DEPRECATION.md](design/DEPRECATION.md)), and `torb rename` for a field renamed at every use the checker
+  resolves ([tooling/torb-rename.md](tooling/torb-rename.md)). **Left:** a place in the manifest to choose rules (only
   `--rule`/`--skip` today), the rules named and not built (a closure that only passes its parameter on, a case the
-  expected type names, a `deprecated` field) ([tooling/torb-lint.md](tooling/torb-lint.md)).
+  expected type names) ([tooling/torb-lint.md](tooling/torb-lint.md)).
 - **The language server is the compiler** - **the second round is built (2026-09-28)**: `torb lsp` over standard
   input and output, the diagnostics of `check` with their ranges for the open documents and, in the background, for
   every file of the workspace, hover from the model of `torb doc`, go to definition, the references, a rename that is
@@ -220,7 +221,7 @@ supported, and neither is a dialect with its own name.
 | One principle for where a program may panic | [design/PANICS.md](design/PANICS.md) |
 | `for var`, the words per kind of collection | [design/COLLECTIONS.md](design/COLLECTIONS.md) |
 | `?` return traces in the debug profile | [BACKEND.md](BACKEND.md) row 5.13, CONCEPT "Error Handling" |
-| `deprecated`, a public enum that may grow, the prelude rule | [design/RELEASE.md](design/RELEASE.md) section 2, the 1.0 list |
+| A public enum that may grow, the prelude rule | [design/RELEASE.md](design/RELEASE.md) section 2, the 1.0 list |
 | The candidates without a decision: let-else, variadic type parameters, `_` as a type argument, fields on one line, and others | CONCEPT, "Open Questions" |
 
 ## Smaller open points

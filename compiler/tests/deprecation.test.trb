@@ -1,0 +1,516 @@
+/**
+ * `deprecated(...)`: the clause the parser reads, the rules the checker holds it to, the warning at every use, the rule
+ * `deprecated` of `torb lint` with its fix, and what `torb doc` and the language server make of it
+ * (docs/design/DEPRECATION.md).
+ */
+
+use test, group from "std/test"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+use DeclarationKind, MemberKind from "../src/syntax/ast"
+use check from "../src/semantics/check"
+use deprecatedFindings from "../src/lint/deprecated"
+use fixed from "../src/lint/command"
+use referenceOf from "../src/reference/model"
+use siteFiles from "../src/reference/site"
+use problems, problemsOf, workspaceWith from "./harness"
+
+const geometry = raw"""
+  /** A point, stored in polar form. */
+  public type Point {
+    /** The horizontal position, as it was stored. */
+    deprecated("the position is computed now", replacement: "x()", since: "0.4")
+    x: Int = 0
+    radius: Int
+
+    /** The horizontal position. */
+    fn x(): Int {
+      radius * 2
+    }
+
+    deprecated("it says what it is under its new name", replacement: "length")
+    fn size(): Int {
+      radius
+    }
+
+    fn length(): Int {
+      radius
+    }
+
+    deprecated("the origin is `Point.origin`", replacement: "origin", since: "0.3")
+    static zero = Point(radius: 0)
+
+    static origin = Point(radius: 0)
+  }
+
+  public type Marker {
+    deprecated("a dot is a `Dot` now", replacement: "Dot")
+    case Spot
+    case Dot
+  }
+
+  /** Reads a point, under its old name. */
+  deprecated("the name says too little", replacement: "parsePoint", since: "0.4")
+  public fn parse(text: String): Point {
+    parsePoint text
+  }
+
+  public fn parsePoint(text: String): Point {
+    Point radius: text.byteLength()
+  }
+
+  deprecated("a pair says nothing", since: "0.1")
+  public type Pair {
+    first: Int
+    second: Int
+  }
+
+  deprecated("a length says it", since: "0.2")
+  public trait Measured {
+    fn measure(): Int
+  }
+  """
+
+fn withGeometry(main: String): Map<String, String> {
+  ["app/src/geometry.trb": geometry, "app/src/main.trb": main]
+}
+
+/** Every warning of `app`, as `message @ the text it points at`. */
+fn warningsOf(main: String): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(withGeometry(main)), ["app"]).files {
+    for warning in file.warnings {
+      const written = main.sliceBytes warning.span.start, warning.span.end
+      found.append "{warning.message} @ {written}"
+    }
+  }
+  found
+}
+
+/** What `torb lint --fix --rule deprecated` writes into `main.trb`. */
+fn fixedMain(main: String): String {
+  const checked = check workspaceWith(withGeometry(main)), ["app"]
+  const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+  fixed main, deprecatedFindings(checked, module)
+}
+
+/** The messages the parser gives a source. */
+fn parseProblems(source: String): List<String> {
+  parse(SourceText.of(source)).diagnostics.map({ _.message }).toList()
+}
+
+group "the clause" {
+  test "it stands above a declaration and a member, below the doc comment" {
+    const parsed = parse SourceText.of(geometry)
+    assert parsed.diagnostics.isEmpty()
+    const declaration = match parsed.file.statements[0].kind {
+      .Declare(found) => found
+      _ => {
+        panic "a declaration"
+      }
+    }
+    assert(declaration.doc == "A point, stored in polar form.")
+    const members = match declaration.kind {
+      .Type(found) => found.members
+      _ => []
+    }
+    const field = members[0]
+    assert(field.doc == "The horizontal position, as it was stored.")
+    const clause = field.modifiers.deprecation.expect "the clause of the field"
+    assert(clause.reason == "the position is computed now")
+    assert(clause.replacementName() == "x")
+    assert clause.replacementCalls()
+    assert(clause.since == "0.4")
+    assert(members[3].modifiers.deprecation.expect("the clause of the method").since == None)
+  }
+
+  test "a function named deprecated is still called" {
+    const source = raw"""
+      fn deprecated(text: String) {
+        print text
+      }
+
+      deprecated("called")
+      deprecated "called again"
+      """
+    assert parseProblems(source).isEmpty()
+    assert problems(source).isEmpty()
+  }
+
+  test "a field, a parameter and a label may be named deprecated" {
+    const source = raw"""
+      type Flag {
+        deprecated: Bool
+      }
+
+      fn shown(deprecated: Bool): String {
+        if deprecated { "old" } else { "current" }
+      }
+
+      print shown(Flag(deprecated: true).deprecated)
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "it needs a reason" {
+    assert(parseProblems("deprecated()\nfn old() \{\}\n") == ["`deprecated` needs a reason"])
+  }
+
+  test "the reason comes first" {
+    const source = "deprecated(since: \"0.4\", \"why\")\nfn old() \{\}\n"
+    assert(parseProblems(source) == ["The reason of `deprecated` comes first, and once"])
+  }
+
+  test "it takes a reason, a replacement and a version and nothing else" {
+    const source = "deprecated(\"why\", instead: \"new\")\nfn old() \{\}\n"
+    assert(parseProblems(source) == ["`deprecated` takes a reason, `replacement:` and `since:`, and no `instead:`"])
+  }
+
+  test "a label is written once" {
+    const source = "deprecated(\"why\", since: \"0.4\", since: \"0.5\")\nfn old() \{\}\n"
+    assert(parseProblems(source) == ["`since:` is written twice"])
+  }
+
+  test "its arguments are string literals without an interpolation" {
+    assert(parseProblems("deprecated(reason)\nfn old() \{\}\n") == [
+      "The arguments of `deprecated` are string literals, which the compiler reads",
+    ])
+    const interpolated = "deprecated(\"\{1 + 1\}\")\nfn old() \{\}\n"
+    assert(parseProblems(interpolated) == [
+      "An argument of `deprecated` is read and not evaluated, so it has no interpolation",
+    ])
+  }
+
+  test "a version is two or three numbers" {
+    assert(parseProblems("deprecated(\"why\", since: \"4\")\nfn old() \{\}\n") == ["`4` is not a version"])
+    assert(parseProblems("deprecated(\"why\", since: \"0.4.1.2\")\nfn old() \{\}\n") == ["`0.4.1.2` is not a version"])
+    assert parseProblems("deprecated(\"why\", since: \"1.2.3\")\nfn old() \{\}\n").isEmpty()
+  }
+
+  test "a replacement is a name, with () behind it or not" {
+    const source = "deprecated(\"why\", replacement: \"x + 1\")\nfn old() \{\}\n"
+    assert(parseProblems(source) == ["`x + 1` is not a replacement `torb lint --fix` can write"])
+  }
+
+  test "it stands on a line of its own" {
+    const source = "type Point \{\n  deprecated(\"why\") x: Int\n\}\n"
+    assert(parseProblems(source) == ["`deprecated(...)` stands on a line of its own"])
+  }
+
+  test "the doc comment stands above it" {
+    const source = "deprecated(\"why\")\n/** Old. */\nfn old() \{\}\n"
+    assert(parseProblems(source) == ["A doc comment stands above `deprecated(...)`"])
+  }
+}
+
+group "the rules of the checker" {
+  test "the clause of a use, an extend and a local declaration" {
+    const source = raw"""
+      type Point {
+        x: Int
+      }
+
+      deprecated("why")
+      extend Point {
+        fn twice(): Int {
+          x * 2
+        }
+      }
+
+      fn outer() {
+        deprecated("why")
+        fn inner() {
+        }
+        inner()
+      }
+
+      outer()
+      """
+    assert(problems(source) == [
+      "`deprecated` marks a declaration, and an `extend` is none",
+      "A declaration inside a body cannot be deprecated",
+    ])
+    const imported = [
+      "app/src/geometry.trb": "public fn area(): Int \{\n  1\n\}\n",
+      "app/src/main.trb": "deprecated(\"why\")\nuse area from \"./geometry\"\n\nprint area()\n",
+    ]
+    assert(problemsOf(imported) == ["`deprecated` marks a declaration, and a `use` is none"])
+  }
+
+  test "the replacement of a member is a member of the same type" {
+    const source = raw"""
+      type Point {
+        deprecated("why", replacement: "horizontal")
+        x: Int
+      }
+
+      print Point(1).x
+      """
+    assert(problems(source) == ["`horizontal` is no member of `Point`"])
+  }
+
+  test "the replacement of a declaration is a name of its module" {
+    const source = raw"""
+      deprecated("why", replacement: "parseText")
+      fn parse(text: String): Int {
+        text.byteLength()
+      }
+
+      print parse("abc")
+      """
+    assert(problems(source) == ["`parseText` is not declared or imported here"])
+  }
+
+  test "() calls a method or a function" {
+    const source = raw"""
+      type Point {
+        deprecated("why", replacement: "horizontal()")
+        x: Int
+        horizontal: Int
+      }
+
+      deprecated("why", replacement: "limit()")
+      fn size(): Int {
+        1
+      }
+
+      const limit = 3
+
+      print Point(1, 2).x + size()
+      """
+    assert(problems(source) == [
+      "`horizontal` is not a method, so `horizontal()` does not call it",
+      "`limit` is not a function, so `limit()` does not call it",
+    ])
+  }
+
+  test "a declaration is not its own replacement" {
+    const source = raw"""
+      deprecated("why", replacement: "size")
+      fn size(): Int {
+        1
+      }
+
+      type Point {
+        deprecated("why", replacement: "length")
+        fn length(): Int {
+          1
+        }
+      }
+
+      print size() + Point().length()
+      """
+    assert(problems(source) == ["A declaration is not its own replacement", "A member is not its own replacement"])
+  }
+
+  test "a field shares its name with a method only while it is deprecated and names the method" {
+    const sharing = raw"""
+      type Point {
+        deprecated("computed now", replacement: "x()")
+        x: Int = 0
+        radius: Int
+
+        fn x(): Int {
+          radius
+        }
+      }
+
+      const point = Point(radius: 3)
+      print point.x + point.x()
+      """
+    assert problems(sharing).isEmpty()
+    const plain = raw"""
+      type Point {
+        x: Int = 0
+
+        fn x(): Int {
+          1
+        }
+      }
+
+      print Point().x
+      """
+    assert(problems(plain) == ["`x` is already declared in `Point`"])
+    const withParameter = raw"""
+      type Point {
+        deprecated("computed now", replacement: "x()")
+        x: Int = 0
+
+        fn x(scale: Int): Int {
+          scale
+        }
+      }
+
+      print Point().x
+      """
+    assert(problems(withParameter) == ["A member is not its own replacement", "`x` is already declared in `Point`"])
+  }
+}
+
+group "the warnings" {
+  test "every use outside the file that declares it" {
+    const main = raw"""
+      use Point, Marker, Pair, parse from "./geometry"
+
+      const point = parse("abc")
+      print point.x
+      print point.x()
+      print point.size()
+      print Point.zero.radius
+      print point.copy(x: 2).radius
+      print Marker.Spot
+      const pair: Pair = Pair(1, 2)
+      print pair.first
+      """
+    assert(warningsOf(main) == [
+      "`parse` is deprecated since 0.4: the name says too little @ parse",
+      "`Point.x` is deprecated since 0.4: the position is computed now @ x",
+      "`Point.size` is deprecated: it says what it is under its new name @ size",
+      "`Point.zero` is deprecated since 0.3: the origin is `Point.origin` @ zero",
+      "`Point.x` is deprecated since 0.4: the position is computed now @ x",
+      "`Marker.Spot` is deprecated: a dot is a `Dot` now @ Spot",
+      "`Pair` is deprecated since 0.1: a pair says nothing @ Pair",
+      "`Pair` is deprecated since 0.1: a pair says nothing @ Pair",
+    ])
+  }
+
+  test "a name in the head of a declaration" {
+    const main = raw"""
+      use Measured from "./geometry"
+
+      type Rod with Measured {
+        size: Int
+
+        fn measure(): Int {
+          size
+        }
+      }
+
+      fn total<Item: Measured>(item: Item): Int {
+        item.measure()
+      }
+
+      print total(Rod(2))
+      """
+    assert(warningsOf(main) == [
+      "`Measured` is deprecated since 0.2: a length says it @ Measured",
+      "`Measured` is deprecated since 0.2: a length says it @ Measured",
+    ])
+  }
+
+  test "a warning is no problem" {
+    const main = "use parse from \"./geometry\"\n\nprint parse(\"abc\").radius\n"
+    assert problemsOf(withGeometry(main)).isEmpty()
+  }
+
+  test "a pattern and a deprecated declaration are no uses" {
+    const main = raw"""
+      use Marker from "./geometry"
+
+      const marker: Marker = .Dot
+      const name = match marker {
+        .Spot => "spot"
+        .Dot => "dot"
+      }
+      print name
+
+      deprecated("why")
+      fn old(): String {
+        "{Marker.Spot}"
+      }
+
+      print old()
+      """
+    assert warningsOf(main).isEmpty()
+  }
+
+  test "the warning names the replacement" {
+    const main = "use parse from \"./geometry\"\n\nprint parse(\"abc\").radius\n"
+    for file in check(workspaceWith(withGeometry(main)), ["app"]).files {
+      for warning in file.warnings {
+        assert(warning.notes == ["Write `parsePoint` instead; `torb lint --fix --rule deprecated` rewrites it"])
+      }
+    }
+  }
+}
+
+group "the fix" {
+  test "every use becomes the replacement, and the use that imports it too" {
+    const main = raw"""
+      use Point, Marker, parse from "./geometry"
+
+      const point = parse("abc")
+      print point.x
+      print point.size()
+      print Point.zero.radius
+      print Marker.Spot
+      """
+    const expected = raw"""
+      use Point, Marker, parsePoint from "./geometry"
+
+      const point = parsePoint("abc")
+      print point.x()
+      print point.length()
+      print Point.origin.radius
+      print Marker.Dot
+      """
+    assert(fixedMain(main) == expected)
+  }
+
+  test "no fix where the replacement cannot stand" {
+    const main = raw"""
+      use Point, Pair from "./geometry"
+
+      print Point(radius: 1).copy(x: 2).radius
+      print Pair(1, 2).first
+      """
+    assert(fixedMain(main) == main)
+  }
+}
+
+group "torb doc" {
+  test "an item carries its clause" {
+    const files = ["app/src/lib.trb": geometry, "app/src/main.trb": "print 1\n"]
+    const reference = referenceOf check(workspaceWith(files), ["app"])
+    var found: List<String> = []
+    for entry in reference.everyItem() {
+      if const Some(deprecation) = entry.item.deprecation {
+        found.append "{entry.item.anchor}: {deprecation.reason} ({deprecation.replacement ?? "-"}, {deprecation.since ?? "-"})"
+      }
+    }
+    assert(found == [
+      "Point.x: the position is computed now (x(), 0.4)",
+      "Point.size: it says what it is under its new name (length, -)",
+      "Point.zero: the origin is `Point.origin` (origin, 0.3)",
+      "Marker.Spot: a dot is a `Dot` now (Dot, -)",
+      "parse: the name says too little (parsePoint, 0.4)",
+      "Pair: a pair says nothing (-, 0.1)",
+      "Measured: a length says it (-, 0.2)",
+    ])
+  }
+
+  test "the doc comment above the clause is the item's" {
+    const files = ["app/src/lib.trb": geometry, "app/src/main.trb": "print 1\n"]
+    const reference = referenceOf check(workspaceWith(files), ["app"])
+    const field = reference.everyItem().find({ _.item.anchor == "Point.x" }).expect("the item of the field")
+    assert(field.item.doc == "The horizontal position, as it was stored.")
+    assert(field.item.signature == "x: Int = 0")
+  }
+
+  test "a page says it above the documentation" {
+    const files = ["app/src/lib.trb": geometry, "app/src/main.trb": "print 1\n"]
+    const pages = siteFiles referenceOf(check(workspaceWith(files), ["app"]))
+    var html = ""
+    for (path, text) in pages {
+      if path.endsWith("lib.html") {
+        html = text
+      }
+    }
+    const notice = "<div class=\"deprecated\"><p><strong>Deprecated since 0.4:</strong> the name says too little. Write"
+      + " <code>parsePoint</code> instead.</p>"
+    if !html.contains(notice) {
+      print html
+    }
+    assert html.contains(notice)
+  }
+}

@@ -16,6 +16,7 @@ use Program from "../semantics/scope"
 use boundNamesOf from "../semantics/symbols"
 use DocumentedItem, itemAt from "../reference/model"
 use linkedMarkdown, linkTargetsIn from "../reference/render"
+use deprecationNotice from "../semantics/checker/deprecation"
 
 /** A place a link of a doc comment leads to: the file, and the span of the name there, in the program's text of it. */
 public type LinkTarget {
@@ -71,9 +72,15 @@ fn targetsOf(item: DocumentedItem): List<String> {
   targets
 }
 
-/** The comment of an item as Markdown: its text, its parameters with a comment of their own, then its sections. */
+/**
+ * The comment of an item as Markdown: that it is deprecated and what to write instead, its text, its parameters with a
+ * comment of their own, then its sections.
+ */
 fn markdownOf(item: DocumentedItem, links: Map<String, String>): String {
   var parts: List<String> = []
+  if const Some(deprecation) = item.deprecation {
+    parts.append deprecationNotice(deprecation.reason, deprecation.replacement, deprecation.since)
+  }
   if !item.doc.isEmpty() {
     parts.append linkedMarkdown(item.doc, links)
   }

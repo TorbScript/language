@@ -241,6 +241,12 @@ a function of a hundred lines whose check - with the bodies it asks for on deman
   the style the checker leaves alone and `torb lint` is no gate. The rules that read the syntax tree run wherever the
   file parses; the rules that read the checker's tables run where the checker found no problem, exactly as `torb lint`
   decides it.
+- **A use of a deprecated declaration is a warning**, the one finding that is more than a hint: it is the warning
+  `torb check` prints, with `torb` as the source and the tag *deprecated*, which an editor strikes through, and its
+  fix - the replacement - is a quick fix (docs/design/DEPRECATION.md). It is found wherever the checker resolved the
+  name, a file with a problem included, and like every other finding from the run that knows the code: the base's uses
+  outside of the changed bodies, moved, and the overlay's inside of them (`checkBodiesOfFront` records the uses of the
+  bodies it checked).
 - **A quick fix is the fix of one finding** (`actions.trb`): the edits `torb lint --fix` writes, as a `quickfix` code
   action on every finding with a fix that touches the range asked about.
 
@@ -275,9 +281,10 @@ declarations and the names of local bindings where they are bound; an expression
   hover. A link of the comment resolves the way a name at that place resolves, and `[Type.member]` to the member in the
   declaration of the type; it becomes a link to the place of the declaration (`file:///...#L12,5`), which an editor
   opens. At a call of a generic function the hover says what its type parameters are there (`Item` is `Int64` here),
-  from the type arguments the checker recorded for the call. A local shows `const`/`var`, its name and its type; a
-  constant its type, which its declaration need not write. The one difference to a page: the first declaration of a file
-  without imports has the comment at the start of the file as its own, as the parser has it.
+  from the type arguments the checker recorded for the call. A deprecated declaration says so first - the reason, the
+  version and what to write instead - from the clause the model carries. A local shows `const`/`var`, its name and
+  its type; a constant its type, which its declaration need not write. The one difference to a page: the first
+  declaration of a file without imports has the comment at the start of the file as its own, as the parser has it.
 - **Go to definition** follows a resolution to the symbol it names and the symbol to its module and span; a local leads
   to where it is bound, a module to its first line.
 - **Completion behind a `.`** looks for the smallest expression of the run that ends at the dot. Where the text around
@@ -287,7 +294,7 @@ declarations and the names of local bindings where they are bound; an expression
   members; a module its exports. **Anywhere else** the names in scope: the locals of the bodies around the cursor, read
   from the syntax tree, then the file's own names and imports, its prelude, and the keywords. An item of a declaration
   carries the place of its name (`data`), and `completionItem/resolve` answers it with the signature and the
-  documentation of the hover.
+  documentation of the hover; an item of a deprecated declaration carries the tag *deprecated*.
 - **Signature help** (`signature-help.trb`) finds the innermost call of the syntax tree whose arguments hold the cursor,
   in either style - between the parentheses of `f(a, b)` or behind the name of `f a, b` - and shows what the checker
   resolved it to: a function by its signature, the constructor of a type and a case by their fields. The parameter is
@@ -343,7 +350,8 @@ conflict nobody thought of, because it asks the checker what every name means.
 The syntax resolver of `../highlight` decides every name it can place from the file alone. The member behind a `.` is
 classified by the member the checker resolved - a `var` field is `mutable`, a method of a type is a `method`, a case an
 `enumMember` - and a plain name the resolver placed nowhere gets the token of what it resolved to: the resolutions of the
-base outside of the changed bodies, moved to where they are now, and those of the overlay inside of them.
+base outside of the changed bodies, moved to where they are now, and those of the overlay inside of them. The legend's
+one addition is the modifier `deprecated`, on the name of a deprecated declaration and on every use of one.
 
 ## 13. A project per folder
 

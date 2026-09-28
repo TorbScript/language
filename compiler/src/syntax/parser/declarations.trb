@@ -8,17 +8,21 @@ use TokenKind, Keyword, TextPart, staticKeyword from "../token"
 use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItem, UseItems, UseSource from "../ast"
 use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference, TraitClause from "../ast"
 use TypeDeclaration, AliasDeclaration, TraitDeclaration, ExtendDeclaration, ForeignDeclaration from "../ast"
-use Member, MemberKind, Field, CaseDeclaration, Name, TypeKind, ExpressionKind from "../ast"
+use Member, MemberKind, Field, CaseDeclaration, Name, TypeKind, ExpressionKind, Deprecation, Argument from "../ast"
 use Parser from "./parser"
 use parseBlock, parseBinding, parseBindingBody from "./statements"
 use parseType, parseSingleType from "./types"
-use parseExpression, parseCommandExpression from "./expressions"
+use parseExpression, parseCommandExpression, parseArgument from "./expressions"
 
 /** `fn`, `type`, `trait`, `extend`, `use`, `foreign`, with their modifiers. */
 public fn parseDeclaration(var parser: Parser): Declaration {
-  const doc = parser.takeDoc()
+  var doc = parser.takeDoc()
+  const deprecation = parseDeprecation parser
+  if deprecation.isSome() {
+    doc = docBelowDeprecation parser, doc
+  }
   const start = parser.span()
-  const modifiers = parseModifiers parser
+  const modifiers = parseModifiers(parser).copy(deprecation: deprecation)
   const kind = match parser.kind() {
     .Reserved(.Use) => parseUse parser
     .Reserved(.Fn) => DeclarationKind.Function parseFunction(parser)
@@ -103,6 +107,196 @@ public fn isAtProtectedDeclaration(parser: Parser): Bool {
 }
 
 const protectedWord = "protected"
+
+/** `deprecated`, a word only in front of the `(` of its clause: a field, a function and a label may be named after it. */
+const deprecatedWord = "deprecated"
+
+/**
+ * `deprecated(...)` at the start of a statement, on a line of its own above a declaration: the clause of
+ * [parseDeprecation] and not a call. The line after the closing parenthesis has to start a declaration, so a call of a
+ * function named `deprecated` stays one wherever anything else follows it.
+ */
+public fn isAtDeprecatedDeclaration(parser: Parser): Bool {
+  if !parser.isAtWord(deprecatedWord) || parser.kindAt(1) != TokenKind.ParenOpen {
+    return false
+  }
+  var offset = 2
+  var depth = 1
+  while depth > 0 {
+    match parser.kindAt(offset) {
+      .ParenOpen => {
+        depth = depth + 1
+      }
+      .ParenClose => {
+        depth = depth - 1
+      }
+      .EndOfFile => {
+        return false
+      }
+      _ => {}
+    }
+    offset = offset + 1
+  }
+  if parser.kindAt(offset) != TokenKind.Newline {
+    return false
+  }
+  while parser.kindAt(offset) == TokenKind.Newline {
+    offset = offset + 1
+  }
+  match parser.kindAt(offset) {
+    .Reserved(
+      .Public | .Private | .Native | .Shared | .Fn | .Type | .Trait | .Extend | .Foreign | .Const | .Var,
+    ) => true
+    .Reserved(.Use) => true
+    _ => false
+  }
+}
+
+/**
+ * `deprecated("it is computed now", replacement: "x()", since: "0.4")` on the line above a declaration or a
+ * member, below its doc comment; `None` where the parser is not at one. The reason comes first and is required,
+ * `replacement:` and `since:` follow it, each at most once, and every argument is a string literal without an
+ * interpolation - the compiler reads them, and nothing of it runs. What the replacement names is the checker's
+ * question; here it only has to be a name, with `()` behind it where the use becomes a call.
+ */
+fn parseDeprecation(var parser: Parser): Deprecation? {
+  if !parser.isAtWord(deprecatedWord) || parser.kindAt(1) != TokenKind.ParenOpen {
+    return None
+  }
+  const start = parser.span()
+  const before = parser
+  parser.bump()
+  parser.bump()
+  const arguments = parser.commaSeparated TokenKind.ParenClose, parseArgument
+  const at = start.to parser.previousSpan()
+  var reason: String? = None
+  var replacement: Name? = None
+  var since: String? = None
+  for argument in arguments {
+    const text = match deprecationTextOf(parser, argument) {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    const label = match argument.label {
+      Some(found) => found
+      None => {
+        if reason.isSome() || replacement.isSome() || since.isSome() {
+          const note = "Write `deprecated(\"why\", replacement: \"name\", since: \"0.4\")`"
+          parser.errorWithNote "The reason of `deprecated` comes first, and once", note, argument.value.span
+        } else {
+          reason = text
+        }
+        continue
+      }
+    }
+    if label.text == "replacement" && replacement.isNone() {
+      if isReplacementText(text) {
+        replacement = Name text, argument.value.span
+      } else {
+        const note = "A replacement is a name the declaration's scope has, with `()` behind it where the use becomes a"
+          + " call: `\"origin\"`, `\"x()\"`"
+        parser.errorWithNote "`{text}` is not a replacement `torb lint --fix` can write", note, argument.value.span
+      }
+    } else if label.text == "since" && since.isNone() {
+      if isVersionText(text) {
+        since = text
+      } else {
+        const note = "A version is two or three numbers with dots between them: `\"0.4\"`, `\"1.2.3\"`"
+        parser.errorWithNote "`{text}` is not a version", note, argument.value.span
+      }
+    } else if label.text == "replacement" || label.text == "since" {
+      parser.error "`{label.text}:` is written twice", label.span
+    } else {
+      const note = "Write `deprecated(\"why\", replacement: \"name\", since: \"0.4\")`"
+      parser.errorWithNote(
+        "`deprecated` takes a reason, `replacement:` and `since:`, and no `{label.text}:`",
+        note,
+        label.span,
+      )
+    }
+  }
+  if reason.isNone() && !parser.hasFailedSince(before) {
+    const note = "Say why, and what to use instead: `deprecated(\"Use `origin` instead\", replacement: \"origin\")`"
+    parser.errorWithNote "`deprecated` needs a reason", note, at
+  }
+  if parser.isAt(TokenKind.Newline) {
+    parser.skipNewlines()
+  } else {
+    const note = "It stands below the doc comment and above the declaration, whose line it leaves alone"
+    parser.errorWithNote "`deprecated(...)` stands on a line of its own", note, at
+  }
+  Deprecation(reason ?? "", replacement, since, at)
+}
+
+/**
+ * The doc comment of a declaration whose `deprecated` clause stands in front of it: the one above the clause, which is
+ * where it belongs, or one between the clause and the declaration, which is an error that still keeps the comment.
+ */
+fn docBelowDeprecation(var parser: Parser, above: String?): String? {
+  const below = parser.takeDoc()
+  if const Some(found) = below {
+    const note = "The doc comment comes first, then `deprecated(...)`, then the declaration"
+    parser.errorWithNote "A doc comment stands above `deprecated(...)`", note, parser.span()
+    return above ?? found
+  }
+  above
+}
+
+/** The text of an argument of `deprecated`: a string literal without an interpolation, or a message and `None`. */
+fn deprecationTextOf(var parser: Parser, argument: Argument): String? {
+  const segments = match argument.value.kind {
+    .TextLiteral(found) => found
+    _ => {
+      parser.error "The arguments of `deprecated` are string literals, which the compiler reads", argument.value.span
+      return None
+    }
+  }
+  var text = ""
+  for segment in segments {
+    match segment {
+      .Literal(piece) => {
+        text = text + piece
+      }
+      .Interpolated(_) => {
+        parser.error(
+          "An argument of `deprecated` is read and not evaluated, so it has no interpolation",
+          argument.value.span,
+        )
+        return None
+      }
+    }
+  }
+  text
+}
+
+/** `origin`, `x()`: an ASCII name, and `()` behind it or nothing. */
+fn isReplacementText(text: String): Bool {
+  const name = if text.endsWith("()") { text.droppingLast characters: 2 } else { text }
+  if name.isEmpty() {
+    return false
+  }
+  var first = true
+  for character in name.chars() {
+    const letter = (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || character == '_'
+    const digit = character >= '0' && character <= '9'
+    if !letter && (first || !digit) {
+      return false
+    }
+    first = false
+  }
+  true
+}
+
+/** `0.4`, `1.2.3`: two or three numbers, with a dot between each two. */
+fn isVersionText(text: String): Bool {
+  const parts = text.split "."
+  if parts.length() < 2 || parts.length() > 3 {
+    return false
+  }
+  parts.all({ part => !part.isEmpty() && part.chars().all({ _ >= '0' && _ <= '9' }) })
+}
 
 /** The visibility of a declaration, which it has once: `private protected var count: Int` is an error. */
 fn withVisibility(var parser: Parser, modifiers: Modifiers, visibility: Visibility, at: Span): Modifiers {
@@ -588,7 +782,11 @@ fn parseMembers(var parser: Parser, hasReceiver: Bool): List<Member> {
 }
 
 fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
-  const doc = parser.takeDoc()
+  var doc = parser.takeDoc()
+  const deprecation = parseDeprecation parser
+  if deprecation.isSome() {
+    doc = docBelowDeprecation parser, doc
+  }
   const start = parser.span()
   // `public` on a member says what it is already: a member is public unless it is `private`. `public: Bool` is a field
   // named after the keyword, as `private: Bool` is
@@ -596,7 +794,7 @@ fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
     const note = "Members are public by default: drop `public`, or write `private` to hide one"
     parser.errorWithNote "`public` is what a member is without it", note, parser.span()
   }
-  const modifiers = parseModifiers parser
+  const modifiers = parseModifiers(parser).copy(deprecation: deprecation)
   const kind = match parser.kind() {
     // `type: String`, `case: Int`: a reserved word followed by `:` names a field, which is reached as `self.type`
     .Reserved(_) if hasReceiver

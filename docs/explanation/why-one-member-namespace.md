@@ -86,11 +86,13 @@ type itself declares or `extend`s, keeps "is `x.f` a member of `x`'s type?" answ
 
 ## Consequences
 
-**A field and a method are specified to never collide, because the compiler is meant to check one namespace for
-both.** CONCEPT.md states this as a consequence of the one-namespace rule: a `type Broken` with the field
-`name: String` and the method `fn name(): String` should be rejected as an error, because `name` would be claimed
-twice in the same namespace. Today's checker accepts this declaration without reporting a problem - a gap between the design and the
-checker rather than a second namespace appearing through the back door.
+**A field and a method never collide, because the compiler checks one namespace for both.** A `type Broken` with the
+field `name: String` and the method `fn name(): String` is an error, `name` is already declared, because `name` would
+be claimed twice in the same namespace - for a `private` field as well, because making a field private must not change
+what a caller writes. The one pair that may share a name is a field that became a method, while the field is
+[deprecated](../language/modules-and-packages/deprecation.md) with the method as its replacement: `point.x` reads the
+field and warns, `point.x()` calls the method, and `torb lint --fix` turns the first into the second. The exception
+lasts as long as the field does, so the namespace is one again once it is gone.
 
 **A property command's meaning is fixed by what the name refers to.** `database { ... }` on a record field configures
 it in place; the same trailing block on a method calls it. A field is otherwise written only with `=` - `port = 9090`

@@ -94,7 +94,11 @@ The settings of the check of the workspace come in the `initializationOptions` o
 Every problem `torb check` reports for a document is an error with the range of its span, and its notes follow the
 message on lines of their own. Every finding of the rules of `torb lint` is a hint that names its rule as the code and
 `torb lint` as the source; a binding nothing reads is marked as unneeded, which an editor fades. The rules that read the
-checker's tables only run on a document the checker found no problem in, as `torb lint` does.
+checker's tables only run on a document the checker found no problem in, as `torb lint` does. The one rule that is
+more than a hint is `deprecated`: a use of a deprecated declaration is the warning `torb check` prints, so it is a
+warning with `torb` as the source and the tag `Deprecated`, which an editor strikes through, and its fix is a quick fix
+([Deprecation](../language/modules-and-packages/deprecation.md)). The same declaration and every use of it carry the
+semantic token modifier `deprecated`, a hover says it above the doc comment, and a completion item carries the tag.
 
 The files nobody opened are checked in the background: every module of the project a while after `initialized`, and
 after files change on disk the ones that changed and every module that imports one of them. The server answers the

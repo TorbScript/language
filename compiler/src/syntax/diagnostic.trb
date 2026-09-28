@@ -12,13 +12,36 @@ public type Diagnostic {
   message: String
   span: Span
   notes: List<String> = []
+  severity: Severity = Severity.Error
 
   static fn error(message: String, span: Span): Self {
     Self message, span
   }
 
+  /** A problem that is printed and builds anyway: the use of a deprecated declaration. */
+  static fn warning(message: String, span: Span): Self {
+    Self message, span, severity: Severity.Warning
+  }
+
   fn withNote(note: String): Self {
     copy notes: notes.appended(note)
+  }
+}
+
+/**
+ * How bad a [Diagnostic] is. An error is why nothing is built; a warning is printed next to the errors, in a list of
+ * its own (`CheckedFile.warnings`), and a program that has only warnings builds and runs.
+ */
+public type Severity {
+  case Error
+  case Warning
+
+  /** The word a rendered diagnostic starts with: `error`, `warning`. */
+  fn word(): String {
+    match self {
+      .Error => "error"
+      .Warning => "warning"
+    }
   }
 }
 

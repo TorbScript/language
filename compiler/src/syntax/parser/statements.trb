@@ -9,7 +9,7 @@ use Span from "../source"
 use TokenKind, Keyword from "../token"
 use Statement, StatementKind, Binding, Block, Condition, Expression, ExpressionKind from "../ast"
 use Parser from "./parser"
-use parseDeclaration, isAtProtectedDeclaration from "./declarations"
+use parseDeclaration, isAtProtectedDeclaration, isAtDeprecatedDeclaration from "./declarations"
 use parseType from "./types"
 use parsePattern from "./patterns"
 use parseExpression, parseCommandExpression from "./expressions"
@@ -76,6 +76,10 @@ fn parseStatement(var parser: Parser): Statement {
       + " Write `private` to hide the declaration"
     parser.errorWithNote "`protected` is only a modifier of a field", note, parser.span()
     parser.bump()
+  }
+  // `deprecated("...")` on the line above a declaration is its clause, and not a call
+  if isAtDeprecatedDeclaration(parser) {
+    return Statement StatementKind.Declare(parseDeclaration(parser)), start.to(parser.previousSpan())
   }
   const kind = match parser.kind() {
     .Reserved(.Public | .Private | .Native | .Shared | .Fn | .Type | .Trait | .Extend | .Use | .Foreign) => {

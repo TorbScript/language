@@ -1327,7 +1327,9 @@ account.balance = 1_000_000              // Compile error in another file: `bala
 
 A type has **one namespace** of members. A member is either an instance field, or a constant of the type
 (`static`). There is nothing else, and two words say which is which: `static` belongs to the type and not to a value,
-`var` may change.
+`var` may change. The one pair that may share a name is a field that became a method, for as long as the field is
+`deprecated` with the method as its replacement (`replacement: "x()"`): `point.x` reads the field, `point.x()` calls the
+method (docs/design/DEPRECATION.md section 4).
 
 - A `static fn` is a constant of the type that holds a function; `static name = value` is one that holds a value.
 - A method is a constant of the type that holds a _receiver closure_ - the very same thing that powers the DSLs. It
@@ -2579,6 +2581,17 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **`deprecated("why", replacement: "name", since: "0.4")` marks a declaration or a member** (2026-09-28; answers the
+  open question "`deprecated` (and `since`)"; docs/design/DEPRECATION.md, docs/language/modules-and-packages/deprecation.md).
+  A clause on the line of its own above the declaration, below the doc comment: a reason, then the replacement - a
+  name of the declaration's own scope, `()` behind it where a use becomes a call - and the version it became deprecated
+  in, all string literals the compiler reads. `deprecated` is a word only there. Every use outside the declaring file
+  is a warning of `torb check` and `torb build` (never of `torb run` or `torb test`, whose output is the program's), a
+  use inside a deprecated declaration or in a pattern is none, and `torb lint --fix --rule deprecated` writes the
+  replacement. The use case CONCEPT named settles the one exception to the single namespace of members: a deprecated
+  field and the method without parameters that replaces it share a name while the field is deprecated. Not an
+  annotation and not a doc comment tag, both of which the language refuses; a modifier in the line of the declaration
+  was weighed and refused because it lengthens every deprecated line and the signature `torb doc` shows.
 - **A value wraps itself into `Some` and `Ok` where one is expected** (2026-09-27, owner; reverses "There is no implicit
   `Some`"; docs/language/types/conversions.md rule 8). The fifth coercion: a value of exactly `Value` where an
   `Option<Value>` or a `Result<Value, Failure>` is expected becomes `Some(value)` or `Ok(value)`, in every position that
@@ -3186,10 +3199,6 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Exclusivity is conservative for now. Collect the correct programs it rejects (closures that capture a `var`
   binding and run during a `var` access, paths through `[]`) here, and decide with a compiler at hand:
   - (none yet)
-- `deprecated` (and `since`): not documentation but something the compiler has to read. A modifier? Decide when the
-  first API needs it. The use case that settles its shape: a field that becomes a method. The field stays for one
-  version next to the new method, marked `deprecated` with its replacement, and `torb lint --fix` rewrites the callers
-  (`.x` to `.x()`); the language server offers the same as a quick fix.
 - `yield`: a function that answers a `Source` and produces items with `yield` would be the same state machine `Task`
   already is, so it costs little. Not in v1, because `Source.produce { sink => ... }` covers the cases (and with
   `capacity: 0` it *is* lock-step generation), and a second way to write a producer is worth less than one obvious way.

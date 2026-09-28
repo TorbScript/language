@@ -72,6 +72,7 @@ extend Name { ... }                          members added to a type
 public fn name() { ... }                     exported from its file
 private var field: Int = 0                   invisible outside its type
 protected var field: Int = 0                 write-protected: read by everyone, written by its own file only
+deprecated("why", replacement: "other")      on the line above a declaration: kept, warned about, rewritten by lint
 use Name from "std/core"                     an import
 use Type.Case from "./module"                a case, by its path
 use Type.member from "acme/text"             a member another package's `extend` adds

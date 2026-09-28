@@ -22,7 +22,7 @@ use SourceTree from "./project/source-tree"
 use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
-use BuildOptions, Profile, profileNamed, build from "./cli/build"
+use BuildOptions, Profile, profileNamed, build, printWarnings from "./cli/build"
 use buildEmbedded from "./cli/embed"
 use problemsOfEveryTarget from "./cli/targets"
 use BuildTarget, everyTarget, targetNamed from "./project/target"
@@ -245,6 +245,9 @@ fn checkProjects(
       printError ""
     }
   }
+  // A warning is printed after the problems and is none of them: the use of a deprecated declaration checks
+  const warnings = printWarnings checked
+  const warned = if warnings == 0 { "" } else { ", {counted(warnings, "warning")}" }
   // Nothing checked is not "no problems": a path that reaches no module of any package is a mistake of the command line
   if checked.files.isEmpty() {
     var named: List<String> = []
@@ -256,10 +259,10 @@ fn checkProjects(
     return problems + 1
   }
   if problems == 0 {
-    printClean "{counted(checked.files.length(), "file")}, no problems"
+    printClean "{counted(checked.files.length(), "file")}, no problems{warned}"
   } else {
     const total = counted checked.files.length(), "file"
-    printProblemCount "{counted(problems, "problem")} in {filesWithProblems} of {total}"
+    printProblemCount "{counted(problems, "problem")} in {filesWithProblems} of {total}{warned}"
   }
   if withEveryTarget && problems == 0 {
     return checkEveryTarget checked, tree

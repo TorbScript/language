@@ -18,6 +18,7 @@ use Program, resolveNames, checkNames from "./scope"
 use resolveTypes from "./resolve-types"
 use Checker, Timing from "./checker/context"
 use checkTypes, checkBodiesWithin, Stopwatch from "./checker/check"
+use DeprecatedUse, deprecationsOf, deprecatedUsesOf from "./checker/deprecation"
 
 /** One file that was checked, with everything that is wrong in it, sorted by position. */
 public type CheckedFile {
@@ -25,6 +26,8 @@ public type CheckedFile {
   path: String
   text: String
   diagnostics: List<Diagnostic>
+  /** What is printed and builds anyway, sorted by position: every use of a deprecated declaration */
+  warnings: List<Diagnostic> = []
 }
 
 /** What `torb check` found, and the tables the type checker built while finding it. */
@@ -40,6 +43,8 @@ public type Checked {
   requested: List<ModuleId>
   /** What the type checker knows: every type by id, the type of every type position, and every signature it built */
   checker: Checker
+  /** Every use of a deprecated declaration in the reported files, by module and then by position */
+  deprecatedUses: List<DeprecatedUse> = []
 }
 
 /**
@@ -178,13 +183,18 @@ public fn checkFront(
   for module in reported {
     isReported.insert module.value
   }
+  const deprecations = deprecationsOf graph
+  var deprecatedUses: List<DeprecatedUse> = []
   var files: List<CheckedFile> = []
   for module in graph.modules {
     if !isReported.contains(module.id.value) {
       continue
     }
+    const uses = deprecatedUsesOf checked, module.id, deprecations
+    deprecatedUses.appendAll uses
     const diagnostics = diagnosticsOfModule front, checked, module.id
-    files.append CheckedFile(tree.display(module.path), module.source.text, diagnostics)
+    const warnings = uses.map({ _.warning() }).toList()
+    files.append CheckedFile(tree.display(module.path), module.source.text, diagnostics, warnings)
   }
   // A `project.trb` that is a receiver script is a module and was reported above; without `std/project` there is no
   // type to check it against, and then only what the parser found about it is reported
@@ -199,7 +209,8 @@ public fn checkFront(
     }
   }
   files.sort({ _.path })
-  Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
+  const program = resolvedProgram.copy symbols: checked.symbols
+  Checked program, files, problems, resolutions, requested, checked, deprecatedUses: deprecatedUses
 }
 
 /**
@@ -243,7 +254,11 @@ public fn checkBodiesOfFront(
   }
   const shape = graph.at module
   const files = [CheckedFile(tree.display(shape.path), shape.source.text, checker.diagnostics[module.value])]
-  Checked front.program.copy(symbols: checker.symbols), files, front.problems, front.resolutions, [module], checker
+  // The uses of deprecated declarations the checked bodies hold: a caller keeps those inside of `within`, as it does
+  // the diagnostics
+  const uses = deprecatedUsesOf checker, module, deprecationsOf(graph)
+  const program = front.program.copy symbols: checker.symbols
+  Checked program, files, front.problems, front.resolutions, [module], checker, deprecatedUses: uses
 }
 
 /**

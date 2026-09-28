@@ -17,6 +17,8 @@ use File, IoError from "std/fs"
 use Json from "std/json"
 use joinPath, parentPath from "../project/path"
 use DocumentedPackage, DocumentedModule, DocumentedItem, ItemKind, ItemSection, ResolvedLink, Reference from "./model"
+use DocumentedDeprecation from "./model"
+use deprecationNotice from "../semantics/checker/deprecation"
 use markdownHtml from "./render"
 use highlightedCode, escapedHtml from "./highlight"
 use fontFaces, baseStylesheet, themeScript, headScript from "../documentation/site-style"
@@ -245,6 +247,9 @@ fn itemHtml(page: String, item: DocumentedItem, level: Int): String {
     "<h{level}><span class=\"kind\">{item.kind.word()}</span> <a class=\"anchor\" href=\"#{anchor}\">{escapedHtml(shownName(item))}</a></h{level}>",
     "<pre class=\"signature\"><code>{highlightedCode(item.signature)}</code></pre>",
   ]
+  if const Some(deprecation) = item.deprecation {
+    pieces.append deprecationHtml(deprecation, links)
+  }
   if !item.doc.isEmpty() {
     pieces.append "<div class=\"doc\">{markdownHtml(item.doc, links)}</div>"
   } else if item.required {
@@ -268,6 +273,15 @@ fn itemHtml(page: String, item: DocumentedItem, level: Int): String {
   }
   pieces.append "</section>"
   pieces.joined separator: "\n"
+}
+
+/**
+ * What the `deprecated` clause of a construct says, above its documentation: since when, why, and what to write
+ * instead.
+ */
+fn deprecationHtml(deprecation: DocumentedDeprecation, links: Map<String, String>): String {
+  const text = deprecationNotice deprecation.reason, deprecation.replacement, deprecation.since
+  "<div class=\"deprecated\">{markdownHtml(text, links)}</div>"
 }
 
 fn sectionsHtml(sections: List<ItemSection>, links: Map<String, String>, level: Int): String {
@@ -393,6 +407,12 @@ const stylesheet = raw"""
   .summary,
   .kind,
   .undocumented {
+    color: var(--torb-text-muted);
+  }
+
+  .deprecated {
+    border-left: 3px solid var(--torb-text-muted);
+    padding-left: 0.75em;
     color: var(--torb-text-muted);
   }
 

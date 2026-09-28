@@ -273,6 +273,39 @@ fn nominalMember(
 }
 
 /**
+ * `point.x()` where `x` is a field and a method of one type at once - a deprecated field that became a method, the one
+ * pair of members that may share a name: a call means the method, and reading the name means the field. `None` for
+ * every other member.
+ */
+public fn methodBehindField(var checker: Checker, receiver: TypeId, found: Candidate, name: String): Candidate? {
+  match found.kind {
+    .Field(_, _) => {}
+    _ => {
+      return None
+    }
+  }
+  const (symbol, arguments) = match checker.types.form(receiver) {
+    .Nominal(symbol, arguments) => (symbol, arguments)
+    _ => {
+      return None
+    }
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  const member = shape.members.get(name)?
+  const mapping = argumentMapping shape.generics, arguments
+  memberCandidate(
+    checker,
+    receiver,
+    member,
+    mapping,
+    shape.generics.length(),
+    isStatic: false,
+    dispatch: Dispatch.Direct,
+  )
+}
+
+/**
  * `extend Int64 { ... }`, `extend<Item> List<Item> where Item: Shape { ... }`: a member without a trait. Two visible
  * extensions that bring the same member are an ambiguity, and the fix is to rename one with `as`.
  */

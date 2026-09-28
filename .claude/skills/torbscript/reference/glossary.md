@@ -133,7 +133,8 @@ containing logic. See [Construction](language/types/construction.md).
 
 A word that reads as an ordinary name after a `.` or as an argument label, and as a keyword everywhere else - today
 only `from`, `as` and `by`, because nothing can be declared with any other keyword's spelling. `protected` is one the
-other way round: a word only in front of a member of a type, and a name everywhere else. See
+other way round: a word only in front of a member of a type, and a name everywhere else, and so is `deprecated`, a
+word only in front of the parenthesis of its clause. See
 [Lexical structure](language/syntax/lexical-structure.md).
 
 ### Copy trap
@@ -162,6 +163,12 @@ every type whose constructor is reachable from outside. See [Encode and Decode](
 
 Forwarding a trait's required members to the one field of a single-field type with `by`, such as
 `Add & Subtract by value`. See [Delegation with by](language/traits/delegation.md).
+
+### Deprecated
+
+Marked with a `deprecated("why", replacement: "name", since: "0.4")` clause: a declaration that still works for its
+callers, whose every use outside its file is a warning, and which `torb lint --fix` rewrites to its replacement. See
+[Deprecation](language/modules-and-packages/deprecation.md).
 
 ### Destructor
 

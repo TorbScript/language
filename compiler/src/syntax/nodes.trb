@@ -1,12 +1,14 @@
 /**
  * One flat collection of the nodes below a declaration: every expression, every pattern and every written type, for a
- * rule that asks the same question of each of them wherever it stands. A `type`, `trait` or `extend` declared inside a
- * body is not walked into but collected, because it is a scope of its own.
+ * pass that asks the same question of each of them wherever it stands - a rule of `torb lint`, the warnings about
+ * deprecated declarations. A `type`, `trait` or `extend` declared inside a body is not walked into but collected,
+ * because it is a scope of its own.
  */
 
-use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
-use FunctionDeclaration, Field, Binding, Condition, Block, Expression, ExpressionKind, Argument from "../syntax/ast"
-use Pattern, PatternKind, TypeReference, TypeKind, TextSegment from "../syntax/ast"
+use Span from "./source"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "./ast"
+use FunctionDeclaration, Field, Binding, Condition, Block, Expression, ExpressionKind, Argument from "./ast"
+use Pattern, PatternKind, TypeReference, TypeKind, TextSegment from "./ast"
 
 /** What a walk found, in the order it found it. */
 public type Nodes {
@@ -15,6 +17,8 @@ public type Nodes {
   var types: List<TypeReference> = []
   /** Every declaration of a type, a trait or an `extend`, at the top level of a file or inside a body */
   var declarations: List<Declaration> = []
+  /** The span of the target of every assignment, `point.x` of `point.x = 1` */
+  var assignedTargets: List<Span> = []
 }
 
 /** The declarations of a file, and the nodes of everything at its top level that is not one of them. */
@@ -40,6 +44,7 @@ public fn everyNodeOf(file: SourceFile): Nodes {
     nodes.patterns.appendAll inner.patterns
     nodes.types.appendAll inner.types
     nodes.declarations.appendAll inner.declarations
+    nodes.assignedTargets.appendAll inner.assignedTargets
     index = index + 1
   }
   nodes
@@ -124,6 +129,7 @@ fn walkStatement(var nodes: Nodes, statement: Statement) {
     }
     .Bind(binding) => walkBinding nodes, binding
     .Assign(target, value) => {
+      nodes.assignedTargets.append target.span
       walkExpression nodes, target
       walkExpression nodes, value
     }

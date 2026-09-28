@@ -1,6 +1,6 @@
 ---
 title: torb lint
-summary: torb lint reports the style rules the type checker leaves alone - Self, a Bool field named as a question, an unread binding, an unlabeled literal, a redundant Some or Ok, private(var) - each with its id and, where certain, a fix.
+summary: torb lint reports the style rules the type checker leaves alone - Self, a question field, an unread binding, an unlabeled literal, a redundant Some, private(var) - and the uses of deprecated declarations, with a fix where certain.
 kind: tooling
 status: stable
 order: 130
@@ -13,6 +13,7 @@ keywords:
   - labeled-literal
   - redundant-wrap
   - protected-field
+  - deprecated
 source:
   - compiler/src/lint/command.trb
   - compiler/src/lint/finding.trb
@@ -36,6 +37,7 @@ Rules (every one runs unless --rule picks some):
   labeled-literal  `true`, `false` or `None` for a `Bool` or an optional carries the label (fix; runs the checker)
   redundant-wrap   No `Some(value)` or `Ok(value)` where the value wraps itself (fix; runs the checker)
   protected-field  A field only its own file writes is `protected var`, not `private(var)` (fix)
+  deprecated       A use of a deprecated declaration becomes the replacement it names (fix; runs the checker)
 
   --fix         Write every fix a rule is certain of, then lint again and report what is left
   --rule <id>   Run this rule (repeatable); without it every rule runs
@@ -162,6 +164,20 @@ server.accepted()
 print server.connections
 ```
 
+**`deprecated`**: every use of a declaration marked `deprecated(...)` - the warnings `torb check` prints, as findings
+([Deprecation](../language/modules-and-packages/deprecation.md)). Where the clause names a replacement, the fix writes
+it at the use - the name, or `x()` where a field became the method `x` - and renames the `use` that imported the
+declaration, unless the file sees the replacement already. It is how a deprecation of `std` moves the code of its
+users: `torb lint --fix --rule deprecated` is the whole migration. A use the replacement cannot stand in keeps its
+finding without a fix: a method as the target of an assignment or as the label of a constructor, and a name the file
+imported under another one, whose `use` is renamed instead.
+
+```console
+$ torb lint --fix --rule deprecated app
+fixed 1 file; what is left:
+3 files, no findings
+```
+
 ### `--fix`
 
 Every fix of every finding is applied, a fix that overlaps one taken before it is left out, and a file whose fixed text
@@ -181,8 +197,7 @@ does not recognize.
 - **The rules named and not built.** A closure that only passes its parameter on (`items.map { stripMargin(_) }` for
   `items.map(stripMargin)`) is only certain where the callee takes exactly that one parameter, which needs the checker's
   answer about defaults, labels and `var` parameters. A case whose type the expected type already names
-  (`.SwitchCase(path)` for `DecisionNode.SwitchCase(path)`) needs the expected type of every argument. A field marked
-  `deprecated` in favour of a method needs the marker, which the language does not have yet.
+  (`.SwitchCase(path)` for `DecisionNode.SwitchCase(path)`) needs the expected type of every argument.
 
 ## Examples
 

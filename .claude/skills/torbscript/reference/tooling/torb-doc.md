@@ -91,7 +91,9 @@ page colours a field and a case the way the editor does. The first line of an ex
 
 `--json` prints `{"format": 1, "packages": [...]}`: every package with its modules, every module with its constructs,
 and every construct with its kind, name, anchor, signature, summary, description, sections, parameters, examples,
-resolved links and members. `format` is raised whenever a field changes meaning or goes away. It is the data a
+resolved links, members, and `deprecation` - the `reason`, `replacement` and `since` of its
+[`deprecated`](../language/modules-and-packages/deprecation.md) clause, or `null`. A page shows the same above the
+construct's documentation: `Deprecated since 0.4: why. Write x() instead.` `format` is raised whenever a field changes meaning or goes away. It is the data a
 language server's hover shows and the registry renders per package (RELEASE.md section 7.7).
 
 ### Doc tests

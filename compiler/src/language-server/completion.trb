@@ -18,6 +18,7 @@ use boundNamesOf, SymbolId, SymbolKind from "../semantics/symbols"
 use Checker, Candidate, CandidateKind from "../semantics/checker/context"
 use TypeId from "../semantics/checker/type"
 use lookupMember, lookupStaticMember, memberNames, caseNamesOf from "../semantics/checker/member"
+use deprecationOfSymbol from "../semantics/checker/deprecation"
 use Analysis from "./analysis"
 use kindWord from "./lookup"
 use object, integer, text, array from "./json"
@@ -172,14 +173,25 @@ fn keywords(): List<String> {
   [
     "if", "else", "match", "for", "in", "while", "loop", "break", "continue", "return", "const", "var", "static", "fn",
     "type", "trait", "extend", "foreign", "case", "use", "from", "as", "public", "private", "protected", "native",
-    "shared", "lazy", "with", "where", "by", "using", "true", "false", "void", "self", "Self",
+    "shared", "lazy", "with", "where", "by", "using", "deprecated", "true", "false", "void", "self", "Self",
   ]
 }
 
-fn item(label: String, kind: Int, detail: String, group: String, data: JsonValue? = None): JsonValue {
+/** One item. A deprecated declaration carries the tag an editor strikes the label through for. */
+fn item(
+  label: String,
+  kind: Int,
+  detail: String,
+  group: String,
+  data: JsonValue? = None,
+  deprecated: Bool = false,
+): JsonValue {
   var entries = [("label", text(label)), ("kind", integer(kind)), ("sortText", text("{group}{label}"))]
   if !detail.isEmpty() {
     entries.append(("detail", text(detail)))
+  }
+  if deprecated {
+    entries.append(("tags", array([integer(deprecatedTag)])))
   }
   if const Some(found) = data {
     entries.append(("data", found))
@@ -187,9 +199,14 @@ fn item(label: String, kind: Int, detail: String, group: String, data: JsonValue
   object entries
 }
 
+/** The tag of the protocol for a deprecated completion item. */
+const deprecatedTag = 1
+
 fn symbolItem(analysis: Analysis, name: String, symbol: SymbolId, group: String): JsonValue {
-  const kind = analysis.checked.checker.symbolAt(symbol).kind
-  item name, itemKindOf(kind), kindWord(kind), group, declarationData(analysis, symbol)
+  const checker = analysis.checked.checker
+  const kind = checker.symbolAt(symbol).kind
+  const deprecated = deprecationOfSymbol(checker, symbol).isSome()
+  item name, itemKindOf(kind), kindWord(kind), group, declarationData(analysis, symbol), deprecated: deprecated
 }
 
 fn memberItem(analysis: Analysis, name: String, kind: CandidateKind, detail: String): JsonValue {
@@ -206,7 +223,11 @@ fn memberItem(analysis: Analysis, name: String, kind: CandidateKind, detail: Str
     Some(found) => declarationData analysis, found
     None => None
   }
-  item name, itemKind, detail, "0", data
+  const deprecated = match symbol {
+    Some(found) => deprecationOfSymbol(analysis.checked.checker, found).isSome()
+    None => false
+  }
+  item name, itemKind, detail, "0", data, deprecated: deprecated
 }
 
 /**

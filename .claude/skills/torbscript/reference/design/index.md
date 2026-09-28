@@ -32,6 +32,7 @@ documents:
   - PANICS.md
   - FLAGS.md
   - CLOSED-TRAITS.md
+  - DEPRECATION.md
   - TEXT-FORMATS.md
   - RANDOM.md
   - CLI.md
@@ -98,6 +99,7 @@ the reasons behind a decision that no longer needs a whole record, which belong 
 - **Panics**
 - **Cases with Fixed Values and Flags**
 - **Closed Traits: Every Case Is a Type**
+- **Deprecation**
 - **YAML, Regular Expressions and Markdown**
 - **Random Numbers**
 - **Command Lines**

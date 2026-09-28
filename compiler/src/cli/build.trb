@@ -46,7 +46,7 @@ use findCompilerSources from "../project/toolchain"
 use scriptHostObjectOf, programSourcesOf, hostedStandardLibraryOf from "./host"
 use manifestOfProject from "../vm/manifest"
 use Clock from "std/time"
-use counted, printDiagnostic, printProblem, printErrorMessage, printProblemCount from "./render"
+use counted, printDiagnostic, printDiagnosticAs, printProblem, printErrorMessage, printProblemCount from "./render"
 
 /**
  * How a program is built: how hard the C compiler optimizes the one C file. The C itself is the same under every
@@ -180,6 +180,10 @@ public fn buildTree(tree: SourceTree, requested: List<String>, options: BuildOpt
   if reported > 0 {
     printError "{counted(reported, "problem")}, nothing was built"
     return buildFailedCode
+  }
+  // `torb build` says what it found and builds anyway; `torb run` and `torb test` keep their output the program's
+  if options.saysWhatItWrote {
+    const _ = printWarnings checked
   }
   if options.testing {
     const modules = match entryModulesOf(checked, tree, options) {
@@ -518,6 +522,26 @@ public fn reportChecked(checked: Checked): Int {
     }
   }
   problems
+}
+
+/**
+ * The warnings of the files the front end checked - every use of a deprecated declaration - on standard error, the way
+ * `torb check` renders them, and how many there were. A warning never stops a build.
+ */
+public fn printWarnings(checked: Checked): Int {
+  var count = 0
+  for file in checked.files {
+    if file.warnings.isEmpty() {
+      continue
+    }
+    count = count + file.warnings.length()
+    const lines = LineIndex.of file.text
+    for warning in file.warnings {
+      printDiagnosticAs warning.severity.word(), file.path, lines, warning
+      printError ""
+    }
+  }
+  count
 }
 
 /**

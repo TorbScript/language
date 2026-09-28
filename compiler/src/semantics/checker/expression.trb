@@ -18,6 +18,7 @@ use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral, T
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
+use methodBehindField from "./member"
 use boundMember, dispatchOfBound from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterateSourceOf from "./implementation"
 use fallibleFailuresOf, appliedTraitsOf, appliedArgumentsOf, fitsType, memberOfImplementation from "./implementation"
@@ -186,17 +187,21 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
 
 /**
  * A name or a member path, read as a value or as the callee of a call. One function for both, because `p.area` and
- * `p.area()` ask the very same question and only do different things with the answer.
+ * `p.area()` ask the very same question and only do different things with the answer. `calls` says it is a callee,
+ * which decides the one member name that means two things: a deprecated field and the method that replaces it.
  */
 public fn resolveTarget(
   var checker: Checker,
   expression: Expression,
   expected: TypeId?,
   explicit: List<TypeId> = [],
+  calls: Bool = false,
 ): Target {
   match expression.kind {
     .Name(text) => resolveName checker, text, expression.span, expected, explicit
-    .Member(target, name, isOptional) => memberTarget checker, target, name.text, name.span, isOptional, explicit
+    .Member(target, name, isOptional) => {
+      memberTarget checker, target, name.text, name.span, isOptional, explicit, calls: calls
+    }
     .ImplicitMember(name) => implicitMemberTarget checker, name.text, expected, expression.span
     // `List<Int>.of(1)`, `value.to<Set<Int>>()`: which parameters the type arguments fill is only known now
     .Generic(inner, references) => {
@@ -256,6 +261,7 @@ fn memberTarget(
   at: Span,
   isOptional: Bool,
   explicit: List<TypeId>,
+  calls: Bool = false,
 ): Target {
   const owner = resolveTarget checker, base, expected: None
   checker.resolved base.span, owner.resolution
@@ -301,7 +307,10 @@ fn memberTarget(
   }
   const receiver = owner.type
   match lookupMember(checker, receiver, text, at) {
-    Some(candidate) => {
+    Some(found) => {
+      // `point.x()` where the deprecated field `x` stands beside the method `x()` that replaces it
+      const behind = if calls { methodBehindField checker, receiver, found, text } else { None }
+      const candidate = behind ?? found
       recordDelegation checker, at, candidate
       requireObjectSafe checker, receiver, candidate, text, at
       const found = targetOfCandidate checker, candidate, text

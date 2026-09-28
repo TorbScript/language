@@ -26,6 +26,7 @@ use lintFindingsOf from "../lint/command"
 use labeledLiteralFindings from "../lint/labeled-literal"
 use redundantWrapFindings from "../lint/redundant-wrap"
 use plainBindingStarts from "../lint/plain-values"
+use deprecatedFindings from "../lint/deprecated"
 use Analysis, analyzeBodies, bodyFactsOf from "./analysis"
 use SpanMapping, mappingBetween from "./mapping"
 
@@ -219,6 +220,26 @@ public fn documentFindings(view: DocumentView, current: Front, clean: Bool): Lis
   }
   const plain = if clean { Some view.plainStarts() } else { None }
   var findings = lintFindingsOf shape.source.text, shape.file, everyLintRule(), plain
+  // A use of a deprecated declaration is a name the checker resolved, which it does in a file with a problem too
+  if const Some(earlier) = view.base.moduleOf(view.path) {
+    for finding in deprecatedFindings(view.base.checked, earlier) {
+      if view.mapping.touchesChangedEarlier(finding.span) {
+        continue
+      }
+      if const Some(moved) = movedFinding(finding, view.mapping) {
+        findings.append moved
+      }
+    }
+  }
+  if const Some(changed) = view.overlay {
+    if const Some(now) = changed.moduleOf(view.path) {
+      for finding in deprecatedFindings(changed.checked, now) {
+        if view.mapping.isInsideChanged(finding.span) {
+          findings.append finding
+        }
+      }
+    }
+  }
   if clean {
     if const Some(earlier) = view.base.moduleOf(view.path) {
       const checker = view.base.checked.checker
