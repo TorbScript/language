@@ -188,6 +188,14 @@ torb-0.4.0-linux-x64/
 - **The Agent Skill** (`torb docs skill`) is published as its own archive on torb.dev, not inside the toolchain: it is
   documentation, and an agent installs it where its harness reads skills.
 - **Nothing else.** No bundled editor, no documentation in the archive (torb.dev has every version), no C compiler.
+- **The Windows `torb.exe` carries the Orb and its version** (docs/design/BRAND.md section 11, "Binary icons"):
+  `tools/windows/torb.rc` names `brand/icons/torb.ico` and the product name TorbScript, and `tools/windows/resource.sh`
+  compiles it with the version of `project.trb` into an object file. The release step of `.forgejo/actions/portable`
+  compiles the bootstrap's `program.c` again with that object linked (`TORB_OBJECTS` of `tools/build-seed.sh`), so
+  the bootstrap, its fixpoint - which compares the C - and every program `torb build` writes stay without it. The
+  resource compiler is GNU `windres`, which MSYS2's gcc brings on the Windows runner; without one the binary ships
+  without its icon and the step warns. A program built with `torb build` gets no TorbScript icon: it belongs to its
+  author.
 
 ### The C compiler
 

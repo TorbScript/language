@@ -4,8 +4,8 @@
 than the first draft's; carmine `#D4002D` with the palette of section 4; Chivo and Chivo Mono; the depth gradient as
 the primary form of the mark; a red button only for the main call to action. The logo files, the icons, the social card
 and the tokens are in `brand/` (`brand/README.md` lists every file). The VS Code extension carries the icons and the
-walkthrough (section 11); its two colour themes, the website, the registry, the forge's theme and the colours of
-`torb`'s output are the slices of section 13 still to come.
+walkthrough, and the released Windows `torb.exe` the Orb (section 11); the extension's two colour themes, the website,
+the registry, the forge's theme and the colours of `torb`'s output are the slices of section 13 still to come.
 
 **One mark, one red, one type family, and every value a named token.** The identity has to look like the language it
 stands for: one clear shape instead of several, exact about where things change, confident without effects.
@@ -646,9 +646,9 @@ white are ground colours in the light scheme, black in the dark one.
 
 ### Binary icons
 
-- **Windows:** `brand/icons/torb.ico` (16, 24, 32, 48 px as bitmaps, 256 px as PNG) embedded in `torb.exe` as a
-  resource. The installer writes
-  `brand/icons/file-icon.ico` as the `DefaultIcon` of `.trb`.
+- **Windows:** `brand/icons/torb.ico` (16, 24, 32, 48 px as bitmaps, 256 px as PNG) embedded in the released
+  `torb.exe` as a resource, with the product name and the version (`tools/windows/torb.rc`, RELEASE.md section 4).
+  The installer is to write `brand/icons/file-icon.ico` as the `DefaultIcon` of `.trb`; it does not yet.
 - **macOS:** an `.icns` from `brand/icons/app-icon-tile.svg` (16 to 1024 px, @1x and @2x); for Icon Composer two flat
   layers (the gradient square and the paper mark), with a dark variant of ink with the carmine mark. No glass or glow of
   our own.
@@ -679,7 +679,7 @@ from it, never one SVG edited alone.
 2. **The registry:** the same shell and the package page of section 11.
 3. **The forge's theme:** the two CSS files, `app.ini`, logo and favicon on git.torb.dev.
 4. **`torb`'s colours:** the rules of section 10, in `compiler/src/cli/render.trb` and the summary lines, with a
-   `--color` flag; `torb.ico` as a resource of `torb.exe`.
+   `--color` flag; `torb.ico` as a resource of `torb.exe` (done).
 5. **The VS Code extension:** the icons and the walkthrough (done), the two themes.
 
 ## 14. Open

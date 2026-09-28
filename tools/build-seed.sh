@@ -16,6 +16,9 @@
 # script is in, which is how `sh build.sh` inside an unpacked seed archive works. The output is `<seed directory>/torb`
 # unless it is named; a C compiler on Windows appends `.exe`.
 #
+# `$TORB_OBJECTS` adds object files to the link: the release links the icon and the version of the Windows `torb.exe`
+# this way (tools/windows/resource.sh), and nothing else passes any.
+#
 # `$TORB_CC` picks the compiler (default: clang, gcc, cc - the order `torb build` uses), `$TORB_CFLAGS` adds flags. The
 # compile runs inside one of the machine-wide build slots of `tools/build-slot.sh` where that script is found beside
 # this one, because the C is about 100 MB and one `cc1` over it takes 1.5 to 2 GB.
@@ -117,13 +120,13 @@ slot="$here/build-slot.sh"
 # shellcheck disable=SC2086
 if [ -f "$slot" ]; then
   if ! sh "$slot" "$log" "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} $hosting -I "$runtime/include" -o "$output" \
-    "$seed/program.c" $sources $threads -lm; then
+    "$seed/program.c" $sources ${TORB_OBJECTS-} $threads -lm; then
     cat "$log" >&2
     fail "the C compiler could not build $seed/program.c"
   fi
 else
   if ! "$compiler" -std=c11 -O2 -g0 ${TORB_CFLAGS-} $hosting -I "$runtime/include" -o "$output" \
-    "$seed/program.c" $sources $threads -lm >"$log" 2>&1; then
+    "$seed/program.c" $sources ${TORB_OBJECTS-} $threads -lm >"$log" 2>&1; then
     cat "$log" >&2
     fail "the C compiler could not build $seed/program.c"
   fi

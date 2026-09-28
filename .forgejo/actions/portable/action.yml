@@ -71,12 +71,30 @@ runs:
         fi
 
     - name: The release binary (the bootstrapped one)
-      if: inputs.package == 'true' && !startsWith(inputs.target, 'linux-')
+      if: inputs.package == 'true' && inputs.target == 'macos-arm64'
       shell: bash
       run: |
         mkdir -p build/dist-binary
         cp build/release/torb* build/dist-binary/
         rm -f build/dist-binary/*.old-*
+
+    # The bootstrap's C compiled again with the Orb and the version of project.trb linked in (tools/windows/torb.rc):
+    # the fixpoint compared that C and never a binary, and no other build links the resource
+    - name: The release binary (Windows, with its icon and version)
+      if: inputs.package == 'true' && inputs.target == 'windows-x64'
+      shell: bash
+      run: |
+        mkdir -p build/dist-binary
+        if sh tools/windows/resource.sh build/torb-resource.o; then
+          TORB_OBJECTS=build/torb-resource.o sh tools/build-seed.sh build/release build/dist-binary/torb
+          objdump -h build/dist-binary/torb.exe | grep -q '\.rsrc' || {
+            echo "::error::torb.exe has no resource section"
+            exit 1
+          }
+        else
+          echo "::warning::no resource compiler (windres): torb.exe ships without its icon and version"
+          cp build/release/torb.exe build/dist-binary/
+        fi
 
     - name: Only system libraries (Windows)
       if: inputs.package == 'true' && inputs.target == 'windows-x64'
