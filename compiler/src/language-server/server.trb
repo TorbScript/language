@@ -29,6 +29,7 @@ use definitionOf from "./definition"
 use completionContextOf, memberCompletion, nameCompletion, withoutMemberAccess from "./completion"
 use semanticTokensOf, tokenTypes, tokenModifiers from "./tokens"
 use codeActionsOf from "./actions"
+use testTreeOf from "./test-tree"
 use languageVersion from "../package/version"
 
 /** Where the server is in the life cycle the protocol prescribes. */
@@ -177,6 +178,8 @@ public type LanguageServer {
         respond id, result
       }
       "textDocument/codeAction" => codeActions id, parameters
+      // Of this server's own, and `experimental` in the capabilities says so: the tests of a file, for an editor
+      "torbscript/tests" => respond id, testsOf(parameters)
       _ => respondError(id, -32601, "`{method}` is not a request this server answers")
     }
   }
@@ -228,6 +231,8 @@ public type LanguageServer {
       ("completionProvider", object([("triggerCharacters", array([text(".")]))])),
       ("semanticTokensProvider", object([("legend", legend), ("full", JsonValue.Bool(true))])),
       ("codeActionProvider", object([("codeActionKinds", array([text("quickfix")]))])),
+      // The requests of this server's own: `torbscript/tests`
+      ("experimental", object([("tests", JsonValue.Bool(true))])),
     ])
   }
 
@@ -488,6 +493,36 @@ public type LanguageServer {
     const from = lines.offsetOf range.start
     const to = lines.offsetOf range.end
     respond id, codeActionsOf(findings.get(document.path) ?? [], document, from, to)
+  }
+
+  /**
+   * `torbscript/tests`: the tests and groups of a file (`./test-tree`), from the text the client holds where it opened
+   * the document and from the disk where it did not - a parse, and no run of the checker. A URI that is no file, or a
+   * file that cannot be read, has none: the answer is an empty array and never an error.
+   */
+  private fn testsOf(parameters: JsonValue): JsonValue {
+    const path = match locations.pathOf(textAt(parameters, ["textDocument", "uri"]) ?? "") {
+      Some(found) => found
+      None => {
+        return array([])
+      }
+    }
+    const source: String? = match documents.get(path) {
+      Some(document) => document.text
+      None => textOnDisk path
+    }
+    match source {
+      Some(found) => testTreeOf found
+      None => array([])
+    }
+  }
+
+  /** What the disk holds now, and not what the tree read of it before; a tree built in memory is its own disk. */
+  private fn textOnDisk(path: String): String? {
+    if readsDisk {
+      return File.readText(path).ok()
+    }
+    tree?.text(path)
   }
 
   /** The open document a request names. */

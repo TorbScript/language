@@ -1,0 +1,227 @@
+/**
+ * `torbscript/tests`: the tests and groups of a file as its syntax tree has them, for the list of tests of an editor. A
+ * parse and nothing else - the checker does not run - so an editor can ask for every test file of the workspace when it
+ * starts, the ones nobody opened among them.
+ *
+ * A test is a call of `test` or `group` in any style - `test "name" { ... }`, `test("name") { ... }`,
+ * `test("name", { ... })` - whose callee is that bare name and whose first argument is a string literal without
+ * interpolation. The calls are looked for in every statement and expression of the file, closures and the bodies of
+ * `if`, `for` and `while` included; what is inside the arguments of a `group` are its children, and the body of a `test`
+ * is not searched. A call whose name is interpolated or no literal at all is left out with everything inside it: the
+ * name it has is known only when it runs, and the report of the run names it (`torb test --report json`).
+ *
+ * The body of a function the file declares is not searched either: which group its tests belong to is decided where it
+ * is called, which a parse does not know.
+ */
+
+use JsonValue from "std/json"
+use Span, SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use Statement, StatementKind, DeclarationKind, Condition, Expression, ExpressionKind, Argument from "../syntax/ast"
+use LineMap from "./position"
+use object, text, array from "./json"
+use rangeJson from "./diagnostics"
+
+/** A call of `test` or of `group`, with the tests and groups inside of a group. */
+public type TestItem {
+  /** `test` or `group`: the name the call calls */
+  kind: String
+  /** What the string literal reads, its escapes decoded: the name the report of the run prints */
+  name: String
+  /** The whole call, from the callee to the end of its closure */
+  span: Span
+  /** The string literal of the name, its quotes included */
+  nameSpan: Span
+  /** In source order; always empty for a `test` */
+  children: List<TestItem> = []
+}
+
+/** The tests and groups of a text, in source order. */
+public fn testItemsOf(source: String): List<TestItem> {
+  const parsed = parse SourceText.of(source)
+  var items: List<TestItem> = []
+  collectStatements items, parsed.file.statements
+  items
+}
+
+/**
+ * The answer of `torbscript/tests` for a text: an array of `{kind, name, range, selectionRange, children}`, each range in
+ * the positions of the protocol.
+ */
+public fn testTreeOf(source: String): JsonValue {
+  const lines = LineMap.of source
+  array(testItemsOf(source).map({ itemJson _, lines }).toList())
+}
+
+fn itemJson(item: TestItem, lines: LineMap): JsonValue {
+  object([
+    ("kind", text(item.kind)),
+    ("name", text(item.name)),
+    ("range", rangeJson(lines.rangeOf(item.span))),
+    ("selectionRange", rangeJson(lines.rangeOf(item.nameSpan))),
+    ("children", array(item.children.map({ itemJson _, lines }).toList())),
+  ])
+}
+
+fn collectStatements(var items: List<TestItem>, statements: List<Statement>) {
+  for statement in statements {
+    collectStatement items, statement
+  }
+}
+
+fn collectStatement(var items: List<TestItem>, statement: Statement) {
+  match statement.kind {
+    // A constant of the module is an expression like any other; the body of a function is placed where it is called
+    .Declare(declaration) => {
+      match declaration.kind {
+        .Constant(binding) => collect items, binding.value
+        _ => {}
+      }
+    }
+    .Bind(binding) => collect items, binding.value
+    .Assign(target, value) => {
+      collect items, target
+      collect items, value
+    }
+    .For(_, iterable, body) => {
+      collect items, iterable
+      collectStatements items, body.statements
+    }
+    .While(condition, body) => {
+      collectCondition items, condition
+      collectStatements items, body.statements
+    }
+    .Loop(body) => collectStatements items, body.statements
+    .Return(value) => {
+      if const Some(inner) = value {
+        collect items, inner
+      }
+    }
+    .Break | .Continue => {}
+    .Evaluate(expression) => collect items, expression
+  }
+}
+
+fn collectCondition(var items: List<TestItem>, condition: Condition) {
+  match condition {
+    .Test(expression) => collect items, expression
+    .Bind(_, _, value) => collect items, value
+  }
+}
+
+fn collectArguments(var items: List<TestItem>, arguments: List<Argument>) {
+  for argument in arguments {
+    collect items, argument.value
+  }
+}
+
+fn collect(var items: List<TestItem>, expression: Expression) {
+  match expression.kind {
+    .Call(callee, arguments, _) => {
+      match callee.kind {
+        .Name(called) if called == "test" || called == "group" => collectTest items, called, expression.span, arguments
+        _ => {
+          collect items, callee
+          collectArguments items, arguments
+        }
+      }
+    }
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .VoidLiteral | .CharLiteral(_) => {}
+    .Name(_) | .ImplicitMember(_) | .Invalid => {}
+    .TextLiteral(segments) => {
+      for segment in segments {
+        match segment {
+          .Interpolated(inner) => collect items, inner
+          .Literal(_) => {}
+        }
+      }
+    }
+    .Generic(target, _) => collect items, target
+    .TupleLiteral(elements) | .ListLiteral(elements) => collectArguments items, elements
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        collect items, key
+        collect items, value
+      }
+    }
+    .Member(target, _, _) => collect items, target
+    .Index(target, index) => {
+      collect items, target
+      collect items, index
+    }
+    .Unary(_, operand) => collect items, operand
+    .Binary(_, left, right) => {
+      collect items, left
+      collect items, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(inner) = start {
+        collect items, inner
+      }
+      if const Some(inner) = end {
+        collect items, inner
+      }
+    }
+    .Try(inner) => collect items, inner
+    .Closure(closure) => collectStatements items, closure.body.statements
+    .If(condition, then, otherwise) => {
+      collectCondition items, condition
+      collectStatements items, then.statements
+      if const Some(inner) = otherwise {
+        collect items, inner
+      }
+    }
+    .Match(subject, arms) => {
+      collect items, subject
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          collect items, guard
+        }
+        collect items, arm.body
+      }
+    }
+    .Block(block) => collectStatements items, block.statements
+  }
+}
+
+/** A call of `test` or `group`: an item where its name is a literal, and nothing at all where it is not. */
+fn collectTest(var items: List<TestItem>, kind: String, span: Span, arguments: List<Argument>) {
+  const first = match arguments.first() {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const name = match literalOf(first.value) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  var children: List<TestItem> = []
+  if kind == "group" {
+    collectArguments children, arguments.skip(1).toList()
+  }
+  items.append TestItem(kind, name, span, first.value.span, children)
+}
+
+/** What a string literal without interpolation reads; `None` for an interpolated one and for any other expression. */
+fn literalOf(expression: Expression): String? {
+  const segments = match expression.kind {
+    .TextLiteral(found) => found
+    _ => {
+      return None
+    }
+  }
+  var read = ""
+  for segment in segments {
+    const part = match segment {
+      .Literal(found) => found
+      .Interpolated(_) => {
+        return None
+      }
+    }
+    read = read + part
+  }
+  read
+}

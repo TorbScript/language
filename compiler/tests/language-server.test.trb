@@ -17,6 +17,7 @@ use LineMap, Position from "../src/language-server/position"
 use Locations, absolutePathOf, fileUriOf from "../src/language-server/uri"
 use completionContextOf, CompletionContext, withoutMemberAccess from "../src/language-server/completion"
 use outlineOf from "../src/language-server/analysis"
+use TestItem, testItemsOf, testTreeOf from "../src/language-server/test-tree"
 use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
 
@@ -478,5 +479,87 @@ group "Quick fixes" {
       encoded(JsonValue.Array(edits)),
       "[\{\"range\":\{\"start\":\{\"line\":3,\"character\":22\},\"end\":\{\"line\":3,\"character\":27\}\},\"newText\":\"Self\"\}]",
     )
+  }
+}
+
+/** The tests and groups of a text on one line: `group Outer [test adds [], group Inner []]`. */
+fn writtenTests(items: List<TestItem>): String {
+  items.map({ item => "{item.kind} {item.name} [{writtenTests(item.children)}]" }).toList().joined(separator: ", ")
+}
+
+/** A request of `torbscript/tests` for the document at `uri`. */
+fn testsRequest(id: Int, uri: String): String {
+  message "torbscript/tests", "\{\"textDocument\":\{\"uri\":\"{uri}\"\}\}", id
+}
+
+/** The names of the top level of the answer to the request with this id among the messages the server sent. */
+fn testNamesOf(answers: List<JsonValue>, id: Int): List<String> {
+  const answer = answers.find({ integerAt(_, ["id"]) == id }) ?? JsonValue.Null
+  itemsAt(answer, ["result"]).map({ textAt(_, ["name"]) ?? "" }).toList()
+}
+
+group "The tests of a file" {
+  test "`initialize` says the server answers `torbscript/tests`" {
+    var server = LanguageServer.over workspaceWith([:]), root
+    expectContains encoded(only(server, [initialize])), "\"experimental\":\{\"tests\":true\}"
+  }
+
+  test "every style of call, a group with its children, and a name that is no literal left out" {
+    const source = raw"""
+      use test, group from "std/test"
+
+      group "Outer" {
+        test "adds" {
+          assert(1 + 1 == 2)
+        }
+
+        group("Inner") {
+          test("in parentheses", { assert(true) })
+        }
+
+        const count = 2
+        test "counted {count}" {
+          assert(true)
+        }
+      }
+
+      for index in [1, 2] {
+        if index > 0 {
+          test "in a loop" {
+            test "inside of a test" { assert(true) }
+          }
+        }
+      }
+
+      fn helper() {
+        test "in a function" { assert(true) }
+      }
+
+      test "escaped \"quotes\"" { assert(true) }
+      """
+    const expected = "group Outer [test adds [], group Inner [test in parentheses []]], test in a loop [], test escaped \"quotes\" []"
+    expectText writtenTests(testItemsOf(source)), expected
+  }
+
+  test "the range is the whole call and the selection its name, both in UTF-16" {
+    const source = "group \"Größe\" \{\n  test \"日本 😀\" \{ assert(true) \}\n\}\n"
+    const inner = "\{\"kind\":\"test\",\"name\":\"日本 😀\",\"range\":\{\"start\":\{\"line\":1,\"character\":2\},\"end\":\{\"line\":1,\"character\":31\}\},\"selectionRange\":\{\"start\":\{\"line\":1,\"character\":7\},\"end\":\{\"line\":1,\"character\":14\}\},\"children\":[]\}"
+    const outer = "\{\"kind\":\"group\",\"name\":\"Größe\",\"range\":\{\"start\":\{\"line\":0,\"character\":0\},\"end\":\{\"line\":2,\"character\":1\}\},\"selectionRange\":\{\"start\":\{\"line\":0,\"character\":6\},\"end\":\{\"line\":0,\"character\":13\}\},\"children\":[{inner}]\}"
+    expectText encoded(testTreeOf(source)), "[{outer}]"
+  }
+
+  test "the request answers from the open document, from the file otherwise, and `[]` where there is none" {
+    const testUri = "file:///workspace/app/tests/math.test.trb"
+    const onDisk = "use test from \"std/test\"\n\ntest \"on disk\" \{\n  assert(true)\n\}\n"
+    var server = started(["app/tests/math.test.trb": onDisk])
+    const fromFile = testNamesOf send(server, [testsRequest(2, testUri)]), 2
+    assert(fromFile == ["on disk"])
+    const open = "use test from \"std/test\"\n\ntest \"open\" \{\n  assert(true)\n\}\n"
+    const fromDocument = testNamesOf send(server, [opened(testUri, open), testsRequest(3, testUri)]), 3
+    assert(fromDocument == ["open"])
+    const missing = only server, [testsRequest(4, "file:///workspace/app/tests/missing.test.trb")]
+    expectText encoded(memberAt(missing, ["result"]) ?? JsonValue.Null), "[]"
+    const untitled = only server, [testsRequest(5, "untitled:Untitled-1")]
+    expectText encoded(memberAt(untitled, ["result"]) ?? JsonValue.Null), "[]"
   }
 }
