@@ -1,0 +1,98 @@
+/**
+ * The capability table of a target (`compiler/src/project/capability.trb`) and where the VM enforces it
+ * (`missingCapabilitiesOf` of `compiler/src/vm/run.trb`): a machine has every package, and in the browser - the
+ * playground's target - the processes and the network are missing, the file system is simulated, and an import of a
+ * missing package in a file of the program is an error at the import.
+ */
+
+use test, group from "std/test"
+use check from "../src/semantics/check"
+use Capability, capabilityOf, standardPackageOf from "../src/project/capability"
+use BuildTarget, TargetSystem, TargetArchitecture, everyTarget, targetNamed from "../src/project/target"
+use missingCapabilitiesOf from "../src/vm/run"
+use workspaceWith from "./harness"
+
+const browser = BuildTarget TargetSystem.Browser, TargetArchitecture.Wasm64
+const linux = BuildTarget TargetSystem.Linux, TargetArchitecture.X64
+
+const packages = ["std/process", "std/network", "std/dns", "std/http", "std/tls", "std/fs", "std/json", "std/time"]
+
+fn kindOf(capability: Capability): String {
+  match capability {
+    .Real => "real"
+    .Simulated(_) => "simulated"
+    .Missing(_) => "missing"
+  }
+}
+
+/** The messages of what the VM refuses in a program of one file, built for `target`. */
+fn refusedIn(source: String, target: BuildTarget): List<String> {
+  const checked = check workspaceWith(["app/src/main.trb": source]), ["app"], withTimings: false
+  var messages: List<String> = []
+  for missing in missingCapabilitiesOf(checked, target) {
+    messages.append missing.diagnostic.message
+  }
+  messages
+}
+
+group "The capabilities of a target" {
+  test "every machine has every package" {
+    for target in everyTarget() {
+      if target.system == TargetSystem.Browser {
+        continue
+      }
+      for package in packages {
+        assert(capabilityOf(target, package) == Capability.Real)
+      }
+    }
+  }
+
+  test "the browser starts no processes, has no network, and keeps its files in memory" {
+    for package in ["std/process", "std/network", "std/dns", "std/http", "std/tls"] {
+      assert(kindOf(capabilityOf(browser, package)) == "missing")
+    }
+    assert(kindOf(capabilityOf(browser, "std/fs")) == "simulated")
+    assert(kindOf(capabilityOf(browser, "std/json")) == "real")
+  }
+
+  test "the package of an import is its first two segments below std" {
+    assert(standardPackageOf("std/fs") == "std/fs")
+    assert(standardPackageOf("std/os/windows/native") == "std/os")
+    assert(standardPackageOf("./helpers") == None)
+    assert(standardPackageOf("acme/http") == None)
+  }
+
+  test "browser-wasm64 is a target of the toolchain" {
+    assert(targetNamed("browser-wasm64") == browser)
+    assert(targetNamed("browser-x64") == None)
+    assert everyTarget().contains(browser)
+  }
+}
+
+group "An import the target does not have" {
+  const importsProcess = raw"""
+    use Process from "std/process"
+    use File from "std/fs"
+
+    print Process.arguments()
+    """
+
+  test "is an error at the import in the browser" {
+    const expected = "`std/process` does not exist in the browser: a program in the browser starts no processes"
+    assert(refusedIn(importsProcess, browser) == [expected])
+  }
+
+  test "is nothing on a machine" {
+    assert refusedIn(importsProcess, linux).isEmpty()
+  }
+
+  test "names every missing package once" {
+    const source = raw"""
+      use Http from "std/http"
+      use Socket from "std/network/socket"
+
+      print 1
+      """
+    assert(refusedIn(source, browser).length() == 2)
+  }
+}

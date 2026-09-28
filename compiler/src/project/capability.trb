@@ -1,0 +1,62 @@
+/**
+ * The capability table of a target (docs/design/JAVASCRIPT-AND-PHP.md section 2): what each package of `std` that
+ * reaches outside of the program is on a target - real, simulated over something else, or missing, and then an import
+ * of it is an error at the import.
+ *
+ * Every machine has every capability. The browser, where the playground's `torb` runs a program in its VM
+ * (docs/design/RELEASE.md section 6), prints and reads the clock for real, keeps `std/fs` in memory, and starts no
+ * process and has no network.
+ */
+
+use BuildTarget from "./target"
+
+/** What a package is on one target. */
+public type Capability with Equals {
+  /** The package does what it does on a machine. */
+  case Real
+  /** The package works, over something other than a machine: `how` says over what. */
+  case Simulated(how: String)
+  /** The target has no such thing, and importing the package is an error: `why` says what is missing. */
+  case Missing(why: String)
+}
+
+/**
+ * What `package` (`std/fs`, never a module below it) is on `target`.
+ *
+ * # Examples
+ *
+ *     use BuildTarget, TargetSystem, TargetArchitecture from "./target"
+ *
+ *     print(capabilityOf(BuildTarget(.Browser, .Wasm64), "std/process") != Capability.Real)
+ */
+public fn capabilityOf(target: BuildTarget, package: String): Capability {
+  match target.system {
+    .Windows | .Linux | .MacOs | .FreeBsd => Capability.Real
+    .Browser => browserCapabilityOf package
+  }
+}
+
+fn browserCapabilityOf(package: String): Capability {
+  match package {
+    "std/process" => Capability.Missing "a program in the browser starts no processes"
+    "std/network" | "std/dns" | "std/http" | "std/tls" => Capability.Missing "a program in the browser has no network"
+    "std/fs" => Capability.Simulated "a file system in memory, which is empty when the program starts"
+    _ => Capability.Real
+  }
+}
+
+/**
+ * The package of `std` a `use` path names: `std/fs` of `"std/fs"` and of `"std/fs/metadata"`. `None` for a relative
+ * path and for a package outside of `std`, which reaches the system only through the packages of `std`.
+ *
+ * # Examples
+ *
+ *     print(standardPackageOf("std/os/windows/native") == "std/os")
+ */
+public fn standardPackageOf(path: String): String? {
+  const segments = path.split("/").toList()
+  if segments.length() < 2 || segments[0] != "std" {
+    return None
+  }
+  "std/{segments[1]}"
+}

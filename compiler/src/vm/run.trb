@@ -21,7 +21,10 @@ use checkBodiesOf from "../semantics/checker/check"
 use insertOwnership from "../ir/ownership"
 use verifyOwnedProgram from "../ir/ownership-verify"
 use lowerWorkspace, lowerScripts, pathsOfModules, isLowered from "../ir/lower/lower"
-use hostTarget from "../project/target"
+use BuildTarget, hostTarget from "../project/target"
+use capabilityOf, standardPackageOf from "../project/capability"
+use Diagnostic from "../syntax/diagnostic"
+use Statement from "../syntax/ast"
 use entryNameOf from "../ir/lower/function"
 use printDiagnostic, printProblem, printErrorMessage from "../cli/render"
 use emitBytecode from "../backend/bytecode/emit"
@@ -60,6 +63,9 @@ public fn runInMachine(
   }
   clock.lap "checking"
   if reportChecked(checked) > 0 {
+    return refusedCode
+  }
+  if reportMissingCapabilities(checked, hostTarget()) > 0 {
     return refusedCode
   }
   const options = BuildOptions([path], program: program, command: "run")
@@ -540,6 +546,61 @@ public fn importsOf(checked: Checked, module: ModuleId): String {
     }
   }
   found.joined separator: "\n"
+}
+
+/**
+ * Every import, in a file of the program, of a package of `std` the target does not have ([capabilityOf]): the VM
+ * compiles a program for the machine it runs on, and in the playground that is the browser, where an import of
+ * `std/process` is an error at the import. The packages of `std` are not asked - the toolchain compiles them for the
+ * target - and no machine misses a capability.
+ */
+public fn missingCapabilitiesOf(checked: Checked, target: BuildTarget): List<MissingCapability> {
+  var found: List<MissingCapability> = []
+  const workspace = checked.program.workspace
+  for module in checked.program.graph.modules {
+    if workspace.packages[module.package].name.startsWith("std/") {
+      continue
+    }
+    for statement in module.file.statements {
+      const path = importPathOf(statement) ?? ""
+      const package = standardPackageOf(path) ?? ""
+      if const .Missing(why) = capabilityOf(target, package) {
+        const message = "`{package}` does not exist in {target.system.displayName()}: {why}"
+        const note = "The playground runs a program in the browser: printing and the clock are real, `std/fs` is in memory"
+        found.append MissingCapability(module.id, Diagnostic.error(message, statement.span).withNote(note))
+      }
+    }
+  }
+  found
+}
+
+/** An import [missingCapabilitiesOf] refuses: the module it is written in, and the error at it. */
+public type MissingCapability {
+  module: ModuleId
+  diagnostic: Diagnostic
+}
+
+/** [missingCapabilitiesOf], rendered the way `torb check` renders a diagnostic. Answers how many there were. */
+fn reportMissingCapabilities(checked: Checked, target: BuildTarget): Int {
+  const found = missingCapabilitiesOf checked, target
+  for missing in found {
+    const module = checked.program.graph.at missing.module
+    printDiagnostic module.shownPath, LineIndex.of(module.source.text), missing.diagnostic
+    printError ""
+  }
+  found.length()
+}
+
+/** The path a `use ... from "<path>"` statement names, and `None` for any other statement. */
+fn importPathOf(statement: Statement): String? {
+  if const .Declare(declaration) = statement.kind {
+    if const .Use(written) = declaration.kind {
+      if const .Module(path) = written.source {
+        return path
+      }
+    }
+  }
+  None
 }
 
 /** Everything the front end found, rendered the way `torb check` renders it. */
