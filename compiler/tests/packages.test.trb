@@ -12,7 +12,7 @@ use requirementOf, versionsOf from "../src/package/requirement"
 use specifierOf, packageNameOf from "../src/package/specifier"
 use Candidate, resolve from "../src/package/resolve"
 use PackageIndex, IndexRelease, IndexYank, IndexRecord, readIndex, indexStart, renderRelease, renderYank, renderUnyank, recordMessage, candidatesOf from "../src/package/index"
-use RegistryKey, recordSignature, endorsed, readRegistryKeys, renderRegistryKeys, trustedKeys, verifyIndex from "../src/package/signing"
+use RegistryKey, recordSignature, endorsed, readRegistryKeys, renderRegistryKeys, trustedKeys, verifyIndex, keyOfText from "../src/package/signing"
 use Ed25519PrivateKey from "std/signature"
 use Lock, LockedPackage, LockedSettings, readLock, renderLock from "../src/package/lock"
 use Manifest from "../src/project/manifest"
@@ -22,6 +22,9 @@ use findWorkspace from "../src/project/workspace"
 use TarEntry, tarred from "std/archive"
 use gzipped from "std/compression"
 use unpacked, treeHash from "../src/package/archive"
+use RegistryLocation, FetchSettings, registryKeysOf from "../src/package/fetch"
+use shippedKeys, publicRegistry from "../src/package/registry"
+use File from "std/fs"
 
 fn parsedVersion(text: String): Version {
   Version.tryFrom(text).expect("a version")
@@ -436,6 +439,27 @@ group "Signatures of the index" {
     assert text.startsWith("// index/config.trb - written by the registry")
     const read = readRegistryKeys(text).expect("the keys")
     assert(read == listed)
+  }
+}
+
+group "The keys a client ships" {
+  test "packages.torb.dev's production key is trusted offline, without ever pinning it" {
+    const cache = File.createTemporaryDirectory(prefix: "package-fetch-test-").expect("a temporary cache")
+    const settings = FetchSettings cache: cache, offline: true
+    const trusted = registryKeysOf(RegistryLocation.Web(publicRegistry), settings).expect("the shipped keys")
+    const expected = keyOfText("ed25519:d0f14d661e7db9d83c2807b8fa2c27b034dc724f8f66ec3ad43fd5ae6d04d7c4")
+      .expect("a key")
+    assert(trusted == [expected])
+    // A registry `shippedKeys` names nothing for is trusted on first use instead - offline, and with nothing pinned
+    // yet, that is nothing at all
+    assert(registryKeysOf(RegistryLocation.Web("https://example.test"), settings) == Ok([]))
+    File.removeDirectory(cache).expect("the cache removed")
+  }
+
+  test "shippedKeys lists a key exactly as index/config.trb would carry it" {
+    for entry in shippedKeys {
+      assert keyOfText(entry.key).isOk()
+    }
   }
 }
 

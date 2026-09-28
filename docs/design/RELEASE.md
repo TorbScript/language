@@ -1023,15 +1023,18 @@ resolution that reads a hundred index files of ten records each spends about a s
 VM verifies about 20 a second.
 
 **Tested**: `compiler/tests/packages.test.trb` - the text of a record, a signed index that verifies, a changed, moved,
-appended-again or unsigned record and another key that do not, and trust along endorsements;
+appended-again or unsigned record and another key that do not, trust along endorsements, and the shipped key of
+packages.torb.dev trusted offline without ever being pinned;
 `tools/registry/tests/server.test.trb` - `index/config.trb` at the start, every record the registry wrote verifying,
 a successor announced once; `tools/registry/tests/client.test.trb` - `torb add` from the registry's files over HTTP
 pins the keys, and a changed record and a replaced list of keys are refused.
 
-**Not built**: the production key and its line in `shippedKeys` - the owner makes it when packages.torb.dev opens
-(`docs/contributing/releasing.md`, "The root server"); naming a registry's key in `project.trb` or `~/.torb/config.trb`
-instead of trusting it on first use; a command that forgets pinned keys (deleting the file under `<cache>/keys/` is the
-way); the tombstones of 7.3.
+**Built (2026-09-28)**: packages.torb.dev opened with its production key,
+`ed25519:d0f14d661e7db9d83c2807b8fa2c27b034dc724f8f66ec3ad43fd5ae6d04d7c4`, listed in `shippedKeys` of
+`compiler/src/package/registry.trb` (`docs/contributing/releasing.md`, "The root server").
+
+**Not built**: naming a registry's key in `project.trb` or `~/.torb/config.trb` instead of trusting it on first use; a
+command that forgets pinned keys (deleting the file under `<cache>/keys/` is the way); the tombstones of 7.3.
 
 ## 8. Terminology
 

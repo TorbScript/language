@@ -98,8 +98,9 @@ Everything comes from the environment (`tools/deploy/compose.example.yml` sets i
 
 ## Not built yet
 
-The production signing key does not exist yet, so no `torb` ships a key for packages.torb.dev and every client trusts
-the registry's keys on first use; accounts are created by the operator, not by signing in through GitHub, GitLab, Codeberg or a passkey; there is no second factor, no
+The production signing key ships in `shippedKeys` (`compiler/src/package/registry.trb`) since packages.torb.dev opened
+with it; accounts are created by the operator, not by signing in through GitHub, GitLab, Codeberg or a passkey; there
+is no second factor, no
 documentation worker, no search, no `deprecate`, no verified domains and no "elsewhere" owners; the similar-name rule
 does not yet compare against packages with many dependents; and `torb yank`, `torb owner` and `torb login` are not
 commands yet - the API is there for them.
