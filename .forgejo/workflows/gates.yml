@@ -111,6 +111,14 @@ jobs:
             echo "::error::the release binary is linked dynamically"
             exit 1
           fi
+          # No MMX instruction (runtime/include/torb.h): one leaves the x87 unusable, and musl formats floats on it
+          objdump -d --no-show-raw-insn build/dist-binary/torb >build/dist-binary.s
+          if grep -q '%mm[0-7]' build/dist-binary.s; then
+            echo "::error::the release binary holds MMX instructions, and its first float after them crashes it"
+            awk '/^[0-9a-f]+ <.*>:$/ { name = $2 } /%mm[0-7]/ { print name }' build/dist-binary.s | sort | uniq -c
+            exit 1
+          fi
+          rm -f build/dist-binary.s
       - name: Smoke test of the release binary
         if: inputs.package
         run: sh tools/smoke-test.sh build/dist-binary/torb
