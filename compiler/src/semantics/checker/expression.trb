@@ -310,6 +310,11 @@ fn memberTarget(
       if reportUnknownMember(checker, receiver, text, at) {
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
+      // A receiver whose type is an error already - an unknown type, a type of a module that is missing - was reported
+      // where that type is written: its members are that error too, and not a hole in the checker
+      if resolveType(checker, receiver) == checker.invalidType {
+        return Target Resolution.Deferred, checker.invalidType, name: text
+      }
       Target Resolution.Deferred, checker.deferredType, name: text
     }
   }
@@ -371,7 +376,8 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
   const candidate = match lookupMember(checker, inner, text, at) {
     Some(found) => found
     None => {
-      if reportUnknownMember(checker, inner, text, at) {
+      // `value?.size` of a `Widget?` whose `Widget` is an error already, as `memberTarget` has it
+      if reportUnknownMember(checker, inner, text, at) || resolveType(checker, inner) == checker.invalidType {
         return Target Resolution.Deferred, checker.invalidType, name: text
       }
       return Target Resolution.Deferred, checker.deferredType, name: text

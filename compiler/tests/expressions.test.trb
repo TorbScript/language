@@ -6,7 +6,7 @@
  */
 
 use test, group from "std/test"
-use probe, problems, notes from "./harness"
+use probe, problems, notes, problemsOf from "./harness"
 
 /** The source inside of a `fn probe()` body, so that an expression can be looked at without a declaration around it. */
 fn inBody(body: String): String {
@@ -435,6 +435,35 @@ group "One root cause, one message" {
     const source = "fn collect<Value>(item: Value?): List<Value> \{\n  var found: List<Value> = []\n"
       + "  if const Some(x) = item \{\n    found.add x\n  \}\n  found\n\}"
     assert(problems(source) == ["`List<Value>` has no member `add`"])
+  }
+
+  test "a member of a value whose type is an error already is that error too, and no hole of the checker" {
+    // The messages are the ones of the import and of the names: neither a call of a member nor a read of one, behind
+    // `.` or `?.`, is an expression "the checker did not work out"
+    const files = [
+      "app/src/helper.trb": raw"""
+        use Widget from "./nowhere"
+
+        public fn apply(value: Widget, argument: Int): Int {
+          value.field(argument)
+        }
+
+        public fn size(value: Widget): Int {
+          value.size
+        }
+
+        public fn maybe(value: Widget?): Int? {
+          value?.count(1)
+        }
+        """,
+      "app/src/main.trb": raw"""
+        use apply, size, maybe from "./helper"
+
+        print "x"
+        """,
+    ]
+    const unknown = "Unknown type `Widget`"
+    assert(problemsOf(files) == ["There is no module `./nowhere`", unknown, unknown, unknown])
   }
 
   test "a keyword as the name of a function is the parser's message, and the checker adds none" {

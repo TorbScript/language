@@ -98,8 +98,17 @@ public fn checkCall(
       reportUncallable checker, target, expression.span
       checker.resolved callee.span, target.resolution
       const _ = checker.typed callee.span, target.type
-      deferArguments checker, arguments
       checker.resolved expression.span, Resolution.Deferred
+      // `value.field(argument)` where the type of `value` is an error already - an unknown type, one of a module that
+      // is missing - which was reported where that type is written: every argument still gets a type, and the call is
+      // that error too, not an expression the checker did not work out
+      if hasBrokenReceiver(checker, callee) {
+        for argument in arguments {
+          const _ = inferExpression checker, argument.value
+        }
+        return checker.invalidType
+      }
+      deferArguments checker, arguments
       return checker.deferredType
     }
   }
@@ -159,6 +168,27 @@ public fn checkCall(
   checker.resolved expression.span, resolution
   recordPlan checker, expression.span, inner, plan
   resolveType checker, inner.result
+}
+
+/**
+ * Whether the callee is a member of a receiver whose type is the error type, which a message came with already - or,
+ * behind `?.`, of an `Option` of it.
+ */
+fn hasBrokenReceiver(var checker: Checker, callee: Expression): Bool {
+  const (base, isOptional) = match callee.kind {
+    .Member(target, _, optional) => (target, optional)
+    _ => {
+      return false
+    }
+  }
+  const found = match checker.expressionTypeHere(base.span) {
+    Some(annotation) => resolveType checker, annotation
+    None => {
+      return false
+    }
+  }
+  const receiver = if isOptional { optionValueOf(checker, found) ?? found } else { found }
+  resolveType(checker, receiver) == checker.invalidType
 }
 
 /**
