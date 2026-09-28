@@ -32,7 +32,7 @@ use instantiateTrait from "./instantiate"
 use instanceFor, isClosedType from "./instances"
 use newFunction, addTemporary, emit, terminate, finishFunction, setBlockLocation from "./build"
 use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
-use GenericSlot, TableSource from "./lower/context"
+use GenericSlot, TableSource, TableMember from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
 use nativeFunctionOf, needsNativeWrapper, declarationLocationOf from "./lower/native"
 use lowerTraitValue from "./lower/generic"
@@ -686,12 +686,6 @@ fn addTraitArguments(
 
 // --- What is in a table, and where -----------------------------------------------------------------------------------
 
-/** One member of a table: the declaration, and the trait that requires it - which may be a supertrait. */
-public type TableMember {
-  member: SymbolId
-  bound: TypeId
-}
-
 /**
  * The members of the table of one bound, in the order a back end indexes them: the required members the ABI can reach,
  * in declaration order, then the same of every supertrait in declaration order.
@@ -723,8 +717,15 @@ public type TableMember {
  * (BACKEND 5.6).
  */
 public fn tableMembersOf(var lowering: Lowering, bound: TypeId, subject: TypeId): List<TableMember> {
+  // Every question it asks has one answer per program: a signature, the supertraits of a bound, and which defaults
+  // the closed world overrides, which is collected once. So the members are built once per bound and subject
+  const key = (bound.value, subject.value)
+  if const Some(known) = lowering.tableMembers.get(key) {
+    return known
+  }
   var found: List<TableMember> = []
   addTableMembers lowering, found, bound, subject, 0
+  lowering.tableMembers.set key, found
   found
 }
 

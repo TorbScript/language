@@ -132,6 +132,15 @@ public type TableSource {
   implementation: ImplementationId
 }
 
+/**
+ * One member of a witness table: the declaration, and the trait that requires it - which may be a supertrait
+ * (`ir/witness.trb`, `tableMembersOf`).
+ */
+public type TableMember {
+  member: SymbolId
+  bound: TypeId
+}
+
 /** One generated member that is known to be needed and not built yet. */
 public type GeneratedRequest {
   /** The stub the worklist already added, whose body this replaces. */
@@ -336,6 +345,11 @@ public type Lowering {
    */
   var overriddenMembers: Map<SymbolId, Bool> = [:]
   var overriddenMembersAreKnown: Bool = false
+  /**
+   * The members of the table of a bound for a subject, by the ids of the two: built once each (`ir/witness.trb`,
+   * `tableMembersOf`). Every dispatched call asks for them, and building them again was a sixth of the lowering.
+   */
+  var tableMembers: Map<(Int, Int), List<TableMember>> = [:]
   /**
    * Which packages the **program** consists of, by their index in `Workspace.packages`: the roots' own, everything they
    * depend on and the prelude (`programPackagesOf` in `ir/lower/lower.trb`). Every closed-world question of the back end
