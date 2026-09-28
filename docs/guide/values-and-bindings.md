@@ -98,7 +98,8 @@ is "always a copy" and the cost is "only when it matters".
 
 ## The copy trap
 
-This is the one mistake everybody makes once, and it is the price of value semantics:
+This is the one mistake everybody makes once, and it is the price of
+[value semantics](../glossary.md#value-semantics):
 
 ```trb run
 type Counter {
