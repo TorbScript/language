@@ -16,6 +16,7 @@ native executables, and it is its own configuration format.
 | `runtime/`   | The C runtime every compiled binary links against ([runtime/README.md](runtime/README.md)) |
 | `examples/`  | Tour and example projects                                                     |
 | `tests/`     | The conformance suite and the language smoke programs ([tests/conformance/README.md](tests/conformance/README.md)) |
+| `brand/`     | The logo, the icons and the design tokens ([brand/README.md](brand/README.md), [docs/design/BRAND.md](docs/design/BRAND.md)) |
 
 ## Building
 
