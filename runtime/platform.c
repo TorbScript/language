@@ -79,7 +79,7 @@
  * `RLIMIT_AS` would count and which grows with the number of threads, not with what a program holds. FreeBSD counts
  * only `brk` against `RLIMIT_DATA` and its allocator maps, so there it is `RLIMIT_AS`. macOS enforces neither in a way
  * that fits: its address space already holds the shared cache of several GiB before `main` runs, so the runtime counts
- * its own allocations there.
+ * its own allocations there. So it does in the browser, whose WebAssembly (emscripten) has no limits of a system at all.
  */
 #  if defined(__linux__)
 #    include <malloc.h>
@@ -92,6 +92,10 @@
 #  elif defined(__APPLE__)
 #    include <malloc/malloc.h>
 #    define TORB_ALLOCATION_SIZE(block) malloc_size(block)
+#  elif defined(__EMSCRIPTEN__)
+#    include <emscripten/stack.h>
+#    include <malloc.h>
+#    define TORB_ALLOCATION_SIZE(block) malloc_usable_size(block)
 #  else
 #    define TORB_ALLOCATION_SIZE(block) ((void)(block), (size_t)0u)
 #  endif
@@ -1641,6 +1645,20 @@ void torb_platform_sleep(int64_t nanoseconds) {
   }
 }
 
+#if defined(__EMSCRIPTEN__)
+
+/**
+ * The bottom of the stack in WebAssembly, where emscripten laid it out in the linear memory: the playground's `torb`
+ * (docs/design/RELEASE.md section 6). Nothing grows it, and below it lies the program's data, so the check is what
+ * keeps a deep recursion from writing over it.
+ */
+bool torb_platform_stack_low(uintptr_t *low) {
+  *low = (uintptr_t)emscripten_stack_get_end();
+  return true;
+}
+
+#else
+
 /**
  * The bottom of the stack of the calling thread, for the main thread: the limit of `RLIMIT_STACK` below an address near
  * its top, which is how far the kernel lets that stack grow. An unlimited stack is taken as 8 MiB, the usual default -
@@ -1659,6 +1677,8 @@ bool torb_platform_stack_low(uintptr_t *low) {
   *low = (uintptr_t)&top - size;
   return true;
 }
+
+#endif
 
 /** The `argv` of `main` is what there is here, and it is bytes - which is what a path and a `String` both are. */
 bool torb_platform_arguments(torb_list *out) {
@@ -3206,10 +3226,24 @@ void torb_thread_exit(void) {
   pthread_exit(NULL);
 }
 
+#if defined(__EMSCRIPTEN__)
+
+/**
+ * One, in the browser: the playground's `torb` is built without threads, so the pool is its one worker and a program's
+ * tasks take turns on it, in the order `TORB_WORKERS=1` pins everywhere.
+ */
+uint32_t torb_platform_processor_count(void) {
+  return 1u;
+}
+
+#else
+
 uint32_t torb_platform_processor_count(void) {
   long count = sysconf(_SC_NPROCESSORS_ONLN);
   return count < 1 ? 1u : (uint32_t)count;
 }
+
+#endif
 
 void torb_platform_set_worker(torb_worker *worker) {
   torb_thread_worker = worker;
