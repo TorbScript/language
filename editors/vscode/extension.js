@@ -480,7 +480,8 @@ async function activate(context) {
   if (!context.globalState.get(WALKTHROUGH_SHOWN)) {
     await context.globalState.update(WALKTHROUGH_SHOWN, true);
     await vscode.commands.executeCommand('torbscript.openWalkthrough');
-  } else if (!toolchain.isFound()) {
+  }
+  if (!toolchain.isFound()) {
     toolchain.offerInstall();
   }
 
