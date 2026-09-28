@@ -1,27 +1,34 @@
 /**
- * A run of the checker that is taken one module at a time: a [ModuleRun] builds what every module needs once - the
- * declaration sites and the implementation index of the whole program (`preparedChecker`) - and then checks one module
- * per [ModuleRun.step], so that the language server answers the messages that arrive in between. The escapes of what
- * the bodies hand on are settled once, as the last step, as `torb check` settles them after the last module.
+ * A run of the checker that is taken a slice at a time: a [ModuleRun] builds what every module needs once - the
+ * declaration sites and the implementation index of the whole program (`preparedChecker`) - and then checks the
+ * statements of its modules for a few dozen milliseconds per [ModuleRun.step], so that the language server answers the
+ * messages that arrive in between even while it checks the largest module of the compiler. The escapes of what the
+ * bodies hand on are settled once, as the last step, as `torb check` settles them after the last module.
  *
  * What the checker found is the same as a `torb check` of the same modules: every module is checked by the functions
- * `checkTypes` calls, in the same order.
+ * `checkTypes` and `checkModule` call, in the same order, only with the messages of the server in between.
  */
 
+use Clock from "std/time"
 use Diagnostic from "../syntax/diagnostic"
 use Front, diagnosticsOfModule from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Checker from "../semantics/checker/context"
-use preparedChecker, checkNextModule from "../semantics/checker/check"
+use ModuleCheck, preparedChecker, beginNextModule, continueModuleCheck, finishModuleCheck from "../semantics/checker/check"
 use settleEscapes from "../semantics/checker/escape"
 
-/** The modules of a front that are checked one at a time, and the checker that checks them. */
+/** How long one step of a run checks statements before it hands the server back, in milliseconds. */
+const stepBudget: Int64 = 40
+
+/** The modules of a front that are checked a slice at a time, and the checker that checks them. */
 public type ModuleRun {
   front: Front
   modules: List<ModuleId>
   var checker: Checker
   /** How many of `modules` are checked */
   var done: Int = 0
+  /** How far the check of the module that is being checked got */
+  var progress: ModuleCheck? = None
   /** Whether the escapes are settled, which is the last step */
   var settled: Bool = false
 
@@ -34,22 +41,52 @@ public type ModuleRun {
     settled
   }
 
-  /** The module the next step checks, or `None` where the next step settles the escapes or nothing is left. */
-  fn nextModule(): ModuleId? {
-    modules.get done
+  /** Whether every module is checked, so that only the escapes are left to settle. */
+  fn isChecked(): Bool {
+    done >= modules.length() && progress.isNone()
   }
 
-  /** Checks the next module, or settles the escapes once every module is checked. */
-  var fn step() {
-    if const Some(module) = nextModule() {
-      checkNextModule checker, module
-      done = done + 1
-      return
+  /**
+   * Checks statements of the module that is being checked for a few dozen milliseconds, beginning the next module where
+   * none is - or settles the escapes once every module is checked. The module whose check the step ended, where it
+   * ended one: its tables are whole from here on.
+   */
+  var fn step(): ModuleId? {
+    const started = Clock.milliseconds()
+    var current = match progress {
+      Some(found) => found
+      None => {
+        const module = match modules.get(done) {
+          Some(found) => found
+          None => {
+            if !settled {
+              settleEscapes checker
+              settled = true
+            }
+            return None
+          }
+        }
+        match beginNextModule(checker, module) {
+          Some(begun) => begun
+          None => {
+            // Checked already, on demand of another module's bodies
+            done = done + 1
+            return module
+          }
+        }
+      }
     }
-    if !settled {
-      settleEscapes checker
-      settled = true
+    while !current.isWhole() && Clock.milliseconds() - started < stepBudget {
+      continueModuleCheck checker, current, 1
     }
+    if !current.isWhole() {
+      progress = current
+      return None
+    }
+    finishModuleCheck checker, current
+    progress = None
+    done = done + 1
+    current.module
   }
 
   /** Everything that is wrong with a module the run checked, as `torb check` prints it. */

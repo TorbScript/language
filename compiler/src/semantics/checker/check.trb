@@ -12,7 +12,7 @@ use ModuleId from "../module"
 use SymbolId, boundNamesOf from "../symbols"
 use Program from "../scope"
 use Clock from "std/time"
-use Checker, TypeScope, Statistics, Timing, newChecker from "./context"
+use Checker, TypeScope, Statistics, Timing, BodyState, newChecker from "./context"
 use TypeId from "./type"
 use declareSites, declareParameters, genericsOf from "./signature"
 use signatureOf, typeSignatureOf, aliasTargetOf from "./signature"
@@ -108,16 +108,17 @@ public fn preparedChecker(
 }
 
 /**
- * The trait requirements and every body of one module, on a checker [preparedChecker] made: one module of what
- * [checkTypes] checks. A module whose bodies are checked already is left alone.
+ * The trait requirements of one module and the beginning of the check of its bodies, on a checker [preparedChecker]
+ * made: one module of what [checkTypes] checks, whose statements [continueModuleCheck] checks and
+ * [finishModuleCheck] ends. `None` for a module whose bodies are checked already.
  */
-public fn checkNextModule(var checker: Checker, module: ModuleId) {
+public fn beginNextModule(var checker: Checker, module: ModuleId): ModuleCheck? {
   if checker.checkedModules.containsKey(module.value) {
-    return
+    return None
   }
   checker.checkedModules.set module.value, true
   checkImplementations checker, module
-  checkModule checker, module
+  beginModuleCheck checker, module
 }
 
 /**
@@ -341,6 +342,36 @@ public type Stopwatch {
  * scope in the next.
  */
 public fn checkModule(var checker: Checker, module: ModuleId) {
+  var progress = beginModuleCheck checker, module
+  continueModuleCheck checker, progress, progress.count
+  finishModuleCheck checker, progress
+}
+
+/**
+ * How far the check of one module got, for a caller that checks it in parts ([beginModuleCheck],
+ * [continueModuleCheck], [finishModuleCheck]) and answers other work in between: a language server's check of the
+ * workspace, whose steps have to stay short. What [checkModule] does is the three in a row.
+ */
+public type ModuleCheck {
+  module: ModuleId
+  /** What the checker was before it entered the body the top level of the module is; `None` for a receiver script */
+  saved: BodyState?
+  /** How many statements of the top level are checked */
+  var next: Int = 0
+  /** How many statements the top level has */
+  count: Int = 0
+
+  /** Whether every statement of the top level is checked. */
+  fn isWhole(): Bool {
+    next >= count
+  }
+}
+
+/**
+ * The beginning of the check of a module: the spelling of its names, and its top level entered as the one body it is.
+ * A receiver script - `project.trb`, a configuration file - is checked against its receiver here, as a whole.
+ */
+public fn beginModuleCheck(var checker: Checker, module: ModuleId): ModuleCheck {
   // How every name of the file is spelled: one walk over its syntax, before anything is resolved, and for a
   // configuration script as well as for a module
   checkSpelling checker, module
@@ -349,7 +380,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
     if const Some(receiver) = scriptReceiverOf(checker, module) {
       checkReceiverScript checker, module, receiver
     }
-    return
+    return ModuleCheck module, saved: None
   }
   const statements = checker.program.graph.at(module).file.statements
   const voidType = checker.voidType
@@ -362,10 +393,32 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   // level code is an error of its own, so nothing is said about it twice
   checker.awaitsTasks = true
   checker.openScope()
+  ModuleCheck module, saved, count: statements.length()
+}
+
+/** The next `count` statements of the top level of a module whose check [beginModuleCheck] began. */
+public fn continueModuleCheck(var checker: Checker, var progress: ModuleCheck, count: Int) {
+  const statements = checker.program.graph.at(progress.module).file.statements
+  const end = (progress.next + count).min(progress.count)
   // The sites of the top level are known already, so nothing is collected here
-  for statement in statements {
-    checkTopLevel checker, TypeScope(module), statement
+  for index in progress.next..end {
+    checkTopLevel checker, TypeScope(progress.module), statements[index]
   }
+  progress.next = end
+}
+
+/**
+ * The end of the check of a module once its statements are checked: the changes of its top level settled, and the
+ * visibility and the shape of its declarations.
+ */
+public fn finishModuleCheck(var checker: Checker, progress: ModuleCheck) {
+  const saved = match progress.saved {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const module = progress.module
   // The top level of a file is one body, so its changes are settled like any other's
   settleChanges checker
   checker.closeScope()

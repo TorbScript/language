@@ -38,16 +38,26 @@ public type WorkspaceCheck {
   var everything: Bool = true
   /** The files that changed on disk since the last round began */
   var changed: List<String> = []
-  /** The round that runs, one module per step */
+  /** The round that runs, a slice of its modules per step */
   var round: ModuleRun? = None
+  /**
+   * The files a round that builds its front from scratch parses first, a few per step, before the front is built:
+   * parsing the whole workspace is seconds, too long for one step
+   */
+  var parsing: List<String>? = None
   /** What the last rounds published for each file, by its path, in the form of the protocol */
   var published: Map<String, List<JsonValue>> = [:]
   /** The front of the last round, which the next one brings up to date with the files that changed */
   var front: Front? = None
 
-  /** Whether a step is waiting: a round that runs, or one that is due at `now`. */
+  /** Whether a step is waiting: a round that runs or parses, or one that is due at `now`. */
   fn isDue(now: Int64): Bool {
-    round.isSome() || (dueAt.map({ _ <= now }) ?? false)
+    isBusy() || (dueAt.map({ _ <= now }) ?? false)
+  }
+
+  /** Whether a round runs, or parses the files it needs. */
+  fn isBusy(): Bool {
+    round.isSome() || parsing.isSome()
   }
 
   /** Asks for a round `delay` milliseconds after `now`, for the files that changed, or for every file. */
@@ -76,6 +86,7 @@ public type WorkspaceCheck {
       }
       round = None
     }
+    parsing = None
     dueAt = now + Int64.from(delay)
   }
 
@@ -83,6 +94,7 @@ public type WorkspaceCheck {
   var fn stop() {
     dueAt = None
     round = None
+    parsing = None
     changed = []
     everything = true
   }

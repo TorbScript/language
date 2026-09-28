@@ -31,7 +31,7 @@ use declaredSymbolsOf, documentSymbolsJson, symbolInformationJson, indexedSymbol
 use formattingOf, rangeFormattingOf from "./formatting"
 use Callees from "../canon/walk"
 use SourceText from "../syntax/source"
-use parse from "../syntax/parser/parser"
+use Parsed, parse from "../syntax/parser/parser"
 use ModuleId from "../semantics/module"
 use memberAt, textAt, integerAt, booleanAt, itemsAt, object, integer, text, array, decoded, encoded from "./json"
 use LineMap, Position, Range from "./position"
@@ -957,7 +957,7 @@ public type LanguageServer {
     }
     var earliest: Int64? = None
     for project in projects {
-      if project.workspace.round.isSome() {
+      if project.workspace.isBusy() {
         return 0
       }
       if const Some(due) = project.workspace.dueAt {
@@ -1094,15 +1094,14 @@ public type LanguageServer {
           }
           Some(running) => {
             var run = running
-            if const Some(module) = run.nextModule() {
-              run.step()
+            if const Some(module) = run.step() {
               const checked = checkedOf run
               const path = checked.program.graph.at(module).path
               for span in sitesIn(checked, module, next.target, keysOfRun(checked, path)) {
                 next.found.append((path, span))
               }
             }
-            if run.nextModule().isNone() {
+            if run.isChecked() {
               const _answered = requests.removeAt 0
               respond job.id, referencesAnswer(next)
               return
@@ -1378,17 +1377,47 @@ public type LanguageServer {
     match check.round {
       None => {
         check.dueAt = None
-        var open: List<String> = []
-        for (path, document) in documents {
-          if document.project == index {
-            open.append path
-          }
-        }
         const root = project.locations.rootPath
         var refreshed: Front? = None
         if const Some(last) = check.front {
           if !check.everything {
             refreshed = refreshedFrontOf project.tree, last, check.changed
+          }
+        }
+        // A front from scratch parses the whole workspace, which is seconds: a few files per step first
+        if refreshed.isNone() && check.parsing.isNone() {
+          var unparsed: List<String> = []
+          for path in project.tree.paths() {
+            if path.endsWith(".trb") && !project.tree.isParsed(path) {
+              unparsed.append path
+            }
+          }
+          check.parsing = unparsed
+        }
+        if const Some(pending) = check.parsing {
+          if !pending.isEmpty() {
+            var rest = pending
+            var parsed: Map<String, (SourceText, Parsed)> = [:]
+            while parsed.length() < parsesPerStep {
+              match rest.removeAt(rest.length() - 1) {
+                Some(path) => parsed.set path, project.tree.parsedAt(path)
+                None => {
+                  break
+                }
+              }
+            }
+            project.tree = project.tree.withParsed parsed
+            check.parsing = rest
+            project.workspace = check
+            projects.set index, project
+            return
+          }
+          check.parsing = None
+        }
+        var open: List<String> = []
+        for (path, document) in documents {
+          if document.project == index {
+            open.append path
           }
         }
         const current = refreshed ?? frontOf(project.tree, [root], withTimings: true)
@@ -1402,9 +1431,7 @@ public type LanguageServer {
       }
       Some(running) => {
         var run = running
-        const module = run.nextModule()
-        run.step()
-        if const Some(checked) = module {
+        if const Some(checked) = run.step() {
           publishModule check, run, checked
         }
         if run.isDone() {
@@ -1761,6 +1788,9 @@ fn withCurrentData(result: JsonValue, translate: (String, Span) => Span?, uriOf:
   entries.set "items", array(items)
   JsonValue.Object entries
 }
+
+/** How many files a step of the check of the workspace parses before its front is built. */
+const parsesPerStep = 12
 
 /** The most declarations `workspace/symbol` answers with. */
 const symbolLimit = 256
