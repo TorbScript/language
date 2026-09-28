@@ -1,0 +1,212 @@
+/**
+ * `textDocument/formatting` and `textDocument/rangeFormatting`: the layout of `torb format` (`../format/command.trb`)
+ * over the text the editor holds, answered as the few edits that turn the one into the other - never as one edit of the
+ * whole text, which would move the cursor and every mark of the editor to its end.
+ *
+ * The layout is one function of the whole file: the width of a line decides where a call breaks, and a call that fits
+ * again joins lines that were broken. So a range is formatted by formatting the whole text and keeping the edits that
+ * touch the lines of the range. A text that does not parse is left as it is, as `torb format` leaves it. What the
+ * checker knows about the callees of the calls ([Callees]) is what `torb format` asks it too: a call of a field that
+ * holds a function keeps its parentheses, and without a run of the checker every call is left as it is written. The options of
+ * the request - the size of a tab, spaces or tabs - are not read: the layout is decided once, for every program.
+ */
+
+use JsonValue from "std/json"
+use formatted from "../format/command"
+use Callees from "../canon/walk"
+use LineMap, Position from "./position"
+use object, integer, text, array from "./json"
+
+/** Lines `from` up to, but not including, `to` of the earlier text, written as lines `newFrom` up to `newTo` of the later. */
+public type LineEdit {
+  from: Int
+  to: Int
+  newFrom: Int
+  newTo: Int
+}
+
+/** The edits of the layout of `torb format` for a whole text, as the protocol wants them; `None` where it does not parse. */
+public fn formattingOf(source: String, callees: Callees): JsonValue? {
+  editsOf source, callees, lines: None
+}
+
+/** The edits of the layout that touch the lines `firstLine` to `lastLine` of the text, both included. */
+public fn rangeFormattingOf(source: String, callees: Callees, firstLine: Int, lastLine: Int): JsonValue? {
+  editsOf source, callees, (firstLine, lastLine)
+}
+
+fn editsOf(source: String, callees: Callees, lines: (Int, Int)?): JsonValue? {
+  const outcome = formatted source, callees
+  if outcome.skipped.isSome() {
+    return None
+  }
+  const before = LineMap.of source
+  const after = LineMap.of outcome.text
+  var edits: List<JsonValue> = []
+  for edit in lineEditsBetween(linesOf(before), linesOf(after)) {
+    if const Some((first, last)) = lines {
+      // An edit that only inserts lines touches the line it inserts them in front of
+      if edit.from > last || edit.to.max(edit.from + 1) <= first {
+        continue
+      }
+    }
+    const start = lineStart before, edit.from
+    const end = lineStart before, edit.to
+    const written = outcome.text.sliceBytes lineStart(after, edit.newFrom), lineStart(after, edit.newTo)
+    const range = object([
+      ("start", positionJson(before.positionOf(start))),
+      ("end", positionJson(before.positionOf(end))),
+    ])
+    edits.append object([("range", range), ("newText", text(written))])
+  }
+  array edits
+}
+
+fn positionJson(position: Position): JsonValue {
+  object([("line", integer(position.line)), ("character", integer(position.character))])
+}
+
+/** Every line of a text with the line break that ends it: the last one, behind the last break, may be empty. */
+fn linesOf(lines: LineMap): List<String> {
+  var found: List<String> = []
+  for index in 0..lines.lineCount() {
+    found.append lines.text.sliceBytes(lineStart(lines, index), lineStart(lines, index + 1))
+  }
+  found
+}
+
+/** Where line `index` starts, and the end of the text for the line behind the last. */
+fn lineStart(lines: LineMap, index: Int): Int {
+  lines.lineStarts.get(index) ?? lines.text.byteLength()
+}
+
+/**
+ * The shortest edits that turn the lines of `before` into the lines of `after` (Myers's algorithm, over what is left
+ * between the lines both begin and end with). Where they differ in more than [searchLimit] places, one edit of all of
+ * that middle is answered instead.
+ */
+public fn lineEditsBetween(before: List<String>, after: List<String>): List<LineEdit> {
+  var start = 0
+  while start < before.length() && start < after.length() && before[start] == after[start] {
+    start = start + 1
+  }
+  var beforeEnd = before.length()
+  var afterEnd = after.length()
+  while beforeEnd > start && afterEnd > start && before[beforeEnd - 1] == after[afterEnd - 1] {
+    beforeEnd = beforeEnd - 1
+    afterEnd = afterEnd - 1
+  }
+  if start == beforeEnd && start == afterEnd {
+    return []
+  }
+  const earlier = before[start..beforeEnd].toList()
+  const later = after[start..afterEnd].toList()
+  const points = match shortestPath(earlier, later) {
+    Some(found) => found
+    None => {
+      return [LineEdit(start, beforeEnd, start, afterEnd)]
+    }
+  }
+  // A diagonal step is a line both have; every run of other steps between two of them is one edit
+  var edits: List<LineEdit> = []
+  var opened: (Int, Int)? = None
+  for index in 0..(points.length() - 1) {
+    const (x, y) = points[index]
+    const (nextX, nextY) = points[index + 1]
+    const isDiagonal = nextX == x + 1 && nextY == y + 1
+    if !isDiagonal {
+      if opened.isNone() {
+        opened = (x, y)
+      }
+      continue
+    }
+    if const Some((fromX, fromY)) = opened {
+      edits.append LineEdit(start + fromX, start + x, start + fromY, start + y)
+      opened = None
+    }
+  }
+  if const Some((fromX, fromY)) = opened {
+    const (endX, endY) = points[points.length() - 1]
+    edits.append LineEdit(start + fromX, start + endX, start + fromY, start + endY)
+  }
+  edits
+}
+
+/** The most differences the search goes through before it answers one edit of the whole middle. */
+const searchLimit = 2000
+
+/**
+ * The points of a shortest edit script from `(0, 0)` to the ends of both lists, in order, one step apart: `(x, y)` has
+ * taken the first `x` lines of `earlier` and the first `y` of `later`. `None` where it is longer than [searchLimit].
+ */
+fn shortestPath(earlier: List<String>, later: List<String>): List<(Int, Int)>? {
+  const n = earlier.length()
+  const m = later.length()
+  const most = (n + m).min(searchLimit)
+  const offset = most + 1
+  var reach: List<Int> = []
+  for _ in 0..(2 * offset + 1) {
+    reach.append 0
+  }
+  var trace: List<List<Int>> = []
+  var difference = 0
+  while difference <= most {
+    trace.append reach
+    var diagonal = -difference
+    while diagonal <= difference {
+      var x = if takesInsertion(reach, offset, diagonal, difference) {
+        reach[offset + diagonal + 1]
+      } else {
+        reach[offset + diagonal - 1] + 1
+      }
+      var y = x - diagonal
+      while x < n && y < m && earlier[x] == later[y] {
+        x = x + 1
+        y = y + 1
+      }
+      reach.set(offset + diagonal, x)
+      if x >= n && y >= m {
+        return backtracked trace, n, m, offset
+      }
+      diagonal = diagonal + 2
+    }
+    difference = difference + 1
+  }
+  None
+}
+
+/** Whether the path to `diagonal` in round `difference` comes down from the diagonal above rather than across. */
+fn takesInsertion(reach: List<Int>, offset: Int, diagonal: Int, difference: Int): Bool {
+  diagonal == -difference || (diagonal != difference && reach[offset + diagonal - 1] < reach[offset + diagonal + 1])
+}
+
+/** The points of the path the search found, walked back from the ends through what each round could reach. */
+fn backtracked(trace: List<List<Int>>, n: Int, m: Int, offset: Int): List<(Int, Int)> {
+  var points: List<(Int, Int)> = [(n, m)]
+  var x = n
+  var y = m
+  var difference = trace.length() - 1
+  while difference > 0 {
+    const reach = trace[difference]
+    const diagonal = x - y
+    const previous = if takesInsertion(reach, offset, diagonal, difference) { diagonal + 1 } else { diagonal - 1 }
+    const previousX = reach[offset + previous]
+    const previousY = previousX - previous
+    while x > previousX && y > previousY {
+      x = x - 1
+      y = y - 1
+      points.append((x, y))
+    }
+    x = previousX
+    y = previousY
+    points.append((x, y))
+    difference = difference - 1
+  }
+  while x > 0 && y > 0 {
+    x = x - 1
+    y = y - 1
+    points.append((x, y))
+  }
+  points.reverse()
+  points
+}

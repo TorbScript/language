@@ -1,17 +1,13 @@
 /**
- * What stands at a byte offset of a module, as the checker's tables say - the question hover and go to definition
- * both start from - and how a declaration reads in a hover: its signature as the source writes it, and its doc comment.
+ * What stands at a byte offset of a module, as the checker's tables say: the question hover, go to definition, the
+ * references and a rename all start from.
  *
  * The tables are keyed by span, so the answer is the **smallest** span that contains the offset: of `a.b.c` with the
  * offset on `b`, that is `a.b`, whose resolution is the member `b`. An offset right behind the last character of a name
  * still counts as on it, which is where an editor's cursor stands after typing it.
  */
 
-use Span, SourceText from "../syntax/source"
-use lex from "../syntax/lexer"
-use Token from "../syntax/token"
-use SourceFile, Statement, Declaration, Member, Pattern from "../syntax/ast"
-use ItemKind, signatureOf from "../reference/model"
+use Span from "../syntax/source"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use SymbolId, SymbolKind from "../semantics/symbols"
@@ -134,181 +130,6 @@ public fn nominalSymbolOf(checked: Checked, annotation: TypeId): SymbolId? {
   match checked.checker.types.form(annotation) {
     .Nominal(symbol, _) => symbol
     _ => None
-  }
-}
-
-/** How a declaration reads in a hover. */
-public type Description {
-  /** One line, as the source writes the declaration up to its body */
-  signature: String
-  /** The doc comment, Markdown; empty where there is none */
-  documentation: String
-}
-
-/** The signature and the doc comment of the declaration of a symbol, found in the syntax tree of its module. */
-public fn describeSymbol(checked: Checked, symbol: SymbolId): Description? {
-  const found = checked.checker.symbolAt symbol
-  const module = found.module?
-  const shape = checked.program.graph.at module
-  const written = writtenDeclarationOf(shape.file, shape.source.text, found.span)?
-  const lexed = lex shape.source
-  var tokens: List<Token> = []
-  for token in lexed.tokens {
-    tokens.append token
-  }
-  const signature = signatureOf tokens, shape.source.text, written.start, written.end, written.kind
-  Description signature, written.documentation
-}
-
-/** Where a declaration's signature is in the text, what kind of declaration it is, and its doc comment. */
-type Written {
-  start: Int
-  end: Int
-  kind: ItemKind
-  documentation: String
-}
-
-/** The declaration whose name is at `name`: a top-level one, or a member, case or field inside of one. */
-fn writtenDeclarationOf(file: SourceFile, text: String, name: Span): Written? {
-  for statement in file.statements {
-    if const Some(found) = writtenInStatement(statement, text, name) {
-      return found
-    }
-  }
-  None
-}
-
-fn writtenInStatement(statement: Statement, text: String, name: Span): Written? {
-  match statement.kind {
-    .Declare(declaration) => writtenInDeclaration declaration, text, name
-    .Bind(binding) => {
-      if patternNames(binding.pattern, name) {
-        return Written(statement.span.start, statement.span.end, ItemKind.Constant, binding.doc ?? "")
-      }
-      None
-    }
-    _ => None
-  }
-}
-
-fn writtenInDeclaration(declaration: Declaration, text: String, name: Span): Written? {
-  const documentation = declaration.doc ?? ""
-  const start = declaration.span.start
-  match declaration.kind {
-    .Function(function) => {
-      if function.name.span == name {
-        const end = function.body.map({ _.span.start }) ?? declaration.span.end
-        return Written start, end, ItemKind.Function, documentation
-      }
-      None
-    }
-    .Type(written) => {
-      if written.name.span == name {
-        return Written start, headerEnd(text, name.end, declaration.span.end), ItemKind.Type, documentation
-      }
-      writtenInMembers written.members, text, name
-    }
-    .Trait(written) => {
-      if written.name.span == name {
-        return Written start, headerEnd(text, name.end, declaration.span.end), ItemKind.Trait, documentation
-      }
-      writtenInMembers written.members, text, name
-    }
-    .Alias(written) => {
-      if written.name.span == name {
-        return Written start, declaration.span.end, ItemKind.Alias, documentation
-      }
-      None
-    }
-    .Extend(written) => writtenInMembers written.members, text, name
-    .Foreign(written) => writtenInMembers written.members, text, name
-    .Constant(binding) => {
-      if patternNames(binding.pattern, name) {
-        return Written start, declaration.span.end, ItemKind.Constant, documentation
-      }
-      None
-    }
-    .Use(_) => None
-  }
-}
-
-fn writtenInMembers(members: List<Member>, text: String, name: Span): Written? {
-  for member in members {
-    const documentation = member.doc ?? ""
-    const start = member.span.start
-    match member.kind {
-      .Field(field) => {
-        if field.name.span == name {
-          return Written start, member.span.end, ItemKind.Field, documentation
-        }
-      }
-      .Constant(binding) => {
-        if patternNames(binding.pattern, name) {
-          return Written start, member.span.end, ItemKind.Constant, documentation
-        }
-      }
-      .Function(function) => {
-        if function.name.span == name {
-          const end = function.body.map({ _.span.start }) ?? member.span.end
-          return Written start, end, ItemKind.Function, documentation
-        }
-      }
-      .Case(written) => {
-        if written.name.span == name {
-          return Written start, member.span.end, ItemKind.Case, documentation
-        }
-        for field in written.fields {
-          if field.name.span == name {
-            const end = fieldEnd text, field.name.span.end, member.span.end
-            return Written(field.name.span.start, end, ItemKind.Field, field.doc ?? "")
-          }
-        }
-      }
-    }
-  }
-  None
-}
-
-/** Whether the pattern binds the name at `name`. */
-fn patternNames(pattern: Pattern, name: Span): Bool {
-  match pattern.kind {
-    .Binding(_) => pattern.span == name
-    .TuplePattern(items) => items.any({ patternNames _, name })
-    _ => false
-  }
-}
-
-/**
- * Where a field of a case ends: at the `,` or the `)` behind it that no bracket of its type encloses, or at the end of
- * the case.
- */
-fn fieldEnd(text: String, after: Int, end: Int): Int {
-  var depth = 0
-  var at = after
-  while at < end {
-    const byte = text.byteAt(at) ?? 0
-    // `(`, `[` and `<` open a bracket of the type, `)`, `]` and `>` close one - but the `>` of a `=>` does not
-    const partOfArrow = byte == 62 && at > 0 && text.byteAt(at - 1) == 61
-    if byte == 40 || byte == 91 || byte == 60 {
-      depth = depth + 1
-    } else if (byte == 41 || byte == 93 || byte == 62) && !partOfArrow {
-      if depth == 0 {
-        return at
-      }
-      depth = depth - 1
-    } else if byte == 44 && depth == 0 {
-      return at
-    }
-    at = at + 1
-  }
-  end
-}
-
-/** Where the header of a type or a trait ends: at the `{` of its members, or at its end where it has none. */
-fn headerEnd(text: String, after: Int, end: Int): Int {
-  match text.sliceBytes(after, end).byteOffsetOf("\{") {
-    Some(found) => after + found
-    None => end
   }
 }
 

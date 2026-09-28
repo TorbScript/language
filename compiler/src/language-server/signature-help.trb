@@ -1,0 +1,306 @@
+/**
+ * `textDocument/signatureHelp`: at the arguments of a call, the signature of what it calls - a function, the
+ * constructor of a type, a case - with the parameter the cursor is at marked, and the documentation `torb doc` has for
+ * it (`./documentation.trb`).
+ *
+ * The call is the innermost one of the syntax tree whose arguments hold the cursor, in either style: between the
+ * parentheses of `f(a, b)`, or behind the name of `f a, b`. What it calls is what the checker resolved it to; where the
+ * checker could not resolve it yet - an argument is still being typed - the callee's name is looked up in the file,
+ * and a member through the type of its receiver. The parameter is the one the argument's label names, or the one at
+ * the argument's position.
+ */
+
+use JsonValue from "std/json"
+use Span, SourceText from "../syntax/source"
+use lex from "../syntax/lexer"
+use Token from "../syntax/token"
+use Statement, Expression, Argument, FunctionDeclaration, Field, Member from "../syntax/ast"
+use ItemKind, signatureOf from "../reference/model"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use SymbolId from "../semantics/symbols"
+use Resolution from "../semantics/checker/context"
+use TypeId from "../semantics/checker/type"
+use lookupMember from "../semantics/checker/member"
+use everyNodeOf from "../lint/nodes"
+use Analysis from "./analysis"
+use nominalSymbolOf from "./lookup"
+use LinkTarget, documentationOf from "./documentation"
+use utf16Units from "./position"
+use object, integer, text, array from "./json"
+
+/** The call whose arguments hold an offset, and where among them the offset is. */
+type CallAt {
+  call: Expression
+  callee: Expression
+  arguments: List<Argument>
+  /** Which argument the offset is in, counted by the commas in front of it */
+  argument: Int
+}
+
+/**
+ * The signature help at a byte offset of a document, in the text of the run: `None` where no call's arguments hold
+ * it, or where what it calls is unknown.
+ */
+public fn signatureHelpOf(analysis: Analysis, path: String, offset: Int, locate: (LinkTarget) => String?): JsonValue? {
+  const module = analysis.moduleOf(path)?
+  const checked = analysis.checked
+  const shape = checked.program.graph.at module
+  const at = callAt(shape.file.statements.isEmpty(), everyNodeOf(shape.file).expressions, shape.source.text, offset)?
+  const symbol = calledSymbol(checked, module, at)?
+  const declared = checked.checker.symbolAt symbol
+  const home = declared.module?
+  const documented = documentationOf checked.program, home, declared.span, locate
+  const homeShape = checked.program.graph.at home
+  const parameters = parametersOf homeShape.source, homeShape.file.statements, declared.span
+  // A constructor and a case are called with their fields, which is what their label says; a function by its signature
+  const label = match declared.kind {
+    .Type => "{declared.name}({parameters.map({ _.text }).toList().joined(separator: ", ")})"
+    .Case(owner) => {
+      const written = parameters.map({ _.text }).toList().joined(separator: ", ")
+      "{checked.checker.symbolAt(owner).name}.{declared.name}({written})"
+    }
+    _ => documented.map({ _.signature }) ?? declared.name
+  }
+  var ranges: List<JsonValue> = []
+  var from = 0
+  for parameter in parameters {
+    // Each parameter where the signature writes it, one after the other
+    const found = label.sliceBytes(from, label.byteLength()).byteOffsetOf(parameter.text)
+    if const Some(start) = found {
+      const begin = from + start
+      const end = begin + parameter.text.byteLength()
+      ranges.append(array([
+        integer(utf16Units(label.sliceBytes(0, begin))),
+        integer(utf16Units(label.sliceBytes(0, end))),
+      ]))
+      from = end
+    } else {
+      ranges.append array([integer(0), integer(0)])
+    }
+  }
+  var active = at.argument
+  if const Some(argument) = at.arguments.get(at.argument) {
+    if const Some(name) = argument.label {
+      if const Some(index) = parameters.map({ _.name }).toList().indexOf(name.text) {
+        active = index
+      }
+    }
+  }
+  var information = [("label", text(label))]
+  if const Some(found) = documented {
+    if !found.documentation.isEmpty() {
+      information.append(("documentation", object([("kind", text("markdown")), ("value", text(found.documentation))])))
+    }
+  }
+  information.append(("parameters", array(ranges.map({ object([("label", _)]) }).toList())))
+  object([
+    ("signatures", array([object(information)])),
+    ("activeSignature", integer(0)),
+    ("activeParameter", integer(active.min(parameters.length() - 1).max(0))),
+  ])
+}
+
+/** The innermost call whose arguments hold the offset, in either style. */
+fn callAt(isEmpty: Bool, expressions: List<Expression>, text: String, offset: Int): CallAt? {
+  if isEmpty {
+    return None
+  }
+  var best: CallAt? = None
+  for expression in expressions {
+    const (callee, arguments) = match expression.kind {
+      .Call(found, given, _) => (found, given)
+      _ => {
+        continue
+      }
+    }
+    // The arguments begin behind the callee, and end with the call - before its `)` where it has one
+    const closed = text.byteAt(expression.span.end - 1) == 41
+    const end = if closed { expression.span.end - 1 } else { expression.span.end }
+    if offset <= callee.span.end || offset > end {
+      continue
+    }
+    const narrower = match best {
+      Some(found) => expression.span.end - expression.span.start < found.call.span.end - found.call.span.start
+      None => true
+    }
+    if narrower {
+      best = CallAt expression, callee, arguments, commasBetween(text, callee.span.end, offset)
+    }
+  }
+  best
+}
+
+/**
+ * How many commas stand between the end of a callee and an offset, outside of the brackets and strings inside of the
+ * arguments: which argument the offset is in.
+ */
+fn commasBetween(text: String, from: Int, to: Int): Int {
+  // The arguments of `f(a, b)` are inside of its parentheses, those of `f a, b` at the depth of the callee
+  const opening = text.sliceBytes(from, to).trim().startsWith("(")
+  const level = if opening { 1 } else { 0 }
+  var depth = 0
+  var commas = 0
+  var inString = false
+  var at = from
+  while at < to {
+    const byte = text.byteAt(at) ?? 0
+    if inString {
+      if byte == 92 {
+        at = at + 1
+      } else if byte == 34 {
+        inString = false
+      }
+    } else if byte == 34 {
+      inString = true
+    } else if byte == 40 || byte == 91 || byte == 123 {
+      depth = depth + 1
+    } else if byte == 41 || byte == 93 || byte == 125 {
+      depth = depth - 1
+    } else if byte == 44 && depth == level {
+      commas = commas + 1
+    }
+    at = at + 1
+  }
+  commas
+}
+
+/**
+ * What a call calls, as a declaration: a function, the type of a constructor or of a `copy`, or a case. Through the
+ * checker's resolution of the call where it has one, and through the callee's name where it has not.
+ */
+fn calledSymbol(checked: Checked, module: ModuleId, at: CallAt): SymbolId? {
+  const checker = checked.checker
+  for span in [at.call.span, at.callee.span] {
+    if const Some(resolution) = checker.resolutionAt(module, span) {
+      if const Some(symbol) = symbolOfCall(checked, resolution) {
+        return symbol
+      }
+    }
+  }
+  match at.callee.kind {
+    .Name(name) => {
+      if const Some(found) = checked.program.lookUp(module, name) {
+        return found
+      }
+      checked.program.preludeOf(module).get(name)
+    }
+    .Member(target, name, _) => {
+      const receiver = checker.tables[module.value].expressionTypes.get(target.span)?
+      var lookups = checker
+      lookups.module = module
+      const candidate = lookupMember(lookups, receiver, name.text)?
+      match candidate.kind {
+        .Method(_, symbol) => symbol
+        _ => None
+      }
+    }
+    _ => None
+  }
+}
+
+fn symbolOfCall(checked: Checked, resolution: Resolution): SymbolId? {
+  match resolution {
+    .Callable(symbol, _, _) => symbol
+    .CaseOf(_, variant) => variant
+    .Construct(owner) | .CopyOf(owner) | .TypeOf(owner) => nominalSymbolOf checked, owner
+    _ => None
+  }
+}
+
+/** One parameter of a signature: its name, and how the signature writes it. */
+type ParameterText {
+  name: String
+  text: String
+}
+
+/**
+ * The parameters of the declaration named at `name` in a file, as its signature writes them: the parameters of a
+ * function, the fields of a case, or the fields of a type for its constructor.
+ */
+fn parametersOf(source: SourceText, statements: List<Statement>, name: Span): List<ParameterText> {
+  var tokens: List<Token> = []
+  for token in lex(source).tokens {
+    tokens.append token
+  }
+  for statement in statements {
+    if const .Declare(declaration) = statement.kind {
+      match declaration.kind {
+        .Function(function) => {
+          if function.name.span == name {
+            return functionParameters tokens, source.text, function
+          }
+        }
+        .Type(declared) => {
+          if declared.name.span == name {
+            var fields: List<Field> = []
+            for member in declared.members {
+              if const .Field(field) = member.kind {
+                fields.append field
+              }
+            }
+            return fieldTexts tokens, source.text, fields
+          }
+          if const Some(found) = memberParameters(tokens, source.text, declared.members, name) {
+            return found
+          }
+        }
+        .Trait(declared) => {
+          if const Some(found) = memberParameters(tokens, source.text, declared.members, name) {
+            return found
+          }
+        }
+        .Extend(extension) => {
+          if const Some(found) = memberParameters(tokens, source.text, extension.members, name) {
+            return found
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+  []
+}
+
+fn memberParameters(tokens: List<Token>, text: String, members: List<Member>, name: Span): List<ParameterText>? {
+  for member in members {
+    match member.kind {
+      .Function(function) => {
+        if function.name.span == name {
+          return functionParameters tokens, text, function
+        }
+      }
+      .Case(declared) => {
+        if declared.name.span == name {
+          return fieldTexts tokens, text, declared.fields
+        }
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn functionParameters(tokens: List<Token>, text: String, function: FunctionDeclaration): List<ParameterText> {
+  var found: List<ParameterText> = []
+  for parameter in function.parameters {
+    if parameter.name.text.isEmpty() {
+      continue
+    }
+    const end = parameter.default.map({ _.span.end }) ?? parameter.type.map({ _.span.end }) ?? parameter.name.span.end
+    found.append(ParameterText(
+      parameter.name.text,
+      signatureOf(tokens, text, parameter.name.span.start, end, ItemKind.Field),
+    ))
+  }
+  found
+}
+
+fn fieldTexts(tokens: List<Token>, text: String, fields: List<Field>): List<ParameterText> {
+  var found: List<ParameterText> = []
+  for field in fields {
+    const end = field.default.map({ _.span.end }) ?? field.type.span.end
+    found.append ParameterText(field.name.text, signatureOf(tokens, text, field.name.span.start, end, ItemKind.Field))
+  }
+  found
+}

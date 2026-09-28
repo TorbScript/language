@@ -1,0 +1,154 @@
+/**
+ * The diagnostics of every file of a project, not only of the open documents: a [WorkspaceCheck] checks the files of
+ * the project in the background - a while after the server started, and a while after files changed on disk - and
+ * publishes what `torb check` would print for each of them, the files nobody opened included. The open documents are
+ * left to their views (`./view.trb`), which know the text the editor holds.
+ *
+ * A round checks one module per step ([ModuleRun]), so the server answers the messages that arrive in between, and a
+ * change on disk while a round runs starts it again once things are quiet. After a change, a round checks the files
+ * that changed and every file that imports one of them, directly or through others; the first round checks all of
+ * them. What the lint rules find is left to the open documents: they are the style `torb lint` reports on request, and
+ * no gate.
+ */
+
+use JsonValue from "std/json"
+use SourceText from "../syntax/source"
+use Parsed from "../syntax/parser/parser"
+use SourceTree from "../project/source-tree"
+use isInside from "../project/path"
+use Front from "../semantics/check"
+use ModuleId from "../semantics/module"
+use Program from "../semantics/scope"
+use importsOf from "./analysis"
+use ModuleRun from "./run"
+
+/** What the client says about the check of the workspace. */
+public type WorkspaceSettings {
+  /** Whether the files nobody opened are checked at all */
+  enabled: Bool = true
+  /** How long after the last change - or after the start - a round begins, in milliseconds */
+  delay: Int = 1000
+}
+
+/** The check of a project's files in the background, and what it published. */
+public type WorkspaceCheck {
+  /** When the next round may begin, in the milliseconds of `Clock.milliseconds()`; `None` where none is wanted */
+  var dueAt: Int64? = None
+  /** Whether the next round checks every file of the project, rather than the ones that changed and their importers */
+  var everything: Bool = true
+  /** The files that changed on disk since the last round began */
+  var changed: List<String> = []
+  /** The round that runs, one module per step */
+  var round: ModuleRun? = None
+  /** What the last rounds published for each file, by its path, in the form of the protocol */
+  var published: Map<String, List<JsonValue>> = [:]
+  /** The front of the last round, which the next one brings up to date with the files that changed */
+  var front: Front? = None
+
+  /** Whether a step is waiting: a round that runs, or one that is due at `now`. */
+  fn isDue(now: Int64): Bool {
+    round.isSome() || (dueAt.map({ _ <= now }) ?? false)
+  }
+
+  /** Asks for a round `delay` milliseconds after `now`, for the files that changed, or for every file. */
+  var fn schedule(now: Int64, delay: Int, files: List<String>?) {
+    match files {
+      Some(paths) => {
+        for path in paths {
+          if !changed.contains(path) {
+            changed.append path
+          }
+        }
+      }
+      None => {
+        everything = true
+      }
+    }
+    // A round that runs checks a workspace that is not there any more: the next one checks what it would have
+    if const Some(running) = round {
+      if !everything {
+        for module in running.modules {
+          const path = running.front.program.graph.at(module).path
+          if !changed.contains(path) {
+            changed.append path
+          }
+        }
+      }
+      round = None
+    }
+    dueAt = now + Int64.from(delay)
+  }
+
+  /** Stops every round and forgets what was published: the check is turned off. */
+  var fn stop() {
+    dueAt = None
+    round = None
+    changed = []
+    everything = true
+  }
+}
+
+/**
+ * The modules a round checks: every module of the front below `root` that no open document shows - all of them, or the
+ * ones of `changed` and every module that imports one of them, directly or through others.
+ */
+public fn modulesToCheck(
+  front: Front,
+  root: String,
+  open: List<String>,
+  everything: Bool,
+  changed: List<String>,
+): List<ModuleId> {
+  const program = front.program
+  var wanted: Set<Int> = Set.of()
+  if !everything {
+    var importers: Map<Int, List<ModuleId>> = [:]
+    for module in program.graph.modules {
+      for imported in importsOf(program, module.id) {
+        var known = importers.get(imported.value) ?? []
+        known.append module.id
+        importers.set imported.value, known
+      }
+    }
+    var pending: List<ModuleId> = []
+    for path in changed {
+      if const Some(module) = program.graph.moduleAt(path) {
+        pending.append module
+      }
+    }
+    while const Some(module) = pending.removeAt(pending.length() - 1) {
+      if wanted.contains(module.value) {
+        continue
+      }
+      wanted.insert module.value
+      pending.appendAll(importers.get(module.value) ?? [])
+    }
+  }
+  var found: List<ModuleId> = []
+  for module in program.graph.modules {
+    if !isInside(module.path, root) || open.contains(module.path) {
+      continue
+    }
+    if everything || wanted.contains(module.id.value) {
+      found.append module.id
+    }
+  }
+  found
+}
+
+/**
+ * The tree with the parses of a front kept, where the tree still holds the text each was made of: a round of the
+ * workspace began with a tree the documents may have changed since.
+ */
+public fn withCurrentParses(tree: SourceTree, program: Program): SourceTree {
+  var kept: Map<String, (SourceText, Parsed)> = [:]
+  for module in program.graph.modules {
+    if module.receiver.isSome() {
+      continue
+    }
+    if tree.text(module.path) == module.source.text {
+      kept.set module.path, (module.source, Parsed(module.file, module.diagnostics, module.deferred))
+    }
+  }
+  tree.withParsed kept
+}

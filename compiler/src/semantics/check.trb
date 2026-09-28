@@ -153,7 +153,6 @@ public fn checkFront(
   const workspace = front.workspace
   const graph = front.program.graph
   const resolutions = front.resolutions
-  const unresolved = front.unresolved
   const problems = front.problems
   const resolvedProgram = front.program
   var requested: List<ModuleId> = []
@@ -184,17 +183,7 @@ public fn checkFront(
     if !isReported.contains(module.id.value) {
       continue
     }
-    var diagnostics = module.diagnostics
-    // What is wrong with the `String` reading of a literal is no problem where the checker read the literal verbatim
-    for deferred in module.deferred {
-      if !checked.isReadVerbatim(module.id, deferred.literal) {
-        diagnostics.append deferred.diagnostic
-      }
-    }
-    diagnostics.appendAll checkNames(resolvedProgram, module.id)
-    diagnostics.appendAll unresolved[module.id.value]
-    diagnostics.appendAll checked.diagnostics[module.id.value]
-    diagnostics.sort({ (_.span.start, _.span.end) })
+    const diagnostics = diagnosticsOfModule front, checked, module.id
     files.append CheckedFile(tree.display(module.path), module.source.text, diagnostics)
   }
   // A `project.trb` that is a receiver script is a module and was reported above; without `std/project` there is no
@@ -211,6 +200,26 @@ public fn checkFront(
   }
   files.sort({ _.path })
   Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
+}
+
+/**
+ * Everything that is wrong with one module of a front whose bodies `checker` checked, sorted by position: what the
+ * parser found, name resolution, the names in type positions and the type checker - the list `torb check` prints.
+ */
+public fn diagnosticsOfModule(front: Front, checker: Checker, module: ModuleId): List<Diagnostic> {
+  const shape = front.program.graph.at module
+  var diagnostics = shape.diagnostics
+  // What is wrong with the `String` reading of a literal is no problem where the checker read the literal verbatim
+  for deferred in shape.deferred {
+    if !checker.isReadVerbatim(module, deferred.literal) {
+      diagnostics.append deferred.diagnostic
+    }
+  }
+  diagnostics.appendAll checkNames(front.program, module)
+  diagnostics.appendAll front.unresolved[module.value]
+  diagnostics.appendAll checker.diagnostics[module.value]
+  diagnostics.sort({ (_.span.start, _.span.end) })
+  diagnostics
 }
 
 /**

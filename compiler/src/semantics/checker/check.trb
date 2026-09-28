@@ -82,6 +82,45 @@ public fn checkTypes(
 }
 
 /**
+ * A checker that built the declaration sites and the implementation index of the whole program and checked its
+ * coherence - everything [checkTypes] does before its first module - for a caller that checks the modules one at a
+ * time with [checkNextModule], answering other work in between (a language server's check of the workspace), and
+ * settles the escapes once at the end (`settleEscapes`).
+ */
+public fn preparedChecker(
+  program: Program,
+  resolutions: List<Map<Span, SymbolId>>,
+  withTimings: Bool = false,
+): Checker {
+  var checker = newChecker program, resolutions
+  checker.withTimings = withTimings
+  var clock = Stopwatch withTimings
+  clock.start()
+  for module in program.graph.modules {
+    declareSites checker, module.id, module.file.statements
+  }
+  checker.timings.append Timing("declaration sites", clock.taken())
+  buildImplementations checker
+  checker.timings.append Timing("the implementation index", clock.taken())
+  checkCoherence checker
+  checker.timings.append Timing("coherence", clock.taken())
+  checker
+}
+
+/**
+ * The trait requirements and every body of one module, on a checker [preparedChecker] made: one module of what
+ * [checkTypes] checks. A module whose bodies are checked already is left alone.
+ */
+public fn checkNextModule(var checker: Checker, module: ModuleId) {
+  if checker.checkedModules.containsKey(module.value) {
+    return
+  }
+  checker.checkedModules.set module.value, true
+  checkImplementations checker, module
+  checkModule checker, module
+}
+
+/**
  * The bodies of the functions of one module that lie inside of `within`, and nothing else of that module: what a
  * language server checks after a keystroke that changed these bodies and nothing another body can see
  * (docs/design/LANGUAGE-SERVER.md section 6). The declaration sites and the implementation index are built for the

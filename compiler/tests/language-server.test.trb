@@ -18,6 +18,7 @@ use Locations, absolutePathOf, fileUriOf from "../src/language-server/uri"
 use completionContextOf, CompletionContext, withoutMemberAccess from "../src/language-server/completion"
 use outlineOf from "../src/language-server/analysis"
 use SpanMapping, mappingBetween from "../src/language-server/mapping"
+use LineEdit, lineEditsBetween from "../src/language-server/formatting"
 use TestItem, testItemsOf, testTreeOf from "../src/language-server/test-tree"
 use Span, SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
@@ -208,7 +209,11 @@ group "The life cycle" {
     const answer = encoded only(server, [initialize])
     expectContains answer, "\"textDocumentSync\":\{\"openClose\":true,\"change\":2\}"
     expectContains answer, "\"hoverProvider\":true,\"definitionProvider\":true"
-    expectContains answer, "\"completionProvider\":\{\"triggerCharacters\":[\".\"]\}"
+    expectContains answer, "\"completionProvider\":\{\"triggerCharacters\":[\".\"],\"resolveProvider\":true\}"
+    expectContains answer, "\"signatureHelpProvider\":\{\"triggerCharacters\":[\"(\",\",\"]\}"
+    expectContains answer, "\"referencesProvider\":true,\"renameProvider\":\{\"prepareProvider\":true\}"
+    expectContains answer, "\"documentSymbolProvider\":true,\"workspaceSymbolProvider\":true"
+    expectContains answer, "\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":true"
     expectContains answer, "\"tokenTypes\":[\"type\",\"interface\",\"typeParameter\",\"enumMember\",\"namespace\""
     expectContains answer, "\"codeActionProvider\":\{\"codeActionKinds\":[\"quickfix\"]\}"
   }
@@ -235,7 +240,7 @@ group "The life cycle" {
 
   test "a request the server does not know is answered with an error" {
     var server = started()
-    const answer = only server, [message("workspace/symbol", "\{\"query\":\"\"\}", 4)]
+    const answer = only server, [message("textDocument/moniker", "\{\}", 4)]
     assert(integerAt(answer, ["error", "code"]) == (-32601))
   }
 
@@ -341,6 +346,76 @@ group "A change redoes the front of its file" {
     assert(published(answers).get(mainUri) == [])
     const answer = only server, [at("textDocument/hover", 21, mainUri, 4, 7)]
     expectText(textAt(answer, ["result", "contents", "value"]) ?? "", "```trb\nfn double(value: Int): Int\n```")
+  }
+}
+
+/** The URIs of `app/` among what was published. */
+fn appUris(found: Map<String, List<JsonValue>>): List<String> {
+  found.keys().filter({ _.startsWith "file:///workspace/app/" }).toList()
+}
+
+/** `workspace/didChangeWatchedFiles` for one file: 1 created, 2 changed, 3 deleted. */
+fn watched(uri: String, kind: Int): String {
+  message "workspace/didChangeWatchedFiles", "\{\"changes\":[\{\"uri\":\"{uri}\",\"type\":{kind}\}]\}"
+}
+
+group "Diagnostics of the whole workspace" {
+  const helperUri = "file:///workspace/app/src/helper.trb"
+  const broken = "public fn value(): Int \{\n  \"no\"\n\}\n"
+  const fixed = "public fn value(): Int \{\n  1\n\}\n"
+
+  test "after `initialized` the files nobody opened are checked, and only those with a problem are published" {
+    var server = started(["app/src/helper.trb": broken])
+    const _initialized = send server, [message("initialized", "\{\}")]
+    const answers = server.settle()
+    const found = published answers
+    assert(messagesOf(found.get(helperUri) ?? []) == ["Expected `Int64`, found `String`"])
+    // The prelude of the tests is a small one of its own that does not check as a package: only `app/` counts here
+    assert(appUris(found) == [helperUri])
+  }
+
+  test "a file that changes on disk is checked again, with every file that imports it" {
+    const main = "use value from \"./helper\"\n\nconst total: Int = value()\nprint total\n"
+    var server = started(["app/src/helper.trb": fixed, "app/src/main.trb": main])
+    const _initialized = send server, [message("initialized", "\{\}")]
+    const quiet = appUris(published(server.settle())).isEmpty()
+    assert quiet
+    server.writeMemoryFile "app/src/helper.trb", "public fn value(): String \{\n  \"no\"\n\}\n"
+    const _changed = send server, [watched(helperUri, 2)]
+    const found = published server.settle()
+    assert(messagesOf(found.get(mainUri) ?? []) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a deleted file has its diagnostics cleared" {
+    var server = started(["app/src/helper.trb": broken])
+    const _initialized = send server, [message("initialized", "\{\}")]
+    const _first = server.settle()
+    server.writeMemoryFile "app/src/helper.trb", text: None
+    const answers = send server, [watched(helperUri, 3)]
+    assert(published(answers).get(helperUri) == [])
+  }
+
+  test "an open document is its view's, and closing it shows what the workspace found again" {
+    var server = started(["app/src/helper.trb": broken])
+    const _initialized = send server, [message("initialized", "\{\}")]
+    const _first = server.settle()
+    const _opened = send server, [opened(helperUri, fixed)]
+    const closing = message "textDocument/didClose", "\{\"textDocument\":\{\"uri\":\"{helperUri}\"\}\}"
+    const answers = send server, [closing]
+    assert(messagesOf(published(answers).get(helperUri) ?? []) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "turned off, the check clears what it published and checks nothing more" {
+    var server = started(["app/src/helper.trb": broken])
+    const _initialized = send server, [message("initialized", "\{\}")]
+    const _first = server.settle()
+    const settings = "\{\"settings\":\{\"torbscript\":\{\"languageServer\":\{\"workspaceDiagnostics\":false\}\}\}\}"
+    const answers = send server, [message("workspace/didChangeConfiguration", settings)]
+    assert(published(answers).get(helperUri) == [])
+    server.writeMemoryFile "app/src/helper.trb", "public fn value(): Int \{\n  missing\n\}\n"
+    const _changed = send server, [watched(helperUri, 2)]
+    const idle = server.settle().isEmpty()
+    assert idle
   }
 }
 
@@ -564,6 +639,296 @@ group "Semantic tokens" {
     )
     // `total` declared (line 0, character 6, a readonly variable), `print` (a function), `total` used (readonly)
     expectText encoded(memberAt(answer, ["result"]) ?? JsonValue.Null), "\{\"data\":[0,6,5,8,3,1,0,5,5,0,0,6,5,8,2]\}"
+  }
+}
+
+/** A request about a whole document. */
+fn about(method: String, id: Int, uri: String, rest: String = ""): String {
+  message method, "\{\"textDocument\":\{\"uri\":\"{uri}\"\}{rest}\}", id
+}
+
+/** The names of the answer to the request with this id among the messages the server sent, `children` below each. */
+fn symbolNamesOf(answers: List<JsonValue>, id: Int): List<String> {
+  const answer = answers.find({ integerAt(_, ["id"]) == id }) ?? JsonValue.Null
+  itemsAt(answer, ["result"]).map({ textAt(_, ["name"]) ?? "" }).toList()
+}
+
+group "Symbols" {
+  const source = "type Point \{\n  x: Int\n\n  fn doubled(): Int \{\n    x * 2\n  \}\n\}\n\nfn run() \{\n  print 1\n\}\n"
+
+  test "the declarations of a document, with their members inside of them where the client nests them" {
+    var server = LanguageServer.over workspaceWith([:]), root
+    const capabilities = "\"capabilities\":\{\"textDocument\":\{\"documentSymbol\":\{\"hierarchicalDocumentSymbolSupport\":true\}\}\}"
+    const _initialized = send server, [message("initialize", "\{\"rootUri\":\"{root}\",{capabilities}\}", 1)]
+    const answers = send server, [opened(mainUri, source), about("textDocument/documentSymbol", 2, mainUri)]
+    const answer = answers.find({ integerAt(_, ["id"]) == 2 }) ?? JsonValue.Null
+    const symbols = itemsAt answer, ["result"]
+    assert(symbolNamesOf(answers, 2) == ["Point", "run"])
+    assert(integerAt(symbols[0], ["kind"]) == 23)
+    const members = itemsAt symbols[0], ["children"]
+    assert(members.map({ textAt(_, ["name"]) ?? "" }).toList() == ["x", "doubled"])
+    assert(textAt(members[1], ["detail"]) == "fn doubled(): Int")
+    assert(integerAt(members[1], ["kind"]) == 6)
+    expectText(
+      encoded(memberAt(members[1], ["selectionRange"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":3,\"character\":5\},\"end\":\{\"line\":3,\"character\":12\}\}",
+    )
+  }
+
+  test "a flat list, each member naming its container, for a client that does not nest them" {
+    var server = started()
+    const answers = send server, [opened(mainUri, source), about("textDocument/documentSymbol", 3, mainUri)]
+    assert(symbolNamesOf(answers, 3) == ["Point", "x", "doubled", "run"])
+    const answer = answers.find({ integerAt(_, ["id"]) == 3 }) ?? JsonValue.Null
+    assert(textAt(itemsAt(answer, ["result"])[1], ["containerName"]) == "Point")
+  }
+
+  test "the declarations of every file of the workspace whose name holds the query, once the index is read" {
+    const helper = "public type Doubler \{\}\n\npublic fn doubleIt(value: Int): Int \{\n  value * 2\n\}\n"
+    var server = started(["app/src/helper.trb": helper])
+    const isWaiting = send(server, [message("workspace/symbol", "\{\"query\":\"doub\"\}", 4)]).isEmpty()
+    assert isWaiting
+    const answers = server.settle()
+    assert(symbolNamesOf(answers, 4) == ["Doubler", "doubleIt"])
+    // Read once, the index answers at once
+    const again = send server, [message("workspace/symbol", "\{\"query\":\"doubleit\"\}", 5)]
+    assert(symbolNamesOf(again, 5) == ["doubleIt"])
+  }
+
+  test "a request that takes steps is answered with an error once it is cancelled" {
+    var server = started()
+    const _asked = send server, [message("workspace/symbol", "\{\"query\":\"x\"\}", 6)]
+    const answer = only server, [message("$/cancelRequest", "\{\"id\":6\}")]
+    assert(integerAt(answer, ["error", "code"]) == (-32800))
+    const idle = server.settle().isEmpty()
+    assert idle
+  }
+}
+
+group "Formatting" {
+  test "the edits of the layout of `torb format`, one per run of lines that changes" {
+    var server = started()
+    const source = "fn run() \{\nprint(1)\n\}\n"
+    const answers = send server, [opened(mainUri, source), about("textDocument/formatting", 7, mainUri)]
+    const answer = answers.find({ integerAt(_, ["id"]) == 7 }) ?? JsonValue.Null
+    expectText(
+      encoded(memberAt(answer, ["result"]) ?? JsonValue.Null),
+      "[\{\"range\":\{\"start\":\{\"line\":1,\"character\":0\},\"end\":\{\"line\":2,\"character\":0\}\},\"newText\":\"  print 1\\n\"\}]",
+    )
+  }
+
+  test "a range keeps the edits that touch its lines" {
+    var server = started()
+    const source = "fn one() \{\nprint(1)\n\}\n\nfn two() \{\nprint(2)\n\}\n"
+    const range = ",\"range\":\{\"start\":\{\"line\":5,\"character\":0\},\"end\":\{\"line\":5,\"character\":3\}\}"
+    const answers = send server, [opened(mainUri, source), about("textDocument/rangeFormatting", 8, mainUri, range)]
+    const answer = answers.find({ integerAt(_, ["id"]) == 8 }) ?? JsonValue.Null
+    const edits = itemsAt answer, ["result"]
+    assert(edits.length() == 1)
+    assert(textAt(edits[0], ["newText"]) == "  print 2\n")
+  }
+
+  test "a call of a field that holds a function keeps its parentheses, as `torb format` asks the checker" {
+    var server = started()
+    const source = "type Button \{\n  action: (Int) => Void\n\}\n\nconst button = Button(\{ print _ \})\nbutton.action(1)\nprint(2)\n"
+    const answers = send server, [opened(mainUri, source), about("textDocument/formatting", 10, mainUri)]
+    const edits = itemsAt answerOf(answers, 10), ["result"]
+    assert(edits.length() == 1)
+    assert(textAt(edits[0], ["newText"]) == "print 2\n")
+  }
+
+  test "a text that does not parse is left alone" {
+    var server = started()
+    const answers = send server, [opened(mainUri, "fn run( \{\n"), about("textDocument/formatting", 9, mainUri)]
+    const answer = answers.find({ integerAt(_, ["id"]) == 9 }) ?? JsonValue.Null
+    assert(memberAt(answer, ["result"]) == JsonValue.Null)
+  }
+
+  test "the shortest edits between two lists of lines" {
+    const edits = lineEditsBetween(["a\n", "b\n", "c\n", "d\n"], ["a\n", "B\n", "c\n", "d\n", "e\n"])
+    assert(edits == [LineEdit(1, 2, 1, 2), LineEdit(4, 4, 4, 5)])
+  }
+}
+
+/** The answer to the request with this id among the messages the server sent. */
+fn answerOf(answers: List<JsonValue>, id: Int): JsonValue {
+  answers.find({ integerAt(_, ["id"]) == id }) ?? JsonValue.Null
+}
+
+/** Locations as `path line:character-line:character`, one text each, without the root of the workspace. */
+fn placesOf(answer: JsonValue): List<String> {
+  var found: List<String> = []
+  for location in itemsAt(answer, ["result"]) {
+    const uri = (textAt(location, ["uri"]) ?? "").withoutPrefix("file:///workspace/") ?? ""
+    const start = "{integerAt(location, ["range", "start", "line"]) ?? -1}:{integerAt(location, ["range", "start", "character"]) ?? -1}"
+    const end = "{integerAt(location, ["range", "end", "line"]) ?? -1}:{integerAt(location, ["range", "end", "character"]) ?? -1}"
+    found.append "{uri} {start}-{end}"
+  }
+  found
+}
+
+/** A request about a position with more parameters behind it. */
+fn atWith(method: String, id: Int, uri: String, line: Int, character: Int, rest: String): String {
+  const position = "\"position\":\{\"line\":{line},\"character\":{character}\}"
+  message method, "\{\"textDocument\":\{\"uri\":\"{uri}\"\},{position}{rest}\}", id
+}
+
+group "References" {
+  const helper = "public fn double(value: Int): Int \{\n  value * 2\n\}\n"
+  const main = "use double from \"./helper\"\nuse quadruple from \"./other\"\n\nprint double(21)\nprint quadruple(1)\n"
+  const other = "use double from \"./helper\"\n\npublic fn quadruple(value: Int): Int \{\n  double(double(value))\n\}\n"
+
+  test "a function in the open documents at once, in the files nobody opened once they are checked" {
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main, "app/src/other.trb": other])
+    const _opened = send server, [opened(mainUri, main)]
+    const context = ",\"context\":\{\"includeDeclaration\":true\}"
+    const isWaiting = send(server, [atWith("textDocument/references", 40, mainUri, 3, 8, context)]).isEmpty()
+    assert isWaiting
+    const places = placesOf answerOf(server.settle(), 40)
+    expectText(
+      places.joined(separator: "\n"),
+      [
+        "app/src/helper.trb 0:10-0:16",
+        "app/src/main.trb 0:4-0:10",
+        "app/src/main.trb 3:6-3:12",
+        "app/src/other.trb 0:4-0:10",
+        "app/src/other.trb 3:2-3:8",
+        "app/src/other.trb 3:9-3:15",
+      ].joined(separator: "\n"),
+    )
+  }
+
+  test "a local in its body alone, without its declaration where it is not asked for" {
+    var server = started()
+    const source = "fn run(): Int \{\n  const total = 1\n  total + total\n\}\n\nprint run()\n"
+    const context = ",\"context\":\{\"includeDeclaration\":false\}"
+    const answers = send(
+      server,
+      [opened(mainUri, source), atWith("textDocument/references", 41, mainUri, 2, 3, context)],
+    )
+    assert(placesOf(answerOf(answers, 41)) == ["app/src/main.trb 2:2-2:7", "app/src/main.trb 2:10-2:15"])
+  }
+
+  test "a field: its declaration, a member behind a dot, the label of the constructor" {
+    var server = started()
+    const source = "type Point \{\n  x: Int\n\}\n\nconst point = Point(x: 1)\nprint point.x\n"
+    const context = ",\"context\":\{\"includeDeclaration\":true\}"
+    const answers = send(
+      server,
+      [opened(mainUri, source), atWith("textDocument/references", 42, mainUri, 5, 12, context)],
+    )
+    assert(
+      placesOf(answerOf(answers, 42))
+        == ["app/src/main.trb 1:2-1:3", "app/src/main.trb 4:20-4:21", "app/src/main.trb 5:12-5:13"],
+    )
+  }
+}
+
+group "Rename" {
+  const helperUri = "file:///workspace/app/src/helper.trb"
+  const helper = "public fn double(value: Int): Int \{\n  value * 2\n\}\n"
+  const main = "use double from \"./helper\"\n\nprint double(21)\n"
+
+  test "`prepareRename` answers the name at the position and its range" {
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main])
+    const answers = send server, [opened(mainUri, main), at("textDocument/prepareRename", 50, mainUri, 2, 8)]
+    const answer = answerOf answers, 50
+    assert(textAt(answer, ["result", "placeholder"]) == "double")
+    expectText(
+      encoded(memberAt(answer, ["result", "range"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":2,\"character\":6\},\"end\":\{\"line\":2,\"character\":12\}\}",
+    )
+  }
+
+  test "a rename edits every place that names it, in every file, once the checks agree" {
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main])
+    const _opened = send server, [opened(mainUri, main)]
+    const _asked = send server, [atWith("textDocument/rename", 51, mainUri, 2, 8, ",\"newName\":\"twice\"")]
+    const answer = answerOf server.settle(), 51
+    const mainEdits = itemsAt(answer, ["result", "changes", mainUri]).map(encoded).toList()
+    assert(mainEdits.length() == 2)
+    expectContains mainEdits[1], "\"newText\":\"twice\""
+    const helperEdits = itemsAt answer, ["result", "changes", helperUri]
+    expectText(
+      encoded(memberAt(helperEdits[0], ["range"]) ?? JsonValue.Null),
+      "\{\"start\":\{\"line\":0,\"character\":10\},\"end\":\{\"line\":0,\"character\":16\}\}",
+    )
+  }
+
+  test "a name that is no name, a keyword or of the wrong case is refused at once" {
+    var server = started(["app/src/helper.trb": helper, "app/src/main.trb": main])
+    const _opened = send server, [opened(mainUri, main)]
+    for name in ["Twice", "match", "two words", "double"] {
+      const answer = only server, [atWith("textDocument/rename", 52, mainUri, 2, 8, ",\"newName\":\"{name}\"")]
+      assert(integerAt(answer, ["error", "code"]) == (-32803))
+    }
+  }
+
+  test "a rename that would change what a name means is refused, and says where" {
+    var server = started()
+    const source = "fn run(): Int \{\n  const first = 1\n  const second = 2\n  first + second\n\}\n\nprint run()\n"
+    const _opened = send server, [opened(mainUri, source)]
+    const _asked = send server, [atWith("textDocument/rename", 53, mainUri, 3, 3, ",\"newName\":\"second\"")]
+    const answer = answerOf server.settle(), 53
+    assert(integerAt(answer, ["error", "code"]) == (-32803))
+    expectContains(textAt(answer, ["error", "message"]) ?? "", "renaming `first` to `second`")
+  }
+}
+
+group "Signature help" {
+  test "the signature of what a call calls, the parameter at the cursor marked" {
+    var server = started()
+    const source = "/** Adds. */\nfn add(first: Int, second: Int): Int \{\n  first + second\n\}\n\nprint add(1, 2)\n"
+    const answers = send server, [opened(mainUri, source), at("textDocument/signatureHelp", 60, mainUri, 5, 13)]
+    const answer = answerOf answers, 60
+    const signature = itemsAt(answer, ["result", "signatures"])[0]
+    assert(textAt(signature, ["label"]) == "fn add(first: Int, second: Int): Int")
+    assert(textAt(signature, ["documentation", "value"]) == "Adds.")
+    expectText(
+      encoded(memberAt(signature, ["parameters"]) ?? JsonValue.Null),
+      "[\{\"label\":[7,17]\},\{\"label\":[19,30]\}]",
+    )
+    assert(integerAt(answer, ["result", "activeParameter"]) == 1)
+  }
+
+  test "the constructor of a type is called with its fields, and a label names the parameter" {
+    var server = started()
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\nprint Point(y: 2, x: 1)\n"
+    const answers = send server, [opened(mainUri, source), at("textDocument/signatureHelp", 61, mainUri, 5, 13)]
+    const answer = answerOf answers, 61
+    assert(textAt(itemsAt(answer, ["result", "signatures"])[0], ["label"]) == "Point(x: Int, y: Int)")
+    assert(integerAt(answer, ["result", "activeParameter"]) == 1)
+  }
+}
+
+group "The documentation of a declaration" {
+  const source = "/**\n * Twice the value; [triple] is more.\n *\n * # Panics\n *\n * Never.\n */\nfn double(value: Int): Int \{\n  value * 2\n\}\n\n/** Three times the value. */\nfn triple(value: Int): Int \{\n  value * 3\n\}\n\nprint double(1) + triple(1)\n"
+
+  test "a hover renders the doc comment as `torb doc` does, its links leading to what they name" {
+    var server = started()
+    const answers = send server, [opened(mainUri, source), at("textDocument/hover", 70, mainUri, 16, 7)]
+    const markdown = textAt(answerOf(answers, 70), ["result", "contents", "value"]) ?? ""
+    expectContains markdown, "```trb\nfn double(value: Int): Int\n```"
+    expectContains markdown, "[`triple`](file:///workspace/app/src/main.trb#L13,4) is more."
+    expectContains markdown, "**Panics**\n\nNever."
+  }
+
+  test "a completion item resolves to the signature and the documentation of its declaration" {
+    var server = started()
+    const typing = source.replace "print double(1) + triple(1)\n", "print tri\n"
+    const answers = send server, [opened(mainUri, typing), at("textDocument/completion", 71, mainUri, 16, 9)]
+    const items = itemsAt answerOf(answers, 71), ["result", "items"]
+    const item = items.find({ textAt(_, ["label"]) == "triple" }) ?? JsonValue.Null
+    const resolved = only server, [message("completionItem/resolve", encoded(item), 72)]
+    assert(textAt(resolved, ["result", "detail"]) == "fn triple(value: Int): Int")
+    assert(textAt(resolved, ["result", "documentation", "value"]) == "Three times the value.")
+  }
+
+  test "a call of a generic function says what its type parameters are there" {
+    var server = started()
+    const generic = "fn firstOf<Item>(items: List<Item>): Item? \{\n  items.first()\n\}\n\nprint firstOf([1, 2])\n"
+    const answers = send server, [opened(mainUri, generic), at("textDocument/hover", 73, mainUri, 4, 8)]
+    expectContains(textAt(answerOf(answers, 73), ["result", "contents", "value"]) ?? "", "`Item` is `Int64` here")
   }
 }
 

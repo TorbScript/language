@@ -10,6 +10,8 @@ use Finding from "../lint/finding"
 use Front from "../semantics/check"
 use Locations from "./uri"
 use DocumentView from "./view"
+use WorkspaceCheck from "./workspace"
+use IndexedSymbol from "./symbols"
 
 /** A document the client opened, with the text it holds now, and the project it belongs to. */
 public type Document {
@@ -37,17 +39,23 @@ public type Project {
   var findings: Map<String, List<Finding>> = [:]
   /** The open documents whose text changed since their last run */
   var changed: List<String> = []
-  /** Whether the project is a folder of the client, rather than the surroundings of a file that belongs to none */
-  isFolder: Bool = true
+  /** Whether the project is the surroundings of a file that belongs to no folder of the client, rather than a folder */
+  loose: Bool = false
+  /** The check of the files nobody opened, in the background */
+  var workspace: WorkspaceCheck = WorkspaceCheck()
+  /** The declarations of the files below the root, by path: the index of `workspace/symbol`, read once per text */
+  var symbolIndex: Map<String, List<IndexedSymbol>> = [:]
 
   /** Whether a normalized path lies below the root of the project, or is a file of its tree. */
   fn holds(path: String): Bool {
     locations.holds(path) || tree.exists(path)
   }
 
+  /** Marks an open document whose text changed; what the index read of it is read again. */
   var fn markChanged(path: String) {
     if !changed.contains(path) {
       changed.append path
     }
+    const _indexed = symbolIndex.remove path
   }
 }

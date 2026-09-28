@@ -17,13 +17,13 @@
 use Span, SourceText, LineIndex from "../syntax/source"
 use Token, TokenKind from "../syntax/token"
 use lex from "../syntax/lexer"
-use Declaration, Member, Field, Parameter, Visibility, TypeReference, Block from "../syntax/ast"
+use Statement, Declaration, Member, Field, Parameter, Visibility, TypeReference, Block from "../syntax/ast"
 use joinPath, isInside, normalizePath from "../project/path"
 use Package from "../project/workspace"
 use libraryEntry, defaultEntry from "../project/programs"
 use Checked from "../semantics/check"
 use Module, ModuleId from "../semantics/module"
-use SymbolId, Definition from "../semantics/symbols"
+use SymbolId, Definition, boundNamesOf from "../semantics/symbols"
 use DocumentationProblem from "../documentation/markdown"
 use DocumentationBlock, CommentLine, documentationBlocks, startsFile, sectionsOf, firstSentence from "../documentation/comments"
 use examplesOf, ExampleKind from "../documentation/comments"
@@ -218,6 +218,19 @@ public fn referenceOf(checked: Checked): Reference {
   packages.sort({ _.name })
   const resolved = resolveLinks checked, packages, builder.pending, builder.locations
   Reference resolved.packages, resolved.problems
+}
+
+/**
+ * The item of the declaration whose name is written at `name` in a module, public or not: a top-level declaration, or
+ * a member or a case of a type, a trait or an `extend`, read the way [referenceOf] reads every item of a page - its
+ * signature, the doc comment in front of it, its sections and the parameters that carry a comment of their own - but
+ * without its members and with its links unresolved. What a language server's hover and the details of its
+ * completions show. `None` where no declaration of the module is named there.
+ */
+public fn itemAt(module: Module, name: Span): DocumentedItem? {
+  var reader = ModuleReader.of module, [], [:], exported: None, page: ""
+  reader.borrowsModuleComment = true
+  reader.itemNamedAt module.file.statements, name
 }
 
 /** Where a construct of the site is: its page and its anchor. */
@@ -416,6 +429,11 @@ type ModuleReader {
   /** Where the module comment starts, or `-1` */
   moduleStart: Int
   var anchors: Set<String> = []
+  /**
+   * Whether the first declaration of a file without imports has the comment at the start of the file as its own, as
+   * the parser has it - what a hover about that declaration shows - rather than leaving it to the module
+   */
+  var borrowsModuleComment: Bool = false
   var pending: List<PendingLinks> = []
   var locations: Map<String, Location> = [:]
 
@@ -523,6 +541,135 @@ type ModuleReader {
       .Use(_) => None
       .Foreign(_) => None
     }
+  }
+
+  /** The item of the declaration named at `name` among the statements, or among the members of one ([itemAt]). */
+  var fn itemNamedAt(statements: List<Statement>, name: Span): DocumentedItem? {
+    for statement in statements {
+      const declaration = match statement.kind {
+        .Declare(found) => found
+        // A top-level `const` without `public` is a statement of the file, and a declaration all the same
+        .Bind(binding) => {
+          if boundNamesOf(binding.pattern).any({ _.span == name }) {
+            const text = module.source.text.sliceBytes name.start, name.end
+            return item ItemKind.Constant, text, "", statement.span, statement.span.end, [], [], isRequired: false
+          }
+          continue
+        }
+        _ => {
+          continue
+        }
+      }
+      const span = declaration.span
+      match declaration.kind {
+        .Function(function) => {
+          if function.name.span == name {
+            const parameters = parametersOf function.parameters
+            return item(
+              ItemKind.Function,
+              function.name.text,
+              "",
+              span,
+              bodyStart(function.body, span.end),
+              parameters,
+              [],
+              isRequired: false,
+            )
+          }
+        }
+        .Type(declared) => {
+          if declared.name.span == name {
+            const header = headerEnd declared.name.span.end, span.end
+            return item ItemKind.Type, declared.name.text, "", span, header, [], [], isRequired: false
+          }
+          if const Some(found) = memberNamedAt(declared.members, declared.name.text, name) {
+            return found
+          }
+        }
+        .Trait(declared) => {
+          if declared.name.span == name {
+            const header = headerEnd declared.name.span.end, span.end
+            return item ItemKind.Trait, declared.name.text, "", span, header, [], [], isRequired: false
+          }
+          if const Some(found) = memberNamedAt(declared.members, declared.name.text, name) {
+            return found
+          }
+        }
+        .Alias(declared) => {
+          if declared.name.span == name {
+            return item ItemKind.Alias, declared.name.text, "", span, span.end, [], [], isRequired: false
+          }
+        }
+        .Constant(binding) => {
+          if boundNamesOf(binding.pattern).any({ _.span == name }) {
+            const text = module.source.text.sliceBytes name.start, name.end
+            return item ItemKind.Constant, text, "", span, span.end, [], [], isRequired: false
+          }
+        }
+        .Extend(extension) => {
+          if const Some(found) = memberNamedAt(extension.members, typeNameOf(extension.target), name) {
+            return found
+          }
+        }
+        .Foreign(library) => {
+          if const Some(found) = memberNamedAt(library.members, "", name) {
+            return found
+          }
+        }
+        .Use(_) => {}
+      }
+    }
+    None
+  }
+
+  /** The item of the member of `owner` named at `name`, where one is. */
+  var fn memberNamedAt(members: List<Member>, owner: String, name: Span): DocumentedItem? {
+    for member in members {
+      const span = member.span
+      match member.kind {
+        .Field(field) => {
+          if field.name.span == name {
+            return item ItemKind.Field, field.name.text, owner, span, span.end, [], [], isRequired: false
+          }
+        }
+        .Case(declared) => {
+          if declared.name.span == name {
+            return item(
+              ItemKind.Case,
+              declared.name.text,
+              owner,
+              span,
+              span.end,
+              fieldsOf(declared.fields),
+              [],
+              isRequired: false,
+            )
+          }
+        }
+        .Function(function) => {
+          if function.name.span == name {
+            const parameters = parametersOf function.parameters
+            return item(
+              ItemKind.Function,
+              function.name.text,
+              owner,
+              span,
+              bodyStart(function.body, span.end),
+              parameters,
+              [],
+              isRequired: false,
+            )
+          }
+        }
+        .Constant(binding) => {
+          if boundNamesOf(binding.pattern).any({ _.span == name }) {
+            const text = module.source.text.sliceBytes name.start, name.end
+            return item ItemKind.Constant, text, owner, span, span.end, [], [], isRequired: false
+          }
+        }
+      }
+    }
+    None
   }
 
   /** Records where a top-level item and its members are, for the links that name them. */
@@ -653,7 +800,7 @@ type ModuleReader {
       }
     }
     const block = found?
-    if block.span.start == moduleStart {
+    if block.span.start == moduleStart && !borrowsModuleComment {
       return None
     }
     if !module.source.text.sliceBytes(block.span.end, start).isBlank() {

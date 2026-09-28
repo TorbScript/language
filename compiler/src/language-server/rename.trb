@@ -1,0 +1,186 @@
+/**
+ * Whether a rename keeps what a program means, as the checker can tell: `textDocument/rename` checks the files the
+ * rename could touch - every file whose text has the old name or the new one as a word - before the edits and after
+ * them, and compares what each name there resolves to and what is wrong with each file ([ModuleFacts]). Only where the
+ * two agree, the places moved by the edits, is the rename answered; anywhere else it is refused, and the reason names
+ * the place: a name that would mean something else - a local the new name shadows, a declaration it collides with, a
+ * member it would take over - or a problem the rename would bring.
+ *
+ * A file that has the old name as a word and a problem before the rename refuses it as well: where the checker could
+ * not resolve everything, a use of the name might go unseen.
+ */
+
+use JsonValue from "std/json"
+use Span from "../syntax/source"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use Resolution from "../semantics/checker/context"
+use Key, RenameEdit from "./references"
+use symbolOfResolution from "./lookup"
+
+/** What a run knows about one module, in the offsets of its text: what every name resolves to, and every problem. */
+public type ModuleFacts {
+  /** Every place a name resolves to something, with the place of what it resolves to */
+  names: List<ResolvedName>
+  /** Every problem, with its place */
+  problems: List<Problem>
+}
+
+/** A name of a module and what it resolves to: a declaration or a local binding, known by the place of its name. */
+public type ResolvedName {
+  start: Int
+  end: Int
+  /** Where what it names is declared; empty for a resolution the checker could not make */
+  target: Key
+}
+
+public type Problem {
+  start: Int
+  end: Int
+  message: String
+}
+
+/**
+ * What a run knows about a module: its resolutions and names in type positions, each with the place of what it names,
+ * and the problems `diagnostics` holds for it.
+ */
+public fn factsOf(checked: Checked, module: ModuleId, problems: List<(Span, String)>): ModuleFacts {
+  const checker = checked.checker
+  const path = checked.program.graph.at(module).path
+  var names: List<ResolvedName> = []
+  for (span, resolution) in checker.tables[module.value].resolutions {
+    if const Some(target) = keyOfResolution(checked, path, resolution) {
+      names.append ResolvedName(span.start, span.end, target)
+    }
+  }
+  if const Some(typeNames) = checked.resolutions.get(module.value) {
+    for (span, symbol) in typeNames {
+      const declared = checker.symbolAt symbol
+      if const Some(home) = declared.module {
+        names.append ResolvedName(span.start, span.end, Key(checked.program.graph.at(home).path, declared.span.start))
+      }
+    }
+  }
+  names.sort({ (_.start, _.end, _.target.path, _.target.start) })
+  var found: List<Problem> = []
+  for (span, message) in problems {
+    found.append Problem(span.start, span.end, message)
+  }
+  found.sort({ (_.start, _.end, _.message) })
+  ModuleFacts names, found
+}
+
+/** The place of what a resolution names: a declaration of a module, a local binding of this one, or nothing yet. */
+fn keyOfResolution(checked: Checked, path: String, resolution: Resolution): Key? {
+  match resolution {
+    .Local(binding) => Key path, checked.checker.binding(binding).at.start
+    .Deferred => Key "", 0
+    _ => {
+      const symbol = symbolOfResolution(checked, resolution)?
+      const declared = checked.checker.symbolAt symbol
+      const home = declared.module?
+      Key checked.program.graph.at(home).path, declared.span.start
+    }
+  }
+}
+
+/** Where an offset of the text before the edits of a file is after them. */
+public fn shiftedOffset(offset: Int, edits: List<RenameEdit>): Int {
+  var shift = 0
+  for edit in edits {
+    if edit.end <= offset {
+      shift = shift + edit.text.byteLength() - (edit.end - edit.start)
+    } else if edit.start < offset {
+      // Inside of an edit: its start, which is where whatever it names begins
+      return edit.start + shift
+    }
+  }
+  offset + shift
+}
+
+/**
+ * The first difference between what a module was before a rename and what it is after it, both in the offsets of the
+ * text after the rename, as a sentence a refusal can end with - or `None` where they agree. `edits` has the edits of
+ * every file, by path, sorted, and `text` is the file after them.
+ */
+public fn differenceOf(
+  path: String,
+  before: ModuleFacts,
+  after: ModuleFacts,
+  edits: Map<String, List<RenameEdit>>,
+  text: String,
+): String? {
+  const own = edits.get(path) ?? []
+  var moved: List<ResolvedName> = []
+  for name in before.names {
+    const target = if name.target.path.isEmpty() {
+      name.target
+    } else {
+      Key name.target.path, shiftedOffset(name.target.start, edits.get(name.target.path) ?? [])
+    }
+    moved.append ResolvedName(shiftedOffset(name.start, own), shiftedOffset(name.end, own), target)
+  }
+  moved.sort({ (_.start, _.end, _.target.path, _.target.start) })
+  var movedProblems: List<Problem> = []
+  for problem in before.problems {
+    movedProblems.append Problem(shiftedOffset(problem.start, own), shiftedOffset(problem.end, own), problem.message)
+  }
+  movedProblems.sort({ (_.start, _.end, _.message) })
+  // A problem the rename brings
+  for problem in after.problems {
+    if !movedProblems.contains(problem) {
+      return "it brings a problem to {path}, line {lineOf(text, problem.start)}: {problem.message}"
+    }
+  }
+  // A name that would mean something else, or that the rename would take from something else
+  var index = 0
+  while index < moved.length() || index < after.names.length() {
+    const earlier = moved.get index
+    const later = after.names.get index
+    if earlier != later {
+      const at = later.map({ _.start }) ?? earlier.map({ _.start }) ?? 0
+      const word = wordAt text, at
+      return "`{word}` in {path}, line {lineOf(text, at)}, would mean something else afterwards"
+    }
+    index = index + 1
+  }
+  None
+}
+
+/** The line of an offset, counted from 1. */
+fn lineOf(text: String, offset: Int): Int {
+  var line = 1
+  var at = 0
+  const end = offset.min text.byteLength()
+  while const Some(found) = text.sliceBytes(at, end).byteOffsetOf("\n") {
+    line = line + 1
+    at = at + found + 1
+  }
+  line
+}
+
+/** The name that starts at an offset. */
+fn wordAt(text: String, offset: Int): String {
+  var end = offset
+  while end < text.byteLength() && isNameByte(text.byteAt(end) ?? 0) {
+    end = end + 1
+  }
+  text.sliceBytes offset, end
+}
+
+fn isNameByte(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
+}
+
+/** A text with the edits of a rename made, which are sorted and do not overlap. */
+public fn editedText(text: String, edits: List<RenameEdit>): String {
+  var pieces: List<String> = []
+  var at = 0
+  for edit in edits {
+    pieces.append text.sliceBytes(at, edit.start)
+    pieces.append edit.text
+    at = edit.end
+  }
+  pieces.append text.sliceBytes(at, text.byteLength())
+  pieces.joined separator: ""
+}

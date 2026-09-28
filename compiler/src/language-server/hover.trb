@@ -1,6 +1,8 @@
 /**
- * `textDocument/hover`: what the name or expression under the cursor is. A declaration shows its signature as the
- * source writes it and its doc comment; a local binding its type; any other expression the type the checker gave it.
+ * `textDocument/hover`: what the name or expression under the cursor is. A declaration shows the item `torb doc`
+ * builds for it (`./documentation.trb`): its signature as the source writes it, and its doc comment with the links
+ * resolved, its parameters and its sections - and at a call of a generic function, what its type parameters are
+ * there. A local binding shows its type, and any other expression the type the checker gave it.
  */
 
 use Span from "../syntax/source"
@@ -8,9 +10,12 @@ use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Resolution, BindingId from "../semantics/checker/context"
 use TypeId from "../semantics/checker/type"
+use genericsOf from "../semantics/checker/signature"
+use everyNodeOf from "../lint/nodes"
 use SymbolId from "../semantics/symbols"
 use Analysis from "./analysis"
-use Found, foundAt, symbolOfResolution, describeSymbol, kindWord from "./lookup"
+use Found, foundAt, symbolOfResolution, kindWord from "./lookup"
+use LinkTarget, documentationOf from "./documentation"
 
 /** What a hover says, and the span of the document it is about, in the text of the run that answered. */
 public type Hover {
@@ -18,11 +23,14 @@ public type Hover {
   span: Span
 }
 
-/** The hover at a byte offset of a document, in the text of the run: `None` where there is nothing to say. */
-public fn hoverOf(analysis: Analysis, path: String, offset: Int): Hover? {
+/**
+ * The hover at a byte offset of a document, in the text of the run: `None` where there is nothing to say. `locate`
+ * turns the place a link of a doc comment names into its URL.
+ */
+public fn hoverOf(analysis: Analysis, path: String, offset: Int, locate: (LinkTarget) => String?): Hover? {
   const module = analysis.moduleOf(path)?
   const found = foundAt(analysis.checked, module, offset)?
-  const markdown = markdownOf analysis.checked, module, found
+  const markdown = markdownOf analysis.checked, module, found, locate
   if markdown.isEmpty() {
     return None
   }
@@ -30,7 +38,7 @@ public fn hoverOf(analysis: Analysis, path: String, offset: Int): Hover? {
 }
 
 /** What a hover says about one thing the tables know. */
-fn markdownOf(checked: Checked, module: ModuleId, found: Found): String {
+fn markdownOf(checked: Checked, module: ModuleId, found: Found, locate: (LinkTarget) => String?): String {
   match found {
     .Resolved(span, resolution) => {
       const described = match resolution {
@@ -40,63 +48,127 @@ fn markdownOf(checked: Checked, module: ModuleId, found: Found): String {
           checked,
           symbol,
           checked.checker.tables[module.value].expressionTypes.get(span),
+          locate,
         )
         .Namespace(target) => code "module {checked.program.graph.at(target).shownPath}"
         .TupleField(_, index) => code ".{index}"
-        _ => symbolText checked, symbolOfResolution(checked, resolution)
+        .Callable(symbol, arguments, _) => {
+          const text = symbolText checked, symbol, locate
+          const given = if arguments.isEmpty() { typeArgumentsOfCall checked, module, span } else { arguments }
+          const instantiated = instantiationOf checked, symbol, given
+          if instantiated.isEmpty() || text.isEmpty() { text } else { insertedAfterSignature text, instantiated }
+        }
+        _ => symbolText checked, symbolOfResolution(checked, resolution), locate
       }
       if !described.isEmpty() {
         return described
       }
       typeText checked, checked.checker.tables[module.value].expressionTypes.get(span)
     }
-    .TypeName(_, symbol) => symbolText checked, symbol
-    .Declared(_, symbol) => symbolText checked, symbol
+    .TypeName(_, symbol) => symbolText checked, symbol, locate
+    .Declared(_, symbol) => symbolText checked, symbol, locate
     .Bound(_, binding) => bindingText checked, binding
     .Typed(_, result) => typeText checked, result
   }
 }
 
-/** A declaration: its signature, and its doc comment under it. */
-fn symbolText(checked: Checked, symbol: SymbolId?): String {
+/** A declaration: its signature, and its documentation under it. */
+fn symbolText(checked: Checked, symbol: SymbolId?, locate: (LinkTarget) => String?): String {
   const found = match symbol {
     Some(known) => known
     None => {
       return ""
     }
   }
-  match describeSymbol(checked, found) {
-    Some(description) => {
-      const signature = code description.signature
-      if description.documentation.isEmpty() {
+  const declared = checked.checker.symbolAt found
+  const module = match declared.module {
+    Some(home) => home
+    None => {
+      return code "{kindWord(declared.kind)} {declared.name}"
+    }
+  }
+  match documentationOf(checked.program, module, declared.span, locate) {
+    Some(documented) => {
+      const signature = code documented.signature
+      if documented.documentation.isEmpty() {
         signature
       } else {
-        "{signature}\n\n{description.documentation}"
+        "{signature}\n\n{documented.documentation}"
       }
     }
-    None => {
-      const declared = checked.checker.symbolAt found
-      code "{kindWord(declared.kind)} {declared.name}"
-    }
+    None => code "{kindWord(declared.kind)} {declared.name}"
   }
 }
 
-/** A constant of a module or of a type, with the type of its value, and its doc comment. */
-fn constantText(checked: Checked, symbol: SymbolId, found: TypeId?): String {
+/** A constant of a module or of a type, with the type of its value, and its documentation. */
+fn constantText(checked: Checked, symbol: SymbolId, found: TypeId?, locate: (LinkTarget) => String?): String {
   const known = match found {
     Some(annotation) => annotation
     None => {
-      return symbolText checked, symbol
+      return symbolText checked, symbol, locate
     }
   }
-  const name = checked.checker.symbolAt(symbol).name
-  const signature = code "const {name}: {checked.checker.describe(known)}"
-  const documentation = describeSymbol(checked, symbol).map({ _.documentation }) ?? ""
+  const declared = checked.checker.symbolAt symbol
+  const signature = code "const {declared.name}: {checked.checker.describe(known)}"
+  const documentation = match declared.module {
+    Some(module) => documentationOf(checked.program, module, declared.span, locate).map({ _.documentation }) ?? ""
+    None => ""
+  }
   if documentation.isEmpty() {
     signature
   } else {
     "{signature}\n\n{documentation}"
   }
+}
+
+/**
+ * What the type parameters of a generic function are at one call, a line each: `Output` is `Int64` here. Empty where
+ * the function has none, or where the call gives fewer than it declares.
+ */
+fn instantiationOf(checked: Checked, symbol: SymbolId, arguments: List<TypeId>): String {
+  if arguments.isEmpty() {
+    return ""
+  }
+  var checker = checked.checker
+  const generics = genericsOf checker, symbol
+  // The arguments are the function's own parameters, which come behind those of the type it is a member of
+  if generics.length() < arguments.length() {
+    return ""
+  }
+  const own = generics.length() - arguments.length()
+  var lines: List<String> = []
+  for (index, argument) in arguments.indexed() {
+    const name = checker.types.parameter(generics[own + index]).name
+    lines.append "`{name}` is `{checker.describe(argument)}` here"
+  }
+  lines.joined separator: "  \n"
+}
+
+/** The type arguments a call was instantiated with, where the expression at `span` is the call or its callee. */
+fn typeArgumentsOfCall(checked: Checked, module: ModuleId, span: Span): List<TypeId> {
+  const table = checked.checker.tables[module.value].typeArguments
+  if const Some(found) = table.get(span) {
+    return found
+  }
+  for expression in everyNodeOf(checked.program.graph.at(module).file).expressions {
+    if const .Call(callee, _, _) = expression.kind {
+      if callee.span == span {
+        return table.get(expression.span) ?? []
+      }
+    }
+  }
+  []
+}
+
+/** A hover's text with a paragraph right below its signature, before the documentation. */
+fn insertedAfterSignature(text: String, paragraph: String): String {
+  const end = match text.byteOffsetOf("\n```") {
+    Some(found) => found + 4
+    None => {
+      return "{text}\n\n{paragraph}"
+    }
+  }
+  "{text.sliceBytes(0, end)}\n\n{paragraph}{text.sliceBytes(end, text.byteLength())}"
 }
 
 /** A local binding: `const`, `var` or a parameter, with its type. */
@@ -109,12 +181,7 @@ fn bindingText(checked: Checked, binding: BindingId): String {
   } else {
     "const "
   }
-  code "{word}{found.name}: {checked.checker.describe(bindingType(checked, binding))}"
-}
-
-/** The type the checker gave a binding. */
-fn bindingType(checked: Checked, binding: BindingId): TypeId {
-  checked.checker.binding(binding).type
+  code "{word}{found.name}: {checked.checker.describe(found.type)}"
 }
 
 fn typeText(checked: Checked, found: TypeId?): String {

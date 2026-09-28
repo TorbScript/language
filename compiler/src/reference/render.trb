@@ -38,6 +38,109 @@ public fn markdownHtml(text: String, links: Map<String, String>): String {
 }
 
 /**
+ * The Markdown of a doc comment with every link written the way Markdown links, to the URL `links` has for its
+ * target - or as code, where it has none - and the marker of every example left out: what a language server's hover
+ * shows of a comment. Code blocks and code spans are left alone.
+ */
+public fn linkedMarkdown(text: String, links: Map<String, String>): String {
+  withLinks withoutMarkers(text), links
+}
+
+/**
+ * Every link of a doc comment, `[Option]` or `[Option.map]`, outside of code blocks and code spans, and not followed by a
+ * URL of its own: the targets [linkedMarkdown] writes as links. Each once, in the order of the text.
+ */
+public fn linkTargetsIn(text: String): List<String> {
+  var targets: List<String> = []
+  var isFenced = false
+  for line in text.split("\n") {
+    if line.trim().startsWith("```") {
+      isFenced = !isFenced
+      continue
+    }
+    if isFenced || line.startsWith("    ") || line.startsWith("\t") {
+      continue
+    }
+    const characters = line.chars().toList()
+    var index = 0
+    var isCode = false
+    while index < characters.length() {
+      const character = characters[index]
+      if character == '`' {
+        isCode = !isCode
+      }
+      if isCode || character != '[' {
+        index = index + 1
+        continue
+      }
+      var stop = index + 1
+      while stop < characters.length() && characters[stop] != ']' {
+        stop = stop + 1
+      }
+      if stop >= characters.length() {
+        break
+      }
+      const target = String.from characters[(index + 1)..stop]
+      const isInline = characters.get(stop + 1) == '(' || characters.get(stop + 1) == '['
+      if !isInline && isLinkTarget(target) && !targets.contains(target) {
+        targets.append target
+      }
+      index = stop + 1
+    }
+  }
+  targets
+}
+
+/** Whether a text in brackets names a construct: names joined by dots, and nothing else. */
+fn isLinkTarget(target: String): Bool {
+  if target.isEmpty() {
+    return false
+  }
+  for part in target.split(".") {
+    if part.isEmpty() {
+      return false
+    }
+    for character in part.chars() {
+      if !(character.isLetter() || character.isDigit() || character == '_') {
+        return false
+      }
+    }
+  }
+  true
+}
+
+/**
+ * The text of a comment with the marker in front of each of its examples left out: the first line of a block of code,
+ * fenced or indented, that says how the doc tests check it.
+ */
+fn withoutMarkers(text: String): String {
+  var lines: List<String> = []
+  var isFenced = false
+  var isInCode = false
+  for line in text.split("\n") {
+    const trimmed = line.trim()
+    if trimmed.startsWith("```") {
+      isFenced = !isFenced
+      isInCode = false
+      lines.append line
+      continue
+    }
+    const isBlank = trimmed.isEmpty()
+    const isCode = isFenced || (!isBlank && (line.startsWith("    ") || line.startsWith("\t")))
+    const isMarker = trimmed == "// fragment" || trimmed == "// check" || trimmed.startsWith("// skip")
+    if isCode && !isInCode && isMarker {
+      isInCode = true
+      continue
+    }
+    if !isBlank || isFenced {
+      isInCode = isCode
+    }
+    lines.append line
+  }
+  lines.joined separator: "\n"
+}
+
+/**
  * The first line of an example says how it is checked - `// fragment`, `// skip <reason>`, `// check` - which is for
  * the tools and not for the reader.
  */

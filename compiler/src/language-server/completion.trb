@@ -85,7 +85,7 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, o
           if isInstanceMember(candidate) {
             continue
           }
-          items.append memberItem(name, candidate.kind, checker.describe(candidate.type))
+          items.append memberItem(analysis, name, candidate.kind, checker.describe(candidate.type))
         }
       }
     }
@@ -101,7 +101,7 @@ public fn memberCompletion(analysis: Analysis, path: String, receiverEnd: Int, o
           if !isInstanceMember(candidate) {
             continue
           }
-          items.append memberItem(name, candidate.kind, checker.describe(candidate.type))
+          items.append memberItem(analysis, name, candidate.kind, checker.describe(candidate.type))
         }
       }
     }
@@ -176,30 +176,49 @@ fn keywords(): List<String> {
   ]
 }
 
-fn item(label: String, kind: Int, detail: String, group: String): JsonValue {
+fn item(label: String, kind: Int, detail: String, group: String, data: JsonValue? = None): JsonValue {
   var entries = [("label", text(label)), ("kind", integer(kind)), ("sortText", text("{group}{label}"))]
   if !detail.isEmpty() {
     entries.append(("detail", text(detail)))
+  }
+  if const Some(found) = data {
+    entries.append(("data", found))
   }
   object entries
 }
 
 fn symbolItem(analysis: Analysis, name: String, symbol: SymbolId, group: String): JsonValue {
   const kind = analysis.checked.checker.symbolAt(symbol).kind
-  item name, itemKindOf(kind), kindWord(kind), group
+  item name, itemKindOf(kind), kindWord(kind), group, declarationData(analysis, symbol)
 }
 
-fn memberItem(name: String, kind: CandidateKind, detail: String): JsonValue {
-  const itemKind = match kind {
-    .Field(_, _) => 5
-    .Constant(_, _) => 21
-    .Method(_, _) => 2
-    .CaseConstructor(_, _) => 20
-    .Construct(_) => 4
-    .Copy(_) => 2
-    .TupleField(_, _) => 5
+fn memberItem(analysis: Analysis, name: String, kind: CandidateKind, detail: String): JsonValue {
+  const (itemKind, symbol) = match kind {
+    .Field(_, field) => (5, Some(field))
+    .Constant(_, found) => (21, Some(found))
+    .Method(_, found) => (2, Some(found))
+    .CaseConstructor(_, variant) => (20, Some(variant))
+    .Construct(_) => (4, None)
+    .Copy(_) => (2, None)
+    .TupleField(_, _) => (5, None)
   }
-  item name, itemKind, detail, "0"
+  const data = match symbol {
+    Some(found) => declarationData analysis, found
+    None => None
+  }
+  item name, itemKind, detail, "0", data
+}
+
+/**
+ * Where the declaration of a symbol is - its file and the span of its name, in the texts of the run - as the `data` of
+ * a completion item, which `completionItem/resolve` hands back to be answered with its documentation. `None` for a
+ * builtin, which is declared nowhere.
+ */
+fn declarationData(analysis: Analysis, symbol: SymbolId): JsonValue? {
+  const declared = analysis.checked.checker.symbolAt symbol
+  const module = declared.module?
+  const path = analysis.checked.program.graph.at(module).path
+  object([("path", text(path)), ("start", integer(declared.span.start)), ("end", integer(declared.span.end))])
 }
 
 /**

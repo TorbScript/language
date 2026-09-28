@@ -6,15 +6,25 @@
  * torb lsp [--stdio]
  * ```
  *
- * **The server is a task.** Standard input is read through `std/io`'s `standardInput()`, whose reads are tasks, so the
- * loop that reads it returns a `Task`. The top level of `torb` does not wait for it: an `await()` there would make the
- * whole entry file a task, and the VM that `torb run` and `torb test` start refuses to run its scheduler from inside
- * one. A task the entry starts and does not wait for runs once the entry has finished (`torb_scheduler_run` after the
- * entry, docs/design/CONCURRENCY.md), and the loop ends the process itself with `Process.exit`.
+ * **The server is a task, and so is the reading of standard input.** A task of its own reads the chunks of standard
+ * input, cuts them into messages and hands every batch that arrived together to a [Channel]; the server takes what the
+ * channel holds, one item at a time. Work that is not over in one go - the check of the files nobody opened - is done
+ * in steps between the items: the server hands itself a tick through the same channel after every step, behind whatever
+ * standard input brought in the meantime, so a message never waits for more than one step, and a `$/cancelRequest` or a
+ * change of a document is read while the work is still going on. A step that is due later - the check of the workspace
+ * starts a while after the last change - waits for the clock, a task that hands in a timer every quarter of a second.
+ * Every task keeps its end of the channel for as long as the server runs: an end that is dropped closes the channel.
+ *
+ * The top level of `torb` does not wait for the server: an `await()` there would make the whole entry file a task, and
+ * the VM that `torb run` and `torb test` start refuses to run its scheduler from inside one. A task the entry starts
+ * and does not wait for runs once the entry has finished (`torb_scheduler_run` after the entry,
+ * docs/design/CONCURRENCY.md), and the server ends the process itself with `Process.exit`.
  */
 
 use standardInput, standardOutput from "std/io"
 use Process from "std/process"
+use pause from "std/task"
+use Clock, sleep from "std/time"
 use LanguageServer from "./server"
 use FrameReader, framed from "./protocol"
 use encoded from "./json"
@@ -48,48 +58,121 @@ public fn startLanguageServer() {
   const _session = serve()
 }
 
-/** Reads messages until `exit`, answers each batch that arrived together, and writes every answer framed. */
+/** What the server takes out of its channel. */
+type Event {
+  /** The messages of the chunks of standard input that arrived together */
+  case Messages(bodies: List<String>)
+  /** The server's own: the next step of the work between messages, behind what standard input brought meanwhile */
+  case Tick
+  /** A quarter of a second passed: a step that was due later may be due now */
+  case Timer
+  /** Standard input ended, or failed with this problem */
+  case Ended(problem: String)
+}
+
+/** How often the clock hands the server a [Event.Timer], in seconds: the resolution of a delay of the server's. */
+const timerInterval = 0.25
+
+/** Takes the items of the channel until `exit`, answers each, and writes every answer framed. */
 fn serve(): Task<Void> {
+  const events = Channel<Event>(capacity: 256)
+  const _reader = spawn({ readInput(events).await() })
+  const _clock = spawn({ tickEvery(events, timerInterval).await() })
   var server = LanguageServer()
+  var output = standardOutput()
+  // One end of each for as long as the server runs: an end that is dropped closes the channel
+  var source = events.source()
+  var sink = events.sink()
+  // Whether the server's own tick is in the channel
+  var isTicking = false
+  loop {
+    const event = match source.next().await() {
+      Ok(Some(found)) => found
+      Ok(None) => Event.Ended "the channel of standard input closed"
+      Fail(_) => Event.Ended "the channel of standard input failed"
+    }
+    server.now = Clock.milliseconds()
+    const replies = match event {
+      .Messages(bodies) => server.receive bodies
+      .Tick => {
+        isTicking = false
+        server.step()
+      }
+      .Timer => []
+      .Ended(problem) => {
+        printError "torb lsp: {problem}"
+        Process.exit 1
+      }
+    }
+    for line in server.log {
+      printError "torb lsp: {line}"
+    }
+    server.log = []
+    for reply in replies {
+      if const Fail(problem) = output.addText(framed(encoded(reply))).await() {
+        printError "torb lsp: standard output failed: {problem}"
+        Process.exit 1
+      }
+    }
+    if server.hasExited() {
+      Process.exit server.exitCode()
+    }
+    const due = match server.nextStepAt() {
+      Some(found) => found
+      None => {
+        continue
+      }
+    }
+    if due <= Clock.milliseconds() && !isTicking {
+      // Whatever standard input brought meanwhile goes into the channel first, and the tick behind it
+      isTicking = true
+      pause().await()
+      const _ = sink.add(Event.Tick).await()
+    }
+  }
+}
+
+/** Hands the server a [Event.Timer] every `seconds`, for as long as it runs. */
+fn tickEvery(events: Channel<Event>, seconds: Float64): Task<Void> {
+  var sink = events.sink()
+  loop {
+    sleep(seconds).await()
+    if const Fail(_) = sink.add(Event.Timer).await() {
+      return
+    }
+  }
+}
+
+/** Reads standard input until it ends, and hands the channel the messages of every chunk. */
+fn readInput(events: Channel<Event>): Task<Void> {
   var reader = FrameReader.empty()
   var input = standardInput()
-  var output = standardOutput()
+  var sink = events.sink()
   loop {
-    var bodies: List<String> = []
-    loop {
-      match reader.next() {
-        Ok(Some(body)) => bodies.append body
-        Ok(None) => {
-          break
-        }
-        Fail(problem) => printError "torb lsp: {problem.message}"
-      }
-    }
-    if !bodies.isEmpty() {
-      const replies = server.receive bodies
-      for line in server.log {
-        printError "torb lsp: {line}"
-      }
-      server.log = []
-      for reply in replies {
-        if const Fail(problem) = output.addText(framed(encoded(reply))).await() {
-          printError "torb lsp: standard output failed: {problem}"
-          Process.exit 1
-        }
-      }
-      if server.hasExited() {
-        Process.exit server.exitCode()
-      }
-    }
     match input.next().await() {
-      Ok(Some(chunk)) => reader.add chunk
+      Ok(Some(chunk)) => {
+        reader.add chunk
+        var bodies: List<String> = []
+        loop {
+          match reader.next() {
+            Ok(Some(body)) => bodies.append body
+            Ok(None) => {
+              break
+            }
+            Fail(problem) => printError "torb lsp: {problem.message}"
+          }
+        }
+        if !bodies.isEmpty() {
+          const _ = sink.add(Event.Messages(bodies)).await()
+        }
+      }
       Ok(None) => {
-        printError "torb lsp: standard input ended before `exit`"
-        Process.exit 1
+        const _ = sink.add(Event.Ended("standard input ended before `exit`")).await()
+        return
       }
       Fail(problem) => {
-        printError "torb lsp: standard input failed: {problem}"
-        Process.exit 1
+        const _ = sink.add(Event.Ended("standard input failed: {problem}")).await()
+        return
       }
     }
   }

@@ -42,6 +42,8 @@ public type SourceTree {
    * [SourceTree.cache].
    */
   private cacheValue: String = ""
+  /** The files removed since the tree was made ([SourceTree.withoutFile]), which the listing of the disk still names */
+  private removed: Set<String> = []
 
   static fn of(files: Map<String, String>, base: String = ".", standardLibrary: String = "", cache: String = ""): Self {
     var normalized: Map<String, String> = [:]
@@ -116,12 +118,15 @@ public type SourceTree {
     if const Some(found) = files.get(normalized) {
       return found
     }
+    if removed.contains(normalized) {
+      return None
+    }
     disk?.read(normalized)
   }
 
   fn exists(path: String): Bool {
     const normalized = normalizePath path
-    files.containsKey(normalized) || (disk?.lists(normalized) ?? false)
+    files.containsKey(normalized) || (!removed.contains(normalized) && (disk?.lists(normalized) ?? false))
   }
 
   /**
@@ -132,7 +137,9 @@ public type SourceTree {
     var found = files
     if const Some(read) = disk {
       for (path, text) in read.texts {
-        found.set path, text
+        if !removed.contains(path) {
+          found.set path, text
+        }
       }
     }
     found
@@ -166,7 +173,24 @@ public type SourceTree {
     texts.set normalized, text
     var parsed = parsedFiles
     const _ = parsed.remove normalized
-    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue
+    const gone = removed.removed normalized
+    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue, gone
+  }
+
+  /**
+   * The same tree without one file: what a language server makes of a file deleted on disk. Nothing asks for its text
+   * any more, and its parse is forgotten.
+   */
+  fn withoutFile(path: String): Self {
+    const normalized = normalizePath path
+    var texts = files
+    const _text = texts.remove normalized
+    const paths = sortedPaths.filter({ _ != normalized }).toList()
+    var parsed = parsedFiles
+    const _parsed = parsed.remove normalized
+    var gone = removed
+    gone.insert normalized
+    Self texts, paths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue, gone
   }
 
   /** The same tree with every file parsed once, which [SourceTree.parsedAt] then answers without parsing again. */
@@ -178,7 +202,7 @@ public type SourceTree {
         parsed.set path, (source, parse(source))
       }
     }
-    Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue
+    Self files, sortedPaths, base, standardLibraryValue, parsed, disk, otherPaths, cacheValue, removed
   }
 
   /**
@@ -190,7 +214,7 @@ public type SourceTree {
     for (path, found) in parsed {
       kept.set normalizePath(path), found
     }
-    Self files, sortedPaths, base, standardLibraryValue, kept, disk, otherPaths, cacheValue
+    Self files, sortedPaths, base, standardLibraryValue, kept, disk, otherPaths, cacheValue, removed
   }
 
   /** The text of a file as the parser reads it, and what the parser made of it: kept, or parsed now. */

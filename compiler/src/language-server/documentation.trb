@@ -1,0 +1,161 @@
+/**
+ * How the language server shows a declaration: the item `torb doc` builds for it (`../reference/model.trb`) - its
+ * signature as the source writes it up to its body, the doc comment with its links resolved, the parameters that carry
+ * a comment of their own and the sections of the comment - as the Markdown of a hover and of the documentation of a
+ * completion item. One model has every reader, so the hover says what the page of the site says.
+ *
+ * A link of a comment resolves the way a name at that place resolves: `[Option]` is what the file declares, imports or
+ * gets from its prelude by that name, and `[Option.map]` a member of it, found in its declaration. It becomes a link to
+ * the place of the declaration (`file:///...#L12,5`), which an editor opens.
+ */
+
+use Span from "../syntax/source"
+use Member from "../syntax/ast"
+use Module, ModuleId from "../semantics/module"
+use Program from "../semantics/scope"
+use boundNamesOf from "../semantics/symbols"
+use DocumentedItem, itemAt from "../reference/model"
+use linkedMarkdown, linkTargetsIn from "../reference/render"
+
+/** A place a link of a doc comment leads to: the file, and the span of the name there, in the program's text of it. */
+public type LinkTarget {
+  path: String
+  span: Span
+}
+
+/** A declaration as a hover shows it: its signature, and everything below it. */
+public type Documented {
+  /** One line, as the source writes the declaration up to its body */
+  signature: String
+  /** The doc comment, its parameters and its sections, Markdown; empty where there is no comment */
+  documentation: String
+}
+
+/**
+ * The declaration named at `name` in a module of a program, as Markdown. `locate` turns the place a link of its comment
+ * names into the URL of the link; a link to a place it answers nothing for, or to nothing at all, is shown as code.
+ */
+public fn documentationOf(
+  program: Program,
+  module: ModuleId,
+  name: Span,
+  locate: (LinkTarget) => String?,
+): Documented? {
+  const shape = program.graph.at module
+  const item = match itemAt(shape, name) {
+    Some(found) => found
+    None => {
+      return caseFieldOf shape, name
+    }
+  }
+  var links: Map<String, String> = [:]
+  for target in targetsOf(item) {
+    const url = match resolvedLink(program, module, target) {
+      Some(place) => locate(place) ?? ""
+      None => ""
+    }
+    links.set target, url
+  }
+  Documented item.signature, markdownOf(item, links)
+}
+
+/** Every link target of an item's comment: its text above the headings, its parameters and its sections. */
+fn targetsOf(item: DocumentedItem): List<String> {
+  var targets = linkTargetsIn item.doc
+  for parameter in item.parameters {
+    targets.appendAll linkTargetsIn(parameter.doc)
+  }
+  for section in item.sections {
+    targets.appendAll linkTargetsIn(section.text)
+  }
+  targets
+}
+
+/** The comment of an item as Markdown: its text, its parameters with a comment of their own, then its sections. */
+fn markdownOf(item: DocumentedItem, links: Map<String, String>): String {
+  var parts: List<String> = []
+  if !item.doc.isEmpty() {
+    parts.append linkedMarkdown(item.doc, links)
+  }
+  if !item.parameters.isEmpty() {
+    var lines = ["**Parameters**", ""]
+    for parameter in item.parameters {
+      lines.append "- `{parameter.name}`: {linkedMarkdown(parameter.doc, links).replace("\n", " ")}"
+    }
+    parts.append lines.joined(separator: "\n")
+  }
+  for section in item.sections {
+    parts.append "**{section.heading}**\n\n{linkedMarkdown(section.text, links)}"
+  }
+  parts.joined separator: "\n\n"
+}
+
+/**
+ * Where a link of a comment in `module` leads: the declaration the first name means there, and for `Type.member` the
+ * member of that name in the declaration of the type - or the type itself, where its declaration does not hold it.
+ */
+fn resolvedLink(program: Program, module: ModuleId, target: String): LinkTarget? {
+  const parts = target.split "."
+  const symbol = program.lookUp(module, parts[0]) ?? program.preludeOf(module).get(parts[0])?
+  const declared = program.symbols.at symbol
+  const home = declared.module?
+  const shape = program.graph.at home
+  if parts.length() == 1 {
+    return LinkTarget shape.path, declared.span
+  }
+  const member = memberSpanOf(shape, declared.span, parts[1]) ?? declared.span
+  LinkTarget shape.path, member
+}
+
+/** The span of the name of the member `name` in the declaration of the type or trait named at `owner`. */
+fn memberSpanOf(shape: Module, owner: Span, name: String): Span? {
+  for statement in shape.file.statements {
+    if const .Declare(declaration) = statement.kind {
+      const members = match declaration.kind {
+        .Type(written) => if written.name.span == owner { written.members } else { [] }
+        .Trait(written) => if written.name.span == owner { written.members } else { [] }
+        _ => []
+      }
+      for member in members {
+        if const Some(span) = memberNamed(member, name) {
+          return span
+        }
+      }
+    }
+  }
+  None
+}
+
+fn memberNamed(member: Member, name: String): Span? {
+  match member.kind {
+    .Field(field) => if field.name.text == name { field.name.span } else { None }
+    .Function(function) => if function.name.text == name { function.name.span } else { None }
+    .Case(written) => if written.name.text == name { written.name.span } else { None }
+    .Constant(binding) => boundNamesOf(binding.pattern).find({ _.text == name }).map({ _.span })
+  }
+}
+
+/**
+ * A field of a case, which the model has as a parameter of its case: its declaration as the source writes it, and its
+ * own comment.
+ */
+fn caseFieldOf(shape: Module, name: Span): Documented? {
+  for statement in shape.file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Type(written) = declaration.kind {
+        for member in written.members {
+          if const .Case(variant) = member.kind {
+            for field in variant.fields {
+              if field.name.span == name {
+                const end = field.type.span.end
+                const signature = shape.source.text.sliceBytes field.name.span.start, end
+                return Documented signature, (field.doc ?? "").trim()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  None
+}

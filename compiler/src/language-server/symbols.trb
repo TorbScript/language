@@ -1,0 +1,280 @@
+/**
+ * `textDocument/documentSymbol` and `workspace/symbol`: the declarations of a file as the outline of an editor shows
+ * them - types with their fields, cases and members, traits, functions, constants, `extend`s - and the declarations of
+ * every file of the workspace whose name holds what was typed. Both read the syntax tree alone, a parse and no run of
+ * the checker, so they answer for a file nobody opened as well, and while the checker is busy.
+ */
+
+use JsonValue from "std/json"
+use Span, SourceText from "../syntax/source"
+use lex from "../syntax/lexer"
+use Token from "../syntax/token"
+use SourceFile, Declaration, Member, Pattern from "../syntax/ast"
+use boundNamesOf from "../semantics/symbols"
+use ItemKind, signatureOf from "../reference/model"
+use LineMap, Range from "./position"
+use rangeJson from "./diagnostics"
+use object, integer, text, array from "./json"
+
+/** The kinds of the protocol's `SymbolKind` the server uses. */
+const namespaceKind = 3
+const classKind = 5
+const methodKind = 6
+const fieldKind = 8
+const enumKind = 10
+const interfaceKind = 11
+const functionKind = 12
+const variableKind = 13
+const constantKind = 14
+const enumMemberKind = 22
+const structKind = 23
+const typeParameterKind = 26
+
+/** One declaration of a file, with the declarations inside of it. */
+public type DeclaredSymbol {
+  name: String
+  /** A `SymbolKind` of the protocol */
+  kind: Int
+  /** The declaration as the source writes it up to its body, on one line; empty where it was not asked for */
+  detail: String
+  /** The whole declaration */
+  span: Span
+  /** Its name */
+  nameSpan: Span
+  children: List<Self> = []
+  /** What its members name as their container, where that is not its name: the type an `extend` extends */
+  containerName: String = ""
+}
+
+/** The declarations of a parsed file, in the order of the source; `withDetails` reads the signature of each. */
+public fn declaredSymbolsOf(source: SourceText, file: SourceFile, withDetails: Bool = true): List<DeclaredSymbol> {
+  var tokens: List<Token> = []
+  if withDetails {
+    for token in lex(source).tokens {
+      tokens.append token
+    }
+  }
+  const reader = SymbolReader source.text, tokens, withDetails
+  var found: List<DeclaredSymbol> = []
+  for statement in file.statements {
+    match statement.kind {
+      .Declare(declaration) => found.appendAll reader.declaration(declaration)
+      .Bind(binding) => {
+        const kind = if binding.var { variableKind } else { constantKind }
+        found.appendAll reader.bindingSymbols(binding.pattern, kind, statement.span, statement.span.end)
+      }
+      _ => {}
+    }
+  }
+  found
+}
+
+/** What reading the declarations of one file needs: its text and, for the details, its tokens. */
+type SymbolReader {
+  text: String
+  tokens: List<Token>
+  withDetails: Bool
+
+  fn detailOf(start: Int, end: Int, kind: ItemKind): String {
+    if !withDetails {
+      return ""
+    }
+    signatureOf tokens, text, start, end, kind
+  }
+
+  fn declaration(declaration: Declaration): List<DeclaredSymbol> {
+    const span = declaration.span
+    match declaration.kind {
+      .Function(function) => {
+        const end = function.body.map({ _.span.start }) ?? span.end
+        const detail = detailOf span.start, end, ItemKind.Function
+        [DeclaredSymbol(function.name.text, functionKind, detail, span, function.name.span)]
+      }
+      .Type(written) => {
+        const hasCases = written.members.any({ member => isCase member })
+        const kind = if hasCases { enumKind } else if declaration.modifiers.shared { classKind } else { structKind }
+        const detail = detailOf span.start, braceOf(written.name.span.end, span.end), ItemKind.Type
+        const children = memberSymbols written.members
+        [DeclaredSymbol(written.name.text, kind, detail, span, written.name.span, children)]
+      }
+      .Trait(written) => {
+        const detail = detailOf span.start, braceOf(written.name.span.end, span.end), ItemKind.Trait
+        const children = memberSymbols written.members
+        [DeclaredSymbol(written.name.text, interfaceKind, detail, span, written.name.span, children)]
+      }
+      .Alias(written) => {
+        const detail = detailOf span.start, span.end, ItemKind.Alias
+        [DeclaredSymbol(written.name.text, typeParameterKind, detail, span, written.name.span)]
+      }
+      .Extend(extension) => {
+        const header = braceOf extension.target.span.end, span.end
+        const name = text.sliceBytes(span.start, header).trim()
+        const children = memberSymbols extension.members
+        const target = text.sliceBytes extension.target.span.start, extension.target.span.end
+        [DeclaredSymbol(name, namespaceKind, "", span, extension.target.span, children, target)]
+      }
+      .Foreign(library) => {
+        const children = memberSymbols library.members
+        const name = "foreign \"{library.library}\""
+        [DeclaredSymbol(name, namespaceKind, "", span, Span(span.start, span.start), children)]
+      }
+      .Constant(binding) => bindingSymbols binding.pattern, constantKind, span, span.end
+      .Use(_) => []
+    }
+  }
+
+  /** The names a top-level binding declares, each a symbol of its own. */
+  fn bindingSymbols(pattern: Pattern, kind: Int, span: Span, end: Int): List<DeclaredSymbol> {
+    const detail = detailOf span.start, end, ItemKind.Constant
+    boundNamesOf(pattern).map({ DeclaredSymbol _.text, kind, detail, span, _.span }).toList()
+  }
+
+  fn memberSymbols(members: List<Member>): List<DeclaredSymbol> {
+    var found: List<DeclaredSymbol> = []
+    for member in members {
+      const span = member.span
+      match member.kind {
+        .Field(field) => {
+          const detail = detailOf span.start, span.end, ItemKind.Field
+          found.append DeclaredSymbol(field.name.text, fieldKind, detail, span, field.name.span)
+        }
+        .Case(written) => {
+          const detail = detailOf span.start, span.end, ItemKind.Case
+          found.append DeclaredSymbol(written.name.text, enumMemberKind, detail, span, written.name.span)
+        }
+        .Function(function) => {
+          const end = function.body.map({ _.span.start }) ?? span.end
+          const detail = detailOf span.start, end, ItemKind.Function
+          found.append DeclaredSymbol(function.name.text, methodKind, detail, span, function.name.span)
+        }
+        .Constant(binding) => found.appendAll bindingSymbols(binding.pattern, constantKind, span, span.end)
+      }
+    }
+    found
+  }
+
+  /** Where the `{` of the members of a declaration is, searched behind `after`; the end of the declaration without one. */
+  fn braceOf(after: Int, end: Int): Int {
+    match text.sliceBytes(after, end).byteOffsetOf("\{") {
+      Some(found) => after + found
+      None => end
+    }
+  }
+}
+
+fn isCase(member: Member): Bool {
+  match member.kind {
+    .Case(_) => true
+    _ => false
+  }
+}
+
+/** The declarations of a file as the protocol's `DocumentSymbol`s, each with its members as children. */
+public fn documentSymbolsJson(symbols: List<DeclaredSymbol>, lines: LineMap): JsonValue {
+  array symbols.map({ symbol => documentSymbolJson symbol, lines }).toList()
+}
+
+fn documentSymbolJson(symbol: DeclaredSymbol, lines: LineMap): JsonValue {
+  var entries = [("name", text(symbol.name))]
+  if !symbol.detail.isEmpty() {
+    entries.append(("detail", text(symbol.detail)))
+  }
+  entries.appendAll([
+    ("kind", integer(symbol.kind)),
+    ("range", rangeJson(lines.rangeOf(symbol.span))),
+    ("selectionRange", rangeJson(lines.rangeOf(symbol.nameSpan))),
+    ("children", documentSymbolsJson(symbol.children, lines)),
+  ])
+  object entries
+}
+
+/**
+ * The declarations of a file as the protocol's flat `SymbolInformation`s, for a client that knows no `DocumentSymbol`:
+ * a member names what it is declared in as its container.
+ */
+public fn symbolInformationJson(symbols: List<DeclaredSymbol>, lines: LineMap, uri: String): JsonValue {
+  var found: List<JsonValue> = []
+  addInformation found, symbols, lines, uri, ""
+  array found
+}
+
+fn addInformation(
+  var found: List<JsonValue>,
+  symbols: List<DeclaredSymbol>,
+  lines: LineMap,
+  uri: String,
+  container: String,
+) {
+  for symbol in symbols {
+    var entries = [
+      ("name", text(symbol.name)),
+      ("kind", integer(symbol.kind)),
+      ("location", object([("uri", text(uri)), ("range", rangeJson(lines.rangeOf(symbol.nameSpan)))])),
+    ]
+    if !container.isEmpty() {
+      entries.append(("containerName", text(container)))
+    }
+    found.append object(entries)
+    addInformation found, symbol.children, lines, uri, symbol.name
+  }
+}
+
+/** One declaration of the index of the workspace: what `workspace/symbol` answers with, found by its name. */
+public type IndexedSymbol {
+  name: String
+  kind: Int
+  /** What it is declared in: a type, a trait, an `extend`; empty at the top level of its file */
+  container: String
+  /** Where its name is, in the protocol's coordinates */
+  range: Range
+}
+
+/** The declarations of a file for the index of the workspace, without their details. */
+public fn indexedSymbolsOf(source: SourceText, file: SourceFile): List<IndexedSymbol> {
+  const lines = LineMap.of source.text
+  var found: List<IndexedSymbol> = []
+  addIndexed found, declaredSymbolsOf(source, file, withDetails: false), lines, ""
+  found
+}
+
+fn addIndexed(var found: List<IndexedSymbol>, symbols: List<DeclaredSymbol>, lines: LineMap, container: String) {
+  for symbol in symbols {
+    // An `extend` or a `foreign` block has no name of its own to be found by, and its members name what it extends
+    if symbol.kind != namespaceKind {
+      found.append IndexedSymbol(symbol.name, symbol.kind, container, lines.rangeOf(symbol.nameSpan))
+    }
+    const inner = if symbol.containerName.isEmpty() { symbol.name } else { symbol.containerName }
+    addIndexed found, symbol.children, lines, inner
+  }
+}
+
+/**
+ * How well a name matches what was typed, where it does at all: every character of the query in the name, in order,
+ * whatever their case. Less is better - a name that starts with the query first, then one that holds it, then the rest
+ * - and the shorter name first among equals. `None` where it does not match.
+ */
+public fn matchScore(name: String, query: String): Int? {
+  if query.isEmpty() {
+    return name.byteLength()
+  }
+  const lowerName = name.toLowerCase()
+  const lowerQuery = query.toLowerCase()
+  if lowerName.startsWith(lowerQuery) {
+    return name.byteLength()
+  }
+  if lowerName.contains(lowerQuery) {
+    return 1000 + name.byteLength()
+  }
+  var at = 0
+  const nameBytes: List<UInt8> = lowerName.bytes()
+  for byte in lowerQuery.bytes() {
+    while at < nameBytes.length() && nameBytes[at] != byte {
+      at = at + 1
+    }
+    if at == nameBytes.length() {
+      return None
+    }
+    at = at + 1
+  }
+  2000 + name.byteLength()
+}

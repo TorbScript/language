@@ -25,11 +25,29 @@ use Front, frontOf from "../semantics/check"
 use Analysis, analyzeOver, refreshedFrontOf, parsesOfProgram, dependentsOf from "./analysis"
 use DocumentView, Layer, Located, documentDiagnostics, documentFindings, viewAfterChange from "./view"
 use Document, Project from "./projects"
-use memberAt, textAt, integerAt, itemsAt, object, integer, text, array, decoded from "./json"
+use WorkspaceSettings, WorkspaceCheck, modulesToCheck, withCurrentParses from "./workspace"
+use ModuleRun from "./run"
+use declaredSymbolsOf, documentSymbolsJson, symbolInformationJson, indexedSymbolsOf, matchScore from "./symbols"
+use formattingOf, rangeFormattingOf from "./formatting"
+use Callees from "../canon/walk"
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use ModuleId from "../semantics/module"
+use memberAt, textAt, integerAt, booleanAt, itemsAt, object, integer, text, array, decoded, encoded from "./json"
 use LineMap, Position, Range from "./position"
 use Locations, absolutePathOf, fileUriOf from "./uri"
 use diagnosticsJson, rangeJson from "./diagnostics"
 use hoverOf from "./hover"
+use LinkTarget, documentationOf from "./documentation"
+use signatureHelpOf from "./signature-help"
+use Key, Keys, Target, TargetKind, RenameEdit, targetKindOf, sitesIn, fieldEdits, nameSpanAt, problemOfNewName from "./references"
+use ModuleFacts, factsOf, differenceOf, editedText from "./rename"
+use foundAt, symbolOfResolution from "./lookup"
+use wordOffsets from "../lint/rename"
+use Checked from "../semantics/check"
+use SymbolId from "../semantics/symbols"
+use BindingId from "../semantics/checker/context"
+use FunctionDeclaration, Member from "../syntax/ast"
 use definitionOf from "./definition"
 use completionContextOf, memberCompletion, nameCompletion, withoutMemberAccess from "./completion"
 use semanticTokensOf, tokenTypes, tokenModifiers from "./tokens"
@@ -60,12 +78,22 @@ public type LanguageServer {
   var log: List<String> = []
   /** Whether the trees are read from disk, or were handed in (a test) */
   private readsDisk: Bool = true
+  /** The disk of a server over a tree in memory, by normalized path: what a test changes before it says so */
+  private var memoryDisk: Map<String, String> = [:]
+  /** What the client says about the check of the workspace */
+  var workspaceSettings: WorkspaceSettings = WorkspaceSettings()
+  /** The time now, in the milliseconds of `Clock.milliseconds()`: what the transport sets before every call */
+  var now: Int64 = 0
+  /** The requests whose answer takes steps, the one that waits longest first */
+  private var requests: List<RequestJob> = []
+  /** What the client said it can do, in `initialize` */
+  private var clientCapabilities: JsonValue = JsonValue.Null
   /** The messages the batch that is being handled sends */
   private var outgoing: List<JsonValue> = []
 
   /** A server over a tree built in memory, whose root is `rootUri`: nothing is read from disk. */
   static fn over(tree: SourceTree, rootUri: String): Self {
-    Self projects: [Project(Locations.of(rootUri, "."), tree)], readsDisk: false
+    Self projects: [Project(Locations.of(rootUri, "."), tree)], readsDisk: false, memoryDisk: tree.readTexts()
   }
 
   fn hasExited(): Bool {
@@ -101,7 +129,7 @@ public type LanguageServer {
     if !hasExited() && phase == Phase.Running {
       for index in 0..projects.length() {
         if !projects[index].changed.isEmpty() {
-          refresh index, None
+          refresh index, also: None
         }
       }
     }
@@ -137,14 +165,27 @@ public type LanguageServer {
     match method {
       "initialize" => respond id, initialize(parameters)
       "shutdown" => {
+        // What was asked before is answered before the answer to this
+        while !requests.isEmpty() {
+          stepRequest()
+        }
         phase = Phase.ShuttingDown
         respond id, JsonValue.Null
       }
       "textDocument/hover" => respond id, hover(parameters)
       "textDocument/definition" => respond id, definition(parameters)
       "textDocument/completion" => respond id, completion(parameters)
+      "completionItem/resolve" => respond id, resolvedItem(parameters)
+      "textDocument/signatureHelp" => respond id, signatureHelp(parameters)
+      "textDocument/references" => references id, parameters
+      "textDocument/prepareRename" => prepareRename id, parameters
+      "textDocument/rename" => rename id, parameters
       "textDocument/semanticTokens/full" => respond id, semanticTokens(parameters)
       "textDocument/codeAction" => respond id, codeActions(parameters)
+      "textDocument/documentSymbol" => respond id, documentSymbols(parameters)
+      "workspace/symbol" => workspaceSymbols(id, textAt(parameters, ["query"]) ?? "")
+      "textDocument/formatting" => respond id, formatting(parameters, range: None)
+      "textDocument/rangeFormatting" => respond id, formatting(parameters, rangeAt(parameters, ["range"]))
       // Of this server's own, and `experimental` in the capabilities says so: the tests of a file, for an editor
       "torbscript/tests" => respond id, testsOf(parameters)
       _ => respondError(id, -32601, "`{method}` is not a request this server answers")
@@ -160,8 +201,14 @@ public type LanguageServer {
       "textDocument/didChange" => changedDocument parameters
       "textDocument/didClose" => closed parameters
       "workspace/didChangeWatchedFiles" => watchedFilesChanged parameters
-      // `initialized`, `$/cancelRequest`, `$/setTrace`, `textDocument/didSave`, `workspace/didChangeConfiguration`:
-      // nothing to do. A request is answered before the next message is read, so none is ever cancelled in flight
+      "workspace/didChangeConfiguration" => configure memberAt(parameters, ["settings", "torbscript", "languageServer"])
+      "initialized" => {
+        for index in 0..projects.length() {
+          scheduleWorkspace index, files: None
+        }
+      }
+      "$/cancelRequest" => cancel(memberAt(parameters, ["id"]) ?? JsonValue.Null)
+      // `$/setTrace`, `textDocument/didSave`: nothing to do
       _ => {}
     }
   }
@@ -169,6 +216,8 @@ public type LanguageServer {
   // --- The life cycle --------------------------------------------------------------------------------------------------
 
   private var fn initialize(parameters: JsonValue): JsonValue {
+    configure memberAt(parameters, ["initializationOptions"])
+    clientCapabilities = memberAt(parameters, ["capabilities"]) ?? JsonValue.Null
     if readsDisk {
       var roots: List<String> = []
       for folder in itemsAt(parameters, ["workspaceFolders"]) {
@@ -219,9 +268,19 @@ public type LanguageServer {
       ("textDocumentSync", object([("openClose", JsonValue.Bool(true)), ("change", integer(2))])),
       ("hoverProvider", JsonValue.Bool(true)),
       ("definitionProvider", JsonValue.Bool(true)),
-      ("completionProvider", object([("triggerCharacters", array([text(".")]))])),
+      (
+        "completionProvider",
+        object([("triggerCharacters", array([text(".")])), ("resolveProvider", JsonValue.Bool(true))]),
+      ),
       ("semanticTokensProvider", object([("legend", legend), ("full", JsonValue.Bool(true))])),
       ("codeActionProvider", object([("codeActionKinds", array([text("quickfix")]))])),
+      ("signatureHelpProvider", object([("triggerCharacters", array([text("("), text(",")]))])),
+      ("referencesProvider", JsonValue.Bool(true)),
+      ("renameProvider", object([("prepareProvider", JsonValue.Bool(true))])),
+      ("documentSymbolProvider", JsonValue.Bool(true)),
+      ("workspaceSymbolProvider", JsonValue.Bool(true)),
+      ("documentFormattingProvider", JsonValue.Bool(true)),
+      ("documentRangeFormattingProvider", JsonValue.Bool(true)),
       // The requests of this server's own: `torbscript/tests`
       ("experimental", object([("tests", JsonValue.Bool(true))])),
     ])
@@ -258,24 +317,13 @@ public type LanguageServer {
       return None
     }
     const tree = readTreeOf(path)?
-    projects.append Project(Locations.of("", "."), tree, isFolder: false)
+    projects.append Project(Locations.of("", "."), tree, loose: true)
     (projects.length() - 1, path)
   }
 
   /** The URI of a path, in the spelling of the folder that holds it. */
   private fn uriOf(path: String): String {
-    var best: Locations? = None
-    var longest = -1
-    for project in projects {
-      if project.locations.holds(path) && project.locations.rootUri.byteLength() > longest {
-        longest = project.locations.rootUri.byteLength()
-        best = project.locations
-      }
-    }
-    match best {
-      Some(locations) => locations.uriOf path
-      None => fileUriOf normalizePath(path)
-    }
+    uriIn projects, path
   }
 
   private var fn opened(parameters: JsonValue) {
@@ -340,20 +388,24 @@ public type LanguageServer {
     // The front holds the text of the document, and the disk holds the text everybody else sees now
     project.front = None
     project.changed = project.changed.filter({ _ != path }).toList()
-    if readsDisk {
-      if const Ok(onDisk) = File.readText(path) {
-        project.tree = project.tree.withFile path, onDisk
-      }
+    const _indexed = project.symbolIndex.remove path
+    var edited = false
+    if const Some(onDisk) = readFile(path) {
+      edited = project.tree.text(path) != onDisk
+      project.tree = project.tree.withFile path, onDisk
     }
     projects.set document.project, project
-    publish document.uri, []
+    // What the check of the workspace found about the file is what it shows again, and changes it made that were not
+    // saved are gone from what every other file sees
+    publish(document.uri, projects[document.project].workspace.published.get(path) ?? [])
+    if edited {
+      scheduleWorkspace document.project, [path]
+    }
   }
 
   /** A file the client watches changed on disk: an open document keeps its own text, every other file is read again. */
   private var fn watchedFilesChanged(parameters: JsonValue) {
-    if !readsDisk {
-      return
-    }
+    var changedIn: Map<Int, List<String>> = [:]
     for change in itemsAt(parameters, ["changes"]) {
       const uri = textAt(change, ["uri"]) ?? ""
       const (index, path) = match placeOf(uri) {
@@ -365,17 +417,61 @@ public type LanguageServer {
       if documents.containsKey(path) {
         continue
       }
-      if const Ok(onDisk) = File.readText(path) {
-        var project = projects[index]
-        project.tree = project.tree.withFile path, onDisk
-        // Every open document may import what changed; the next run asks all of them again
-        project.front = None
-        for (open, document) in documents {
-          if document.project == index {
-            project.markChanged open
+      var project = projects[index]
+      match readFile(path) {
+        Some(onDisk) => {
+          if project.tree.text(path) == onDisk {
+            continue
+          }
+          project.tree = project.tree.withFile path, onDisk
+        }
+        None => {
+          if !project.tree.exists(path) {
+            continue
+          }
+          // Deleted: nothing asks for it any more, and what was published about it is gone with it
+          project.tree = project.tree.withoutFile path
+          if project.workspace.published.containsKey(path) {
+            const _published = project.workspace.published.remove path
+            publish uriOf(path), []
           }
         }
-        projects.set index, project
+      }
+      const _indexed = project.symbolIndex.remove path
+      // Every open document may import what changed; the next run asks all of them again
+      project.front = None
+      for (open, document) in documents {
+        if document.project == index {
+          project.markChanged open
+        }
+      }
+      projects.set index, project
+      var paths = changedIn.get(index) ?? []
+      paths.append path
+      changedIn.set index, paths
+    }
+    for (index, paths) in changedIn {
+      scheduleWorkspace index, paths
+    }
+  }
+
+  /** The text of a file on disk now: the disk's, or for a server over a tree in memory, the tree's first text. */
+  private fn readFile(path: String): String? {
+    if readsDisk {
+      return File.readText(path).ok()
+    }
+    memoryDisk.get normalizePath(path)
+  }
+
+  /**
+   * Writes a file of the disk a server over a tree in memory reads, or deletes it where `text` is `None`: what a test
+   * does before it tells the server that a watched file changed.
+   */
+  var fn writeMemoryFile(path: String, text: String?) {
+    match text {
+      Some(found) => memoryDisk.set normalizePath(path), found
+      None => {
+        const _removed = memoryDisk.remove normalizePath(path)
       }
     }
   }
@@ -563,21 +659,15 @@ public type LanguageServer {
     path: String,
     span: Span,
   ): Span? {
-    if path == document.path {
-      return view.currentSpan layer, span
-    }
-    const project = projects[document.project]
-    const now = project.tree.text(path) ?? ""
-    const module = analysis.moduleOf(path)?
-    const earlier = analysis.checked.program.graph.at module
-    if earlier.source.text == now {
-      return span
-    }
-    const front = project.front?
-    const currentModule = front.program.graph.moduleAt(path)?
-    const current = front.program.graph.at currentModule
-    const mapping = mappingBetween(earlier.file, earlier.source.text, current.file, current.source.text)?
-    mapping.toCurrent span
+    currentSpanIn projects[document.project], document, view, layer, analysis, path, span
+  }
+
+  /**
+   * The URL a link of a doc comment leads to - the place of the declaration it names, as the file is now: its URI, and
+   * the line and column where the name starts (`#L12,5`, counted from 1), which an editor opens.
+   */
+  private fn linkTo(document: Document, view: DocumentView, at: Located, target: LinkTarget): String? {
+    linkIn projects, document, view, at, target
   }
 
   // --- Requests about a position ---------------------------------------------------------------------------------------
@@ -589,7 +679,13 @@ public type LanguageServer {
         return JsonValue.Null
       }
     }
-    const found = match hoverOf(at.analysis, document.path, at.offset) {
+    const all = projects
+    const found = match hoverOf(
+      at.analysis,
+      document.path,
+      at.offset,
+      { target => linkIn all, document, view, at, target },
+    ) {
       Some(thing) => thing
       None => {
         return JsonValue.Null
@@ -649,28 +745,125 @@ public type LanguageServer {
     match completionContextOf(document.text, offset) {
       .Name(_) => {
         match view.layerAt(offset) {
-          Some(at) => nameCompletion at.analysis, document.path, at.offset
+          Some(at) => {
+            const found = nameCompletion at.analysis, document.path, at.offset
+            const project = projects[document.project]
+            const all = projects
+            withCurrentData(
+              found,
+              { path, span => currentSpanIn project, document, view, at.layer, at.analysis, path, span },
+              { uriIn all, _ },
+            )
+          }
           None => JsonValue.Null
         }
       }
       .Member(receiverEnd, dot, optional) => {
         if const Some(at) = view.layerAt(receiverEnd) {
           if const Some(found) = memberCompletion(at.analysis, document.path, at.offset, optional) {
-            return found
+            const project = projects[document.project]
+            const all = projects
+            return withCurrentData(
+              found,
+              { path, span => currentSpanIn project, document, view, at.layer, at.analysis, path, span },
+              { uriIn all, _ },
+            )
           }
         }
-        const retried = match viewOfText(document, view, withoutMemberAccess(document.text, dot, offset, optional)) {
+        const patched = withoutMemberAccess document.text, dot, offset, optional
+        const retried = match viewOfText(document, view, patched) {
           Some(found) => found
           None => {
             return JsonValue.Null
           }
         }
+        // What the text without the member access has behind it is where the member access ends now
+        const cut = if optional { dot - 1 } else { dot }
+        const removed = document.text.byteLength() - patched.byteLength()
         match retried.layerAt(receiverEnd) {
-          Some(at) => memberCompletion(at.analysis, document.path, at.offset, optional) ?? JsonValue.Null
+          Some(at) => {
+            const found = memberCompletion(at.analysis, document.path, at.offset, optional) ?? JsonValue.Null
+            const project = projects[document.project]
+            const all = projects
+            const translate: (String, Span) => Span? = { path, span =>
+              const moved = currentSpanIn(project, document, retried, at.layer, at.analysis, path, span)?
+              if path == document.path && moved.start >= cut { Span(moved.start + removed, moved.end + removed) } else { moved }
+            }
+            withCurrentData found, translate, { uriIn all, _ }
+          }
           None => JsonValue.Null
         }
       }
     }
+  }
+
+  /**
+   * `completionItem/resolve`: the item with the signature of its declaration as its detail and the documentation of
+   * `torb doc` (`./documentation.trb`), found through the place its `data` names. An item without one - a local, a
+   * keyword - comes back as it is.
+   */
+  private fn resolvedItem(item: JsonValue): JsonValue {
+    const uri = textAt(item, ["data", "uri"]) ?? ""
+    const start = integerAt(item, ["data", "start"]) ?? -1
+    const end = integerAt(item, ["data", "end"]) ?? -1
+    if uri.isEmpty() || start < 0 {
+      return item
+    }
+    for project in projects {
+      const path = match project.locations.pathOf(uri) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const front = match project.front {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const module = match front.program.graph.moduleAt(path) {
+        Some(found) => found
+        None => {
+          continue
+        }
+      }
+      const all = projects
+      const documented = match documentationOf(
+        front.program,
+        module,
+        Span(start, end),
+        { target => plainLinkIn all, project, target },
+      ) {
+        Some(found) => found
+        None => {
+          return item
+        }
+      }
+      var members = match item {
+        .Object(entries) => entries
+        _ => [:]
+      }
+      members.set "detail", text(documented.signature)
+      if !documented.documentation.isEmpty() {
+        members.set "documentation", object([("kind", text("markdown")), ("value", text(documented.documentation))])
+      }
+      return JsonValue.Object members
+    }
+    item
+  }
+
+  /** `textDocument/signatureHelp`: the signature of what the call at the position calls (`./signature-help.trb`). */
+  private var fn signatureHelp(parameters: JsonValue): JsonValue {
+    const (document, view, at) = match located(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const all = projects
+    signatureHelpOf(at.analysis, document.path, at.offset, { target => linkIn all, document, view, at, target })
+      ?? JsonValue.Null
   }
 
   /** A view of the document with another text, which nobody keeps: what a completion behind a `.` asks once more. */
@@ -727,7 +920,7 @@ public type LanguageServer {
    */
   private var fn testsOf(parameters: JsonValue): JsonValue {
     const uri = textAt(parameters, ["textDocument", "uri"]) ?? ""
-    const (index, path) = match placeOf(uri) {
+    const (_, path) = match placeOf(uri) {
       Some(found) => found
       None => {
         return array([])
@@ -735,7 +928,7 @@ public type LanguageServer {
     }
     const source: String? = match documents.get(path) {
       Some(document) => document.text
-      None => textOnDisk index, path
+      None => textOnDisk path
     }
     match source {
       Some(found) => testTreeOf found
@@ -743,12 +936,646 @@ public type LanguageServer {
     }
   }
 
-  /** What the disk holds now, and not what the tree read of it before; a tree built in memory is its own disk. */
-  private fn textOnDisk(project: Int, path: String): String? {
-    if readsDisk {
-      return File.readText(path).ok()
+  /** What the disk holds now, and not what the tree read of it before. */
+  private fn textOnDisk(path: String): String? {
+    readFile path
+  }
+
+  // --- Work between messages -------------------------------------------------------------------------------------------
+
+  /**
+   * When the next step of the work between messages is due, in the milliseconds of `Clock.milliseconds()`: `0` where it
+   * is due now, `None` where there is nothing to do. The transport comes back for [LanguageServer.step] then, and answers
+   * the messages that arrive in the meantime first.
+   */
+  fn nextStepAt(): Int64? {
+    if phase != Phase.Running {
+      return None
     }
-    projects[project].tree.text path
+    if !requests.isEmpty() {
+      return 0
+    }
+    var earliest: Int64? = None
+    for project in projects {
+      if project.workspace.round.isSome() {
+        return 0
+      }
+      if const Some(due) = project.workspace.dueAt {
+        if earliest.map({ due < _ }) ?? true {
+          earliest = due
+        }
+      }
+    }
+    earliest
+  }
+
+  /** One step of the work between messages that is due now, and what it sends. */
+  var fn step(): List<JsonValue> {
+    outgoing = []
+    if phase == Phase.Running {
+      if !requests.isEmpty() {
+        stepRequest()
+      } else {
+        for index in 0..projects.length() {
+          if projects[index].workspace.isDue(now) {
+            stepWorkspace index
+            break
+          }
+        }
+      }
+    }
+    const sent = outgoing
+    outgoing = []
+    sent
+  }
+
+  /** Every step of the work between messages, each as soon as nothing else is due: what a test waits for. */
+  var fn settle(): List<JsonValue> {
+    var sent: List<JsonValue> = []
+    var steps = 0
+    while const Some(due) = nextStepAt() {
+      now = now.max due
+      sent.appendAll step()
+      steps = steps + 1
+      if steps > 100000 {
+        log.append "the work between messages did not end"
+        break
+      }
+    }
+    sent
+  }
+
+  /** Reads what the client says about the check of the workspace, and starts or stops it where that changed. */
+  private var fn configure(settings: JsonValue?) {
+    const found = match settings {
+      Some(value) => value
+      None => {
+        return
+      }
+    }
+    var next = workspaceSettings
+    if const Some(enabled) = booleanAt(found, ["workspaceDiagnostics"]) {
+      next = next.copy enabled: enabled
+    }
+    if const Some(delay) = integerAt(found, ["workspaceDiagnosticsDelay"]) {
+      next = next.copy delay: delay.max(0)
+    }
+    const wasEnabled = workspaceSettings.enabled
+    workspaceSettings = next
+    if wasEnabled && !next.enabled {
+      for index in 0..projects.length() {
+        var project = projects[index]
+        project.workspace.stop()
+        for (path, _) in project.workspace.published {
+          if !documents.containsKey(path) {
+            publish uriOf(path), []
+          }
+        }
+        project.workspace.published = [:]
+        projects.set index, project
+      }
+    }
+    if !wasEnabled && next.enabled && phase == Phase.Running {
+      for index in 0..projects.length() {
+        scheduleWorkspace index, files: None
+      }
+    }
+  }
+
+  /**
+   * `$/cancelRequest`: a request whose answer takes steps is dropped and answered with the error the protocol has for
+   * it. Every other request was answered before the next message was read, and there is nothing left to cancel.
+   */
+  private var fn cancel(id: JsonValue) {
+    const key = encoded id
+    for (index, job) in requests.indexed() {
+      if encoded(job.id) == key {
+        const _job = requests.removeAt index
+        respondError(id, -32800, "the request was cancelled")
+        return
+      }
+    }
+  }
+
+  /** One step of the request that waits longest: a part of its work, or its answer. */
+  private var fn stepRequest() {
+    var job = match requests.first() {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    match job.work {
+      .Symbols(query, pending) => {
+        var rest = pending
+        var done = 0
+        while done < 40 {
+          match rest.removeAt(rest.length() - 1) {
+            Some((index, path)) => indexFile index, path
+            None => {
+              break
+            }
+          }
+          done = done + 1
+        }
+        if rest.isEmpty() {
+          const _answered = requests.removeAt 0
+          respond job.id, symbolsMatching(query)
+          return
+        }
+        job.work = RequestWork.Symbols query, rest
+      }
+      .References(search) => {
+        var next = search
+        match next.run {
+          None => {
+            const front = frontOf projects[next.project].tree, next.candidates, onlyReached: true
+            next.run = ModuleRun.over front, modulesOf(front, next.candidates)
+          }
+          Some(running) => {
+            var run = running
+            if const Some(module) = run.nextModule() {
+              run.step()
+              const checked = checkedOf run
+              const path = checked.program.graph.at(module).path
+              for span in sitesIn(checked, module, next.target, keysOfRun(checked, path)) {
+                next.found.append((path, span))
+              }
+            }
+            if run.nextModule().isNone() {
+              const _answered = requests.removeAt 0
+              respond job.id, referencesAnswer(next)
+              return
+            }
+            next.run = run
+          }
+        }
+        job.work = RequestWork.References next
+      }
+      .Rename(search) => {
+        var next = search
+        // A document the rename edits changed since it was asked: its edits would land somewhere else
+        for (path, version) in next.versions {
+          if documents.get(path).map({ _.version }) != version {
+            const _abandoned = requests.removeAt 0
+            respondError(job.id, -32801, "`{path}` changed while the rename was being checked")
+            return
+          }
+        }
+        match next.run {
+          None => {
+            const tree = next.edited ?? next.tree
+            const front = frontOf tree, next.files, onlyReached: true
+            next.run = ModuleRun.over front, modulesOf(front, next.files)
+          }
+          Some(running) => {
+            var run = running
+            run.step()
+            if !run.isDone() {
+              next.run = run
+            } else if next.edited.isNone() {
+              if const Some(problem) = renameBefore(next, run) {
+                const _refused = requests.removeAt 0
+                respondError(job.id, -32803, problem)
+                return
+              }
+              next = afterRunOf next, run
+            } else {
+              const _answered = requests.removeAt 0
+              match renameAfter(next, run) {
+                Some(problem) => respondError(job.id, -32803, problem)
+                None => respond job.id, workspaceEditOf(next)
+              }
+              return
+            }
+          }
+        }
+        job.work = RequestWork.Rename next
+      }
+    }
+    requests.set 0, job
+  }
+
+  // --- References and rename -------------------------------------------------------------------------------------------
+
+  /**
+   * What the name at a position is about, and where that name is now: a declaration or a local binding. `None` where it
+   * names nothing a search can be about - a builtin, a module, an expression.
+   */
+  private var fn targetAt(parameters: JsonValue): (Document, Target, Span)? {
+    const (document, view, at) = located(parameters)?
+    const checked = at.analysis.checked
+    const module = at.analysis.moduleOf(document.path)?
+    const found = foundAt(checked, module, at.offset)?
+    const project = projects[document.project]
+    match found {
+      .Resolved(span, .Local(binding)) => {
+        const name = checked.checker.binding(binding).name
+        localTarget(project, document, view, at, binding, nameSpanAt(checked, module, span, name) ?? span)
+      }
+      .Bound(span, binding) => localTarget project, document, view, at, binding, span
+      .Resolved(span, resolution) => {
+        const symbol = symbolOfResolution(checked, resolution)?
+        const name = checked.checker.symbolAt(symbol).name
+        symbolTarget(project, document, view, at, symbol, nameSpanAt(checked, module, span, name) ?? span)
+      }
+      .TypeName(span, symbol) => symbolTarget project, document, view, at, symbol, span
+      .Declared(span, symbol) => symbolTarget project, document, view, at, symbol, span
+      .Typed(_, _) => None
+    }
+  }
+
+  /**
+   * `textDocument/references`: every place that names what the name at the position is about. The open documents answer
+   * from their views at once; the files nobody opened whose text has the name as a word are checked, one per step,
+   * and the answer waits for them.
+   */
+  private var fn references(id: JsonValue, parameters: JsonValue) {
+    const (document, target, _) = match targetAt(parameters) {
+      Some(found) => found
+      None => {
+        respond id, JsonValue.Null
+        return
+      }
+    }
+    const includeDeclaration = booleanAt(parameters, ["context", "includeDeclaration"]) ?? true
+    const project = projects[document.project]
+    var found: List<(String, Span)> = []
+    for (path, open) in documents {
+      if open.project != document.project || (target.kind.isFileLocal() && path != target.key.path) {
+        continue
+      }
+      if const Some(view) = project.views.get(path) {
+        found.appendAll sitesOfView(project, open, view, target)
+      }
+    }
+    var candidates: List<String> = []
+    if !target.kind.isFileLocal() {
+      for path in project.tree.paths() {
+        if path.endsWith(".trb")
+          && !documents.containsKey(path)
+          && hasWord(project.tree.text(path) ?? "", target.name) {
+          candidates.append path
+        }
+      }
+    }
+    const search = ReferenceSearch document.project, target, includeDeclaration, found, candidates
+    if candidates.isEmpty() {
+      respond id, referencesAnswer(search)
+      return
+    }
+    requests.append RequestJob(id, RequestWork.References(search))
+  }
+
+  /** The places a search found, as the protocol's locations: with the declaration or without it, as it was asked. */
+  private fn referencesAnswer(search: ReferenceSearch): JsonValue {
+    const declaration = (search.target.key.path, search.target.span)
+    var places: List<(String, Span)> = []
+    for place in search.found {
+      if place != declaration {
+        places.append place
+      }
+    }
+    if search.includeDeclaration {
+      places.append declaration
+    }
+    const all = projects
+    locationsJson places, textsOf(search.project, places), { uriIn all, _ }
+  }
+
+  /** The current text of every file among the places, by path. */
+  private fn textsOf(project: Int, places: List<(String, Span)>): Map<String, String> {
+    var texts: Map<String, String> = [:]
+    for (path, _) in places {
+      if !texts.containsKey(path) {
+        texts.set(path, projects[project].tree.text(path) ?? "")
+      }
+    }
+    texts
+  }
+
+  /** `textDocument/prepareRename`: the name at the position and its range, where a rename of it may be asked for. */
+  private var fn prepareRename(id: JsonValue, parameters: JsonValue) {
+    const (document, target, cursor) = match targetAt(parameters) {
+      Some(found) => found
+      None => {
+        respondError(id, -32803, "there is no name of a declaration or a binding here")
+        return
+      }
+    }
+    if const Some(problem) = renameRefusal(document, target) {
+      respondError(id, -32803, problem)
+      return
+    }
+    const range = rangeJson LineMap.of(document.text).rangeOf(cursor)
+    respond id, object([("range", range), ("placeholder", text(target.name))])
+  }
+
+  /**
+   * `textDocument/rename`: the edits of every place that names what the name at the position is about, once a check of
+   * every file that has the old name or the new one as a word, before and after the edits, found that they mean what
+   * they meant (`./rename.trb`). The checks are done one module per step, and the answer waits for them.
+   */
+  private var fn rename(id: JsonValue, parameters: JsonValue) {
+    const (document, target, _) = match targetAt(parameters) {
+      Some(found) => found
+      None => {
+        respondError(id, -32803, "there is no name of a declaration or a binding here")
+        return
+      }
+    }
+    const newName = textAt(parameters, ["newName"]) ?? ""
+    for problem in [renameRefusal(document, target), problemOfNewName(target, newName)] {
+      if const Some(reason) = problem {
+        respondError(id, -32803, reason)
+        return
+      }
+    }
+    const project = projects[document.project]
+    var files: List<String> = []
+    if target.kind.isFileLocal() {
+      files.append document.path
+    } else {
+      for path in project.tree.paths() {
+        if !path.endsWith(".trb") {
+          continue
+        }
+        const content = project.tree.text(path) ?? ""
+        if hasWord(content, target.name) || hasWord(content, newName) {
+          files.append path
+        }
+      }
+    }
+    var versions: Map<String, Int> = [:]
+    for (path, open) in documents {
+      if files.contains(path) {
+        versions.set path, open.version
+      }
+    }
+    const nested = booleanAt(clientCapabilities, ["workspace", "workspaceEdit", "documentChanges"]) ?? false
+    const search = RenameSearch document.project, target, newName, files, project.tree, versions, nested
+    requests.append RequestJob(id, RequestWork.Rename(search))
+  }
+
+  /** Why what a name is about cannot be renamed at all, where it cannot: it is declared outside of the workspace. */
+  private fn renameRefusal(document: Document, target: Target): String? {
+    const project = projects[document.project]
+    const inside = if project.loose { target.key.path == document.path } else { project.locations.holds target.key.path }
+    if !inside {
+      return "`{target.name}` is declared outside of the workspace, in {project.tree.display(target.key.path)}"
+    }
+    None
+  }
+
+  /** The edits of a rename as the protocol's workspace edit, with the version of every open document it edits. */
+  private fn workspaceEditOf(search: RenameSearch): JsonValue {
+    var changes: List<JsonValue> = []
+    var byUri: List<(String, JsonValue)> = []
+    var paths: List<String> = []
+    for (path, _) in search.edits {
+      paths.append path
+    }
+    paths.sort({ _ })
+    for path in paths {
+      const lines = LineMap.of(search.tree.text(path) ?? "")
+      var edits: List<JsonValue> = []
+      for edit in search.edits.get(path) ?? [] {
+        const range = rangeJson lines.rangeOf(Span(edit.start, edit.end))
+        edits.append object([("range", range), ("newText", text(edit.text))])
+      }
+      const uri = uriOf path
+      if search.usesDocumentChanges {
+        const version = match search.versions.get(path) {
+          Some(number) => integer number
+          None => JsonValue.Null
+        }
+        const identifier = object([("uri", text(uri)), ("version", version)])
+        changes.append object([("textDocument", identifier), ("edits", array(edits))])
+      } else {
+        byUri.append((uri, array(edits)))
+      }
+    }
+    if search.usesDocumentChanges {
+      return object([("documentChanges", array(changes))])
+    }
+    object([("changes", object(byUri))])
+  }
+
+  /** Asks for a round of the check of a project's files: for the files that changed, or for every file. */
+  private var fn scheduleWorkspace(index: Int, files: List<String>?) {
+    if !workspaceSettings.enabled || projects[index].loose {
+      return
+    }
+    var project = projects[index]
+    project.workspace.schedule now, workspaceSettings.delay, files
+    projects.set index, project
+  }
+
+  /** One step of the check of a project's files: the beginning of a round, one module of it, or its end. */
+  private var fn stepWorkspace(index: Int) {
+    var project = projects[index]
+    var check = project.workspace
+    match check.round {
+      None => {
+        check.dueAt = None
+        var open: List<String> = []
+        for (path, document) in documents {
+          if document.project == index {
+            open.append path
+          }
+        }
+        const root = project.locations.rootPath
+        var refreshed: Front? = None
+        if const Some(last) = check.front {
+          if !check.everything {
+            refreshed = refreshedFrontOf project.tree, last, check.changed
+          }
+        }
+        const current = refreshed ?? frontOf(project.tree, [root], withTimings: true)
+        project.tree = withCurrentParses project.tree, current.program
+        const modules = modulesToCheck current, root, open, check.everything, check.changed
+        check.everything = false
+        check.changed = []
+        check.front = current
+        check.round = ModuleRun.over current, modules
+        log.append "the check of the workspace begins: {modules.length()} file(s) below {root}"
+      }
+      Some(running) => {
+        var run = running
+        const module = run.nextModule()
+        run.step()
+        if const Some(checked) = module {
+          publishModule check, run, checked
+        }
+        if run.isDone() {
+          // Settling the escapes may have found something about any module of the round
+          for each in run.modules {
+            publishModule check, run, each
+          }
+          check.round = None
+          log.append "the check of the workspace ended: {run.modules.length()} file(s)"
+        } else {
+          check.round = run
+        }
+      }
+    }
+    project.workspace = check
+    projects.set index, project
+  }
+
+  /** Publishes what a round found about a module that no document shows, where that is not what was published. */
+  private var fn publishModule(var check: WorkspaceCheck, run: ModuleRun, module: ModuleId) {
+    const shape = run.front.program.graph.at module
+    if documents.containsKey(shape.path) {
+      return
+    }
+    const found = diagnosticsJson LineMap.of(shape.source.text), run.diagnosticsOf(module), []
+    const before = check.published.get(shape.path) ?? []
+    if encoded(JsonValue.Array(found)) == encoded(JsonValue.Array(before)) {
+      return
+    }
+    if found.isEmpty() {
+      const _removed = check.published.remove shape.path
+    } else {
+      check.published.set shape.path, found
+    }
+    publish uriOf(shape.path), found
+  }
+
+  // --- Symbols ---------------------------------------------------------------------------------------------------------
+
+  /** `textDocument/documentSymbol`: the declarations of a document, nested where the client can show them so. */
+  private var fn documentSymbols(parameters: JsonValue): JsonValue {
+    const document = match documentOf(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const source = SourceText.of document.text
+    const symbols = declaredSymbolsOf source, parse(source).file
+    const lines = LineMap.of document.text
+    const nested = booleanAt clientCapabilities, ["textDocument", "documentSymbol", "hierarchicalDocumentSymbolSupport"]
+    if nested ?? false {
+      return documentSymbolsJson symbols, lines
+    }
+    symbolInformationJson symbols, lines, document.uri
+  }
+
+  /**
+   * `workspace/symbol`: the declarations of every file below a folder of the workspace whose name holds the query. The
+   * files are read into an index once, a few dozen per step where it does not hold them yet, and read again when they
+   * change.
+   */
+  private var fn workspaceSymbols(id: JsonValue, query: String) {
+    var pending: List<(Int, String)> = []
+    for (index, project) in projects.indexed() {
+      if project.loose {
+        continue
+      }
+      for path in project.tree.paths() {
+        if path.endsWith(".trb") && project.locations.holds(path) && !project.symbolIndex.containsKey(path) {
+          pending.append((index, path))
+        }
+      }
+    }
+    if pending.isEmpty() {
+      respond id, symbolsMatching(query)
+      return
+    }
+    requests.append RequestJob(id, RequestWork.Symbols(query, pending))
+  }
+
+  /** Reads the declarations of one file into the index of its project. */
+  private var fn indexFile(index: Int, path: String) {
+    var project = projects[index]
+    const (source, parsed) = project.tree.parsedAt path
+    project.symbolIndex.set path, indexedSymbolsOf(source, parsed.file)
+    project.tree = project.tree.withParsed([path: (source, parsed)])
+    projects.set index, project
+  }
+
+  /** What the index holds of the declarations whose name matches the query, the best first, at most [symbolLimit]. */
+  private fn symbolsMatching(query: String): JsonValue {
+    var found: List<(Int, String, JsonValue)> = []
+    for project in projects {
+      for (path, symbols) in project.symbolIndex {
+        const uri = uriOf path
+        for symbol in symbols {
+          const score = match matchScore(symbol.name, query) {
+            Some(value) => value
+            None => {
+              continue
+            }
+          }
+          var entries = [
+            ("name", text(symbol.name)),
+            ("kind", integer(symbol.kind)),
+            ("location", object([("uri", text(uri)), ("range", rangeJson(symbol.range))])),
+          ]
+          if !symbol.container.isEmpty() {
+            entries.append(("containerName", text(symbol.container)))
+          }
+          found.append((score, symbol.name, object(entries)))
+        }
+      }
+    }
+    found.sort({ (_.0, _.1) })
+    array found.take(symbolLimit).map({ _.2 }).toList()
+  }
+
+  // --- Formatting ------------------------------------------------------------------------------------------------------
+
+  /** `textDocument/formatting` and, with a range, `textDocument/rangeFormatting`: the edits of `torb format`. */
+  private var fn formatting(parameters: JsonValue, range: Range?): JsonValue {
+    const document = match documentOf(parameters) {
+      Some(found) => found
+      None => {
+        return JsonValue.Null
+      }
+    }
+    const callees = calleesOfDocument document
+    const edits = match range {
+      Some(lines) => rangeFormattingOf document.text, callees, lines.start.line, lines.end.line
+      None => formattingOf document.text, callees
+    }
+    match edits {
+      Some(found) => found
+      None => {
+        log.append "not formatted, it does not parse: {document.path}"
+        JsonValue.Null
+      }
+    }
+  }
+
+  /**
+   * What the checker knows about the callees of the calls of a document, from its view: nothing where no run could check
+   * it, and then `torb format` leaves every call as it is written.
+   */
+  private var fn calleesOfDocument(document: Document): Callees {
+    const view = match viewOf(document) {
+      Some(found) => found
+      None => {
+        return Callees.nothingKnown()
+      }
+    }
+    const front = match projects[document.project].front {
+      Some(found) => found
+      None => {
+        return Callees.nothingKnown()
+      }
+    }
+    const module = match front.program.graph.moduleAt(document.path) {
+      Some(found) => found
+      None => {
+        return Callees.nothingKnown()
+      }
+    }
+    const shape = front.program.graph.at module
+    if shape.source.text != document.text {
+      return Callees.nothingKnown()
+    }
+    view.calleesOf shape.file
   }
 
   // --- Messages --------------------------------------------------------------------------------------------------------
@@ -778,6 +1605,391 @@ public type LanguageServer {
  * of the changed files once more, so the symbols of the program grow by a few per keystroke until then.
  */
 const frontRunLimit = 200
+
+/**
+ * Where a span of the file at `path` in the text the run `analysis` read is now, in a project: through the view of the
+ * document where it is the document's, through a mapping of the two texts where the file changed since the run, and as
+ * it is where it did not. `None` where the code it was about changed.
+ */
+fn currentSpanIn(
+  project: Project,
+  document: Document,
+  view: DocumentView,
+  layer: Layer,
+  analysis: Analysis,
+  path: String,
+  span: Span,
+): Span? {
+  if path == document.path {
+    return view.currentSpan layer, span
+  }
+  const now = project.tree.text(path) ?? ""
+  const module = analysis.moduleOf(path)?
+  const earlier = analysis.checked.program.graph.at module
+  if earlier.source.text == now {
+    return span
+  }
+  const front = project.front?
+  const currentModule = front.program.graph.moduleAt(path)?
+  const current = front.program.graph.at currentModule
+  const mapping = mappingBetween(earlier.file, earlier.source.text, current.file, current.source.text)?
+  mapping.toCurrent span
+}
+
+/** The URI of a path, in the spelling of the folder that holds it. */
+fn uriIn(projects: List<Project>, path: String): String {
+  var best: Locations? = None
+  var longest = -1
+  for project in projects {
+    if project.locations.holds(path) && project.locations.rootUri.byteLength() > longest {
+      longest = project.locations.rootUri.byteLength()
+      best = project.locations
+    }
+  }
+  match best {
+    Some(locations) => locations.uriOf path
+    None => fileUriOf normalizePath(path)
+  }
+}
+
+/**
+ * The URL a link of a doc comment leads to - the place of the declaration it names, as the file is now: its URI, and
+ * the line and column where the name starts (`#L12,5`, counted from 1), which an editor opens.
+ */
+fn linkIn(projects: List<Project>, document: Document, view: DocumentView, at: Located, target: LinkTarget): String? {
+  const project = projects[document.project]
+  const span = currentSpanIn(project, document, view, at.layer, at.analysis, target.path, target.span)?
+  const content = if target.path == document.path { document.text } else { project.tree.text(target.path)? }
+  const position = LineMap.of(content).positionOf(span.start)
+  "{uriIn(projects, target.path)}#L{position.line + 1},{position.character + 1}"
+}
+
+/** The URL a link of a doc comment leads to, in a project whose front holds the current text of every file. */
+fn plainLinkIn(projects: List<Project>, project: Project, target: LinkTarget): String? {
+  const content = project.tree.text(target.path)?
+  const position = LineMap.of(content).positionOf(target.span.start)
+  "{uriIn(projects, target.path)}#L{position.line + 1},{position.character + 1}"
+}
+
+/** How the ids of one run of a view turn into the places the current texts have them at. */
+fn keysOfLayer(project: Project, document: Document, view: DocumentView, layer: Layer, analysis: Analysis): Keys {
+  Keys(
+    symbol: { symbol =>
+      const declared = analysis.checked.checker.symbolAt symbol
+      const home = declared.module?
+      const path = analysis.checked.program.graph.at(home).path
+      const now = currentSpanIn(project, document, view, layer, analysis, path, declared.span)?
+      Key path, now.start
+    },
+    binding: { binding =>
+      const now = view.currentSpan(layer, analysis.checked.checker.binding(binding).at)?
+      Key document.path, now.start
+    },
+  )
+}
+
+/** How the ids of a run over the current texts turn into places, for the module at `path`: as they are. */
+fn keysOfRun(checked: Checked, path: String): Keys {
+  Keys(
+    symbol: { symbol =>
+      const declared = checked.checker.symbolAt symbol
+      const home = declared.module?
+      Key checked.program.graph.at(home).path, declared.span.start
+    },
+    binding: { binding => Key path, checked.checker.binding(binding).at.start },
+  )
+}
+
+/** What a run one module at a time has checked so far, as a run of `check` answers it. */
+fn checkedOf(run: ModuleRun): Checked {
+  Checked run.front.program.copy(symbols: run.checker.symbols), [], [], run.front.resolutions, run.modules, run.checker
+}
+
+/** The places, each once and sorted, as the protocol's locations. */
+fn locationsJson(places: List<(String, Span)>, texts: Map<String, String>, uriOf: (String) => String): JsonValue {
+  var sorted = places
+  sorted.sort({ (_.0, _.1.start, _.1.end) })
+  var found: List<JsonValue> = []
+  var previous: (String, Span)? = None
+  for place in sorted {
+    if previous == place {
+      continue
+    }
+    previous = place
+    const lines = LineMap.of(texts.get(place.0) ?? "")
+    found.append object([("uri", text(uriOf(place.0))), ("range", rangeJson(lines.rangeOf(place.1)))])
+  }
+  array found
+}
+
+/**
+ * The items of a completion with the place of each declaration in its `data` moved to where it is now, through
+ * `translate`, and named by the URI of its file: an item whose place has none there loses its `data`, and resolves to
+ * nothing more.
+ */
+fn withCurrentData(result: JsonValue, translate: (String, Span) => Span?, uriOf: (String) => String): JsonValue {
+  var entries = match result {
+    .Object(found) => found
+    _ => {
+      return result
+    }
+  }
+  var items: List<JsonValue> = []
+  for item in itemsAt(result, ["items"]) {
+    const path = textAt(item, ["data", "path"]) ?? ""
+    const start = integerAt(item, ["data", "start"]) ?? -1
+    const end = integerAt(item, ["data", "end"]) ?? -1
+    var members = match item {
+      .Object(found) => found
+      _ => [:]
+    }
+    if path.isEmpty() || start < 0 {
+      items.append item
+      continue
+    }
+    match translate(path, Span(start, end)) {
+      Some(now) => {
+        const data = object([("uri", text(uriOf(path))), ("start", integer(now.start)), ("end", integer(now.end))])
+        members.set "data", data
+      }
+      None => {
+        const _dropped = members.remove "data"
+      }
+    }
+    items.append JsonValue.Object(members)
+  }
+  entries.set "items", array(items)
+  JsonValue.Object entries
+}
+
+/** The most declarations `workspace/symbol` answers with. */
+const symbolLimit = 256
+
+/** A request whose answer takes more than one step of the work between messages. */
+type RequestJob {
+  id: JsonValue
+  var work: RequestWork
+}
+
+/** What a request that takes steps still has to do. */
+type RequestWork {
+  /** `workspace/symbol`: the files the index does not hold yet, by project, then the answer */
+  case Symbols(query: String, pending: List<(Int, String)>)
+  /** `textDocument/references`: the files nobody opened that have the name as a word, one per step */
+  case References(search: ReferenceSearch)
+  /** `textDocument/rename`: the check before the edits, then the check after them, one module per step */
+  case Rename(search: RenameSearch)
+}
+
+/** A search of the places that name a target, and what it found so far. */
+type ReferenceSearch {
+  project: Int
+  target: Target
+  includeDeclaration: Bool
+  var found: List<(String, Span)>
+  /** The files nobody opened that have the name as a word */
+  candidates: List<String>
+  var run: ModuleRun? = None
+}
+
+/** A rename, the two checks it waits for, and what the first found. */
+type RenameSearch {
+  project: Int
+  target: Target
+  newName: String
+  /** Every file that has the old name or the new one as a word */
+  files: List<String>
+  /** The files as they were when the rename was asked */
+  tree: SourceTree
+  /** The version of every open document among the files when the rename was asked */
+  versions: Map<String, Int>
+  /** Whether the client takes the edits with the versions of the documents they edit */
+  usesDocumentChanges: Bool
+  var run: ModuleRun? = None
+  /** What the check before the edits found about each file, by path */
+  var before: Map<String, ModuleFacts> = [:]
+  /** The edits of each file, sorted, by path */
+  var edits: Map<String, List<RenameEdit>> = [:]
+  /** The files with the edits made, once the check before them is done */
+  var edited: SourceTree? = None
+}
+
+/**
+ * What the check before the edits of a rename found: the facts of every file and the edits of every place that names
+ * the target - or why the rename cannot be made, where a file that has the old name has a problem.
+ */
+fn renameBefore(var search: RenameSearch, run: ModuleRun): String? {
+  const checked = checkedOf run
+  for module in run.modules {
+    const shape = checked.program.graph.at module
+    const keys = keysOfRun checked, shape.path
+    const problems = run.diagnosticsOf module
+    if !problems.isEmpty() && hasWord(shape.source.text, search.target.name) {
+      return "{shape.path} has a problem, and a use of `{search.target.name}` in it might go unseen: {problems[0].message}"
+    }
+    search.before.set shape.path, factsOf(checked, module, problems.map({ (_.span, _.message) }).toList())
+    var edits: List<RenameEdit> = []
+    if search.target.kind == TargetKind.Field {
+      edits = fieldEdits checked, module, search.target, keys, search.newName
+    } else {
+      for span in sitesIn(checked, module, search.target, keys) {
+        edits.append RenameEdit(span.start, span.end, search.newName)
+      }
+    }
+    if !edits.isEmpty() {
+      search.edits.set shape.path, edits
+    }
+  }
+  if search.edits.isEmpty() {
+    return "nothing names `{search.target.name}`"
+  }
+  None
+}
+
+/** The rename with the edits made to its files, ready for the check after them. */
+fn afterRunOf(search: RenameSearch, _run: ModuleRun): RenameSearch {
+  var edited = search.tree
+  for (path, edits) in search.edits {
+    edited = edited.withFile path, editedText(search.tree.text(path) ?? "", edits)
+  }
+  search.copy run: None, edited: edited
+}
+
+/** Why the rename changes what the program means, where the check after its edits found a difference. */
+fn renameAfter(search: RenameSearch, run: ModuleRun): String? {
+  const checked = checkedOf run
+  for module in run.modules {
+    const shape = checked.program.graph.at module
+    const problems = run.diagnosticsOf(module).map({ (_.span, _.message) }).toList()
+    const after = factsOf checked, module, problems
+    const before = search.before.get(shape.path) ?? ModuleFacts([], [])
+    if const Some(difference) = differenceOf(shape.path, before, after, search.edits, shape.source.text) {
+      return "renaming `{search.target.name}` to `{search.newName}` would change what the program means: {difference}"
+    }
+  }
+  None
+}
+
+/** The modules of a front at the paths, in their order. */
+fn modulesOf(front: Front, paths: List<String>): List<ModuleId> {
+  var found: List<ModuleId> = []
+  for path in paths {
+    if const Some(module) = front.program.graph.moduleAt(path) {
+      found.append module
+    }
+  }
+  found
+}
+
+/** Whether a text has the name as a word. */
+fn hasWord(text: String, name: String): Bool {
+  text.contains(name) && !wordOffsets(text, name).isEmpty()
+}
+
+/** A local binding as a target, with the span of its name at the position. */
+fn localTarget(
+  project: Project,
+  document: Document,
+  view: DocumentView,
+  at: Located,
+  binding: BindingId,
+  cursor: Span,
+): (Document, Target, Span)? {
+  const bound = at.analysis.checked.checker.binding binding
+  const declared = view.currentSpan(at.layer, bound.at)?
+  const name = view.currentSpan(at.layer, cursor)?
+  var parameterOf: Key? = None
+  if bound.bindsParameter {
+    if const Some(function) = functionOfParameter(at.analysis, document.path, bound.at) {
+      if const Some(now) = currentSpanIn(project, document, view, at.layer, at.analysis, document.path, function) {
+        parameterOf = Key document.path, now.start
+      }
+    }
+  }
+  const target = Target bound.name, Key(document.path, declared.start), declared, TargetKind.Local, parameterOf
+  (document, target, name)
+}
+
+/** A declaration as a target, with the span of its name at the position. */
+fn symbolTarget(
+  project: Project,
+  document: Document,
+  view: DocumentView,
+  at: Located,
+  symbol: SymbolId,
+  cursor: Span,
+): (Document, Target, Span)? {
+  const checked = at.analysis.checked
+  const declared = checked.checker.symbolAt symbol
+  const kind = targetKindOf(declared.kind)?
+  const home = declared.module?
+  const path = checked.program.graph.at(home).path
+  const span = currentSpanIn(project, document, view, at.layer, at.analysis, path, declared.span)?
+  const name = view.currentSpan(at.layer, cursor)?
+  (document, Target(declared.name, Key(path, span.start), span, kind), name)
+}
+
+/** The name of the function of the file a parameter named at `parameter` belongs to, where it is one of a function. */
+fn functionOfParameter(analysis: Analysis, path: String, parameter: Span): Span? {
+  const module = analysis.moduleOf(path)?
+  for statement in analysis.checked.program.graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      const functions: List<FunctionDeclaration> = match declaration.kind {
+        .Function(function) => [function]
+        .Type(written) => functionsOf written.members
+        .Trait(written) => functionsOf written.members
+        .Extend(written) => functionsOf written.members
+        _ => []
+      }
+      for function in functions {
+        if function.parameters.any({ _.name.span == parameter }) {
+          return function.name.span
+        }
+      }
+    }
+  }
+  None
+}
+
+fn functionsOf(members: List<Member>): List<FunctionDeclaration> {
+  var found: List<FunctionDeclaration> = []
+  for member in members {
+    if const .Function(function) = member.kind {
+      found.append function
+    }
+  }
+  found
+}
+
+/**
+ * The places of one open document that name a target, where they are now: the base's outside of the changed bodies,
+ * and the overlay's inside of them.
+ */
+fn sitesOfView(project: Project, document: Document, view: DocumentView, target: Target): List<(String, Span)> {
+  var found: List<(String, Span)> = []
+  if const Some(module) = view.base.moduleOf(document.path) {
+    const keys = keysOfLayer project, document, view, Layer.Base, view.base
+    for span in sitesIn(view.base.checked, module, target, keys) {
+      if view.mapping.touchesChangedEarlier(span) {
+        continue
+      }
+      if const Some(now) = view.mapping.toCurrent(span) {
+        found.append((document.path, now))
+      }
+    }
+  }
+  if const Some(overlay) = view.overlay {
+    if const Some(module) = overlay.moduleOf(document.path) {
+      const keys = keysOfLayer project, document, view, Layer.Overlay, overlay
+      for span in sitesIn(overlay.checked, module, target, keys) {
+        if view.mapping.isInsideChanged(span) {
+          found.append((document.path, span))
+        }
+      }
+    }
+  }
+  found
+}
 
 /** Adds a path to a list that does not hold it yet. */
 fn addPath(var paths: List<String>, path: String) {

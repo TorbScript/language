@@ -1,0 +1,539 @@
+/**
+ * What `textDocument/references` and `textDocument/rename` find: every place a declaration or a local binding is named,
+ * as the checker resolved it - a call, a member behind a `.`, a name in a type position, the item of a `use`, the label
+ * of an argument that names a parameter, a link of a doc comment - and never a place that only has the same text.
+ *
+ * A [Target] is known by where its name is now, in the current text of its file: runs of the checker over different
+ * texts give the same declaration different ids, and the place is what they agree on. A run answers through two
+ * functions that turn its ids into such places ([Keys]); the places it finds are in its own text, which the caller moves
+ * to where they are now.
+ *
+ * A field is found by the rename of `torb rename` (`../lint/rename.trb`), which knows every place that names one -
+ * labels of constructors, of `copy`, of cases and of patterns, a delegate, a bare name inside of its type - and how a
+ * bare use has to be written where the new name would mean something else there.
+ */
+
+use Span from "../syntax/source"
+use Keyword from "../syntax/token"
+use SourceFile, Expression, UseItems from "../syntax/ast"
+use Checked from "../semantics/check"
+use ModuleId from "../semantics/module"
+use SymbolId, SymbolKind from "../semantics/symbols"
+use Resolution, BindingId from "../semantics/checker/context"
+use everyNodeOf from "../lint/nodes"
+use RenameScope, FieldRename, fieldRenameOf, renameSites, wordOffsets from "../lint/rename"
+use Found, symbolOfResolution from "./lookup"
+
+/** A place in a file: its path and a byte offset, what a declaration is known by across runs. */
+public type Key {
+  path: String
+  start: Int
+}
+
+/** What a search is about. */
+public type Target {
+  /** The name as the source writes it */
+  name: String
+  /** Where the name of the declaration or the binding is now */
+  key: Key
+  /** Where the whole name is now */
+  span: Span
+  kind: TargetKind
+  /** For a parameter of a function: where the function's name is now, whose calls name the parameter as a label */
+  parameterOf: Key? = None
+}
+
+/** What kind of thing a target is: where it is found, and which names a rename may give it. */
+public type TargetKind {
+  /** A `const`, a `var`, a parameter or a binding of a pattern: in the one body that binds it */
+  case Local
+  case Function
+  case Constant
+  case Field
+  /** A `type`, a `trait`, an alias */
+  case Type
+  case Case
+  /** A type parameter: in the one declaration that declares it */
+  case TypeParameter
+
+  /** Whether the name of such a thing starts with an uppercase letter. */
+  fn isUpperCase(): Bool {
+    match self {
+      .Type | .Case | .TypeParameter => true
+      .Local | .Function | .Constant | .Field => false
+    }
+  }
+
+  /** Whether it is found only in the file that declares it. */
+  fn isFileLocal(): Bool {
+    match self {
+      .Local | .TypeParameter => true
+      _ => false
+    }
+  }
+}
+
+/** How a run's ids turn into the places the current texts have them at: `None` where the code changed since. */
+public type Keys {
+  symbol: (SymbolId) => Key?
+  binding: (BindingId) => Key?
+}
+
+/** The kind of target a declaration is; `None` for one no search is about: a builtin, a module. */
+public fn targetKindOf(kind: SymbolKind): TargetKind? {
+  match kind {
+    .Function => TargetKind.Function
+    .Type | .Alias | .Trait => TargetKind.Type
+    .Constant => TargetKind.Constant
+    .Case(_) => TargetKind.Case
+    .Field(_) => TargetKind.Field
+    .GenericParameter => TargetKind.TypeParameter
+    .Namespace(_) | .Builtin => None
+  }
+}
+
+/**
+ * The places in one module of a run that name the target, in the run's text of the module, sorted and each once. The
+ * declaration itself is among them where the module declares it and the run's tables know its name there.
+ */
+public fn sitesIn(checked: Checked, module: ModuleId, target: Target, keys: Keys): List<Span> {
+  const shape = checked.program.graph.at module
+  const text = shape.source.text
+  if wordOffsets(text, target.name).isEmpty() {
+    return []
+  }
+  var sites: List<Span> = []
+  if target.kind == TargetKind.Field {
+    for span in fieldSites(checked, module, target, keys) {
+      sites.append span
+    }
+    return sortedOnce sites
+  }
+  const checker = checked.checker
+  const names = nameSpansOf shape.file
+  // An expression that names something: a name, a member behind a `.`, a call
+  for (span, resolution) in checker.tables[module.value].resolutions {
+    if !isTargetOf(checked, resolution, target, keys) {
+      continue
+    }
+    match names.get(span) {
+      Some(name) => sites.append name
+      None => {
+        if const Some(name) = wordIn(text, span, target.name) {
+          sites.append name
+        }
+      }
+    }
+  }
+  // A name in a type position
+  if const Some(typeNames) = checked.resolutions.get(module.value) {
+    for (span, symbol) in typeNames {
+      if isSymbolTarget(checked, symbol, target, keys) {
+        sites.append span
+      }
+    }
+  }
+  // The name of a declaration, which the checker knows where it is written
+  for (index, symbol) in checker.symbols.all.indexed() {
+    if symbol.module == module && symbol.name == target.name && keys.symbol(SymbolId(index)) == target.key {
+      if text.sliceBytes(symbol.span.start, symbol.span.end) == target.name {
+        sites.append symbol.span
+      }
+    }
+  }
+  if target.kind == TargetKind.Local {
+    for (index, binding) in checker.bindings.indexed() {
+      if binding.name == target.name && keys.binding(BindingId(index)) == target.key {
+        if text.sliceBytes(binding.at.start, binding.at.end) == target.name {
+          sites.append binding.at
+        }
+      }
+    }
+  }
+  sites.appendAll useSites(checked, module, target, keys)
+  sites.appendAll labelSites(checked, module, target, keys)
+  sites.appendAll linkSites(checked, module, target, keys)
+  sortedOnce sites
+}
+
+/** Whether a resolution names the target. */
+fn isTargetOf(checked: Checked, resolution: Resolution, target: Target, keys: Keys): Bool {
+  match resolution {
+    .Local(binding) => target.kind == TargetKind.Local && keys.binding(binding) == target.key
+    // `value.copy(...)` names the type of its receiver, and not by its name
+    .CopyOf(_) | .Deferred | .TupleField(_, _) | .Namespace(_) => false
+    _ => {
+      match symbolOfResolution(checked, resolution) {
+        Some(symbol) => isSymbolTarget checked, symbol, target, keys
+        None => false
+      }
+    }
+  }
+}
+
+fn isSymbolTarget(checked: Checked, symbol: SymbolId, target: Target, keys: Keys): Bool {
+  if target.kind == TargetKind.Local || checked.checker.symbolAt(symbol).name != target.name {
+    return false
+  }
+  keys.symbol(symbol) == target.key
+}
+
+/**
+ * The name the expression at `span` of a module names something by, in the run's text: itself for a name, the member
+ * of a member access, the callee's name of a call - or the last place inside of it that has the name as a word.
+ */
+public fn nameSpanAt(checked: Checked, module: ModuleId, span: Span, name: String): Span? {
+  const shape = checked.program.graph.at module
+  if const Some(found) = nameSpansOf(shape.file).get(span) {
+    return found
+  }
+  wordIn shape.source.text, span, name
+}
+
+/** The name an expression names something by: itself for a name, the member of a member access, the callee's name of a call. */
+fn nameSpansOf(file: SourceFile): Map<Span, Span> {
+  var found: Map<Span, Span> = [:]
+  for expression in everyNodeOf(file).expressions {
+    if const Some(name) = nameOf(expression) {
+      found.set expression.span, name
+    }
+  }
+  found
+}
+
+fn nameOf(expression: Expression): Span? {
+  match expression.kind {
+    .Name(_) => expression.span
+    .Member(_, name, _) => name.span
+    .ImplicitMember(name) => name.span
+    .Call(callee, _, _) => nameOf callee
+    .Generic(target, _) => nameOf target
+    _ => None
+  }
+}
+
+/** The last place inside of a span where the text has the name as a word. */
+fn wordIn(text: String, span: Span, name: String): Span? {
+  const inside = text.sliceBytes span.start, span.end
+  const offsets = wordOffsets inside, name
+  const last = offsets.last()?
+  Span(span.start + last, span.start + last + name.byteLength())
+}
+
+/** The names of `use` items that import the target, and the target a `public use` passes on. */
+fn useSites(checked: Checked, module: ModuleId, target: Target, keys: Keys): List<Span> {
+  var found: List<Span> = []
+  if target.kind.isFileLocal() {
+    return found
+  }
+  for statement in checked.program.graph.at(module).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Names(items) = usage.items {
+          for item in items {
+            if item.name().text != target.name || item.path.length() != 1 {
+              continue
+            }
+            if const Some(symbol) = checked.program.scopes[module.value].names.get(item.localName().text) {
+              if keys.symbol(symbol) == target.key {
+                found.append item.name().span
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+/** The labels of the arguments of calls of a function that name the target, where it is one of its parameters. */
+fn labelSites(checked: Checked, module: ModuleId, target: Target, keys: Keys): List<Span> {
+  var found: List<Span> = []
+  const function = match target.parameterOf {
+    Some(key) => key
+    None => {
+      return found
+    }
+  }
+  for expression in everyNodeOf(checked.program.graph.at(module).file).expressions {
+    if const .Call(callee, arguments, _) = expression.kind {
+      if !arguments.any({ argument => argument.label.map({ _.text == target.name }) ?? false }) {
+        continue
+      }
+      const called = match calledAt(checked, module, expression.span, callee.span) {
+        Some(symbol) => symbol
+        None => {
+          continue
+        }
+      }
+      if keys.symbol(called) != function {
+        continue
+      }
+      for argument in arguments {
+        if const Some(label) = argument.label {
+          if label.text == target.name {
+            found.append label.span
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
+/**
+ * The links of doc comments that name the target: `[Name]` where the name means it in the file, and `[Type.member]`
+ * where the target is that member of that type. Only a line that is a comment, or has `//` in front of the link, is
+ * looked at.
+ */
+fn linkSites(checked: Checked, module: ModuleId, target: Target, keys: Keys): List<Span> {
+  var found: List<Span> = []
+  if target.kind.isFileLocal() {
+    return found
+  }
+  const text = checked.program.graph.at(module).source.text
+  for offset in wordOffsets(text, target.name) {
+    if !isInComment(text, offset) {
+      continue
+    }
+    const end = offset + target.name.byteLength()
+    if text.byteAt(end) != 93 {
+      continue
+    }
+    // `[Name]`, or `[Owner.name]` with the owner in front of a dot
+    if offset > 0 && text.byteAt(offset - 1) == 91 {
+      if const Some(symbol) = lookUpName(checked, module, target.name) {
+        if keys.symbol(symbol) == target.key {
+          found.append Span(offset, end)
+        }
+      }
+      continue
+    }
+    if offset > 0 && text.byteAt(offset - 1) == 46 {
+      var start = offset - 1
+      while start > 0 && isNameByte(text.byteAt(start - 1) ?? 0) {
+        start = start - 1
+      }
+      if start == 0 || text.byteAt(start - 1) != 91 {
+        continue
+      }
+      const owner = text.sliceBytes(start, offset - 1)
+      if const Some(ownerSymbol) = lookUpName(checked, module, owner) {
+        if isMemberTarget(checked, ownerSymbol, target, keys) {
+          found.append Span(offset, end)
+        }
+      }
+    }
+  }
+  found
+}
+
+/** Whether the target is a member of the type or trait `owner` declares, as its declaration writes it. */
+fn isMemberTarget(checked: Checked, owner: SymbolId, target: Target, keys: Keys): Bool {
+  for (index, symbol) in checked.checker.symbols.all.indexed() {
+    if symbol.name != target.name {
+      continue
+    }
+    const holder = match symbol.kind {
+      .Field(found) => found
+      .Case(found) => found
+      _ => {
+        continue
+      }
+    }
+    if holder == owner && keys.symbol(SymbolId(index)) == target.key {
+      return true
+    }
+  }
+  // A function or a constant of the type: its declaration lies inside of the owner's
+  const declared = checked.checker.symbolAt owner
+  const home = match declared.module {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const path = checked.program.graph.at(home).path
+  if path != target.key.path {
+    return false
+  }
+  for statement in checked.program.graph.at(home).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      const name = match declaration.kind {
+        .Type(written) => written.name.span
+        .Trait(written) => written.name.span
+        _ => {
+          continue
+        }
+      }
+      if name == declared.span {
+        // Where the declaration is now is what the target's key says; the owner's own name moved the same way
+        return keys.symbol(owner).map({ _.start < target.key.start }) ?? false
+      }
+    }
+  }
+  false
+}
+
+/** A name the way the checker looks it up in a file: its own scope, then its prelude. */
+fn lookUpName(checked: Checked, module: ModuleId, name: String): SymbolId? {
+  if const Some(found) = checked.program.lookUp(module, name) {
+    return found
+  }
+  checked.program.preludeOf(module).get(name)
+}
+
+/** The function a call calls, as the checker resolved the call or its callee. */
+fn calledAt(checked: Checked, module: ModuleId, call: Span, callee: Span): SymbolId? {
+  for span in [call, callee] {
+    if const Some(.Callable(symbol, _, _)) = checked.checker.resolutionAt(module, span) {
+      return symbol
+    }
+  }
+  None
+}
+
+fn isNameByte(byte: UInt8): Bool {
+  (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || byte == 95
+}
+
+/** Whether the offset stands in a comment: its line starts with `*`, `/*` or `//`, or has `//` in front of it. */
+fn isInComment(text: String, offset: Int): Bool {
+  const before = text.sliceBytes 0, offset
+  const lineStart = match before.lastByteOffsetOf("\n") {
+    Some(found) => found + 1
+    None => 0
+  }
+  const line = text.sliceBytes lineStart, offset
+  const trimmed = line.trim()
+  trimmed.startsWith("*") || trimmed.startsWith("/*") || line.contains("//")
+}
+
+/**
+ * The places of a field, as the rename of `torb rename` finds them: every edit it would make, with the name the field
+ * has, in the one module.
+ */
+fn fieldSites(checked: Checked, module: ModuleId, target: Target, keys: Keys): List<Span> {
+  var found: List<Span> = []
+  for edit in fieldEdits(checked, module, target, keys, target.name) {
+    found.append Span(edit.start, edit.end)
+  }
+  found
+}
+
+/** One edit of a rename in the text of a run: the span it replaces and what it writes. */
+public type RenameEdit {
+  start: Int
+  end: Int
+  text: String
+}
+
+/**
+ * The edits that rename a field in one module of a run, as `torb rename` makes them: a bare use of the field is
+ * written `self.name` where the new name is a keyword or means something else in that body.
+ */
+public fn fieldEdits(
+  checked: Checked,
+  module: ModuleId,
+  target: Target,
+  keys: Keys,
+  newName: String,
+): List<RenameEdit> {
+  var found: List<RenameEdit> = []
+  const checker = checked.checker
+  var field: SymbolId? = None
+  for (index, symbol) in checker.symbols.all.indexed() {
+    if symbol.name == target.name && keys.symbol(SymbolId(index)) == target.key {
+      if const .Field(_) = symbol.kind {
+        field = SymbolId index
+      }
+    }
+  }
+  const symbol = match field {
+    Some(found_) => found_
+    None => {
+      return found
+    }
+  }
+  const rename = match fieldRenameOf(checker, symbol, newName) {
+    Some(found_) => found_
+    None => {
+      return found
+    }
+  }
+  var declared: Map<String, SymbolId> = [:]
+  for (index, each) in checker.symbols.all.indexed() {
+    if const Some(home) = each.module {
+      match each.kind {
+        .Type | .Field(_) => declared.set "{home.value}:{each.span.start}", SymbolId(index)
+        _ => {}
+      }
+    }
+  }
+  const scope = RenameScope checker, checked.program.graph, checked.resolutions, [module], declared
+  for site in renameSites(scope, [rename]) {
+    found.append RenameEdit(site.edit.start, site.edit.end, site.edit.text)
+  }
+  found
+}
+
+/** The spans sorted by where they start, each once. */
+fn sortedOnce(spans: List<Span>): List<Span> {
+  var sorted = spans
+  sorted.sort({ (_.start, _.end) })
+  var found: List<Span> = []
+  for span in sorted {
+    if found.last() != span {
+      found.append span
+    }
+  }
+  found
+}
+
+/**
+ * Whether a name may replace the target's: a name of the language - a letter or `_`, then letters, digits and `_` - that
+ * is no keyword, starts with the letter the target's kind is spelled with, and differs from the name it has. The reason
+ * where it may not.
+ */
+public fn problemOfNewName(target: Target, newName: String): String? {
+  if newName == target.name {
+    return "`{target.name}` has that name already"
+  }
+  var first = true
+  for character in newName.chars() {
+    const isLetter = (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+    const isAllowed = isLetter || character == '_' || (!first && character >= '0' && character <= '9')
+    if !isAllowed {
+      return "`{newName}` is not a name: a letter or `_`, then letters, digits and `_`"
+    }
+    first = false
+  }
+  if first {
+    return "the new name is empty"
+  }
+  if Keyword.fromText(newName).isSome() {
+    return "`{newName}` is a keyword"
+  }
+  const initial = newName.sliceBytes 0, 1
+  const isUpper = initial.toUpperCase() == initial && initial.toLowerCase() != initial
+  if target.kind.isUpperCase() && !isUpper {
+    return "the name of {kindText(target.kind)} starts with an uppercase letter"
+  }
+  if !target.kind.isUpperCase() && isUpper {
+    return "the name of {kindText(target.kind)} starts with a lowercase letter"
+  }
+  None
+}
+
+fn kindText(kind: TargetKind): String {
+  match kind {
+    .Local => "a local binding"
+    .Function => "a function"
+    .Constant => "a constant"
+    .Field => "a field"
+    .Type => "a type"
+    .Case => "a case"
+    .TypeParameter => "a type parameter"
+  }
+}

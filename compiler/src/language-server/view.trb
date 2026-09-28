@@ -14,7 +14,10 @@
 
 use Span from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
-use Statement from "../syntax/ast"
+use Statement, SourceFile from "../syntax/ast"
+use Resolution from "../semantics/checker/context"
+use walk, Callees from "../canon/walk"
+use isNoField from "../format/typed"
 use SourceTree from "../project/source-tree"
 use Front from "../semantics/check"
 use checkNames from "../semantics/scope"
@@ -74,6 +77,37 @@ public type DocumentView {
       .Base => mapping.toCurrent span
       .Overlay => span
     }
+  }
+
+  /** What the checker resolved the expression at a span of the current text to, in the run that knows the code there. */
+  fn resolutionAt(span: Span): Resolution? {
+    if const Some(changed) = overlay {
+      if mapping.isInsideChanged(span) {
+        const module = changed.moduleOf(path)?
+        return changed.checked.checker.resolutionAt module, span
+      }
+    }
+    const earlier = mapping.toEarlier(span)?
+    const module = base.moduleOf(path)?
+    base.checked.checker.resolutionAt module, earlier
+  }
+
+  /**
+   * What the checker knows about the callee of every call of the document as it is now (`parsed`, its current parse):
+   * the calls whose callee it resolved to something that is no field, which `torb format` may write as a command. A
+   * call of a field that holds a function keeps its parentheses, and so does one the checker did not resolve.
+   */
+  fn calleesOf(parsed: SourceFile): Callees {
+    const sites = walk parsed
+    var resolved: Set<Int> = Set.of()
+    for (index, site) in sites.calls.indexed() {
+      if const .Call(callee, _, _) = site.call.kind {
+        if isNoField(resolutionAt(callee.span)) {
+          resolved.insert index
+        }
+      }
+    }
+    Callees sites.calls.length(), resolved
   }
 
   /** Whether the checker read a string literal at a span of the current text verbatim. */
