@@ -44,6 +44,7 @@ anything else, so it runs the compiler of this checkout.
 | `images/icon.png`, `images/icon.svg` | The icon of the stores and of the Extensions view - see "The brand" |
 | `images/file-icon-light.svg`, `images/file-icon-dark.svg` | The icon of a `.trb` file in the explorer and on tabs - see "The brand" |
 | `samples/tokens.trb` | Every semantic token kind in one file, to see the palette in place; checked and formatted by the gates like any other file |
+| `test/toolchain.js` | Where `toolchain.js` finds `torb`, against a fake file system and without VS Code: `node editors/vscode/test/toolchain.js`, which the forge's extension job runs |
 
 ## The brand
 
