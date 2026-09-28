@@ -151,10 +151,16 @@ fn compilerIdentityOf(executable: String, directory: String): Int {
   executable.hash()
 }
 
-/** The texts of the runtime's C files and headers, with their names: what every binary is linked against. */
+/**
+ * The texts of the runtime's C files and headers, with their names: what every binary is linked against - those of
+ * `runtime/` and `include/`, and those of `os/` and `tls/`, whose files a binary links as well (the directories the
+ * object cache of `torb build` keys on, `runtimeHeadersHashOf`). An edit of the poller of a system kept the key once,
+ * and `run --native` started the binary built before it.
+ */
 fn runtimeIdentityOf(runtime: String): Int {
   var seed = 0
-  for directory in [runtime, joinPath(runtime, "include")] {
+  const directories = [runtime, joinPath(runtime, "include"), joinPath(runtime, "os"), joinPath(runtime, "tls")]
+  for directory in directories {
     const names = match File.list(directory) {
       Ok(found) => found
       Fail(_) => []
