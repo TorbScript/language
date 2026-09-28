@@ -117,7 +117,7 @@ counters.update 1 { element =>
 /** A connection has identity, not just a value: `shared type` is the exception where assigning never copies. */
 shared type Connection {
   url: String
-  private(var) sent: Int = 0
+  protected var sent: Int = 0
 
   var fn send(message: String) {
     sent = sent + 1
@@ -198,10 +198,10 @@ type Percent with TryFrom<Int, ParseError> {
 
 // --- Visibility ---------------------------------------------------------------
 
-/** A member is public unless marked `private`; `private(var)` is public to read and private to write. */
+/** A member is public unless marked `private`; `protected var` is public to read and written only in its own file. */
 type Account {
   owner: String                                        // Members are public unless marked `private`
-  private(var) balance: Int = 0                         // The `var` is private: everybody reads, only Account writes
+  protected var balance: Int = 0                       // Write-protected: everybody reads, only this file writes
   private var history: List<String> = []                    // `private`: invisible from outside
 
   var fn deposit(amount: Int) {

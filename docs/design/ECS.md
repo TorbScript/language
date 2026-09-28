@@ -459,11 +459,11 @@ stopgap that works today, and it is a stopgap because two packages can write one
 
 ```trb fragment
 public type Column<Component> {
-  private(var) owners: List<Entity> = []
-  private(var) values: List<Component> = []
-  private(var) rows: Map<Entity, Int> = [:]
-  private(var) stamps: List<Int> = []
-  private(var) clock: Int = 0
+  protected var owners: List<Entity> = []
+  protected var values: List<Component> = []
+  protected var rows: Map<Entity, Int> = [:]
+  protected var stamps: List<Int> = []
+  protected var clock: Int = 0
 }
 ```
 
@@ -626,7 +626,7 @@ That is one slot write per row into a dense column. Where a system changes many 
 them one at a time, which reads better than a batched form would.
 
 In-place mutation without a write-back does exist and the compiled probe uses it, but only from **inside** the type
-that owns the column, because `private(var)` hands outsiders a read-only path:
+that owns the column, because `protected var` hands outsiders a read-only path:
 
 ```trb fragment
 extend Column<Position> {
@@ -880,8 +880,8 @@ are checked for a conflict and otherwise only documented.
 
 ```trb fragment
 public type Schedule<World> {
-  private(var) stages: List<Stage<World>> = []
-  private(var) accumulated: Duration = Duration.zero
+  protected var stages: List<Stage<World>> = []
+  protected var accumulated: Duration = Duration.zero
   var step: Duration = Duration.milliseconds(16)
 }
 ```
@@ -1196,7 +1196,7 @@ the language:
 
 ```trb fragment
 public type Registry<World> {
-  private(var) installers: Map<ComponentKey, (var world: World, entity: Entity, value: EncodedValue) => Void> = [:]
+  protected var installers: Map<ComponentKey, (var world: World, entity: Entity, value: EncodedValue) => Void> = [:]
 
   var fn register(key: ComponentKey, install: (var world: World, entity: Entity, value: EncodedValue) => Void) {
     installers[key] = install

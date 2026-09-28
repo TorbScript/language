@@ -131,7 +131,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | Path | Title | Kind | Answers | Source |
 |------|-------|------|---------|--------|
 | `language/types/declaring-a-type.md` | Declaring a type | reference | Fields, methods, and what is generated | done |
-| `language/types/fields.md` | Fields | reference | `var`, `private`, `private(var)`, and the table of four | `CONCEPT.md#visibility-and-encapsulation` |
+| `language/types/fields.md` | Fields | reference | `var`, `private`, `protected var`, and the table of four | `CONCEPT.md#visibility-and-encapsulation` |
 | `language/types/construction.md` | Construction | reference | The one generated constructor, and where logic goes | `CONCEPT.md#construction` |
 | `language/types/data-or-capsule.md` | Data or capsule | reference | What a `private` field without a default closes, and the factory, accessors and conversion pair that take its place | `CONCEPT.md#construction` |
 | `language/types/copy-and-equality.md` | Copy and equality | reference | What `copy`, `==` and `hash` do without being written | `CONCEPT.md#values` |

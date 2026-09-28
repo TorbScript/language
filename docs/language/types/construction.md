@@ -229,7 +229,7 @@ const wrong = Path(None, [])
 
 ## Related
 
-- [Fields](fields.md) - `var`, `private` and `private(var)`, the modifiers a constructor's fields carry.
+- [Fields](fields.md) - `var`, `private` and `protected var`, the modifiers a constructor's fields carry.
 - [Maps and sets](../collections-and-iteration/maps-and-sets.md) - `[]` as the empty `Set`, the constant a field of one
   starts from.
 - [Declaring a type](declaring-a-type.md) - fields, methods and what else is generated.

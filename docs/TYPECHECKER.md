@@ -737,7 +737,7 @@ public fn isMutable(var checker: Checker, place: Place): Bool
 ```
 
 `isMutable` walks from the root: the root must be a `var` binding, a `var` parameter or a `var fn` receiver; every `Field`
-step must be a `var` field _and_ writable from here (`private(var)` outside the declaring type yields a const path,
+step must be a `var` field _and_ writable from here (`protected var` outside the file of its type yields a const path,
 and const is deep: `config.routes.add(...)` is an error while `config.routes` reads and iterates); `Index` needs
 `MutableIndexed`, `Range` needs `MutableSlice`. `Temporary` is not mutable.
 
@@ -873,7 +873,7 @@ advances `current` (gap 3); the subject must then be a mutable place and the exc
   to a literal. `Array<Item, Size + 1>` is "there is no arithmetic in types".
 - Top-level `?` and `await()` are allowed in entry files and scripts. `await()` elsewhere requires a return type of
   `Task<...>` or a closure passed to `spawn` (milestone 7 activates the rule; the checker has the hook).
-- `private(var)` is only valid on a field. `native` is only valid in a `std` package. `shared` on a trait means only
+- `protected` is only valid on a `var` field. `native` is only valid in a `std` package. `shared` on a trait means only
   `shared type`s may implement it and a value of it counts as shared.
 - **How a name is spelled is a rule of the language** (`spelling.trb`), reported once per declaration at the name's
   span. `A` to `Z` is uppercase and `_`/`a` to `z` is lowercase; a name is ASCII, so there is no third answer. Uppercase:
@@ -1516,7 +1516,7 @@ list. Everything else is as written.
   has no configuration a block could fill" instead of a message about whatever the block contains.
 - **A property command leaves the path it is written through to 4.6**, and since that slice is in it goes through it:
   `checkPropertyWrite` is `place.trb`'s `checkAssignment` with another message, so `port 8080` asks about a `var` field,
-  a `private(var)` one, a `const` root and a temporary exactly as `=` does, records its `Place` for milestone 5, and
+  a `protected var` one, a `const` root and a temporary exactly as `=` does, records its `Place` for milestone 5, and
   counts as a change for the dead-change rule.
 - **A call of a local binding that is not a function is reported here**, because section 3.3's "a local binding is
   written with `=`" has no other home: `count 1` reads "`count` is a `Int64`, and only a function can be called".
@@ -1618,16 +1618,16 @@ list. Everything else is as written.
   twelve files of `examples/tour` are, and there is no `src/main.trb` they could be the entry of. The `src/lib.trb` of a
   named package is always a module, because it is what other packages import. `Checker.importedModules` is one walk over
   every `use` of the workspace, kept.
-- **`private(var)` *is* the `var`.** The concept writes `private(var) balance: Int = 0` without a second `var` and then
-  writes the field from inside, so the modifier is what makes the field mutable - privately. `FieldSignature.isVar` is
-  therefore true for a `private(var)` field, and `private(var)` on a field is never an error by itself. What it *is* an
-  error on is everything that is not a field (gap 30) - and a second `var` next to it ("`private(var)` already says
-  `var`").
+- **`protected var` is the `var`, written where every `var` field writes it.** `protected var balance: Int = 0` parses
+  to `Visibility.Protected` with `Field.isVar == true`. `private(var) balance: Int = 0`, the spelling it replaced,
+  carried the `var` inside the modifier; the signature knows one visibility, `Protected`, and `FieldSignature.isVar`
+  is true for both. `protected` on anything but a `var` field is an error (gap 30), and `private(var)` is an error
+  that names `protected var`, with the lint rule `protected-field` as its fix.
 - **Who may write a field is decided in one place, `place.trb`.** 4.9 asked it of the target of an assignment and of a
   property command, 4.6 asks it of every step of every path, and both gave the same message - so the walk over the path
   owns it and `isInsideType` is what it asks. A field that this code may not even *name* is 4.9's message alone: a
   wholly `private` one was already reported where it was named, so the place says nothing a second time, and
-  `private(var)` - public to read, private to write - is the one visibility a place decides about.
+  `protected var` - public to read, private to write - is the one visibility a place decides about.
 - **Visibility is decided outside the memoized member lookup.** `lookupMember` keeps its answer per module, receiver and
   name; whether the code may *name* the member depends on the declaration the use stands in, so `findMember` answers and
   `requireVisibleMember` judges, once per use.
@@ -1931,7 +1931,7 @@ section 12 (gaps 58, 67 and section 13's 1, 2, 3 and 17 above), two close gaps 5
   private member, a free function of that file sees it too (it could not before), and an `extend` in another file of
   the package no longer does. The three messages (`is private to`, `cannot be passed from here`,
   `this pattern cannot read it`) say "in the file that declares `X`" in their notes. One place in the repository
-  wrote a `private(var)` field of another file, an `extend Column<Node>` of `examples/ecs-probe-2`, and it goes
+  wrote a write-protected field of another file, an `extend Column<Node>` of `examples/ecs-probe-2`, and it goes
   through the public members now.
 - **A constant index that is out of range is a compile error and not a panic**, where how many items there are is
   known without running anything: an `Array<Item, Size>`, whose size is part of its type, and a collection literal

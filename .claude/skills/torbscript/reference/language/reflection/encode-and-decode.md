@@ -49,7 +49,7 @@ trait Describe { static fn describe<Target: Describer>(var target: Target) }
    constructor.
 
 2. **A `private` field with a default is not a parameter from outside, so it is in none of the three forms.** A cache
-   or a memo stays out without an annotation; on the way in it takes its default. A `private(var)` field is publicly
+   or a memo stays out without an annotation; on the way in it takes its default. A `protected var` field is publicly
    constructible and therefore part of all three.
 
 3. **A capsule - a `private` field without a default - is written, read and described as the source of its one

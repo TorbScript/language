@@ -160,6 +160,6 @@ print workspace.memberPatterns
 
 ## Related
 
-- [Fields](fields.md) - `var`, `private` and `private(var)`, which decide whether a write may reach the field.
+- [Fields](fields.md) - `var`, `private` and `protected var`, which decide whether a write may reach the field.
 - [Methods and `static fn`s](methods.md) - what the same command syntax does when the name is a method instead.
 - [Declaring a type](declaring-a-type.md) - the one namespace a property command and a method call share.

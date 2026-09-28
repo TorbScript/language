@@ -65,7 +65,8 @@ print "{point} {point.area()} {Point.origin}"
 ```
 
 ```text
-<field>     ::= [private | private(var)] [var] <name>: <Type> [= <default>]
+<field>     ::= [private] [var] <name>: <Type> [= <default>]
+            | protected var <name>: <Type> [= <default>]
 <constant>  ::= [private] const <name> [: <Type>] = <expression>
 <function>  ::= [private] fn <name>[<parameters>](<self or nothing>, <parameters>) [: <Type>] { ... }
 ```
@@ -82,12 +83,12 @@ print "{point} {point.area()} {Point.origin}"
    |-------|:-----------------:|:------------------:|
    | `x: Value` | yes | no, it is `const` |
    | `var x: Value` | yes | yes |
-   | `private(var) x: Value` | yes | no |
+   | `protected var x: Value` | yes | no |
    | `private x: Value` | no | no |
 
-   `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands an outsider a
-   `const` path, and `const` is deep, so `config.routes.append(...)` from outside is an error while `config.routes` can be
-   read and iterated.
+   `protected var` reads as "write-protected": everybody reads the field, and only the file of its type writes it. It
+   hands an outsider a `const` path, and `const` is deep, so `config.routes.append(...)` from outside is an error while
+   `config.routes` can be read and iterated.
 
 3. **`private` reaches as far as the type does.** A private member is visible in the body of its type and in every
    `extend` of that type in the same package, and nowhere else. The package is the unit of coherence, so it is the unit of
@@ -182,7 +183,7 @@ which one it is. There is no `get` prefix; a predicate is `isEmpty()` or `hasErr
 
 ```trb
 type Account {
-  private(var) balance: Int = 0
+  protected var balance: Int = 0
 
   var fn deposit(amount: Int) {
     balance = balance + amount

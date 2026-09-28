@@ -212,7 +212,7 @@ The language has value semantics; identity is the marked exception (`shared type
    `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. **4.8 is done**: an `Expression<Value>`
    parameter or binding quotes what arrives at it, so every one of the repository's 1600 `assert`s records the tree
    milestone 5 has to build, the captures it hands on and their `Encode` witness, and `examples/query-provider`
-   translates `filter { _.age >= minAge }` to SQL. **4.9 is done** too: `private` and `private(var)`, what a `public`
+   translates `filter { _.age >= minAge }` to SQL. **4.9 is done** too: `private` and `protected var`, what a `public`
    declaration promises, which files may contain top-level code, top-level constants that are evaluated at compile time,
    and the rules of `native`, `shared type`, `isSame`, `extend` and `foreign`. **Milestone 4 is done**: 4.10 closed the
    last unchecked expressions (the generated members of a literal type, a `.Case` whose type only a following `?` would

@@ -116,7 +116,7 @@ print counters[0].count
 `remove` and `removed`. The verb is a `var fn`; the participle reads its receiver and answers a new value. The
 participles are default members of the collection traits, so an implementation writes only the verbs.
 
-**There are no getters and no defensive copies.** `private(var)` hands an outsider a `const` path to a field, and `const`
+**There are no getters and no defensive copies.** `protected var` hands an outsider a `const` path to a field, and `const`
 is deep, so `config.routes` can be read and iterated from outside while `config.routes.append(...)` is an error. What somebody
 takes out of it is a copy anyway.
 
@@ -135,7 +135,7 @@ the dead-change rule, because the read can be anywhere the call runs the closure
 ## Related
 
 - [Bindings](../language/values-and-types/bindings.md) - the rules, with the diagnostics.
-- [Declaring a type](../language/types/declaring-a-type.md) - `var` fields, `private(var)` and verbs.
+- [Declaring a type](../language/types/declaring-a-type.md) - `var` fields, `protected var` and verbs.
 - [Values and bindings](../guide/values-and-bindings.md) - the same material as a learning step.
 - [Coming from Rust](coming-from-rust.md) - what to do instead of `&mut`.
 - [What a model trained on other languages gets wrong](mistakes-models-make.md) - the copy trap as a diagnostic.

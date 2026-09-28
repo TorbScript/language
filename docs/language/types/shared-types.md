@@ -22,7 +22,7 @@ have an identity - a connection, a file, a window - where everybody holding it h
 ```trb
 shared type Connection {
   url: String
-  private(var) sent: Int = 0
+  protected var sent: Int = 0
 
   var fn send(message: String) {
     sent = sent + 1
@@ -52,12 +52,12 @@ shared type <Name> {
 2. **A change of an object is not a question of the path it is reached through.** An object has one identity and no
    copy, so its `var fn` members and its `var` fields change through any binding that holds it: a `const` one, a
    parameter, an element of a `const` list. What still decides is the object's own type - a field that is not `var`
-   never changes, and `private(var)` is written only by the type.
+   never changes, and `protected var` is written only by the file of the type.
 
    ```trb
    shared type Connection {
      url: String
-     private(var) sent: Int = 0
+     protected var sent: Int = 0
 
      var fn send(message: String) {
        sent = sent + 1

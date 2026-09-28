@@ -98,7 +98,7 @@ type ServerOptions {
   var host: String = "localhost"
   var port: Int = 8080
   var database: DatabaseOptions = DatabaseOptions()
-  private(var) routes: List<Route> = []
+  protected var routes: List<Route> = []
 
   var fn route(path: String, to: String) {
     routes.append Route(path, to)
