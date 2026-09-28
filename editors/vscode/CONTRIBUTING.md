@@ -83,7 +83,9 @@ second after the last change of an open one. A run is `torb test --report json` 
 `--native` for the profile "Run Natively" and a `--filter "<group> > <test>"` per chosen group or test; whole files of
 one folder run in one process, a file with chosen groups or tests in one of its own
 (`docs/tooling/torb-test.md` has the report's events). The id of an item is `<file URI>#<full name>`, and the full name
-is what the report and `--filter` both use.
+is what the report and `--filter` both use. The site of a failure is written as the compiler names the file - the
+package's name in front of the path inside the package (`acme/shop/tests/cart.test.trb`) - so the extension takes the
+name off one segment at a time and looks for the rest below the test file's package, then below the workspace folder.
 
 A `torb` older than `--report json` takes the flag for a path and answers `error: --report: The file does not exist`.
 The extension reads that answer instead of showing it, remembers it for that binary (its path, version and time of

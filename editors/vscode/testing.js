@@ -618,25 +618,80 @@ class TorbTests {
       run.passed(item, duration);
       return;
     }
-    run.failed(item, this.messageOf(event, folder), duration);
+    run.failed(item, this.messageOf(event, folder, state.file), duration);
   }
 
   /** The failure of a test as a message at its site - a comparison of two values as expected and actual where it is one. */
-  messageOf(event, folder) {
-    const { vscode, path } = this;
+  messageOf(event, folder, file) {
+    const { vscode } = this;
     const text = [String(event.message || 'the test failed'), event.frames ? String(event.frames) : '']
       .filter(Boolean)
       .join('\n\n');
     const compared = comparisonOf(String(event.message || ''));
     const message = compared ? vscode.TestMessage.diff(text, compared.expected, compared.actual) : new vscode.TestMessage(text);
     const at = event.location;
-    if (at && at.path && Number.isInteger(at.line)) {
-      const file = path.isAbsolute(at.path) ? at.path : path.resolve(folder, at.path);
+    const site = at && at.path && Number.isInteger(at.line) ? this.fileOfSite(String(at.path), folder, file) : undefined;
+    if (site) {
       const line = Math.max(0, at.line - 1);
       const column = Math.max(0, (Number.isInteger(at.column) ? at.column : 1) - 1);
-      message.location = new vscode.Location(vscode.Uri.file(file), new vscode.Position(line, column));
+      message.location = new vscode.Location(vscode.Uri.file(site), new vscode.Position(line, column));
     }
     return message;
+  }
+
+  /**
+   * The file a site of the report names. The runtime writes a site as the compiler names the file - the package's name
+   * in front of the path inside the package (`acme/shop/tests/cart.test.trb`) - so the name is taken off one segment at
+   * a time and the rest looked for below the package of the test file, then below the workspace folder. `undefined`
+   * where no file is found, except that a site of the test file's own name is taken to be in it.
+   */
+  fileOfSite(site, folder, file) {
+    const { path, fs } = this;
+    const isFile = (candidate) => {
+      try {
+        return fs.statSync(candidate).isFile();
+      } catch (error) {
+        return false;
+      }
+    };
+    if (path.isAbsolute(site) && isFile(site)) {
+      return site;
+    }
+    const segments = site.split(/[\\/]/).filter(Boolean);
+    const roots = [];
+    const packageRoot = file ? this.packageRootOf(file.uri.fsPath, folder) : undefined;
+    if (packageRoot) {
+      roots.push(packageRoot);
+    }
+    roots.push(folder);
+    for (let skipped = 0; skipped < segments.length; skipped += 1) {
+      for (const root of roots) {
+        const candidate = path.join(root, ...segments.slice(skipped));
+        if (isFile(candidate)) {
+          return candidate;
+        }
+      }
+    }
+    if (file && path.basename(site) === path.basename(file.uri.fsPath)) {
+      return file.uri.fsPath;
+    }
+    return undefined;
+  }
+
+  /** The directory of the `project.trb` nearest above a file, up to the workspace folder. */
+  packageRootOf(file, folder) {
+    const { path, fs } = this;
+    let directory = path.dirname(file);
+    for (;;) {
+      if (fs.existsSync(path.join(directory, 'project.trb'))) {
+        return directory;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory || path.relative(folder, directory) === '') {
+        return undefined;
+      }
+      directory = parent;
+    }
   }
 
   fail(run, files, text) {
@@ -719,7 +774,7 @@ class PlainReport {
     const { item, message, frames, location } = this.failing;
     this.failing = null;
     const event = { message: message.join('\n'), frames: frames.join('\n'), location };
-    this.run.failed(item, this.tests.messageOf(event, this.folder));
+    this.run.failed(item, this.tests.messageOf(event, this.folder, this.state.file));
   }
 }
 
@@ -795,4 +850,4 @@ function startTests(context, vscode, cp, fs, path, toolchain, client, log) {
   return new TorbTests(context, vscode, cp, fs, path, toolchain, client, log);
 }
 
-module.exports = { startTests, comparisonOf, isUnknownReportFlag, PlainReport };
+module.exports = { startTests, comparisonOf, isUnknownReportFlag, PlainReport, TorbTests };
