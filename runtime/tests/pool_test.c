@@ -441,7 +441,8 @@ static torb_poll spinner_resume(torb_task *task) {
   if (torb_task_cancelled(task)) {
     return TORB_POLL_STOPPED;
   }
-  spinner_ran_on = torb_worker_index();
+  /* Several spinners may start at once on several workers */
+  __atomic_store_n(&spinner_ran_on, torb_worker_index(), __ATOMIC_RELAXED);
   frame->held = torb_show_i64(424242);
   __atomic_store_n(&spinner_started, 1u, __ATOMIC_RELEASE);
   for (;;) {
@@ -483,7 +484,7 @@ TORB_TEST(a_cancellation_stops_a_loop_on_another_worker) {
   torb_task_cancel(spinner);
   torb_scheduler_run(spinner);
   TORB_CHECK(started);
-  TORB_CHECK(spinner_ran_on != 0u);
+  TORB_CHECK(__atomic_load_n(&spinner_ran_on, __ATOMIC_RELAXED) != 0u);
   TORB_CHECK_INTEGER(spinner->status, TORB_TASK_CANCELLED);
   torb_task_release(spinner);
   pool_end();

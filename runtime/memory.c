@@ -44,7 +44,7 @@ static torb_heap *torb_heap_current(void) {
  * Whether a VM ever counted a program in this process: the leak report is then about that program's blocks, which the
  * heap counts apart from `torb`'s own while the thread runs inside the VM's kernel (`torb_count_in_machine`).
  */
-static bool torb_counts_machine = false;
+static uint8_t torb_counts_machine = 0u;
 
 /* One block more or less, and the same for the VM's program where the thread runs inside its kernel. */
 static void torb_count_live(torb_heap *heap, int64_t change) {
@@ -77,6 +77,16 @@ static void torb_memory_uncount(void *block);
 
 static void *torb_payload(void *block) {
   return (void *)((uint8_t *)block + sizeof(torb_header));
+}
+
+/*
+ * The count of a block, read before it is changed. A shared block's count is changed atomically by other workers at the
+ * same time, so the read is an atomic one too - a relaxed load, which is the plain load it always was on every target
+ * the toolchain builds for; only the bits it looks at first, `TORB_SHARED_COUNT` and the immortal count, decide
+ * anything before an atomic operation takes over, and those never change while a second thread holds the block.
+ */
+static uint32_t torb_count_of(const torb_header *header) {
+  return torb_atomic_peek_u32(&header->count);
 }
 
 /* `drop` and `retain_children` receive the block itself, which is what an emitted `T_x *` is. */
@@ -161,7 +171,7 @@ void torb_retain(void *block) {
   if (header == NULL) {
     return;
   }
-  count = header->count;
+  count = torb_count_of(header);
   if (count >= TORB_SHARED_COUNT) {
     if (count == TORB_IMMORTAL_COUNT) {
       return;
@@ -180,7 +190,7 @@ void torb_release(void *block, torb_drop_function drop) {
   if (header == NULL) {
     return;
   }
-  count = header->count;
+  count = torb_count_of(header);
   if (count == TORB_IMMORTAL_COUNT) {
     return;
   }
@@ -215,7 +225,7 @@ void torb_release(void *block, torb_drop_function drop) {
 
 bool torb_count_down(void *block) {
   torb_header *header = (torb_header *)block;
-  uint32_t count = header->count;
+  uint32_t count = torb_count_of(header);
   if (count == TORB_IMMORTAL_COUNT) {
     return false;
   }
@@ -356,7 +366,7 @@ size_t torb_immortal_block_count(void) {
 }
 
 void torb_report_leaks(void) {
-  if (torb_counts_machine) {
+  if (torb_atomic_load_u8(&torb_counts_machine) != 0u) {
     fprintf(stderr, "live blocks at exit: %lld\n", (long long)torb_pool_sum_machine_live_blocks());
     fprintf(stderr, "immortal blocks at exit: %lld\n", (long long)torb_pool_sum_machine_immortal_blocks());
     return;
@@ -369,8 +379,9 @@ unsigned torb_count_in_machine(unsigned inside) {
   torb_heap *heap = torb_heap_current();
   unsigned before = heap->in_machine;
   heap->in_machine = inside;
-  if (inside != 0u) {
-    torb_counts_machine = true;
+  /* Set once, by the first thread that enters the kernel; every call after it only reads it */
+  if (inside != 0u && torb_atomic_load_u8(&torb_counts_machine) == 0u) {
+    torb_atomic_store_u8(&torb_counts_machine, 1u);
   }
   return before;
 }

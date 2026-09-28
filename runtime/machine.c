@@ -1002,10 +1002,16 @@ static void torb_machine_release_value(int64_t *value, const torb_machine_shape 
 static void torb_machine_release_block(void *block) {
   torb_header *header = (torb_header *)block;
   const torb_machine_shape *shape;
-  if (header == NULL || header->count == TORB_IMMORTAL_COUNT) {
+  uint32_t count;
+  if (header == NULL) {
     return;
   }
-  if ((header->count & TORB_SHARED_COUNT) != 0u) {
+  /* Another worker may change a shared block's count at this very moment: the read is atomic, as memory.c's is */
+  count = torb_atomic_peek_u32(&header->count);
+  if (count == TORB_IMMORTAL_COUNT) {
+    return;
+  }
+  if ((count & TORB_SHARED_COUNT) != 0u) {
     /* A shared environment, which several workers may hold: whoever takes the last count frees it */
     if (!torb_count_down(block)) {
       return;

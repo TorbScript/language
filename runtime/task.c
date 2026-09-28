@@ -1957,7 +1957,8 @@ static void torb_idle(torb_worker *self, torb_task *until, bool is_main, bool fo
   int64_t span = torb_sleep_span(self);
   bool may_sleep;
   torb_mutex_lock(&self->lock);
-  self->sleeping = 1u;
+  /* Atomic, because a notifier peeks at it without the lock before it takes the lock to look again */
+  torb_atomic_store_u32(&self->sleeping, 1u);
   (void)torb_atomic_add_u32(&torb_pool.sleeping, 1u);
   may_sleep = self->queue_first == NULL && self->wanted == 0u;
   /* What the thread would take if it were awake: the ring's steal lists, or the blocking pool's inbox */
@@ -1978,7 +1979,7 @@ static void torb_idle(torb_worker *self, torb_task *until, bool is_main, bool fo
     (void)torb_condition_wait(&self->wake, &self->lock, span);
   }
   (void)torb_atomic_sub_u32(&torb_pool.sleeping, 1u);
-  self->sleeping = 0u;
+  torb_atomic_store_u32(&self->sleeping, 0u);
   self->wanted = 0u;
   torb_mutex_unlock(&self->lock);
 }
@@ -2562,8 +2563,8 @@ static void torb_pool_stop(void) {
 /* -------------------------------------------------------------------------------- what may cross a worker --- */
 
 bool torb_closure_may_move(torb_environment *environment) {
-  /* Shared, or immortal - which has the bit too */
-  return environment == NULL || (environment->header.count & TORB_SHARED_COUNT) != 0u;
+  /* Shared, or immortal - which has the bit too. Atomic, because another worker may change a shared count meanwhile */
+  return environment == NULL || (torb_atomic_peek_u32(&environment->header.count) & TORB_SHARED_COUNT) != 0u;
 }
 
 bool torb_closure_privatize(torb_environment **environment) {
