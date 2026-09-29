@@ -412,7 +412,7 @@ is the line under it and the text of the meta description.
 | Path | Content | Comes from |
 |---|---|---|
 | `/` | what the language is in one screen: one program, the three claims (value semantics, one language for code and configuration, interpreted and native), install line, links | written for the site, in `docs/site/` |
-| `/install` | the one-liners, the archives, what each target needs, `torb upgrade` | `docs/guide/installing-and-running.md`, rewritten for downloads |
+| `/install` | the one-liners, the archives, what each target needs, `torb upgrade` | `docs/site/install.md`, written for the site; the guide's `docs/guide/installing-and-running.md` links to it and builds nothing, and building from a checkout is `docs/contributing/building-from-source.md` |
 | `/agents` | the one line that installs the Agent Skills into each agent | `docs/site/agents.md` |
 | `/download` | every artifact of every release, hashes, signatures, the portable seed | generated from the release manifest |
 | `/learn` | the guide in order, then the tour | `docs/guide/`, `examples/tour/` |
