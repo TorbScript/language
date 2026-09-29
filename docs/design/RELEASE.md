@@ -1639,17 +1639,18 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
   push to `release/*` as on `main`, and bootstraps from `main`'s newest seed, so `main` keeps reading every form
   the maintained release branch uses until the next minor is out.
 - **The VS Code extension follows the release, and the nightly follows itself.** A release publishes
-  `torbscript-<version>.vsix`, the file among its assets, to the Visual Studio Marketplace (`vsce publish`, the secret
-  `VSCE_PAT`) and to Open VSX (`ovsx publish`, the secret `OVSX_PAT`), each only where its secret exists, after the
-  release is on the forge. A nightly carries `torbscript-nightly-YYYYMMDD.vsix` to both stores the same way, marked as
-  a pre-release, as VS Code's "Switch to Pre-Release Version" - `vsce verify-pat` and `ovsx verify-pat` run first, so a
-  wrong publisher or namespace fails clearly. Its manifest is stamped with a store version of its own,
-  `MAJOR.(MINOR+1).YYYYMMDD` of `package.json`'s version and the nightly's date (`tools/package-extension.sh`,
-  `0.1.0` becomes `0.2.20260929`) - not the toolchain's number, which belongs to releases: a later stable `0.2.0` is
-  then lower than the nightlies of its cycle, so pre-release users stay ahead of release users and a release never
-  collides with a nightly's number. A second nightly of the same day has the same store version and is skipped
-  (`--skip-duplicate`). A release candidate's `torbscript-0.2.0-rc.1.vsix` is marked as a pre-release too, but reaches
-  neither store: its version, `0.2.0`, would collide with the stable release that follows it.
+  `torbscript-<version>.vsix`, the file among its assets, to the Visual Studio Marketplace (`vsce publish`, the
+  secret `VSCE_PAT`) and to Open VSX (`ovsx publish`, the secret `OVSX_PAT`), each only where its secret exists,
+  after the release is on the forge. A nightly carries `torbscript-nightly-YYYYMMDD.vsix` to both stores the same
+  way, marked as a pre-release, as VS Code's "Switch to Pre-Release Version" - `vsce verify-pat` and `ovsx
+  verify-pat` run first, so a wrong publisher or namespace fails clearly. Its manifest is stamped with a store
+  version of its own, `MAJOR.(MINOR+1).YYYYMMDD` of `package.json`'s version and the nightly's date
+  (`tools/package-extension.sh`, `0.1.0` becomes `0.2.20260929`) - not the toolchain's number, which belongs to
+  releases: a later stable `0.2.0` is then lower than the nightlies of its cycle, so pre-release users stay ahead of
+  release users and a release never collides with a nightly's number. A second nightly of the same day has the same
+  store version and is skipped (`--skip-duplicate`). A release candidate's `torbscript-0.2.0-rc.1.vsix` is marked as
+  a pre-release too, but reaches neither store: its version, `0.2.0`, would collide with the stable release that
+  follows it.
 - **stable**: the release, marked latest, kept forever. **preview**: a pre-release, kept like a release.
   **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
   when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on

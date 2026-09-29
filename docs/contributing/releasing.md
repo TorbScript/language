@@ -178,9 +178,9 @@ was out first.
 
 1. **Fixes only**, never a break and never a feature: the fix of a regression or of a security problem, cherry-picked
    with `-x` from `main` onto `release/0.2` as above.
-2. **The four places and the two Agent Skills packages say `0.2.1`** on `release/0.2`, in `chore(release): 0.2.1`, with
-   the notes in `docs/releases/0.2.1.md`; cherry-pick the notes onto `main` as well, so its `docs/releases/` lists
-   every release.
+2. **The four places and the two Agent Skills packages say `0.2.1`** on `release/0.2`, in `chore(release): 0.2.1`,
+   with the notes in `docs/releases/0.2.1.md`; cherry-pick the notes onto `main` as well, so its `docs/releases/`
+   lists every release.
 3. **Tag and push**; a patch has no candidate:
 
    ```console
