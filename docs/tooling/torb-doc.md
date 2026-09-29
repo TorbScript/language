@@ -55,7 +55,7 @@ and not out of a second parse.
 - **A signature is the source's own text**, token by token on one line: without the body, without the comments -
   the doc comment of a parameter is shown under the signature instead - and without `public`, which every construct of a
   reference is.
-- **A doc comment is split the way the standard of `compiler/CONTRIBUTING.md` writes it**: the first sentence is the
+- **A doc comment is split into its parts**: the first sentence is the
   summary an index and the search show, the paragraphs above the first heading are the description, and `# Examples`,
   `# Errors`, `# Panics`, `# Pitfalls`, `# Open` and `# Related` each become a section.
 
@@ -121,13 +121,12 @@ generates a package's pages without running any of its code.
 The constructs the standard asks a doc comment of that have none are counted - `std/` has 218 of 2353 today - and the
 count is printed, but they do not fail the check: until `std/` has none, the count is what shows the way there.
 
-### In the gates
+### How long a check takes
 
-Tier A of `tools/gates.sh` runs `torb doc --check --no-run std`: every link of a doc comment of std's public API
-resolves, and every example of it parses, is in the canon and type checks - about half a minute. The whole of
-`torb doc --check std`, which also builds and runs the 156 examples that are programs, takes between one and two
-minutes, most of it the lowering and the C compile of their one program, and is run by hand before a change to the
-examples of `std/` is committed.
+`torb doc --check --no-run std` checks that every link of a doc comment of std's public API resolves, and that every
+example of it parses, is in the canon and type checks - about half a minute. The whole of `torb doc --check std`, which
+also builds and runs the 156 examples that are programs, takes between one and two minutes, most of it the lowering and
+the C compile of their one program.
 
 ## Examples
 

@@ -303,8 +303,8 @@ $ torb format --check examples/tour/src/scratch.trb
 0 of 1 file would change
 ```
 
-That is the tier A gate of [compiler/CONTRIBUTING.md](../../compiler/CONTRIBUTING.md), and `sh tools/gates.sh a` runs
-it over the whole repository.
+`torb format --check .` over a whole project is the check to run before a commit, and the one to put into continuous
+integration: it exits with 1 when a file would change.
 
 ## Related
 

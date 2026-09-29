@@ -85,8 +85,8 @@ The same lock is the same bytes on every machine, so it can be reviewed in a dif
 in a fixed order, the `settings` blocks sorted by package and the lines inside one in the order of the vocabulary, the
 packages of `graph` sorted by name, nothing about the machine - no time, no absolute path, no tool build, a `path:`
 relative to the lock - hashes as `sha256:` and lowercase hexadecimal, UTF-8, LF, and exactly one trailing newline.
-`torb lock --check` holds a checked-in lock to that: it writes the file in memory and fails where one byte differs, and
-`tools/gates.sh a` runs it over every `project.lock.trb` of the repository.
+`torb lock --check` holds a checked-in lock to that: it writes the file in memory and fails where one byte differs,
+which makes it a check for continuous integration.
 
 ## Pitfalls
 
@@ -99,8 +99,14 @@ dependency cannot be published.
 
 ## Examples
 
-`tools/packages.sh` runs the whole cycle against a `file:` registry and compares every file it writes with
-`tests/packages/transcript.expected`.
+The whole cycle of a project with one dependency: `add` writes `project.trb` and the lock, `lock --check` holds the
+lock to the manifest, and `install` fetches what it pins on another checkout:
+
+```console
+$ torb add acme/http
+$ torb lock --check
+$ torb install
+```
 
 ## Related
 

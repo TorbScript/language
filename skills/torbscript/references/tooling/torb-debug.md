@@ -115,9 +115,6 @@ A session as it goes over the wire, without the headers, for a program whose lin
 <-- {"seq":7,"type":"response","request_seq":5,"success":true,"command":"evaluate","body":{"result":"1","type":"Int","variablesReference":0}}
 ```
 
-`tests/debug/` holds whole sessions like this one - a breakpoint and the steps, the tests of a file with a filter, a
-panic - which `sh tools/debug.sh` pipes into `torb debug` and compares with what it writes.
-
 ## Related
 
 - [Set up your editor](../how-to/set-up-your-editor.md) - the Debug buttons of VS Code, and another editor's settings.

@@ -203,9 +203,6 @@ A session as it goes over the wire, without the headers:
 --> {"jsonrpc":"2.0","method":"exit","params":null}
 ```
 
-`tests/lsp/` holds whole sessions like this one, which `sh tools/lsp.sh` pipes into `torb lsp` and compares with what it
-writes; `compiler/tests/language-server.test.trb` holds more of them, fed to the server without the transport.
-
 ## Related
 
 - [Set up your editor](../how-to/set-up-your-editor.md) - the VS Code extension, and the settings of another editor.

@@ -13,7 +13,6 @@ keywords:
 source:
   - compiler/src/cli/packages.trb
   - compiler/src/package/lock.trb
-  - tools/gates.sh
   - docs/design/PROJECT.md#the-locked-manifest-installing-still-never-runs-code
 ---
 
@@ -65,7 +64,7 @@ error: project.lock.trb is not what `torb lock` writes
   `torb lock --project .` writes it
 ```
 
-It is a gate of tier A: `tools/gates.sh a` runs `lock --check` for the project of every `project.lock.trb` git knows.
+`lock --check` changes nothing and fails where a lock is stale, which makes it a check for continuous integration.
 
 ## Pitfalls
 

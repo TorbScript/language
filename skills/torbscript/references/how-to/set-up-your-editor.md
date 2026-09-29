@@ -132,9 +132,6 @@ as a whole.
 - **The installer extends `PATH` for new terminals, not for VS Code.** The extension finds the new `torb` in the
   installer's own directory anyway; a terminal VS Code opened before the install needs to be opened again for `torb`
   to be a command there.
-- **In this repository**, `.vscode/extensions.json` recommends the published extension, and it runs the compiler of
-  the checkout (`build/release/torb`). To work on the extension itself, "Run and Debug -> TorbScript extension" loads
-  `editors/vscode` in an Extension Development Host; `editors/vscode/CONTRIBUTING.md` has the rest.
 
 ## Full example
 
