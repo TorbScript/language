@@ -17,10 +17,12 @@ source:
   - playground/playground-worker.js
   - playground/build.sh
   - playground/smoke-test.mjs
+  - playground/examples/index.json
   - compiler/src/project/capability.trb
   - compiler/src/vm/run.trb
   - std/os/src/browser/system.trb
   - runtime/os/browser.c
+  - tools/gates.sh
   - docs/design/RELEASE.md#the-playground
 ---
 
@@ -96,6 +98,26 @@ emscripten, pinned by version in `playground/build.sh`. `std/` is embedded into 
 site](torb-docs-site.md) copies what the script wrote into `assets/` of the site, and the site image builds it from the
 release's own source.
 
+### The example gallery
+
+`playground/examples/` holds the programs the gallery on `torb.dev/play` offers beside the empty editor, one file each
+and `index.json` naming them: `id`, `file`, `title`, a one-sentence `description`, a `category`
+(`Basics`, `Types`, `Errors`, `Collections`, `DSLs`, `Fun`), a `level` (`beginner` or `intermediate`), `"default": true`
+on the one example the page opens with, and the same `title`/`description` in German under `de`. `playground/build.sh`
+copies `index.json` and every `.trb` file it names into `build/playground/examples/`, beside `torb.wasm`, so the page
+serves them the way it serves the toolchain itself - no server call.
+
+Every example is also a program `sh tools/gates.sh a` runs: each `<name>.trb` has a `<name>.expected` beside it, and
+the gate runs it with `torb run` (the playground never builds natively) and compares. Adding one is the same shape as
+a program of `tests/language/`:
+
+1. Write `playground/examples/<name>.trb` - it has to run in the browser (no `std/process` or network, `std/fs` is in
+   memory, a program stops well under a second) and print something worth seeing.
+2. Run it and save what it prints: `build/release/torb run playground/examples/<name>.trb > playground/examples/<name>.expected`.
+3. Add its entry to `index.json`, English and German.
+4. `sh tools/gates.sh a` - the `check playground/examples` and `playground/examples against .expected` gates catch a
+   mistake in either the program or the manifest.
+
 ## Examples
 
 An import the browser does not have is an error at the import. The program below runs on every machine; in the
@@ -147,3 +169,4 @@ ok    hello world (860 ms)
   a `.Browser` arm.
 - [torb docs site](torb-docs-site.md) - the site that serves the playground and turns runnable blocks into it.
 - [std/os](../standard-library/os.md) - what the system questions answer in the browser.
+- [Verify your work](verifying-your-work.md) - `sh tools/gates.sh a`, which runs every example of the gallery.
