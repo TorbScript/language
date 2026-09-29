@@ -1,0 +1,33 @@
+// A command call with a trailing block, the language's own DSL: no builder, no method chain.
+
+type Topping {
+  name: String
+  extra: Bool = false
+}
+
+type Pizza {
+  var size: String = "medium"
+  var toppings: List<Topping> = []
+
+  var fn topping(name: String, extra: Bool = false) {
+    toppings.append Topping(name, extra: extra)
+  }
+}
+
+fn pizza(configure: (var self: Pizza) => Void): Pizza {
+  var order = Pizza()
+  configure order
+  order
+}
+
+const order = pizza {
+  size = "large"
+  topping "mozzarella"
+  topping "mushrooms", extra: true
+}
+
+print "One {order.size} pizza with:"
+for item in order.toppings {
+  const marker = if item.extra { " (extra)" } else { "" }
+  print "  - {item.name}{marker}"
+}

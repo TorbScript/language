@@ -9,10 +9,12 @@
 #
 # Tier A: bootstrap if `build/release/torb` is missing or older than a file it is built from (the compiler's sources,
 # `std/`, the runtime), `check .`, `check --statistics .`, `check tests/conformance tests/language`,
-# `check --every-target std/os`,
+# `check --every-target std/os`, `check playground/examples`,
 # `manifest --check` over every `project.trb`, `test --native compiler/tests`, `test` of the std/example packages in
 # both back ends (one that waits for a back-end gap is named in docs/RUST-EXIT.md section 2.4 and skipped here), the
-# programs of `tests/language/` against their `.expected` in both back ends, the sessions of `tests/repl/` piped into
+# programs of `tests/language/` against their `.expected` in both back ends, the programs of `playground/examples/`
+# against their `.expected` in the VM (docs/tooling/the-playground.md - the playground itself never builds natively),
+# the sessions of `tests/repl/` piped into
 # `torb repl` (`tools/repl.sh`), the sessions of `tests/lsp/` piped into `torb lsp` (`tools/lsp.sh`), the sessions of
 # `tests/debug/` piped into `torb debug` (`tools/debug.sh`), the reports of
 # `torb test --filter` and `--report json` in both back ends (`tools/test-report.sh`), the unknown flags every
@@ -302,6 +304,48 @@ language_programs() {
   [ "$failures" -eq 0 ]
 }
 
+# The programs of `playground/examples/` (docs/tooling/the-playground.md, "Adding an example"): each one file, run
+# with `torb run` alone - the playground never builds natively - and compared with its `.expected`. `index.json` is
+# checked for the shape the gallery needs: every file on disk is listed, every listed file exists, and exactly one
+# example is the default.
+playground_examples() {
+  torb=$1
+  failures=0
+  manifest=playground/examples/index.json
+  found=0
+  for program in playground/examples/*.trb; do
+    found=$((found + 1))
+    name=$(basename "$program" .trb)
+    if ! grep -q "\"file\": \"$name.trb\"" "$manifest"; then
+      printf '%s\n' "$program is not listed in $manifest"
+      failures=$((failures + 1))
+    fi
+    expected="${program%.trb}.expected"
+    if actual=$("$torb" run "$program" 2>&1); then
+      if ! printf '%s\n' "$actual" | cmp -s - "$expected"; then
+        printf '%s\n' "$program: the output is not $expected:"
+        printf '%s\n' "$actual" | diff "$expected" - || true
+        failures=$((failures + 1))
+      fi
+    else
+      printf '%s\n' "$program failed:"
+      printf '%s\n' "$actual"
+      failures=$((failures + 1))
+    fi
+  done
+  listed=$(grep -c '"file":' "$manifest")
+  if [ "$listed" -ne "$found" ]; then
+    printf '%s\n' "$manifest lists $listed files, but playground/examples/ has $found .trb files"
+    failures=$((failures + 1))
+  fi
+  defaults=$(grep -c '"default": true' "$manifest")
+  if [ "$defaults" -ne 1 ]; then
+    printf '%s\n' "$manifest must mark exactly one example \"default\": true, found $defaults"
+    failures=$((failures + 1))
+  fi
+  [ "$failures" -eq 0 ]
+}
+
 # The same programs in a native binary that embeds the VM (`torb build --embed-vm`, docs/design/VM.md section 11): each
 # built into `build/embed-vm/`, run, and compared with the same `.expected` - and `examples/config-dsl`, whose receiver
 # script runs in the sandbox of the embedded VM, compared with what `torb run` prints for it.
@@ -387,6 +431,7 @@ lane_checks() {
   gate "check ." "$torb" check .
   gate "check --statistics ." "$torb" check --statistics .
   gate "check tests/conformance tests/language" "$torb" check tests/conformance tests/language
+  gate "check playground/examples" "$torb" check playground/examples
   # docs/design/OS.md section 2: every program and test of std/os lowered once per target, without C, so a native of one
   # system reached from the arm of another is an error on this machine too
   gate "check --every-target std/os" "$torb" check --every-target std/os
@@ -415,6 +460,7 @@ lane_checks() {
   language_broken=""
   gate "tests/language against .expected (native)" language_programs "$torb" --native
   gate "tests/language against .expected (VM)" language_programs "$torb"
+  gate "playground/examples against .expected (VM)" playground_examples "$torb"
 
   # docs/design/RELEASE.md section 7.13: publish, add, build, update, remove and install against a `file:` registry, the
   # whole transcript against tests/packages/transcript.expected

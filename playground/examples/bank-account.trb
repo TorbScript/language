@@ -1,0 +1,34 @@
+// The failures of a withdrawal are cases, not strings: match handles each one on its own.
+
+type AccountError {
+  case InsufficientFunds(short: Int)
+  case NegativeAmount
+}
+
+type Account {
+  var balance: Int
+
+  var fn withdraw(amount: Int): Result<Int, AccountError> {
+    if amount < 0 {
+      return Fail AccountError.NegativeAmount
+    }
+    if amount > balance {
+      return Fail AccountError.InsufficientFunds(amount - balance)
+    }
+    balance = balance - amount
+    balance
+  }
+}
+
+fn describe(result: Result<Int, AccountError>): String {
+  match result {
+    Ok(balance) => "ok, balance is now {balance}"
+    Fail(.NegativeAmount) => "cannot withdraw a negative amount"
+    Fail(.InsufficientFunds(short)) => "short by {short}"
+  }
+}
+
+var account = Account balance: 100
+print describe(account.withdraw(40))
+print describe(account.withdraw(1000))
+print describe(account.withdraw(-5))

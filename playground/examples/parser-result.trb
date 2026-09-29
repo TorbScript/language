@@ -1,0 +1,20 @@
+// A parser that can fail: Result and ? thread the error through, no exceptions involved.
+
+type ParseError {
+  reason: String
+}
+
+fn parseNumber(text: String): Result<Int, ParseError> {
+  Int.tryFrom(text.trim()).mapError({ _ => ParseError "'{text.trim()}' is not a number" })
+}
+
+fn sumLine(line: String): Result<Int, ParseError> {
+  var total = 0
+  for piece in line.split(",") {
+    total = total + parseNumber(piece)?
+  }
+  total
+}
+
+print sumLine("1, 2, 3")
+print sumLine("4, five, 6")

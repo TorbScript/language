@@ -1,0 +1,54 @@
+// Conway's Game of Life: a glider, three generations, each grid a plain value built from the last.
+
+type Grid with Show {
+  cells: List<List<Bool>>
+
+  fn neighbors(row: Int, col: Int): Int {
+    const offsets = [-1, 0, 1]
+    var count = 0
+    for dr in offsets {
+      for dc in offsets {
+        if dr == 0 && dc == 0 {
+          continue
+        }
+        const r = row + dr
+        const c = col + dc
+        if r >= 0 && r < cells.length() && c >= 0 && c < cells[0].length() && cells[r][c] {
+          count = count + 1
+        }
+      }
+    }
+    count
+  }
+
+  fn next(): Self {
+    var rows: List<List<Bool>> = []
+    for row in 0..cells.length() {
+      var line: List<Bool> = []
+      for col in 0..cells[row].length() {
+        const alive = cells[row][col]
+        const n = neighbors row, col
+        line.append((alive && (n == 2 || n == 3)) || (!alive && n == 3))
+      }
+      rows.append line
+    }
+    Self rows
+  }
+
+  fn show(): String {
+    cells.map({ row => row.map({ alive => if alive { "#" } else { "." } }).joined() }).joined(separator: "\n")
+  }
+}
+
+fn parseRow(row: String): List<Bool> {
+  row.chars().map({ _ == '#' }).toList()
+}
+
+const pattern = [".#...", "..#..", "###..", ".....", "....."]
+var current = Grid pattern.map(parseRow).toList()
+
+for generation in 0..3 {
+  print "Generation {generation}:"
+  print current
+  current = current.next()
+}

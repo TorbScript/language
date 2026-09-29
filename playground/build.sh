@@ -186,6 +186,14 @@ fi
 for file in playground.js playground-worker.js playground.css; do
   cp "$here/$file" "$output/$file"
 done
+
+# The gallery's programs: index.json and the .trb files it names, not the .expected beside them (tools/gates.sh
+# compares those, the site never reads them)
+rm -rf "$output/examples"
+mkdir -p "$output/examples"
+cp "$here/examples"/*.trb "$output/examples/"
+cp "$here/examples/index.json" "$output/examples/index.json"
+
 gzip -9 -n -c "$output/torb.wasm" >"$output/torb.wasm.gz"
 
 say "wrote $output/: torb.wasm $(wc -c <"$output/torb.wasm") bytes, $(wc -c <"$output/torb.wasm.gz") gzipped"

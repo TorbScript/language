@@ -1,0 +1,34 @@
+// A tiny interpreter: an expression tree, evaluated by one match with a case for every operator.
+
+type Expr {
+  case Number(value: Float)
+  case Add(left: Expr, right: Expr)
+  case Subtract(left: Expr, right: Expr)
+  case Multiply(left: Expr, right: Expr)
+  case Divide(left: Expr, right: Expr)
+}
+
+fn eval(expr: Expr): Result<Float, String> {
+  match expr {
+    .Number(value) => value
+    .Add(left, right) => eval(left)? + eval(right)?
+    .Subtract(left, right) => eval(left)? - eval(right)?
+    .Multiply(left, right) => eval(left)? * eval(right)?
+    .Divide(left, right) => {
+      const divisor = eval(right)?
+      if divisor == 0.0 {
+        return Fail "division by zero"
+      }
+      eval(left)? / divisor
+    }
+  }
+}
+
+// (3 + 4) * 2 - 10 / 5
+const expression = Expr.Subtract(
+  Expr.Multiply(Expr.Add(Expr.Number(3.0), Expr.Number(4.0)), Expr.Number(2.0)),
+  Expr.Divide(Expr.Number(10.0), Expr.Number(5.0)),
+)
+
+print eval(expression)
+print eval(Expr.Divide(Expr.Number(1.0), Expr.Number(0.0)))
