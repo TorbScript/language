@@ -143,7 +143,8 @@ machine starts - and the runtime's browser target makes its standard input a thi
 scheduler would sleep it returns to the worker instead. The worker frames each message of the editor with its
 `Content-Length` header into standard input and lets the server go on until it waits again; what the server writes it
 cuts into messages and hands to the editor. The server asks for its timers the same way, and the worker calls it
-again when they are due.
+again when they are due. Longer work - the check of the workspace, a rename - returns to the worker every 50 ms, so
+a keystroke's completion is answered in the middle of it rather than after it.
 
 ### How it is built
 

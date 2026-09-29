@@ -619,12 +619,18 @@ a read fails with `EAGAIN` as on a non-blocking descriptor; a read of `standardI
 operation of the IO core (`runtime/stream.c`); where the main thread's scheduler would sleep while it waits, it returns
 to the page instead (`task.c`) - the first time by giving up the stack of `main` (`emscripten_unwind_to_js_event_loop`),
 with the program alive. `torb_browser_resume(input)`, exported, wakes the read and runs the scheduler until it waits
-for the page again, and answers the milliseconds to its first timer, which the worker waits for with `setTimeout`. A
-page whose `stdin` answers `null` - every run - sees standard input at its end, as before. `Process.exit` from inside
-the server throws emscripten's `ExitStatus` to the worker, which tells the page; the page starts a new server and opens
-its documents again, up to three times. `playground-worker.js` has two roles now, a run and the language server, and
-`smoke-test.mjs` runs the worker itself in a thread of node's: initialize, the diagnostics of a document opened and
-changed, completion at a member access, hover, semantic tokens, and the exit.
+for the page again, and answers the milliseconds to its first timer, which the worker waits for with `setTimeout`.
+Natively a message waits for at most one step of the server's longer work (LANGUAGE-SERVER.md section 2), because the
+reader is a task of its own; in a page the reader can only be handed a message while the scheduler is out of the way,
+so tasks that run on and on return to the page after a slice of 50 ms as well, and the worker calls back at once,
+behind the messages that came meanwhile (the answer 0, a `MessageChannel` rather than `setTimeout`, whose clamp would
+cost a slice 4 ms). A hover sent in the middle of a rename, which takes 7 seconds in the browser because it checks the
+program twice, is answered within the next slice. A page whose `stdin` answers `null` - every run - sees standard input
+at its end, as before, and is never sliced. `Process.exit` from inside the server throws emscripten's `ExitStatus` to
+the worker, which tells the page; the page starts a new server and opens its documents again, up to three times.
+`playground-worker.js` has two roles now, a run and the language server, and `smoke-test.mjs` runs the worker itself
+in a thread of node's: initialize, the diagnostics of a document opened and changed, completion at a member access,
+hover, semantic tokens, a rename, and the exit.
 
 **The editor is CodeMirror 6 with `@codemirror/lsp-client`**, 452 KB minified and 142 KB gzipped, loaded when an
 editor is about to be used.
