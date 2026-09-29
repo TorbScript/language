@@ -38,6 +38,7 @@ fetch() {
 }
 
 base_url=${TORB_INSTALL_BASE_URL:-https://torb.dev/download}
+channel_requested=${TORB_INSTALL_CHANNEL:-}
 channel=${TORB_INSTALL_CHANNEL:-stable}
 home=${HOME:?TORB_INSTALL needs \$HOME}
 torb_home="$home/.torb"
@@ -70,20 +71,36 @@ version=${TORB_INSTALL_VERSION:-}
 if [ -z "$version" ]; then
   fetch "$base_url/versions.txt" "$scratch/versions.txt" || fail "could not reach $base_url/versions.txt"
   version=$(awk -v c="$channel" '$2 == c { print $1; exit }' "$scratch/versions.txt")
+  if [ -z "$version" ] && [ -z "$channel_requested" ] && [ "$channel" = "stable" ]; then
+    # No stable release yet (docs/design/RELEASE.md section 3): the default channel falls back to the newest
+    # nightly, and the toolchain follows the nightly channel (torb upgrade reads install.trb below) until a
+    # stable release exists. An explicitly requested channel or version never falls back.
+    fallback_version=$(awk -v c="nightly" '$2 == c { print $1; exit }' "$scratch/versions.txt")
+    if [ -n "$fallback_version" ]; then
+      say "no stable release yet: installing the nightly $fallback_version"
+      channel="nightly"
+      version="$fallback_version"
+    fi
+  fi
   [ -n "$version" ] || fail "no version of the \"$channel\" channel is listed at $base_url/versions.txt"
 fi
 
 archive="torb-$version-$target.tar.gz"
 say "installing TorbScript $version ($target)"
-fetch "$base_url/$version/$archive" "$scratch/$archive" || fail "could not download $archive"
-fetch "$base_url/$version/SHA256SUMS" "$scratch/SHA256SUMS" || fail "could not download SHA256SUMS"
 
-# ---------------------------------------------------------------------------------------------------------- the hash
+# SHA256SUMS is fetched first and is what decides whether $target has an archive of $version at all: a missing
+# archive is a clear error naming the version and target, not a failed download that looks like a network problem
+fetch "$base_url/$version/SHA256SUMS" "$scratch/SHA256SUMS" || fail "could not download SHA256SUMS for $version"
 
 # GNU sha256sum marks a file read in binary mode with a leading "*" (always, on a system where text and binary
 # differ) - stripped here so the same SHA256SUMS verifies on every platform that wrote it
 expected=$(awk -v f="$archive" '{ name = $2; sub(/^\*/, "", name); if (name == f) { print $1; exit } }' "$scratch/SHA256SUMS")
-[ -n "$expected" ] || fail "$archive is not listed in SHA256SUMS"
+[ -n "$expected" ] || fail "$version has no $target archive yet"
+
+fetch "$base_url/$version/$archive" "$scratch/$archive" || fail "could not download $archive"
+
+# ---------------------------------------------------------------------------------------------------------- the hash
+
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$scratch/$archive" | awk '{ print $1 }')
 elif command -v shasum >/dev/null 2>&1; then
