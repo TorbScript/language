@@ -14,6 +14,10 @@
 # on Linux) and `llvm-windres` (LLVM's). Without one it says so and exits with 3, and the caller ships torb.exe without
 # its icon rather than not at all.
 #
+# An `<object>` whose name ends in `.res` is a resource file instead, compiled by `zig rc` (`$TORB_ZIG`, or `zig` on
+# the PATH), which brings its own preprocessor and <winver.h>; the linker of `zig cc` takes it like an object. That is
+# how the cross-compiled torb.exe gets its icon (tools/cross.sh), on a machine with no MinGW at all.
+#
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
 set -eu
@@ -40,19 +44,32 @@ esac
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$root"
 
-windres=${TORB_WINDRES-}
-if [ -z "$windres" ]; then
-  for candidate in windres x86_64-w64-mingw32-windres llvm-windres; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      windres=$candidate
-      break
+windres=""
+zig=""
+case "$output" in
+  *.res)
+    zig=${TORB_ZIG:-zig}
+    if ! command -v "$zig" >/dev/null 2>&1; then
+      say "resource.sh: no zig for a .res (\$TORB_ZIG or zig on the PATH)"
+      exit 3
     fi
-  done
-fi
-if [ -z "$windres" ]; then
-  say "resource.sh: no resource compiler (tried \$TORB_WINDRES, windres, x86_64-w64-mingw32-windres, llvm-windres)"
-  exit 3
-fi
+    ;;
+  *)
+    windres=${TORB_WINDRES-}
+    if [ -z "$windres" ]; then
+      for candidate in windres x86_64-w64-mingw32-windres llvm-windres; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+          windres=$candidate
+          break
+        fi
+      done
+    fi
+    if [ -z "$windres" ]; then
+      say "resource.sh: no resource compiler (tried \$TORB_WINDRES, windres, x86_64-w64-mingw32-windres, llvm-windres)"
+      exit 3
+    fi
+    ;;
+esac
 
 version=$(tr -d '\r' <project.trb | sed -n 's/^version *=\{0,1\} *"\([^"]*\)".*$/\1/p' | head -n 1)
 printf '%s\n' "$version" | grep -q -E '^[0-9]+\.[0-9]+\.[0-9]+$' ||
@@ -72,6 +89,10 @@ cat >"$scratch/torb-version.h" <<EOF
 EOF
 
 mkdir -p "$(dirname "$output")"
-"$windres" --input-format=rc --output-format=coff -I "$scratch" -i tools/windows/torb.rc -o "$output" ||
-  fail "$windres could not compile tools/windows/torb.rc"
+if [ -n "$zig" ]; then
+  "$zig" rc -i "$scratch" -fo "$output" -- tools/windows/torb.rc || fail "$zig rc could not compile tools/windows/torb.rc"
+else
+  "$windres" --input-format=rc --output-format=coff -I "$scratch" -i tools/windows/torb.rc -o "$output" ||
+    fail "$windres could not compile tools/windows/torb.rc"
+fi
 say "wrote $output: the icon of brand/icons/torb.ico and version $version"

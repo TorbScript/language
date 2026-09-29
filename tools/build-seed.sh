@@ -17,7 +17,7 @@
 # unless it is named; a C compiler on Windows appends `.exe`.
 #
 # `$TORB_OBJECTS` adds object files to the link: the release links the icon and the version of the Windows `torb.exe`
-# this way (tools/windows/resource.sh), and nothing else passes any.
+# this way (tools/windows/resource.sh; a `.res` where `zig cc` links, tools/cross.sh), and nothing else passes any.
 #
 # `$TORB_CC` picks the compiler (default: clang, gcc, cc - the order `torb build` uses), `$TORB_CFLAGS` adds flags. The
 # compile runs inside one of the machine-wide build slots of `tools/build-slot.sh` where that script is found beside
@@ -78,14 +78,23 @@ else
   [ -n "$compiler" ] || fail "no C compiler found (tried \$TORB_CC, clang, gcc, cc)"
 fi
 
-# The worker pool is pthreads everywhere but Windows, where it is the Win32 API that every C compiler links anyway
+# The worker pool is pthreads everywhere but Windows, where it is the Win32 API that every C compiler links anyway. The
+# machine the binary is for decides, and the compiler knows it (`-dumpmachine`: x86_64-w64-mingw32, or
+# x86_64-unknown-windows-gnu from the `zig cc` of tools/cross.sh) - a cross compiler's machine is not this one. Without
+# an answer it is this machine.
 threads="-pthread"
-case "$(uname -s 2>/dev/null)" in
-  MINGW* | MSYS* | CYGWIN* | Windows*) threads="" ;;
+machine=$("$compiler" -dumpmachine 2>/dev/null || true)
+case "$machine" in
+  *mingw* | *windows* | *cygwin*) threads="" ;;
+  "")
+    case "$(uname -s 2>/dev/null)" in
+      MINGW* | MSYS* | CYGWIN* | Windows*) threads="" ;;
+    esac
+    if [ "${OS-}" = "Windows_NT" ]; then
+      threads=""
+    fi
+    ;;
 esac
-if [ "${OS-}" = "Windows_NT" ]; then
-  threads=""
-fi
 
 # Every `.c` of the runtime and of its `os/` directory, as `torb build` compiles them. A runtime that predates `os/`
 # has none there, and the unexpanded pattern is not passed on.

@@ -8,6 +8,11 @@
 #
 #   sh tools/smoke-test.sh build/release/torb
 #   sh tools/smoke-test.sh build/torb-static
+#   TORB_SMOKE_RUNNER=wine sh tools/smoke-test.sh build/cross/windows-x64/torb.exe
+#
+# `$TORB_SMOKE_RUNNER` is the command a binary of another machine runs under - `wine` for a windows-x64 `torb.exe`,
+# `qemu-aarch64` for a linux-arm64 `torb` - which is how the binaries tools/cross.sh builds are started on the runner
+# that built them. Everything else is the same.
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
@@ -78,16 +83,22 @@ print "{older < newer} {newer >= older} {0.01 * 3.0} {7.5 % 2.0}"
 EOF
 ordered='true true 0.03 1.5'
 
+runner=${TORB_SMOKE_RUNNER-}
+run_torb() {
+  # shellcheck disable=SC2086
+  $runner "$torb" "$@"
+}
+
 cd "$scratch/somewhere"
 unset TORB_STD TORB_RUNTIME 2>/dev/null || true
 
-say "smoke test of $binary, laid out in $scratch/toolchain"
-if ! output=$("$torb" check hello.trb 2>&1); then
+say "smoke test of $binary${runner:+ under $runner}, laid out in $scratch/toolchain"
+if ! output=$(run_torb check hello.trb 2>&1); then
   say "$output"
   fail "torb check failed outside of a checkout"
 fi
 say "check: $output"
-if ! output=$("$torb" run hello.trb 2>&1); then
+if ! output=$(run_torb run hello.trb 2>&1); then
   say "$output"
   fail "torb run failed outside of a checkout"
 fi
@@ -99,7 +110,7 @@ if [ "$output" != "$expected" ]; then
   fail "torb run printed something else"
 fi
 say "run: the program printed what it should"
-if ! output=$("$torb" run order.trb 2>&1); then
+if ! output=$(run_torb run order.trb 2>&1); then
   say "$output"
   fail "torb run of an order comparison and floats failed"
 fi
@@ -113,7 +124,7 @@ say "run: an order comparison and floats printed what they should"
 # The build stage of the registry's image (tools/deploy/Dockerfile.registry) up to its C: a program with the whole
 # compiler inside it, the largest one a release binary meets, from a tree with `std/` beside it as the source archive is
 cd "$root"
-if ! output=$("$torb" build tools/registry/src/main.trb --emit-c --output "$scratch/registry/registry" 2>&1); then
+if ! output=$(run_torb build tools/registry/src/main.trb --emit-c --output "$scratch/registry/registry" 2>&1); then
   say "$output"
   fail "torb build --emit-c of tools/registry failed"
 fi
