@@ -15,7 +15,9 @@
  * operation of the IO core; and where the scheduler would sleep while it waits, it returns to the page instead
  * (task.c): the first time out of `main`, whose stack it gives up, with the program alive. The page then hands in bytes
  * and calls `torb_browser_resume(1)`, or calls `torb_browser_resume(0)` once the time it was told has passed, and the
- * scheduler goes on where it stopped until it waits for the page again.
+ * scheduler goes on where it stopped until it waits for the page again. Tasks that run on and on return to the page
+ * too, after a slice of 50 ms, so that a message the page got meanwhile is read before their next step - the answer 0
+ * asks the page to call again at once, after its own messages.
  *
  * `torb lsp` in the playground's language worker is the same server as everywhere, over the same standard input and
  * output: this is its transport, and nothing of the server knows it runs in a page. A page whose `stdin` answers `null`
@@ -94,8 +96,9 @@ void torb_browser_unwind(void) {
 /**
  * The page's call, after it handed in standard input (`input` 1) or once the time the last call answered has passed
  * (`input` 0): the program runs until it waits for the page again, and the answer is the milliseconds until its first
- * timer is due - when the page calls again with 0 - or -1 where only more input can wake it. A program that ends ends
- * the runtime as `exit` does, which emscripten reports to the page by throwing its `ExitStatus`.
+ * timer is due - when the page calls again with 0 - or -1 where only more input can wake it; 0 where its slice was over
+ * with more to run. A program that ends ends the runtime as `exit` does, which emscripten reports to the page by
+ * throwing its `ExitStatus`.
  */
 EMSCRIPTEN_KEEPALIVE int32_t torb_browser_resume(int32_t input) {
   int64_t span = -1;

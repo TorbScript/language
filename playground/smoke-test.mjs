@@ -304,6 +304,21 @@ await step("hover and semantic tokens answer", async () => {
     throw new Error(JSON.stringify(tokens));
   }
 });
+await step("a rename, a request that takes steps, is answered", async () => {
+  session.notify("textDocument/didChange", {
+    textDocument: { uri, version: 4 },
+    contentChanges: [{ text: 'const names = ["Ada", "Alan"]\nprint names.length()\n' }],
+  });
+  const answer = await session.request("textDocument/rename", {
+    textDocument: { uri },
+    position: { line: 0, character: 7 },
+    newName: "people",
+  });
+  const edits = answer.result && (answer.result.changes ? answer.result.changes[uri] : null);
+  if (!edits || edits.length !== 2 || !edits.every((edit) => edit.newText === "people")) {
+    throw new Error(JSON.stringify(answer).slice(0, 400));
+  }
+});
 await step("shutdown and exit end the server with 0", async () => {
   await session.request("shutdown", null);
   const exited = session.exited();

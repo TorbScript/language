@@ -418,8 +418,8 @@ TORB_NORETURN void torb_browser_unwind(void);
 
 /**
  * task.c's: the scheduler again after it returned to the page, until it waits for the page once more - true, with the
- * nanoseconds to its first timer in `span`, -1 for none - or until the run `main` started is over: false, with the task
- * `main` waited for in `until`, or `NULL`.
+ * nanoseconds to its first timer in `span`, -1 for none, 0 where its slice was over with more to run - or until the run
+ * `main` started is over: false, with the task `main` waited for in `until`, or `NULL`.
  */
 bool torb_scheduler_resume(int64_t *span, torb_task **until);
 

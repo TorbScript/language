@@ -254,13 +254,22 @@ function startLanguageServer(module) {
       end(problem);
       return;
     }
-    if (due >= 0) {
+    if (due === 0) {
+      // The server's slice was over with more to do: again at once, once the messages that came meanwhile are in
+      soon.port2.postMessage(null);
+    } else if (due > 0) {
       timer = setTimeout(function () {
         timer = null;
         resume(false);
       }, due);
     }
   }
+
+  // A turn of the event loop without the clamp of `setTimeout(0)`: behind every message that is already there
+  const soon = new MessageChannel();
+  soon.port1.onmessage = function () {
+    resume(false);
+  };
 
   function end(problem) {
     ended = true;
@@ -311,10 +320,8 @@ function startLanguageServer(module) {
       return;
     }
     torb = instance;
-    // What the page sent while the toolchain was instantiated
-    if (inputAt < input.length) {
-      resume(true);
-    }
+    // Once more, for what the page sent meanwhile and for the first timer the server asks for
+    resume(inputAt < input.length);
   }, end);
 
   return { send: send };

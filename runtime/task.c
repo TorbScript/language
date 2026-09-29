@@ -161,8 +161,14 @@ static torb_pool_state torb_pool = { NULL, 1u, 0u, 0u, 0u, 0u, 0, 0, 0u, 0u, NUL
 static torb_mutex torb_tree = TORB_MUTEX_INITIALIZER;
 
 #if defined(__EMSCRIPTEN__)
-/** Whether the main thread's loop returned because a task waits for the page (`torb_browser_input_waited`). */
+/**
+ * Whether the main thread's loop returned to the page, where a task waits for it (`torb_browser_input_waited`): 1
+ * because nothing else can run, 2 because its slice was over and there is more to run.
+ */
 static uint8_t torb_browser_yielded = 0u;
+/** When the main thread's loop last came from the page, and how long it runs before it lets the page in again. */
+static torb_instant torb_browser_slice_started = 0;
+#  define TORB_BROWSER_SLICE ((torb_duration)50000000)
 #endif
 
 /* The blocking pool ("The blocking pool" below), whose workers are numbered from `TORB_BLOCKING_INBOX` on (torb_pool.h). */
@@ -2049,6 +2055,18 @@ static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main, 
       torb_process_exit(torb_pool.exit_code);
     }
     torb_fire_timers(self);
+#if defined(__EMSCRIPTEN__)
+    /*
+     * Where a task waits for the page, tasks that run on and on still let it in once a slice is over, so what it sent
+     * meanwhile is read before the next of them: the page's message queue is only read while its thread is not here.
+     * One thread and no other: the queue is read without its lock.
+     */
+    if (is_main && !for_test && self->queue_first != NULL && torb_browser_input_waited()
+        && torb_clock_now() - torb_browser_slice_started >= TORB_BROWSER_SLICE) {
+      torb_browser_yielded = 2u;
+      return;
+    }
+#endif
     task = torb_take_local(self);
     /* The turn of a task to the blocking pool completed: it goes there instead of running here */
     if (task != NULL && task->hopping != 0u && torb_hand_to_blocking(self, task)) {
@@ -2109,6 +2127,9 @@ void torb_scheduler_run(torb_task *until) {
   }
   self->scheduler.running = true;
   torb_until_set(until);
+#if defined(__EMSCRIPTEN__)
+  torb_browser_slice_started = torb_clock_now();
+#endif
   torb_worker_loop(self, until, true, false);
 #if defined(__EMSCRIPTEN__)
   /* The program waits for the page: `main` gives up its stack, and `torb_browser_resume` goes on from here */
@@ -2126,9 +2147,10 @@ bool torb_scheduler_resume(int64_t *span, torb_task **until) {
   torb_worker *self = &torb_main_worker;
   torb_task *awaited = (torb_task *)torb_atomic_load_pointer(&torb_pool.until);
   torb_browser_yielded = 0u;
+  torb_browser_slice_started = torb_clock_now();
   torb_worker_loop(self, awaited, true, false);
   if (torb_browser_yielded != 0u) {
-    *span = torb_sleep_span(self);
+    *span = torb_browser_yielded == 2u ? 0 : torb_sleep_span(self);
     return true;
   }
   torb_atomic_store_pointer(&torb_pool.until, NULL);
