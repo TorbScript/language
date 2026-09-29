@@ -134,7 +134,8 @@ language *means* changes the page that says so - `docs check` names the page who
 blank line when the change needs one. The types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`,
 `build`, `ci`, `chore` and `revert`; `!` after the scope, or a `BREAKING CHANGE:` line in the body, marks a
 change that breaks a program. The scope is the part the change is about: `checker`, `parser`, `lower`, `backend`,
-`vm`, `repl`, `runtime`, `std/<package>`, `docs`, `tools`, `ci` - or none when it spans many.
+`vm`, `repl`, `runtime`, `std/<package>`, `docs`, `tools`, `ci` - several separated by commas when it is about a few
+(`std/dns,std/yaml`), or none when it spans many.
 
 **The history is linear.** `main` has no merge commits: a branch lands rebased onto `main` (each of its commits a
 Conventional Commit that builds) or squashed into one commit, and `main` only moves forward. The two commits of a

@@ -12,7 +12,7 @@ base=$1
 head=${2:-HEAD}
 
 types='feat|fix|perf|refactor|docs|test|build|ci|chore|revert'
-pattern="^($types)(\([a-z0-9][a-z0-9/._-]*\))?!?: [^ ].*"
+pattern="^($types)(\([a-z0-9][a-z0-9/._-]*(,[a-z0-9][a-z0-9/._-]*)*\))?!?: [^ ].*"
 limit=100
 
 bad=0
