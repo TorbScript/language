@@ -50,6 +50,8 @@ public type SiteSettings {
   lockup: String
   /** The flat mark as inline SVG */
   mark: String
+  /** A hash of the playground's files where the site serves them ([playgroundVersionOf]), empty where it does not */
+  playgroundVersion: String = ""
 }
 
 /** The site: every text file it writes, every file of the brand it copies, and the problems found building it. */
@@ -231,6 +233,7 @@ public fn buildSite(documentation: Documentation, settings: SiteSettings): Built
       localTitles,
       localSummaries,
       hasPlayground: documentation.pageAt("{siteFolder}/play.md").isSome(),
+      playgroundVersion: settings.playgroundVersion,
     )
     var shownTitles = titles
     for (source, title) in localTitles {
@@ -607,6 +610,20 @@ public fn writeBuiltSite(output: String, brand: String, site: BuiltSite): Result
     count = count + 1
   }
   count
+}
+
+/**
+ * The version of a built playground: twelve hexadecimal digits of the SHA-256 of its files but `torb.wasm`, whose
+ * `torb.wasm.gz` is hashed instead - the same bytes, a quarter of them. A page loads the playground with it as `?v=`.
+ */
+public fn playgroundVersionOf(playground: String): Result<String, IoError> {
+  var hasher = Sha256()
+  for name in playgroundFiles {
+    if name != "torb.wasm" {
+      hasher.add(File.readBytes(joinDocumentationPath(playground, name))?)
+    }
+  }
+  hasher.finished().hex().prefix(characters: 12)
 }
 
 /** Copies the built playground from `playground` into `assets/` of `output`. Answers with the number of files. */

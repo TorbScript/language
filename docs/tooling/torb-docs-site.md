@@ -181,8 +181,9 @@ only under the exercises of Start; everywhere else a mount looks like any other 
 it.
 
 **Loading.** No page names `playground.js` statically, so the link check does not require it. When a page has a mount,
-`assets/site.js` inserts `<script src="<root>assets/playground.js">`; when that loads and defines
-`window.TorbPlayground`, it calls, for every mount in document order:
+`assets/site.js` inserts `<script src="<root>assets/playground.js?v=<hash>">` - the hash of the playground's files,
+which every page carries as `data-playground-version` when the site was written with `--playground` - and when that
+loads and defines `window.TorbPlayground`, it calls, for every mount in document order:
 
 ```text
 TorbPlayground.mount(element, {
@@ -190,13 +191,15 @@ TorbPlayground.mount(element, {
   file,             // data-file
   expectedOutput,   // data-expected-output, or undefined
   solution,         // data-solution, or undefined
-  labels,           // { run, reset, solution, output, expected, solved, running }, in the page's language
+  labels,           // { run, stop, reset, solution, output, expected, solved, unsolved, running, loading, stopped,
+                    //   exitCode, tooMuchOutput, crashed, unsupported }: the words playground.*, in the page's language
   onResult          // function ({ output, exitCode, passed }) - passed: the output equals expectedOutput
 })
 ```
 
-From then on `mount` owns the element's children. `playground.js` does not mount anything by itself, and whatever it
-loads besides - the toolchain as WebAssembly - it loads relative to its own URL. When the script is missing or fails,
+From then on `mount` owns the element's children, and keeps a `playground-local` line below what it builds.
+`playground.js` does not mount anything by itself, and whatever it loads besides - the toolchain as WebAssembly - it
+loads relative to its own URL and with its own `?v=`. When the script is missing or fails,
 nothing happens and the fallback stays. A page `site/play.md` is written as `play.html`, and the header links it as
 Playground where it exists.
 

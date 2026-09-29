@@ -552,12 +552,14 @@ beyond a megabyte stops the run. `TorbPlayground.mount` follows the contract of 
 `/play` - the editor fills it and the address carries the source.
 
 **The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the six files into
-`assets/` where they were built; no page names them, so a site without them is still whole. `tools/deploy/nginx.conf`
-sends `torb.wasm.gz` with `gzip_static`, and has a browser ask for the playground's files again after five minutes
-(a 304 while the release has not replaced them): the site's script loads `assets/playground.js` by its name, without
-the hash behind `?v=` that lets the stylesheet be kept for a year. The site image builds the playground itself, in the pinned emscripten image,
-from the release's source and with the release's `torb` - the same inputs give the same wasm, and nothing but the
-release is downloaded for it. CI's `playground` job (`.forgejo/workflows/gates.yml`) builds it in that image from the
+`assets/` where they were built; no page names them, so a site without them is still whole. Every page then carries a
+hash of them (`data-playground-version`), the site's script loads `assets/playground.js?v=<hash>`, and
+`playground.js` hands its query on to the worker, `torb.js` and `torb.wasm` - so `tools/deploy/nginx.conf` lets a
+browser keep all of them for a year, like the stylesheet, and sends `torb.wasm.gz` with `gzip_static`. The site's
+labels of the playground are words of its interface (`playground.*` in `site-strings.trb` and each language's
+`strings.json`), and the line that says how to run an exercise of Start locally stays below the mount. The site image
+builds the playground itself, in the pinned emscripten image, from the release's source and with the release's `torb` -
+the same inputs give the same wasm, and nothing but the release is downloaded for it. CI's `playground` job (`.forgejo/workflows/gates.yml`) builds it in that image from the
 compiler of the run and runs `smoke-test.mjs`.
 
 **Not built**: brotli (the stock nginx has no module for it; 30% smaller), a checked prelude (above), keeping the

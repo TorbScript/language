@@ -78,6 +78,11 @@ public type SiteContext {
   summaries: Map<String, String> = [:]
   /** Whether the site has a playground page, `site/play.md`, which the header links */
   hasPlayground: Bool = false
+  /**
+   * A hash of the playground's files where the site serves them, which the script loads `assets/playground.js` with
+   * as `?v=`, so the server may let a browser keep them for a year; empty where the site has no playground
+   */
+  playgroundVersion: String = ""
 
   /** A word of the interface in the language of the pages. */
   fn word(key: String): String {
@@ -168,6 +173,14 @@ fn scriptWordsHtml(site: SiteContext): String {
     "playground.output",
     "playground.solved",
     "playground.running",
+    "playground.stop",
+    "playground.unsolved",
+    "playground.loading",
+    "playground.stopped",
+    "playground.exitCode",
+    "playground.tooMuchOutput",
+    "playground.crashed",
+    "playground.unsupported",
   ]
   var entries: List<String> = []
   for key in keys {
@@ -371,6 +384,9 @@ fn pageHtml(site: SiteContext, head: PageHead, level: Level, main: String, extra
   const docs = "{site.language.prefix}{docsDirectory(site.version)}/"
   const docsPage = head.page.withoutPrefix(docs) ?? ""
   var attributes = "data-root=\"{root}\" data-site-root=\"{siteRoot}\" data-version=\"{escapedHtml(site.version)}\" data-page=\"{escapedHtml(docsPage)}\""
+  if !site.playgroundVersion.isEmpty() {
+    attributes = "{attributes} data-playground-version=\"{escapedHtml(site.playgroundVersion)}\""
+  }
   if !extra.isEmpty() {
     attributes = "{attributes} {extra}"
   }

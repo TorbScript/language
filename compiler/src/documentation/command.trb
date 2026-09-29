@@ -23,7 +23,8 @@ use NativeOptions from "./native"
 use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, staleSkillFiles, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
-use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf, playgroundFiles, writePlayground from "./site"
+use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf from "./site"
+use playgroundFiles, playgroundVersionOf, writePlayground from "./site"
 use counted from "../cli/render"
 
 /** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
@@ -264,7 +265,15 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   const version = if options.version.isEmpty() { "latest" } else { options.version }
   const documentation = readDocumentation(options.root)?
   const drawings = brandDrawingsOf(brand)?
-  const site = buildSite documentation, SiteSettings(version, drawings.lockup, drawings.mark)
+  const playground = if options.playground.isEmpty() { "{options.root}/../build/playground" } else { options.playground }
+  const hasPlayground = playgroundFiles.all({ File.exists "{playground}/{_}" })
+  if !hasPlayground && !options.playground.isEmpty() {
+    printError "torb docs site: `{playground}` has no built playground. `sh playground/build.sh` builds it"
+    return 1
+  }
+  const playgroundVersion = if hasPlayground { playgroundVersionOf(playground)? } else { "" }
+  const settings = SiteSettings version, drawings.lockup, drawings.mark, playgroundVersion
+  const site = buildSite documentation, settings
   var count = reportProblems site.problems
   for copy in site.copies {
     const source = "{brand}/{copy.source}"
@@ -280,12 +289,6 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   if options.onlyCheck {
     print "{pages}, {counted(site.texts.length() + site.copies.length(), "file")}, no broken link"
     return 0
-  }
-  const playground = if options.playground.isEmpty() { "{options.root}/../build/playground" } else { options.playground }
-  const hasPlayground = playgroundFiles.all({ File.exists "{playground}/{_}" })
-  if !hasPlayground && !options.playground.isEmpty() {
-    printError "torb docs site: `{playground}` has no built playground. `sh playground/build.sh` builds it"
-    return 1
   }
   var written = writeBuiltSite(options.out, brand, site)?
   if hasPlayground {

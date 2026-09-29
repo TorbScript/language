@@ -43,8 +43,8 @@
     expected: "Expected output",
     solved: "Solved",
     unsolved: "Not yet",
-    running: "Running",
-    loading: "Loading the toolchain",
+    running: "Running…",
+    loading: "Loading the toolchain…",
     exitCode: "Exit code",
     stopped: "Stopped",
     tooMuchOutput: "Stopped: the program printed more than a megabyte",
@@ -722,6 +722,8 @@
     const expected = settings.expectedOutput;
     const isExercise = typeof expected === "string";
     const isPage = settings.page === true || target.closest("[data-playground-page]") !== null;
+    // The line that says how to run it locally, which the site writes under an exercise of Start, stays below it
+    const local = target.querySelector(".playground-local");
 
     target.textContent = "";
     target.classList.add("playground-mounted");
@@ -803,7 +805,7 @@
       active = job;
       runButton.textContent = labels.stop;
       runButton.classList.add("playground-stop");
-      status.textContent = (compiled ? labels.running : labels.loading) + "…";
+      status.textContent = compiled ? labels.running : labels.loading;
       output.textContent = "";
       panel.hidden = false;
       verdict.hidden = true;
@@ -812,7 +814,7 @@
       let streamedErrors = "";
       try {
         const result = await run(editor.value, function (more, moreErrors) {
-          status.textContent = labels.running + "…";
+          status.textContent = labels.running;
           streamedOutput += more;
           streamedErrors += moreErrors;
           renderOutput(output, streamedOutput, streamedErrors, file, editor);
@@ -848,6 +850,9 @@
       }
     }
 
+    if (local !== null) {
+      target.appendChild(local);
+    }
     if (isPage) {
       sharing(editor);
     }
