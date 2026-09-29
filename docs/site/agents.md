@@ -33,8 +33,10 @@ nothing of them is in its context while it works on something else.
 
 ## Install them
 
-Every command below installs all seven skills. The repository is
+Every command below installs all seven skills unless it says otherwise. The repository is
 [git.torb.dev/torbscript/language](https://git.torb.dev/torbscript/language); the skills are its `skills/` directory.
+Its public mirror [github.com/TorbScript/language](https://github.com/TorbScript/language) has the same skills, so an
+agent that takes a GitHub repository by its short name installs them as `TorbScript/language` as well.
 
 ### Claude Code
 
@@ -52,6 +54,9 @@ $ claude plugin marketplace add https://git.torb.dev/torbscript/language.git --s
 $ claude plugin install torbscript@torbscript
 ```
 
+`/plugin marketplace add TorbScript/language` (or `claude plugin marketplace add TorbScript/language`) adds the same
+marketplace from the GitHub mirror.
+
 The skills are then named after the plugin: `torbscript:torbscript`, `torbscript:torbscript-testing`, and the five
 others the same way.
 `claude plugin marketplace update torbscript`, then `claude plugin update torbscript@torbscript`, fetches a newer
@@ -64,8 +69,16 @@ $ codex plugin marketplace add https://git.torb.dev/torbscript/language.git
 $ codex plugin add torbscript@torbscript
 ```
 
-`/plugins` in a session does the same. Without the plugin system, the command of the next section with `-a codex`
-copies the skills into `.agents/skills/` of the project.
+`codex plugin marketplace add TorbScript/language` adds the same marketplace from the GitHub mirror, and `/plugins` in
+a session does what the two lines do. Without the plugin system, the command of the next section with `-a codex`
+copies the skills into `.agents/skills/` of the project. The skill installer built into Codex also takes a skill from
+GitHub by its directory, one skill at a time, and the skill is there from the next turn:
+
+```text
+$skill-installer install https://github.com/TorbScript/language/tree/main/skills/torbscript
+```
+
+`skills/torbscript-language`, `skills/torbscript-testing` and the other directories install the rest the same way.
 
 ### OpenClaw, GitHub Copilot, Cursor, Gemini CLI and others
 
@@ -73,10 +86,12 @@ copies the skills into `.agents/skills/` of the project.
 
 ```console
 $ npx skills add https://git.torb.dev/torbscript/language
+$ npx skills add TorbScript/language
 ```
 
-It asks which agents to install for; `-a openclaw`, `-a github-copilot` or `-a cursor` names one, `-g` installs for
-your user instead of the project, and `--skill '*' -y` takes every skill without asking.
+The second line takes the same skills from the GitHub mirror. It asks which agents to install for; `-a openclaw`,
+`-a github-copilot` or `-a cursor` names one, `-g` installs for your user instead of the project, and `--skill '*' -y`
+takes every skill without asking.
 
 ### APM
 
@@ -84,9 +99,10 @@ your user instead of the project, and `--skill '*' -y` takes every skill without
 $ apm install https://git.torb.dev/torbscript/language.git
 ```
 
-The [Agent Package Manager](https://microsoft.github.io/apm/) reads `apm.yml` at the root of the repository and
-deploys the skills for the agent it finds in the project; where it finds several, `--target claude` (or `codex`,
-`copilot`, `cursor`, `opencode`) says which.
+`apm install TorbScript/language` installs the same package from the GitHub mirror. The
+[Agent Package Manager](https://microsoft.github.io/apm/) reads `apm.yml` at the root of the repository and deploys the
+skills for the agent it finds in the project; where it finds several, `--target claude` (or `codex`, `copilot`,
+`cursor`, `opencode`) says which.
 
 ### By hand
 
