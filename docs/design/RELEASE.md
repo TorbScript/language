@@ -185,8 +185,9 @@ torb-0.4.0-linux-x64/
 - **Two artifacts beside the per-target archives**: the source of the tagged commit, and the compiler's `program.c` —
   the portable seed of RUST-EXIT section 4.1, "builds anywhere a C compiler exists". README.md already promises both
   ("A release publishes both artifacts").
-- **The Agent Skill** (`torb docs skill`) is published as its own archive on torb.dev, not inside the toolchain: it is
-  documentation, and an agent installs it where its harness reads skills.
+- **The Agent Skills** (`torb docs skill`, committed in `skills/`) are not inside the toolchain: they are
+  documentation, and an agent installs them from the repository where its harness reads skills - a Claude Code or
+  Codex plugin marketplace, `npx skills`, APM (docs/site/agents.md).
 - **Nothing else.** No bundled editor, no documentation in the archive (torb.dev has every version), no C compiler.
 - **The Windows `torb.exe` carries the Orb and its version** (docs/design/BRAND.md section 11, "Binary icons"):
   `tools/windows/torb.rc` names `brand/icons/torb.ico` and the product name TorbScript, and `tools/windows/resource.sh`
@@ -412,7 +413,8 @@ is the line under it and the text of the meta description.
 |---|---|---|
 | `/` | what the language is in one screen: one program, the three claims (value semantics, one language for code and configuration, interpreted and native), install line, links | written for the site, in `docs/site/` |
 | `/install` | the one-liners, the archives, what each target needs, `torb upgrade` | `docs/guide/installing-and-running.md`, rewritten for downloads |
-| `/download` | every artifact of every release, hashes, signatures, the portable seed, the skill | generated from the release manifest |
+| `/agents` | the one line that installs the Agent Skills into each agent | `docs/site/agents.md` |
+| `/download` | every artifact of every release, hashes, signatures, the portable seed | generated from the release manifest |
 | `/learn` | the guide in order, then the tour | `docs/guide/`, `examples/tour/` |
 | `/docs/<version>/` | the language reference, `std`, tooling, how-to, explanation | `docs/` of that tag |
 | `/docs/<version>/std/<package>` | one page per `std` package, written by hand, with a link to the package's generated reference | `docs/standard-library/` |

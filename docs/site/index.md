@@ -1,6 +1,6 @@
 ---
 title: The website
-summary: The pages torb.dev shows around the documentation - the front page and the install page - which torb docs site writes at the root of the site.
+summary: The pages torb.dev shows around the documentation - the front page, the install page and the page for AI agents - which torb docs site writes at the root of the site.
 kind: index
 status: stable
 order: 100
@@ -13,10 +13,11 @@ them at the root of torb.dev instead of below `/docs/<version>/`, with a layout 
 ## What belongs here
 
 Pages of the website that are not documentation: the front page (`home.md`, written as `/`), the install page
-(`install.md`, as `/install`), the playground (`play.md`, as `/play`, which the header links where it exists), and the
-imprint and the privacy notice (`imprint.md` and `privacy.md`, as `/imprint` and `/privacy`), which the site links in
-its footer only where the page exists. Each has the kind `site`, and none of them is carried by the skill or by
-`llms-full.txt`. Their translations are below `translations/<language>/site/`.
+(`install.md`, as `/install`), the page about the Agent Skills (`agents.md`, as `/agents`), the playground (`play.md`,
+as `/play`, which the header links where it exists), and the imprint and the privacy notice (`imprint.md` and
+`privacy.md`, as `/imprint` and `/privacy`), which the site links in its footer only where the page exists. Each has the
+kind `site`, and none of them is carried by the skills or by `llms-full.txt`. Their translations are below
+`translations/<language>/site/`.
 
 What does not belong here: anything about the language or the toolchain, which is in the sections of the documentation,
 and the release notes, which will have `docs/releases/`.
@@ -27,6 +28,7 @@ and the release notes, which will have `docs/releases/`.
 
 - **[TorbScript](home.md)** - A programming language for scripts, tools and servers. It finds mistakes before your program runs, starts at once while you write, and builds a fast program when you ship.
 - **[Install TorbScript](install.md)** - One command installs the toolchain for the current user on Linux, macOS, FreeBSD and Windows, checked against the release's hashes, and torb upgrade keeps it current.
+- **[Use TorbScript with your AI agent](agents.md)** - One command installs the TorbScript Agent Skills into Claude Code, Codex, OpenClaw, Copilot, Cursor or any other agent that reads the open skill format, so that the agent finds or installs torb and writes TorbScript that compiles.
 - **[Playground](play.md)** - Write TorbScript and run it in your browser - the whole toolchain as WebAssembly checks, compiles and runs the program on your machine, with no server and no account, and the address is the link to share it.
 
 <!-- torb:index:end -->

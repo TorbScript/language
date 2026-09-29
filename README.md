@@ -8,6 +8,8 @@ native executables, and it is its own configuration format.
 - [CONCEPT.md](CONCEPT.md) - the language
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how it is implemented, and the state of it
 - [examples/tour](examples/tour) - the language in thirteen files
+- [docs/site/agents.md](docs/site/agents.md) - the Agent Skills that teach an AI agent TorbScript, and the one line that
+  installs them into Claude Code, Codex, OpenClaw, Copilot and others
 
 | Directory    | Contains                                                                      |
 |--------------|-------------------------------------------------------------------------------|
@@ -15,6 +17,7 @@ native executables, and it is its own configuration format.
 | `std/`       | The standard library, one package per directory (`std/core`, `std/fs`, ...; `std/prelude` re-exports) |
 | `runtime/`   | The C runtime every compiled binary links against ([runtime/README.md](runtime/README.md)) |
 | `examples/`  | Tour and example projects                                                     |
+| `skills/`    | The Agent Skills of the language, written from `docs/` by `torb docs skill` ([docs/site/agents.md](docs/site/agents.md)) |
 | `tests/`     | The conformance suite and the language smoke programs ([tests/conformance/README.md](tests/conformance/README.md)) |
 | `brand/`     | The logo, the icons and the design tokens ([brand/README.md](brand/README.md), [docs/design/BRAND.md](docs/design/BRAND.md)) |
 | `playground/` | The playground of torb.dev/play: `torb` built as WebAssembly, and the page's script ([docs/tooling/the-playground.md](docs/tooling/the-playground.md)) |

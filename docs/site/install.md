@@ -54,6 +54,11 @@ To read the script before running it rather than piping it into `iex`, download 
 > powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
+## With an AI agent
+
+[Use TorbScript with your AI agent](agents.md) installs the TorbScript Agent Skills. An agent that has them checks for
+`torb` itself and runs this installer once you agree.
+
 ## A C compiler for native builds
 
 `torb run` runs a program in the VM inside `torb` and needs nothing else. `torb build` and `torb run --native` hand C to
@@ -75,5 +80,6 @@ channel from then on.
 
 ## From source
 
-The toolchain compiles itself from a seed. [Run your first program](../guide/installing-and-running.md) builds it with
-`sh tools/bootstrap.sh` from a checkout of [the repository](https://git.torb.dev/torbscript/language).
+The toolchain compiles itself from a seed: the README of [the repository](https://git.torb.dev/torbscript/language)
+says how to build it from a checkout. [Run your first program](../guide/installing-and-running.md) goes on from an
+installed `torb`.
