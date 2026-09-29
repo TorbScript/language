@@ -321,9 +321,13 @@ static int64_t torb_stream_perform(torb_stream_frame *frame) {
 /*
  * The machine of every such task: the turn to the blocking pool, the operation there, the answer. A task cancelled
  * before its operation ran stops without it; one whose operation runs is not interrupted, and finishes it.
+ *
+ * In a browser, standard input may be fed by the page (os/browser.c): a read that finds nothing there yet answers
+ * `EAGAIN`, and the task waits for the page to hand in more (state 2) and reads again, rather than failing.
  */
 static torb_poll torb_stream_resume(torb_task *task) {
   torb_stream_frame *frame = (torb_stream_frame *)torb_task_frame(task);
+  int64_t answer;
   /*
    * A task of a program of the VM counts as the program's on whatever thread runs it, as the VM's own tasks do
    * (runtime/machine.c, `torb_machine_resume`): the thread of the pool that resumes it is the program's from here on,
@@ -343,14 +347,29 @@ static torb_poll torb_stream_resume(torb_task *task) {
       return TORB_POLL_SUSPENDED;
     }
   }
-  torb_task_release(frame->turn);
-  frame->turn = NULL;
-  if (torb_task_cancelled(task)) {
-    torb_stream_free_frame(frame);
-    return TORB_POLL_STOPPED;
+  if (frame->turn != NULL) {
+    torb_task_release(frame->turn);
+    frame->turn = NULL;
   }
-  (void)torb_task_outcome(task);
-  *(int64_t *)torb_task_result_slot(task) = torb_stream_perform(frame);
+  for (;;) {
+    if (torb_task_cancelled(task)) {
+      torb_stream_free_frame(frame);
+      return TORB_POLL_STOPPED;
+    }
+    (void)torb_task_outcome(task);
+    answer = torb_stream_perform(frame);
+#if defined(__EMSCRIPTEN__)
+    if (frame->kind == TORB_STREAM_STANDARD_READ && answer == -(int64_t)EAGAIN - TORB_STREAM_PLATFORM) {
+      task->state = 2u;
+      if (torb_browser_wait_input(task) == TORB_WAIT_SUSPENDED) {
+        return TORB_POLL_SUSPENDED;
+      }
+      continue;
+    }
+#endif
+    break;
+  }
+  *(int64_t *)torb_task_result_slot(task) = answer;
   torb_stream_free_frame(frame);
   return TORB_POLL_FINISHED;
 }

@@ -393,4 +393,36 @@ void torb_pool_prepare_thread(void);
  */
 bool torb_io_stop(void);
 
+/* ------------------------------------------------------------------------------------ a page of a browser --- */
+
+#if defined(__EMSCRIPTEN__)
+
+/*
+ * In a browser (os/browser.c) nothing may wait inside a read or on a condition: the thread has to return to the event
+ * loop of its page or worker before the next message can arrive at all. So standard input that the page feeds is an
+ * operation of the IO core, and where the scheduler would sleep while a task waits for it, it returns to the page
+ * instead; the page calls it again with `torb_browser_resume`.
+ */
+
+/** Whether a task waits for the page to hand in standard input. */
+bool torb_browser_input_waited(void);
+
+/** Whether `waiting` is that wait, which belongs to no operation of io.c. */
+bool torb_browser_is_input(const torb_io_waiting *waiting);
+
+/** `self` waits until the page hands in more standard input, or says it ended. The running task only. */
+torb_wait torb_browser_wait_input(torb_task *self);
+
+/** Gives up the stack of `main` and returns to the page's event loop with the program alive. */
+TORB_NORETURN void torb_browser_unwind(void);
+
+/**
+ * task.c's: the scheduler again after it returned to the page, until it waits for the page once more - true, with the
+ * nanoseconds to its first timer in `span`, -1 for none - or until the run `main` started is over: false, with the task
+ * `main` waited for in `until`, or `NULL`.
+ */
+bool torb_scheduler_resume(int64_t *span, torb_task **until);
+
+#endif
+
 #endif /* TORB_POOL_H */

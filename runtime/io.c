@@ -503,8 +503,14 @@ static void torb_io_resolver_stop(void) {
 }
 
 void torb_io_waiter_cancelled(torb_io_waiting *waiting) {
-  torb_io_operation *operation =
-      (torb_io_operation *)(void *)((uint8_t *)waiting - offsetof(torb_io_operation, waiting));
+  torb_io_operation *operation;
+#if defined(__EMSCRIPTEN__)
+  /* The standard input a page feeds is a wait of os/browser.c and no operation: there is nothing to give up */
+  if (torb_browser_is_input(waiting)) {
+    return;
+  }
+#endif
+  operation = (torb_io_operation *)(void *)((uint8_t *)waiting - offsetof(torb_io_operation, waiting));
   if (operation->kind == (uint8_t)TORB_IO_RESOLVE) {
     torb_io_resolver_cancel(operation);
   } else {

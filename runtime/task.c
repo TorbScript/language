@@ -160,6 +160,11 @@ static torb_pool_state torb_pool = { NULL, 1u, 0u, 0u, 0u, 0u, 0, 0, 0u, 0u, NUL
 /** The parent, child and live links of every task. The first lock of the order at the top of the file. */
 static torb_mutex torb_tree = TORB_MUTEX_INITIALIZER;
 
+#if defined(__EMSCRIPTEN__)
+/** Whether the main thread's loop returned because a task waits for the page (`torb_browser_input_waited`). */
+static uint8_t torb_browser_yielded = 0u;
+#endif
+
 /* The blocking pool ("The blocking pool" below), whose workers are numbered from `TORB_BLOCKING_INBOX` on (torb_pool.h). */
 #define TORB_BLOCKING_DEFAULT 4u
 
@@ -1440,7 +1445,16 @@ torb_task *torb_pause(void) {
  * and stops at its first check without running its body; one whose body runs is not interrupted - the thread runs the
  * body to its end, and the machine stops at its next check and releases its frame there, on that thread (section 7, the
  * row of the blocking pool: the worker is free at once, the frame at the next honest moment).
+ *
+ * **In a browser there is no pool**: the playground's `torb` is built without threads (os/browser.c), so every turn is
+ * taken in place, and the body runs on the one worker there is.
  */
+
+#if defined(__EMSCRIPTEN__)
+#  define TORB_BLOCKING_TURNS 0
+#else
+#  define TORB_BLOCKING_TURNS 1
+#endif
 
 static void torb_worker_main(void *argument);
 
@@ -1501,7 +1515,7 @@ torb_task *torb_blocking_turn(void) {
   torb_worker *self = torb_worker_self();
   torb_task *current = self->scheduler.current;
   torb_task *turn = torb_task_new(torb_turn_resume, 0u, &torb_element_void);
-  if (current != NULL && current->portable != 0u && !torb_is_blocking_worker(self)) {
+  if (TORB_BLOCKING_TURNS && current != NULL && current->portable != 0u && !torb_is_blocking_worker(self)) {
     torb_blocking_start();
     current->hopping = 1u;
   }
@@ -2057,6 +2071,13 @@ static void torb_worker_loop(torb_worker *self, torb_task *until, bool is_main, 
       torb_panic_text("deadlock: every task is waiting for another one, and nothing is left that could wake one",
                       torb_location_unknown);
     }
+#if defined(__EMSCRIPTEN__)
+    /* Nothing wakes a thread that sleeps in a browser: where a task waits for the page, the scheduler returns to it */
+    if (is_main && !for_test && torb_browser_input_waited()) {
+      torb_browser_yielded = 1u;
+      return;
+    }
+#endif
     torb_idle(self, until, is_main, for_test);
   }
 }
@@ -2089,9 +2110,34 @@ void torb_scheduler_run(torb_task *until) {
   self->scheduler.running = true;
   torb_until_set(until);
   torb_worker_loop(self, until, true, false);
+#if defined(__EMSCRIPTEN__)
+  /* The program waits for the page: `main` gives up its stack, and `torb_browser_resume` goes on from here */
+  if (torb_browser_yielded != 0u) {
+    torb_browser_unwind();
+  }
+#endif
   torb_atomic_store_pointer(&torb_pool.until, NULL);
   self->scheduler.running = false;
 }
+
+#if defined(__EMSCRIPTEN__)
+
+bool torb_scheduler_resume(int64_t *span, torb_task **until) {
+  torb_worker *self = &torb_main_worker;
+  torb_task *awaited = (torb_task *)torb_atomic_load_pointer(&torb_pool.until);
+  torb_browser_yielded = 0u;
+  torb_worker_loop(self, awaited, true, false);
+  if (torb_browser_yielded != 0u) {
+    *span = torb_sleep_span(self);
+    return true;
+  }
+  torb_atomic_store_pointer(&torb_pool.until, NULL);
+  self->scheduler.running = false;
+  *until = awaited;
+  return false;
+}
+
+#endif
 
 static void torb_pool_stop(void);
 
