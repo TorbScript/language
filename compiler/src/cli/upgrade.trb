@@ -517,23 +517,43 @@ fn performUpgrade(home: String, info: InstallInfo, options: UpgradeOptions): Int
 }
 
 fn upgraded(home: String, info: InstallInfo, options: UpgradeOptions): Result<Void, String> {
-  const channel = options.channel ?? info.channel
+  var channel = options.channel ?? info.channel
+  var channelChanged = options.channel.isSome() && options.channel != info.channel
   const version = match options.version {
     Some(named) => named
     None => {
       const text = fetchText(baseUrl(), "versions.txt")?
-      match newestOf(parseVersionsManifest(text), channel) {
+      const manifest = parseVersionsManifest text
+      match newestOf(manifest, channel) {
         Some(entry) => entry.version
         None => {
-          return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+          if options.channel.isSome() || channel != "stable" {
+            return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+          }
+          // No stable release yet (docs/design/RELEASE.md section 3): the same fallback tools/install.sh and
+          // tools/install.ps1 make where nothing was requested explicitly, and the toolchain follows the nightly
+          // channel from here on - install.trb would already say so had it been installed today.
+          match newestOf(manifest, "nightly") {
+            Some(fallback) => {
+              print "no stable release yet: installing the nightly {fallback.version}"
+              channel = "nightly"
+              channelChanged = true
+              fallback.version
+            }
+            None => {
+              return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+            }
+          }
         }
       }
     }
   }
-  if options.channel.isSome() && options.channel != info.channel {
+  if channelChanged {
     const updated = InstallInfo channel, info.method
     File.writeTextAtomically("{home}/install.trb", renderInstallInfo(updated)).mapError({ _.show() })?
-    print "channel switched to \"{channel}\""
+    if options.channel.isSome() {
+      print "channel switched to \"{channel}\""
+    }
   }
   if File.exists("{home}/toolchains/{version}") {
     print "{version} is already installed; making it the one in use"
