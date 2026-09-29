@@ -1,15 +1,12 @@
 ---
 title: Concurrency and streams
-summary: Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
+summary: Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword, run by a pool of workers.
 kind: index
 status: stable
 order: 80
 ---
 
-> **Planned.** Every page in this section is `status: planned`: the types type check against the real standard
-> library, but no back end runs `await()`, `spawn` or a stream yet.
-
-`Task<Value>`, `await()`, `Channel`, and the two ends of a stream, `Source` and `Sink`.
+`Task<Value>`, `await()`, `spawn`, `Channel`, and the two ends of a stream, `Source` and `Sink`.
 
 ## What belongs here
 

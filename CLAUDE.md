@@ -68,8 +68,11 @@ Code rules, gates and repository operations: `compiler/CONTRIBUTING.md`.
   never PowerShell arrays.
 - TorbScript in docs and answers: no semicolons, no squeezed one-liners, command calls where the canon says so,
   members as `fn area(): Int` (no `self` in the list) and `var fn` for mutation.
-- `docs/` is generated into `.claude/skills/torbscript`: after a docs change run
-  `build/release/torb.exe docs skill docs .claude/skills/torbscript` and commit both (`--check` is a tier A gate).
+- `docs/` is generated into the public Agent Skills in `skills/` (templates in `docs/skills/`; `.claude/skills/<name>`
+  are links to them, which is how this repository's agents load them): after a docs change run
+  `build/release/torb.exe docs skill docs skills` and commit both (`--check` is a tier A gate). The skills are for users:
+  nothing about the compiler's build, seeds, gates or repository operations goes into them
+  (`docs/contributing/the-skill.md`).
 - Commit messages are Conventional Commits (`feat(vm): ...`, `fix(checker): ...`), at most 100 characters, and the
   history is linear: no merge commits - a branch lands rebased or squashed (`compiler/CONTRIBUTING.md`, "Repository
   Operations"). CI checks both. A worktree takes a newer `main` with `git rebase main`, not `git merge`.

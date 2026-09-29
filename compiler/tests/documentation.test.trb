@@ -12,7 +12,7 @@ use checkDocumentation, checkSnippetTypes from "../src/documentation/check"
 use Snippet, SnippetKind, expectedOutputOf from "../src/documentation/snippets"
 use markerOf, outputProblems from "../src/documentation/native"
 use generateIndexes from "../src/documentation/index"
-use buildSkill from "../src/documentation/skill"
+use buildSkills, BuiltSkills from "../src/documentation/skill"
 use bundleDocumentation from "../src/documentation/bundle"
 use indexBegin, indexEnd from "../src/documentation/schema"
 use contentHashOf, translatesOf from "../src/documentation/translations"
@@ -377,15 +377,24 @@ group "the schema" {
     assert(found.any({ _.contains "> **Planned.**" }))
   }
 
-  test "two pages cannot claim the same role in the skill" {
+  test "the one value of skill is omit" {
     var files = goodTree()
     files.set(
       "language/bindings.md",
       referencePage("Bindings").replace("status: stable", "status: stable\nskill: model"),
     )
-    files.set "language/other.md", referencePage("Other").replace("status: stable", "status: stable\nskill: model")
     const found = check files
-    assert(found.any({ _.contains "already is the `model` of the skill" }))
+    assert(found.any({ _.contains "`model` is not a value of `skill`" }))
+  }
+
+  test "a file below skills/ is a template of a skill and not a page" {
+    var files = goodTree()
+    files.set "skills/first/SKILL.md", "---\nname: first\n---\n\nNo front matter a page would need.\n"
+    files.set "skills/first/scripts/check.sh", "echo ok\n"
+    assert check(files).isEmpty()
+    const documentation = documentationOf "docs", files
+    assert(documentation.skillSources.get("first/scripts/check.sh") == "echo ok\n")
+    assert(!documentation.pages.any({ _.path.startsWith "skills/" }))
   }
 }
 
@@ -803,49 +812,57 @@ fn standardLibrary(): Map<String, String> {
   ]
 }
 
-group "the skill" {
-  test "the body carries the model and the verification, and points at the other two" {
-    const documentation = documentationOf "docs", skillTree()
-    const skill = buildSkill documentation
-    assert skill.problems.isEmpty()
-    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
-    assert body.startsWith("---\nname: torbscript\n")
-    assert body.contains("## The language in sixty seconds")
-    assert body.contains("## How to verify your work")
-    assert body.contains("`reference/language/cheat-sheet.md`")
-    assert body.contains("`reference/explanation/mistakes.md`")
-  }
-
-  test "a heading of an inlined page is one level deeper" {
-    const documentation = documentationOf "docs", skillTree()
-    const skill = buildSkill documentation
-    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
-    assert body.contains("### Goal")
-  }
-
-  test "a planned page is in the skill with its banner" {
-    var files = skillTree()
-    const planned = referencePage("Planned").replace("status: stable", "status: planned").replace(
-      "One paragraph about the construct.",
-      "> **Planned.** Not implemented.",
+group "the skills" {
+  test "a template keeps its prose and its front matter, and an inlined page is one heading level deeper" {
+    const built = buildSkills documentationOf("docs", skillTree())
+    assert built.problems.isEmpty()
+    const body = fileOf built, "first/SKILL.md"
+    assert(
+      body.startsWith("---\nname: first\ndescription: \"Does the first thing. Use it for tests.\"\n---\n\n# First\n"),
     )
-    files.set "language/planned.md", planned
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    assert(skill.excluded == 0)
-    const copied = skill.files.find({ _.path == "reference/language/planned.md" }).expect("the planned page")
-    assert copied.text.contains("> **Planned.**")
+    assert body.contains("### Goal")
+    assert(!body.contains("carry:"))
   }
 
-  test "a page that says omit is not in the skill" {
+  test "a page goes to the skill whose rule is the most specific" {
+    const built = buildSkills documentationOf("docs", skillTree())
+    assert built.files.any({ _.path == "first/references/language/cheat-sheet.md" })
+    assert built.files.any({ _.path == "second/references/language/bindings.md" })
+    assert(!built.files.any({ _.path == "second/references/language/cheat-sheet.md" }))
+    assert built.files.any({ _.path == "first/references/guide/model.md" })
+  }
+
+  test "two skills that carry the same page is a problem" {
     var files = skillTree()
-    files.set "language/omitted.md", referencePage("Omitted").replace("status: stable", "status: stable\nskill: omit")
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    assert(!skill.files.any({ _.path == "reference/language/omitted.md" }))
+    files.set "skills/second/SKILL.md", secondTemplate().replace("<!-- carry: language/ -->", "<!-- carry: guide/ -->")
+    const built = buildSkills documentationOf("docs", files)
+    assert(built.problems.any({ _.message.contains "first and second both carry the page" }))
   }
 
-  test "a link to what the skill does not carry keeps only its text" {
+  test "a page that no skill carries is a problem, unless it says omit" {
+    var files = skillTree()
+    files.set "tooling/index.md", folderIndex("The toolchain")
+    const built = buildSkills documentationOf("docs", files)
+    assert(built.problems.any({ _.message.contains "No skill carries the page" }))
+    files.set "tooling/index.md", folderIndex("The toolchain").replace("status: stable", "status: stable\nskill: omit")
+    const omitted = buildSkills documentationOf("docs", files)
+    assert omitted.problems.isEmpty()
+    assert(omitted.excluded == 1)
+  }
+
+  test "a link to a page of another skill keeps its text and names the skill" {
+    var files = skillTree()
+    files.set(
+      "language/cheat-sheet.md",
+      referencePage("Cheat sheet").replace("It is not something else.", "See [bindings](bindings.md#rules)."),
+    )
+    const built = buildSkills documentationOf("docs", files)
+    assert built.problems.isEmpty()
+    const copied = fileOf built, "first/references/language/cheat-sheet.md"
+    assert copied.contains("See bindings (skill `second`: `references/language/bindings.md`).")
+  }
+
+  test "a link to what no skill carries keeps only its text" {
     var files = skillTree()
     files.set "language/omitted.md", referencePage("Omitted").replace("status: stable", "status: stable\nskill: omit")
     const linking = referencePage("Linking").replace(
@@ -853,23 +870,24 @@ group "the skill" {
       "See [the omitted page](omitted.md), [the concept](../../CONCEPT.md) and [bindings](bindings.md#rules).",
     )
     files.set "language/linking.md", linking
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    assert skill.problems.isEmpty()
-    const copied = skill.files.find({ _.path == "reference/language/linking.md" }).expect("the page").text
+    const built = buildSkills documentationOf("docs", files)
+    assert built.problems.isEmpty()
+    const copied = fileOf built, "second/references/language/linking.md"
     assert copied.contains("See the omitted page, the concept and [bindings](bindings.md#rules).")
   }
 
-  test "a link of an inlined page is seen from the body, or keeps its text" {
+  test "a link of an inlined page is seen from SKILL.md" {
     var files = skillTree()
     files.set(
       "guide/model.md",
-      guidePage().replace("One paragraph.", "See [the tooling](../tooling/index.md) and [the root](../../README.md)."),
+      guidePage().replace(
+        "One paragraph.",
+        "See [the cheat sheet](../language/cheat-sheet.md) and [the root](../../README.md).",
+      ),
     )
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
-    assert body.contains("See [the tooling](reference/tooling/index.md) and the root.")
+    const built = buildSkills documentationOf("docs", files)
+    const body = fileOf built, "first/SKILL.md"
+    assert body.contains("See [the cheat sheet](references/language/cheat-sheet.md) and the root.")
   }
 
   test "a link inside code is left alone" {
@@ -879,46 +897,128 @@ group "the skill" {
       "Write `[text](nowhere.md)` for a link.",
     )
     files.set "language/linking.md", linking
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    assert skill.problems.isEmpty()
+    const built = buildSkills documentationOf("docs", files)
+    assert built.problems.isEmpty()
   }
 
-  test "the reference index names every page with its summary" {
-    const documentation = documentationOf "docs", skillTree()
-    const skill = buildSkill documentation
-    const index = skill.files.find({ _.path == "reference/index.md" }).expect("the index").text
+  test "pages, sections and skills write one line each" {
+    const built = buildSkills documentationOf("docs", skillTree())
+    const body = fileOf built, "second/SKILL.md"
+    assert body.contains("- [Bindings](references/language/bindings.md) - What this construct means")
+    assert body.contains("- [The language](references/language/index.md) - What a reader finds in this folder")
+    assert body.contains("- `first` - Does the first thing.")
+    assert(!body.contains("- `second`"))
+  }
+
+  test "the reference index names every page of the skill with its summary" {
+    const built = buildSkills documentationOf("docs", skillTree())
+    const index = fileOf built, "second/references/index.md"
     assert index.contains("## Contents")
-    assert index.contains("`language/cheat-sheet.md`")
-    assert index.contains("What this construct means")
+    assert index.contains("`language/bindings.md`")
+    assert(!index.contains("cheat-sheet"))
   }
 
-  test "a missing role is reported" {
+  test "a file of a template is copied as it is" {
+    const built = buildSkills documentationOf("docs", skillTree())
+    assert(fileOf(built, "first/scripts/check.sh") == "#!/bin/sh\necho ok\n")
+  }
+
+  test "the name of a skill is the name of its directory, and its fields are the format's" {
     var files = skillTree()
-    files.remove "language/cheat-sheet.md"
-    const documentation = documentationOf "docs", files
-    const skill = buildSkill documentation
-    assert(skill.problems.any({ _.message.contains "`skill: cheat-sheet`" }))
+    files.set "skills/second/SKILL.md", secondTemplate().replace("name: second", "name: other\nversion: 2")
+    const built = buildSkills documentationOf("docs", files)
+    assert(built.problems.any({ _.message.contains "is the name of its directory, `second`" }))
+    assert(built.problems.any({ _.message.contains "`version` is not a field of a skill" }))
+  }
+
+  test "an unknown directive and a rule that reaches nothing are problems" {
+    var files = skillTree()
+    files.set(
+      "skills/second/SKILL.md",
+      secondTemplate().replace("<!-- pages -->", "<!-- page -->\n\n<!-- carry: nowhere/ -->"),
+    )
+    const built = buildSkills documentationOf("docs", files)
+    assert(built.problems.any({ _.message.contains "`page` is not a directive of a template" }))
+    assert(built.problems.any({ _.message.contains "`carry: nowhere/` reaches no page" }))
+  }
+
+  test "a planned page is carried with its banner" {
+    var files = skillTree()
+    const planned = referencePage("Planned").replace("status: stable", "status: planned").replace(
+      "One paragraph about the construct.",
+      "> **Planned.** Not implemented.",
+    )
+    files.set "language/planned.md", planned
+    const built = buildSkills documentationOf("docs", files)
+    assert fileOf(built, "second/references/language/planned.md").contains("> **Planned.**")
+    assert fileOf(built, "second/SKILL.md").contains("- [Planned](references/language/planned.md) (planned) - ")
   }
 }
 
-/** A tree with one page per role of the skill. */
+/** Two skills: `first` carries the guide and one page of the language, `second` the rest of the language. */
 fn skillTree(): Map<String, String> {
   var files = goodTree()
-  files.set(
-    "language/cheat-sheet.md",
-    referencePage("Cheat sheet").replace("status: stable", "status: stable\nskill: cheat-sheet"),
-  )
-  files.set "explanation/index.md", folderIndex("Why")
-  files.set(
-    "explanation/mistakes.md",
-    referencePage("Mistakes").replace("status: stable", "status: stable\nskill: mistakes"),
-  )
+  files.set "language/cheat-sheet.md", referencePage("Cheat sheet")
   files.set "guide/index.md", folderIndex("The guide")
   files.set "guide/model.md", guidePage()
-  files.set "tooling/index.md", folderIndex("The toolchain")
-  files.set "tooling/verify.md", referencePage("Verify").replace("status: stable", "status: stable\nskill: verify")
+  files.set "skills/first/SKILL.md", firstTemplate()
+  files.set "skills/first/scripts/check.sh", "#!/bin/sh\necho ok\n"
+  files.set "skills/second/SKILL.md", secondTemplate()
   files
+}
+
+fn firstTemplate(): String {
+  """
+    ---
+    name: first
+    description: "Does the first thing. Use it for tests."
+    ---
+
+    <!-- carry: guide/ language/cheat-sheet.md -->
+
+    # First
+
+    Run `scripts/check.sh` first.
+
+    ## The model
+
+    <!-- inline: guide/model.md -->
+
+    ## Pages
+
+    <!-- pages -->
+    """
+}
+
+fn secondTemplate(): String {
+  """
+    ---
+    name: second
+    description: "Does the second thing. Use it for other tests."
+    license: MIT
+    ---
+
+    <!-- carry: language/ -->
+
+    # Second
+
+    ## Sections
+
+    <!-- sections -->
+
+    ## Pages
+
+    <!-- pages -->
+
+    ## The other skills
+
+    <!-- skills -->
+    """
+}
+
+/** The text of one file of the built skills. */
+fn fileOf(built: BuiltSkills, path: String): String {
+  built.files.find({ _.path == path }).expect("the file {path}").text
 }
 
 fn guidePage(): String {
@@ -928,7 +1028,6 @@ fn guidePage(): String {
     summary: The mental model of the language in one screen, which is what a reader needs before anything else.
     kind: guide
     status: stable
-    skill: model
     ---
 
     One paragraph.
@@ -1046,10 +1145,14 @@ group "the lessons" {
     assert check(files).isEmpty()
   }
 
-  test "a lesson is not carried by the skill" {
-    const documentation = documentationOf "docs", withGeneratedIndexes(lessonTree())
-    const skill = buildSkill documentation
-    assert(!skill.files.any({ _.path.contains "start/names" }))
+  test "a lesson is not carried by a folder rule" {
+    var files = withGeneratedIndexes lessonTree()
+    const template = "---\nname: first\ndescription: \"Does the first thing.\"\n---\n\n<!-- carry: start/ language/ -->\n"
+    files.set "skills/first/SKILL.md", template
+    const built = buildSkills documentationOf("docs", files)
+    assert built.problems.isEmpty()
+    assert built.files.any({ _.path == "first/references/start/index.md" })
+    assert(!built.files.any({ _.path.contains "start/names" }))
   }
 }
 

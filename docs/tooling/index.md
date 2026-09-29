@@ -9,8 +9,8 @@ order: 60
 One binary does everything: running, checking, building, testing, formatting and documenting. These pages say which
 command, which flag and which file.
 
-`torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command on
-these pages is run from the repository root.
+`torb` is the binary [the installer](../site/install.md) puts on the `PATH`, and a command on these pages runs in the
+directory of a project - the one with `project.trb` - unless it names a path.
 
 ## What belongs here
 

@@ -88,7 +88,7 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 |-------|------|----------|------|
 | `title` | scalar | reader, index generator, skill navigation | At most 60 characters, no full stop at the end. It is the `#` heading of the page, so the body starts at `##`. |
 | `summary` | scalar | index generator, skill, and an agent deciding whether to open the page | 40 to 240 characters, one or two whole sentences, ends with `.`, `?` or `!`. It must not contain `this page`: a summary is about the subject. |
-| `kind` | scalar | checker (section order), template, skill builder, site generator | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`, `site`, `lesson`. A `site` page and a `lesson` are left out of the skill and the bundle. |
+| `kind` | scalar | checker (section order), template, skill builder, site generator | One of `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package`, `glossary`, `site`, `lesson`. A `site` page and a `lesson` are left out of the skills and the bundle. |
 | `status` | scalar | reader, skill builder | One of `stable`, `draft`, `planned`. |
 
 ### The seven optional fields
@@ -97,10 +97,10 @@ The indicator characters that a plain scalar may not start with are the ones YAM
 |-------|------|----------|------|
 | `order` | integer | index generator | The order inside its folder, lowest first. A page without one follows every page that has one, sorted by title. |
 | `source` | list | a human hunting drift | Where the facts come from: a `CONCEPT.md` section, a `std/` file, an example, a URL. Required for `kind: reference` and `kind: package`. |
-| `keywords` | list | search, and the skill's reference index | The words somebody would look for that are not in the title. |
+| `keywords` | list | search, and the reference index of a skill | The words somebody would look for that are not in the title. |
 | `prerequisites` | list | reader, learning path | Paths of pages to read first. Only a `guide` page has it. |
 | `documents` | list | index generator, checker | Plain Markdown files without front matter that this index links, relative to the index. Only an `index.md` has it. |
-| `skill` | scalar | skill builder | One of `model`, `cheat-sheet`, `mistakes`, `verify`, `omit`. The first four each belong to exactly one page in the tree; `omit` keeps a page out of the skill. |
+| `skill` | scalar | skill builder | Only `omit`, which keeps a page out of every Agent Skill. Which skill carries any other page is decided by the templates below `skills/` ([the skills](the-skill.md)). |
 | `translates` | scalar | checker, site generator | The version of its English original a translation below `translations/<language>/` was made from: the twelve hexadecimal digits `docs check` names. Only a translation has it, and every translation does. |
 
 ### The two status banners
@@ -146,8 +146,9 @@ summary: A const binding never changes and a var binding can, and the binding de
 The first one describes the document; the second one answers the question. The checker rejects `this page` for exactly
 this reason, and nothing else about the first one is decidable by a tool.
 
-**`status: planned` is not a hedge.** It means the feature does not exist. A planned page is excluded from the generated
-skill completely, because a model that reads a designed feature as an available one writes code that cannot compile.
+**`status: planned` is not a hedge.** It means the feature does not exist. A planned page opens with its banner and the
+skills keep it, because a model that reads a designed feature as an available one writes code that cannot compile: it
+has to read the warning in the same file as the design.
 
 **`kind` is not a tag.** A page has exactly one kind, and it decides the sections. A page that wants two kinds is two
 pages.

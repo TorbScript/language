@@ -490,13 +490,13 @@ graceful end, each answering a `Task`; `close()` is the abrupt end. See
 
 ### Skill
 
-The Agent Skill derived from this documentation by `torb docs skill`: a folder whose `SKILL.md` has a `name` and a
-`description` and whose `reference/` holds the pages. See [The Agent Skill](contributing/the-skill.md).
+One of the Agent Skills `torb docs skill` derives from this documentation into `skills/`: a folder whose `SKILL.md`
+has a `name` and a `description` and whose `references/` holds pages. See [The Agent Skills](contributing/the-skill.md).
 
 ### Seed
 
-A `torb` binary that already exists, which `sh tools/bootstrap.sh` compiles the current compiler sources with. The
-compiler is written in TorbScript, so something that already compiles TorbScript has to build it once. See
+A `torb` binary that already exists, which a build from source compiles the current compiler sources with. The compiler
+is written in TorbScript, so something that already compiles TorbScript has to build it once. See
 [the architecture](ARCHITECTURE.md).
 
 ### Slot

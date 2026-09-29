@@ -92,8 +92,8 @@ a new page appears in its index without a second edit, and `docs index --check` 
 | `tooling` | A command or a project file | `Synopsis`, `What it does`, `Examples`, `Related` |
 | `package` | One package of `std/` | `Import`, `Declarations`, `Related` |
 | `glossary` | `glossary.md` | `Terms` |
-| `site` | A page of the website in `site/`, which `torb docs site` writes at the root of the site and the skill and the bundle leave out | none |
-| `lesson` | A lesson of the course in `start/`, which the skill and the bundle leave out ([the shape of a lesson](levels-and-plain-words.md)) | `Exercise`, `Recap` |
+| `site` | A page of the website in `site/`, which `torb docs site` writes at the root of the site and the skills and the bundle leave out | none |
+| `lesson` | A lesson of the course in `start/`, which the skills and the bundle leave out ([the shape of a lesson](levels-and-plain-words.md)) | `Exercise`, `Recap` |
 
 Other `##` sections may stand between the required ones. A reference page is free to add `## More examples` or
 `## Coming from other languages`; it may not leave out `## What this is not`.

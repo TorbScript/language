@@ -1,6 +1,6 @@
 ---
-title: The Agent Skill
-summary: How torb docs skill turns this documentation into an Agent Skill, what it copies, what it leaves out, and how to install the result.
+title: The Agent Skills
+summary: How torb docs skill turns this documentation into the TorbScript Agent Skills below skills/, which templates declare them, which page goes into which skill, and how the result is installed and checked.
 kind: tooling
 status: stable
 skill: omit
@@ -10,140 +10,147 @@ keywords:
   - SKILL.md
   - progressive disclosure
   - install
+  - plugin marketplace
 source:
   - https://agentskills.io/specification
+  - https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices
   - compiler/src/documentation/skill.trb
 ---
 
-An [Agent Skill](https://agentskills.io/specification) is a folder whose `SKILL.md` carries a `name` and a
+An [Agent Skill](https://agentskills.io/specification) is a directory whose `SKILL.md` carries a `name` and a
 `description` in YAML front matter, a body that is loaded when the skill triggers, and further files that are read only
-when they are needed. `torb docs skill` builds one from this documentation, so that a model with no training on
-TorbScript can write it correctly.
+when they are needed. `torb docs skill` builds the TorbScript skills from this documentation, so that a model with no
+training on TorbScript can write it correctly, and writes them to `skills/` at the root of the repository, where every
+agent's installer finds them.
 
 ## Synopsis
 
 ```text
-torb docs skill <root> <out>
+torb docs skill <root> <out>           Write every skill <root>/skills/ declares, one directory each below <out>
+torb docs skill <root> <out> --check   Write nothing: report every file below <out> that is not what it would write
 ```
 
-From the repository root, writing into the project skill of this repository, which is committed:
+From the repository root, as the gate of tier A runs it:
 
 ```console
-torb docs skill docs .claude/skills/torbscript
+torb docs skill docs skills --check
+torb docs skill docs skills
 ```
-
-The output directory has to be named `torbscript`, because the format requires the directory name and the `name` field
-to be equal.
 
 ## What it does
 
-### The shape
+### The set
 
 ```text
-torbscript/
-├ SKILL.md                     name, description, and the body
-└ reference/
-  ├ index.md                   Every page with its path, its kind and its summary: one file to search
-  └ <the documentation tree>   Every page, copied with its links checked
+skills/
+├ torbscript/                    The entry: toolchain, everyday commands, the mental model, verification, the map
+│ ├ SKILL.md
+│ ├ scripts/toolchain.sh         Finds torb, installs it with --install; toolchain.ps1 is the same for PowerShell
+│ └ references/                  The guide, the toolchain, the cheat sheet, the mistakes models make
+├ torbscript-language/           Every construct, the explanations, the language recipes
+├ torbscript-standard-library/   Every package of std but the ones below
+├ torbscript-projects/           project.trb, dependencies, workspaces, builds, publishing
+├ torbscript-testing/            Test files and torb test
+├ torbscript-concurrency/        Tasks, channels, streams, parallel pipelines
+└ torbscript-networking/         HTTP, sockets, TLS, DNS, IP addresses, URIs
 ```
 
-The three levels of the format are what the shape follows:
+One entry skill with the basics that every task needs, and one skill per area an agent needs only for some tasks. The
+split follows the sections of this documentation where it can and the kind of program where it cannot: a skill scoped
+too narrowly makes one task load several, one scoped too broadly triggers where it should not.
 
-1. **`name` and `description`** are in the model's context at all times, at roughly 100 tokens. They decide whether the
-   skill is used at all.
-2. **`SKILL.md`** is read when the skill triggers. It stays under 500 lines, which is the published limit for the body,
-   and the command fails when it does not.
-3. **`reference/`** costs nothing until a file is read, and `SKILL.md` asks for no file to be read up front. It points
-   at the section indexes and at a search (`grep -ril <word> reference/`, or over `reference/index.md`, which holds every
-   path and every summary). A file that an agent is told to read first is paid for on every task: the first version of
-   this skill asked for the cheat sheet, the list of mistakes and the 47 KB index before any work, about 24,000 tokens.
+### The templates
 
-### What goes into the body
+`docs/skills/<name>/` declares one skill. Its `SKILL.md` is the frame: the front matter as it is published, the few
+sentences only an agent needs, and directives, each on a line of its own, that the builder expands. Every other file of
+the directory - the scripts of the entry skill - is copied as it is. Nothing below `docs/skills/` is a page: `docs
+check`, `docs index`, `docs site` and `docs bundle` never see it.
 
-Nothing in the body is written by the builder. Every section is the body of a page that carries the matching `skill`
-role in its front matter, one heading level deeper so that it nests, and the builder names the page it came from. So the
-skill cannot drift away from the documentation, and a change to the documentation changes the skill.
+| Directive | What it becomes |
+|-----------|-----------------|
+| `<!-- carry: <path>... -->` | Nothing in the body: the pages it names are copied into `references/`. A path that ends in `/` is a folder and everything below it |
+| `<!-- inline: <path> -->` | The body of that page, one heading level deeper, its links seen from `SKILL.md` |
+| `<!-- pages -->` | One line per page of the skill, with its summary |
+| `<!-- sections -->` | One line per folder index the skill carries, with its summary |
+| `<!-- skills -->` | One line per other skill of the set, with the first sentence of its description |
 
-| Part of `SKILL.md` | Comes from the page with | How |
-|--------------------|--------------------------|-----|
-| The language in sixty seconds | `skill: model` | the body, inlined one heading level deeper |
-| Two files to look things up in | `skill: cheat-sheet`, `skill: mistakes` | a path, one line each, and how to search them |
-| How to verify your work | `skill: verify` | the body, inlined one heading level deeper |
-| Where to look things up | the folder indexes | generated |
+The front matter uses only the fields of the format - `name`, `description`, `license`, `compatibility`, `metadata` and
+`allowed-tools` - because a field one agent does not know fails another agent's validator. `name` is the name of the
+directory; the `description` says what the skill does and when to use it, names the words that should trigger it and
+stays below 1024 characters.
 
-Two of the four roles are **inlined** and two are **pointed at**, and the split is not arbitrary. The mental model and
-the verification loop are needed on every task and are short, so they belong in the body. The cheat sheet and the list of
-mistakes are long lookup material: together they are more than 500 lines, which is the whole budget of the body. They sit
-one `Read` away instead - one level deep from `SKILL.md`, which is what the format asks for - and `SKILL.md` says what
-each one answers and how to find a section in it without reading it whole.
+### Which page goes where
 
-Each of the four roles belongs to exactly one page, and the checker enforces that. A missing role is reported by
-`docs skill`, so the skill cannot quietly lose a part.
+Every page belongs to at most one skill. The most specific `carry` rule decides: a page named on its own wins over its
+folder, and a deeper folder over a shallower one, so `torbscript-language` can carry `language/` while
+`torbscript-concurrency` carries `language/concurrency-and-streams/` and the entry skill the cheat sheet. Two skills
+naming the same page or folder is a problem. A page that no rule reaches is a problem too, unless it says
+`skill: omit` or is a page of the website or a lesson of the course, which only a rule naming the page itself carries.
+So a new page cannot fall out of every skill without somebody deciding it.
 
-### What is copied and what is condensed
+### How a page is copied
 
-- **A page is copied, front matter included, with one change: a link to something the skill does not carry keeps only
-  its text.** That is a page marked `skill: omit`, a design record of `docs/` that is not a page, or a file of the
-  repository outside `docs/` - a path that leads nowhere is the one thing an agent cannot recover from. Nothing else is
-  touched: a condensed copy would be a second version of the same rules, and two versions of one rule is how a
-  documentation starts to contradict itself. The front matter stays because `summary` and `status` are useful to a
-  reader that arrives at a single file.
-- **Every link of every file of the skill has to resolve inside the skill.** The builder checks it after writing the
-  files in memory, and `docs skill` fails on a dangling link instead of writing it.
-- **`reference/index.md` is generated, not copied.** It is one flat list of every page with its path, its kind and its
-  summary, grouped by folder, with a table of contents at the top. A file longer than 100 lines needs one, so that a
-  partial read still shows the whole scope. It takes the place of the documentation root index, whose body would say the
-  same thing less completely.
-- **Nothing is rewritten.** The body is condensed by choosing which pages to inline, never by summarizing them.
+- **A page is copied into `references/` at its path in the documentation, front matter included**, so a link between
+  two pages of one skill resolves unchanged.
+- **A link to a page of another skill keeps its text and names that skill**, and where that skill has the page. A
+  skill can be installed on its own, so a path into another one is not a link it can promise:
 
-### What is left out
+  ```text
+  See [Result](../errors/result.md).     becomes     See Result (skill `torbscript-language`: `references/...`).
+  ```
 
-- **Every page with `skill: omit`.** That is how a page that is about the documentation itself, rather than about the
-  language, stays out. All of `contributing/` is marked this way.
-- **A `status: draft` or `status: planned` page stays in** and keeps its banner, so the model reads the warning in the
-  same file as the content, and `reference/index.md` marks it. A planned page used to be left out, and the pages of the
-  features that exist then linked into nothing: `spawn` and `.await()` are used on stable pages and their rules live on
-  planned ones.
+- **A link to anything no skill carries keeps only its text**: a page marked `skill: omit`, a design record, a file of
+  the repository outside `docs/`.
+- **Every link of every Markdown file of a skill has to resolve inside that skill.** The builder checks it after writing
+  the files in memory and fails on a dangling link instead of writing it.
+- **`references/index.md` is generated**: every page of the skill with its path, its kind and its summary, grouped by
+  folder, with a table of contents at the top.
+- **Nothing is rewritten.** A body is made short by choosing what to inline, never by summarizing a page, because two
+  versions of one rule is how a documentation starts to contradict itself.
 
-### How the size limit is respected
+### Progressive disclosure and the size limit
 
-`SKILL.md` has to stay under 500 lines. The command counts the lines it wrote and reports a problem when it does not,
-which means the limit is a gate and not advice - the first build of this skill came to 863 lines and failed, which is how
-the split between inlined and pointed-at parts was decided. When the body grows past the limit again, the fix is
-hierarchy rather than denser prose: move a part out of the body and into the list of files to read. Compressing the body
-instead is what produces a skill that is short and wrong.
+The three levels of the format are what the shape follows. The `name` and the `description` of every installed skill
+are in the context of every request, so a description is a sentence or two. A `SKILL.md` is read when the skill
+triggers and stays under 500 lines, which `docs skill` enforces. `references/` costs nothing until a file is opened, and
+a body says which file answers which question rather than asking for anything to be read up front. When a body grows
+past the limit, the fix is to carry a page instead of inlining it, not to compress the prose.
 
-The description is capped at 1024 characters by the format. The one here stays far below that, because it is in the
-context of every request and not only of the ones that use it.
+### Public-facing
+
+The skills are for people who use TorbScript, not for the people who build it: nothing in them is about the compiler's
+own build, the seed, the gates or the operations of this repository. Those are in `compiler/CONTRIBUTING.md` and
+`CLAUDE.md`, and a page that is only about them says `skill: omit`.
 
 ## Examples
 
-Rebuild the skill of this repository, from a clean directory so that no copy of a removed page stays behind:
+Rebuilding the skills after a change of `docs/`, which also removes a file a page no longer produces:
 
 ```console
-$ rm -rf .claude/skills/torbscript
-$ torb docs skill docs .claude/skills/torbscript
-torbscript: 215 files, SKILL.md has 327 lines
-214 pages, 10 left out by `skill: omit`
-Copy `.claude/skills/torbscript` to `~/.claude/skills/torbscript` for yourself, or to `.claude/skills/torbscript` of a project to share it
+$ torb docs skill docs skills
+torbscript: SKILL.md has 374 lines, 41 pages
+torbscript-concurrency: SKILL.md has 34 lines, 7 pages
+...
+269 files in skills, 35 pages in no skill on purpose
 ```
 
-The two places a skill is installed:
+### How people install them
 
-| Where | Path | Who sees it |
-|-------|------|-------------|
-| Personal | `~/.claude/skills/torbscript/` | Every session of this machine |
-| A project | `<project>/.claude/skills/torbscript/` | Everybody who checks the project out |
+`docs/site/agents.md` has the line for every agent. The repository is a Claude Code plugin marketplace
+(`.claude-plugin/marketplace.json`, one plugin whose source is `./skills`), a Codex plugin marketplace
+(`.agents/plugins/marketplace.json` and `skills/.codex-plugin/plugin.json`) and an APM package (`apm.yml`), and
+`npx skills` finds `skills/` on its own. A hidden entry directly below `skills/` belongs to such a manifest, and the
+check leaves it alone.
 
-The generated skill is an **output**, and this repository commits it at `.claude/skills/torbscript`, so that every
-agent working here has it. It is never edited by hand: an edit there is lost on the next build. What is edited is the
-page the section came from, and a change of `docs/` regenerates the skill and commits both together. The command
-writes files and deletes none, so a page that was removed or renamed leaves its old copy behind: delete the directory
-before regenerating it.
+### How this repository's agents load them
+
+`.claude/skills/<name>` is a symbolic link to `../../skills/<name>` for each skill, so a Claude Code session in this
+repository, and every agent it starts in a worktree, loads the skills of its own checkout under their plain names. A
+new skill needs its link as well: `ln -s ../../skills/<name> .claude/skills/<name>`, committed with the skill.
 
 ## Related
 
-- [The docs commands](checks.md) - the other three commands and the gate.
-- [How this documentation is structured](structure.md) - the tree the skill copies.
+- [The docs commands](checks.md) - the other commands and the gate.
+- [How this documentation is structured](structure.md) - the tree the skills copy.
 - [What the research decided](research.md) - the published guidance the shape follows, with its sources.
-- [Verify your work](../tooling/verifying-your-work.md) - the page that becomes the verification section.
+- [Verify your work](../tooling/verifying-your-work.md) - the page the entry skill inlines as its verification.

@@ -4,6 +4,7 @@ summary: torb docs site writes the website of TorbScript from docs/ as static fi
 kind: tooling
 status: stable
 order: 78
+skill: omit
 keywords:
   - torb docs site
   - website

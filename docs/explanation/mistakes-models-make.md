@@ -4,7 +4,6 @@ summary: The mistakes a language model makes in TorbScript because it has read R
 kind: explanation
 status: stable
 order: 15
-skill: mistakes
 keywords:
   - mistakes
   - diagnostics

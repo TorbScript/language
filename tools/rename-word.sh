@@ -36,16 +36,16 @@ total=0
 for pair in "$@"; do
   old=${pair%%=*}
   new=${pair#*=}
-  files=$(git grep -l -I -w -e "$old" -- . ':!seed' ':!.claude/skills' ':!tools/rename-word.sh' || true)
+  files=$(git grep -l -I -w -e "$old" -- . ':!seed' ':!skills' ':!tools/rename-word.sh' || true)
   for file in $files; do
     count=$(grep -o -w -e "$old" "$file" | wc -l | tr -d ' ')
     sed --binary -i "s/\\b$old\\b/$new/g" "$file"
     echo "$file: $old -> $new ($count)"
     total=$((total + count))
   done
-  if git grep -q -I -w -e "$old" -- . ':!seed' ':!.claude/skills' ':!tools/rename-word.sh'; then
+  if git grep -q -I -w -e "$old" -- . ':!seed' ':!skills' ':!tools/rename-word.sh'; then
     echo "rename-word: \`$old\` is still there after the rename:" >&2
-    git grep -n -I -w -e "$old" -- . ':!seed' ':!.claude/skills' ':!tools/rename-word.sh' >&2
+    git grep -n -I -w -e "$old" -- . ':!seed' ':!skills' ':!tools/rename-word.sh' >&2
     exit 1
   fi
 done

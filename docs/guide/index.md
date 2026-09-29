@@ -36,7 +36,7 @@ isolation, which is a [how-to](../how-to/index.md); and the argument for a desig
 
 - **[The language in sixty seconds](the-language-in-sixty-seconds.md)** - The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
 - **[TorbScript in 15 minutes](torbscript-in-15-minutes.md)** - The fastest honest tour of TorbScript for a working programmer, one short example and a few sentences per idea.
-- **[Run your first program](installing-and-running.md)** - Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
+- **[Run your first program](installing-and-running.md)** - Install the toolchain, run a single file, and create a project with a manifest, a source file and a test.
 - **[Values and bindings](values-and-bindings.md)** - Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
 - **[Functions and closures](functions-and-closures.md)** - How to declare a function, when it must spell out its return type, and the one closure form the language has.
 - **[Types and methods](types-and-methods.md)** - How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.

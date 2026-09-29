@@ -492,7 +492,7 @@ lane_sessions() {
 lane_docs() {
   gate "docs check" "$torb" docs check docs
   gate "docs index --check" "$torb" docs index --check docs
-  gate "docs skill --check" "$torb" docs skill docs .claude/skills/torbscript --check
+  gate "docs skill --check" "$torb" docs skill docs skills --check
   # docs/tooling/torb-docs-site.md: the website of main builds, and every internal link of it leads to a file of it
   gate "docs site --check" "$torb" docs site docs --check
   # docs/design/PANICS.md recommendation 10: every public function of std/ that can panic says when (`# Panics`)

@@ -4,6 +4,7 @@ summary: torb docs source checks the doc comments of the code itself - a module 
 kind: tooling
 status: stable
 order: 75
+skill: omit
 keywords:
   - torb docs source
   - doc comment

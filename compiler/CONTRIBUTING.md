@@ -39,8 +39,8 @@ torb docs source --panics std                           # ...except its `# Panic
 torb docs check docs                                    # The documentation: schema, links, every snippet
 torb docs index --check docs                            # Is the generated part of every index.md current?
 torb docs index docs                                    # ...write it
-torb docs skill docs .claude/skills/torbscript --check  # Is the committed skill what docs/ generates?
-torb docs skill docs .claude/skills/torbscript          # ...write it, and commit it with the docs change
+torb docs skill docs skills --check                     # Are the committed skills/ what docs/ generates?
+torb docs skill docs skills                             # ...write them, and commit them with the docs change
 sh tools/refresh-seed.sh                                # build/release -> seed/, the old seed archived (below)
 ```
 
@@ -57,6 +57,13 @@ at `-O0`, with a peak of 1.6-1.7 GB at every level, and the compiler that comes 
 
 A change is done when the gates of its tier are green (below) and the repository still checks with "no problems". A
 false positive of the checker is a bug of the checker.
+
+**The Agent Skills.** `skills/` holds the public Agent Skills of TorbScript, which people install into their agents
+(docs/site/agents.md); `torb docs skill docs skills` writes them from `docs/` and the templates in `docs/skills/`, and
+never by hand. They are for people who use the language: what is about building the compiler, the seed, the gates or
+this repository stays here and in CLAUDE.md. This repository's own agents load them through `.claude/skills/<name>`, a
+symbolic link to `../../skills/<name>` for each skill; a new skill is committed with its link
+(docs/contributing/the-skill.md).
 
 ## The Gates, and Which of Them a Round Runs
 
@@ -151,7 +158,7 @@ maintainer pushes its branch into the repository to test it.
 
 **Landing.** `sh tools/land.sh` lands finished branches together: `prepare <name> <branch>...` picks their commits onto
 a landing worktree beside the checkout, `build` bootstraps it and writes the generated files (the natives table, the docs
-indexes, the skill) and the format again, `gates` runs both tiers side by side (`tools/gates.sh ab`), and `publish`
+indexes, the skills) and the format again, `gates` runs both tiers side by side (`tools/gates.sh ab`), and `publish`
 moves `main` there, refreshes the seed, publishes it to the forge (`TORB_FORGE_TOKEN`, a token of git.torb.dev that may
 write the releases) and pushes to the forge (`TORB_PUBLISH_REMOTES`, default `forgejo`). `build` and `gates` each take
 the third gate slot (`TORB_GATE_SLOTS=3`), which agents' gates never reach. A conflict in a generated file is never

@@ -4,17 +4,15 @@ summary: The commands that decide whether TorbScript you wrote is correct and in
 kind: tooling
 status: stable
 order: 20
-skill: verify
 keywords:
   - check
   - format
   - lint
   - test
-  - gate
   - verify
 source:
-  - compiler/CONTRIBUTING.md
-  - tools/gates.sh
+  - compiler/src/main.trb
+  - compiler/src/cli/test.trb
 ---
 
 Never hand over TorbScript you have not run through the compiler. The language has a type checker, an exhaustiveness
@@ -23,17 +21,16 @@ was not checked is the most expensive thing you can produce.
 
 ## Synopsis
 
-All of these run from the repository root, with the `torb` that `sh tools/bootstrap.sh` wrote.
+All of these take a file or a directory, and default to the current directory: run them in the directory of the
+project, the one with `project.trb`, or name a single file.
 
 ```text
 torb check <path>                   Type check: "no problems", or a line and a caret
-torb check --statistics <path>      Every expression has a type: "0 deferred"
 torb parse <path>                   Syntax only, recursively
 torb format --check <path>          Is it in the layout of the formatter?
 torb format <path>                  ...write it
 torb lint <path>                    The rules of style the checker leaves alone
-torb test --native compiler/tests   The TorbScript tests of the compiler
-torb docs check docs                The documentation gate
+torb test <path>                    Every *.test.trb file below the path
 ```
 
 ## What it does
@@ -43,11 +40,12 @@ torb docs check docs                The documentation gate
 1. **`check`** first. It resolves every name and types every expression, so it finds the mistakes that matter: an
    undeclared name, a wrong type, a non-exhaustive `match`, a change that cannot be seen, a `var` that is missing.
 2. **`format --check`** second. It reports every file whose call form, indentation, spaces, blank lines or line breaks
-   are not in the layout. Run plain `format` to write it rather than fixing it by hand - it edits over the syntax tree and re-parses, so
-   it cannot change what a program means.
-3. **`test`** last, when there are tests. One process per file, as many at a time as the machine has cores.
+   are not in the layout. Run plain `format` to write it rather than fixing it by hand - it edits over the syntax tree
+   and re-parses, so it cannot change what a program means.
+3. **`test`** last, when there are tests. One program runs every test file, and a test that fails is reported and the
+   next one runs.
 
-A change is done when all three are green **and** `check` still answers `no problems` over the whole repository. A false
+A change is done when all three are green **and** `check` still answers `no problems` over the whole project. A false
 positive of the checker is a bug in the checker.
 
 ### What each one catches
@@ -56,11 +54,9 @@ positive of the checker is a bug in the checker.
 |---------|---------|
 | `parse` | A semicolon, an unclosed brace, a command call in the wrong position, a `{` where a block was meant |
 | `check` | An undeclared name, a wrong type, a missing `var`, a non-exhaustive `match`, an unreachable arm, a dead change, a discarded result, a visibility violation |
-| `check --statistics` | Expressions that have no type yet, reported as `deferred`. The number has to be 0 |
 | `format --check` | A parenthesized call that should be a command, a command that should have parentheses, a multi-line string that is not indented, a line indented wrong, a missing or extra space, a second blank line, a line over 120 columns that a line break makes fit, a broken call that fits on one line again |
 | `lint` | The own name of a type instead of `Self`, a `Bool` field named as a question, an unread binding, an unlabeled literal option |
 | `test` | Everything a test asserts, including the exact text of a diagnostic |
-| `docs check` | A page of `docs/` whose front matter, sections, links, headings or code blocks are wrong |
 
 ### Reading a diagnostic
 
@@ -74,12 +70,11 @@ error: Comparisons do not chain. Use `&&`: `a < b && b < c`
   |                       ^
 ```
 
-One root cause, one message. When a message offers a fix, take it: the diagnostics of this language are written to name the
-correct line rather than to describe the rule.
+One root cause, one message. When a message offers a fix, take it: the diagnostics of this language are written to
+name the correct line rather than to describe the rule.
 
 ### Checking a snippet that is not a file yet
 
-<!-- To verify once the std-discovery round (findings H4) is merged: a loose file finds std and runtime/. -->
 Write it to a file and check the file. A `.trb` file that nothing imports is a script, so it may hold top-level code and
 needs no `fn main`. A loose file, anywhere, is checked against the standard library of the `torb` that checks it and
 built with that toolchain's C runtime; `TORB_STD=<path to std>` and `TORB_RUNTIME=<path to runtime>` point it at
@@ -87,7 +82,7 @@ others:
 
 ```console
 $ torb check scratch.trb
-1 files, no problems
+1 file, no problems
 $ torb run scratch.trb
 ```
 
@@ -95,16 +90,18 @@ $ torb run scratch.trb
 
 ## Examples
 
-A clean run over the whole repository:
+A clean run over a project:
 
 ```console
 $ torb check .
-255 files, no problems
-$ torb check --statistics .
-149982 of 149982 expressions typed (100%), 0 deferred
+4 files, no problems
 $ torb format --check .
-0 of 761 files would change
-$ torb test --native compiler/tests
+0 of 4 files would change
+$ torb test
+tests/main.test.trb
+  ok      greets by name
+
+1 passed, 0 failed (1 file)
 ```
 
 A run that found something:
@@ -119,19 +116,6 @@ error: `append` needs a `var`. Did you mean `appended`?
 
 1 problems in 1 of 1 files
 ```
-
-### Before a commit
-
-One script runs the whole of it, the tier A gate of `compiler/CONTRIBUTING.md`:
-
-```console
-sh tools/gates.sh a
-```
-
-It builds `build/release/torb` where that is missing or older than the compiler sources, then runs `check .`,
-`check --statistics .`, `test compiler/tests`, the test packages of `std/` and `examples/`, the two docs gates and
-`format --check` over the repository, one line per gate with its time. A round that touches the IR, a back end or
-`runtime/` runs `sh tools/gates.sh b` once besides: the conformance suite, the fixpoint and the C runtime tests.
 
 ## Related
 

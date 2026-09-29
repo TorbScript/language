@@ -38,7 +38,7 @@ Where the compiler and [`CONCEPT.md`](../../CONCEPT.md) disagree, the compiler i
 - **[Generics](generics/index.md)** - Type parameters, where they are declared, how a bound restricts them, what is inferred, and how a trait-typed value satisfies one at runtime.
 - **[Errors](errors/index.md)** - How a function says it can fail, how a caller handles it, and what a panic is for.
 - **[Collections and iteration](collections-and-iteration/index.md)** - List, Map, Set, Stack and Queue as traits over a shared Iterate, plus slices, pipelines and collectors.
-- **[Concurrency and streams](concurrency-and-streams/index.md)** - Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
+- **[Concurrency and streams](concurrency-and-streams/index.md)** - Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword, run by a pool of workers.
 - **[Modules and packages](modules-and-packages/index.md)** - How a file brings in names from elsewhere, what a package is, and the two rules - visibility and top-level code - that decide what a module may contain.
 - **[Reflection](reflection/index.md)** - Why there is no runtime reflection, the four syntactic bridges that connect a type to a value instead, and the generated Encode and Decode pair that covers serialization.
 - **[Configuration](configuration/index.md)** - Receiver closures, the builder function around one, and the receiver script and sandbox that let a whole file play the same role - statically typed configuration without a second language.

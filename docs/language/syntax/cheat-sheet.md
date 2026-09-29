@@ -4,7 +4,6 @@ summary: "Every form of the language in one place: declarations, expressions, pa
 kind: reference
 status: stable
 order: 10
-skill: cheat-sheet
 keywords:
   - cheat sheet
   - syntax

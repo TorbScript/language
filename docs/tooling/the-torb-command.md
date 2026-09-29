@@ -70,12 +70,12 @@ torb --version         Print `torb <version>`: the one number of the toolchain, 
 Every command: --color auto|always|never   colour where the output is a terminal, always, or never
 ```
 
-`torb` is `build/release/torb`, what [`sh tools/bootstrap.sh`](../ARCHITECTURE.md) writes, and every command below is
-run from the repository root:
+`torb` is the binary [the installer](../site/install.md) puts on the `PATH`, and a command below runs in the directory
+of a project - the one with `project.trb` - unless it names a path:
 
 ```console
 torb check .
-torb test --native compiler/tests
+torb test
 torb format --check .
 ```
 
@@ -305,8 +305,7 @@ Evaluates every `project.trb` the paths reach - a manifest named directly, or ev
 directory - as the receiver script it is: in the VM, inside the sandbox a project file gets, against the `Project` of
 `std/project` (see [project.trb](project-trb.md)). It prints the settings each one configured, as literal command
 calls. With `--check` it prints nothing but a summary, and fails where the static reader the other commands use reads
-anything else out of those settings than out of the file itself; `tools/gates.sh a` runs it over every manifest of the
-repository.
+anything else out of those settings than out of the file itself.
 
 ### `add`, `remove`, `update`, `install`, `publish` and `lock`
 

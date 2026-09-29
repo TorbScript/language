@@ -53,6 +53,13 @@ public type Folder {
  */
 public const translationsFolder = "translations"
 
+/**
+ * The folder below the documentation root that holds the templates of the Agent Skills `torb docs skill` writes:
+ * `skills/torbscript/SKILL.md` is the frame of the skill `torbscript`, and every other file of that directory - a script,
+ * say - is copied into the skill as it is. Nothing below it is a page.
+ */
+public const skillsFolder = "skills"
+
 /** A page in another language, which mirrors the path of the English page it translates. */
 public type Translation {
   /** The language, as the folder below `translations/` names it: `de` */
@@ -83,6 +90,11 @@ public type Documentation {
   translations: List<Translation> = []
   /** The text of every `translations/<language>/strings.json`, by language */
   strings: Map<String, String> = [:]
+  /**
+   * Every file below `skills/`, by its path below that folder (`torbscript/SKILL.md`, `torbscript/scripts/toolchain.sh`).
+   * They are not pages: they are the templates of the skills, which only `torb docs skill` reads
+   */
+  skillSources: Map<String, String> = [:]
 
   fn pageAt(path: String): Page? {
     pages.find({ _.path == path })
@@ -156,7 +168,12 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
   var folderPaths: List<String> = [""]
   var translations: List<Translation> = []
   var strings: Map<String, String> = [:]
+  var skillSources: Map<String, String> = [:]
   for path in paths {
+    if const Some(template) = path.withoutPrefix("{skillsFolder}/") {
+      skillSources.set(template, files.get(path) ?? "")
+      continue
+    }
     if const Some(translated) = path.withoutPrefix("{translationsFolder}/") {
       const parts = translated.splitOnce "/"
       const language = parts?.before ?? ""
@@ -216,7 +233,7 @@ public fn documentationOf(root: String, files: Map<String, String>): Documentati
     }
     folders.append Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
   }
-  Documentation root, pages, folders, plainTitles, plainTexts, problems, translations, strings
+  Documentation root, pages, folders, plainTitles, plainTexts, problems, translations, strings, skillSources
 }
 
 /** The first `# ` heading of a plain Markdown file, or its file name when it has none. */
@@ -248,8 +265,8 @@ fn shownPath(root: String, path: String): String {
 }
 
 /**
- * Reads every `.md` file below the root, and the `strings.json` of every language below `translations/`. Hidden
- * directories are skipped, as everywhere.
+ * Reads every `.md` file below the root, the `strings.json` of every language below `translations/`, and every file
+ * below `skills/`. Hidden directories are skipped, as everywhere.
  */
 public fn readDocumentation(root: String): Result<Documentation, IoError> {
   if !File.isDirectory(root) {
@@ -272,7 +289,8 @@ fn readInto(var files: Map<String, String>, root: String, relative: String): Res
       continue
     }
     const isStrings = entry == "strings.json" && child.startsWith("{translationsFolder}/")
-    if entry.endsWith(".md") || isStrings {
+    const isSkillSource = child.startsWith "{skillsFolder}/"
+    if entry.endsWith(".md") || isStrings || isSkillSource {
       const text = File.readText(absolute)?
       files.set child, text
     }

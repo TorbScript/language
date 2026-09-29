@@ -58,9 +58,8 @@ directory is in**: every `*.test.trb` below the innermost directory above it tha
 working directory itself where there is none. So `torb test` in `shop/src/` runs the tests of `shop`.
 
 **Several paths are one run**, and therefore one binary and one report over all of them, in the order the paths sort
-in: `torb test std/path/tests std/linear/tests` builds both packages together. Any test package works the same way -
-the standard library's, an example's, your own - because nothing about the command is particular to the compiler's own
-suite.
+in: `torb test shop/tests billing/tests` builds both packages together. Any test package works the same way - the
+standard library's, an example's, your own.
 
 ### Running them
 
@@ -70,11 +69,12 @@ a `test` inside two `group`s prints as `<outer> > <inner> > <name>`. At the end,
 every file:
 
 ```console
-$ torb test compiler/tests/calls.test.trb
-  ok      Constructors, cases and `copy` > the generated constructor takes the fields in declaration order
-  ok      Closures as arguments > a call of a generic function solves its parameters from the arguments (milestone 4.4)
+$ torb test tests/cart.test.trb
+tests/cart.test.trb
+  ok      Cart > an empty cart costs nothing
+  ok      Cart > the total adds up every line
 
-30 passed, 0 failed (1 files)
+2 passed, 0 failed (1 file)
 ```
 
 `test` exits with `0` when nothing failed and `1` otherwise, so it composes with a shell's `&&` and with continuous
@@ -85,9 +85,8 @@ integration the same way [`check`](torb-check.md) does.
 `test` runs **one program for every file it found**, in the bytecode VM inside `torb` unless `--native` or a profile
 says to build it: the same program - every test file an entry, its name printed in front of its tests - is lowered to
 the typed IR a binary is compiled from and run by the VM on the same runtime, and the report is the one the binary
-writes, line for line, and so is the exit code. The gates of the repository hold the test packages of `std/` and
-`examples/` to that in both back ends. The compiler's own suite runs natively (`torb test --native compiler/tests`):
-each of its tests checks a whole program, and interpreted that takes many times as long as the one C compile.
+writes, line for line, and so is the exit code. A suite whose tests do a lot of work runs faster natively
+(`torb test --native`): interpreted, it can take many times as long as the one C compile.
 
 With `--native`, `test` builds **one binary for every file it found** and runs it: one C translation unit that holds
 every test file plus a generated `main` that calls each file's own top-level code with the file's name printed in
@@ -113,7 +112,7 @@ doubles a list forever - ends with one line and exit code `102`, which no recove
 would start at the limit too:
 
 ```console
-$ torb test compiler/tests
+$ torb test --native
 panic: out of memory: the limit of 8 GiB was reached (the default of a dev build; TORB_MEMORY_LIMIT sets another, 0 none)
 ```
 
@@ -134,7 +133,7 @@ processes that each run another shard run the whole suite between them at the sa
 only its own files, and its summary says which shard it was:
 
 ```console
-$ torb test --native compiler/tests --shard 2/4
+$ torb test --native tests --shard 2/4
 ...
 515 passed, 0 failed (20 files, shard 2 of 4)
 ```
@@ -150,12 +149,12 @@ The files are dealt out in turn, not by how long they take, so the shard that ho
 long as that file alone.
 
 `--shards n` does the whole of it in one command: it builds the binary once and runs all n shards of it at the same
-time, each a process of its own (`tools/test-shards.sh`), and once the last one has ended it prints their reports one
-after the other and one summary over all of them. That is what saves time: n commands of `--shard` each check and lower
+time, each a process of its own, and once the last one has ended it prints their reports one after the other and one
+summary over all of them. That is what saves time: n commands of `--shard` each check and lower
 the whole suite before its C is known to be the same, which costs the front end n times.
 
 ```console
-$ torb test --native compiler/tests --shards 4
+$ torb test --native tests --shards 4
 ...
 2288 passed, 0 failed (80 files, 4 shards)
 ```
@@ -228,7 +227,6 @@ a line the test prints
 ```
 
 The same run with `--native` adds `"frames":"  in a closure in a closure in the top level\n..."` to the failure.
-`tools/test-report.sh` holds the reports of both back ends to one expected output.
 
 ### What the run forwards
 

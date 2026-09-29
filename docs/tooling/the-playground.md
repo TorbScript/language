@@ -4,6 +4,7 @@ summary: The playground at torb.dev/play and in the course runs TorbScript in th
 kind: tooling
 status: stable
 order: 48
+skill: omit
 keywords:
   - playground
   - /play

@@ -54,8 +54,11 @@ public const kinds: List<String> = [
 /** How far a page can be trusted. A `planned` page must never read like an available feature. */
 public const statuses: List<String> = ["stable", "draft", "planned"]
 
-/** What the skill builder does with a page beyond copying it into `reference/`. */
-public const skillRoles: List<String> = ["model", "cheat-sheet", "mistakes", "verify", "omit"]
+/**
+ * The values of `skill`. `omit` keeps a page out of every Agent Skill; which skill carries any other page is decided
+ * by the templates below `skills/`, not by the page.
+ */
+public const skillRoles: List<String> = ["omit"]
 
 /** The kinds whose facts have to name where they come from, so drift against the implementation can be found. */
 public const kindsThatNeedASource: List<String> = ["reference", "package"]
@@ -303,7 +306,7 @@ fn listProblems(shown: String, page: Page, frontMatter: FrontMatter): List<Docum
     Some(found) => {
       if !skillRoles.contains(found) {
         const all = skillRoles.joined separator: ", "
-        const note = "`{found}` is not a role in the skill. One of: {all}"
+        const note = "`{found}` is not a value of `skill`. One of: {all}"
         problems.append DocumentationProblem(shown, frontMatter.lineOf("skill"), note)
       }
     }
@@ -472,30 +475,6 @@ public fn withoutInlineCode(text: String): String {
     }
   }
   String.from kept
-}
-
-/** The pages that carry a role in the skill, and whether two of them claim the same one. */
-public fn skillRoleProblems(documentation: Documentation): List<DocumentationProblem> {
-  var problems: List<DocumentationProblem> = []
-  var taken: List<String> = []
-  for page in documentation.pages {
-    const role = page.frontMatter.text "skill"
-    match role {
-      Some(found) => {
-        if found == "omit" {
-          continue
-        }
-        if taken.contains(found) {
-          const shown = page.shown documentation.root
-          const note = "Another page already is the `{found}` of the skill. There is exactly one of each"
-          problems.append DocumentationProblem(shown, page.frontMatter.lineOf("skill"), note)
-        }
-        taken.append found
-      }
-      None => {}
-    }
-  }
-  problems
 }
 
 /** Whether a folder or page name is one a link can be written by hand: lowercase, hyphens, no spaces. */

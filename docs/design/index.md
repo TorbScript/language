@@ -4,6 +4,7 @@ summary: The specification documents behind a language or library feature that i
 kind: index
 status: stable
 order: 70
+skill: omit
 documents:
   - STREAMS.md
   - ENCODING.md

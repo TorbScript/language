@@ -1,6 +1,6 @@
 ---
 title: Run your first program
-summary: Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
+summary: Install the toolchain, run a single file, and create a project with a manifest, a source file and a test.
 kind: guide
 status: stable
 order: 10
@@ -12,7 +12,8 @@ keywords:
   - hello world
 source:
   - README.md
-  - tools/bootstrap.sh
+  - tools/install.sh
+  - tools/install.ps1
   - CONCEPT.md#project-layout
   - compiler/src/cli/new.trb
 ---
@@ -26,23 +27,25 @@ step. The two run the same program with the same output.
 At the end of this page you have run a `.trb` file, created a project with a manifest and a test, and seen the two
 commands you will use most.
 
-## Build the toolchain
+## Install the toolchain
 
-TorbScript is self-hosted: the compiler is written in TorbScript and compiles itself from a seed - a `torb` that
-already exists. Put one under `seed/` and build it once, from the repository root:
+One command installs `torb` for the current user. On Linux, macOS and FreeBSD:
 
 ```console
-$ sh tools/bootstrap.sh
-seed: seed/torb
-step 1: the seed builds the compiler
-step 2: that compiler builds the compiler again
-
-the fixpoint holds: both steps emitted the same C.
-torb: build/release/torb
+$ curl -fsSL https://torb.dev/install.sh | sh
 ```
 
-`build/release/torb` is the compiler that comes out, and `torb` below is that binary. A C compiler on the `PATH` is
-what it needs (`$TORB_CC`, or `clang`, `gcc`, `cc`).
+In PowerShell on Windows:
+
+```console
+> irm https://torb.dev/install.ps1 | iex
+```
+
+The script checks the download against the release's hashes and unpacks the toolchain into your home directory. On
+Linux, macOS and FreeBSD it prints the line that puts `~/.torb/bin` on the `PATH` for you to add to your shell's
+profile; on Windows it adds its directory to your `PATH` itself. A new shell then answers `torb --version`.
+[Install TorbScript](../site/install.md) has the details, and `torb upgrade` keeps the toolchain current. `torb run`
+needs nothing else; `torb build` also needs a C compiler on the `PATH` (`$TORB_CC`, or `clang`, `gcc`, `cc`).
 
 ## Run a single file
 

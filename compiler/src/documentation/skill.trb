@@ -1,198 +1,560 @@
 /**
- * `torb docs skill`: the documentation as an Agent Skill, in the format Anthropic published
- * (https://agentskills.io/specification): a folder whose `SKILL.md` has the front matter `name` and `description`, a
- * body that is loaded when the skill triggers, and further files that are read only when they are needed.
+ * `torb docs skill`: the documentation as a set of Agent Skills, in the open format of
+ * https://agentskills.io/specification - one directory per skill, whose `SKILL.md` has the front matter `name` and
+ * `description`, a body that is loaded when the skill triggers, and further files that are read only when they are
+ * needed.
  *
- * The three levels of progressive disclosure are what the shape follows:
+ * The set is declared by the templates below `skills/` of the documentation root. `skills/<name>/SKILL.md` is the frame
+ * of one skill: its front matter as it is published, the few sentences only an agent needs, and directives on lines of
+ * their own that the builder expands. Every other file of that directory - a script - is copied as it is.
  *
- * 1. `name` and `description` are always in the model's context (about 100 tokens). They decide whether the skill is
- *    used at all, so the description says what the skill is **and when to use it**, in the third person.
- * 2. `SKILL.md` is read when the skill triggers and stays under `longestSkillBody` lines: the mental model of the
- *    language, how to verify work, and how to find the rest. It is the only file the skill asks to be read up front.
- * 3. `reference/` holds the pages, and costs nothing until a file is opened. The body points at the section indexes and
- *    at a search, never at "read this long file first", because every file read up front is paid for on every task.
+ * | Directive | What it becomes |
+ * |-----------|-----------------|
+ * | `<!-- carry: <path>... -->` | Nothing in the body: the pages it names go into `references/`. A path that ends in `/` is a folder and everything below it |
+ * | `<!-- inline: <path> -->` | The body of that page, one heading level deeper, its links seen from `SKILL.md` |
+ * | `<!-- pages -->` | One line per page of the skill, with its summary |
+ * | `<!-- sections -->` | One line per folder index the skill carries, with its summary |
+ * | `<!-- skills -->` | One line per other skill of the set, with the first sentence of its description |
  *
- * Nothing in the body is written here: every section is the body of a page that carries the matching `skill` role in
- * its front matter, so the skill cannot drift away from the documentation. What this file decides is the *shape*.
+ * Every page belongs to at most one skill. The most specific `carry` rule decides - a page named on its own before its
+ * folder, a deeper folder before a shallower one - and two skills naming the same page or folder is a problem. A page no
+ * rule reaches is a problem too, unless it says `skill: omit` or belongs to the website or the course, so that a new
+ * page cannot fall out of every skill unnoticed.
  *
- * A link of a copied page that points at something the skill does not carry - a page about the documentation itself,
- * a design record, a file of the repository outside `docs/` - becomes its plain text, and after that every link of
- * every file the skill holds has to resolve inside the skill: a dangling link is a problem of the build, never a file
- * that is written anyway.
+ * The three levels of progressive disclosure are what the shape follows: the description is in every context and says
+ * what a skill is for and when to use it, `SKILL.md` stays under [longestSkillBody] lines, and `references/` costs
+ * nothing until a file is opened. A copied page keeps its place in the tree of the documentation below `references/`,
+ * so a link between two pages of one skill still resolves; a link to a page of another skill becomes its text and the
+ * name of that skill, and a link to anything no skill carries becomes its text. After that every link of every file has
+ * to resolve inside its own skill: a dangling link is a problem of the build, never a file that is written anyway.
  *
- * [buildSkill] is the whole command, a pure function of the [Documentation] to a [BuiltSkill]; [writeSkill] and
- * [staleSkillFiles] (`--check`, the gate) are the two places that touch disk.
+ * [buildSkills] is the whole command, a pure function of the [Documentation]; [writeSkills] and [staleSkillFiles]
+ * (`--check`, the gate) are the two places that touch disk.
  */
 
 use File, IoError from "std/fs"
 use normalizePath from "../project/path"
-use DocumentationProblem, linesOf from "./markdown"
-use Page, Documentation, folderOf, fileName, joinDocumentationPath from "./tree"
+use DocumentationProblem, linesOf, readPage from "./markdown"
+use Page, Folder, Documentation, skillsFolder, folderOf, joinDocumentationPath from "./tree"
+use sortedByOrder, sortedChildren from "./index"
 
-/**
- * The name of the skill. It is also the name of its directory, which the format requires, and it may only contain
- * lowercase letters, digits and single hyphens.
- */
-public const skillName = "torbscript"
-
-/**
- * What the model matches a request against. It says what the skill is and when to use it, in the third person, and it
- * names the words that should trigger it - a description that does not name them is a skill nobody reaches. The format
- * allows 1024 characters; this one stays far below that on purpose, because it is in the context of every request.
- */
-public const skillDescription = "Writes, reads and reviews TorbScript, a functional-first language with value semantics whose CLI is `torb` and whose files end in `.trb`. Use it for any task that touches TorbScript source, a `project.trb`, the `torb` toolchain, or the TorbScript standard library - and use it before writing TorbScript from memory, because the language looks like Rust, Swift and Kotlin but differs from all three in mutation, error handling, cases and call syntax."
-
-/** Anthropic's guidance: under 500 lines keeps the body inside the token budget of level two. */
+/** Anthropic's guidance and the format's: a body under 500 lines keeps the second level inside its budget. */
 public const longestSkillBody = 500
 
-/** One file of the generated skill. Writing happens in `writeSkill`, so building it is a pure function. */
+/** The limits the format sets on the front matter. */
+const longestName = 64
+const longestDescription = 1024
+const longestCompatibility = 500
+
+/** The fields of the format's front matter. A template with any other field would not validate everywhere. */
+const skillFields: List<String> = ["name", "description", "license", "compatibility", "metadata", "allowed-tools"]
+
+/** What a file of the skills is below the output directory, always with `/`: `torbscript/SKILL.md` */
 public type SkillFile {
-  /** Relative to the skill directory, always with `/` */
   path: String
   text: String
 }
 
-/** Everything `torb docs skill` builds: every file of the skill, and the problems found while building it. */
+/** What one skill of the set came to, for the line the command prints about it. */
 public type BuiltSkill {
+  name: String
+  /** The lines of its `SKILL.md`, the number the size limit is about */
+  bodyLines: Int
+  /** How many pages went into its `references/` */
+  pages: Int
+}
+
+/** Everything `torb docs skill` builds: every file of every skill, and the problems found while building them. */
+public type BuiltSkills {
   files: List<SkillFile>
   problems: List<DocumentationProblem>
-  /** The lines of `SKILL.md`, the number the size limit is about */
-  bodyLines: Int
-  /** How many pages went into `reference/`, and how many were left out because they say `skill: omit` */
-  included: Int
+  skills: List<BuiltSkill>
+  /** The pages no skill carries on purpose: `skill: omit`, the website's and the course's */
   excluded: Int
 }
 
-/** Builds the whole skill from the documentation tree. Writing it to disk is [writeSkill]. */
-public fn buildSkill(documentation: Documentation): BuiltSkill {
+/** One skill as its template declares it. */
+type SkillTemplate {
+  /** The directory below `skills/`, which the format requires to be the `name` of the front matter */
+  name: String
+  description: String
+  /** The front matter as it is published: every line from the first `---` to the second, both included */
+  frontMatter: List<String>
+  /** The lines of the body, directives included */
+  body: List<String>
+  /** The line of the template the body starts on, 1-based, for the problems */
+  bodyLine: Int
+  /** The `carry` rules, in the order they are written */
+  carries: List<String>
+  /** Every other file of the template's directory, by its path relative to that directory */
+  files: List<SkillFile>
+}
+
+/** A line of a template that is a directive: `<!-- inline: guide/model.md -->` is `inline` with one argument. */
+type Directive {
+  name: String
+  arguments: List<String>
+}
+
+/** Which skill carries each page, and how many pages none carries on purpose. */
+type PageHomes {
+  /** The name of the skill that carries a page, by the page's path */
+  homes: Map<String, String>
+  excluded: Int
+}
+
+/** What a link of one file of a skill is resolved against. */
+type LinkContext {
+  /** The skill the file belongs to */
+  skill: String
+  homes: Map<String, String>
+  /** What a target of the same skill is written relative to: `references/` from `SKILL.md`, nothing from a page */
+  prefix: String
+}
+
+/** What one link becomes in a file of a skill. */
+type Rewritten {
+  /** The link stays, with this target */
+  case Kept(target: String)
+  /** The page belongs to another skill: its text stays, followed by that skill and the path inside it */
+  case Elsewhere(skill: String, path: String)
+  /** No skill carries the target: only the text of the link stays */
+  case Dropped
+}
+
+/** Builds every skill the templates declare. Writing them to disk is [writeSkills]. */
+public fn buildSkills(documentation: Documentation): BuiltSkills {
   var problems: List<DocumentationProblem> = []
-  const pages = includedPages documentation
-  const excluded = documentation.pages.length() - pages.length()
-  var carried: List<String> = ["index.md"]
-  for page in pages {
-    carried.append page.path
+  const templates = templatesOf documentation, problems
+  const placed = homesOf documentation, templates, problems
+  var files: List<SkillFile> = []
+  var skills: List<BuiltSkill> = []
+  for template in templates {
+    const pages = pagesOf documentation, placed.homes, template.name
+    var own: List<SkillFile> = []
+    const body = bodyOf documentation, template, templates, placed.homes, pages, problems
+    own.append SkillFile("SKILL.md", body)
+    if !pages.isEmpty() {
+      own.append SkillFile("references/index.md", referenceIndex(documentation, template.name, pages))
+    }
+    const context = LinkContext template.name, placed.homes, ""
+    for page in pages {
+      own.append SkillFile("references/{page.path}", carriedText(page, context))
+    }
+    own.appendAll template.files
+    problems.appendAll danglingLinks(template.name, own)
+    const lines = linesOf(body).length()
+    if lines > longestSkillBody {
+      const note = "`SKILL.md` has {lines} lines. A skill body stays under {longestSkillBody}: carry material instead"
+      problems.append DocumentationProblem(sourceOf(documentation, "{template.name}/SKILL.md"), 0, note)
+    }
+    for file in own {
+      files.append SkillFile("{template.name}/{file.path}", file.text)
+    }
+    skills.append BuiltSkill(template.name, lines, pages.length())
+  }
+  BuiltSkills files, problems, skills, placed.excluded
+}
+
+/** How a file below `skills/` is named in a problem. */
+fn sourceOf(documentation: Documentation, path: String): String {
+  const root = documentation.root
+  if root.isEmpty() || root == "." {
+    return "{skillsFolder}/{path}"
+  }
+  "{root}/{skillsFolder}/{path}"
+}
+
+/** Every template below `skills/`, sorted by name. */
+fn templatesOf(documentation: Documentation, var problems: List<DocumentationProblem>): List<SkillTemplate> {
+  var paths = documentation.skillSources.keys().toList()
+  paths.sort({ _ })
+  var names: List<String> = []
+  for path in paths {
+    match path.splitOnce("/") {
+      Some(parts) => {
+        if !names.contains(parts.before) {
+          names.append parts.before
+        }
+      }
+      None => {
+        const note = "A file below `{skillsFolder}/` belongs to the directory of one skill"
+        problems.append DocumentationProblem(sourceOf(documentation, path), 0, note)
+      }
+    }
+  }
+  // By name, so that `torbscript` comes before `torbscript-language`, which the order of the paths would not give
+  names.sort({ _ })
+  var templates: List<SkillTemplate> = []
+  for name in names {
+    match documentation.skillSources.get("{name}/SKILL.md") {
+      Some(text) => {
+        if const Some(template) = templateOf(documentation, name, text, problems) {
+          templates.append template
+        }
+      }
+      None => {
+        const note = "The directory of a skill has a `SKILL.md`, the template of the skill"
+        problems.append DocumentationProblem(sourceOf(documentation, name), 0, note)
+      }
+    }
+  }
+  templates
+}
+
+/** One template, read and checked against the rules of the format. `None` when there is nothing to build from. */
+fn templateOf(
+  documentation: Documentation,
+  name: String,
+  text: String,
+  var problems: List<DocumentationProblem>,
+): SkillTemplate? {
+  const shown = sourceOf documentation, "{name}/SKILL.md"
+  const read = readPage shown, text
+  problems.appendAll read.problems
+  const frontMatter = match read.frontMatter {
+    Some(found) => found
+    None => {
+      problems.append DocumentationProblem(shown, 1, "A template starts with the front matter of the skill")
+      return None
+    }
+  }
+  for field in frontMatter.fields {
+    if !skillFields.contains(field.key) {
+      const all = skillFields.joined separator: ", "
+      problems.append DocumentationProblem(shown, field.line, "`{field.key}` is not a field of a skill. One of: {all}")
+    }
+  }
+  const declared = frontMatter.text("name") ?? ""
+  if declared != name {
+    const note = "The `name` of a skill is the name of its directory, `{name}`"
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("name"), note)
+  }
+  if const Some(note) = nameProblem(name) {
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("name"), note)
+  }
+  const description = frontMatter.text("description") ?? ""
+  if description.isEmpty() || description.byteLength() > longestDescription {
+    const note = "A skill has a `description` of 1 to {longestDescription} characters: what it does and when to use it"
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("description"), note)
+  }
+  if description.contains("<") || description.contains(">") {
+    const note = "A `description` has no angle brackets: some agents read them as a tag"
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("description"), note)
+  }
+  if (frontMatter.text("compatibility") ?? "").byteLength() > longestCompatibility {
+    const note = "A `compatibility` is at most {longestCompatibility} characters"
+    problems.append DocumentationProblem(shown, frontMatter.lineOf("compatibility"), note)
+  }
+  const lines = linesOf text
+  const bodyStart = read.bodyLine - 1
+  var published: List<String> = []
+  var body: List<String> = []
+  for index in 0..lines.length() {
+    if index < bodyStart {
+      published.append lines[index]
+    } else {
+      body.append lines[index]
+    }
+  }
+  var carries: List<String> = []
+  var openFence = 0
+  var openIndent = 0
+  var number = bodyStart
+  for line in body {
+    number = number + 1
+    const fence = fenceAfter line, openFence, openIndent
+    if fence != openFence {
+      if openFence == 0 {
+        openIndent = indentOf line
+      }
+      openFence = fence
+      continue
+    }
+    if openFence > 0 {
+      continue
+    }
+    if const Some(directive) = directiveOf(line) {
+      if const Some(note) = directiveProblem(directive) {
+        problems.append DocumentationProblem(shown, number, note)
+      }
+      if directive.name == "carry" {
+        carries.appendAll directive.arguments
+      }
+    }
   }
   var files: List<SkillFile> = []
-  const body = skillBody documentation, pages, carried
-  problems.appendAll body.problems
-  files.append SkillFile("SKILL.md", body.text)
-  files.append SkillFile("reference/index.md", referenceIndex(documentation, pages))
-  for page in pages {
-    // `reference/index.md` is the generated map of every page, which is worth more here than the root index
+  for (path, content) in documentation.skillSources {
+    if const Some(relative) = path.withoutPrefix("{name}/") {
+      if relative != "SKILL.md" {
+        files.append SkillFile(relative, content)
+      }
+    }
+  }
+  files.sort({ _.path })
+  SkillTemplate name, description, published, body, read.bodyLine, carries, files
+}
+
+/** What is wrong with the name of a skill, by the rules of the format, or `None`. */
+fn nameProblem(name: String): String? {
+  const rule = "A skill's name is lowercase letters, digits and single hyphens, at most {longestName} characters"
+  if name.isEmpty() || name.byteLength() > longestName {
+    return rule
+  }
+  if name.startsWith("-") || name.endsWith("-") || name.contains("--") {
+    return rule
+  }
+  for character in name.chars() {
+    const isAllowed = (character >= 'a' && character <= 'z') || character.isDigit() || character == '-'
+    if !isAllowed {
+      return rule
+    }
+  }
+  if name.contains("anthropic") || name.contains("claude") {
+    return "A skill's name does not contain `anthropic` or `claude`, which are reserved"
+  }
+  None
+}
+
+/** The directive a line is, when it is one: a whole line `<!-- name: arguments -->`. */
+fn directiveOf(line: String): Directive? {
+  const trimmed = line.trim()
+  const opened = trimmed.withoutPrefix("<!--")?
+  const inner = (opened.withoutSuffix("-->")?).trim()
+  const parts = inner.splitOnce ":"
+  const name = (parts?.before ?? inner).trim()
+  var arguments: List<String> = []
+  if const Some(found) = parts {
+    for word in found.after.split(" ") {
+      if !word.trim().isEmpty() {
+        arguments.append word.trim()
+      }
+    }
+  }
+  Directive name, arguments
+}
+
+/** What is wrong with a directive, or `None`. */
+fn directiveProblem(directive: Directive): String? {
+  match directive.name {
+    "carry" => {
+      if directive.arguments.isEmpty() {
+        return "`carry` names at least one page or folder: `<!-- carry: guide/ tooling/torb-run.md -->`"
+      }
+      for argument in directive.arguments {
+        if argument.startsWith("/") || argument.startsWith(".") || argument.contains("..") {
+          return "`{argument}` is a path relative to the documentation root, without `.` or `..`"
+        }
+      }
+      None
+    }
+    "inline" => {
+      if directive.arguments.length() != 1 {
+        return "`inline` names exactly one page: `<!-- inline: guide/model.md -->`"
+      }
+      None
+    }
+    "pages" | "sections" | "skills" => {
+      if !directive.arguments.isEmpty() {
+        return "`{directive.name}` takes nothing: `<!-- {directive.name} -->`"
+      }
+      None
+    }
+    _ => "`{directive.name}` is not a directive of a template. One of: carry, inline, pages, sections, skills"
+  }
+}
+
+/** Which skill carries each page: the most specific rule of every template decides. */
+fn homesOf(
+  documentation: Documentation,
+  templates: List<SkillTemplate>,
+  var problems: List<DocumentationProblem>,
+): PageHomes {
+  var homes: Map<String, String> = [:]
+  var excluded = 0
+  for page in documentation.pages {
+    // The root index is the map of the whole documentation, and every skill has a map of its own instead
     if page.path == "index.md" {
       continue
     }
-    files.append SkillFile("reference/{page.path}", carriedText(page, carried))
-  }
-  problems.appendAll danglingLinks(files)
-  const lines = linesOf(body.text).length()
-  if lines > longestSkillBody {
-    const note = "`SKILL.md` has {lines} lines. A skill body stays under {longestSkillBody}: move material into a page"
-    problems.append DocumentationProblem("SKILL.md", 0, note)
-  }
-  BuiltSkill files, problems, lines, pages.length(), excluded
-}
-
-/**
- * Everything the skill carries: every page except the ones whose author said `skill: omit`, the pages of the
- * website (`kind: site`), which are about the site and not the language, and the lessons of the course for beginners
- * (`kind: lesson`), which teach in small steps what the other pages state. A `planned` page is carried with its banner,
- * like a `draft` one: the pages of the features that exist link it for the rules of a construct they use (`spawn`,
- * `.await()`), and a model reads the banner in the same file as the design.
- */
-fn includedPages(documentation: Documentation): List<Page> {
-  var kept: List<Page> = []
-  for page in documentation.pages {
-    const role = page.frontMatter.text("skill") ?? ""
+    const shown = page.shown documentation.root
     const kind = page.frontMatter.text("kind") ?? ""
-    if role == "omit" || kind == "site" || kind == "lesson" {
+    const isForTheSite = kind == "site" || kind == "lesson"
+    const isOmitted = (page.frontMatter.text("skill") ?? "") == "omit"
+    var best = -1
+    var winners: List<String> = []
+    for template in templates {
+      for rule in template.carries {
+        const weight = weightOf rule, page.path, isForTheSite
+        if weight < 0 {
+          continue
+        }
+        if weight > best {
+          best = weight
+          winners = [template.name]
+        } else if weight == best && !winners.contains(template.name) {
+          winners.append template.name
+        }
+      }
+    }
+    if isOmitted {
+      excluded = excluded + 1
+      if best >= 1000 {
+        problems.append DocumentationProblem(shown, 0, "The page says `skill: omit`, and `{winners[0]}` carries it")
+      }
       continue
     }
-    kept.append page
-  }
-  kept
-}
-
-type WrittenBody {
-  text: String
-  problems: List<DocumentationProblem>
-}
-
-fn skillBody(documentation: Documentation, pages: List<Page>, carried: List<String>): WrittenBody {
-  var problems: List<DocumentationProblem> = []
-  var lines: List<String> = ["---", "name: {skillName}"]
-  lines.append "description: \"{skillDescription}\""
-  lines.append "---"
-  lines.append ""
-  lines.append "# TorbScript"
-  lines.append ""
-  lines.append "Paths below are relative to the directory of this file. Nothing but this file needs to be read up front:"
-  lines.append "every other file is opened when a question needs it."
-  lines.append ""
-  // Two sections are needed on every task and are short, so they stand in the body. The two that are long lookup
-  // material are one `Read` away instead, which is what keeps the body inside the published budget of 500 lines -
-  // and they are named as lookup material, not as reading, because a file read up front is paid on every task
-  const referenced = [
-    ("cheat-sheet", "every form of the language with its exact spelling: how is this written?"),
-    ("mistakes", "the lines that look right and are not, each with its diagnostic: why does this not compile?"),
-  ]
-  match pageWithRole(documentation, "model") {
-    Some(page) => {
-      lines.appendAll inlinedSection("The language in sixty seconds", page, carried)
-    }
-    None => {
-      problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: model`")
-    }
-  }
-  lines.append "## Two files to look things up in"
-  lines.append ""
-  for (role, why) in referenced {
-    match pageWithRole(documentation, role) {
-      Some(page) => {
-        lines.append "- `reference/{page.path}` - {why}"
+    if winners.isEmpty() {
+      if isForTheSite {
+        excluded = excluded + 1
+        continue
       }
-      None => {
-        problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
+      const note = "No skill carries the page. Name it in a `carry` line below `{skillsFolder}/`, or give it `skill: omit`"
+      problems.append DocumentationProblem(shown, 0, note)
+      continue
+    }
+    if winners.length() > 1 {
+      const both = winners.joined separator: " and "
+      problems.append DocumentationProblem(shown, 0, "{both} both carry the page. One skill carries it")
+    }
+    homes.set page.path, winners[0]
+  }
+  for template in templates {
+    for rule in template.carries {
+      const kind = if rule.endsWith("/") { "folder" } else { "page" }
+      const reaches = documentation.pages.any({ page =>
+        const isForTheSite = ["site", "lesson"].contains(page.frontMatter.text("kind") ?? "")
+        weightOf(rule, page.path, isForTheSite) >= 0
+      })
+      if !reaches {
+        const note = "`carry: {rule}` reaches no page: there is no such {kind} below the documentation root"
+        problems.append DocumentationProblem(sourceOf(documentation, "{template.name}/SKILL.md"), 0, note)
       }
     }
   }
-  lines.append ""
-  lines.append "Search them instead of reading them whole: `grep -n \"^###\" <file>` lists the sections of either one, and a"
-  lines.append "section is a few dozen lines. Before handing over code, scan the section headings of the second one."
-  lines.append ""
-  match pageWithRole(documentation, "verify") {
-    Some(page) => {
-      lines.appendAll inlinedSection("How to verify your work", page, carried)
-    }
-    None => {
-      problems.append DocumentationProblem("SKILL.md", 0, "No page carries `skill: verify`")
-    }
-  }
-  lines.appendAll navigation(documentation, pages)
-  WrittenBody lines.joined(separator: "\n"), problems
-}
-
-/** One section of the body: the heading, the page's body one level deeper, and where it came from. */
-fn inlinedSection(heading: String, page: Page, carried: List<String>): List<String> {
-  var lines = ["## {heading}", ""]
-  lines.appendAll demoted(page, carried)
-  lines.append ""
-  lines.append "Source: `reference/{page.path}`"
-  lines.append ""
-  lines
-}
-
-fn pageWithRole(documentation: Documentation, role: String): Page? {
-  documentation.pages.find({ (_.frontMatter.text("skill") ?? "") == role })
+  PageHomes homes, excluded
 }
 
 /**
- * The body of a page, one heading level deeper, so that its sections sit below the section of the skill they fill. The
- * body is copied verbatim otherwise: a condensed copy would be a second version of the same text, and two versions of
- * one rule is how a documentation starts to contradict itself. Its links are seen from `SKILL.md` instead of from the
- * page, so a link that was relative to the page's folder becomes relative to the skill's root.
+ * How specific a rule is about a page, or `-1` when it does not reach it: a page named on its own beats every folder,
+ * and a folder beats the folders above it. A folder rule never reaches a page of the website or the course, which only
+ * a rule naming the page itself carries.
  */
-fn demoted(page: Page, carried: List<String>): List<String> {
+fn weightOf(rule: String, path: String, isForTheSite: Bool): Int {
+  if !rule.endsWith("/") {
+    return if rule == path { 1000 } else { -1 }
+  }
+  if isForTheSite || !path.startsWith(rule) {
+    return -1
+  }
+  var depth = 0
+  for character in rule.chars() {
+    if character == '/' {
+      depth = depth + 1
+    }
+  }
+  depth
+}
+
+/**
+ * Every folder in the order the indexes show them: a folder, then the folders below it, each level sorted by the
+ * `order` of its index - the way a reader walks the tree.
+ */
+fn orderedFolders(documentation: Documentation): List<Folder> {
+  var ordered: List<Folder> = []
+  if const Some(root) = documentation.folderAt("") {
+    appendFolderTree documentation, root, ordered
+  }
+  // A folder whose index is missing is reached through no index: it follows, in the order of its path
+  for folder in documentation.folders {
+    if !ordered.any({ _.path == folder.path }) {
+      ordered.append folder
+    }
+  }
+  ordered
+}
+
+fn appendFolderTree(documentation: Documentation, folder: Folder, var ordered: List<Folder>) {
+  ordered.append folder
+  for index in sortedChildren(documentation, folder) {
+    if const Some(child) = documentation.folderAt(index.folder) {
+      appendFolderTree documentation, child, ordered
+    }
+  }
+}
+
+/** The pages one skill carries, folder by folder in the order of the documentation, each folder's index first. */
+fn pagesOf(documentation: Documentation, homes: Map<String, String>, skill: String): List<Page> {
+  var pages: List<Page> = []
+  for folder in orderedFolders(documentation) {
+    if const Some(index) = folder.index {
+      if (homes.get(index.path) ?? "") == skill {
+        pages.append index
+      }
+    }
+    for page in sortedByOrder(folder.pages) {
+      if (homes.get(page.path) ?? "") == skill {
+        pages.append page
+      }
+    }
+  }
+  pages
+}
+
+/** The text of one `SKILL.md`: the front matter as the template has it, and the body with every directive expanded. */
+fn bodyOf(
+  documentation: Documentation,
+  template: SkillTemplate,
+  templates: List<SkillTemplate>,
+  homes: Map<String, String>,
+  pages: List<Page>,
+  var problems: List<DocumentationProblem>,
+): String {
+  const shown = sourceOf documentation, "{template.name}/SKILL.md"
+  const context = LinkContext template.name, homes, "references/"
+  var lines: List<String> = []
+  var openFence = 0
+  var openIndent = 0
+  var number = template.bodyLine - 1
+  for line in template.body {
+    number = number + 1
+    const fence = fenceAfter line, openFence, openIndent
+    if fence != openFence {
+      if openFence == 0 {
+        openIndent = indentOf line
+      }
+      openFence = fence
+      lines.append line
+      continue
+    }
+    const directive: Directive? = if openFence > 0 { None } else { directiveOf line }
+    match directive {
+      Some(found) => {
+        match found.name {
+          "inline" => {
+            const path = found.arguments.get(0) ?? ""
+            match documentation.pageAt(path) {
+              Some(page) => lines.appendAll inlined(page, context)
+              None => problems.append DocumentationProblem(shown, number, "`inline: {path}` names no page")
+            }
+          }
+          "pages" => lines.appendAll pageList(pages)
+          "sections" => lines.appendAll sectionList(pages)
+          "skills" => lines.appendAll skillList(templates, template.name)
+          _ => {}
+        }
+      }
+      None => lines.append line
+    }
+  }
+  var text = template.frontMatter
+  text.append ""
+  text.appendAll withoutRepeatedBlankLines(trimmedBlankLines(lines))
+  text.joined(separator: "\n") + "\n"
+}
+
+/** The body of a page, one heading level deeper and without its comments, its links seen from `SKILL.md`. */
+fn inlined(page: Page, context: LinkContext): List<String> {
   var lines: List<String> = []
   var openFence = 0
   var openIndent = 0
@@ -210,20 +572,77 @@ fn demoted(page: Page, carried: List<String>): List<String> {
       lines.append line
       continue
     }
+    // A comment of a page is for its authors - the markers of a generated index, a note - and not for an agent
+    if line.trim().startsWith("<!--") && line.trim().endsWith("-->") {
+      continue
+    }
     if line.startsWith("#") {
       lines.append "#{line}"
       continue
     }
-    lines.append withRewrittenLinks(line, page.folder, carried, "reference/")
+    lines.append withRewrittenLinks(line, page.folder, context)
   }
   trimmedBlankLines lines
 }
 
+/** `<!-- pages -->`: every page of the skill with its summary. */
+fn pageList(pages: List<Page>): List<String> {
+  var lines: List<String> = []
+  for page in pages {
+    lines.append "- [{titleOf(page)}](references/{page.path}){statusOf(page)} - {summaryOf(page)}"
+  }
+  lines
+}
+
+/** `<!-- sections -->`: every folder index the skill carries, with its summary. */
+fn sectionList(pages: List<Page>): List<String> {
+  var lines: List<String> = []
+  for page in pages {
+    if page.indexesFolder {
+      lines.append "- [{titleOf(page)}](references/{page.path}) - {summaryOf(page)}"
+    }
+  }
+  lines
+}
+
+/** `<!-- skills -->`: every other skill of the set, with the first sentence of its description. */
+fn skillList(templates: List<SkillTemplate>, own: String): List<String> {
+  var lines: List<String> = []
+  for template in templates {
+    if template.name != own {
+      lines.append "- `{template.name}` - {firstSentenceOf(template.description)}"
+    }
+  }
+  lines
+}
+
+/** A description up to the end of its first sentence. */
+fn firstSentenceOf(text: String): String {
+  match text.splitOnce(". ") {
+    Some(parts) => "{parts.before}."
+    None => text
+  }
+}
+
+fn titleOf(page: Page): String {
+  page.frontMatter.text("title") ?? page.path
+}
+
+fn summaryOf(page: Page): String {
+  page.frontMatter.text("summary") ?? ""
+}
+
+/** ` (planned)` or ` (draft)` behind the title of a page that is not stable, nothing behind one that is. */
+fn statusOf(page: Page): String {
+  const status = page.frontMatter.text("status") ?? "stable"
+  if status == "stable" { "" } else { " ({status})" }
+}
+
 /**
- * A copied page, whose links to what the skill carries stay as they are - the tree below `reference/` is the tree of
- * the documentation, so a relative link still resolves - and whose links to anything else become their plain text.
+ * A copied page, whose links to pages of the same skill stay as they are - the tree below `references/` is the tree of
+ * the documentation, so a relative link still resolves - and whose other links are rewritten by [withRewrittenLinks].
  */
-fn carriedText(page: Page, carried: List<String>): String {
+fn carriedText(page: Page, context: LinkContext): String {
   var lines: List<String> = []
   var openFence = 0
   var openIndent = 0
@@ -241,7 +660,7 @@ fn carriedText(page: Page, carried: List<String>): String {
       lines.append line
       continue
     }
-    lines.append withRewrittenLinks(line, page.folder, carried, "")
+    lines.append withRewrittenLinks(line, page.folder, context)
   }
   var text = lines.joined separator: "\n"
   if page.text.endsWith("\n") {
@@ -251,11 +670,11 @@ fn carriedText(page: Page, carried: List<String>): String {
 }
 
 /**
- * Every link of one line, seen from a file of the skill: a link to a page the skill carries is written relative to
- * `prefix` (`reference/` from `SKILL.md`, nothing from a copied page, whose folder is the page's own), and a link to
+ * Every link of one line, seen from a file of a skill: a link to a page of the same skill is written relative to the
+ * prefix of the context, a link to a page of another skill becomes its text and where that skill has it, and a link to
  * anything else keeps only its text. What stands between backticks is code and is left alone.
  */
-fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefix: String): String {
+fn withRewrittenLinks(line: String, folder: String, context: LinkContext): String {
   var rewritten = ""
   var rest = line
   var isInsideCode = false
@@ -282,18 +701,21 @@ fn withRewrittenLinks(line: String, folder: String, carried: List<String>, prefi
     isInsideCode = hasOddBackticks head, isInsideCode
     const target = rest.sliceBytes(opening + 2, end)
     const labelStart = labelStartOf head
-    const kept = keptTarget target, folder, carried, prefix
     if wasInsideCode || isInsideCode || labelStart.isNone() {
       rewritten = rewritten + head + "](" + target + ")"
     } else {
-      match kept {
-        Some(written) => {
+      const start = labelStart.expect "checked above"
+      const before = head.sliceBytes 0, start
+      const label = head.sliceBytes(start + 1, head.byteLength())
+      match rewrittenTarget(target, folder, context) {
+        .Kept(written) => {
           rewritten = rewritten + head + "](" + written + ")"
         }
-        None => {
-          // A target the skill does not carry: the text of the link stays, the brackets and the target go
-          const start = labelStart.expect "checked above"
-          rewritten = rewritten + head.sliceBytes(0, start) + head.sliceBytes(start + 1, head.byteLength())
+        .Elsewhere(skill, path) => {
+          rewritten = rewritten + before + label + " (skill `{skill}`: `references/{path}`)"
+        }
+        .Dropped => {
+          rewritten = rewritten + before + label
         }
       }
     }
@@ -329,14 +751,11 @@ fn hasOddBackticks(text: String, before: Bool): Bool {
   isInside
 }
 
-/**
- * The target a link keeps in a file of the skill, or `None` when it points at something the skill does not carry. An
- * external link and an anchor of the same page are kept as they are.
- */
-fn keptTarget(target: String, folder: String, carried: List<String>, prefix: String): String? {
+/** What one link target becomes in a file of the skill of the context. */
+fn rewrittenTarget(target: String, folder: String, context: LinkContext): Rewritten {
   const isExternal = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("mailto:")
   if isExternal || target.isEmpty() || target.startsWith("#") {
-    return target
+    return Rewritten.Kept target
   }
   const parts = target.splitOnce "#"
   const path = parts?.before ?? target
@@ -345,13 +764,18 @@ fn keptTarget(target: String, folder: String, carried: List<String>, prefix: Str
     None => ""
   }
   const resolved = normalizePath joinDocumentationPath(folder, path)
-  if !carried.contains(resolved) {
-    return None
+  match context.homes.get(resolved) {
+    Some(skill) => {
+      if skill != context.skill {
+        return Rewritten.Elsewhere skill, resolved
+      }
+      if context.prefix.isEmpty() {
+        return Rewritten.Kept target
+      }
+      Rewritten.Kept "{context.prefix}{resolved}{anchor}"
+    }
+    None => Rewritten.Dropped
   }
-  if prefix.isEmpty() {
-    return target
-  }
-  "{prefix}{resolved}{anchor}"
 }
 
 /**
@@ -400,18 +824,48 @@ fn trimmedBlankLines(lines: List<String>): List<String> {
   kept
 }
 
+/** The lines with every run of blank lines outside a fence cut to one: a directive that wrote nothing leaves none. */
+fn withoutRepeatedBlankLines(lines: List<String>): List<String> {
+  var kept: List<String> = []
+  var openFence = 0
+  var openIndent = 0
+  var wasBlank = false
+  for line in lines {
+    const fence = fenceAfter line, openFence, openIndent
+    if fence != openFence {
+      if openFence == 0 {
+        openIndent = indentOf line
+      }
+      openFence = fence
+      kept.append line
+      wasBlank = false
+      continue
+    }
+    const isBlank = openFence == 0 && line.trim().isEmpty()
+    if isBlank && wasBlank {
+      continue
+    }
+    kept.append line
+    wasBlank = isBlank
+  }
+  kept
+}
+
 /**
- * Every link of every file of the skill that does not resolve to another file of it. The rewriting above is meant to
- * leave none, and this is what makes that a promise: a link that leads nowhere is the one thing an agent cannot recover
- * from, so the build fails instead of writing it.
+ * Every link of every Markdown file of one skill that does not resolve to another file of it. The rewriting above is
+ * meant to leave none, and this is what makes that a promise: a link that leads nowhere is the one thing an agent cannot
+ * recover from, so the build fails instead of writing it.
  */
-fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
+fn danglingLinks(skill: String, files: List<SkillFile>): List<DocumentationProblem> {
   var paths: List<String> = []
   for file in files {
     paths.append file.path
   }
   var problems: List<DocumentationProblem> = []
   for file in files {
+    if !file.path.endsWith(".md") {
+      continue
+    }
     const folder = folderOf file.path
     var openFence = 0
     var openIndent = 0
@@ -438,7 +892,7 @@ fn danglingLinks(files: List<SkillFile>): List<DocumentationProblem> {
         const resolved = normalizePath joinDocumentationPath(folder, path)
         if !paths.contains(resolved) {
           const note = "The link `{target}` leads to no file of the skill"
-          problems.append DocumentationProblem("{skillName}/{file.path}", number, note)
+          problems.append DocumentationProblem("{skill}/{file.path}", number, note)
         }
       }
     }
@@ -475,91 +929,55 @@ fn linkTargetsOf(line: String): List<String> {
   targets
 }
 
-/** How to find the rest: the section indexes, a search, and the one map of every page. */
-fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
-  var lines: List<String> = ["## Where to look things up", ""]
-  lines.append "Every section has an index that lists its pages with one sentence each. Open the index of the section a"
-  lines.append "question belongs to, then the one page that answers it:"
-  lines.append ""
-  lines.append "| Section | What is in it |"
-  lines.append "|---------|---------------|"
-  for folder in documentation.folders {
-    if folder.path.isEmpty() || folder.path.contains("/") {
-      continue
-    }
-    match folder.index {
-      Some(index) => {
-        // A folder whose index is not part of the skill has no file to point at
-        if pages.any({ _.path == index.path }) {
-          const summary = index.frontMatter.text("summary") ?? ""
-          lines.append "| `reference/{folder.path}/index.md` | {summary} |"
-        }
-      }
-      None => {}
-    }
-  }
-  lines.append ""
-  lines.append "To find a construct or a name directly, search: `grep -ril \"<word>\" reference/` names the pages, and"
-  lines.append "`reference/index.md` has every page's path and summary on one line each - search it, it is long:"
-  lines.append "`grep -i \"<word>\" reference/index.md`."
-  lines.append ""
-  lines.append "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
-  lines.append "question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked"
-  lines.append "`status: planned` describes a designed feature that does not compile yet, and its first line says so."
-  lines.append ""
-  lines.append "There are {pages.length()} pages."
-  lines
-}
-
 /**
- * One file with every page: its path, its title and its summary, grouped by folder. This is the level between the body
- * of the skill and a page - an index of summaries costs a fraction of the pages it describes, and a search over it
- * costs a fraction of the index.
+ * One file with every page of a skill: its path, its title and its summary, grouped by folder. It is the level between
+ * the body of the skill and a page - an index of summaries costs a fraction of the pages it describes, and a search over
+ * it costs a fraction of the index.
  */
-fn referenceIndex(documentation: Documentation, pages: List<Page>): String {
-  var lines: List<String> = ["# The TorbScript documentation", ""]
-  lines.append "Every page of the reference, with what it answers. Search this file for a word, then open the one page"
-  lines.append "that answers the question. A page marked (planned) describes a feature that does not compile yet."
+fn referenceIndex(documentation: Documentation, skill: String, pages: List<Page>): String {
+  var lines: List<String> = ["# The pages of {skill}", ""]
+  lines.append "Every page of this skill, with what it answers. Search this file for a word, then open the one page that"
+  lines.append "answers the question. A page marked planned describes a feature that does not compile yet."
   lines.append ""
   lines.append "## Contents"
   lines.append ""
-  for folder in documentation.folders {
-    if carried(pages, folder.path).isEmpty() {
-      continue
+  const folders = orderedFolders documentation
+  for folder in folders {
+    if pages.any({ _.folder == folder.path }) {
+      lines.append "- {shownFolder(folder.path)}"
     }
-    const shown = if folder.path.isEmpty() { "the root" } else { folder.path }
-    lines.append "- {shown}"
   }
   lines.append ""
-  for folder in documentation.folders {
-    const own = carried pages, folder.path
+  for folder in folders {
+    const own = pages.filter({ _.folder == folder.path }).toList()
     if own.isEmpty() {
       continue
     }
-    const heading = if folder.path.isEmpty() { "The root" } else { folder.path }
-    lines.append "## {heading}"
+    lines.append "## {shownFolder(folder.path)}"
     lines.append ""
     for page in own {
-      const title = page.frontMatter.text("title") ?? ""
-      const summary = page.frontMatter.text("summary") ?? ""
       const kind = page.frontMatter.text("kind") ?? ""
       const status = page.frontMatter.text("status") ?? "stable"
       const marked = if status == "stable" { kind } else { "{kind}, {status}" }
-      lines.append "- `{page.path}` - **{title}** ({marked}): {summary}"
+      lines.append "- `{page.path}` - **{titleOf(page)}** ({marked}): {summaryOf(page)}"
     }
     lines.append ""
   }
   lines.joined separator: "\n"
 }
 
-/** The pages of one folder that the skill carries, without the root index, which `reference/index.md` replaces. */
-fn carried(pages: List<Page>, folder: String): List<Page> {
-  pages.filter({ _.folder == folder && _.path != "index.md" }).toList()
+/** A folder as the reference index names it: the root has no path of its own. */
+fn shownFolder(path: String): String {
+  if path.isEmpty() { "the root" } else { path }
 }
 
-/** Writes the skill. Every directory is created before the file that goes into it. */
-public fn writeSkill(out: String, skill: BuiltSkill): Result<Void, IoError> {
-  for file in skill.files {
+/**
+ * Writes the skills, every directory before the file that goes into it, and removes every file below the directory of
+ * one of them that no template writes any more - a page that moved to another skill, a script that was renamed. Nothing
+ * outside those directories is touched. Returns the paths it removed.
+ */
+public fn writeSkills(out: String, skills: BuiltSkills): Result<List<String>, IoError> {
+  for file in skills.files {
     const path = "{out}/{file.path}"
     const directory = folderOf path
     if !directory.isEmpty() {
@@ -567,18 +985,32 @@ public fn writeSkill(out: String, skill: BuiltSkill): Result<Void, IoError> {
     }
     File.writeText(path, file.text)?
   }
-  Ok(void)
+  var generated: List<String> = []
+  for file in skills.files {
+    generated.append file.path
+  }
+  var removed: List<String> = []
+  for skill in skills.skills {
+    for path in filesBelow(out, skill.name)? {
+      if !generated.contains(path) {
+        File.remove("{out}/{path}")?
+        removed.append path
+      }
+    }
+  }
+  removed
 }
 
 /**
- * Every file under `out` that is not what [writeSkill] would write there, relative to `out` and sorted: one that is
- * missing, one whose text differs, and one that no page produces any more. Empty when the committed skill is current.
- * A line ending is not a difference, because git may check the files out with either one.
+ * Every file under `out` that is not what [writeSkills] would write there, relative to `out` and sorted: one that is
+ * missing, one whose text differs, and one that no template writes. Empty when the committed skills are current. A line
+ * ending is not a difference, because git may check the files out with either one. A hidden entry directly below `out`
+ * belongs to somebody else - the manifest of a plugin, say - and is left alone.
  */
-public fn staleSkillFiles(out: String, skill: BuiltSkill): Result<List<String>, IoError> {
+public fn staleSkillFiles(out: String, skills: BuiltSkills): Result<List<String>, IoError> {
   var stale: List<String> = []
   var generated: List<String> = []
-  for file in skill.files {
+  for file in skills.files {
     generated.append file.path
     const path = "{out}/{file.path}"
     if !File.exists(path) {
@@ -591,9 +1023,15 @@ public fn staleSkillFiles(out: String, skill: BuiltSkill): Result<List<String>, 
     }
   }
   if File.isDirectory(out) {
-    for path in filesBelow(out, "")? {
-      if !generated.contains(path) {
-        stale.append "{path} (no page writes it)"
+    for entry in File.list(out)? {
+      if entry.startsWith(".") {
+        continue
+      }
+      const paths = if File.isDirectory("{out}/{entry}") { filesBelow(out, entry)? } else { [entry] }
+      for path in paths {
+        if !generated.contains(path) {
+          stale.append "{path} (no template writes it)"
+        }
       }
     }
   }
@@ -601,12 +1039,15 @@ public fn staleSkillFiles(out: String, skill: BuiltSkill): Result<List<String>, 
   stale
 }
 
-/** Every file below `out`, as a path relative to it. */
+/** Every file below `out/relative`, as a path relative to `out`. Nothing when there is no such directory. */
 fn filesBelow(out: String, relative: String): Result<List<String>, IoError> {
-  const directory = if relative.isEmpty() { out } else { "{out}/{relative}" }
+  const directory = "{out}/{relative}"
+  if !File.isDirectory(directory) {
+    return Ok([])
+  }
   var found: List<String> = []
   for entry in File.list(directory)? {
-    const child = if relative.isEmpty() { entry } else { "{relative}/{entry}" }
+    const child = "{relative}/{entry}"
     if File.isDirectory("{out}/{child}") {
       found.appendAll(filesBelow(out, child)?)
     } else {
@@ -614,10 +1055,4 @@ fn filesBelow(out: String, relative: String): Result<List<String>, IoError> {
     }
   }
   found
-}
-
-/** The name of the file the skill is installed as, for the message the command prints. */
-public fn installationHint(out: String): String {
-  const name = fileName out
-  "Copy `{out}` to `~/.claude/skills/{name}` for yourself, or to `.claude/skills/{name}` of a project to share it"
 }

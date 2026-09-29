@@ -4,7 +4,6 @@ summary: "The mental model of TorbScript in one screen: values, bindings, no nul
 kind: guide
 status: stable
 order: 0
-skill: model
 keywords:
   - overview
   - mental model

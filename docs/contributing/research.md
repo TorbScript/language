@@ -128,9 +128,10 @@ The guidance that shaped the generated skill, quoted where the wording carries t
 - No time-sensitive statements; superseded material goes into a collapsed section.
 - Evaluations before prose: three tasks that fail without the skill, then the smallest text that passes them.
 
-*Rules derived:* [the skill](the-skill.md) is generated, its body sections are the bodies of pages that carry a `skill`
-role in their front matter (so the skill cannot drift from the documentation), `torb docs skill` fails when the body
-passes 500 lines, and a page with `status: planned` is left out of the skill entirely.
+*Rules derived:* [the skills](the-skill.md) are generated from templates whose bodies inline and carry pages of this
+documentation (so a skill cannot drift from it), one entry skill holds what every task needs and one skill per area
+what only some tasks need, `torb docs skill` fails when a body passes 500 lines, and a page with `status: planned` is
+carried with its banner.
 
 **Context-window economics.**
 [Anthropic on context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
@@ -140,7 +141,7 @@ lightweight identifiers - file paths - and load the content when it is needed, w
 discover relevant context through exploration".
 
 *Rules derived:* rules 6 and 7. A path is the index, a `summary` is the decision, and a page is the payload. The
-generated `reference/index.md` of the skill is one file that holds every path with its summary.
+generated `references/index.md` of each skill is one file that holds every path with its summary.
 
 **Retrieval-friendly writing.** [kapa.ai's guidance](https://docs.kapa.ai/improving/writing-best-practices) is the
 clearest statement of the mechanism: retrieval works on chunks, so a chunk that depends on a neighbour loses the

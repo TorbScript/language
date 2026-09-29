@@ -65,7 +65,7 @@ src/
 │ ├ snippets.trb        Every fenced code block, verified with the compiler's own front end
 │ ├ canon.trb           The part of the formatter canon a documentation snippet is checked against
 │ ├ native.trb          What the native back end says about the blocks of the documentation
-│ ├ skill.trb           `torb docs skill`: the documentation as an Agent Skill
+│ ├ skill.trb           `torb docs skill`: the documentation as the Agent Skills of skills/
 │ ├ bundle.trb          `torb docs bundle`: llms.txt and llms-full.txt
 │ ├ source.trb          `torb docs source`: the gate of the documentation that lives in the code
 │ ├ comments.trb        The comments of a .trb file, read the way that gate judges them

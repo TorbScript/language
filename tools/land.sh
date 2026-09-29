@@ -80,7 +80,7 @@ binary_in() {
 
 is_generated() {
   case "$1" in
-    runtime/machine_natives.c | runtime/include/torb_natives.h | .claude/skills/*) return 0 ;;
+    runtime/machine_natives.c | runtime/include/torb_natives.h | skills/torbscript*) return 0 ;;
     docs/*/index.md | docs/index.md) return 0 ;;
   esac
   return 1
@@ -167,7 +167,7 @@ case "$command" in
       torb=$(binary_in "$landing")
     fi
     "$torb" docs index docs >/dev/null
-    "$torb" docs skill docs .claude/skills/torbscript >/dev/null
+    "$torb" docs skill docs skills >/dev/null
     "$torb" format . >/dev/null
     if [ -n "$(git status --porcelain)" ]; then
       git add -A

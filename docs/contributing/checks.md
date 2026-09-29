@@ -30,7 +30,8 @@ torb docs check [root]                     Check the documentation (default root
     --no-native                            Do not build the snippets: for a machine without a C compiler
 torb docs index [root]                     Write the generated part of every index.md
     --check                                Report instead of writing, for the gate
-torb docs skill <root> <out>               Write the Agent Skill of the language (fails on a dangling link)
+torb docs skill <root> <out>               Write the Agent Skills of <root>/skills/ below <out> (fails on a dangling link)
+    --check                                Report the stale files instead of writing, for the gate
 torb docs bundle <root> <out>              Write llms.txt and llms-full.txt
 torb docs site <root> --output <dir>       Write the website: the front page, every page, the search
     --version <v>                          The version the documentation is of (default: latest)
@@ -71,7 +72,7 @@ instead of about these pages, it has rules of its own, and it is not a gate yet 
   `package` page has a `source`.
 - A `title` is at most 60 characters and has no full stop. A `summary` is 40 to 240 characters, ends a sentence, and
   does not contain `this page`.
-- `documents` only on an index, `prerequisites` only on a guide, and each of the four skill roles on at most one page.
+- `documents` only on an index, `prerequisites` only on a guide, and `skill` only as `skill: omit`.
 
 ### The body
 
@@ -247,4 +248,4 @@ These are the reviewer's, and they are the ones that matter:
 - [The front matter](front-matter.md) - the nine fields and the YAML subset.
 - [How to write here](writing.md) - the rules the reviewer checks.
 - [Add a page](adding-a-page.md) - the steps and the templates.
-- [The skill](the-skill.md) - what `docs skill` produces.
+- [The Agent Skills](the-skill.md) - what `docs skill` produces.
