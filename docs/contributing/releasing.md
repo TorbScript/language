@@ -28,6 +28,8 @@ keywords:
   - push mirror
   - VS Code Marketplace
   - Open VSX
+  - edge
+  - Flux
 source:
   - docs/design/RELEASE.md#3-versions-and-the-stability-promise
   - docs/design/RELEASE.md#13-the-release-pipeline-as-built
@@ -429,7 +431,8 @@ runs on the machine - beside the forge's own stack or in it. Nothing is built on
 4. **Start**: `docker compose pull && docker compose up -d`; the images of cr.torb.dev are public, no `docker login`.
    **An update** is the same command; `TORB_VERSION` pins a version, `latest` follows stable releases, `preview`
    the release candidates, `nightly` the nightlies. While there is no stable release, `latest` does not exist yet:
-   `preview` or `nightly` until 2026-10-06. `docker compose logs <service>` says what each one does.
+   `preview` or `nightly` until 2026-10-06. `docker compose logs <service>` says what each one does. The site alone
+   has `edge` as well, the site of `main` within minutes of a push ("The site of main" below).
 5. **The webhook**: on the forge, `torbscript/language` -> Settings -> Webhooks -> Add webhook -> Forgejo: Target URL
    `https://torb.dev/webhook`, HTTP method `POST`, POST content type `application/json`, Secret the value of
    `RELEASE_SYNC_WEBHOOK_SECRET`, Trigger on: Custom events -> Releases, Active. The forge refuses to deliver to a
@@ -474,6 +477,79 @@ Verifying an image by hand:
 ```console
 $ cosign verify --key https://git.torb.dev/torbscript/language/raw/branch/main/tools/deploy/cosign.pub \
     --insecure-ignore-tlog=true cr.torb.dev/torbscript/registry:0.2.0
+```
+
+## The site of main
+
+Every push to `main` that changes what the site is built from - `docs/`, `brand/`, `playground/` with its editor,
+`std/` (the reference), the generators in `compiler/src/documentation/`, `compiler/src/reference/` and
+`compiler/src/highlight/`, the installers, `tools/deploy/Dockerfile.site`, `nginx.conf`, `cosign.pub` or
+`images.yml` itself - builds `cr.torb.dev/torbscript/site` from that commit and pushes it, signed like every image,
+without waiting for a nightly ([RELEASE.md section 7.11](../design/RELEASE.md#the-site-of-main-as-built-2026-09-29)).
+It is the job `edge` of `images.yml`, and it runs no gate: `main` moves only through landings whose gates were green,
+and `ci` runs them again beside it.
+
+| Tag | Moves | What it is |
+|---|---|---|
+| `edge` | with every such push | the newest site of `main` |
+| `main-<commit>-<time>` | never | the site of one commit: its first eight hexadecimal digits and its committer time in seconds, e.g. `main-3b6b8355-1790707145` - later commits of `main` sort higher |
+
+Neither touches `latest`, `nightly` or `preview`. The documentation in it is `/docs/main/`, and `/docs/latest/` leads
+there. A push that changes only the rest of the compiler builds nothing: the playground of `edge` stays as it was until
+the next push that does, or until **Actions -> images -> Run workflow** on `main` with the channel `edge`, which builds
+the head of `main` as well. From a push to a pushed image takes one and a half to two minutes when only the site's
+own files changed, five to eight when `std/` or a generator did (the compiler comes from the seed that the landing
+published, and the playground is compiled again), and up to a quarter of an hour when there was no such seed - a
+push that did not go through `tools/land.sh publish`. A newer push cancels the run it supersedes.
+
+**Following it with Flux** (the cluster and its repository are the owner's): the image automation of Flux selects the
+newest `main-*` tag by the number at its end, and the setter writes it into the manifest that runs the site.
+
+```yaml
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImageRepository
+metadata:
+  name: torb-site
+  namespace: flux-system
+spec:
+  image: cr.torb.dev/torbscript/site
+  interval: 1m
+---
+apiVersion: image.toolkit.fluxcd.io/v1
+kind: ImagePolicy
+metadata:
+  name: torb-site
+  namespace: flux-system
+spec:
+  imageRepositoryRef:
+    name: torb-site
+  filterTags:
+    pattern: '^main-[0-9a-f]{8}-(?P<time>[0-9]+)$'
+    extract: '$time'
+  policy:
+    numerical:
+      order: asc
+```
+
+The manifest that runs the site marks its image for the setter, and an `ImageUpdateAutomation` with
+`strategy: Setters` commits each newer tag into it:
+
+```yaml
+      containers:
+        - name: site
+          image: cr.torb.dev/torbscript/site:main-3b6b8355-1790707145 # {"$imagepolicy": "flux-system:torb-site"}
+```
+
+The images are public, so the `ImageRepository` needs no secret. Rolling back is pinning an older `main-*` tag.
+Following `edge` instead works too - an `ImagePolicy` whose `filterTags.pattern` is `'^edge$'`, with
+`digestReflectionPolicy: Always` and an `interval`, and the setter writes `edge@sha256:...` - but the tag alone then
+never says which commit runs. Every such push adds a `main-*` tag to cr.torb.dev; a cleanup rule of the owner's
+container packages (`torbscript` -> Settings -> Packages) that removes the versions matching `main-.*` beyond the
+newest few keeps them from piling up. Verifying one:
+
+```console
+$ cosign verify --key https://git.torb.dev/torbscript/language/raw/branch/main/tools/deploy/cosign.pub \
+    --insecure-ignore-tlog=true cr.torb.dev/torbscript/site:edge
 ```
 
 ## Related

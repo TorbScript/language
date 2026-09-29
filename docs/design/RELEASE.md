@@ -1131,8 +1131,10 @@ existing Traefik (TLS, Let's Encrypt; its network, entrypoint and resolver named
 
 **The images** are built by `.forgejo/workflows/images.yml`, which `release.yml` calls once a release is published
 (tags `<version>` and `latest`) and `nightly.yml` once a nightly is (tags `nightly-YYYYMMDD` and `nightly`), and which
-runs by hand for a published release: three images, pushed to `cr.torb.dev/torbscript/` with the token of the
-Authorized Integration `torbscript-images` as the password of `docker login` (section 14), with the OCI labels
+runs by hand for a published release - and, since 2026-09-29, on every push to `main` that changes the site, for the
+site alone (tags `edge` and `main-<commit>-<time>`, "The site of main, as built" below): three images, pushed to
+`cr.torb.dev/torbscript/` with the token of the Authorized Integration `torbscript-images` as the password of
+`docker login` (section 14), with the OCI labels
 `source`, `revision`, `version`, `licenses` (MIT) and `url`, and signed with `cosign sign --key`, the project's key
 (section 13, "Signing"). They are `linux/amd64`; `linux/arm64` joins once a release carries a linux-arm64 toolchain -
 the build stage runs the toolchain of the image's own architecture - and QEMU registers in the runner's Docker, which
@@ -1205,6 +1207,73 @@ worker, search, verified domains, "elsewhere" owners, the similarity rule agains
 
 **What the owner sets up once** is `docs/contributing/releasing.md`, "The root server": DNS, the `.env` and
 `cosign.pub`, the forge's webhook, the first account, trusted publishers, the index mirror and the backup storage.
+
+### The site of main, as built (2026-09-29)
+
+**Decided by the owner (2026-09-29): a change to the website reaches torb.dev fast, from `main`, without a nightly.**
+Until then a change to `docs/`, the playground or its editor was on the server only after a nightly (every gate of
+every target, 15 to 30 minutes on the forge's one runner and up to an hour), a run of `images.yml` by hand, and a
+pull request to the infrastructure that pinned the new digests. The root server moves to k3s with Flux, which follows a
+tag of a registry by itself; what the repository owes it is an image of the site that follows `main`. Built on the
+same day: every push to `main` that changes what the site is built from builds `cr.torb.dev/torbscript/site` from
+that commit and pushes it as
+
+| Tag | Moves | |
+|---|---|---|
+| `edge` | with every such push | the newest site of `main` |
+| `main-<commit>-<time>` | never | the first eight hexadecimal digits of the commit and its committer time in seconds, `main-3b6b8355-1790707145` |
+
+never as `latest`, `nightly` or `preview`, signed with the project's key over the digest both tags name, and with the
+labels of the other images (`source`, `revision`, `version` - the `main-...` tag -, `licenses`, `url`).
+
+| Question | Decision | Why |
+|---|---|---|
+| Where it lives | a `push` trigger on `main` in `.forgejo/workflows/images.yml` and its job `edge`, no new workflow | the Authorized Integration `torbscript-images` admits the workflow files `{release,nightly,images}.yml`, the refs `main` and `v*` and the events push, schedule and workflow_dispatch (section 14): a run of `images.yml` on a push to `main` asks for its token with the claims `images.yml`, `refs/heads/main` and `push`, all of which the rules name, while a new file would need the owner to change the integration first |
+| Which pushes | those that touch `docs/`, `brand/`, `playground/` (with its editor), `std/` (the reference), `compiler/src/documentation/`, `compiler/src/reference/` and `compiler/src/highlight/` (the generators and the colouring of code), `tools/install.sh`, `tools/install.ps1`, `tools/deploy/Dockerfile.site`, `nginx.conf`, `cosign.pub` and `images.yml`; the forge compares the whole push, not only its last commit | what `torb docs site`, `torb doc std` and `playground/build.sh` read and `Dockerfile.site` copies in. `editors/` is not among them: the site shows no file of it. A push that changes only the rest of the compiler builds nothing - most pushes do, and each would hold the runner for minutes; the playground of `edge` stays as new as the last site push until the next one or a run by hand (Actions -> images -> Run workflow, channel `edge`, on `main`), and the nightly's images carry every change as before |
+| One job | from the checkout to the signed image in one job, `edge` | the forge hands the runner the job that became ready first; a second job of this run would become ready minutes after the push, behind the jobs of `ci.yml` that became ready meanwhile - tier A and tier B take ten minutes and more each |
+| The compiler | the cache entry of the bootstrap for these sources, which `ci.yml` writes on every push to `main`; else the published seed of this very commit (`seed-of-commit` of `.forgejo/actions/bootstrap`); else a bootstrap from the newest seed, which writes that entry for `ci.yml` in turn | a push that leaves `compiler/src`, `std/` and `runtime/` alone finds the entry in seconds. `tools/land.sh publish` publishes the seed of the commit it pushes before it pushes it, and that seed's `program.c` is the C of the landing's fixpoint: compiled, it is the compiler of the commit - three minutes, where the two steps of a bootstrap would add two and a half more to build the same compiler twice. The seed's binary is never saved as the bootstrap's entry, which holds only what a bootstrap proved |
+| `ci.yml`'s artifact of the same commit | not read | Forgejo's `download-artifact` reads the artifacts of its own run; waiting for another run's job would hold one of the runner's two slots idle, and the shared cache gives the same reuse without either |
+| The build | `Dockerfile.site`'s stages, fed a context of a release's shape that the job makes: `torb-main-source.tar.gz` (`git archive`), `torb-main-linux-x64.tar.gz` (`tools/package.sh` around that `torb`) and `VERSION=main` | the site of `main` is built by exactly the steps a release's is; its documentation is `/docs/main/`, and `/docs/latest/` leads there as in every image |
+| The playground | `torb.js` and `torb.wasm` in the forge's cache, keyed on `compiler/src`, `std/`, `runtime/`, the two `project.trb`, `playground/build.sh` and `Dockerfile.site`: on a hit the context carries them in `playground-compiled/` and `playground/build.sh --compiled` writes only the page's files beside them; on a miss the build stage compiles them, and the target `playground` of `Dockerfile.site` takes them out of the builder's cache for the next run | the compile is the slow part of the image (80 seconds on the runner, two seconds without it), and the same sources give the same wasm. The playground job of `gates.yml` does not fill the cache: it runs in the emscripten image, which has no zstd, and a cache entry written without zstd is a different entry for a reader that has it |
+| emscripten | its image stays in the builder `torb`, which outlives the job on the runner's Docker | as for the other image jobs; nothing of it is downloaded twice |
+| Gates | none but what the build checks - `torb docs site` fails on a broken internal link | `main` moves only through landings that ran both tiers (`tools/land.sh`), and `ci.yml` runs them again for the same push beside this job; a red `ci` on `main` is fixed on `main`, and the next push builds `edge` again |
+| Concurrency | a newer push, and a run by hand of `edge`, cancel the run of `edge` they supersede (the group `images-edge`); every other run of `images.yml` has a group of its own | the forge reads `cancel-in-progress` as a plain boolean and never as an expression, so the group is what keeps a release's and a nightly's images out of it |
+| The immutable tag | `main-<commit>-<time>` rather than `main-<commit>` alone | Flux's `ImagePolicy` picks the newest of several tags by a number it extracts from them (`numerical`), not by when they were pushed, and a commit's digits do not sort. The committer time grows along `main`, which only fast-forwards; a run of an older commit again keeps its older tag, where the time of the build would put the old site above the new one |
+| Platforms | `linux/amd64` | the root server's; an arm64 build stage runs under QEMU and would take the runner for an hour |
+
+**Expected minutes, from the push to the pushed image**, measured from the forge's runs of 2026-09-29: the bootstrap
+takes 4 to 6 minutes alone (compiling the seed 3, the seed building the compiler about 2 with mbedTLS, the compiler
+building itself under 1) and 9 to 13 beside a second one; compiling the playground 80 seconds in the image job and 90
+to 155 in the gates; `torb docs site` and `torb doc std` 24 seconds; checkout, caches, the context, the push and the
+signature about half a minute more.
+
+| The push changes | The job | Push to image |
+|---|---|---|
+| only the site's files (`docs/`, `brand/`, `playground/`, the installers) | both caches hit | 1.5 to 2 |
+| `std/` or a generator, landed by `tools/land.sh publish` | the seed of the commit, the playground compiled | 5 to 6, up to 8 beside `ci.yml`'s bootstrap |
+| `std/` or a generator, pushed without a seed of its own | a bootstrap, the playground compiled | 8, up to 15 beside `ci.yml`'s bootstrap |
+
+The job waits for one of the runner's two slots first: seconds, since `ci.yml`'s first two jobs are short - longer
+only while a nightly or a release holds both. Flux's own interval comes on top.
+
+**Flux** follows the image by itself: an `ImageRepository` of `cr.torb.dev/torbscript/site` (public, no secret) and an
+`ImagePolicy` whose `filterTags` pattern `^main-[0-9a-f]{8}-(?P<time>[0-9]+)$` extracts `$time`, with the policy
+`numerical`, ascending; an `ImageUpdateAutomation` with the setters strategy writes the newer tag into the manifest,
+and rolling back is pinning an older tag. `docs/contributing/releasing.md`, "The site of main", has the resources.
+Following `edge` by its digest (`filterTags` `^edge$`, `digestReflectionPolicy: Always` with an `interval`) works too,
+and says less: the tag never names the commit that runs. Setting up Flux is the owner's.
+
+**Tested (2026-09-29)**: the workflows pass `forgejo-runner validate` (runner 13.2.0). On a local Forgejo 16.0.5, a push
+of the change started `images.yml` with the three image jobs skipped by the server and `edge` waiting; a push that
+touched only `compiler/src/cli` started none; the next push of `docs/` cancelled the waiting run, and a run by hand with
+the channel `edge` cancelled that one, while a run by hand of the channel `nightly` ran beside it with `edge` skipped;
+`images.yml` called from a dispatched workflow on `main` and from the push of a tag expanded into the three image jobs
+and a skipped `edge`. The image was built locally from a context made the way the job makes it, around the published
+seed of `3b6b8355` compiled on Linux: 141 seconds with the playground compiled and 39 with it taken from
+`playground-compiled/`, the target `playground` gave `torb.js` and `torb.wasm` in three seconds from the builder's
+cache, both images held the same 894 files, and the image served `/`, `/play`, `/docs/latest/` (linked to
+`/docs/main/`), the reference and `torb.wasm`. Only the forge shows the rest: the cache entries that `ci.yml` and this
+job share, the token for a push, the builder on the runner, and the minutes above.
 
 ### 7.12 Registries compared
 
@@ -1966,7 +2035,9 @@ creates both in the web interface (`docs/contributing/releasing.md`, "One-time s
 - **Two integrations, not one**: an integration limited to specific repositories may only hold the repository and issue
   permissions, and pushing an image is a package permission.
 - **The workflow file of a reusable workflow's job** is the calling run's: `images.yml` runs inside `release.yml` and
-  `nightly.yml`, which is why those two are in the image integration's rule, and `images.yml` itself for a run by hand.
+  `nightly.yml`, which is why those two are in the image integration's rule, and `images.yml` itself for a run by hand
+  and for its own push trigger - the site of `main` (section 7.11), whose token names `images.yml`, `refs/heads/main`
+  and the event `push`, which the rule admits as it stands.
 - **A reusable workflow says `enable-openid-connect: true` at its top level**, not on its jobs, and the calling job
   says nothing. A calling job without `runs-on` is expanded by the forge into the called workflow's jobs, each a job of
   the calling run; the jobparser (runner 12.13.2, which Forgejo 16.0.5 builds in) re-reads each expanded job from a
