@@ -18,8 +18,9 @@
 # this script writes itself is the one on standard error when every slot is taken.
 #
 # A slot whose holder is gone is taken over: the directory holds the process id of the shell that took it, and a
-# process that no longer exists (`kill -0`) or a slot older than an hour frees it. The shell removes its slot on the way
-# out, on an interrupt as well.
+# process that no longer exists (`kill -0`, or `tasklist` by Windows process id and image name under Git Bash - see
+# `holder_alive` below) or a slot older than an hour frees it. The shell removes its slot on the way out, on an
+# interrupt as well.
 #
 # POSIX sh. Runs in Git Bash on Windows and on Linux/macOS.
 
@@ -55,13 +56,61 @@ release() {
   fi
 }
 
+# On MSYS/Cygwin (Git Bash) a slot also records the Windows process id and image name of the process that holds it
+# (`take_slot` below): `kill -0` of an MSYS process id whose process already exited can fall back to interpreting the
+# number as a raw Windows process id and find a live, unrelated process there, so a dead holder looks alive for up to
+# an hour - which is the bug this works around. `/proc/<pid>/winpid` gives the real Windows process id, and
+# `tasklist` asks Windows about it directly; the image name recorded alongside it rules out a Windows process id
+# that has since been reused by a different program. Elsewhere (Linux, macOS, FreeBSD) there is no such file and
+# `kill -0` is exact, so nothing changes there.
+windows_pid=""
+windows_image=""
+if [ -r "/proc/$$/winpid" ] && command -v tasklist >/dev/null 2>&1; then
+  read -r windows_pid <"/proc/$$/winpid" 2>/dev/null
+  if [ -n "$windows_pid" ]; then
+    seen=$(tasklist //FI "PID eq $windows_pid" //FO CSV //NH 2>/dev/null)
+    case "$seen" in
+      '"'*)
+        rest=${seen#\"}
+        windows_image=${rest%%\"*}
+        ;;
+    esac
+  fi
+  [ -n "$windows_image" ] || windows_pid=""
+fi
+
+# Whether the process recorded for a slot is still the one that holds it. Where the slot also recorded a Windows
+# process id and image name (see above), this asks Windows with `tasklist` instead of `kill -0`, and checks the image
+# name too, so a Windows process id since reused by a different program is not mistaken for the same holder.
+holder_alive() {
+  slot=$1
+  holder=$2
+  if [ -f "$slot/winholder" ]; then
+    wpid=""
+    wimage=""
+    { read -r wpid; read -r wimage; } <"$slot/winholder" 2>/dev/null
+    seen=$(tasklist //FI "PID eq $wpid" //FO CSV //NH 2>/dev/null)
+    case "$seen" in
+      '"'*)
+        rest=${seen#\"}
+        [ "${rest%%\"*}" = "$wimage" ]
+        return $?
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+  kill -0 "$holder" 2>/dev/null
+}
+
 # A slot is free again when the shell that holds it is gone, or when it has been held for longer than any compile takes.
 # A slot without a process id is one whose holder was stopped between `mkdir` and writing it, and it gets a minute.
 is_stale() {
   slot=$1
   if [ -f "$slot/pid" ]; then
     holder=$(cat "$slot/pid" 2>/dev/null)
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    if [ -n "$holder" ] && ! holder_alive "$slot" "$holder"; then
       return 0
     fi
     [ -n "$(find "$slot" -maxdepth 0 -mmin +60 2>/dev/null)" ]
@@ -79,6 +128,9 @@ take_slot() {
     if mkdir "$slot" 2>/dev/null; then
       held=$slot
       printf '%s\n' "$$" >"$slot/pid"
+      if [ -n "$windows_pid" ]; then
+        printf '%s\n%s\n' "$windows_pid" "$windows_image" >"$slot/winholder"
+      fi
       return 0
     fi
     if is_stale "$slot" && rm -rf "$slot" 2>/dev/null; then
