@@ -1406,6 +1406,13 @@ public const siteStylesheet = raw"""
     user-select: none;
   }
 
+  /* The Windows command (installRowHtml's selectOnly): dragging or Ctrl+A anywhere in it selects it whole, the
+     prompt still excluded by .prompt above; a click does the same through the select-button's script. */
+  .install-command-select {
+    cursor: text;
+    user-select: all;
+  }
+
   .install .copy-button {
     position: static;
     opacity: 1;
@@ -2618,6 +2625,26 @@ public const siteScript = raw"""
       button.hidden = false;
       button.addEventListener("click", function () {
         copyText(button.getAttribute("data-copy"), button);
+      });
+    });
+
+    // The Windows install command (site-layout.trb's installRowHtml, selectOnly): no clipboard write, which is what
+    // uBlock Origin's ClickFix protection flags as a possible attack on a page that writes a PowerShell download
+    // cradle to the clipboard by script. A click selects the command's own text instead, for the person to copy
+    // themselves with Ctrl+C.
+    Array.prototype.forEach.call(document.querySelectorAll("[data-select]"), function (button) {
+      button.hidden = false;
+      button.addEventListener("click", function () {
+        var row = button.parentElement;
+        var target = row ? row.querySelector(".install-command") : null;
+        if (!target || !window.getSelection) {
+          return;
+        }
+        var range = document.createRange();
+        range.selectNodeContents(target);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
       });
     });
 

@@ -139,6 +139,9 @@ const backIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor
 
 const copyIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"5.25\" y=\"5.25\" width=\"8.5\" height=\"8.5\" rx=\"1\"/><path d=\"M10.75 5.25V3.25a1 1 0 0 0-1-1h-6.5a1 1 0 0 0-1 1v6.5a1 1 0 0 0 1 1h2\"/></svg>"
 
+/** The Windows install row's button: a click selects the command instead of copying it (see [installRowHtml]). */
+const selectIcon = "<svg viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" aria-hidden=\"true\"><rect x=\"3\" y=\"3\" width=\"10\" height=\"10\" rx=\"1\" stroke-dasharray=\"2.2 2.2\"/></svg>"
+
 /** How a page links to the file `target` of the site: relative to itself, or from the root of the host. */
 fn urlOf(head: PageHead, target: String): String {
   if head.absolute {
@@ -809,8 +812,8 @@ public fn frontPageHtml(
     site.word "install"
   }
   const rows = [
-    installRowHtml(site, site.word("install.posix"), "$", installCommandPosix),
-    installRowHtml(site, site.word("install.windows"), "&gt;", installCommandWindows),
+    installRowHtml(site, site.word("install.posix"), "$", installCommandPosix, selectOnly: false),
+    installRowHtml(site, site.word("install.windows"), "&gt;", installCommandWindows, selectOnly: true),
   ]
   const installUrl = relativeUrl head.page, "{site.language.prefix}{site.installPage}"
   const learn = if site.targets.containsKey(levelIndex(Level.Start)) {
@@ -840,10 +843,20 @@ public fn frontPageHtml(
   pageHtml site, head, Level.Site, main.joined(separator: "\n"), "", withMenu: false
 }
 
-fn installRowHtml(site: SiteContext, platform: String, prompt: String, command: String): String {
-  const code = "<pre class=\"install-command\"><code><span class=\"prompt\">{prompt} </span>{escapedHtml(command)}</code></pre>"
-  const copy = "<button type=\"button\" class=\"copy-button\" data-copy=\"{escapedHtml(command)}\" hidden aria-label=\"{escapedHtml(site.word("copy.command"))}\">{copyIcon}<span>{escapedHtml(site.word("copy"))}</span></button>"
-  "<div class=\"install-row\"><span class=\"install-platform\">{escapedHtml(platform)}</span>{code}{copy}</div>"
+/**
+ * A row of the front page's install band: the platform, the command, and a button beside it. The Windows command
+ * (`selectOnly`) is never written to the clipboard from script - uBlock Origin's ClickFix protection blocks a
+ * page's own clipboard writes of an `irm ... | iex` line, so the button instead selects the command's text and asks
+ * for `Ctrl+C`. The POSIX command has no such pattern to trip that protection and keeps the one-click copy.
+ */
+fn installRowHtml(site: SiteContext, platform: String, prompt: String, command: String, selectOnly: Bool): String {
+  const commandClass = if selectOnly { "install-command install-command-select" } else { "install-command" }
+  const code = "<pre class=\"{commandClass}\"><code><span class=\"prompt\">{prompt} </span>{escapedHtml(command)}</code></pre>"
+  const hint = escapedHtml site.word("select.command")
+  const selectButton = "<button type=\"button\" class=\"copy-button select-button\" data-select hidden aria-label=\"{hint}\" title=\"{hint}\">{selectIcon}<span>{escapedHtml(site.word("select"))}</span></button>"
+  const copyButton = "<button type=\"button\" class=\"copy-button\" data-copy=\"{escapedHtml(command)}\" hidden aria-label=\"{escapedHtml(site.word("copy.command"))}\">{copyIcon}<span>{escapedHtml(site.word("copy"))}</span></button>"
+  const action = if selectOnly { selectButton } else { copyButton }
+  "<div class=\"install-row\"><span class=\"install-platform\">{escapedHtml(platform)}</span>{code}{action}</div>"
 }
 
 /**
