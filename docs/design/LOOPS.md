@@ -1,7 +1,8 @@
 # Loops as Expressions
 
-**Status: proposed** — `for`, `while` and `loop` are statements only today; none of the slices of section 11 has
-started.
+**Status: Deferred by the owner (2026-09-29): loops stay statements; the pipeline and `Source.produce` cover
+collecting.** The owner's answer to section 12 was "I don't want the construct for now", so none of the slices of
+section 11 is built. The record stays as the argument, and as the place to start from if the question comes back.
 
 `if` and `match` are statements and expressions; `for`, `while` and `loop` are statements only. This is the
 specification of what it would mean for the three loops to produce a value as well: what the value is, when the body
@@ -849,6 +850,9 @@ the state-machine transformation with tasks, so building it before 7.3 would bui
 is named because rule 3 leans on it.
 
 ## 12. Open, for the owner
+
+**Answered by the deferral (2026-09-29).** The owner does not want the construct for now, so loops stay statements and
+none of the six questions below needs an answer: they are kept as they were asked, for the day the construct comes back.
 
 Everything technical above is decided and the reason stands next to it. These are the questions where the answer is
 taste or direction.

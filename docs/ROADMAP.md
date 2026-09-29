@@ -216,11 +216,13 @@ supported, and neither is a dialect with its own name.
 
 | Feature | Record |
 |---|---|
-| Loops as expressions | [design/LOOPS.md](design/LOOPS.md) |
 | One principle for where a program may panic | [design/PANICS.md](design/PANICS.md) |
 | The words per kind of collection (`for var` is built) | [design/COLLECTIONS.md](design/COLLECTIONS.md) |
 | A public enum that may grow, the prelude rule | [design/RELEASE.md](design/RELEASE.md) section 2, the 1.0 list |
 | The candidates without a decision: let-else, variadic type parameters, `_` as a type argument, fields on one line, and others | CONCEPT, "Open Questions" |
+
+Loops as expressions ([design/LOOPS.md](design/LOOPS.md)) are not on this list: the owner deferred them on 2026-09-29,
+and loops stay statements.
 
 ## Smaller open points
 

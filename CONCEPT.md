@@ -2717,6 +2717,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **A closure that captures a `var` binding may not escape its scope** (2026-09-22), the rule `var` parameters have.
   The escaping box gave pure value code aliasing, races through `spawn`, an exclusivity bypass and cycles. State that
   has to escape is a `shared type`. Decided, not yet enforced by the checker.
+- **Loops stay statements** (owner, 2026-09-29; docs/design/LOOPS.md). `for`, `while` and `loop` in expression position
+  were designed (eager, answering a `List`) and deferred: "I don't want the construct for now". The pipeline and
+  `Source.produce` cover collecting.
 - **`for var element in container`** (2026-09-22, built 2026-09-29; docs/design/COLLECTIONS.md section 3.11) is a
   `var` reference to each slot, sugar over `MutableIndex` plus `keys()`, lowered to an index loop over element paths.
   Not Swift's mutable copy.
@@ -3205,8 +3208,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `yield`: a function that answers a `Source` and produces items with `yield` would be the same state machine `Task`
   already is, so it costs little. Not in v1, because `Source.produce { sink => ... }` covers the cases (and with
   `capacity: 0` it *is* lock-step generation), and a second way to write a producer is worth less than one obvious way.
-  Decide when a real generator is awkward to write with `produce`. See docs/design/LOOPS.md, which examines a loop expression
-  as the spelling that would carry it.
+  Decide when a real generator is awkward to write with `produce`. docs/design/LOOPS.md examined a loop expression as
+  the spelling that would carry it; the owner deferred loop expressions (2026-09-29), so loops stay statements.
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
   a spelling turns up that keeps `await` and `?` visible without a keyword combination. See docs/design/LOOPS.md section 8 for
