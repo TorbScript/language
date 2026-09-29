@@ -28,7 +28,7 @@ that does not block core work can be built now, in the order of section 10.
 
 - **[1. Where the repository stands](#1-where-the-repository-stands)** — eighteen facts, measured
 - **[2. Readiness](#2-readiness)** — what each of the three launches needs, by milestone
-- **[3. Versions and the stability promise](#3-versions-and-the-stability-promise)** — the 0.x period, what 1.0 promises, and no editions
+- **[3. Versions and the stability promise](#3-versions-and-the-stability-promise)** — the 0.x period, what 1.0 promises, no editions, pre-releases and the monthly cadence
 - **[4. What a download contains](#4-what-a-download-contains)** — the binary, `std/`, `runtime/`, and the C compiler question
 - **[5. Installing, upgrading, channels and signing](#5-installing-upgrading-channels-and-signing)**
 - **[6. The website](#6-the-website)** — `torb docs site`, versions, search, the playground, hosting
@@ -132,11 +132,20 @@ PROJECT.md section 10 already decided for `language "0.3.0"`: "The language vers
 coincide, so the number is the language's". The download, `torb --version`, the `language` line and the documentation
 path `/docs/0.4/` are the same number.
 
+**A pre-release carries a suffix after the number it is a candidate for** (decided 2026-09-29): `0.1.0-rc.1`, and before
+a major only `1.0.0-alpha.1` and `1.0.0-beta.1` besides the release candidates. SemVer orders it before its release
+(`0.1.0-rc.1` < `0.1.0`, `rc.2` < `rc.10`, `alpha` < `beta` < `rc`), and `torb upgrade`, release-sync and the
+package manager (`compiler/src/package/version.trb`) order versions that way. The manifests, `torb --version` and the
+extension keep the number without the suffix: a release candidate is a build of that number, and where it becomes the
+release, the same commit is tagged again. A package's `language` line is therefore compared with `0.1.0` under
+`0.1.0-rc.1` as well - a candidate is meant to be tried with the programs that will run on its release.
+
 **Before 1.0, `0.MINOR` may break and `0.MINOR.PATCH` may not.** That is Cargo's reading of semantic versions below 1.0
 (`^0.4.2` means `>=0.4.2, <0.5.0`), and the one the registry's resolution uses for packages too. Every breaking minor
 ships its migration: RUST-EXIT section 4.2 already requires the teaching commit to add the rewrite to `torb canon` (from
 milestone 8, `torb format`), so the migration exists before the break by construction. Release notes name each break
-and the command that migrates it.
+and the command that migrates it. **Only a minor breaks, so at most once a month** (the cadence below), each break with
+an automatic migration - `torb format` or `torb lint --fix` - named in the release notes; within 1.x nothing breaks.
 
 **What 1.0 promises**, written in the style of Go's compatibility document:
 
@@ -159,9 +168,36 @@ switch between dialects.
 | The `language` line gates semantics per package (Go since 1.21, which changed loop variables for modules that say `go 1.22`) | an escape hatch that needs no new setting | it *is* editions, one change at a time, and it is only honest if it is rare; kept as the documented fallback if a single semantic change ever cannot wait for 2.0 |
 | No promise (Zig before 1.0) | freedom | it is the 0.x period, not a 1.0 |
 
-**The cadence** — decided for the 0.x period, question 4 of section 12 for later: a minor release every six weeks when
-there is something in it, a patch whenever a regression is fixed, a nightly from every commit on `main` that passes tier
-A and tier B.
+**The cadence — decided by the owner's delegation (2026-09-29), by the calendar**; it replaces the six weeks the owner
+first chose (question 4 of section 12).
+
+- **A minor every month, on the first Tuesday.** A week before - on the Tuesday before the first Tuesday - the branch
+  `release/0.N` is made from `main` and `v0.N.0-rc.1` is tagged on it; `main` moves on at once and carries the next
+  number. Without a blocker the release candidate becomes the stable release unchanged: the first Tuesday tags the
+  same commit `v0.N.0`. A blocker is fixed on `main`, cherry-picked onto `release/0.N`, and the next candidate
+  `-rc.2` is tagged there; the stable release is always a candidate that was out first, and only a blocker that is
+  not fixed by the first Tuesday moves the date. A release candidate is the preview channel (section 5).
+- **A patch** (`0.N.1`) whenever the fix of a regression or of a security problem is ready, from `release/0.N`:
+  fixes only, never a break and never a feature, and no candidate.
+- **Alpha and beta exist only before a major** (1.0, 2.0), and in that phase they replace the monthly minor: an alpha
+  while breaks are still allowed, a beta once the surface is frozen, then a release candidate and the major.
+- **A nightly** from every commit of `main` on which tier A and tier B are green, as before - `nightly-YYYYMMDD`, the
+  tag installers, release-sync and the editor extension already rely on.
+- **Support: no long-term support release**, as Go and Rust have none. In 0.x only the newest minor is maintained:
+  `release/0.N` takes patches until `0.(N+1).0` is out. From 1.0 the newest minor gets every fix, and the one before
+  it security fixes for one more month.
+- **Semantic versions, not calendar numbers.** A number such as `2026.10` would say when a release was made; a
+  semantic version says whether an update breaks, and the registry resolves packages by it (section 7). The date of a
+  release is in its notes.
+- **The first release**: `v0.1.0-rc.1` on 2026-09-29, right after the pipeline learnt pre-releases, and `v0.1.0` on the
+  first Tuesday of October, 2026-10-06. Then `0.2.0-rc.1` on 2026-10-27 and `0.2.0` on 2026-11-03.
+
+| Option | For | Against |
+|---|---|---|
+| **A minor on the first Tuesday of every month, its release candidate a week before** — the decision | a date anybody can plan with; a week in which a candidate meets real programs while `main` moves on; a small month's worth of change per release, and at most one break a month | a release when there is little in it; a release branch to cherry-pick fixes onto for a week, and for the patches of a month |
+| A minor every six weeks when there is something in it (the first decision) | fewer releases, each fuller | no date to plan with - "when there is something in it" is a judgement made anew each time; no candidate phase, so the nightly was the only preview |
+| A release train with a beta channel (Rust: six weeks, stable, beta, nightly) | every change is on beta for a whole cycle | a second maintained branch at all times, which a project of one maintainer does not carry; the preview channel gives the week that matters |
+| Calendar numbers (`2026.10.0`) | the date is the number | the number no longer says whether an update breaks, and the registry resolves by SemVer (section 7) |
 
 ## 4. What a download contains
 
@@ -250,9 +286,12 @@ compiler. FreeBSD has no hosted runner on the common CI services and runs in a v
   They detect the target, download the archive and `SHA256SUMS`, verify the hash, unpack, and write
   `~/.torb/install.trb` (`channel "stable"` by default, `method "script"`), which `torb upgrade` reads.
 - **No stable release yet, the default channel**: both installers, and `torb upgrade` left on `stable`, fall back to
-  the newest nightly, print one line saying so, and write `channel "nightly"` instead - the toolchain then follows
-  the nightly channel until a stable release exists, with nothing more to type. An explicitly requested channel or
-  version is never substituted: it stays the error it already was ("no version of the ... channel is listed").
+  the newest preview and, without one, to the newest nightly, print one line saying which (`no stable release yet:
+  installing the preview 0.1.0-rc.1`), and write that channel instead - the toolchain then follows it, with nothing
+  more to type. Since the preview channel offers the stable releases too, a toolchain that fell back to it moves on to
+  `0.1.0` once that is out, and to each later candidate after that; `torb upgrade --channel stable` leaves it. An
+  explicitly requested channel or version is never substituted: it stays the error it already was ("no version of the
+  ... channel is listed").
 - **A target missing from a version's archives** is decided from that version's `SHA256SUMS` (downloaded first),
   never guessed from a failed download: "`<version>` has no `<target>` archive yet", naming both.
 - **A download with `curl` or PowerShell gets no quarantine attribute** on macOS and no Mark of the Web on Windows, so
@@ -266,7 +305,7 @@ compiler. FreeBSD has no hosted runner on the common CI services and runs in a v
 ```text
 torb upgrade                     the newest release of the installed channel
 torb upgrade 0.5.2               that version
-torb upgrade --channel nightly   switch the channel
+torb upgrade --channel preview   switch the channel: stable, preview or nightly
 torb upgrade --list              what is installed, and what is available
 ```
 
@@ -284,10 +323,17 @@ torb upgrade --list              what is installed, and what is available
 
 | Channel | What it is | Kept |
 |---|---|---|
-| **stable** | a tagged release | forever: every archive, every documentation version |
+| **stable** | a tagged release, `v0.N.P` | forever: every archive, every documentation version |
+| **preview** (2026-09-29) | the newest pre-release - the release candidate `v0.N.0-rc.K` a week before each minor, and before a major its alphas and betas - or the newest stable release where that is newer, so the channel is never behind stable | as stable |
 | **nightly** | the last commit of `main` on which tier A and tier B are green on every tier 1 target | 30 days of archives; the documentation at `/docs/nightly/` |
 
-No beta channel before 1.0: with a minor release every six weeks the nightly is the beta.
+**The preview channel replaces "no beta channel before 1.0"**, which the six weeks decided: a monthly minor needs a week
+in which a candidate meets programs, and the channel is that week. The installers take it with
+`TORB_INSTALL_CHANNEL=preview`, `torb upgrade --channel preview` follows it, and the images carry the tag `preview`.
+Nothing else gets a pre-release: a version in the Visual Studio Marketplace or Open VSX is `MAJOR.MINOR.PATCH` and
+nothing else, so `0.2.0-rc.1` would take `0.2.0` from its own release, and Homebrew, Scoop and winget follow stable
+releases only; what is ahead of stable reaches an editor through the nightly's `.vsix`. The word *preview* also names
+the first of the three launches (section 2); the channel is always written `preview`.
 
 ### Reproducible and signed
 
@@ -317,11 +363,15 @@ has no profile file to append to). Both take their base URL, channel and an exac
 which is what the tests below use instead of a second, test-only code path.
 
 **`<base url>/versions.txt`**, decided here since section 7.4's format is for the package index and this is simpler:
-one release per line, `<version> <channel>`. `release-sync` (section 7.11) writes it by rewriting the whole file on
-every release: the previous line for a version, if any, is replaced, and every channel's lines are kept newest first,
-the stable ones before the nightlies, whatever order the releases were placed in - because `install.sh`/`install.ps1`
-pick the first line of their channel. `torb upgrade` (below) sorts every line of the manifest instead, so it does not
-depend on that order.
+one release per line, `<version> <channel>`, the channel `stable` for `0.1.0`, `preview` for a pre-release
+(`0.2.0-rc.1`, `1.0.0-beta.2`: a `-` after the numbers) and `nightly` for `nightly-YYYYMMDD`. `release-sync`
+(section 7.11) writes it by rewriting the whole file on every release: the previous line for a version, if any, is
+replaced, and every channel's lines are kept newest first by SemVer's precedence - stable, then preview, then nightly -
+whatever order the releases were placed in, because `install.sh`/`install.ps1` pick the first line of their channel.
+For `preview` they compare that line with the first stable one and take the stable release where its numbers are not
+below the candidate's, which is all SemVer's precedence needs between a pre-release and a release. `torb upgrade`
+(below) sorts every line of the manifest instead, by the package manager's `Version`, so it does not depend on that
+order.
 
 **The layout both scripts write, and `torb upgrade` (`compiler/src/cli/upgrade.trb`) manages afterwards**:
 
@@ -343,7 +393,8 @@ removed with the rest of what the new toolchain lacks, or, while it still runs, 
 `project.trb` (nothing here is evaluated, and it is read before a version of the toolchain is even chosen) and not the
 lock's literal-call format either (PROJECT.md section 8), which is for a graph, not four settings.
 
-**`torb upgrade`** is implemented exactly as decided above: `torb upgrade [<version>] [--channel <name>] [--list]`,
+**`torb upgrade`** is implemented exactly as decided above: `torb upgrade [<version>] [--channel stable|preview|nightly]
+[--list]`,
 never implicit, refuses naming the package manager's command when `install.trb` says another method (`brew upgrade
 torb`, `winget upgrade TorbScript.Torb`, `scoop update torb`), and `--list` shows what is installed (from
 `~/.torb/toolchains`) beside what the channel offers (from `versions.txt`), each release marked once it is installed
@@ -400,6 +451,20 @@ an install, a hash that does not match, an upgrade run by the copy's own `torb.e
 in use again, `--channel nightly`, and the refusal for winget - ran on Windows on 2026-09-27 against a `file://` base
 URL (`TORB_UPGRADE_BASE_URL`) with `LOCALAPPDATA` pointing into a scratch directory, which is how it is repeated. The
 POSIX branch beyond its tests, and a release on torb.dev, wait for a packaged release and a second machine.
+
+**The preview channel, tested (2026-09-29)**: `compiler/tests/upgrade.test.trb` orders pre-releases by SemVer
+(`0.1.0-rc.1` < `0.1.0`, `rc.2` < `rc.10`, `alpha` < `beta` < `rc`), lets the preview channel offer the stable
+releases, and chooses a release for every channel with and without the fallback of the default channel;
+`tools/release-sync`'s tests list a pre-release as `preview` between the stable lines and the nightlies, never point
+`latest` at it, and have the periodic check place the newest one. `install.sh` and `install.ps1` (Windows
+PowerShell 5.1, and piped into `iex`) each ran 30 cases against a `file://` fixture whose `versions.txt` held every
+combination of stable, preview and nightly lines - the default channel falling back to the preview and then to the
+nightly with its one line, `stable`, `preview` and `nightly` asked for explicitly, a candidate behind its stable
+release, and each missing channel's error - with the installed version, the recorded channel and the unpacked
+`bin/torb` checked each time; the copy of `install.ps1` that ran had its one line that writes the user `PATH` to the
+registry replaced by a message. A whole `torb upgrade` on Windows against the same fixture fell back to the preview,
+moved on to the stable release of that candidate and then to the next candidate, listed the preview channel, and
+refused an explicit `--channel stable` with nothing stable listed.
 
 ## 6. The website
 
@@ -1002,8 +1067,9 @@ and from GitHub only where `RELEASE_SYNC_FORGE=github` says so; the two differ i
    asset is uploaded, which is when the forge sends "published" - measured on Forgejo 16.0.5: creating the draft and
    uploading send nothing. **The forge does not deliver a failed webhook again**, so a periodic check - at the start
    and every `RELEASE_SYNC_POLL_SECONDS`, default 300 - lists the newest releases (`.../releases?draft=false&limit=50`,
-   `?per_page=50` on GitHub) and syncs every one that is not placed yet of the newest stable release and the nightlies
-   of the thirty days ending with the newest one listed, the thirty days a nightly is kept (section 5, "Channels").
+   `?per_page=50` on GitHub) and syncs every one that is not placed yet of the newest stable release, the newest
+   preview (since 2026-09-29) and the nightlies of the thirty days ending with the newest one listed, the thirty days a
+   nightly is kept (section 5, "Channels").
    Until 2026-09-28 it asked `.../releases/latest`, which is stable releases only and a `404` while there is none: a
    nightly whose delivery was lost - the first production run lost one while the container was still starting and
    Traefik had no route to it - was never placed, and the check logged an error every five minutes.
@@ -1022,14 +1088,14 @@ and from GitHub only where `RELEASE_SYNC_FORGE=github` says so; the two differ i
 4. Only then renames the whole verified directory to `<root>/download/<version>` in one step (`File.rename`), so a
    directory under a version's name is always complete - the same first run left an empty one behind, which the check,
    asking only whether the directory existed, took for placed. It then rewrites `<root>/download/versions.txt` whole or
-   not at all (`File.writeTextAtomically`; that version's old line, if any, replaced; each channel newest first, the
-   stable releases before the nightlies, since the installers take the first line of their channel) and, where the
+   not at all (`File.writeTextAtomically`; that version's old line, if any, replaced; each channel newest first -
+   stable, then preview, then nightly - since the installers take the first line of their channel) and, where the
    release is the newest stable one, repoints the `<root>/download/latest` symlink - a new link beside it renamed over
    the old one, so `latest` is never missing, which `ln -sfn` could not promise. A placement that fails after the
    rename is undone, the old directory and `versions.txt` put back, so the check tries it again; a version counts as
-   placed once `<root>/download/<version>/SHA256SUMS` is there. A nightly has no "latest", only `/docs/nightly/` on the
-   site (section 6), which this program does not touch. `tools/release-sync/README.md` has the variables, the webhook's
-   answers and how to run it locally.
+   placed once `<root>/download/<version>/SHA256SUMS` is there. A preview and a nightly have no "latest"; the nightly
+   has `/docs/nightly/` on the site (section 6), which this program does not touch. `tools/release-sync/README.md` has
+   the variables, the webhook's answers and how to run it locally.
 **Why `curl` and not `std/http`'s body all the way to disk**: the download is the one step left outside the language,
 and `File.write(path, response.body)` is its replacement once `std/http`'s client follows the redirects GitHub answers
 an asset with. Hashing, moving and linking moved into `std/digest` and `std/fs` on 2026-09-27, when `std/fs` gained
@@ -1337,7 +1403,9 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 
 ## 11. What this is not
 
-- **Not a date.** The launches are gated by lists, and the lists are the repository's own milestones.
+- **Not a date for 1.0.** The launches are gated by lists, and the lists are the repository's own milestones. The
+  releases themselves follow the calendar since 2026-09-29 (section 3): the milestones decide what a minor carries, the
+  first Tuesday when it comes.
 - **Not a registration.** Nothing here was registered, published, announced or configured: not a DNS record, not an
   account, not a package name on another registry.
 - **Not a new build system.** The registry stores source and runs nothing; `torb publish` checks, it does not build.
@@ -1364,7 +1432,9 @@ Everything technical above is decided. These are the owner's: questions of direc
    this a question about what the language is.
 4. **The stability promise and the cadence.** Section 3 proposes Go-style strict compatibility within 1.x, no editions,
    and a minor release every six weeks. Confirm, or say which surface should promise less. **Decided by the owner:**
-   Go-style stability without editions, and a release every six weeks.
+   Go-style stability without editions, and a release every six weeks. **Changed by the owner's delegation
+   (2026-09-29):** a minor on the first Tuesday of every month, its release candidate a week before on the preview
+   channel, patches whenever a fix is ready, alpha and beta only before a major, no long-term support (section 3).
 5. **The license.** Apache-2.0 WITH LLVM-exception (recommended) or MIT OR Apache-2.0. Without an answer nothing may be
    published. **Decided by the owner: MIT**, and MIT-0 for `runtime/` and `std/`, whose code ends up in every
    program; every release archive carries the three `LICENSE` files.
@@ -1403,7 +1473,7 @@ the first runs it reports were GitHub's.
 | `.forgejo/workflows/ci.yml` | every push to `main` and every pull request of the repository itself (a fork's runs nothing): the commit messages and the gates |
 | `.forgejo/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, the tests of `tools/`, the agreement of the C, the other targets where they have a runner, and on request the release binaries, the archives and the seed. Writes nothing but artifacts and caches |
 | `.forgejo/workflows/nightly.yml` | every night that `main` changed: the gates, then the seed, a prerelease `nightly-YYYYMMDD`, and its VS Code extension to both stores as a pre-release |
-| `.forgejo/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
+| `.forgejo/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`, or a pre-release `v0.MINOR.0-rc.N` (`vMAJOR.0.0-alpha.N`, `-beta.N`): the checks of the tag, the gates, the signed release, the seed, and for a stable release the package manager channels of section 5 (`publish-packages`) and the extension's stores (`publish-extension`) |
 | `.forgejo/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
 | `.forgejo/workflows/images.yml` | called by `release` and `nightly` after publishing, or run by hand for a release: the root server's three container images from the release's assets, pushed to cr.torb.dev and signed (section 7.11) |
 | `.forgejo/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC`, and the Debian packages a job needs |
@@ -1549,22 +1619,39 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 
 ### Versions, tags and channels
 
-- **A release is a pushed tag `v0.MINOR.PATCH`** and nothing else. `release.yml` refuses a tag that is not
-  `0.MINOR.PATCH` without leading zeros, whose version differs from `version` in `project.trb`,
-  `compiler/project.trb` or `editors/vscode/package.json` (section 3: one number, the editor extension's included),
-  whose commit is not on `main`, or that has no `LICENSE` (section 9; the owner chose MIT, question 5) - the forge's
-  repository is public.
-- **The VS Code extension follows both channels.** A release publishes `torbscript-<version>.vsix`, the file among its
-  assets, to the Visual Studio Marketplace (`vsce publish`, the secret `VSCE_PAT`) and to Open VSX (`ovsx publish`, the
-  secret `OVSX_PAT`), each only where its secret exists, after the release is on the forge. A nightly carries
-  `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, to both stores the same way, as VS Code's "Switch to
-  Pre-Release Version" - `vsce verify-pat` and `ovsx verify-pat` run first, so a wrong publisher or namespace fails
-  clearly. Its manifest is stamped with a store version of its own, `MAJOR.(MINOR+1).YYYYMMDD` of `package.json`'s
-  version and the nightly's date (`tools/package-extension.sh`, `0.1.0` becomes `0.2.20260929`) - not the toolchain's
-  number, which belongs to releases: a later stable `0.2.0` is then lower than the nightlies of its cycle, so
-  pre-release users stay ahead of release users and a release never collides with a nightly's number. A second nightly
-  of the same day has the same store version and is skipped (`--skip-duplicate`).
-- **stable**: the release, marked latest, kept forever. **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
+- **A release is a pushed tag** and nothing else: `v0.MINOR.PATCH` for a stable release, and since 2026-09-29 a
+  pre-release `v0.MINOR.0-rc.N` - before a major `vMAJOR.0.0-alpha.N`, `-beta.N` and `-rc.N` (section 3).
+  `release.yml` refuses a tag of another shape or with a leading zero, a stable release that is not `0.MINOR.PATCH` -
+  1.0 is released by changing that check - a tag whose number without its suffix differs from `version` in
+  `project.trb`, `compiler/project.trb` or `editors/vscode/package.json`, or from `languageVersion` in
+  `compiler/src/package/version.trb` (section 3: one number, the editor extension's and `torb --version`'s
+  included), a commit that is neither on `main` nor on `release/MAJOR.MINOR` of its number, and a repository without
+  a `LICENSE` (section 9; the owner chose MIT, question 5) - the forge's repository is public.
+- **A pre-release is a prerelease of the forge**: never its latest release, listed by release-sync on the `preview`
+  channel, its images tagged `<version>` and `preview` instead of `latest`, and neither `publish-packages` nor the
+  stores run for it - `publish-extension` says so in a notice. Its assets are named after the whole version,
+  `torb-0.2.0-rc.1-linux-x64.tar.gz` and `torbscript-0.2.0-rc.1.vsix`, whose manifest says `0.2.0` and marks it as a
+  pre-release. Its notes are `docs/releases/<version>.md`, or else those of its number, `docs/releases/0.2.0.md`, with
+  a paragraph that names the channel.
+- **A release of `release/MAJOR.MINOR`** - a later candidate or a patch, whose commit `main` does not have - keeps its
+  seed out of `seeds.txt`: every clone of `main` bootstraps from the newest seed there, and the release branch's
+  compiler may not read what `main` has taught since. The seed stays an asset of the release. `ci` runs on every
+  push to `release/*` as on `main`, and bootstraps from `main`'s newest seed, so `main` keeps reading every form
+  the maintained release branch uses until the next minor is out.
+- **The VS Code extension follows the release, and the nightly follows itself.** A release publishes
+  `torbscript-<version>.vsix`, the file among its assets, to the Visual Studio Marketplace (`vsce publish`, the secret
+  `VSCE_PAT`) and to Open VSX (`ovsx publish`, the secret `OVSX_PAT`), each only where its secret exists, after the
+  release is on the forge. A nightly carries `torbscript-nightly-YYYYMMDD.vsix` to both stores the same way, marked as
+  a pre-release, as VS Code's "Switch to Pre-Release Version" - `vsce verify-pat` and `ovsx verify-pat` run first, so a
+  wrong publisher or namespace fails clearly. Its manifest is stamped with a store version of its own,
+  `MAJOR.(MINOR+1).YYYYMMDD` of `package.json`'s version and the nightly's date (`tools/package-extension.sh`,
+  `0.1.0` becomes `0.2.20260929`) - not the toolchain's number, which belongs to releases: a later stable `0.2.0` is
+  then lower than the nightlies of its cycle, so pre-release users stay ahead of release users and a release never
+  collides with a nightly's number. A second nightly of the same day has the same store version and is skipped
+  (`--skip-duplicate`). A release candidate's `torbscript-0.2.0-rc.1.vsix` is marked as a pre-release too, but reaches
+  neither store: its version, `0.2.0`, would collide with the stable release that follows it.
+- **stable**: the release, marked latest, kept forever. **preview**: a pre-release, kept like a release.
+  **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
   when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on
   one day replaces that day's nightly.
 - **The release notes** are `docs/releases/<version>.md` when it exists (section 6 plans that folder), plus the
@@ -1578,7 +1665,7 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 | `torb-<version>-windows-x64.zip` | the same for Windows, as a zip as well |
 | `torb-<version>-source.tar.gz` | `git archive` of the tag |
 | `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |
-| `torbscript-<version>.vsix` | the VS Code extension of `editors/vscode`, the file the Marketplace and Open VSX get (a nightly: `torbscript-nightly-YYYYMMDD.vsix`, published as a pre-release with a store version of its own) |
+| `torbscript-<version>.vsix` | the VS Code extension of `editors/vscode`, the file the Marketplace and Open VSX get (a nightly: `torbscript-nightly-YYYYMMDD.vsix`, published as a pre-release with a store version of its own; a release candidate: `torbscript-0.2.0-rc.1.vsix`, marked as a pre-release too but never in a store) |
 | `SHA256SUMS` | the SHA-256 of every asset above |
 | `SHA256SUMS.sig` | the cosign signature of `SHA256SUMS`, made with the project's key (`SHA256SUMS.sigstore.json`, the keyless bundle, while releases were made on GitHub) |
 

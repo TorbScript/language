@@ -375,8 +375,9 @@ with `torb format`. `torbscript.languageServer.enabled` turns the server off; wh
 and `torb highlight` color the code as they did before.
 
 **Decision (2026-09-28): the extension is published, from `editors/vscode`, with the toolchain's version.** The
-release workflow packs it with every release and publishes it to the Visual Studio Marketplace and to Open VSX as
-`torbscript.torbscript`; a nightly carries a pre-release `.vsix` that no store gets (RELEASE.md section 13). An extension
+release workflow packs it with every release and publishes a stable release's to the Visual Studio Marketplace and to
+Open VSX as `torbscript.torbscript`; a nightly and a release candidate carry a pre-release `.vsix` that no store gets
+(RELEASE.md section 13). An extension
 from a store may run where no `torb` is, so it looks for one in the places the installers write as well, offers the
 official installer in a terminal the person sees where it finds none, and opens a walkthrough on its first start; its
 Test Explorer lists the tests of `torbscript/tests` and runs them with `torb test --report json`

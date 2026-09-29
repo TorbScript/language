@@ -13,9 +13,10 @@ source:
 The toolchain is one binary, `torb`, with the standard library and the C runtime beside it. Both install scripts are
 short and readable, and they are served from torb.dev: read one before you run it.
 
-**There is no stable release yet.** Both installers fall back to the newest nightly when the `stable` channel is
-still empty, print one line saying so, and record it: the toolchain then follows the nightly channel (see
-"Upgrading" below) until a stable release exists, without anything more to type.
+**The first stable release, 0.1.0, comes on 2026-10-06**, and a new minor on the first Tuesday of every month after it,
+each a week earlier as a release candidate. Until 0.1.0 is out both installers fall back to the newest release
+candidate - and without one to the newest nightly - print one line saying which, and record that channel: the
+toolchain then follows it (see "Channels" below), without anything more to type.
 
 ## Linux, macOS and FreeBSD
 
@@ -23,8 +24,9 @@ still empty, print one line saying so, and record it: the toolchain then follows
 $ curl -fsSL https://torb.dev/install.sh | sh
 ```
 
-The script detects the target, downloads the archive of the newest release of the channel (`stable`, or the newest
-nightly while there is none) and its `SHA256SUMS`, checks the hash, and unpacks the toolchain into
+The script detects the target, downloads the archive of the newest release of the channel (`stable`, or while there is
+none the newest release candidate, else the newest nightly) and its `SHA256SUMS`, checks the hash, and unpacks the
+toolchain into
 `~/.torb/toolchains/<version>/`, with `~/.torb/bin/torb` the one in use. It writes nothing into the profile of a
 shell: it prints the line that puts `~/.torb/bin` on the `PATH`, for you to add yourself. It needs `curl` or `wget`,
 `tar`, and `sha256sum` or `shasum`.
@@ -54,6 +56,29 @@ To read the script before running it rather than piping it into `iex`, download 
 > powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
+## Channels
+
+| Channel | What it installs |
+|---|---|
+| `stable` | the newest release, `0.1.0` - the default |
+| `preview` | the newest release candidate, `0.2.0-rc.1`, out a week before its release - or the newest stable release where that is newer |
+| `nightly` | the last commit of `main` on which every gate is green, `nightly-20261015` |
+
+Both installers take another channel from a variable:
+
+```console
+$ curl -fsSL https://torb.dev/install.sh | TORB_INSTALL_CHANNEL=preview sh
+```
+
+```console
+> $env:TORB_INSTALL_CHANNEL = "preview"; irm https://torb.dev/install.ps1 | iex
+```
+
+A release candidate becomes the release unchanged unless something blocks it, so the preview channel is where a
+release can be tried a week early. In the Marketplace and Open VSX, the extension's stable version follows the stable
+releases and its pre-release version follows the nightly; neither store carries a release candidate, since its
+version number would collide with the stable release that follows it.
+
 ## With an AI agent
 
 [Use TorbScript with your AI agent](agents.md) installs the TorbScript Agent Skills. An agent that has them checks for
@@ -69,14 +94,15 @@ a C compiler: `$TORB_CC`, or the first of `clang`, `gcc` and `cc` on the `PATH`.
 ```console
 $ torb upgrade
 $ torb upgrade --list
-$ torb upgrade --channel nightly
+$ torb upgrade --channel preview
 ```
 
 `torb upgrade` installs the newest release of the channel beside the versions already installed and makes it the one in
-use; it never runs by itself. `--list` shows what is installed and what the channel offers, and `--channel nightly`
-switches to the nightly channel: the last commit of `main` on which every gate is green. Left on `stable` while there
-is no stable release, it falls back to the newest nightly exactly as the installers do, and stays on the nightly
-channel from then on.
+use; it never runs by itself. `--list` shows what is installed and what the channel offers, and `--channel` switches
+to `stable`, `preview` or `nightly` and stays there. Versions are ordered as semantic versions, so `0.1.0-rc.1` comes
+before `0.1.0`. Left on `stable` while there is no stable release, it falls back to the newest release candidate,
+else to the newest nightly, exactly as the installers do, and stays on that channel from then on; a toolchain on the
+preview channel moves on to `0.1.0` once it is out.
 
 ## From source
 

@@ -10,6 +10,11 @@ The order is the order of dependence. Milestones 7 and 8 are the core, and the p
 so neither blocks 1.0. Beside the milestones, a few packages and language features are designed and wait for a slot;
 they are listed after the milestones.
 
+**The releases follow the calendar since 2026-09-29** ([design/RELEASE.md](design/RELEASE.md) section 3): `0.1.0-rc.1`
+on 2026-09-29 and `0.1.0` on 2026-10-06, then a minor on the first Tuesday of every month, each a week earlier as a
+release candidate on the preview channel, and a patch whenever a fix is ready. A milestone decides what a minor
+carries, not when it comes; 1.0 is gated by its list in RELEASE.md section 2, not by a date.
+
 The public release also carries the brand of [design/BRAND.md](design/BRAND.md): the logo, the icons and the design
 tokens are in `brand/`, and applying them to the website, the registry, the forge, the colours of `torb`'s output and
 the VS Code extension is that record's five slices (section 13).

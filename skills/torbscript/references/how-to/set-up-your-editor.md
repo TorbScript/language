@@ -44,7 +44,8 @@ the Visual Studio Marketplace and to Open VSX; every other editor with a client 
    Without a store, download `torbscript-<version>.vsix` from a release at
    [torb.dev/download](https://torb.dev/download) and run `code --install-extension torbscript-<version>.vsix`, or use
    "Extensions: Install from VSIX..." in the command palette; a nightly's `torbscript-nightly-<date>.vsix` is a
-   pre-release of `main` that no store has.
+   pre-release of `main`, and a release candidate's `torbscript-0.2.0-rc.1.vsix` one of the coming release, that no
+   store has.
 
 2. **Let it find or install the toolchain.** The walkthrough "Get Started with TorbScript" opens the first time the
    extension starts (Help > Welcome > Walkthroughs brings it back). Its first step completes itself once `torb

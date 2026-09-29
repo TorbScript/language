@@ -41,6 +41,6 @@ about what a program *does* comes with a program there.
 - **[The docs commands](checks.md)** - What torb docs check, index, skill and bundle each do, which rules they decide, and which rules only a reviewer can decide.
 - **[Build the toolchain from source](building-from-source.md)** - A checkout builds torb with one script - it takes a seed, the torb of an earlier commit, builds the compiler with it, builds it again with the result, and compares the two.
 - **[The Agent Skills](the-skill.md)** - How torb docs skill turns this documentation into the TorbScript Agent Skills below skills/, which templates declare them, which page goes into which skill, and how the result is installed and checked.
-- **[Cut a release](releasing.md)** - From a green main to a signed release on git.torb.dev and the VS Code extension in its stores, a seed published on its own, what the owner sets up once on the forge, the stores, the mirror and the server, and what to do when a job fails.
+- **[Cut a release](releasing.md)** - The monthly minor from its release candidate a week before, a patch from the release branch, the signed release on git.torb.dev and in the extension stores, what the owner sets up once, and what to do when a job fails.
 
 <!-- torb:index:end -->

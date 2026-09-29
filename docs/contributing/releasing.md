@@ -1,12 +1,17 @@
 ---
 title: Cut a release
-summary: From a green main to a signed release on git.torb.dev and the VS Code extension in its stores, a seed published on its own, what the owner sets up once on the forge, the stores, the mirror and the server, and what to do when a job fails.
+summary: The monthly minor from its release candidate a week before, a patch from the release branch, the signed release on git.torb.dev and in the extension stores, what the owner sets up once, and what to do when a job fails.
 kind: how-to
 status: stable
 skill: omit
 order: 80
 keywords:
   - release
+  - release candidate
+  - preview
+  - patch
+  - release branch
+  - first Tuesday
   - tag
   - nightly
   - seed
@@ -24,16 +29,19 @@ keywords:
   - VS Code Marketplace
   - Open VSX
 source:
+  - docs/design/RELEASE.md#3-versions-and-the-stability-promise
   - docs/design/RELEASE.md#13-the-release-pipeline-as-built
   - docs/design/RELEASE.md#14-the-forge
   - docs/design/RELEASE.md#7.11-hosting-and-the-server
   - .forgejo/workflows/release.yml
   - .forgejo/workflows/nightly.yml
+  - .forgejo/workflows/ci.yml
   - .forgejo/workflows/seed.yml
   - .forgejo/workflows/images.yml
   - .forgejo/actions/token/action.yml
   - .forgejo/actions/cross/action.yml
   - .github/workflows/portable.yml
+  - compiler/src/package/version.trb
   - tools/forge.sh
   - tools/fetch-seed.sh
   - tools/publish-seed.sh
@@ -50,48 +58,132 @@ source:
   - tools/deploy
 ---
 
-A release of TorbScript is made by pushing a tag `v0.MINOR.PATCH` of a commit of `main` to the forge, git.torb.dev. The
+A release of TorbScript is made by pushing a tag to the forge, git.torb.dev: `v0.MINOR.PATCH` for a stable release,
+`v0.MINOR.0-rc.N` for a release candidate, on a commit of `main` or of the minor's release branch `release/0.MINOR`. The
 workflow `release` checks the tag, runs every gate, and only when all of them are green publishes the archives, the
 source, the portable seed, the VS Code extension and `SHA256SUMS` with its cosign signature as a release of
 `torbscript/language`; release-sync then places them at `https://torb.dev/download/<version>/`, where the installers
-read them, and the extension goes to the Visual Studio Marketplace and to Open VSX. Every nightly publishes its own
-extension to both stores too, as a pre-release with a store version of its own - VS Code's "Switch to Pre-Release
-Version" always has `main`, without waiting for a release. The design behind it is
-[section 13 of the release record](../design/RELEASE.md#13-the-release-pipeline-as-built), and the forge, its runners,
-the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-forge).
+read them. A stable release also goes to the Visual Studio Marketplace, Open VSX, Homebrew and Scoop, and every
+nightly publishes its own extension to both stores too, as a pre-release with a store version of its own - VS Code's
+"Switch to Pre-Release Version" always has `main`, without waiting for a release. A release candidate is a
+pre-release: the forge marks it as one, release-sync lists it on the `preview` channel, the images get the tag
+`preview` and not `latest`, and neither a store nor a package manager gets it. The calendar and its rules are
+[section 3 of the release record](../design/RELEASE.md#3-versions-and-the-stability-promise), the pipeline is
+[section 13](../design/RELEASE.md#13-the-release-pipeline-as-built), and the forge, its runners, the GitHub mirror and
+the tokens are [section 14](../design/RELEASE.md#14-the-forge).
 
 ## Steps
 
-1. **Choose the number.** Before 1.0 a minor release may break and a patch may not
-   ([RELEASE.md section 3](../design/RELEASE.md#3-versions-and-the-stability-promise)): a release with a breaking change
-   raises `MINOR` and sets `PATCH` to 0, a release of fixes only raises `PATCH`.
-2. **Write the number into the three manifests.** `version = "0.2.0"` in `project.trb` and in `compiler/project.trb`,
-   and `"version": "0.2.0"` in `editors/vscode/package.json` - the VS Code extension carries the toolchain's number.
-   The workflow refuses a tag whose number differs from any of them, and CI refuses a `package.json` whose number is not
-   `project.trb`'s. The packages of the Agent Skills carry the number as well, and nothing checks them: `version: 0.2.0`
-   in `apm.yml` and `"version": "0.2.0"` in `skills/.codex-plugin/plugin.json`, whose number is how Codex tells a new
-   plugin from the one it has cached.
-3. **Write the release notes** in `docs/releases/0.2.0.md`, when there are notes to write: every breaking change, and
-   the command that migrates it. Without the file the release says one line, its targets and how to verify a download.
-   What changed in the extension goes into `editors/vscode/CHANGELOG.md` as a section `## 0.2.0`, which the stores
-   show as its changelog.
-4. **Land on `main` and wait for `ci` to be green** on the forge (Actions of `torbscript/language`). The release runs
-   the same gates again, but a red `ci` is the cheaper place to find out.
-5. **Tag the commit and push the tag to the forge.** Only the tag starts a release, and pushing it is the approval: the
-   forge holds no job for a reviewer. The workflow checks that the commit is on `main`.
-6. **Check the release page** on git.torb.dev: one `.tar.gz` per tier 1 target - linux-x64, windows-x64, linux-arm64
-   and macos-arm64 - and a `.zip` for Windows, the source, the seed with its `.sha256`, the VS Code extension
-   `torbscript-0.2.0.vsix`, `SHA256SUMS` and
-   `SHA256SUMS.sig`. The release is a draft until its last asset is uploaded, so the webhook reaches release-sync once,
-   with everything there. The seed is added to `seeds.txt` of the release `seeds`, the job `images` pushes
-   `cr.torb.dev/torbscript/release-sync`, `site` and `registry` tagged with the version and `latest`, signed, and
-   `publish-packages` pushes the Homebrew formula and the Scoop manifest where the release has their archives. The root
-   server takes the images with `docker compose pull && docker compose up -d`.
-7. **Check the extension in the stores.** The job `publish-extension` publishes the `.vsix` of the release to the Visual
+### The calendar
+
+A minor every month on the **first Tuesday**, its release candidate on the Tuesday a week before, and a patch whenever
+the fix of a regression or of a security problem is ready. Before 1.0 only a minor may break, and every break ships
+the automatic migration the release notes name; a patch never breaks. The first releases:
+
+| Release candidate | Stable release |
+|---|---|
+| `v0.1.0-rc.1`, 2026-09-29 | `v0.1.0`, 2026-10-06 |
+| `v0.2.0-rc.1`, 2026-10-27 | `v0.2.0`, 2026-11-03 |
+| `v0.3.0-rc.1`, 2026-11-24 | `v0.3.0`, 2026-12-01 |
+
+`main` always carries the number of the next minor, in four places: `version = "0.2.0"` in `project.trb` and in
+`compiler/project.trb`, `"version": "0.2.0"` in `editors/vscode/package.json` - the extension carries the toolchain's
+number - and `languageVersion = "0.2.0"` in `compiler/src/package/version.trb`, which `torb --version` prints and a
+package's `language` line is compared with. A release candidate is a build of that number: the four places never carry
+`-rc.1`. The workflow refuses a tag whose number without its suffix differs from any of them, and CI refuses a
+`package.json` whose number is not `project.trb`'s. The packages of the Agent Skills carry the number as well, and
+nothing checks them: `version: 0.2.0` in `apm.yml` and `"version": "0.2.0"` in `skills/.codex-plugin/plugin.json`,
+whose number is how Codex tells a new plugin from the one it has cached.
+
+### The release candidate: the Tuesday before
+
+1. **Write the release notes** in `docs/releases/0.2.0.md`: every breaking change, and the command that migrates it
+   (`torb format`, `torb lint --fix`). A candidate carries the notes of its number, and a file
+   `docs/releases/0.2.0-rc.1.md` of its own where it needs one. Without either the release says one line, its targets
+   and how to verify a download. What changed in the extension goes into `editors/vscode/CHANGELOG.md` as a section
+   `## 0.2.0`, which the stores show as its changelog.
+2. **Wait for `ci` to be green on `main`** on the forge (Actions of `torbscript/language`). The release runs the same
+   gates again, but a red `ci` is the cheaper place to find out.
+3. **Branch `release/0.2` and tag its first commit.** Only the tag starts a release, and pushing it is the approval: the
+   forge holds no job for a reviewer.
+
+   ```console
+   $ git switch main
+   $ git pull forgejo main
+   $ git branch release/0.2
+   $ git push forgejo release/0.2
+   $ git tag v0.2.0-rc.1
+   $ git push forgejo v0.2.0-rc.1
+   ```
+
+4. **Move `main` to the next minor** at once: the four places and the two Agent Skills packages say `0.3.0` in a
+   commit of their own (`chore(release): make 0.3.0 the next minor`), and `editors/vscode/CHANGELOG.md` opens
+   `## 0.3.0 - unreleased`. From here on `release/0.2` takes fixes only, and `main` moves on.
+5. **Check the release page** on git.torb.dev: a pre-release named `TorbScript 0.2.0-rc.1`, one
+   `torb-0.2.0-rc.1-<target>.tar.gz` per tier 1 target - linux-x64, windows-x64, linux-arm64 and macos-arm64 - and a
+   `.zip` for Windows, the source, the seed with its `.sha256`, `torbscript-0.2.0-rc.1.vsix` (version 0.2.0 inside,
+   marked as a pre-release), `SHA256SUMS` and `SHA256SUMS.sig`. The job `images` pushes the images tagged
+   `0.2.0-rc.1` and `preview`, `publish-extension` says that a pre-release stays out of the stores, and
+   `publish-packages` is skipped. release-sync lists the candidate as `0.2.0-rc.1 preview`, and it installs with
+   `curl -fsSL https://torb.dev/install.sh | TORB_INSTALL_CHANNEL=preview sh` or `torb upgrade --channel preview`.
+
+### The stable release: the first Tuesday
+
+1. **Tag the commit of the last candidate again.** Without a blocker the candidate becomes the release unchanged - the
+   same commit, gated once more by the workflow:
+
+   ```console
+   $ git fetch forgejo --tags
+   $ git tag v0.2.0 v0.2.0-rc.1^{}
+   $ git push forgejo v0.2.0
+   ```
+
+   `^{}` names the commit of an annotated tag; for a lightweight one it is the same commit.
+2. **Check the release page**: the same assets, named `torb-0.2.0-<target>.tar.gz` and `torbscript-0.2.0.vsix`, a
+   release and not a pre-release. The release is a draft until its last asset is uploaded, so the webhook reaches
+   release-sync once, with everything there. The job `images` pushes `cr.torb.dev/torbscript/release-sync`, `site` and
+   `registry` tagged with the version and `latest`, signed, and `publish-packages` pushes the Homebrew formula and the
+   Scoop manifest where the release has their archives. The root server takes the images with
+   `docker compose pull && docker compose up -d`.
+3. **Check the extension in the stores.** The job `publish-extension` publishes the `.vsix` of the release to the Visual
    Studio Marketplace and to Open VSX; its log says "not published" for a store whose secret is not set. The
    Marketplace verifies an upload for a few minutes before
    [its page](https://marketplace.visualstudio.com/items?itemName=torbscript.torbscript) shows the version; Open VSX
    shows it at once ([open-vsx.org/extension/torbscript/torbscript](https://open-vsx.org/extension/torbscript/torbscript)).
+
+### A blocker: the next candidate
+
+A blocker is fixed on `main` first where the fix applies there, then brought to the release branch by a cherry-pick -
+the history stays linear, and the branch never merges:
+
+```console
+$ git switch release/0.2
+$ git cherry-pick -x <commit of the fix>
+$ git push forgejo release/0.2
+$ git tag v0.2.0-rc.2
+$ git push forgejo v0.2.0-rc.2
+```
+
+`ci` runs on every push to `release/*`. The stable release is the last candidate, unchanged, tagged on the first
+Tuesday; a blocker that is not fixed by then moves the date, never the rule that a stable release is a candidate that
+was out first.
+
+### A patch: `0.2.1` from `release/0.2`
+
+1. **Fixes only**, never a break and never a feature: the fix of a regression or of a security problem, cherry-picked
+   with `-x` from `main` onto `release/0.2` as above.
+2. **The four places and the two Agent Skills packages say `0.2.1`** on `release/0.2`, in `chore(release): 0.2.1`, with
+   the notes in `docs/releases/0.2.1.md`; cherry-pick the notes onto `main` as well, so its `docs/releases/` lists
+   every release.
+3. **Tag and push**; a patch has no candidate:
+
+   ```console
+   $ git tag v0.2.1
+   $ git push forgejo release/0.2 v0.2.1
+   ```
+
+In 0.x only the newest minor is maintained: once `0.3.0` is out, `release/0.2` takes nothing more. From 1.0 the newest
+minor gets every fix and the one before it security fixes for one more month. There is no long-term support release.
 
 **Which targets a release carries**: all four tier 1 targets. linux-x64 is built on the forge's runner, and so is each
 of windows-x64, linux-arm64 and macos-arm64 whose runner the repository variable `TORB_RUNNERS` names; the others are
@@ -128,7 +220,14 @@ $ TORB_FORGE_TOKEN=<forge token> sh tools/publish-seed.sh build/seed-archive/tor
 
 - **A tag that fails the check is still a tag.** The workflow publishes nothing, but the tag stays: delete it
   (`git push --delete forgejo v0.2.0`) before pushing the corrected one, and never reuse the number of a published
-  release.
+  release. A candidate is `-rc.N` of `MAJOR.MINOR.0`, from 1; `-alpha.N` and `-beta.N` exist only for a major
+  (`1.0.0-alpha.1`); a tag of another shape - `v0.2.0-preview.1`, `v0.2.1-rc.1` - is refused or starts no release.
+- **"is a commit of neither main nor release/0.2"**: the tag is on a commit of another branch. A candidate and a patch
+  are tagged on `release/0.2`, pushed before the tag.
+- **A release of `release/0.2` publishes no seed into `seeds.txt`**, and says so: every clone of `main` bootstraps
+  from the newest seed there, and the release branch stays behind `main`. Its seed is an asset of the release. The
+  other way round, CI of `release/0.2` bootstraps from `main`'s newest seed, so `main` keeps reading every form
+  of the language `release/0.2` uses until `0.3.0` is out: a form is removed from the compiler only after that.
 - **A release job that fails after the gates** - the signature, the token, the upload - left a draft release or none
   at all. A draft has no tag yet and no webhook was sent: delete the draft on the release page, then re-run the failed
   jobs of the same run; the gates are not run again.
@@ -156,21 +255,35 @@ $ TORB_FORGE_TOKEN=<forge token> sh tools/publish-seed.sh build/seed-archive/tor
   token in its secret (step 9 of "One-time setup"); then re-run that job alone, which passes over the store that has
   the version already. Both stores keep a published version for good, so the fix of a release's broken extension is
   the next patch release - a nightly's fixes itself the next night, with a store version of its own.
-- **The job `extension` of CI is red** with "package.json says version ... and project.trb ...": step 2 above wrote the
-  number into the manifests but not into `editors/vscode/package.json`.
+- **The job `extension` of CI is red** with "package.json says version ... and project.trb ...": the number went into
+  the manifests but not into `editors/vscode/package.json` ("The calendar" names the four places).
+- **"says languageVersion ..."**: `compiler/src/package/version.trb` was left behind. It is a constant of the
+  compiler, so moving it bootstraps once, like any change of `compiler/src`.
 
 ## Full example
 
-The release of 0.2.0, from a green `main`:
+The minor 0.2.0, from a green `main`: its candidate on 2026-10-27, and the release on 2026-11-03.
 
 ```console
 $ git switch main
 $ git pull forgejo main
-$ grep -E '^version|^  "version"' project.trb compiler/project.trb editors/vscode/package.json
+$ grep -E '^version|^  "version"|languageVersion =' project.trb compiler/project.trb editors/vscode/package.json \
+    compiler/src/package/version.trb
 project.trb:version = "0.2.0"
 compiler/project.trb:version = "0.2.0"
 editors/vscode/package.json:  "version": "0.2.0",
-$ git tag v0.2.0
+compiler/src/package/version.trb:public const languageVersion = "0.2.0"
+$ git branch release/0.2
+$ git push forgejo release/0.2
+$ git tag v0.2.0-rc.1
+$ git push forgejo v0.2.0-rc.1
+```
+
+A week later, without a blocker:
+
+```console
+$ git fetch forgejo --tags
+$ git tag v0.2.0 v0.2.0-rc.1^{}
 $ git push forgejo v0.2.0
 ```
 
@@ -224,8 +337,9 @@ value to enter.
    (Settings -> Actions -> Secrets): `COSIGN_PRIVATE_KEY` = the whole content of `cosign.key`, `COSIGN_PASSWORD` = the
    password. Commit `cosign.pub` as `tools/deploy/cosign.pub`, copy it beside `compose.yml` on the root server, and keep
    `cosign.key` and its password offline as well - without them no release can be signed with the same key.
-4. **Protection**: Settings -> Branches: protect `main` against force pushes and deletion; Settings -> Tags: protect
-   `v*` and `seeds` so that only the owner - and the integration, which acts as the owner - creates them.
+4. **Protection**: Settings -> Branches: protect `main` and `release/*` against force pushes and deletion; Settings
+   -> Tags: protect `v*` and `seeds` so that only the owner - and the integration, which acts as the owner - creates
+   them.
 5. **More runners**, when there are machines for them: a runner registered with the label of its target
    (`windows-x64`, `linux-arm64`, `macos-arm64`), and the target added to `TORB_RUNNERS`. A job for a label no runner has
    would wait, which is why the workflows run those jobs only for the targets the variable names. A target the variable
@@ -307,8 +421,9 @@ runs on the machine - beside the forge's own stack or in it. Nothing is built on
      S3-compatible object storage at another provider than the server's, and a key limited to it; `RESTIC_PASSWORD`:
      a random string kept somewhere else too - without it the file backups cannot be read.
 4. **Start**: `docker compose pull && docker compose up -d`; the images of cr.torb.dev are public, no `docker login`.
-   **An update** is the same command; `TORB_VERSION` pins a version, `latest` follows stable releases, `nightly` the
-   nightlies. `docker compose logs <service>` says what each one does.
+   **An update** is the same command; `TORB_VERSION` pins a version, `latest` follows stable releases, `preview`
+   the release candidates, `nightly` the nightlies. While there is no stable release, `latest` does not exist yet:
+   `preview` or `nightly` until 2026-10-06. `docker compose logs <service>` says what each one does.
 5. **The webhook**: on the forge, `torbscript/language` -> Settings -> Webhooks -> Add webhook -> Forgejo: Target URL
    `https://torb.dev/webhook`, HTTP method `POST`, POST content type `application/json`, Secret the value of
    `RELEASE_SYNC_WEBHOOK_SECRET`, Trigger on: Custom events -> Releases, Active. The forge refuses to deliver to a
