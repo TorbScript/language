@@ -80,6 +80,5 @@ channel from then on.
 
 ## From source
 
-The toolchain compiles itself from a seed: the README of [the repository](https://git.torb.dev/torbscript/language)
-says how to build it from a checkout. [Run your first program](../guide/installing-and-running.md) goes on from an
-installed `torb`.
+The toolchain compiles itself from a seed. [Build the toolchain from source](../contributing/building-from-source.md)
+builds it from a checkout of [the repository](https://git.torb.dev/torbscript/language) with `sh tools/bootstrap.sh`.
