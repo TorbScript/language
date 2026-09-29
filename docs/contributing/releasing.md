@@ -28,6 +28,7 @@ source:
   - docs/design/RELEASE.md#14-the-forge
   - docs/design/RELEASE.md#7.11-hosting-and-the-server
   - .forgejo/workflows/release.yml
+  - .forgejo/workflows/nightly.yml
   - .forgejo/workflows/seed.yml
   - .forgejo/workflows/images.yml
   - .forgejo/actions/token/action.yml
@@ -53,7 +54,9 @@ A release of TorbScript is made by pushing a tag `v0.MINOR.PATCH` of a commit of
 workflow `release` checks the tag, runs every gate, and only when all of them are green publishes the archives, the
 source, the portable seed, the VS Code extension and `SHA256SUMS` with its cosign signature as a release of
 `torbscript/language`; release-sync then places them at `https://torb.dev/download/<version>/`, where the installers
-read them, and the extension goes to the Visual Studio Marketplace and to Open VSX. The design behind it is
+read them, and the extension goes to the Visual Studio Marketplace and to Open VSX. Every nightly publishes its own
+extension to both stores too, as a pre-release with a store version of its own - VS Code's "Switch to Pre-Release
+Version" always has `main`, without waiting for a release. The design behind it is
 [section 13 of the release record](../design/RELEASE.md#13-the-release-pipeline-as-built), and the forge, its runners,
 the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-forge).
 
@@ -98,6 +101,13 @@ None of them has passed the conformance suite on its machine: that is what the G
 build after every push, and every morning its job `download` installs the newest nightly on real windows-x64,
 linux-arm64 and macos-arm64 machines and runs it - look there before a release.
 
+**The nightly's extension** is published the same way, automatically, by `nightly.yml`'s own `publish-extension`: once
+the nightly's release is out, its `.vsix` goes to both stores as a pre-release - `vsce verify-pat torbscript` and
+`ovsx verify-pat torbscript` run first, so a wrong publisher or namespace fails with a clear message rather than an
+obscure one from `publish`, and `--skip-duplicate` passes over a second nightly of the same day. Nothing to check by
+hand unless a store's log says otherwise; the store version comes from `tools/package-extension.sh`
+(`MAJOR.(MINOR+1).YYYYMMDD`), not from `package.json`.
+
 **Publishing a seed without a release** is the forge's Actions -> `seed` -> Run workflow on `main`. It bootstraps on
 linux-x64, runs tier A and tier B, and publishes the seed of `main`. That is what the second commit of a breaking change
 waits for: the published seed has to understand the new form before a commit that uses it can bootstrap in CI or in a
@@ -139,10 +149,11 @@ $ TORB_FORGE_TOKEN=<forge token> sh tools/publish-seed.sh build/seed-archive/tor
   public; GitHub's needs `GH_TOKEN` while that repository is private.
 - **A breaking change pushed in one go** fails CI at the bootstrap: the published seed does not know the new form. Push
   the teaching commit, run `seed`, then push the migration.
-- **`publish-extension` failed** after the release is out: the release stays as it is. A store that refused a token
-  (401, "Access Denied", or an expired token - an Azure DevOps token lives a year at most) needs a new token in its
-  secret (step 9 of "One-time setup"); then re-run that job alone, which passes over the store that has the version
-  already. Both stores keep a published version for good, so the fix of a broken extension is the next patch release.
+- **`publish-extension` failed** after the release or the nightly is out: the release stays as it is. A store that
+  refused a token (401, "Access Denied", or an expired token - an Azure DevOps token lives a year at most) needs a new
+  token in its secret (step 9 of "One-time setup"); then re-run that job alone, which passes over the store that has
+  the version already. Both stores keep a published version for good, so the fix of a release's broken extension is
+  the next patch release - a nightly's fixes itself the next night, with a store version of its own.
 - **The job `extension` of CI is red** with "package.json says version ... and project.trb ...": step 2 above wrote the
   number into the manifests but not into `editors/vscode/package.json`.
 
@@ -232,8 +243,9 @@ value to enter.
    private that workflow does nothing.
 8. **Once the forge has every seed** (`sh tools/migrate-seeds.sh` answers "nothing to copy"): the release `seeds` on
    GitHub may stay as an archive; nothing reads it any more.
-9. **The stores of the VS Code extension**, so that `publish-extension` of a release publishes `torbscript.torbscript`.
-   Until both secrets exist the job skips the store without one and says so; nothing else waits for them.
+9. **The stores of the VS Code extension**, so that `publish-extension` of a release, and of every nightly, publishes
+   `torbscript.torbscript`. Until both secrets exist the job skips the store without one and says so; nothing else
+   waits for them.
 
    **The Visual Studio Marketplace**, with one Microsoft account for all three steps:
 
@@ -260,7 +272,8 @@ value to enter.
       `https://github.com/EclipseFdn/open-vsx.org/issues` asking for ownership of the namespace `torbscript`.
 
    **The secrets**: `torbscript/language` -> Settings -> Actions -> Secrets -> Add secret: `VSCE_PAT` = the Azure DevOps
-   token, `OVSX_PAT` = the Open VSX token. Only `publish-extension` of `release` reads them. A renewed token replaces
+   token, `OVSX_PAT` = the Open VSX token. Only `publish-extension` of `release` and of `nightly` reads them. A renewed
+   token replaces
    the value of its secret; nothing else changes.
 
 **The root server** ([RELEASE.md section

@@ -1321,7 +1321,7 @@ the first runs it reports were GitHub's.
 |---|---|
 | `.forgejo/workflows/ci.yml` | every push to `main` and every pull request of the repository itself (a fork's runs nothing): the commit messages and the gates |
 | `.forgejo/workflows/gates.yml` | the reusable workflow every other one calls: bootstrap, tier A, tier B, the tests of `tools/`, the agreement of the C, the other targets where they have a runner, and on request the release binaries, the archives and the seed. Writes nothing but artifacts and caches |
-| `.forgejo/workflows/nightly.yml` | every night that `main` changed: the gates, then the seed and a prerelease `nightly-YYYYMMDD` |
+| `.forgejo/workflows/nightly.yml` | every night that `main` changed: the gates, then the seed, a prerelease `nightly-YYYYMMDD`, and its VS Code extension to both stores as a pre-release |
 | `.forgejo/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`: the checks of the tag, the gates, the signed release, the seed, and (`publish-packages`) the package manager channels of section 5 |
 | `.forgejo/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
 | `.forgejo/workflows/images.yml` | called by `release` and `nightly` after publishing, or run by hand for a release: the root server's three container images from the release's assets, pushed to cr.torb.dev and signed (section 7.11) |
@@ -1473,12 +1473,16 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
   `compiler/project.trb` or `editors/vscode/package.json` (section 3: one number, the editor extension's included),
   whose commit is not on `main`, or that has no `LICENSE` (section 9; the owner chose MIT, question 5) - the forge's
   repository is public.
-- **The VS Code extension follows the release.** A release publishes `torbscript-<version>.vsix`, the file among its
+- **The VS Code extension follows both channels.** A release publishes `torbscript-<version>.vsix`, the file among its
   assets, to the Visual Studio Marketplace (`vsce publish`, the secret `VSCE_PAT`) and to Open VSX (`ovsx publish`, the
   secret `OVSX_PAT`), each only where its secret exists, after the release is on the forge. A nightly carries
-  `torbscript-nightly-YYYYMMDD.vsix` with the version `package.json` says, marked as a pre-release, and no store gets
-  it: the Marketplace's pre-release channel needs a version of its own for every upload, and the toolchain's numbers
-  belong to releases.
+  `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, to both stores the same way, as VS Code's "Switch to
+  Pre-Release Version" - `vsce verify-pat` and `ovsx verify-pat` run first, so a wrong publisher or namespace fails
+  clearly. Its manifest is stamped with a store version of its own, `MAJOR.(MINOR+1).YYYYMMDD` of `package.json`'s
+  version and the nightly's date (`tools/package-extension.sh`, `0.1.0` becomes `0.2.20260929`) - not the toolchain's
+  number, which belongs to releases: a later stable `0.2.0` is then lower than the nightlies of its cycle, so
+  pre-release users stay ahead of release users and a release never collides with a nightly's number. A second nightly
+  of the same day has the same store version and is skipped (`--skip-duplicate`).
 - **stable**: the release, marked latest, kept forever. **nightly**: a prerelease `nightly-YYYYMMDD` of `main`, made only
   when `main` changed since the last one and every target is green, deleted with its tag after 30 days. A second run on
   one day replaces that day's nightly.
@@ -1493,7 +1497,7 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 | `torb-<version>-windows-x64.zip` | the same for Windows, as a zip as well |
 | `torb-<version>-source.tar.gz` | `git archive` of the tag |
 | `torb-seed-<commit>.tar.gz` and `.sha256` | the portable seed, above |
-| `torbscript-<version>.vsix` | the VS Code extension of `editors/vscode`, the file the Marketplace and Open VSX get (a nightly: `torbscript-nightly-YYYYMMDD.vsix`, a pre-release) |
+| `torbscript-<version>.vsix` | the VS Code extension of `editors/vscode`, the file the Marketplace and Open VSX get (a nightly: `torbscript-nightly-YYYYMMDD.vsix`, published as a pre-release with a store version of its own) |
 | `SHA256SUMS` | the SHA-256 of every asset above |
 | `SHA256SUMS.sig` | the cosign signature of `SHA256SUMS`, made with the project's key (`SHA256SUMS.sigstore.json`, the keyless bundle, while releases were made on GitHub) |
 

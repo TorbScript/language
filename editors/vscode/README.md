@@ -75,6 +75,11 @@ durations - and says so once, with `torb upgrade` a click away.
 
 ## Getting started
 
+Until the first stable release, the extension is a pre-release: on the Marketplace and on Open VSX, click the arrow
+beside Install and choose "Install Pre-Release Version" (already installed: the gear icon -> "Switch to Pre-Release
+Version"). A pre-release is built and published every night from `main`; once a stable release exists, Install gets it
+without any extra step, and pre-release users keep getting nightlies ahead of it.
+
 1. Install the extension, and open the walkthrough if it did not open by itself: "TorbScript: Get Started" in the
    command palette.
 2. Install the toolchain from the walkthrough's first step; it completes itself once `torb --version` answers.

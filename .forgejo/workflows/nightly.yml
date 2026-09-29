@@ -5,8 +5,11 @@
 #   - a prerelease `nightly-YYYYMMDD` with the archives of every tier 1 target - built on the target's runner where
 #     TORB_RUNNERS names one, cross-compiled on linux-x64 where not (gates.yml, the cross-* jobs) - the source, the
 #     seed, SHA256SUMS and its cosign signature SHA256SUMS.sig, once every gate is green - and the VS Code extension
-#     of main as `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, which no store gets (only a release
-#     publishes it)
+#     of main as `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, with a store version of its own
+#     (MAJOR.(MINOR+1).YYYYMMDD, always ahead of the cycle's coming release)
+#   - that same .vsix published to the Visual Studio Marketplace and to Open VSX as a pre-release (`publish-extension`,
+#     each store skipped with a notice where its secret is not set; a release publishes the toolchain's own number
+#     there without `--pre-release`)
 #   - the nightlies older than 30 days are deleted, with their tags
 #   - the root server's container images, built from the nightly's assets and pushed to cr.torb.dev as `nightly`
 #     (images.yml)
@@ -189,6 +192,49 @@ jobs:
               sh tools/forge.sh delete "$tag" </dev/null
             fi
           done
+
+  publish-extension:
+    name: the VS Code extension on the Marketplace and Open VSX, as a pre-release
+    needs: [plan, publish]
+    if: always() && forgejo.ref == 'refs/heads/main' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # The .vsix the nightly's release carries - the file among its assets - and no second one packed here
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - uses: ./.forgejo/actions/node
+      # vsce reads its token from VSCE_PAT and ovsx from OVSX_PAT, so neither is ever on a command line. A store whose
+      # secret is missing is skipped, and says so; verify-pat fails early and clearly on a wrong publisher or
+      # namespace, rather than letting `publish` fail obscurely. --skip-duplicate passes over a second nightly of the
+      # same day, whose store version is already there
+      - name: Visual Studio Marketplace
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::notice::the secret VSCE_PAT is not set, so $VERSION is not published to the Visual Studio Marketplace (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 0
+          fi
+          npx --yes @vscode/vsce@4.0.0 verify-pat torbscript </dev/null
+          npx --yes @vscode/vsce@4.0.0 publish --pre-release --skip-duplicate --packagePath "dist/torbscript-$VERSION.vsix" </dev/null
+      - name: Open VSX
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::notice::the secret OVSX_PAT is not set, so $VERSION is not published to Open VSX (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 0
+          fi
+          npx --yes ovsx@1.2.0 verify-pat torbscript </dev/null
+          npx --yes ovsx@1.2.0 publish --pre-release --skip-duplicate "dist/torbscript-$VERSION.vsix" </dev/null
 
   images:
     name: container images, tagged nightly (docs/design/RELEASE.md section 7.11)
