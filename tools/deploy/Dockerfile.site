@@ -51,5 +51,9 @@ LABEL org.opencontainers.image.title="site" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=build /nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /site /usr/share/nginx/html
-# /docs/latest/ is this release's; a nightly's image says nightly instead of a version, which is what it is
-RUN ln -s "/usr/share/nginx/html/docs/$VERSION" /usr/share/nginx/html/docs/latest
+# /docs/latest/ is this release's, and so is <language>/docs/latest/ of every language the site was written in
+# (site.trb writes each below its own directory, docs/<version>/ and de/docs/<version>/); a nightly's image says
+# nightly instead of a version, which is what it is. -maxdepth 3 reaches both docs/<version> and de/docs/<version>
+# without needing busybox find's -path.
+RUN find /usr/share/nginx/html -maxdepth 3 -type d -name "$VERSION" \
+    -exec sh -c 'ln -s "$1" "$(dirname "$1")/latest"' _ {} \;
