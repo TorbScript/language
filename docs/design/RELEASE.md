@@ -507,9 +507,11 @@ no server.**
 
 ### The playground, as built (2026-09-28)
 
-`playground/` holds it: `build.sh` builds the toolchain, `playground.js`, `playground-worker.js` and `playground.css`
-are the page's side, and `smoke-test.mjs` runs the result under node. The user's page is
-[docs/tooling/the-playground.md](../tooling/the-playground.md); `/play` is `docs/site/play.md`.
+`playground/` holds it: `build.sh` builds the toolchain, `playground.js`, `playground-worker.js`, `playground.css` and
+the committed editor bundle `playground-editor.js` (built from `editor/`) are the page's side, `examples/` is the
+gallery of `/play`, and `smoke-test.mjs` runs the result under node. The user's page is
+[docs/tooling/the-playground.md](../tooling/the-playground.md); `/play` is `docs/site/play.md`. The editor, the
+language server and the gallery came a day later, below.
 
 **Measured first, natively** (Windows x64, the `torb.exe` of `dafd3138`), a ten-line program with the prelude:
 `torb check` takes 600 to 680 ms, of which 440 to 510 ms is lexing and parsing, because a loose file's check reads the
@@ -544,6 +546,8 @@ the pthread stubs of a pool of one worker, the clock, randomness, an in-memory f
 `/torb/std`, and the lowered wasm64. wasi-sdk would have needed a JavaScript host with a file system written by hand,
 and it has no wasm64. `runtime/` needed three things: `os/browser.c`, the poller of the IO core that never opens;
 `torb_platform_stack_low` from emscripten's stack; one processor. `TORB_HOSTS_MACHINE` is set as for every `torb`.
+(Two more came with the language server, below: standard input the page feeds, and a turn to the blocking pool taken
+in place, because the pool's start panicked without threads - which had made every stream of `std/io` fail.)
 
 **The capability rule is enforced where the VM runs a program** (`compiler/src/project/capability.trb`,
 `reportMissingCapabilities` in `compiler/src/vm/run.trb`): for the browser, an import of `std/process`, `std/network`,
@@ -577,10 +581,11 @@ beyond a megabyte stops the run. `TorbPlayground.mount` follows the contract of 
 [torb docs site](../tooling/torb-docs-site.md); a mount inside an element with `data-playground-page` is the page
 `/play` - the editor fills it and the address carries the source.
 
-**The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the six files into
-`assets/` where they were built; no page names them, so a site without them is still whole. Every page then carries a
-hash of them (`data-playground-version`), the site's script loads `assets/playground.js?v=<hash>`, and
-`playground.js` hands its query on to the worker, `torb.js` and `torb.wasm` - so `tools/deploy/nginx.conf` lets a
+**The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the seven files
+and the folder `examples/` into `assets/` where they were built; no page names them, so a site without them is still
+whole. Every page then carries a hash of them (`data-playground-version`), the site's script loads
+`assets/playground.js?v=<hash>`, and `playground.js` hands its query on to the workers, `torb.js`, `torb.wasm`, the
+editor and the examples - so `tools/deploy/nginx.conf` lets a
 browser keep all of them for a year, like the stylesheet, and sends `torb.wasm.gz` with `gzip_static`. The site's
 labels of the playground are words of its interface (`playground.*` in `site-strings.trb` and each language's
 `strings.json`), and the line that says how to run an exercise of Start locally stays below the mount. The site image
@@ -588,10 +593,78 @@ builds the playground itself, in the pinned emscripten image, from the release's
 the same inputs give the same wasm, and nothing but the release is downloaded for it. CI's `playground` job (`.forgejo/workflows/gates.yml`) builds it in that image from the
 compiler of the run and runs `smoke-test.mjs`.
 
-**Not built**: brotli (the stock nginx has no module for it; 30% smaller), a checked prelude (above), keeping the
+**Not built**: brotli (the stock nginx has no module for it; 30% smaller), a checked prelude (above), and keeping the
 compiled module between visits in IndexedDB (browsers no longer store a `WebAssembly.Module` there; the HTTP cache and
-the engine's own code cache do it), and a highlighter that knows what the resolver knows - the editor colours by the
-lexer, and a name the site would underline as mutable is not underlined while it is typed.
+the engine's own code cache do it).
+
+### The editor, the language server and the gallery, as built (2026-09-29)
+
+The owner asked for two things after the first playground: examples worth opening, shown sensibly, and a whole
+language server - completion, and the errors while typing rather than after Run. Both are built.
+
+**`torb lsp` runs in the page as it runs for an editor: over standard input and output, in a worker of its own.** The
+server is already a value without a transport (LANGUAGE-SERVER.md section 3), so the question was only how the page
+reaches its standard streams, since nothing in a browser may block and a message reaches a worker only once its thread
+is back in the event loop.
+
+| Option | For | Against |
+|---|---|---|
+| **The runtime's browser target feeds standard input from the page** — decided | the server, its framing, its tick and its timers are the code every editor runs, and nothing of the compiler changes: no native, no flag, no seed; the tasks of the server are state machines in the heap, so nothing lives on the stack while it waits | the scheduler of the runtime has to be able to return to the page (a few lines in task.c and os/browser.c, compiled only by emscripten) |
+| An exported entry point that takes one message and answers the replies | no scheduler work | the compiler can export no TorbScript function to C: a new native to register a closure, which is the two-commit seed dance, and a second transport of the server's |
+| A blocking read in the worker (`Atomics.wait` on a `SharedArrayBuffer`) | the runtime unchanged | cross-origin isolation (COOP and COEP) on every page of the site, and a worker blocked between messages |
+| Asyncify or JSPI | the runtime unchanged | Asyncify doubles the size of a 13 MB module and slows every call; JSPI is not in every engine the playground supports |
+
+The mechanism, in `runtime/os/browser.c`: the page's `stdin` callback answers `undefined` where it has nothing yet, so
+a read fails with `EAGAIN` as on a non-blocking descriptor; a read of `standardInput()` that meets it waits as an
+operation of the IO core (`runtime/stream.c`); where the main thread's scheduler would sleep while it waits, it returns
+to the page instead (`task.c`) - the first time by giving up the stack of `main` (`emscripten_unwind_to_js_event_loop`),
+with the program alive. `torb_browser_resume(input)`, exported, wakes the read and runs the scheduler until it waits
+for the page again, and answers the milliseconds to its first timer, which the worker waits for with `setTimeout`. A
+page whose `stdin` answers `null` - every run - sees standard input at its end, as before. `Process.exit` from inside
+the server throws emscripten's `ExitStatus` to the worker, which tells the page; the page starts a new server and opens
+its documents again, up to three times. `playground-worker.js` has two roles now, a run and the language server, and
+`smoke-test.mjs` runs the worker itself in a thread of node's: initialize, the diagnostics of a document opened and
+changed, completion at a member access, hover, semantic tokens, and the exit.
+
+**The editor is CodeMirror 6 with `@codemirror/lsp-client`**, 452 KB minified and 142 KB gzipped, loaded when an
+editor is about to be used.
+
+| Option | For | Against |
+|---|---|---|
+| **CodeMirror 6 and `@codemirror/lsp-client`** — decided | modular and small; the client speaks LSP over any transport of `{ send, subscribe }`, and has completion, diagnostics, hover, signature help, definition, rename and formatting; themed by CSS, so the site's tokens and both themes apply | no semantic tokens in the client (the editor adds them, 60 lines) |
+| Monaco with a language client | the editor of VS Code | several megabytes, workers of its own, and `monaco-languageclient` brings much of VS Code's API; a look to fight rather than to theme |
+| The textarea, with a hand-written client | nothing to vendor | completion lists, tooltips, the positions of a change and its undo are a text editor to write |
+
+What the editor adds to the client is TorbScript's, in `playground/editor/editor.mjs`: the colours - the lexer's of
+`playground.js` at once, sharpened by the server's semantic tokens where one covers the same name, so a parameter and a
+mutable binding look as they do on the site - the indentation of the formatter, brackets and comments, definition on
+Ctrl or Cmd and a click, and the Markdown of hover and completion sanitized to the elements of prose, because it comes
+from doc comments and a doc comment of a shared link is anybody's. A mount starts as the light editor and becomes
+CodeMirror at once on `/play` and at the first focus elsewhere, so a page of the documentation with ten runnable blocks
+loads neither the editor nor the toolchain until a reader clicks into one; the language worker is one per page and
+holds every mount as a document (`file:///torb/work/main.trb` on `/play`, `block-<n>/<file>` elsewhere). A run never
+waits for the language server, and the language server never for a run: they are two workers over the one compiled
+module.
+
+**The bundle is committed, with its source and its lock file**, rather than built in the site image: building it
+needs npm and the registry, and the site image downloads nothing but the release; `sh playground/editor/build.sh`
+(`npm ci --ignore-scripts`, then esbuild) rebuilds it where the editor changes, the licenses of the fourteen packages
+it holds stand at its end, and CI's `playground` job checks that the committed file is what the source builds.
+
+**The gallery** is `playground/examples/`: a file per example and an `index.json` of `id`, `file`, `title`,
+`description`, `category`, `level`, `default` and `de` (the German title and description), copied beside the toolchain
+by `build.sh` and into `assets/examples/` by the site. `/play` opens the address's program (`#code=`), the example it
+names (`#example=<id>`), or the default example; **Examples** above the editor lists them by category in a panel
+(the overlay's shadow, rising 4 px, a sheet on a phone), in German on the German site; choosing one asks first only
+where the reader changed the code, and the address names the example until the code changes.
+
+**Measured** under node 24 and in headless Chrome on a local server, on a machine running other gates: the language
+server answers `initialize` in about 90 ms after the module is compiled, checks the first document in 190 to 370 ms
+(it reads the standard library once), a keystroke's change and a completion after it in 50 to 150 ms, hover and
+semantic tokens in under 10 ms; the check of the workspace after `initialized` takes about 0.6 s once, in the
+background. On `/play` the editor replaces the light one about 0.1 s after the page loaded, and a typed error is
+underlined within a second (half of it the client's wait for the typing to stop). A run's first output is as fast as
+before: the run worker is untouched.
 
 ### Hosting
 

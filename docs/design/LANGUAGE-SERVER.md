@@ -383,6 +383,13 @@ Test Explorer lists the tests of `torbscript/tests` and runs them with `torb tes
 (`editors/vscode/CONTRIBUTING.md`). The repository recommends the published extension in `.vscode/extensions.json`,
 and `.vscode/launch.json` runs the working copy in an Extension Development Host.
 
+**The second client is the playground (2026-09-29).** Its editor is CodeMirror with `@codemirror/lsp-client`, and the
+server is this one, `torb lsp` in the playground's WebAssembly, in a worker of the page: the worker frames the editor's
+messages into the server's standard input and cuts what it writes into messages again. Nothing of the server knows it
+runs in a page - the runtime's browser target makes a read of standard input that finds nothing wait for the page, and
+the scheduler return to it, instead of blocking (RELEASE.md section 6, "The editor, the language server and the
+gallery, as built"; [the playground](../tooling/the-playground.md)).
+
 ## 15. What is left
 
 - **The passes over the whole program per keystroke.** The declaration sites and the implementation index of the

@@ -59,7 +59,7 @@ torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playgrou
 | `404.html` | The page for a path that is not there | |
 | `assets/site.css`, `assets/site.js` | The one stylesheet and the one script | the compiler |
 | `assets/fonts/` | Chivo and Geist Mono as `.woff2`, with their licence | `brand/fonts/` |
-| `assets/playground.js`, `playground-worker.js`, `playground.css`, `torb.js`, `torb.wasm`, `torb.wasm.gz` | [The playground](the-playground.md), only where it was built | `--playground` |
+| `assets/playground.js`, `playground-worker.js`, `playground-editor.js`, `playground.css`, `torb.js`, `torb.wasm`, `torb.wasm.gz`, `examples/` | [The playground](the-playground.md), only where it was built; `examples/` only where it has a gallery | `--playground` |
 | `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`, `mask-icon.svg`, `icons/`, `manifest.webmanifest`, `social-card.png` | The icons, the web manifest with a maskable icon, and the preview card | `brand/` |
 
 Every link between two pages is relative, so the output can be served from any directory. The page for a missing
@@ -193,14 +193,16 @@ TorbPlayground.mount(element, {
   expectedOutput,   // data-expected-output, or undefined
   solution,         // data-solution, or undefined
   labels,           // { run, stop, reset, solution, output, expected, solved, unsolved, running, loading, stopped,
-                    //   exitCode, tooMuchOutput, crashed, unsupported }: the words playground.*, in the page's language
+                    //   exitCode, tooMuchOutput, crashed, unsupported, examples, replace, format, source }: the
+                    //   words playground.*, in the page's language
   onResult          // function ({ output, exitCode, passed }) - passed: the output equals expectedOutput
 })
 ```
 
 From then on `mount` owns the element's children, and keeps a `playground-local` line below what it builds.
-`playground.js` does not mount anything by itself, and whatever it loads besides - the toolchain as WebAssembly - it
-loads relative to its own URL and with its own `?v=`. When the script is missing or fails,
+`playground.js` does not mount anything by itself, and whatever it loads besides - the toolchain as WebAssembly, the
+editor, the examples - it loads relative to its own URL and with its own `?v=`, which hashes the gallery's files as
+well. When the script is missing or fails,
 nothing happens and the fallback stays. A page `site/play.md` is written as `play.html`, and the header links it as
 Playground where it exists.
 
