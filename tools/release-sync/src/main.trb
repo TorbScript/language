@@ -13,7 +13,7 @@ use Config from "./config"
 use handler from "./webhook"
 use syncRelease, missingReleases, removeLeftovers from "./sync"
 
-/** How many of the newest releases the periodic check asks the forge for: a month of nightlies, and stable releases. */
+/** How many of the newest releases the periodic check asks the forge for: a month of nightlies, and the releases. */
 const recentCount = 50
 
 /**
@@ -30,9 +30,9 @@ fn poll(config: Config): Task<Void> {
 }
 
 /**
- * One periodic check: the newest releases the forge lists, and of those the newest stable one and the nightlies of the
- * last thirty days, each synced unless it is placed already (`missingReleases`). Says nothing where there is nothing
- * to do - also while the repository has no release at all.
+ * One periodic check: the newest releases the forge lists, and of those the newest stable one, the newest preview and
+ * the nightlies of the last thirty days, each synced unless it is placed already (`missingReleases`). Says nothing
+ * where there is nothing to do - also while the repository has no release at all.
  */
 fn check(config: Config): Task<Void> {
   match config.source().recentReleases(recentCount).await() {

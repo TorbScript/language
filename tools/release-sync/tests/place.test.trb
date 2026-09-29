@@ -46,6 +46,10 @@ const versions = File.readText "{root}/download/versions.txt"
 const older = place(ReleaseInfo("v0.2.5", assets), downloaded("older"), root).await()
 const versionsAfterOlder = File.readText "{root}/download/versions.txt"
 
+// A release candidate of the next minor: the preview channel, never `latest`
+const preview = place(ReleaseInfo("v0.4.0-rc.1", assets), downloaded("preview"), root).await()
+const versionsAfterPreview = File.readText "{root}/download/versions.txt"
+
 // An empty directory under the version's name, as a placement left one before placing was a single rename
 File.createDirectory("{root}/download/nightly-20260927").expect("the empty directory of an earlier placement")
 const emptyCountsAsPlaced = isPlaced root, "nightly-20260927"
@@ -129,6 +133,18 @@ group "placing a release" {
       assert(older == Ok(void))
       assert(File.symbolicLinkTarget("{root}/download/latest") == "0.3.0")
       assert(versionsAfterOlder == "0.3.0 stable\n0.2.5 stable\nnightly-20260926 nightly\n")
+    }
+  }
+
+  test "a preview is listed between the stable releases and the nightlies, and latest never points at it" {
+    assert(preview == Ok(void))
+    assert(File.readText("{root}/download/0.4.0-rc.1/torb.tar.gz") == "archive of preview")
+    assert File.linkMetadata("{root}/download/.latest-0.4.0-rc.1").isError()
+    if stable.isOk() {
+      assert(File.symbolicLinkTarget("{root}/download/latest") == "0.3.0")
+      assert(versionsAfterPreview == "0.3.0 stable\n0.2.5 stable\n0.4.0-rc.1 preview\nnightly-20260926 nightly\n")
+    } else {
+      assert(versionsAfterPreview == "0.4.0-rc.1 preview\nnightly-20260926 nightly\n")
     }
   }
 

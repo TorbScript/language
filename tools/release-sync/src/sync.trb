@@ -66,10 +66,11 @@ fn rebuiltUnderSameTag(release: ReleaseInfo, root: String, version: String, sour
 
 /**
  * Of the newest releases the forge lists, the ones the periodic check syncs: those [releasesToSync] chooses - the
- * newest stable release and the nightlies of the last thirty days - that are either not placed yet, or placed with a
- * `SHA256SUMS` that no longer matches the release's own, oldest first. The second case is a release rebuilt under the
- * same tag: nothing else changes what is on the forge without a new tag, since a tag's release is otherwise
- * immutable, and the placed `SHA256SUMS` is compared instead of downloading the whole release again to hash it.
+ * newest stable release, the newest preview and the nightlies of the last thirty days - that are either not placed
+ * yet, or placed with a `SHA256SUMS` that no longer matches the release's own, oldest first. The second case is a
+ * release rebuilt under the same tag: nothing else changes what is on the forge without a new tag, since a tag's
+ * release is otherwise immutable, and the placed `SHA256SUMS` is compared instead of downloading the whole release
+ * again to hash it.
  */
 public fn missingReleases(releases: List<ReleaseInfo>, root: String, source: ReleaseSource): Task<List<ReleaseInfo>> {
   var chosen: List<ReleaseInfo> = []
@@ -225,8 +226,8 @@ public fn verifySignature(directory: String, config: Config, tag: String): Task<
 /**
  * Renames the verified download `sourceDirectory` - holding the release's assets and nothing else - to
  * `<root>/download/<version>` in one step, then updates `versions.txt` (the version's old line, if any, replaced) and,
- * for the newest stable release only, `latest` (a symlink to the version's directory - a nightly has no "latest", only
- * `/docs/nightly/` on the site, which this program does not touch).
+ * for the newest stable release only, `latest` (a symlink to the version's directory - a preview or a nightly has no
+ * "latest"; the nightly has `/docs/nightly/` on the site, which this program does not touch).
  *
  * A directory already under the version's name - the release published again, or an empty one a placement left before
  * placing was one step - is set aside first and removed once the new one is in place. Where `versions.txt` or `latest`

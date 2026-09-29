@@ -21,10 +21,12 @@ For one release - named by a webhook or found by the periodic check - it:
 4. **places it**: the verified directory is renamed to `<root>/download/<version>` in one step, so the web server finds
    a version complete or not at all - never empty, never half filled. A directory already under that name (the release
    published again) is set aside first and removed once the new one is in place;
-5. **lists it** in `<root>/download/versions.txt`, rewritten whole or not at all, each channel newest first and the
-   stable releases before the nightlies - `install.sh` and `install.ps1` take the first line of their channel - and,
-   when it is the newest stable release, points the symbolic link `<root>/download/latest` at it: a new link beside it,
-   renamed over the old one, so `latest` is never missing. A nightly has no `latest`.
+5. **lists it** in `<root>/download/versions.txt`, rewritten whole or not at all, under its channel - `stable` for a
+   release (`v0.1.0`), `preview` for a pre-release (`v0.1.0-rc.1`, `-beta.N`, `-alpha.N`), `nightly` for
+   `nightly-YYYYMMDD` - each channel newest first by SemVer's precedence, stable, then preview, then nightly -
+   `install.sh` and `install.ps1` take the first line of their channel - and, when it is the newest stable release,
+   points the symbolic link `<root>/download/latest` at it: a new link beside it, renamed over the old one, so `latest`
+   is never missing. A preview and a nightly have no `latest`.
 
 A placement that fails after the rename - `versions.txt` or `latest` cannot be written - is undone: the version's
 directory goes back to the scratch directory, the old one and the old `versions.txt` come back, and the periodic check
@@ -99,6 +101,7 @@ When the program starts and then every `RELEASE_SYNC_POLL_SECONDS`, it asks the 
 these that is not placed yet:
 
 - the newest stable release - neither a draft nor a prerelease, the highest version;
+- the newest preview - a release candidate, beta or alpha (`v0.2.0-rc.1`), the highest version by SemVer's precedence;
 - every nightly (`nightly-YYYYMMDD`) of the thirty days that end with the newest nightly listed - the thirty days the
   forge keeps a nightly for (RELEASE.md, "Channels"). The window counts from the newest nightly and not from the
   machine's clock.

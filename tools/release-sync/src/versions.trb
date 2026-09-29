@@ -1,8 +1,9 @@
 /**
  * What a tag says about its release, and which releases the periodic check places: the version and the channel of a
  * tag, the order of two versions of one channel, and - from the newest releases the forge lists - the newest stable
- * release and the nightlies of the last thirty days, the ones `<root>/download/` keeps (docs/design/RELEASE.md,
- * "Channels": 30 days of nightly archives). Everything here decides without the network or the disk.
+ * release, the newest preview and the nightlies of the last thirty days, the ones `<root>/download/` keeps
+ * (docs/design/RELEASE.md, "Channels": 30 days of nightly archives). Everything here decides without the network or
+ * the disk.
  */
 
 use Ordering from "std/core"
@@ -20,40 +21,71 @@ public fn versionOf(tag: String): String {
   }
 }
 
-/** `stable` for a tagged release, `nightly` for `nightly-YYYYMMDD` - the same two channels `versions.txt` lists. */
+/**
+ * The channel `versions.txt` lists a version under: `nightly` for `nightly-YYYYMMDD`, `preview` for a pre-release - a
+ * `-` after the numbers, `0.1.0-rc.1`, `1.0.0-beta.2`, `2.0.0-alpha.1` - and `stable` for every other tagged release.
+ */
 public fn channelOf(version: String): String {
   if version.startsWith("nightly-") {
     "nightly"
+  } else if version.contains("-") {
+    "preview"
   } else {
     "stable"
   }
 }
 
 /**
- * The order of two versions, the newer one greater: numerically segment by segment for a stable version (`0.10.0`
- * after `0.9.0`), where a segment that is no number compares as text; a nightly's date is in its name, so two nightlies
- * compare as text, which is the order of their dates.
+ * The order of two versions, the newer one greater, by SemVer's precedence: the numbers before the first `-` segment by
+ * segment (`0.10.0` after `0.9.0`), then a release after every pre-release of its numbers (`0.1.0-rc.1` before
+ * `0.1.0`), and two pre-releases identifier by identifier - so `alpha` < `beta` < `rc`, and `rc.2` < `rc.10`. A
+ * nightly's date is in its name, so two nightlies compare by their dates.
  */
 public fn compareVersions(first: String, second: String): Ordering {
-  const firstSegments = first.split(".").toList()
-  const secondSegments = second.split(".").toList()
+  const (firstNumbers, firstPreRelease) = splitPreRelease first
+  const (secondNumbers, secondPreRelease) = splitPreRelease second
+  const order = compareIdentifiers firstNumbers.split(".").toList(), secondNumbers.split(".").toList()
+  if order != Ordering.Equal {
+    return order
+  }
+  match (firstPreRelease, secondPreRelease) {
+    (None, None) => Ordering.Equal
+    (None, Some(_)) => Ordering.Greater
+    (Some(_), None) => Ordering.Less
+    (Some(one), Some(other)) => compareIdentifiers one.split(".").toList(), other.split(".").toList()
+  }
+}
+
+/** `0.1.0-rc.1` -> `0.1.0` and `rc.1`, split at the first `-`; a version without one has no pre-release. */
+fn splitPreRelease(version: String): (String, String?) {
+  match version.splitOnce("-") {
+    Some((numbers, rest)) => (numbers, Some(rest))
+    None => (version, None)
+  }
+}
+
+/**
+ * Two lists of identifiers, one pair at a time: two numbers as numbers, a number before a word, two words as text -
+ * and where one list is the start of the other, the shorter one first (semver.org, "Precedence").
+ */
+fn compareIdentifiers(first: List<String>, second: List<String>): Ordering {
   var index = 0
-  while index < firstSegments.length() && index < secondSegments.length() {
-    const one = firstSegments[index]
-    const other = secondSegments[index]
-    const order = match (Int.tryFrom(one).ok(), Int.tryFrom(other).ok()) {
+  while index < first.length() && index < second.length() {
+    const order = match (Int.tryFrom(first[index]).ok(), Int.tryFrom(second[index]).ok()) {
       (Some(left), Some(right)) => left.compare right
-      _ => one.compare other
+      (Some(_), None) => Ordering.Less
+      (None, Some(_)) => Ordering.Greater
+      (None, None) => first[index].compare second[index]
     }
     if order != Ordering.Equal {
       return order
     }
     index = index + 1
   }
-  firstSegments.length().compare(secondSegments.length())
+  first.length().compare(second.length())
 }
 
-/** A version that sorts as [compareVersions] orders it: the key `versions.txt` sorts its stable lines by. */
+/** A version that sorts as [compareVersions] orders it: the key of the stable and preview lines of `versions.txt`. */
 type VersionKey with Compare {
   version: String
 
@@ -65,11 +97,12 @@ type VersionKey with Compare {
 /**
  * `versions.txt` with `version` of `channel` in it - its old line, if any, replaced - and every line in the order the
  * installers read it: `install.sh` and `install.ps1` take the first line of their channel, so each channel's lines come
- * newest first, the stable ones before the nightlies, whatever order the releases were placed in. A line of another
+ * newest first - stable, then preview, then nightly - whatever order the releases were placed in. A line of another
  * shape is kept, after them.
  */
 public fn listedVersions(before: String, version: String, channel: String): String {
   var stable: List<String> = []
+  var preview: List<String> = []
   var nightly: List<String> = []
   var other: List<String> = []
   for line in before.lines() {
@@ -79,6 +112,8 @@ public fn listedVersions(before: String, version: String, channel: String): Stri
     }
     if words.length() == 2 && words[1] == "stable" {
       stable.append words[0]
+    } else if words.length() == 2 && words[1] == "preview" {
+      preview.append words[0]
     } else if words.length() == 2 && words[1] == "nightly" {
       nightly.append words[0]
     } else {
@@ -87,11 +122,13 @@ public fn listedVersions(before: String, version: String, channel: String): Stri
   }
   match channel {
     "stable" => stable.append version
+    "preview" => preview.append version
     "nightly" => nightly.append version
     _ => other.append "{version} {channel}"
   }
   const newestFirst: List<String> = [
     ...stable.sorted({ VersionKey _ }).reversed().map({ "{_} stable" }),
+    ...preview.sorted({ VersionKey _ }).reversed().map({ "{_} preview" }),
     ...nightly.sorted({ _ }).reversed().map({ "{_} nightly" }),
     ...other,
   ]
@@ -151,37 +188,52 @@ fn daysFromCivil(year: Int, month: Int, day: Int): Int {
 }
 
 /**
- * Which of `releases` - the newest ones the forge lists, in any order - the periodic check places, oldest first: the
- * newest stable release (neither a draft nor a prerelease), and every nightly of the `days` days that end with the
- * newest nightly listed. Drafts never. The window is counted from the newest nightly rather than from the clock of
- * this machine, so a check that runs while no nightly has been made for a while still places the last ones.
+ * Which of `releases` - the newest ones the forge lists, in any order - the periodic check places, oldest first: every
+ * nightly of the `days` days that end with the newest nightly listed, the newest preview (a release candidate, beta or
+ * alpha: [channelOf]), and the newest stable release (neither a draft nor a prerelease). Drafts never. The window is
+ * counted from the newest nightly rather than from the clock of this machine, so a check that runs while no nightly has
+ * been made for a while still places the last ones.
  */
 public fn releasesToSync(releases: List<ReleaseInfo>, days: Int = nightlyDays): List<ReleaseInfo> {
   var newestStable: ReleaseInfo? = None
+  var newestPreview: ReleaseInfo? = None
   var nightlies: List<(Int, ReleaseInfo)> = []
   for release in releases {
     if release.draft {
       continue
     }
-    const version = versionOf release.tagName
-    if channelOf(version) == "nightly" {
+    const channel = channelOf versionOf(release.tagName)
+    if channel == "nightly" {
       if const Some(day) = nightlyDay(release.tagName) {
         nightlies.append((day, release))
       }
+    } else if channel == "preview" {
+      newestPreview = newerOf release, newestPreview
     } else if !release.prerelease {
-      const newer = match newestStable {
-        Some(found) => compareVersions(version, versionOf(found.tagName)) == Ordering.Greater
-        None => true
-      }
-      if newer {
-        newestStable = release
-      }
+      newestStable = newerOf release, newestStable
     }
   }
   const lastDay = nightlies.fold(0, { newest, entry => newest.max entry.0 })
   var chosen = nightlies.filter({ lastDay - _.0 < days }).sorted({ _.0 }).map({ _.1 }).toList()
+  if const Some(release) = newestPreview {
+    chosen.append release
+  }
   if const Some(release) = newestStable {
     chosen.append release
   }
   chosen
+}
+
+/** `release`, or `found` where that is the newer of the two by [compareVersions]. */
+fn newerOf(release: ReleaseInfo, found: ReleaseInfo?): ReleaseInfo {
+  match found {
+    Some(other) => {
+      if compareVersions(versionOf(release.tagName), versionOf(other.tagName)) == Ordering.Greater {
+        release
+      } else {
+        other
+      }
+    }
+    None => release
+  }
 }

@@ -1,13 +1,13 @@
 /**
- * Tests for `src/versions.trb`: the order of two versions, the day a nightly names, which of the newest releases the
- * periodic check places, and `versions.txt` kept in the order the installers read it - each channel newest first,
- * whatever order its releases were placed in.
+ * Tests for `src/versions.trb`: the channel of a version, the order of two versions by SemVer's precedence, the day a
+ * nightly names, which of the newest releases the periodic check places, and `versions.txt` kept in the order the
+ * installers read it - each channel newest first, whatever order its releases were placed in.
  */
 
 use test, group from "std/test"
 use Ordering from "std/core"
 use ReleaseInfo from "../src/forge"
-use compareVersions, nightlyDay, releasesToSync, listedVersions, newestStableIn from "../src/versions"
+use channelOf, compareVersions, nightlyDay, releasesToSync, listedVersions, newestStableIn from "../src/versions"
 
 /** The tags of `releases`, in their order. */
 fn tagsOf(releases: List<ReleaseInfo>): List<String> {
@@ -24,6 +24,31 @@ group "the order of two versions" {
 
   test "nightlies compare by their date" {
     assert(compareVersions("nightly-20261001", "nightly-20260930") == Ordering.Greater)
+  }
+
+  test "a pre-release comes before its release, and after the releases before it" {
+    assert(compareVersions("0.1.0-rc.1", "0.1.0") == Ordering.Less)
+    assert(compareVersions("0.1.0", "0.1.0-rc.1") == Ordering.Greater)
+    assert(compareVersions("0.2.0-rc.1", "0.1.9") == Ordering.Greater)
+    assert(compareVersions("0.1.0-rc.1", "0.1.0-rc.1") == Ordering.Equal)
+  }
+
+  test "pre-releases by SemVer: alpha before beta before rc, and their numbers as numbers" {
+    assert(compareVersions("1.0.0-alpha.3", "1.0.0-beta.1") == Ordering.Less)
+    assert(compareVersions("1.0.0-beta.2", "1.0.0-rc.1") == Ordering.Less)
+    assert(compareVersions("0.1.0-rc.10", "0.1.0-rc.2") == Ordering.Greater)
+    assert(compareVersions("1.0.0-alpha", "1.0.0-alpha.1") == Ordering.Less)
+    assert(compareVersions("1.0.0-1", "1.0.0-alpha") == Ordering.Less)
+  }
+}
+
+group "the channel of a version" {
+  test "a tagged release is stable, a pre-release preview, nightly-YYYYMMDD nightly" {
+    assert(channelOf("0.1.0") == "stable")
+    assert(channelOf("0.1.0-rc.1") == "preview")
+    assert(channelOf("1.0.0-beta.2") == "preview")
+    assert(channelOf("2.0.0-alpha.1") == "preview")
+    assert(channelOf("nightly-20260929") == "nightly")
   }
 }
 
@@ -45,18 +70,26 @@ group "the day of a nightly" {
 }
 
 group "which releases the periodic check places" {
-  test "the newest stable release and the nightlies of thirty days, oldest first" {
+  test "the nightlies of thirty days, the newest preview and the newest stable release, oldest first" {
     const releases = [
       ReleaseInfo("nightly-20260929", draft: true, prerelease: true),
       ReleaseInfo("nightly-20260928", prerelease: true),
-      ReleaseInfo("v0.3.0-rc.1", prerelease: true),
+      ReleaseInfo("v0.11.0-rc.2", prerelease: true),
+      ReleaseInfo("v0.11.0-rc.10", prerelease: true),
+      ReleaseInfo("v0.12.0-rc.1", draft: true, prerelease: true),
       ReleaseInfo("nightly-20260927", prerelease: true),
       ReleaseInfo("v0.10.0"),
       ReleaseInfo("nightly-20260830", prerelease: true),
       ReleaseInfo("nightly-20260829", prerelease: true),
       ReleaseInfo("v0.9.0"),
     ]
-    assert(tagsOf(releasesToSync(releases)) == ["nightly-20260830", "nightly-20260927", "nightly-20260928", "v0.10.0"])
+    const expected = ["nightly-20260830", "nightly-20260927", "nightly-20260928", "v0.11.0-rc.10", "v0.10.0"]
+    assert(tagsOf(releasesToSync(releases)) == expected)
+  }
+
+  test "a first release candidate is placed while there is no stable release" {
+    const releases = [ReleaseInfo("v0.1.0-rc.1", prerelease: true), ReleaseInfo("nightly-20260929", prerelease: true)]
+    assert(tagsOf(releasesToSync(releases)) == ["nightly-20260929", "v0.1.0-rc.1"])
   }
 
   test "no release at all, or only drafts, is nothing to place" {
@@ -90,5 +123,18 @@ group "versions.txt" {
 
   test "a list with no stable release names none" {
     assert(newestStableIn("nightly-20260927 nightly\n") == None)
+    assert(newestStableIn("0.1.0-rc.1 preview\nnightly-20260927 nightly\n") == None)
+  }
+
+  test "previews between stable and nightly, newest first by SemVer" {
+    var list = ""
+    list = listedVersions list, "nightly-20260929", "nightly"
+    list = listedVersions list, "0.1.0-rc.2", "preview"
+    list = listedVersions list, "0.1.0-rc.10", "preview"
+    list = listedVersions list, "0.1.0", "stable"
+    list = listedVersions list, "0.2.0-beta.1", "preview"
+    const previews = "0.2.0-beta.1 preview\n0.1.0-rc.10 preview\n0.1.0-rc.2 preview\n"
+    assert(list == "0.1.0 stable\n{previews}nightly-20260929 nightly\n")
+    assert(newestStableIn(list) == "0.1.0")
   }
 }
