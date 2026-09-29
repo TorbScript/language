@@ -1,6 +1,7 @@
 /**
  * Tests for `torb upgrade` (compiler/src/cli/upgrade.trb): the pure parts - the `install.trb` format, the
- * `versions.txt` manifest, version comparison and sorting, picking a hash out of `SHA256SUMS` - and, each in a
+ * `versions.txt` manifest, version comparison and sorting by SemVer's precedence, the release a channel offers and the
+ * fallback of the default channel, picking a hash out of `SHA256SUMS` - and, each in a
  * temporary directory of its own, what it does to files: hashing one, unpacking an archive with `std/archive` and
  * placing the toolchain, switching the symbolic link of POSIX, and setting the running `torb.exe` aside and mirroring
  * the copy of Windows.
@@ -16,9 +17,9 @@ use TarEntry, TarKind, tarred from "std/archive"
 use gzipped from "std/compression"
 use hostTarget, TargetSystem from "../src/project/target"
 use parentPath from "../src/project/path"
-use InstallInfo, ReleaseEntry from "../src/cli/upgrade"
+use InstallInfo, ReleaseEntry, ReleaseChoice from "../src/cli/upgrade"
 use parseInstallInfo, renderInstallInfo from "../src/cli/upgrade"
-use parseVersionsManifest, compareVersions, releasesOf, newestOf from "../src/cli/upgrade"
+use parseVersionsManifest, compareVersions, releasesOf, newestOf, chosenRelease from "../src/cli/upgrade"
 use packageManagerCommand, expectedHash from "../src/cli/upgrade"
 use sha256Of, unpack, placeToolchain, linkActive, setAsideExecutable, mirrorDirectory from "../src/cli/upgrade"
 
@@ -93,6 +94,20 @@ group "comparing versions" {
   test "a nightly compares as text, which sorts a fixed-width date correctly" {
     assert(compareVersions("nightly-20260925", "nightly-20260101") > 0)
   }
+
+  test "a pre-release is older than its release, and older than nothing before it" {
+    assert(compareVersions("0.1.0-rc.1", "0.1.0") < 0)
+    assert(compareVersions("0.1.0", "0.1.0-rc.1") > 0)
+    assert(compareVersions("0.1.0-rc.1", "0.0.9") > 0)
+    assert(compareVersions("0.2.0-rc.1", "0.1.1") > 0)
+  }
+
+  test "pre-releases follow SemVer: alpha, beta, rc, and their numbers as numbers" {
+    assert(compareVersions("1.0.0-alpha.2", "1.0.0-beta.1") < 0)
+    assert(compareVersions("1.0.0-beta.3", "1.0.0-rc.1") < 0)
+    assert(compareVersions("0.1.0-rc.10", "0.1.0-rc.2") > 0)
+    assert(compareVersions("0.1.0-rc.1", "0.1.0-rc.1") == 0)
+  }
 }
 
 group "releasesOf and newestOf" {
@@ -110,6 +125,60 @@ group "releasesOf and newestOf" {
 
   test "a channel with nothing listed answers None" {
     assert(newestOf(parseVersionsManifest(manifest), "beta") == None)
+  }
+
+  test "the preview channel sorts its release candidates by SemVer, newest first" {
+    const previews = parseVersionsManifest "0.2.0-rc.2 preview\n0.2.0-rc.10 preview\n0.2.0-beta.1 preview\n"
+    const releases = releasesOf previews, "preview"
+    assert(releases.map({ _.version }).toList() == ["0.2.0-rc.10", "0.2.0-rc.2", "0.2.0-beta.1"])
+  }
+
+  test "the preview channel offers the stable releases too, so it is never behind stable" {
+    const listed = parseVersionsManifest "0.1.0 stable\n0.1.0-rc.1 preview\nnightly-20260925 nightly\n"
+    assert(newestOf(listed, "preview") == ReleaseEntry("0.1.0", "stable"))
+    const releases = releasesOf listed, "preview"
+    assert(releases.map({ _.version }).toList() == ["0.1.0", "0.1.0-rc.1"])
+    const ahead = parseVersionsManifest "0.2.0-rc.1 preview\n0.1.0 stable\n0.1.0-rc.1 preview\n"
+    assert(newestOf(ahead, "preview") == ReleaseEntry("0.2.0-rc.1", "preview"))
+    assert(newestOf(ahead, "stable") == ReleaseEntry("0.1.0", "stable"))
+  }
+}
+
+group "chosenRelease: the channel, and the fallback of the default channel" {
+  const everything = parseVersionsManifest "0.1.0 stable\n0.2.0-rc.1 preview\nnightly-20260925 nightly\n"
+  const noStable = parseVersionsManifest "0.1.0-rc.2 preview\n0.1.0-rc.1 preview\nnightly-20260925 nightly\n"
+  const nightlyOnly = parseVersionsManifest "nightly-20260925 nightly\nnightly-20260924 nightly\n"
+
+  test "each channel's newest where it has one, and no fallback is needed" {
+    const stable = ReleaseChoice ReleaseEntry("0.1.0", "stable"), "stable"
+    assert(chosenRelease(everything, "stable", explicit: false) == stable)
+    const preview = ReleaseChoice ReleaseEntry("0.2.0-rc.1", "preview"), "preview"
+    assert(chosenRelease(everything, "preview", explicit: true) == preview)
+    const nightly = ReleaseChoice ReleaseEntry("nightly-20260925", "nightly"), "nightly"
+    assert(chosenRelease(everything, "nightly", explicit: false) == nightly)
+  }
+
+  test "the default channel without a stable release falls back to the newest preview" {
+    const choice = ReleaseChoice ReleaseEntry("0.1.0-rc.2", "preview"), "preview"
+    assert(chosenRelease(noStable, "stable", explicit: false) == choice)
+  }
+
+  test "without a preview either, the default channel falls back to the newest nightly" {
+    const choice = ReleaseChoice ReleaseEntry("nightly-20260925", "nightly"), "nightly"
+    assert(chosenRelease(nightlyOnly, "stable", explicit: false) == choice)
+  }
+
+  test "an explicit channel never falls back, and nothing listed is nothing to install" {
+    assert(chosenRelease(noStable, "stable", explicit: true) == None)
+    assert(chosenRelease(nightlyOnly, "preview", explicit: true) == None)
+    assert(chosenRelease(nightlyOnly, "preview", explicit: false) == None)
+    assert(chosenRelease([], "stable", explicit: false) == None)
+  }
+
+  test "a preview release once its stable release is out: the preview channel moves on to the stable one" {
+    const listed = parseVersionsManifest "0.1.0 stable\n0.1.0-rc.1 preview\n"
+    const choice = ReleaseChoice ReleaseEntry("0.1.0", "stable"), "preview"
+    assert(chosenRelease(listed, "preview", explicit: false) == choice)
   }
 }
 

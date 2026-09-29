@@ -12,6 +12,11 @@
  *     <home>/active                  the version the symlink (or, on Windows, the copy) points to
  *     <home>/install.trb             `channel = "..."` and `method = "..."`, `=` and nothing else in the repository
  *
+ * The channels are `stable` (a release), `preview` (the newest release candidate, beta or alpha - or the newest stable
+ * release where that is newer) and `nightly` (`nightly-YYYYMMDD`), as `versions.txt` lists them
+ * (docs/design/RELEASE.md section 5, "Channels"). Versions are ordered by SemVer's precedence, so `0.1.0-rc.1` comes
+ * before `0.1.0`.
+ *
  * `<home>` is `~/.torb` on Linux, macOS and FreeBSD, and `%LOCALAPPDATA%\torb` on Windows, where a running
  * `torb.exe` cannot be replaced in place - `%LOCALAPPDATA%\Programs\torb` is a copy instead of a symlink, and
  * upgrading it renames the running executable out of the way first.
@@ -34,13 +39,14 @@ use Process from "std/process"
 use Environment, OsError from "std/os"
 use hostTarget from "../project/target"
 use parentPath from "../project/path"
+use Version from "../package/version"
 use printErrorMessage from "./render"
 
 /** What `torb upgrade` was called with (parsed in `main.trb`, next to the other `*OptionsOf` functions). */
 public type UpgradeOptions {
   /** `torb upgrade 0.5.2`: an exact version, instead of the newest of the channel. */
   version: String?
-  /** `--channel nightly`: upgrades within that channel instead of the one `install.trb` names, and records it. */
+  /** `--channel preview`: upgrades within that channel instead of the one `install.trb` names, and records it. */
   channel: String?
   /** `--list`: what is installed and what is available, without installing anything. */
   list: Bool
@@ -55,6 +61,13 @@ public type InstallInfo {
 /** One line of `<base url>/versions.txt`: a version and the channel it belongs to. */
 public type ReleaseEntry {
   version: String
+  channel: String
+}
+
+/** What `torb upgrade` installs when no version is named, and the channel `install.trb` records from then on. */
+public type ReleaseChoice {
+  release: ReleaseEntry
+  /** The channel asked for, or the one the default channel fell back to ([chosenRelease]). */
   channel: String
 }
 
@@ -131,11 +144,20 @@ fn numericSegments(version: String): List<Int>? {
 }
 
 /**
- * `-1`, `0` or `1` as `a` is older than, the same as, or newer than `b`. Dotted numeric versions (`0.10.0`) compare
- * segment by segment as numbers, so `0.10.0` is newer than `0.9.0`; anything else, such as `nightly-20260925`,
- * compares as text, which already sorts a fixed-width date correctly.
+ * `-1`, `0` or `1` as `a` is older than, the same as, or newer than `b`. Two semantic versions compare by SemVer's
+ * precedence - the package manager's [Version] - so `0.10.0` is newer than `0.9.0` and a pre-release is older than
+ * its release: `0.1.0-alpha.1` < `0.1.0-beta.1` < `0.1.0-rc.2` < `0.1.0-rc.10` < `0.1.0`. Other dotted numbers (`0.4`)
+ * compare segment by segment; anything else, such as `nightly-20260925`, compares as text, which already sorts a
+ * fixed-width date correctly.
  */
 public fn compareVersions(a: String, b: String): Int {
+  if const (Some(left), Some(right)) = (Version.tryFrom(a).ok(), Version.tryFrom(b).ok()) {
+    return match left.compare(right) {
+      .Less => -1
+      .Equal => 0
+      .Greater => 1
+    }
+  }
   match (numericSegments(a), numericSegments(b)) {
     (Some(left), Some(right)) => compareSegments left, right
     _ => if a == b { 0 } else if a < b { -1 } else { 1 }
@@ -156,32 +178,53 @@ fn compareSegments(left: List<Int>, right: List<Int>): Int {
   0
 }
 
-/** A key that sorts by [compareVersions] through `String`'s own `Compare` - every numeric segment padded alike. */
-fn sortKey(version: String): String {
-  match numericSegments(version) {
-    Some(segments) => segments.map({ paddedSegment _ }).toList().joined(separator: ".")
-    None => version
+/** A version that sorts as [compareVersions] orders it. */
+type VersionOrder with Compare {
+  version: String
+
+  fn compare(other: Self): Ordering {
+    const order = compareVersions version, other.version
+    order.compare 0
   }
 }
 
-fn paddedSegment(value: Int): String {
-  const text = "{value}"
-  const width = 8
-  if text.byteLength() >= width {
-    text
-  } else {
-    "0".repeat(width - text.byteLength()) + text
-  }
-}
-
-/** Every release of `channel`, newest first. */
+/**
+ * Every release `channel` offers, newest first. `preview` offers the stable releases beside its own, so its newest is
+ * never behind stable: once `0.1.0` is out, the preview is `0.1.0` and not `0.1.0-rc.1`, until `0.2.0-rc.1` comes.
+ */
 public fn releasesOf(entries: List<ReleaseEntry>, channel: String): List<ReleaseEntry> {
-  entries.filter({ _.channel == channel }).toList().sorted(by: { sortKey _.version }).reversed()
+  entries.filter({ offers channel, _.channel }).toList().sorted(by: { VersionOrder _.version }).reversed()
+}
+
+/** Whether `channel` offers a release listed under `listed`: its own, and for `preview` the stable ones as well. */
+fn offers(channel: String, listed: String): Bool {
+  listed == channel || (channel == "preview" && listed == "stable")
 }
 
 /** The newest release of `channel`, or `None` where the manifest names none. */
 public fn newestOf(entries: List<ReleaseEntry>, channel: String): ReleaseEntry? {
   releasesOf(entries, channel).first()
+}
+
+/**
+ * The newest release of `channel` in `entries`. Where the channel is the default `stable`, nothing was asked for
+ * `explicit`ly and no stable release is listed yet, the newest preview stands in for it, and without one the newest
+ * nightly - the fallback `tools/install.sh` and `tools/install.ps1` make - and the channel of what stood in is the one
+ * followed from then on. `None` where there is nothing to install: an explicit channel never falls back.
+ */
+public fn chosenRelease(entries: List<ReleaseEntry>, channel: String, explicit: Bool): ReleaseChoice? {
+  if const Some(found) = newestOf(entries, channel) {
+    return ReleaseChoice found, channel
+  }
+  if explicit || channel != "stable" {
+    return None
+  }
+  for fallback in ["preview", "nightly"] {
+    if const Some(found) = newestOf(entries, fallback) {
+      return ReleaseChoice found, fallback
+    }
+  }
+  None
 }
 
 /** What to tell somebody whose toolchain `install.trb` says came from another method than this script. */
@@ -524,26 +567,21 @@ fn upgraded(home: String, info: InstallInfo, options: UpgradeOptions): Result<Vo
     None => {
       const text = fetchText(baseUrl(), "versions.txt")?
       const manifest = parseVersionsManifest text
-      match newestOf(manifest, channel) {
-        Some(entry) => entry.version
+      match chosenRelease(manifest, channel, explicit: options.channel.isSome()) {
         None => {
-          if options.channel.isSome() || channel != "stable" {
-            return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+          return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
+        }
+        Some(choice) => {
+          if choice.channel != channel {
+            // No stable release yet (docs/design/RELEASE.md section 5): the fallback tools/install.sh and
+            // tools/install.ps1 make where nothing was requested explicitly - the newest preview, else the newest
+            // nightly - and the toolchain follows that channel from here on, as install.trb would already say had it
+            // been installed today.
+            print "no stable release yet: installing the {choice.channel} {choice.release.version}"
+            channel = choice.channel
+            channelChanged = true
           }
-          // No stable release yet (docs/design/RELEASE.md section 3): the same fallback tools/install.sh and
-          // tools/install.ps1 make where nothing was requested explicitly, and the toolchain follows the nightly
-          // channel from here on - install.trb would already say so had it been installed today.
-          match newestOf(manifest, "nightly") {
-            Some(fallback) => {
-              print "no stable release yet: installing the nightly {fallback.version}"
-              channel = "nightly"
-              channelChanged = true
-              fallback.version
-            }
-            None => {
-              return Fail "no version of the \"{channel}\" channel is listed at {baseUrl()}/versions.txt"
-            }
-          }
+          choice.release.version
         }
       }
     }
