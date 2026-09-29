@@ -1,27 +1,26 @@
 ---
 title: Kontrollfluss und eigene Konstrukte
-summary: if, for, while und loop wie erwartet, und warum unless eine gewöhnliche Funktion ist, die du selbst hättest schreiben können.
+summary: Ifs und Schleifen funktionieren wie erwartet, und eine neue Kontrollstruktur oder ein Konfigurationsblock ist eine gewöhnliche Funktion, die du selbst schreiben kannst.
 kind: guide
 status: stable
-order: 90
+order: 100
 prerequisites:
   - collections-and-pipelines.md
-translates: 61f1bfbf5d3e
+translates: e5fa4aac7438
 ---
 
-`if`, `for`, `while` und `loop` sehen so aus, wie sie überall aussehen. Anders ist hier, was passiert, sobald dir die
-eingebauten ausgehen: Eine neue Kontrollstruktur ist eine Funktion, kein neues Stück Syntax.
+`if`, `for`, `while` und `loop` sehen aus wie überall. Neu ist, dass du eigene hinzufügen kannst: Eine
+Kontrollstruktur ist eine Funktion, keine neue Syntax.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du den eingebauten Kontrollfluss lesen, deine eigene Kontrollstruktur als Funktion
-schreiben, und einen Konfigurationsblock für das lesen, was er ist: gewöhnlicher Code.
+Am Ende dieser Seite kannst du den eingebauten Kontrollfluss benutzen, eine eigene Kontrollstruktur schreiben und
+einen Konfigurationsblock als den Funktionsaufruf lesen, der er ist.
 
-## Ein if ist ein Ausdruck
+## Ein if gibt einen Wert
 
-```trb
+```trb run
 const temperature = 23
-
 const feeling = if temperature < 10 {
   "cold"
 } else if temperature < 25 {
@@ -29,23 +28,23 @@ const feeling = if temperature < 10 {
 } else {
   "hot"
 }
-
 print feeling
+// prints pleasant
 ```
 
-Jeder Zweig eines so benutzten `if` muss einen Wert desselben Typs liefern, genau wie jeder Zweig eines `match`.
+Ein `if` kann einen Wert geben, wie ein `match`. Dann gibt jeder Zweig einen Wert desselben Typs.
 
-## Schleifen: for, while und loop
+## Schleifen
 
 ```trb run
-for i in 0..3 {
-  print i
+for index in 0..3 {
+  print index
 }
 
 var attempts = 0
 while attempts < 10 {
   attempts = attempts + 1
-  if attempts > 3 {
+  if attempts > 2 {
     break
   }
   print "attempt {attempts}"
@@ -55,58 +54,34 @@ while attempts < 10 {
 // prints 2
 // prints attempt 1
 // prints attempt 2
-// prints attempt 3
 ```
 
-`continue` und `break` funktionieren in beiden wie erwartet. `0..3` ist ein
-[Range](../language/values-and-types/ranges.md); das Ende ist ausgeschlossen, also gibt dies `0`, `1` und `2` aus.
+`0..3` zählt von 0 bis 3 ohne die 3; `0..=3` schließt sie ein. `break` und `continue` funktionieren wie gewohnt. Eine
+Schleife, die nicht von selbst endet, etwa die eines Servers, ist `loop { ... }`: `while true` ist ein Fehler, der dir
+das sagt.
 
-Das dritte ist `loop`, für eine Schleife, die nicht von selbst endet – ein Server, eine Leseschleife, eine
-Zustandsmaschine:
+## Eine eigene Kontrollstruktur schreiben
 
-```trb
-var line = "first"
-loop {
-  print line
-  line = ""
-  if line.isEmpty() {
-    break
-  }
-}
-```
-
-`while true` ist ein Kompilierfehler mit der Meldung `A loop that never ends is written `loop``, sodass es genau eine
-Schreibweise dafür gibt. Ohne `break` hat ein `loop` den Typ `Never`, was einer Funktion, deren ganzer Rumpf einer
-ist, erlaubt, ohne Ergebnis auszukommen; mit `break` ist es `Void` wie jede andere Schleife. Es gibt kein `break
-value`. Siehe [Loops](../language/execution/loops.md).
-
-## Eine Kontrollstruktur ist eine Funktion
-
-`unless` ist kein Schlüsselwort. Es ist eine Funktion, deren zweiter Parameter eine Closure ist, aufgerufen mit einer
-Trailing Closure, sodass es sich wie eine der eingebauten liest:
-
-```trb
+```trb run
 fn unless(condition: Bool, body: () => Void) {
   if !condition {
     body()
   }
 }
 
-const items: List<Int> = []
-unless items.isEmpty() { print "not empty" }
+const items = [1, 2]
+unless items.isEmpty() {
+  print "{items.length()} items"
+}
+// prints 2 items
 ```
 
-Für den Compiler ist an `unless` nichts Besonderes – `do` und `retry` aus der Standardbibliothek sind genauso
-geschrieben, als gewöhnliche Funktionen mit einer Closure oder einem
-[`lazy`](../language/functions/parameter-modes.md)-Parameter. Siehe
-[Control structures are functions](../language/extensibility/control-structures.md) für `retry`.
+`unless` ist eine gewöhnliche Funktion, deren letzter Parameter eine Closure ist. Ein Aufruf ohne Klammern und eine
+Closure dahinter lassen sie wie ein Schlüsselwort lesen. `test` aus der Standardbibliothek ist genauso geschrieben.
 
-## Ein Konfigurationsblock ist eine Empfänger-Closure
+## Ein Konfigurationsblock
 
-Eine [Empfänger-Closure](../language/configuration/receiver-closures.md) ist eine Closure, deren erster Parameter
-`self` heißt, sodass sich Namen darin gegen diesen Empfänger auflösen – genau wie innerhalb einer Methode.
-
-```trb
+```trb run
 type ServerOptions {
   var host: String = "localhost"
   var port: Int = 8080
@@ -122,19 +97,16 @@ const options = serve {
   host = "0.0.0.0"
   port = 8443
 }
-
 print options
+// prints ServerOptions(host: "0.0.0.0", port: 8443)
 ```
 
-`host = "0.0.0.0"` ist kein Aufruf einer Methode namens `host` – `host` ist ein Feld, und ein Feld wird nur mit `=`
-geschrieben. Zusammen sind Command Calls, Trailing Closures und diese Regel es, was `serve { ... }` oben wie ein
-Stück eingebaute Syntax lesen lässt, obwohl es nichts als ein Funktionsaufruf ist. Siehe
-[Builders and DSLs](../language/configuration/builders.md).
+Der Parameter der Closure heißt `self`, also bedeuten `host` und `port` im Block die Felder von `options`, so wie in
+einer Methode. Der Block sieht aus wie eine Konfigurationsdatei und ist gewöhnlicher Code: Er wird typgeprüft, und ein
+Tippfehler in einem Feldnamen ist ein Fehler.
 
 ## Weiter
 
-- [Modules and packages](modules-and-packages.md) - ein Programm in Dateien und ein Projekt aufteilen.
-- [Control structures are functions](../language/extensibility/control-structures.md) - `do`, `retry`, und wie du
-  eigene hinzufügst.
-- [Receiver closures](../language/configuration/receiver-closures.md) - die genaue Regel, wie sich ein Name darin
-  auflöst.
+- [Module und Pakete](modules-and-packages.md) - ein Programm in mehr als einer Datei.
+- [Loops](../language/execution/loops.md) - die genauen Regeln von `for`, `while` und `loop`.
+- [Builders and DSLs](../language/configuration/builders.md) - Konfigurationsblöcke im Detail.

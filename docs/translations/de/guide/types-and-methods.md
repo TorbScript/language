@@ -1,26 +1,25 @@
 ---
 title: Typen und Methoden
-summary: Wie du einen Typ deklarierst, ihm Methoden hinzufügst, und ein Verb, das ihn ändert, von dem Partizip unterscheidest, das eine Kopie zurückgibt.
+summary: Einen Typ mit Feldern deklarieren, ihm Methoden geben und eine Methode, die den Wert ändert, von einer unterscheiden, die eine geänderte Kopie zurückgibt.
 kind: guide
 status: stable
-order: 40
+order: 50
 prerequisites:
   - functions-and-closures.md
-translates: ccea4d4d7b9e
+translates: 918612f767f9
 ---
 
-`type` ist das eine Schlüsselwort, das einen Datentyp deklariert: Was andere Sprachen in `struct`, `class` und einen
-Record aufteilen, ist hier eine Deklaration. Diese Seite bringt dich von einem ersten `type` zu einer Methode, die
-ihn an Ort und Stelle ändert.
+`type` ist das eine Schlüsselwort für deine eigenen Daten. Was andere Sprachen auf Struct, Klasse und Record
+aufteilen, ist hier eine Deklaration.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du einen Typ mit Feldern und Methoden deklarieren und weißt, welche Methode eine `var fn`
-ist und welche nicht.
+Am Ende dieser Seite kannst du einen Typ mit Feldern und Methoden deklarieren, und du weißt, wann eine Methode eine
+`var fn` ist.
 
 ## Einen Typ deklarieren
 
-```trb
+```trb run
 type Point {
   var x: Int
   var y: Int
@@ -29,43 +28,23 @@ type Point {
 const origin = Point 0, 0
 const somewhere = Point x: 3, y: 4
 print "{origin} {somewhere}"
+print(origin == somewhere)
+// prints Point(x: 0, y: 0) Point(x: 3, y: 4)
+// prints false
 ```
 
-Ein Feld ist öffentlich, sofern nicht `private` markiert, und `const`, sofern nicht `var` markiert. Der
-[Konstruktor](../glossary.md#constructor) wird aus den Feldern in Deklarationsreihenfolge erzeugt, sodass `Point(0,
-0)` und `Point(x: 3, y: 4)` beide ohne eine dafür geschriebene Zeile funktionieren. `Equals`, `Hash` und `Show` werden
-ebenfalls erzeugt, weshalb `print` oben nichts Zusätzliches braucht, um einen `Point` zu zeigen. Die volle Liste
-dessen, was erzeugt wird, steht in [Declaring a type](../language/types/declaring-a-type.md).
+Ein Feld ist `const`, außer es sagt `var`, und öffentlich, außer es sagt `private`. Einen Konstruktor schreibst du
+nicht: Er nimmt die Felder der Reihe nach, nach Position oder nach Namen. Vergleichen mit `==`, Hashing, Ausgabe und
+`copy` gibt es ebenfalls gratis.
 
-## Eine Methode hinzufügen
+## Methoden hinzufügen
 
-Eine Methode ist eine Funktion, die innerhalb des Typs deklariert ist. Sie listet ihren Empfänger nicht auf: Die
-Parameterliste ist das, was der Aufrufer schreibt.
-
-```trb
-type Rectangle {
-  width: Int
-  height: Int
-
-  fn area(): Int {
-    width * height
-  }
-}
-
-const rectangle = Rectangle 3, 4
-print rectangle.area()
-```
-
-Innerhalb von `area` lösen sich `width` und `height` gegen den Empfänger auf, ohne `self.width` zu schreiben. Ein
-Member, der als [`static`](../language/types/methods.md) markiert ist, gehört stattdessen zum Typ und wird über den
-Typ statt über einen Wert aufgerufen:
-
-```trb
+```trb run
 type Circle {
   radius: Float
 
   fn area(): Float {
-    3.14159 * radius * radius
+    3.0 * radius * radius
   }
 
   static fn unit(): Circle {
@@ -73,14 +52,19 @@ type Circle {
   }
 }
 
-print Circle.unit().area()
+print Circle(2.0).area()
+print Circle.unit().radius
+// prints 12.0
+// prints 1.0
 ```
 
-## Einen Wert an Ort und Stelle ändern: `var fn`
+Eine Methode ist eine Funktion im Typ. Sie führt `self` nicht auf: In ihr ist `radius` das Feld des Werts, auf dem sie
+aufgerufen wurde. Eine `static fn` gehört zum Typ, nicht zu einem Wert, und wird auf dem Typ aufgerufen:
+`Circle.unit()`.
 
-Eine Methode, die ihren Empfänger ändert, ist eine `var fn`, und heißt ein **Verb**.
+## Eine Methode, die den Wert ändert
 
-```trb
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -95,13 +79,14 @@ type Counter {
 
 var counter = Counter()
 counter.increment()
-print counter.count
+const next = counter.incremented()
+print "{counter.count} {next.count}"
+// prints 1 2
 ```
 
-`increment` braucht `counter` als `var`-Bindung, weil eine Änderung immer einen
-[`var`-Pfad](../language/types/var-paths.md) von der Bindung an braucht. Ihr **Partizip**, `incremented`, ist eine
-gewöhnliche `fn` und gibt stattdessen eine geänderte Kopie zurück, mit `copy`, das jeder Typ kostenlos bekommt.
-`increment` über eine `const`-Bindung aufzurufen ist ein Kompilierfehler:
+Eine Methode, die den Wert ändert, ist eine `var fn`, und sie lässt sich nur auf einem `var` aufrufen. Ihr Zwilling
+`incremented` gibt eine mit `copy` gemachte geänderte Kopie zurück und funktioniert auf allem. Der Name unterscheidet
+sie: Ein Verb ändert an Ort und Stelle, ein Partizip gibt eine Kopie zurück.
 
 ```trb error
 type Counter {
@@ -117,10 +102,9 @@ frozen.increment()
 // error: `increment` needs a `var`
 ```
 
-Wie ein neues Paar benannt wird, steht in [Verbs and participles](../language/types/verbs-and-participles.md).
-
 ## Weiter
 
-- [Cases and matching](cases-and-matching.md) - ein Typ mit mehr als einer Form, und ihn auseinanderzunehmen.
-- [Declaring a type](../language/types/declaring-a-type.md) - Felder, Sichtbarkeit und was erzeugt wird, vollständig.
-- [Mutation and var paths](../language/types/var-paths.md) - was von der Bindung an `var` sein muss.
+- [Fälle und Pattern Matching](cases-and-matching.md) - ein Typ, der eine von mehreren Formen ist.
+- [Declaring a type](../language/types/declaring-a-type.md) - Felder, Standardwerte und was es gratis gibt,
+  vollständig.
+- [Verbs and participles](../language/types/verbs-and-participles.md) - wie ein Paar von Methodennamen gewählt wird.

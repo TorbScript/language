@@ -1,26 +1,25 @@
 ---
 title: Funktionen und Closures
-summary: Wie du eine Funktion deklarierst, wann sie ihren Rückgabetyp ausschreiben muss, und die eine Closure-Form, die die Sprache hat.
+summary: Eine Funktion mit typisierten Parametern, Standardwerten und Labels deklarieren, eine Closure schreiben und sie als letztes Argument eines Aufrufs übergeben.
 kind: guide
 status: stable
-order: 30
+order: 40
 prerequisites:
   - values-and-bindings.md
-translates: 68d903db27c7
+translates: 5e2a3402a5ba
 ---
 
-Eine Funktion wird mit `fn` deklariert, und eine Closure ist die eine Stelle, an der ein Wert ein Stück Code ist statt
-Daten. Diese Seite bringt dich von einer ersten `fn` dahin, eine Closure so zu übergeben, wie es der Rest dieser
-Sprache erwartet.
+Eine Funktion wird mit `fn` deklariert. Eine Closure ist ein Stück Code, das du in einer Bindung ablegen oder einer
+anderen Funktion übergeben kannst.
 
 ## Ziel
 
 Am Ende dieser Seite kannst du eine Funktion mit Standardwerten und Labels deklarieren, eine Closure schreiben und
-sie einer anderen Funktion als Trailing Closure übergeben.
+eine an einen Aufruf übergeben.
 
 ## Eine Funktion deklarieren
 
-```trb
+```trb run
 fn distance(x: Int, y: Int): Int {
   const dx = x * x
   const dy = y * y
@@ -28,112 +27,66 @@ fn distance(x: Int, y: Int): Int {
 }
 
 print distance(3, 4)
+// prints 25
 ```
 
-Jeder Parameter braucht einen Typ; der Rückgabetyp nicht, den leitet der Compiler aus dem letzten Ausdruck des
-Rumpfs ab. Eine `fn` wird [gehoisted](../language/functions/declaring-a-function.md): Sie kann oberhalb der Zeile
-aufgerufen werden, in der sie deklariert ist, was zwei Funktionen erlaubt, sich gegenseitig aufzurufen.
-
-```trb
-fn isEven(n: Int): Bool {
-  if n == 0 { true } else { isOdd(n - 1) }
-}
-
-fn isOdd(n: Int): Bool {
-  if n == 0 { false } else { isEven(n - 1) }
-}
-
-print isEven(10)
-```
-
-Eine `public`-Funktion ist der eine Fall, in dem der Rückgabetyp ausgeschrieben werden muss, selbst wenn er sich
-ableiten ließe: Ein Aufrufer außerhalb der Datei soll nicht den Rumpf lesen müssen, um zu wissen, was zurückkommt.
+Jeder Parameter hat einen Typ. Das Ergebnis ist die letzte Zeile des Rumpfs, und seinen Typ kannst du weglassen: Der
+Compiler ermittelt ihn. Eine `public`-Funktion schreibt ihn aus, damit ein Aufrufer in einer anderen Datei ihn sieht,
+ohne den Rumpf zu lesen. Eine Funktion kann oberhalb der Zeile aufgerufen werden, in der sie deklariert ist.
 
 ## Standardwerte und Labels
 
-```trb
+```trb run
 fn connect(host: String, port: Int = 5432, timeout: Int = 30): String {
-  "{host}:{port} (timeout {timeout}s)"
+  "{host}:{port}, timeout {timeout}s"
 }
 
 print connect("localhost")
 print connect("localhost", 3306)
 print connect("localhost", timeout: 10)
+// prints localhost:5432, timeout 30s
+// prints localhost:3306, timeout 30s
+// prints localhost:5432, timeout 10s
 ```
 
-`port` und `timeout` werden aus ihren Standardwerten gefüllt, wenn der Aufruf sie weglässt, und ein Aufruf kann jeden
-späteren Parameter über sein [Label](../language/functions/arguments.md) statt über seine Position benennen. Ein
-Standardwert wird bei jedem Aufruf, der ihn braucht, neu ausgewertet, also läuft `limits(memory: Int =
-64.megabytes())` `64.megabytes()` jedes Mal erneut aus. Den genauen Gültigkeitsbereich dafür beschreibt
-[Default values](../language/functions/default-values.md).
+Ein Parameter mit Standardwert kann wegfallen. Ein Aufruf kann einen Parameter beim Namen nennen, `timeout: 10`, um die
+davor zu überspringen.
 
-Ein abschließender `...name: Type`-Parameter ist ein
-[variadischer Parameter](../language/functions/variadics.md): Er sammelt jedes verbleibende positionale Argument in
-eine `List`.
+## Closures
 
-```trb
-fn sumAll(...numbers: Int): Int {
-  numbers.fold 0 { a, b => a + b }
-}
-
-print sumAll(1, 2, 3)
-```
-
-Eine Kollektion wird nie von selbst in ihn entpackt; sie mit `...` zu spreaden ist es, was das tut
-(`sumAll(1, ...someList)`).
-
-## Die eine Closure-Form
-
-Ein `{` in Ausdrucksposition ist immer eine Closure, nie ein Block. Sie erfasst den Scope, in dem sie geschrieben
-steht.
-
-```trb
+```trb run
 const double = { x: Int => x * 2 }
 const triple: (Int) => Int = { _ * 3 }
 
 print double(21)
 print triple(7)
+// prints 42
+// prints 21
 ```
 
-`double` schreibt den Typ seines Parameters aus; `triple` lässt ihn weg, weil die Typangabe der Bindung selbst schon
-sagt, was ein an die Closure übergebener Wert sein muss, und dann ist `_` der implizite erste Parameter. Beide Formen
-sind dieselbe [Closure](../language/functions/closures.md). `return` innerhalb einer Closure kehrt aus der Closure
-zurück, nie aus der Funktion darum herum.
+Eine Closure wird immer `{ parameters => body }` geschrieben. Ist der Typ klar aus der Stelle, an die die Closure geht,
+kannst du die Parameter weglassen und `_` für den ersten schreiben. Ein `{`, wo ein Wert erwartet wird, ist immer eine
+Closure, nie ein Block. `return` in einer Closure verlässt die Closure, nicht die Funktion um sie herum.
 
-Wo ein Rückgabetyp ausgeschrieben werden muss oder die Closure sich selbst aufrufen können muss, ist eine lokale `fn`
-stattdessen das richtige Werkzeug – sie ist dieselbe Deklaration wie eine `fn` auf oberster Ebene, kann also mit
-ihrem Namen übergeben werden:
+## Das letzte Argument kann dem Aufruf folgen
 
-```trb
-fn fib(n: Int): Int {
-  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
-}
-
-print([1, 2, 3, 4, 5].map(fib).toList())
-```
-
-## Eine Closure als letztes Argument übergeben
-
-Ist der letzte Parameter eines Aufrufs eine Funktion, kann die Closure dem Aufruf folgen, statt in seinen Klammern zu
-stehen – eine [Trailing Closure](../language/functions/trailing-closures.md).
-
-```trb
+```trb run
 const numbers = [1, 2, 3, 4]
 const doubled = numbers.map { _ * 2 }
 const total = numbers.fold 0 { sum, number => sum + number }
 
 print doubled.toList()
 print total
+// prints [2, 4, 6, 8]
+// prints 10
 ```
 
-`map` benennt seinen impliziten Closure-Parameter nach dem Parameter seiner eigenen Signatur, also kompiliert auch
-`numbers.map { value * 2 }`. Ein Aufruf ohne Argumente braucht trotzdem `()`: Ein bloßer Name wie `distance`
-bezeichnet die Funktion selbst, statt sie aufzurufen.
+Ist der letzte Parameter eine Funktion, kann die Closure hinter dem Aufruf stehen statt in den Klammern. So lesen sich
+`test "name" { ... }` und deine eigenen Kontrollstrukturen wie eingebaute Syntax. Ein Aufruf ohne Argumente braucht
+trotzdem `()`: `distance` allein ist die Funktion selbst, kein Aufruf.
 
 ## Weiter
 
-- [Types and methods](types-and-methods.md) - einen Typ deklarieren und ihm Verhalten geben.
-- [Declaring a function](../language/functions/declaring-a-function.md) - die genauen Regeln, samt Hoisting und
-  Inferenz.
-- [Parameter modes](../language/functions/parameter-modes.md) - `var`, `lazy`, Empfänger-Closures und
-  `Expression<Value>`-Parameter.
+- [Typen und Methoden](types-and-methods.md) - deine eigenen Typen, und Funktionen, die zu ihnen gehören.
+- [Declaring a function](../language/functions/declaring-a-function.md) - die genauen Regeln.
+- [Closures](../language/functions/closures.md) - was eine Closure erfasst, und wann.

@@ -1,26 +1,25 @@
 ---
 title: Fehler
-summary: Wie eine Funktion mit Result sagt, dass sie scheitern kann, und wie ein Aufrufer das mit match oder dem Fragezeichen-Operator behandelt.
+summary: Eine Funktion, die scheitern kann, gibt ein Result zurück, ein Wert, der fehlen kann, ist eine Option, und der Aufrufer behandelt beides mit match, dem Fragezeichen oder einem Ersatzwert.
 kind: guide
 status: stable
-order: 70
+order: 80
 prerequisites:
   - traits.md
-translates: 151f894a57e9
+translates: 6223a690dbb3
 ---
 
-Es gibt kein `null` und keine Exceptions. Abwesenheit ist ein Wert, `Option<Value>`, und Scheitern ist ebenfalls ein
-Wert, `Result<Value, Failure>`. Diese Seite schreibt eine Funktion, die scheitern kann, und zwei Wege, mit dem
-umzugehen, was zurückkommt.
+Es gibt kein `null` und keine Exceptions. Ein Wert, der fehlen kann, und ein Aufruf, der scheitern kann, sagen es
+beide in ihrem Typ, und der Compiler lässt den Aufrufer damit umgehen.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du eine Funktion schreiben, die `Result` zurückgibt, sie mit `match` behandeln und das
-mit dem Fragezeichen-Operator verkürzen.
+Am Ende dieser Seite kannst du eine Funktion schreiben, die scheitern kann, behandeln, was sie zurückgibt, und einen
+Fehlschlag mit `?` weiterreichen.
 
 ## Eine Funktion, die scheitern kann
 
-```trb
+```trb run
 type ConfigError {
   case Missing(key: String)
   case Invalid(key: String, reason: String)
@@ -28,7 +27,7 @@ type ConfigError {
 
 fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
   const raw = settings.get("port").okOr(ConfigError.Missing("port"))?
-  const port = Int.tryFrom(raw).mapError { ConfigError.Invalid "port", "not a number" }?
+  const port = Int.tryFrom(raw).mapError({ _ => ConfigError.Invalid "port", "not a number" })?
   if port < 1 || port > 65535 {
     return Fail ConfigError.Invalid("port", "out of range")
   }
@@ -36,71 +35,73 @@ fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
 }
 
 match readPort(["port": "80a"]) {
-  Ok(port) => print "Port {port}"
+  Ok(port) => print "port {port}"
   Fail(.Missing(key)) => print "{key} is missing"
   Fail(.Invalid(key, reason)) => print "{key} is invalid: {reason}"
 }
+// prints port is invalid: not a number
 ```
 
-Die zwei Fälle von [`Result`](../language/errors/result.md) sind `Ok` und `Fail`, und die Prelude importiert sie
-unqualifiziert, sodass ein Pattern `Ok(port)` schreibt statt `Result.Ok(port)`. `match` muss beide abdecken, genau
-wie es jeden Fall jedes anderen Typs mit Fällen abdecken muss.
+`Result<Int, ConfigError>` ist entweder `Ok` mit einem `Int` oder `Fail` mit einem `ConfigError`. Ein `match` behandelt
+beides, so wie es die Fälle jedes Typs behandelt. `settings.get` gibt ein `String?` zurück, und `okOr` macht aus einem
+fehlenden Wert ein `Fail`. Der Rumpf endet mit `port`, nicht mit `Ok(port)`: Der Wert wird für dich eingepackt.
 
-## Der Fragezeichen-Operator
+## Einen Fehlschlag mit ? weiterreichen
 
-`?` allein am Ende einer Zeile entpackt ein `Ok` und gibt sofort das `Fail` aus der umgebenden Funktion zurück – genau
-das benutzt `readPort` oben schon zweimal, einmal auf einer `Option`, die mit `okOr` in ein `Result` verwandelt wurde,
-einmal auf dem `Result`, das `Int.tryFrom` liefert.
+`?` nach einem Aufruf nimmt den Wert aus einem `Ok`. Bei einem `Fail` gibt es dieses `Fail` sofort aus der Funktion
+zurück. Das erste `readPort` benutzt es zweimal. Unterscheiden sich die Fehlertypen, wandelt `?` den Fehler um,
+sofern der Zieltyp sagt, wie:
 
-```trb
+```trb run
+type ConfigError {
+  case Missing(key: String)
+}
+
 type AppError {
   case Config(cause: ConfigError)
   case Startup(message: String)
 }
 
+fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
+  if settings.isEmpty() {
+    return Fail ConfigError.Missing("port")
+  }
+  8080
+}
+
 fn start(settings: Map<String, String>): Result<Void, AppError> {
   const port = readPort(settings)?
-  print "Listening on {port}"
+  print "listening on {port}"
   Ok void
 }
 
-match start(["port": "8080"]) {
+match start([:]) {
   Ok(_) => print "started"
-  Fail(error) => print "failed to start: {error}"
+  Fail(error) => print "failed: {error}"
 }
+// prints failed: Config(cause: Missing(key: "port"))
 ```
 
-`readPort` liefert einen `ConfigError`, aber `start` liefert einen `AppError` – `?` wandelt den einen über ein
-erzeugtes `From` in den anderen um, weil `AppError.Config` der eine Fall ist, der einen `ConfigError` umschließt, und
-kein anderer. Die genaue Regel dafür steht in
-[The question mark operator](../language/errors/question-mark.md).
+`AppError.Config` ist der eine Fall, der einen `ConfigError` hält, also packt `?` einen `ConfigError` von selbst
+hinein.
 
-## Abwesenheit: Option
+## Ein Wert, der fehlen kann
 
-Abwesenheit wird auf dieselbe Art modelliert, mit `Option<Value>`, geschrieben als `Value?`:
-
-```trb
-type User {
-  id: Int
-  name: String
-}
-
-const users = [User(1, "Ada"), User(2, "Grace")]
-
-fn findUser(id: Int): User? {
-  users.find { _.id == id }
-}
-
-const name = findUser(2)?.name ?? "nobody"
-print name
+```trb run
+const ages = ["Ada": 36]
+const age = ages.get("Grace") ?? 0
+print age
+print ages.get("Ada")
+// prints 0
+// prints Some(36)
 ```
 
-`?.` bildet über die `Option` ab, statt sie zu entpacken, und `??` gibt den Ersatzwert, wenn sie `None` ist. Siehe
-[Optional chaining](../language/errors/option-chaining.md).
+`Int?` ist kurz für `Option<Int>`: entweder `Some` mit einem Wert oder `None`. `??` gibt einen Ersatz für `None`, und
+`?.` greift in den Wert, wenn es einen gibt: `findUser(2)?.name`.
 
-## Panic ist für Bugs, nicht für erwartete Fehlschläge
+## Ein panic ist für Bugs
 
-```trb
+```trb run
 fn percentageOf(part: Int, total: Int): Int {
   if total == 0 {
     panic "total must not be zero"
@@ -109,16 +110,14 @@ fn percentageOf(part: Int, total: Int): Int {
 }
 
 print percentageOf(1, 4)
+// prints 25
 ```
 
-Ein `panic` gibt `panic: <message>` und die Aufrufstelle auf der Standardfehlerausgabe aus, endet mit Exitcode 101,
-und nichts läuft danach noch weiter. Es lässt sich nicht abfangen, weil es sagt, dass das Programm einen Zustand
-erreicht hat, den sein Autor für unmöglich hielt – ein erwarteter Fehlschlag ist ein `Fail`, kein `panic`. Siehe
-[panic](../language/errors/panic.md).
+`panic` beendet das Programm mit Exit-Code 101, und nichts kann es abfangen. Nimm es für einen Zustand, der unmöglich
+sein sollte. Eine schlechte Eingabe ist ein erwarteter Fehlschlag, und ein erwarteter Fehlschlag ist ein `Fail`.
 
 ## Weiter
 
-- [Collections and pipelines](collections-and-pipelines.md) - eine Kollektion bauen, lesen und transformieren.
-- [Result](../language/errors/result.md) - das genaue Vokabular zu `Ok` und `Fail`.
-- [Declaring an error type](../language/errors/error-types.md) - ein Typ mit Fällen, und wann `From` dafür erzeugt
-  wird.
+- [Kollektionen und Pipelines](collections-and-pipelines.md) - Listen, Maps und Mengen, und wie du sie durchgehst.
+- [Result](../language/errors/result.md) - alles, was du mit `Ok` und `Fail` machen kannst.
+- [The question mark operator](../language/errors/question-mark.md) - die genaue Regel, und wann umgewandelt wird.

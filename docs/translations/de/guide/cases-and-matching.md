@@ -1,25 +1,24 @@
 ---
 title: Fälle und Pattern Matching
-summary: Wie du einen Typ mit mehr als einer Form deklarierst und ihn mit einem match auseinandernimmst, das jeden Fall abdecken muss.
+summary: Einen Typ deklarieren, dessen Wert einer von mehreren Fällen ist, und ihn mit einem match auseinandernehmen, das jeden Fall behandeln muss.
 kind: guide
 status: stable
-order: 50
+order: 60
 prerequisites:
   - types-and-methods.md
-translates: 2dc33a3b84cf
+translates: 8a2b362494d8
 ---
 
-Ein `type` ist nicht nur Felder: Er kann auch `case`s haben, einen pro Form, die ein Wert annehmen kann. Diese Seite
-deklariert einen und nimmt ihn mit `match` auseinander.
+Ein `type` kann `case`s aufzählen: die Formen, die sein Wert annehmen kann. Das deckt ab, was andere Sprachen Enum,
+Sealed Class oder Tagged Union nennen.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du einen Typ mit Fällen deklarieren und ein `match` schreiben, das der Compiler als
-vollständig für jeden davon akzeptiert.
+Am Ende dieser Seite kannst du einen Typ mit Fällen deklarieren und ein `match` schreiben, das alle behandelt.
 
-## Einen Typ mit Fällen deklarieren
+## Fälle deklarieren
 
-```trb
+```trb run
 type Shape {
   case Circle(radius: Float)
   case Rectangle(width: Float, height: Float)
@@ -27,7 +26,7 @@ type Shape {
 
   fn area(): Float {
     match self {
-      .Circle(radius) => 3.14159 * radius * radius
+      .Circle(radius) => 3.0 * radius * radius
       .Rectangle(width, height) => width * height
       .Empty => 0.0
     }
@@ -35,66 +34,58 @@ type Shape {
 }
 
 const shapes = [Shape.Circle(2.0), Shape.Rectangle(2.0, 3.0), Shape.Empty]
-print(shapes.map { _.area() }.toList())
+print shapes.map({ _.area() }).toList()
+// prints [12.0, 6.0, 0.0]
 ```
 
-Ein [Case](../glossary.md#case) wird in einem Ausdruck als `Shape.Circle` geschrieben, oder als `.Circle`, wo der
-erwartete Typ schon sagt, welcher Typ gemeint ist – innerhalb des `match` oben ist das Subjekt `self`, also kann
-jeder Zweig den Typnamen weglassen.
+Ein Fall kann Werte tragen, wie `Circle(radius: Float)`, oder keine, wie `Empty`. Schreib ihn mit seinem Typ,
+`Shape.Circle`, oder mit einem Punkt, `.Circle`, wo der Typ schon klar ist. Ein Fall steht nie allein, außer die Datei
+importiert ihn, und jede Datei importiert `Some`, `None`, `Ok` und `Fail`.
 
-## Ein match muss alles abdecken
-
-`match` ist ein Ausdruck, und der Compiler prüft, dass seine Zweige jeden Fall abdecken. Den `.Empty`-Zweig oben zu
-entfernen kompiliert nicht:
+## Ein match behandelt jeden Fall
 
 ```trb error
 type Shape {
   case Circle(radius: Float)
-  case Rectangle(width: Float, height: Float)
   case Empty
+}
 
-  fn area(): Float {
-    match self {
-      .Circle(radius) => 3.14159 * radius * radius
-      .Rectangle(width, height) => width * height
-    }
+fn area(shape: Shape): Float {
+  match shape {
+    .Circle(radius) => 3.0 * radius * radius
   }
 }
 // error: `match` does not handle `.Empty`
 ```
 
-Das macht es sicher, später einen Fall hinzuzufügen: Jedes bestehende `match` auf dem Typ wird zu einem
-Kompilierfehler statt zu einer still falschen Antwort an der einen Aufrufstelle, die niemand aktualisiert hat. Siehe
-[Exhaustiveness](../language/pattern-matching/exhaustiveness.md).
+Ein `match` ist ein Ausdruck, und es muss jeden Fall behandeln. Kommt später ein Fall dazu, listet der Compiler also
+jedes `match` auf, das davon erfahren muss.
 
-## Auf mehr als den Fall matchen
+## Mehr als der Fall
 
-Ein Pattern kann ein Literal tragen, einen Bereich, mit `|` verbundene Alternativen und eine Guard-Bedingung:
-
-```trb
+```trb run
 fn describe(value: Int): String {
   match value {
     0 => "zero"
     1 | 2 | 3 => "small"
     4..=9 => "medium"
-    n if n < 0 => "negative ({n})"
+    number if number < 0 => "negative"
     _ => "large"
   }
 }
 
 print describe(-5)
 print describe(7)
+// prints negative
+// prints medium
 ```
 
-`_` ist der [Wildcard](../glossary.md#wildcard): Er matcht alles und bindet nichts, und er ist es, der das `match`
-oben jeden verbleibenden `Int` abdecken lässt. Jede Form, die ein Pattern annehmen kann, einschließlich Listenmustern
-und verschachtelten Mustern über Tupel, steht in
-[Pattern forms](../language/pattern-matching/pattern-forms.md).
+Ein Muster kann ein Literal sein, mehrere mit `|` verbunden, ein Bereich oder ein Name mit einer Bedingung nach `if`.
+Ein kleingeschriebener Name nimmt den Wert auf, und `_` passt auf alles und behält nichts. Ein Name, den der Zweig nie
+benutzt, ist ein Fehler: Schreib `_`.
 
 ## Weiter
 
-- [Traits](traits.md) - einem Typ eine Fähigkeit geben statt eines Falls.
-- [Cases and match](../language/pattern-matching/cases-and-match.md) - die genauen Regeln zum Schreiben und
-  Importieren eines Falls.
-- [Patterns in bindings and conditions](../language/pattern-matching/patterns-in-bindings.md) - `const Point(x, y) =`,
-  `if const` und `while const`.
+- [Traits](traits.md) - was ein Typ kann, statt was er ist.
+- [Cases and match](../language/pattern-matching/cases-and-match.md) - die genauen Regeln, und einen Fall importieren.
+- [Pattern forms](../language/pattern-matching/pattern-forms.md) - jedes Muster, auch für Listen und Tupel.

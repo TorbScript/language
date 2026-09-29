@@ -1,26 +1,25 @@
 ---
 title: Alles zusammensetzen
-summary: Ein kleines Programm - ein Typ mit Fällen, eine Funktion, die scheitern kann, und eine Pipeline -, das alles benutzt, was dieser Pfad gelehrt hat.
+summary: Ein kleines Programm - ein Typ mit Fällen, ein Typ mit Feldern, eine Funktion, die scheitern kann, und eine Pipeline -, das benutzt, was der Guide gezeigt hat.
 kind: guide
 status: stable
 order: 120
 prerequisites:
-  - tests-and-tooling.md
-translates: 06fc30b3e8bb
+  - modules-and-packages.md
+translates: 14e4b5d74859
 ---
 
-Jede Idee dieses Pfads taucht unten in einem Programm auf: ein `type` mit Feldern und Fällen, eine Funktion, die ein
-`Result` liefert, `match`, und eine Pipeline, die in einem Collector endet. Nichts hier ist neu: Diese Seite
-verdrahtet es nur miteinander.
+Diese Seite bringt nichts Neues. Sie setzt die Teile des Guides zu einem Programm zusammen, das du ausführen und
+ändern kannst.
 
 ## Ziel
 
-Am Ende dieser Seite hast du ein Programm ausgeführt, das einen Typ deklariert, Eingaben in ein `Result` validiert,
-und über eine Kollektion durch eine Pipeline berichtet.
+Am Ende dieser Seite hast du ein Programm ausgeführt, das Aufgaben modelliert, seine Eingabe prüft und über eine Liste
+berichtet.
 
-## Eine Aufgabe modellieren
+## Das Programm
 
-```trb check
+```trb run
 type Priority {
   case Low
   case Medium
@@ -37,36 +36,6 @@ type Task {
   }
 }
 
-fn priorityLabel(priority: Priority): String {
-  match priority {
-    .Low => "low"
-    .Medium => "medium"
-    .High => "high"
-  }
-}
-```
-
-`Priority` ist ein Typ mit drei Fällen und ohne Felder; `Task` ist ein Typ mit Feldern, einem davon mit Standardwert.
-`completed` ist ein Partizip: Es liefert eine geänderte Kopie, statt `self` zu ändern, mit dem erzeugten `copy`.
-
-## Eingaben validieren
-
-Eine Aufgabe mit leerem Titel ist ein Fehler, den der Aufrufer sehen muss, also liefert das Erzeugen einer ein
-`Result`:
-
-```trb check
-type Priority {
-  case Low
-  case Medium
-  case High
-}
-
-type Task {
-  title: String
-  priority: Priority
-  done: Bool = false
-}
-
 type TaskError {
   case EmptyTitle
 }
@@ -78,44 +47,7 @@ fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
   Task title, priority
 }
 
-match newTask("", Priority.Low) {
-  Ok(task) => print "created {task.title}"
-  Fail(error) => print "rejected: {error}"
-}
-```
-
-`Fail TaskError.EmptyTitle` und `Ok Task(title, priority)` sind beides Command Calls: Das erste Argument ist ein
-Wert, das zweite ein verschachtelter Aufruf, und keines braucht eigene Klammern, um eindeutig zu sein.
-
-## Die Pipeline laufen lassen
-
-Setz die zwei Teile über eine Liste von Versuchen zusammen, behalte nur die erfolgreichen, und berichte über sie:
-
-```trb check
-type Priority {
-  case Low
-  case Medium
-  case High
-}
-
-type Task {
-  title: String
-  priority: Priority
-  done: Bool = false
-}
-
-type TaskError {
-  case EmptyTitle
-}
-
-fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
-  if title.isEmpty() {
-    return Fail TaskError.EmptyTitle
-  }
-  Task title, priority
-}
-
-fn priorityLabel(priority: Priority): String {
+fn label(priority: Priority): String {
   match priority {
     .Low => "low"
     .Medium => "medium"
@@ -126,31 +58,38 @@ fn priorityLabel(priority: Priority): String {
 const attempts = [
   newTask("Write the guide", Priority.High),
   newTask("", Priority.Low),
-  newTask("Review the PR", Priority.Medium),
+  newTask("Review the change", Priority.Medium),
 ]
 
-const tasks = attempts.filterMap { _.ok() }.toList()
+var tasks = attempts.filterMap({ _.ok() }).toList()
+tasks[0] = tasks[0].completed()
 
 for task in tasks {
-  print "{task.title} ({priorityLabel(task.priority)})"
+  const mark = if task.done { "x" } else { " " }
+  print "[{mark}] {task.title} ({label(task.priority)})"
 }
 
-const highPriority = tasks.filter { _.priority == Priority.High }.count()
-print "High priority: {highPriority}"
+const open = tasks.filter({ !_.done }).count()
+print "{open} open"
+// prints [x] Write the guide (high)
+// prints [ ] Review the change (medium)
+// prints 1 open
 ```
 
-`filterMap` verwirft jedes `Fail` und entpackt jedes `Ok`, sodass der leere Titel die Schleife nie erreicht. Das
-gibt aus:
+## Was jeder Teil tut
 
-```text
-Write the guide (high)
-Review the PR (medium)
-High priority: 1
-```
+- `Priority` ist ein Typ mit drei Fällen und ohne Felder, `Task` ein Typ mit Feldern, eines davon mit Standardwert.
+- `completed` ist ein Partizip: Es gibt eine mit `copy` gemachte geänderte Kopie zurück und lässt die Aufgabe in Ruhe.
+- `newTask` kann scheitern, also gibt es ein `Result` zurück. Der leere Titel wird zu einem `Fail`, das der Aufrufer
+  behandeln muss.
+- `label` ist ein `match`, das jeden Fall von `Priority` behandelt.
+- `filterMap({ _.ok() })` behält die `Ok`-Werte und verwirft jedes `Fail`, also erreicht der leere Titel die Schleife
+  nie.
+- `tasks[0] = tasks[0].completed()` ändert die Liste dort, wo der Wert liegt, deshalb ist `tasks` ein `var`.
 
 ## Weiter
 
-- [The language reference](../language/index.md) - eine Seite pro Konstrukt, für die genaue Regel hinter allem oben.
-- [Task recipes](../how-to/index.md) - ein Rezept pro Aufgabe, sobald du die Sprache kennst.
-- [Why the language is like this](../explanation/index.md) - die Argumente hinter den Entscheidungen, von denen
-  dieser Pfad dir nur die Oberfläche gezeigt hat.
+- [Idiomatisches TorbScript](idiomatic-torbscript.md) - die Gewohnheiten, mit denen Code wie die Standardbibliothek
+  liest.
+- [Task recipes](../how-to/index.md) - eine Seite pro Aufgabe, sobald du die Sprache kennst.
+- [The language reference](../language/index.md) - die genaue Regel hinter allem auf dem Weg hierher.

@@ -1,184 +1,124 @@
 ---
-title: Dein erstes Programm ausführen
-summary: Die Toolchain bauen, eine einzelne Datei ausführen, und ein Projekt mit Manifest, Quelldatei und Test erstellen.
+title: Installieren und ausführen
+summary: TorbScript mit einem Befehl installieren, eine Datei ausführen und ein Projekt mit einem Test anlegen - die fünf Befehle, die du jeden Tag brauchst.
 kind: guide
 status: stable
-order: 10
-translates: 97858038fbd7
+order: 20
+translates: e60b0531db45
 ---
 
-Die Toolchain ist eine einzige Binärdatei namens `torb`. `torb run` prüft eine Datei und führt sie sofort in der VM
-innerhalb von `torb` aus, wofür kein C-Compiler nötig ist, und `torb build` kompiliert sie stattdessen zu einer
-nativen ausführbaren Datei – `torb run --native` macht beides in einem Schritt. Beide führen dasselbe Programm mit
-derselben Ausgabe aus.
+TorbScript ist ein Programm, `torb`. Es führt deinen Code aus, testet ihn, prüft ihn und formatiert ihn.
 
 ## Ziel
 
-Am Ende dieser Seite hast du eine `.trb`-Datei ausgeführt, ein Projekt mit Manifest und Test erstellt, und die zwei
-Befehle gesehen, die du am meisten benutzen wirst.
+Am Ende dieser Seite ist TorbScript installiert, du hast eine Datei ausgeführt, und du hast ein Projekt mit einem Test,
+der besteht.
 
-## Die Toolchain bauen
+## Installieren
 
-TorbScript ist selbst-hostend: Der Compiler ist in TorbScript geschrieben und kompiliert sich selbst aus einem Seed –
-einem `torb`, das schon existiert. Leg eines unter `seed/` ab und bau es einmal, vom Wurzelverzeichnis des
-Repositorys aus:
+Führe den einen Befehl für dein System von der [Installationsseite](../site/install.md) aus, öffne dann ein neues
+Terminal und prüfe:
 
 ```console
-$ sh tools/bootstrap.sh
-seed: seed/torb
-step 1: the seed builds the compiler
-step 2: that compiler builds the compiler again
-
-the fixpoint holds: both steps emitted the same C.
-torb: build/release/torb
+$ torb --version
+torb 0.1.0
 ```
 
-`build/release/torb` ist der Compiler, der dabei herauskommt, und `torb` unten ist diese Binärdatei. Ein
-C-Compiler im `PATH` ist, was es braucht (`$TORB_CC`, oder `clang`, `gcc`, `cc`).
+## Eine Datei ausführen
 
-## Eine einzelne Datei ausführen
+Speichere das als `hello.trb`:
 
-Schreib das in `hello.trb`:
-
-```trb
+```trb run
 const name = "World"
 print "Hello, {name}!"
+// prints Hello, World!
 ```
 
-Und führ es aus:
+Und führe es aus:
 
 ```console
 $ torb run hello.trb
 Hello, World!
 ```
 
-Zwei Dinge sind dabei passiert, die es wert sind, benannt zu werden. `print` ist eine gewöhnliche Funktion aus der
-Prelude, aufgerufen als **Command**: `print "..."` statt `print("...")`, weil ein Aufruf überall dort ohne Klammern
-geschrieben wird, wo es die Grammatik erlaubt. Und `{name}` innerhalb der Zeichenkette ist Interpolation, die mit
-jedem Ausdruck funktioniert.
+`{name}` setzt einen Wert in den Text ein. Eine Datei wie diese darf Code auf oberster Ebene enthalten; sie braucht
+kein `main`.
 
-Eine Datei, die nichts importiert, darf Code auf oberster Ebene wie diesen enthalten. Eine Datei, die importiert
-wird, enthält nur Deklarationen, weshalb es keine Reihenfolge der Modulinitialisierung in der Sprache gibt.
-
-## Ein Projekt erstellen
-
-`torb new <name>` ist der Anfang: Es schreibt dir ein Projekt, in der Form, die [`torb run`](../tooling/torb-run.md)
-und [`torb test`](../tooling/torb-test.md) schon zu bauen wissen. Ohne `--offline` startet es von einer Vorlage von
-[git.torb.dev](https://git.torb.dev) und stellt zuerst ein paar Fragen – siehe
-[`torb new`](../tooling/torb-new.md) für all das. Diese Seite benutzt das schlichte, eingebaute Gerüst, das
-`--offline` sofort schreibt, weil es das ist, worauf der Rest der Seite Zeile für Zeile aufbaut:
+## Ein Projekt anlegen
 
 ```console
 $ torb new hello --offline
 wrote hello/project.trb, hello/src/main.trb, hello/tests/main.test.trb
-```
-
-```text
-hello/
-├ src/
-├─ main.trb          print "Hello, hello"
-├ tests/
-├─ main.test.trb      use test from "std/test", one passing test
-└ project.trb          name = "hello", version = "0.1.0"
-```
-
-Führ es aus seinem Verzeichnis aus:
-
-```console
 $ cd hello
 $ torb run
 Hello, hello
 ```
 
-`project.trb` ist eine TorbScript-Datei, keine Konfigurationssprache. Es läuft gegen einen eingebauten `Project`-Wert
-in einer Sandbox, die Dateien unterhalb ihres eigenen Verzeichnisses lesen darf und nichts außerhalb davon, sodass ein
-Werkzeug es sicher lesen kann:
+`--offline` schreibt sofort ein kleines Startprojekt. Ohne das stellt `torb new` ein paar Fragen und beginnt mit einer
+Vorlage ([torb new](../tooling/torb-new.md)). Das Projekt besteht aus drei Dateien:
 
-```trb fragment
-name = "hello"
-version = "0.1.0"
+```text
+hello/
+├ src/
+├─ main.trb           das Programm, das torb run startet
+├ tests/
+├─ main.test.trb      ein Test, weil sein Name auf .test.trb endet
+└ project.trb         das Manifest: name = "hello", version = "0.1.0"
 ```
 
-`name = "hello"` schreibt das Feld `name` dieses `Project`, und das ist das ganze Manifest: `src/main.trb` ist das
-Programm wegen seines Namens, und `tests/main.test.trb` ist ein Test wegen seines Namens, also braucht keines von
-beiden eine Zeile. `torb new` schreibt den nackten Namen, den es bekommen hat; ein Paket, das veröffentlicht werden
-soll, benutzt stattdessen `owner/name`, weil ein Owner ein verifizierter Namensraum einer Registry ist. Was `torb
-new` sonst noch schreibt und warum, steht in [torb new](../tooling/torb-new.md).
+Auch `project.trb` ist TorbScript. Die Dateinamen entscheiden den Rest, also braucht das Manifest keine weiteren
+Zeilen.
 
-## Es erweitern
+## Testen
 
-`src/main.trb` ist das, was läuft, und ein Programm wird nie importiert – eine Datei, die Code auf oberster Ebene
-enthalten darf, kann das nicht sein –, also kommt die Funktion, die der Test unten aufruft, in ein eigenes Modul,
-`src/greeting.trb`:
+`tests/main.test.trb` enthält einen Test:
 
-```trb
-public fn greeting(name: String): String {
-  "Hello, {name}!"
-}
-```
-
-`public` ist es, was einer anderen Datei erlaubt, `greeting` zu importieren: Eine Deklaration ist privat zu ihrer
-Datei, sofern sie nichts anderes sagt. Ersetze die eine Zeile, die `torb new` in `src/main.trb` geschrieben hat,
-durch einen Aufruf davon:
-
-```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
-use greeting from "./greeting"
-
-print greeting("World")
-```
-
-```console
-$ torb run
-Hello, World!
-```
-
-## Einen Test schreiben
-
-Eine Testdatei ist ein Skript aus `test`- und `group`-Aufrufen, und die einzige Prüfung ist `assert`. Ersetze den
-Platzhaltertest, den `torb new` in `tests/main.test.trb` geschrieben hat, durch einen, der `greeting` aufruft:
-
-```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
+```trb check
 use test from "std/test"
-use greeting from "../src/greeting"
 
-test "greets by name" {
-  assert(greeting("World") == "Hello, World!")
+test "hello runs" {
+  assert(1 + 1 == 2)
 }
 ```
-
-`torb test` führt jede Datei des Pakets aus, deren Name auf `.test.trb` endet:
 
 ```console
 $ torb test
 tests/main.test.trb
-  ok      greets by name
+  ok      hello runs
 
 1 passed, 0 failed (1 file)
 ```
 
-`test` ist eine gewöhnliche Funktion aus `std/test`, deren letzter Parameter eine Closure ist, weshalb der Block der
-Zeichenkette folgen kann. `assert` nimmt einen `Expression<Bool>`: Es bekommt die Bedingung **und ihren Quelltext**,
-sodass ein Fehlschlag den Ausdruck und die Werte darin ausgibt, ohne ein Matcher-Vokabular, das man lernen müsste.
-Beachte die Klammern um Bedingungen wie `sum == 3`: Ein Operator auf oberster Ebene eines Arguments ist eine der
-Stellen, an denen der Kanon sie verlangt.
+`test` nimmt einen Namen und einen Block. `assert` nimmt eine Bedingung, und wenn sie nicht hält, gibt es die
+Bedingung und die Werte darin aus - es gibt also nichts weiter zu lernen.
 
 ## Prüfen und formatieren
 
-Die zwei Befehle, die du am häufigsten ausführen wirst:
-
 ```console
 $ torb check .
-4 files, no problems
+3 files, no problems
 $ torb format --check .
-0 of 4 files would change
+0 of 3 files would change
 ```
 
-`check` typprüft alles und antwortet mit `no problems` oder zeigt auf eine Zeile. `format` schreibt das eine Layout
-der Sprache über den Syntaxbaum, und `--check` meldet die Dateien, die nicht darin sind. Die vollständige Liste steht
-in [Verify your work](../tooling/verifying-your-work.md).
+`torb check` findet Fehler, ohne etwas auszuführen, und zeigt auf die Zeile. `torb format` schreibt deine Dateien im
+einen Layout der Sprache; `--check` meldet nur. Führe beide aus, bevor du etwas fertig nennst.
+
+## Ausliefern
+
+`torb run` startet sofort. Willst du eine Programmdatei, die ohne TorbScript läuft, bau eine:
+
+```console
+$ torb build --output hello
+wrote hello
+$ ./hello
+Hello, hello
+```
+
+`torb build` braucht einen C-Compiler auf deinem Computer; die [Installationsseite](../site/install.md) sagt, welchen.
 
 ## Weiter
 
-- [Values and bindings](values-and-bindings.md) - `const`, `var`, und warum das die ganze Mutationsgeschichte ist.
-- [The torb command](../tooling/the-torb-command.md) - jeder Unterbefehl.
-- [The language reference](../language/index.md) - eine Seite pro Konstrukt.
+- [Werte und Bindungen](values-and-bindings.md) - `const`, `var` und was eine Kopie bedeutet.
+- [Module und Pakete](modules-and-packages.md) - mehr als eine Datei, und wie ein Test deinen Code erreicht.
+- [The torb command](../tooling/the-torb-command.md) - jeder Befehl und jede Option.

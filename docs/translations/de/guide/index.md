@@ -1,56 +1,45 @@
 ---
 title: TorbScript lernen
-summary: Ein Guide für Programmierer, die schon eine andere Sprache kennen - eine 15-minütige Tour, dann eine Idee pro Seite, an einem Abend zu schaffen.
+summary: Für alle, die schon programmieren - eine Tour von fünfzehn Minuten, dann eine kurze Seite pro Idee, alles an einem Abend geschafft.
 kind: index
 status: stable
 order: 10
-translates: de483409bf00
+translates: 7371805ab4c8
 ---
 
-Wenn du schon beruflich Code schreibst, starte mit [TorbScript in 15 Minuten](torbscript-in-15-minutes.md) oder
-deiner Sprache in [Coming from another language](coming-from/index.md) – beides bringt dich noch heute dazu, echte
-Programme zu schreiben. Die nummerierten Seiten unten gehen denselben Weg noch einmal, langsamer und eine Idee pro
-Seite, für wenn fünfzehn Minuten an einer Stelle nicht gereicht haben. Jede hat ein `## Ziel`, das sagt, was an ihrem
-Ende funktioniert, und endet mit der nächsten Seite. Willst du die genaue Regel hinter etwas statt eines
-Durchlaufs, geh direkt zu [der Sprachreferenz](../language/index.md).
+Fang mit [der Tour](tour.md) an: fünfzehn Minuten, und jedes Beispiel läuft auf der Seite. Dann
+[installiere TorbScript](installing-and-running.md) und geh die Seiten unten der Reihe nach durch. Jede sagt, was du
+danach kannst, zeigt ein Beispiel und nennt die nächste Seite. Zusammen dauern sie einen Abend.
 
-Die zwölf Dateien von [`examples/tour`](../../examples/tour) sind derselbe Stoff als lauffähiger Code; der Pfad unten
-verlinkt dorthin, wo es hilft.
+Kennst du Rust, TypeScript, Python, Go, Kotlin oder Swift, dann legt
+[Coming from another language](coming-from/index.md) in einer Tabelle das, was du kennst, auf TorbScript um.
 
-## Wofür das hier ist
+## Für wen das ist
 
-Lernmaterial für jemanden, der noch nie TorbScript geschrieben hat: eine schnelle Tour, eine Tabelle pro Sprache, aus
-der Leute ankommen, und ein langsamerer Pfad mit einer Seite pro Idee, in Reihenfolge. Eine Seite hier setzt
-Programmiererfahrung voraus, keine TorbScript-Erfahrung, und zeigt, was du tippst und was herauskommt. Die
-Verantwortung für das Ergebnis liegt bei der Seite, nicht beim Leser.
-
-Was hier nicht hingehört: die genauen Regeln eines Konstrukts, die in [`language/`](../language/index.md) stehen;
-eine Aufgabe für sich allein, die ein [How-to](../how-to/index.md) ist; und das Argument für eine Design-Entscheidung,
-die eine [Explanation](../explanation/index.md) ist. Eine Seite darf eine Regel in einem Satz nennen und die Seite
-verlinken, die sie vollständig hat.
+Für alle, die schon in einer anderen Sprache programmieren können. Hast du noch nie programmiert, fängt der
+[Kurs](../start/index.md) bei null an. Willst du die genaue Regel hinter etwas, hat die
+[Sprachreferenz](../language/index.md) eine Seite pro Konstrukt.
 
 <!-- torb:index:begin -->
 
 ## Abschnitte
 
-- **[Coming from another language](coming-from/index.md)** – Eine Seite pro Sprache – eine Tabelle der 10 bis 15 Dinge, die direkt übertragbar sind, der 5, die dich überraschen werden, und was absichtlich fehlt.
+- **[Coming from another language](coming-from/index.md)** – Eine Seite pro Sprache, die du vielleicht kennst - was direkt passt, die Gewohnheiten, über die du stolperst, und was TorbScript weglässt.
 
 ## Seiten
 
-- **[Die Sprache in sechzig Sekunden](the-language-in-sixty-seconds.md)** – Das mentale Modell von TorbScript auf einem Bildschirm: Werte, Bindungen, kein null, keine Exceptions, Traits, und Aufrufe, die als Commands geschrieben werden.
-- **[TorbScript in 15 Minuten](torbscript-in-15-minutes.md)** – Die schnellste ehrliche Tour durch TorbScript für einen arbeitenden Programmierer, ein kurzes Beispiel und ein paar Sätze pro Idee.
-- **[Dein erstes Programm ausführen](installing-and-running.md)** – Die Toolchain bauen, eine einzelne Datei ausführen, und ein Projekt mit Manifest, Quelldatei und Test erstellen.
-- **[Werte und Bindungen](values-and-bindings.md)** – Warum const und var die ganze Mutationsgeschichte sind, was eine Kopie kostet, und die eine Falle, in die jeder tappt, der von einer Sprache mit Referenzen kommt.
-- **[Funktionen und Closures](functions-and-closures.md)** – Wie du eine Funktion deklarierst, wann sie ihren Rückgabetyp ausschreiben muss, und die eine Closure-Form, die die Sprache hat.
-- **[Typen und Methoden](types-and-methods.md)** – Wie du einen Typ deklarierst, ihm Methoden hinzufügst, und ein Verb, das ihn ändert, von dem Partizip unterscheidest, das eine Kopie zurückgibt.
-- **[Fälle und Pattern Matching](cases-and-matching.md)** – Wie du einen Typ mit mehr als einer Form deklarierst und ihn mit einem match auseinandernimmst, das jeden Fall abdecken muss.
-- **[Traits](traits.md)** – Wie du eine Fähigkeit deklarierst, sie einem Typ gibst, und den Trait selbst als Typ benutzt, der verbirgt, welcher konkrete Typ dahintersteht.
-- **[Fehler](errors.md)** – Wie eine Funktion mit Result sagt, dass sie scheitern kann, und wie ein Aufrufer das mit match oder dem Fragezeichen-Operator behandelt.
-- **[Kollektionen und Pipelines](collections-and-pipelines.md)** – Wie du eine List, Map und Set baust, eine an Ort und Stelle änderst oder eine geänderte Kopie bekommst, und Werte durch eine faule Pipeline ziehst.
-- **[Kontrollfluss und eigene Konstrukte](control-flow-and-dsls.md)** – if, for, while und loop wie erwartet, und warum unless eine gewöhnliche Funktion ist, die du selbst hättest schreiben können.
-- **[Module und Pakete](modules-and-packages.md)** – Wie use einen Namen aus einer anderen Datei oder der Standardbibliothek hereinholt, und was public für eine Deklaration auf oberster Ebene bedeutet.
-- **[Tests und die Toolchain](tests-and-tooling.md)** – Wie du mit test, group und assert einen Test schreibst, und die zwei Befehle, die prüfen, ob das Geschriebene korrekt ist.
-- **[Alles zusammensetzen](a-small-program.md)** – Ein kleines Programm - ein Typ mit Fällen, eine Funktion, die scheitern kann, und eine Pipeline -, das alles benutzt, was dieser Pfad gelehrt hat.
-- **[Idiomatisches TorbScript](idiomatic-torbscript.md)** – Die Gewohnheiten, die TorbScript wie TorbScript lesen lassen - Namen, Mutation, Aufrufe, Typen, Fehler, Closures, Ressourcen und Tasks - je als eine Regel, ein lauffähiges Beispiel und der Grund dahinter.
+- **[Eine Tour durch TorbScript](tour.md)** – Die ganze Sprache in fünfzehn Minuten für alle, die schon programmieren - Bindungen, Aufrufe, Funktionen, Typen, Fälle, Fehler, Traits und Pipelines, je ein kurzes Beispiel.
+- **[Installieren und ausführen](installing-and-running.md)** – TorbScript mit einem Befehl installieren, eine Datei ausführen und ein Projekt mit einem Test anlegen - die fünf Befehle, die du jeden Tag brauchst.
+- **[Werte und Bindungen](values-and-bindings.md)** – Eine Bindung ist const oder var, ein zweiter Name ist immer eine Kopie, und eine Änderung geht über den Pfad, an dem der Wert liegt.
+- **[Funktionen und Closures](functions-and-closures.md)** – Eine Funktion mit typisierten Parametern, Standardwerten und Labels deklarieren, eine Closure schreiben und sie als letztes Argument eines Aufrufs übergeben.
+- **[Typen und Methoden](types-and-methods.md)** – Einen Typ mit Feldern deklarieren, ihm Methoden geben und eine Methode, die den Wert ändert, von einer unterscheiden, die eine geänderte Kopie zurückgibt.
+- **[Fälle und Pattern Matching](cases-and-matching.md)** – Einen Typ deklarieren, dessen Wert einer von mehreren Fällen ist, und ihn mit einem match auseinandernehmen, das jeden Fall behandeln muss.
+- **[Traits](traits.md)** – Als Trait deklarieren, was ein Typ kann, ihn einem Typ jetzt oder später geben und den Trait als Typ benutzen, der jeden davon hält.
+- **[Fehler](errors.md)** – Eine Funktion, die scheitern kann, gibt ein Result zurück, ein Wert, der fehlen kann, ist eine Option, und der Aufrufer behandelt beides mit match, dem Fragezeichen oder einem Ersatzwert.
+- **[Kollektionen und Pipelines](collections-and-pipelines.md)** – Eine Liste, eine Map und eine Menge bauen, eine an Ort und Stelle ändern oder eine geänderte Kopie bekommen, und Werte durch eine Pipeline aus Schritten schicken.
+- **[Kontrollfluss und eigene Konstrukte](control-flow-and-dsls.md)** – Ifs und Schleifen funktionieren wie erwartet, und eine neue Kontrollstruktur oder ein Konfigurationsblock ist eine gewöhnliche Funktion, die du selbst schreiben kannst.
+- **[Module und Pakete](modules-and-packages.md)** – Ein Programm mit public und use auf Dateien aufteilen, aus der Standardbibliothek importieren und ein Projekt so anlegen, dass seine Tests seinen Code erreichen.
+- **[Alles zusammensetzen](a-small-program.md)** – Ein kleines Programm - ein Typ mit Fällen, ein Typ mit Feldern, eine Funktion, die scheitern kann, und eine Pipeline -, das benutzt, was der Guide gezeigt hat.
+- **[Idiomatisches TorbScript](idiomatic-torbscript.md)** – Die Gewohnheiten, mit denen Code wie die Standardbibliothek liest - Namen aus ganzen Wörtern, Werte vor geteilten Typen, eine geprüfte Tür für jede Regel, die ein Wert halten muss, using für Ressourcen und das Layout des Formatters.
 
 <!-- torb:index:end -->

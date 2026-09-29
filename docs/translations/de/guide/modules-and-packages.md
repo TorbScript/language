@@ -1,25 +1,24 @@
 ---
 title: Module und Pakete
-summary: Wie use einen Namen aus einer anderen Datei oder der Standardbibliothek hereinholt, und was public für eine Deklaration auf oberster Ebene bedeutet.
+summary: Ein Programm mit public und use auf Dateien aufteilen, aus der Standardbibliothek importieren und ein Projekt so anlegen, dass seine Tests seinen Code erreichen.
 kind: guide
 status: stable
-order: 100
+order: 110
 prerequisites:
   - control-flow-and-dsls.md
-translates: 2b9c0354ba2f
+translates: ad8eefcd8a88
 ---
 
-Ein Programm wächst schnell über eine Datei hinaus. Diese Seite teilt eines in zwei, holt einen Namen mit `use`
-herüber, und benennt das Paket, in dem die Standardbibliothek lebt.
+Jede Datei ist ein Modul. Ein Name gehört seiner Datei, bis er `public` sagt, und eine andere Datei holt ihn mit `use`
+herein.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du Code mit `use` und `public` auf Dateien aufteilen und einen Import aus der
-Standardbibliothek für das lesen, was er benennt.
+Am Ende dieser Seite kannst du ein Projekt auf Dateien aufteilen, aus der Standardbibliothek importieren und eine
+eigene Funktion testen.
 
-## Öffentliche Deklarationen und use
+## Einen Namen zwischen Dateien teilen
 
-Eine Deklaration auf oberster Ebene ist privat zu ihrer Datei, sofern nicht `public` markiert. Gegeben
 `src/greeting.trb`:
 
 ```trb
@@ -28,8 +27,7 @@ public fn greeting(name: String): String {
 }
 ```
 
-Eine andere Datei desselben Projekts erreicht sie mit `use`, wobei sie die Datei über einen relativen Pfad ohne
-Endung benennt:
+`src/main.trb`:
 
 ```trb
 use greeting from "./greeting"
@@ -37,71 +35,65 @@ use greeting from "./greeting"
 print greeting("World")
 ```
 
-Ein Name, der nicht `public` ist, lässt sich überhaupt nicht importieren – nicht per Konvention verborgen, sondern
-ein Kompilierfehler an der `use`-Zeile, die ihn nennt. Siehe
-[Visibility](../language/modules-and-packages/visibility.md) und
-[use](../language/modules-and-packages/use.md).
+`use` nennt eine Datei über ihren Pfad relativ zur importierenden Datei, ohne `.trb`. Ein Name ohne `public` lässt sich
+nicht importieren: Die `use`-Zeile ist ein Fehler.
 
-## Aus der Standardbibliothek importieren
+## Die Standardbibliothek
 
-Die Standardbibliothek ist eine Sammlung von Paketen namens `std/<name>`, und sie brauchen keinen Eintrag in den
-Abhängigkeiten eines Projekts – sie kommen mit der Toolchain.
+```trb check
+use File, IoError from "std/fs"
 
-```trb
-use File from "std/fs"
-
-fn readConfiguration(path: String): Result<String, IoError> {
+fn readSettings(path: String): Result<String, IoError> {
   File.readText path
 }
 ```
 
-`use File from "std/fs"` am Anfang einer Datei ist auch die Aussage "diese Datei rührt an Dateien": `std/fs` ist
-nicht Teil der [Prelude](../language/modules-and-packages/the-prelude.md), des Pakets, dessen öffentliche Namen –
-`Option`, `Result`, `List`, `print` und der Rest dessen, was jede Datei schon hat – überall ohne Import im Sichtbereich
-sind.
+Die Standardbibliothek ist eine Reihe von Paketen namens `std/...`, und sie kommen mit TorbScript. Die Grundlagen wie
+`print`, `List`, `Option` und `Result` sind in jeder Datei ohne `use` da. Alles, was aus dem Programm hinausreicht, wie
+Dateien oder das Netzwerk, braucht eines - so zeigt der Kopf einer Datei, was sie berührt.
 
-## Ein Fall kommt über seinen Typ herein
-
-Ein Fall eines Typs mit Fällen wird über diesen Typ importiert, und nur ein Fall kann das:
-
-```trb
-use Option, Option.Some, Option.None from "./option"
-```
-
-Danach sind `Some` und `None` in einem Pattern und in einem Ausdruck unqualifiziert, genau wie es die eigenen `Some`
-und `None` der Prelude schon sind – siehe [Importing cases](../language/pattern-matching/importing-cases.md).
-
-## Ein Paket ist ein Verzeichnis
+## Ein Projekt
 
 ```text
 hello/
 ├ src/
-├─ main.trb
-├─ lib.trb
-├─ greeting.trb
+├─ main.trb             das Programm, das torb run startet
+├─ greeting.trb         ein Modul
 ├ tests/
-├─ greeting.test.trb
-└ project.trb
+├─ greeting.test.trb    ein Test
+└ project.trb           das Manifest
 ```
 
-Die Namen der Dateien sagen, was jede ist. `src/main.trb` ist das Programm, das `torb run` ausführt, `src/lib.trb`
-ist das, was ein anderes Paket importiert, `src/greeting.trb` ist ein Modul, und eine Datei, deren Name auf
-`.test.trb` endet, ist ein Test, den `torb test` ausführt, egal wo er liegt. `project.trb` benennt das Paket
-`owner/name` und braucht für keine davon eine Zeile.
+Die Namen entscheiden, was jede Datei ist. `src/main.trb` ist das Programm, und nichts importiert es. Also liegt der
+Code, den Programm und Tests teilen, in einem Modul wie `src/greeting.trb`, und beide importieren es.
 
-Das Programm wird nie importiert – eine Datei, die Code auf oberster Ebene enthalten darf, kann das nicht sein –,
-also lebt das, was sich das Programm und ein Test teilen, in einem Modul wie `src/greeting.trb`, und beide
-importieren es. Nur ein als Abhängigkeit aufgeführtes Paket lässt sich von einem anderen aus erreichen, über seinen
-Namen und nie über einen relativen Pfad – siehe [Packages](../language/modules-and-packages/packages.md).
+## Deinen Code testen
 
-Ein Layout wie dieses – `src/main.trb` neben einem testbaren `src/greeting.trb` – ist genau das, wovon
-[`torb new --template app`](../tooling/torb-new.md) ausgeht; eine Bibliothek mit einem `src/lib.trb` und nichts zum
-Ausführen ist `torb new`s eigene Standardvorlage, `package`.
+`tests/greeting.test.trb`:
+
+```trb
+use test from "std/test"
+use greeting from "../src/greeting"
+
+test "greets by name" {
+  assert(greeting("World") == "Hello, World!")
+}
+```
+
+```console
+$ torb test
+tests/greeting.test.trb
+  ok      greets by name
+
+1 passed, 0 failed (1 file)
+```
+
+`torb test` führt jede Datei aus, deren Name auf `.test.trb` endet. `group "name" { ... }` fasst mehrere Tests unter
+einem Namen zusammen. Die Klammern in `assert(...)` sind nötig, weil das Argument auf oberster Ebene einen Operator hat.
 
 ## Weiter
 
-- [Tests and the toolchain](tests-and-tooling.md) - einen Test schreiben und die Prüfungen ausführen.
-- [use](../language/modules-and-packages/use.md) - jede Import-Form, einschließlich Umbenennen und
-  Namensraum-Importen.
-- [The prelude](../language/modules-and-packages/the-prelude.md) - was überall im Sichtbereich ist, und warum
-  Capabilities nicht dazugehören.
+- [Alles zusammensetzen](a-small-program.md) - ein Programm, das alles bisherige benutzt.
+- [use](../language/modules-and-packages/use.md) - jede Form eines Imports, auch das Umbenennen.
+- [Packages](../language/modules-and-packages/packages.md) - was ein Paket ist, und wie ein anderes Projekt davon
+  abhängt.

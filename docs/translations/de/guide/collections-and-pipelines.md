@@ -1,82 +1,71 @@
 ---
 title: Kollektionen und Pipelines
-summary: Wie du eine List, Map und Set baust, eine an Ort und Stelle änderst oder eine geänderte Kopie bekommst, und Werte durch eine faule Pipeline ziehst.
+summary: Eine Liste, eine Map und eine Menge bauen, eine an Ort und Stelle ändern oder eine geänderte Kopie bekommen, und Werte durch eine Pipeline aus Schritten schicken.
 kind: guide
 status: stable
-order: 80
+order: 90
 prerequisites:
   - errors.md
-translates: 79f6b7c8db50
+translates: 45ddde66f5cc
 ---
 
-`List`, `Map` und `Set` sind Werte, also gilt die Bindungsregel aus
-[Werte und Bindungen](values-and-bindings.md) für sie genauso wie für einen `Point`. Diese Seite baut von jeder eine,
-ändert eine an Ort und Stelle, und liest eine Pipeline bis zu einem Ergebnis durch.
+`List`, `Map` und `Set` sind Werte wie alle anderen, also ist ein zweiter Name eine Kopie, und eine Änderung braucht
+ein `var`.
 
 ## Ziel
 
-Am Ende dieser Seite kannst du eine `List`, eine `Map` und ein `Set` bauen, bei einer Kollektion ein Verb von seinem
-Partizip unterscheiden, und eine Pipeline schreiben, die in einem Collector endet.
+Am Ende dieser Seite kannst du eine Kollektion bauen und ändern, über sie laufen und sie mit einer Pipeline in eine
+andere verwandeln.
 
-## Eine Kollektion bauen
+## Bauen und ändern
 
-```trb
-const numbers = [1, 2, 3]
+```trb run
+var numbers = [1, 2, 3]
 var ages = ["Ada": 36, "Grace": 45]
-const primes = Set.of 2, 3, 5, 7
+var seen: Set<String> = []
+
+numbers.append 4
+numbers[0] = 10
+ages["Alan"] = 41
+seen.insert "Ada"
 
 print numbers
 print ages
-print primes
+print seen
+// prints [10, 2, 3, 4]
+// prints ["Ada": 36, "Grace": 45, "Alan": 41]
+// prints {"Ada"}
 ```
 
-`[1, 2, 3]` ist eine `List<Int>`, `["Ada": 36, "Grace": 45]` ist eine `Map<String, Int>`, und ein `Set` wird über eine
-Factory gebaut, weil es kein eigenes Literal hat. Siehe [Lists](../language/collections-and-iteration/lists.md) und
-[Maps and sets](../language/collections-and-iteration/maps-and-sets.md).
+`[1, 2, 3]` ist eine `List<Int>` und `["Ada": 36]` eine `Map<String, Int>`. Eine leere Kollektion ist `[]`, oder `[:]`
+für eine Map, mit dem Typ an der Bindung. Jede Kollektion hat ihr eigenes Wort fürs Hinzufügen: Eine Liste hängt an
+(`append`), eine Menge fügt ein (`insert`), eine Map setzt (`set`). Alle entfernen (`remove`).
 
-## Ein Verb ändert sie, sein Partizip nicht
+Jede Änderung hat einen Zwilling, der eine geänderte Kopie zurückgibt und auf einem `const` funktioniert:
 
-```trb
-var buffer = numbers
-buffer.append 4
-buffer[0] = 10
-print numbers
-print buffer
+```trb run
+const numbers = [1, 2, 3]
+const more = numbers.appended(4).removed(1)
+print "{numbers} {more}"
+// prints [1, 2, 3] [2, 3, 4]
 ```
 
-`buffer` ist eine Kopie von `numbers`, also rührt Wachsen und Schreiben in `buffer` `numbers` nie an – [Zuweisen ist
-Kopieren](values-and-bindings.md) gilt für eine `List` genauso wie für einen `Point`. Jede Änderung hat ein Verb und
-ein Partizip:
+## Darüber laufen
 
-```trb
-const more = numbers.appended(4).appended(5).removed(2)
-print more
-print numbers
-```
-
-`appended` und `removed` geben eine geänderte Kopie zurück und lassen `numbers` unberührt, funktionieren also über
-eine `const`-Bindung. `append` und `remove` brauchen ein `var`. Jede Art hat die Wörter, die jeder dafür kennt – eine
-Liste appended, ein Set inserted, eine Map setzt, ein Stack pusht und poppt, eine Queue enqueued und dequeued. Alle
-davon stehen in [The collection traits](../language/collections-and-iteration/collection-traits.md).
-
-## Lesen mit for
-
-```trb
-for number in numbers {
-  print number
-}
-
+```trb run
+const ages = ["Ada": 36, "Grace": 45]
 for (name, age) in ages {
   print "{name} is {age}"
 }
+// prints Ada is 36
+// prints Grace is 45
 ```
 
-Eine `Map` iteriert als `(key, value)`-Tupel. Was dabei einmal ausgewertet wird und was nicht, steht in
-[Iterating](../language/collections-and-iteration/iterating.md).
+`for` geht eine Liste Wert für Wert durch, und eine Map als `(key, value)`-Paare.
 
-## Eine Pipeline: faule Stufen, eine terminale Operation
+## Pipelines
 
-```trb
+```trb run
 type Employee {
   name: String
   department: String
@@ -89,35 +78,21 @@ const employees = [
   Employee("Linus", "Operations", 28),
 ]
 
-const seniorEngineers = employees
-  .filter { _.department == "Engineering" && _.age >= 40 }
-  .map { _.name }
-
-print seniorEngineers.toList()
+const seniors = employees.filter({ _.age >= 40 }).map({ _.name })
+print seniors.toList()
+print employees.filter({ _.department == "Engineering" }).count()
+// prints ["Grace"]
+// prints 2
 ```
 
-`filter` und `map` sind faule [Stufen](../glossary.md#stage): Nach der Zuweisung an `seniorEngineers` ist noch nichts
-gelaufen, weil eine Pipeline erst läuft, wenn eine terminale Operation die Werte durchzieht – hier `toList()`. Siehe
-[Pipelines](../language/collections-and-iteration/pipelines.md).
-
-Ein [Collector](../glossary.md#collector) ist eine wiederverwendbare Beschreibung dessen, was mit den Werten zu tun
-ist, statt noch einer von Hand geschriebenen terminalen Operation:
-
-```trb
-const headcount = employees.collect counting()
-const byDepartment = employees.collect(groupingBy { _.department })
-
-print headcount
-print byDepartment
-```
-
-Welche Collectors die Standardbibliothek mitbringt und wie du einen eigenen schreibst, steht in
-[Collectors](../language/collections-and-iteration/collectors.md).
+`filter` und `map` sind Schritte einer Pipeline. Sie sind faul: Nichts läuft, bis ein letzter Schritt wie `toList()`
+oder `count()` die Werte durchzieht, und dazwischen wird keine Liste gebaut. `sorted`, `take` und `flatMap` sind
+ebenfalls Schritte; `fold`, `find` und `count` beenden eine Pipeline.
 
 ## Weiter
 
-- [Control flow and your own constructs](control-flow-and-dsls.md) - warum `unless` eine Funktion ist, kein
-  Schlüsselwort.
-- [Slices](../language/collections-and-iteration/slices.md) - `list[from..to]` als Wert und als `var`-Pfad.
+- [Kontrollfluss und eigene Konstrukte](control-flow-and-dsls.md) - `if`, Schleifen und Kontrollstrukturen, die du
+  selbst schreibst.
+- [Pipelines](../language/collections-and-iteration/pipelines.md) - jeder Schritt, und wie eine Pipeline endet.
 - [The collection traits](../language/collections-and-iteration/collection-traits.md) - `List`, `Map`, `Set`, `Stack`
   und `Queue` vollständig.
