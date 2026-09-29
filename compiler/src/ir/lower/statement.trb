@@ -18,7 +18,7 @@ use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, SlotAlias 
 use substituted, irTypeOfClosed from "./context"
 use isVoidType, isNeverType, typeAtSpan, finishBlock, continueIn from "./context"
 use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
-use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
+use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic, implicitParameterOf from "./expression"
 use traitArgumentsOf from "../../semantics/checker/implementation"
 use lowerPatternBinding, lowerWhileBinding, variantLayoutOfType, variantNamed from "./match"
 use lowerPlaceAssignment, lowerSlotAssignment, isReferenceSlot from "./place"
@@ -319,6 +319,12 @@ fn lowerAssignment(
   const declared = lowering.checker.binding(binding).at
   // The slot of a `for var` is `container[key]` of the turn, so assigning it is `MutableIndex.set`
   if lowering.slotAliases.containsKey(declared) {
+    lowerPlaceAssignment lowering, builder, target, value
+    return
+  }
+  // `_ = value` where the closure's parameter is `var`: a pointer into the caller's place, which the path finds by the
+  // position its use names, because the checker declares every implicit parameter under the span of its closure
+  if implicitParameterOf(lowering, target.span).isSome() && lowering.closureAt == declared {
     lowerPlaceAssignment lowering, builder, target, value
     return
   }

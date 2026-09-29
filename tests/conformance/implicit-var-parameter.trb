@@ -1,0 +1,33 @@
+/**
+ * `_` stands for the parameter it fills, with the parameter's `var`: where the expected function type takes the
+ * parameter as `var`, `_` changes the caller's value exactly as a closure that names the parameter does. Until
+ * 2026-09-29 the checker declared every `_` a `const`, so `{ _.append(2) }` was refused where
+ * `{ items => items.append(1) }` was accepted.
+ */
+
+fn filled(body: (var items: List<Int>) => Void): List<Int> {
+  var items: List<Int> = [0]
+  body items
+  items
+}
+
+/** Two `var` parameters, both reached through their implicit names. */
+fn swapped(body: (var first: Int, var second: Int) => Void): (Int, Int) {
+  var first = 1
+  var second = 2
+  body first, second
+  (first, second)
+}
+
+print filled({ items => items.append 1 })
+print filled({ _.append 2 })
+const trailing = filled {
+  _.append 3
+  _.append 4
+}
+print trailing
+print(swapped({
+  const kept = _
+  _ = _2
+  _2 = kept
+}))

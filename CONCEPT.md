@@ -661,6 +661,9 @@ const clamp = { x: Int, low: Int, high: Int =>     // The body is a list of stat
 ```
 
 - Parameter types are inferred from the expected type. A closure without an expected type must annotate them.
+- So is a parameter's `var`, named or implicit: where the expected function type says `(var items: List<Int>) => Void`,
+  `{ items => items.append(1) }` and `{ _.append(1) }` both change the caller's list (decision 2026-09-29: `_` was a
+  `const` there, which made the two spellings of one closure mean different things).
 - The return type is always inferred. If it needs to be spelled out, annotate the binding or use a local `fn`
   (which is the "full form" of a function anyway, and can be passed by name).
 - `return` inside a closure returns from the closure. There is no non-local return. **`?` returns from the closure

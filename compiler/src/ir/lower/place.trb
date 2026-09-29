@@ -37,6 +37,7 @@ use isReferenceParameter, isClosedType from "../instances"
 use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf, locationOf from "./context"
 use substituted, SlotAlias from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf, topLevelVarAdvice from "./expression"
+use implicitParameterOf from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
 use Dispatched, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
@@ -202,7 +203,7 @@ public fn pathPreludeAt(
   const alias = slotAliasOf lowering, place.root
   const root = match alias {
     Some(found) => PlacePath found.root, found.type
-    None => rootReferenceOf(lowering, builder, place.root, what, at)?
+    None => rootReferenceOf(lowering, builder, place.root, target, what, at)?
   }
   const keys = loweredKeys(lowering, builder, place.steps, indexKeysOf(target), what, at)?
   // The slot of a `for var` is `container[key]` of the turn: the path goes on from there
@@ -374,12 +375,16 @@ fn rootReferenceOf(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   root: PlaceRoot,
+  target: Expression,
   what: String,
   at: Span,
 ): PlacePath? {
   match root {
     .Local(binding) => {
       const declared = lowering.checker.binding(binding).at
+      if const Some(found) = implicitParameterPlace(lowering, builder, declared, target) {
+        return found
+      }
       if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
         const annotation = typeOfPlace lowering, builder, place
         return PlacePath place, annotation
@@ -432,6 +437,36 @@ fn rootReferenceOf(
  * `project.trb` and a configuration file *are* the body of a receiver closure, and what applies that body is
  * `Sandbox.load` - so there is no frame to put the receiver in until the sandbox exists.
  */
+/**
+ * `_` of `{ _.append(2) }` where the parameter is `var`: the checker declares an implicit parameter under the span of
+ * its closure, so a path that starts at one finds it by the position its use names, the way a read does
+ * (`lowerLocalRead`). An implicit parameter of a closure around this one is none of this closure's slots.
+ */
+fn implicitParameterPlace(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  declared: Span,
+  target: Expression,
+): PlacePath? {
+  const name = rootNameOf(target)?
+  const position = implicitParameterOf(lowering, name.span)?
+  if lowering.closureAt != declared {
+    return None
+  }
+  const slot = lowering.closureParameters.get(position)?
+  PlacePath Reference(slot, []), builder.typeOfSlot(slot)
+}
+
+/** The name a path starts at: `_` of `_.items[0]`. */
+fn rootNameOf(target: Expression): Expression? {
+  match target.kind {
+    .Name(_) => target
+    .Member(base, _, _) => rootNameOf base
+    .Index(base, _) => rootNameOf base
+    _ => None
+  }
+}
+
 fn describeRoot(var lowering: Lowering, binding: BindingId): String {
   if lowering.checker.binding(binding).bindsReceiver {
     return "the receiver of a receiver script, which `Sandbox.load` applies"

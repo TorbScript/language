@@ -101,6 +101,21 @@ group "Implicit parameters" {
     assert(probed.adaptationsOf("_2") == ["parameter 1"])
   }
 
+  /** The parameter gets its meaning from the one it fills (CONCEPT, "No overloading"), whether it is named or not. */
+  test "`_` is a `var` where the expected function type takes the parameter as `var`, as a named one is" {
+    const source = "fn probe() \{\n  step \{ _.count = 1 \}\n  step \{ counter => counter.count = 2 \}\n\}\n\n"
+      + "type Counter \{\n  var count: Int = 0\n\}\n\n"
+      + "fn step(action: (var it: Counter) => Void) \{\n  var counter = Counter()\n  action(counter)\n  print counter.count\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "`_` of a parameter that is not `var` stays a `const`" {
+    const source = "fn probe() \{\n  look \{ _.count = 1 \}\n\}\n\n"
+      + "type Counter \{\n  var count: Int = 0\n\}\n\n"
+      + "fn look(action: (it: Counter) => Void) \{\n  action(Counter())\n\}"
+    assert problems(source).any({ _.contains "`_` is a `const`" })
+  }
+
   test "fewer implicit parameters than the function type has is allowed" {
     const source = "fn probe() \{\n  const found = twice \{ _ + 1 \}\n\}\n{twice}"
     assert problems(source).isEmpty()

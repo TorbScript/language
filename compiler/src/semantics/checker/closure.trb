@@ -44,11 +44,13 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   var implicit: List<String?> = []
   var types: List<TypeId> = []
   var used: List<Int> = []
+  var mutable: List<Bool> = []
   if !hasParameters {
     for index in (receiver + 1)..parameters.length() {
       implicit.append parameters[index].name
       types.append parameters[index].type
       used.append(-1)
+      mutable.append isVarMode(parameters[index].mode)
     }
   }
   // A closure whose parameters do not line up with what was expected of it said so already: its body is checked
@@ -59,7 +61,7 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
       expectedResult = found.result
     }
   }
-  const frame = ClosureFrame(at, 0, implicit, types, used, [], hasParameters, receiver + 1)
+  const frame = ClosureFrame(at, 0, implicit, types, used, [], hasParameters, receiver + 1, mutable: mutable)
   const result = checkClosureBody checker, closure, at, parameters, frame, receiver, expectedResult
   if written.broken {
     return wanted
@@ -431,15 +433,22 @@ fn hintFor(checker: Checker, frame: Int, index: Int, text: String): String {
   "The parameter of this closure is `{placeholder}`; to name it, write `\{ {rewritten} => ... \}`"
 }
 
-/** The binding of one implicit parameter, made the first time it is used so that the unused ones cost nothing. */
+/**
+ * The binding of one implicit parameter, made the first time it is used so that the unused ones cost nothing. It is a
+ * `var` where the expected function type takes the parameter as `var` (`(var items: List<Int>) => Void`), the same
+ * binding a closure that names the parameter gets, and a reference like it, which a closure that may outlive the call
+ * may not carry off.
+ */
 fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String, at: Span): Target {
   const known = checker.closureFrames[frame].used[index]
   var identifier = BindingId known
   if known < 0 {
     const annotation = checker.closureFrames[frame].types[index]
     const span = checker.closureFrames[frame].at
+    const isVar = checker.closureFrames[frame].mutable.get(index) ?? false
     // The name stays out of the scope chain: an implicit parameter is reached through the frame and nowhere else
-    identifier = checker.declareBinding LocalBinding("_", annotation, var: false, at: span)
+    const binding = LocalBinding "_", annotation, var: isVar, at: span, bindsParameter: true
+    identifier = checker.declareBinding binding
     var used = checker.closureFrames[frame].used
     used.set index, identifier.value
     const updated = checker.closureFrames[frame].copy(used: used)
