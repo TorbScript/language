@@ -59,12 +59,18 @@ fn serve(listener: TcpListener, identity: ServerIdentity): Task<Result<String, N
   "served"
 }
 
-/** Connects, trusting the test root, and reads what the server wrote. */
+/**
+ * Connects, trusting the test root, and reads what the server wrote up to its close_notify: a client that closed after
+ * the first chunk raced the server's `shutdown`, which on Linux then failed with "Transport endpoint is not connected".
+ */
 fn visit(address: SocketAddress): Task<Result<String, NetworkError>> {
   const tcp = TcpStream.connect(address).await()?
   var session = TlsStream.connect(tcp, "localhost", TlsSettings(trusted: [testRoot])).await()?
-  const got = session.receive().await()?
-  "read {got.map({ _.length() }) ?? 0} bytes"
+  var count = 0
+  while const Some(chunk) = session.receive().await()? {
+    count = count + chunk.length()
+  }
+  "read {count} bytes"
 }
 
 const identity = ServerIdentity.of(serverCertificate, serverKey).ok() ?? panic("no identity")
