@@ -316,7 +316,7 @@ question belongs to, then the one page that answers it:
 |---------|---------------|
 | `reference/design/index.md` | The specification documents behind a language or library feature that is still being built, each opening with a status line that says how much of it exists today. |
 | `reference/explanation/index.md` | The arguments behind the decisions, and the contrast pages for people and models arriving from Rust, Swift, Kotlin or TypeScript. |
-| `reference/guide/index.md` | The learning path from nothing to a working program, in order, one step per page. |
+| `reference/guide/index.md` | A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening. |
 | `reference/how-to/index.md` | One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works. |
 | `reference/language/index.md` | One page per construct of TorbScript, grouped by area, with the exact rules and the mistakes each construct invites. |
 | `reference/standard-library/index.md` | One page per package of std, what each contains, and which of them are in scope everywhere without an import. |
@@ -330,4 +330,4 @@ Every page is self-contained: it defines or links every term it uses, so one pag
 question. A page marked `status: draft` may still be wrong, so verify it against the compiler. A page marked
 `status: planned` describes a designed feature that does not compile yet, and its first line says so.
 
-There are 247 pages.
+There are 254 pages.

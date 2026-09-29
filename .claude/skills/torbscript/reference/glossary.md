@@ -571,6 +571,7 @@ value type, so a value is copied where it is given a second name, see [value sem
 Every value behaves like a number: giving it a second name, passing it to a function or storing it makes a copy, so a
 change happens only where it is written. A list or a text shares its storage until one side changes it, so the copy
 costs nothing before that; see [Why values instead of references](explanation/why-values-instead-of-references.md).
+The one exception is a [shared type](#shared-type).
 
 ### Var path
 
