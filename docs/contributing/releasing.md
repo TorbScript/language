@@ -68,7 +68,9 @@ the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-fo
 2. **Write the number into the three manifests.** `version = "0.2.0"` in `project.trb` and in `compiler/project.trb`,
    and `"version": "0.2.0"` in `editors/vscode/package.json` - the VS Code extension carries the toolchain's number.
    The workflow refuses a tag whose number differs from any of them, and CI refuses a `package.json` whose number is not
-   `project.trb`'s.
+   `project.trb`'s. The packages of the Agent Skills carry the number as well, and nothing checks them: `version: 0.2.0`
+   in `apm.yml` and `"version": "0.2.0"` in `skills/.codex-plugin/plugin.json`, whose number is how Codex tells a new
+   plugin from the one it has cached.
 3. **Write the release notes** in `docs/releases/0.2.0.md`, when there are notes to write: every breaking change, and
    the command that migrates it. Without the file the release says one line, its targets and how to verify a download.
    What changed in the extension goes into `editors/vscode/CHANGELOG.md` as a section `## 0.2.0`, which the stores
