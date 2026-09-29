@@ -109,11 +109,30 @@ public const brandCopies: List<(target: String, source: String)> = [
 public const playgroundFiles: List<String> = [
   "playground.js",
   "playground-worker.js",
+  "playground-editor.js",
   "playground.css",
   "torb.js",
   "torb.wasm",
   "torb.wasm.gz",
 ]
+
+/** The folder of the gallery of `/play` in a built playground, copied with it where it is there. */
+const playgroundExamples = "examples"
+
+/** The files of the gallery in a built playground, relative to it (`examples/index.json`, ...); none where it has none. */
+fn playgroundExampleFiles(playground: String): Result<List<String>, IoError> {
+  const folder = joinDocumentationPath playground, playgroundExamples
+  if !File.isDirectory(folder) {
+    return []
+  }
+  var found: List<String> = []
+  for entry in File.walk(folder)? {
+    if !File.isDirectory(joinDocumentationPath(folder, entry)) {
+      found.append "{playgroundExamples}/{entry}"
+    }
+  }
+  found
+}
 
 /**
  * The pages of `site/` the footer links when they exist, with the key of the word it shows: the legal pages of a
@@ -629,7 +648,8 @@ public fn writeBuiltSite(output: String, brand: String, site: BuiltSite): Result
 
 /**
  * The version of a built playground: twelve hexadecimal digits of the SHA-256 of its files but `torb.wasm`, whose
- * `torb.wasm.gz` is hashed instead - the same bytes, a quarter of them. A page loads the playground with it as `?v=`.
+ * `torb.wasm.gz` is hashed instead - the same bytes, a quarter of them - and of the gallery's files, with their names.
+ * A page loads the playground with it as `?v=`, and the playground loads every file of its own with the same query.
  */
 public fn playgroundVersionOf(playground: String): Result<String, IoError> {
   var hasher = Sha256()
@@ -638,10 +658,17 @@ public fn playgroundVersionOf(playground: String): Result<String, IoError> {
       hasher.add(File.readBytes(joinDocumentationPath(playground, name))?)
     }
   }
+  for name in playgroundExampleFiles(playground)? {
+    hasher.add name.bytes()
+    hasher.add(File.readBytes(joinDocumentationPath(playground, name))?)
+  }
   hasher.finished().hex().prefix(characters: 12)
 }
 
-/** Copies the built playground from `playground` into `assets/` of `output`. Answers with the number of files. */
+/**
+ * Copies the built playground from `playground` into `assets/` of `output`, with the gallery's folder where it has one.
+ * Answers with the number of files.
+ */
 public fn writePlayground(output: String, playground: String): Result<Int, IoError> {
   var created: Set<String> = []
   const assets = joinDocumentationPath output, "assets"
@@ -649,7 +676,13 @@ public fn writePlayground(output: String, playground: String): Result<Int, IoErr
   for name in playgroundFiles {
     File.copy(joinDocumentationPath(playground, name), joinDocumentationPath(assets, name))?
   }
-  playgroundFiles.length()
+  const examples = playgroundExampleFiles(playground)?
+  for name in examples {
+    const target = joinDocumentationPath assets, name
+    ensureDirectory(created, folderOf(target))?
+    File.copy(joinDocumentationPath(playground, name), target)?
+  }
+  playgroundFiles.length() + examples.length()
 }
 
 fn ensureDirectory(var created: Set<String>, directory: String): Result<Void, IoError> {
