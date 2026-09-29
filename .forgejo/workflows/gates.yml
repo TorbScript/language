@@ -17,8 +17,9 @@
 #                 (windows-x64) or qemu-user (linux-arm64); macos-arm64 is checked and not run
 #   extension     the VS Code extension of editors/vscode packed into a .vsix (tools/package-extension.sh), which a
 #                 release and a nightly carry among their assets
-#   playground    the compiler built for browser-wasm64 by the pinned emscripten (playground/build.sh), and its
-#                 smoke test under node (playground/smoke-test.mjs)
+#   playground    the compiler built for browser-wasm64 by the pinned emscripten (playground/build.sh), its smoke
+#                 test under node (playground/smoke-test.mjs, the language server too), and the committed editor
+#                 bundle checked against its source (playground/editor/build.sh --check)
 #
 # The forge has one runner today (labels ubuntu-latest and ubuntu-24.04), so windows-x64, linux-arm64 and macos-arm64
 # run only for the targets the repository variable TORB_RUNNERS names - `windows-x64 linux-arm64 macos-arm64`, or any
@@ -495,6 +496,9 @@ jobs:
         run: sh playground/build.sh
       - name: node playground/smoke-test.mjs
         run: node playground/smoke-test.mjs build/playground
+      # The editor is committed as a bundle: it has to be what its source and its lock file build
+      - name: sh playground/editor/build.sh --check
+        run: sh playground/editor/build.sh --check
 
   seed:
     name: pack the seed
