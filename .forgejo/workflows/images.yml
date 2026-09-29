@@ -1,22 +1,32 @@
 # The container images of the root server (docs/design/RELEASE.md section 7.11): cr.torb.dev/torbscript/release-sync,
 # cr.torb.dev/torbscript/site and cr.torb.dev/torbscript/registry, built from a release's own assets (the Linux
-# toolchains and the source archive) and never from a checkout, signed with the project's cosign key, with the OCI
-# labels that link them to the repository. cr.torb.dev is the forge's own container registry.
+# toolchains and the source archive) and never from a checkout - but for `edge`, the site of main, whose context of the
+# same shape the job makes from the pushed commit - signed with the project's cosign key, with the OCI labels that link
+# them to the repository. cr.torb.dev is the forge's own container registry.
 #
 #   stable    <version> and latest        (release.yml calls this once the release is published)
 #   preview   <version> and preview       (release.yml, for a pre-release: 0.2.0-rc.1 - never latest)
 #   nightly   nightly-YYYYMMDD and nightly (nightly.yml, the same)
+#   edge      site only: main-<commit>-<time> and edge (every push to main that changes what the site is built from)
 #
 # Called by those two with `source: artifact` - the `dist` artifact of their run - and run by hand (Actions -> images
 # -> Run workflow) with `source: release`, which downloads the assets of the published release from the forge instead:
 # the way to rebuild the images of a release, or to build them once cr.torb.dev is set up.
+#
+# `edge` is the site of main within minutes of a push, without waiting for a nightly (the job `edge` below): built from
+# the pushed commit by the same Dockerfile.site, and pushed as `edge`, which moves with every such push, and as
+# `main-<commit>-<time>` - the commit's first eight hexadecimal digits and its committer time in seconds - which never
+# moves and sorts in the order main moved, the tag a deployment follows (docs/contributing/releasing.md, "The site of
+# main"). It never touches latest, nightly or preview. A push that changes only the rest of the compiler does not run
+# it: the playground of `edge` is then as new as the last push that did, until the next one or a run by hand
+# (channel `edge`, on main); the nightly's images carry every change of the night as before.
 #
 # Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well for a stable release or a preview
 # that has a linux-arm64 toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) when
 # QEMU can be registered in the runner's Docker; otherwise amd64 images only, and the log says why. A nightly gets
 # amd64 images only: since its linux-arm64 toolchain is cross-compiled (gates.yml) every nightly has one, and an arm64
 # build stage under QEMU for each image would add hours to every night of the one runner, for images the root server
-# (x64) never pulls.
+# (x64) never pulls. `edge` is amd64 only for the same reason.
 #
 # The push logs in to cr.torb.dev with a token of the Authorized Integration whose audience is TORB_IMAGES_AUDIENCE
 # (`docker login` takes it as the password), asked for after the build so an hour-long arm64 build cannot outlive it.
@@ -27,6 +37,25 @@
 name: images
 
 on:
+  # The site of main: what `torb docs site`, `torb doc std` and playground/build.sh read, what Dockerfile.site copies
+  # in, and this file. editors/ is not among them - the site shows no file of it - and the rest of compiler/src is
+  # left to the nightly (the header above)
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "brand/**"
+      - "playground/**"
+      - "std/**"
+      - "compiler/src/documentation/**"
+      - "compiler/src/reference/**"
+      - "compiler/src/highlight/**"
+      - "tools/install.sh"
+      - "tools/install.ps1"
+      - "tools/deploy/Dockerfile.site"
+      - "tools/deploy/nginx.conf"
+      - "tools/deploy/cosign.pub"
+      - ".forgejo/workflows/images.yml"
   workflow_call:
     inputs:
       version:
@@ -45,14 +74,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: The release's version, which names its assets (0.2.0, nightly-20260927)
-        required: true
+        description: The release's version, which names its assets (0.2.0, nightly-20260927) - none for edge
+        required: false
         type: string
       channel:
-        description: stable, preview or nightly
+        description: stable, preview or nightly - or edge, the site of main from its newest commit (on main only)
         required: true
         type: choice
-        options: [stable, preview, nightly]
+        options: [stable, preview, nightly, edge]
       source:
         description: Where the assets come from
         required: false
@@ -60,7 +89,16 @@ on:
         options: [release, artifact]
         default: release
 
-# The push asks for an ID token, and this is the one place that grants it in both forms of the workflow. Called by
+# A newer push to main cancels the run of `edge` it supersedes, and a run by hand of `edge` does the same. Every other
+# run has a group of its own, so nothing cancels a release's or a nightly's images: the forge reads `cancel-in-progress`
+# as a plain boolean, never an expression, and the group is what tells the two apart
+concurrency:
+  group: >-
+    images-${{ forgejo.ref == 'refs/heads/main' && (forgejo.event_name == 'push' || inputs.channel == 'edge') && 'edge'
+    || format('{0}-{1}-{2}', inputs.channel, inputs.version, forgejo.run_id) }}
+  cancel-in-progress: true
+
+# The push asks for an ID token, and this is the one place that grants it in every form of the workflow. Called by
 # nightly.yml or release.yml, the forge expands `image` into jobs of the caller's run, and those jobs take the called
 # workflow's top-level `enable-openid-connect`: the key on a job of a called workflow is lost in the expansion (Forgejo
 # 16, the jobparser of runner 12.13), and the key on the calling job is never read for them (RELEASE.md section 14).
@@ -69,6 +107,8 @@ enable-openid-connect: true
 jobs:
   image:
     name: cr.torb.dev/torbscript/${{ matrix.image }}
+    # A release's or a nightly's images, called or by hand; the push to main and the channel edge are the job below
+    if: inputs.channel != 'edge' && !(forgejo.event_name == 'push' && forgejo.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -95,6 +135,7 @@ jobs:
       - name: The assets, from the published release
         if: inputs.source != 'artifact'
         run: |
+          [ -n "$VERSION" ] || { echo "::error::the channel $CHANNEL needs the version of a release"; exit 1; }
           case "$VERSION" in
             nightly-*) tag=$VERSION ;;
             *) tag="v$VERSION" ;;
@@ -199,6 +240,175 @@ jobs:
       - name: Sign the image
         env:
           NAME: ${{ steps.plan.outputs.name }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then
+            echo "::error::the secret COSIGN_PRIVATE_KEY is not set (docs/contributing/releasing.md, \"One-time setup\")"
+            exit 1
+          fi
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY --tlog-upload=false "$NAME@$DIGEST"
+
+      - name: Log out
+        if: always()
+        run: docker logout cr.torb.dev || true
+
+  # The site of main, fast (`edge` in the header above): one job from the checkout of the pushed commit to the signed
+  # image, because a second job would queue behind the jobs of ci.yml that became ready after it on the one runner.
+  #
+  #   torb          the cache of the bootstrap - the entry ci.yml's bootstrap writes for the same sources, so a push
+  #                 that leaves compiler/src, std/ and runtime/ alone finds it in seconds - else the published seed of
+  #                 this very commit, which tools/land.sh publishes before it pushes (.forgejo/actions/bootstrap,
+  #                 `seed-of-commit`), else a bootstrap from the newest seed
+  #   the context   what a release gives Dockerfile.site: torb-main-source.tar.gz (git archive) and
+  #                 torb-main-linux-x64.tar.gz (tools/package.sh around that torb), VERSION=main - so the site of main
+  #                 is built by the same stages as a release's, and its documentation is /docs/main/ (and /docs/latest/)
+  #   playground    torb.js and torb.wasm from the forge's cache, keyed on what they are compiled from; on a miss the
+  #                 build stage compiles them, and they are taken out of the builder's cache for the next run
+  #   emscripten    its image lives in the builder `torb`, which outlives the job on the runner's Docker
+  #
+  # No gate runs here beyond what building the site checks (`torb docs site` fails on a broken link): main moves only
+  # through landings that ran both tiers (tools/land.sh), and ci.yml runs them again for the same push beside this job.
+  # The ID token names this file, refs/heads/main and push (or workflow_dispatch), which the Authorized Integration
+  # `torbscript-images` admits as it is (RELEASE.md section 14).
+  edge:
+    name: cr.torb.dev/torbscript/site:edge (main)
+    # images.yml runs on a push to main only through its own trigger: release.yml calls it on the push of a tag, and
+    # nightly.yml on a schedule or by hand
+    if: forgejo.ref == 'refs/heads/main' && (forgejo.event_name == 'push' || inputs.channel == 'edge')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REGISTRY: cr.torb.dev
+      NAME: cr.torb.dev/torbscript/site
+      # What the documentation is of: /docs/main/, which Dockerfile.site links as /docs/latest/ as well
+      VERSION: main
+      # One large C compile at a time, as in gates.yml: the runner runs this beside the jobs of ci.yml
+      TORB_BUILD_SLOTS: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+      - uses: ./.forgejo/actions/bootstrap
+        with:
+          target: linux-x64
+          save-cache: "true"
+          seed-of-commit: "true"
+
+      - name: The compiled playground, from the cache
+        id: playground
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            build/playground/torb.js
+            build/playground/torb.wasm
+          key: >-
+            playground-${{ hashFiles('compiler/src/**', 'compiler/project.trb', 'std/**', 'runtime/**', 'project.trb',
+            'playground/build.sh', 'tools/deploy/Dockerfile.site') }}
+
+      - name: The context, the tags and the labels
+        id: plan
+        env:
+          PLAYGROUND: ${{ steps.playground.outputs.cache-hit }}
+          REPOSITORY: ${{ forgejo.repository }}
+          SERVER: ${{ forgejo.server_url }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          # The committer time orders the tags as main moved: main only fast-forwards, so every new head descends from
+          # the one before, and running an older commit again by hand never sorts it above a newer one
+          time=$(git show -s --format=%ct HEAD)
+          tag="main-$(printf '%s' "$commit" | cut -c1-8)-$time"
+          context=build/site-dist
+          rm -rf "$context"
+          mkdir -p "$context"
+          git archive --format=tar.gz --prefix="torb-$VERSION-source/" -o "$context/torb-$VERSION-source.tar.gz" HEAD
+          sh tools/package.sh archive "$VERSION" linux-x64 build/release/torb "$context"
+          if [ "$PLAYGROUND" = "true" ]; then
+            mkdir -p "$context/playground-compiled"
+            cp build/playground/torb.js build/playground/torb.wasm "$context/playground-compiled/"
+            echo "the playground of these sources was compiled before: it comes from the cache"
+          fi
+          ls -lR "$context"
+          {
+            echo "context=$context"
+            echo "tags=$NAME:$tag $NAME:edge"
+          } >>"$GITHUB_OUTPUT"
+          cat >labels.txt <<EOF
+          org.opencontainers.image.source=$SERVER/$REPOSITORY
+          org.opencontainers.image.revision=$commit
+          org.opencontainers.image.version=$tag
+          org.opencontainers.image.licenses=MIT
+          org.opencontainers.image.url=https://torb.dev
+          EOF
+
+      - name: Build (not yet pushed)
+        env:
+          CONTEXT: ${{ steps.plan.outputs.context }}
+          PLAYGROUND: ${{ steps.playground.outputs.cache-hit }}
+        run: |
+          docker buildx version
+          # The builder of the image jobs above: it outlives the job, and with it the emscripten image and its layers
+          docker buildx inspect torb >/dev/null 2>&1 || docker buildx create --name torb --driver docker-container
+          docker buildx use torb
+          set -- --file tools/deploy/Dockerfile.site --platform linux/amd64 --build-arg "VERSION=$VERSION"
+          set -- "$@" --provenance=false
+          while IFS= read -r label; do
+            set -- "$@" --label "$label"
+          done <labels.txt
+          docker buildx build "$@" "$CONTEXT"
+          printf '%s\n' "$@" >build-arguments.txt
+          if [ "$PLAYGROUND" != "true" ]; then
+            # Compiled by the build above: torb.js and torb.wasm out of the builder's cache, for the forge's cache
+            docker buildx build --file tools/deploy/Dockerfile.site --platform linux/amd64 \
+              --build-arg "VERSION=$VERSION" --target playground --output type=local,dest=build/playground "$CONTEXT"
+            ls -l build/playground
+          fi
+
+      - name: Save the compiled playground
+        if: steps.playground.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            build/playground/torb.js
+            build/playground/torb.wasm
+          key: ${{ steps.playground.outputs.cache-primary-key }}
+
+      - id: token
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_IMAGES_AUDIENCE }}
+          variable: TORB_IMAGES_AUDIENCE
+
+      - name: Push
+        id: push
+        env:
+          TOKEN: ${{ steps.token.outputs.token }}
+          TAGS: ${{ steps.plan.outputs.tags }}
+          OWNER: ${{ forgejo.repository_owner }}
+          CONTEXT: ${{ steps.plan.outputs.context }}
+        run: |
+          printf '%s' "$TOKEN" | docker login "$REGISTRY" --username "$OWNER" --password-stdin
+          set --
+          while IFS= read -r argument; do
+            set -- "$@" "$argument"
+          done <build-arguments.txt
+          for tag in $TAGS; do
+            set -- "$@" --tag "$tag"
+          done
+          docker buildx build "$@" --push --metadata-file metadata.json "$CONTEXT"
+          digest=$(sed -n 's/.*"containerimage\.digest"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' metadata.json | head -n 1)
+          [ -n "$digest" ] || { echo "::error::the push named no digest"; cat metadata.json; exit 1; }
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "pushed $TAGS at $digest"
+
+      - uses: ./.forgejo/actions/cosign
+      # One signature covers both tags: cosign signs the digest they name
+      - name: Sign the image
+        env:
           DIGEST: ${{ steps.push.outputs.digest }}
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}

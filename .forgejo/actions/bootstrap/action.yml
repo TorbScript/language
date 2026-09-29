@@ -13,6 +13,13 @@
 # A hit of the first skips the bootstrap: the fixpoint was established when that entry was written, from the same
 # sources. The binary's timestamp is then renewed, because `tools/gates.sh a` compares it with the sources' and the
 # checkout has just written those. A runner without a cache server only loses the time: actions/cache warns and goes on.
+#
+# With `seed-of-commit` (the site image of main, images.yml), a miss of the first cache is answered by the seed alone
+# when the newest published seed was built from the checked-out commit itself - which is the case after every landing,
+# since `tools/land.sh publish` publishes the seed of the commit it pushes before it pushes: its program.c is the C of
+# that commit's fixpoint, so the compiled seed is these sources' compiler, and the two steps of the bootstrap would
+# build it twice more. build/release then holds the seed's binary, program.c and program.hash, and is not saved: the
+# cache of the first kind holds only what a bootstrap here proved.
 name: Bootstrap
 description: Builds build/release/torb from a published seed, or restores it from the cache.
 inputs:
@@ -21,6 +28,10 @@ inputs:
     required: true
   save-cache:
     description: Write the caches (true only for a push to main).
+    required: false
+    default: "false"
+  seed-of-commit:
+    description: Take the published seed of the checked-out commit, where there is one, instead of bootstrapping.
     required: false
     default: "false"
 outputs:
@@ -48,7 +59,19 @@ runs:
       id: seed
       if: steps.compiler.outputs.cache-hit != 'true'
       shell: bash
-      run: echo "commit=$(sh tools/fetch-seed.sh --newest)" >>"$GITHUB_OUTPUT"
+      env:
+        OWN: ${{ inputs.seed-of-commit }}
+      run: |
+        commit=$(sh tools/fetch-seed.sh --newest || true)
+        echo "commit=$commit" >>"$GITHUB_OUTPUT"
+        if [ "$OWN" = "true" ] && [ -n "$commit" ]; then
+          case "$(git rev-parse HEAD)" in
+            "$commit"*)
+              echo "own=true" >>"$GITHUB_OUTPUT"
+              echo "the newest published seed was built from this commit, $commit: it is the compiler of these sources"
+              ;;
+          esac
+        fi
 
     - name: The compiled seed, from the cache
       id: seed-cache
@@ -72,15 +95,23 @@ runs:
         path: build/seed
         key: seed-${{ inputs.target }}-${{ steps.seed.outputs.commit }}
 
+    - name: The seed of this very commit as its compiler
+      if: steps.compiler.outputs.cache-hit != 'true' && steps.seed.outputs.own == 'true'
+      shell: bash
+      run: |
+        mkdir -p build/release
+        cp build/seed/torb build/seed/program.c build/seed/program.hash build/release/
+        build/release/torb --version
+
     - name: Bootstrap (seed -> torb -> torb, the fixpoint)
-      if: steps.compiler.outputs.cache-hit != 'true'
+      if: steps.compiler.outputs.cache-hit != 'true' && steps.seed.outputs.own != 'true'
       shell: bash
       env:
         TORB_SEED_FETCH: "0"
       run: sh tools/bootstrap.sh
 
     - name: Save the compiler
-      if: steps.compiler.outputs.cache-hit != 'true' && inputs.save-cache == 'true'
+      if: steps.compiler.outputs.cache-hit != 'true' && steps.seed.outputs.own != 'true' && inputs.save-cache == 'true'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: build/release
