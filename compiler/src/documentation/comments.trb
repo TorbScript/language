@@ -260,9 +260,10 @@ public type ExampleKind {
   /** The whole thing: it parses, it is in the canon, it type checks, and `torb doc --check` runs it */
   case Program
   /**
-   * `// check`: it parses, it is in the canon and it type checks, and it is not run - an example that reads standard
-   * input, starts a process, ends the program or panics on purpose shows how, and a doc test would only wait or stop
-   * there; so does one the native back end cannot build yet
+   * `// check`, or `// check <reason>`: it parses, it is in the canon and it type checks, and it is not run - an example
+   * that reads standard input, starts a process, ends the program or panics on purpose shows how, and a doc test would
+   * only wait or stop there; so does one the native back end cannot build yet, or one that loads a script, which links
+   * a script host no doc test builds
    */
   case Checked
   /** `// fragment`: a signature or a shape, so only the lexer can judge it */
@@ -278,7 +279,7 @@ public type Example {
   kind: ExampleKind
   /** The code, without the four spaces that make it a code block. The marker line stays in it: it is a comment. */
   text: String
-  /** The reason of a `// skip` */
+  /** The reason of a `// skip`, or the one a `// check` gives */
   reason: String
 }
 
@@ -333,8 +334,9 @@ fn addExample(block: List<CommentLine>, var examples: List<Example>) {
     examples.append Example(kept[0].line, ExampleKind.Fragment, text, "")
     return
   }
-  if marker == "// check" {
-    examples.append Example(kept[0].line, ExampleKind.Checked, text, "")
+  if isCheckMarker(marker) {
+    const reason = (marker.withoutPrefix("// check") ?? "").trim()
+    examples.append Example(kept[0].line, ExampleKind.Checked, text, reason)
     return
   }
   if const Some(skipped) = marker.withoutPrefix("// skip") {
@@ -343,6 +345,11 @@ fn addExample(block: List<CommentLine>, var examples: List<Example>) {
     return
   }
   examples.append Example(kept[0].line, ExampleKind.Program, text, "")
+}
+
+/** Whether the first line of an example is `// check`, with or without the reason why it is not run. */
+public fn isCheckMarker(marker: String): Bool {
+  marker == "// check" || marker.startsWith("// check ")
 }
 
 /** A link of a doc comment: `[Iterator]`, `[List.append]`, `[Option.Some]`. */

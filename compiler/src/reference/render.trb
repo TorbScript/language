@@ -10,6 +10,7 @@
 
 use Markdown, MarkdownDocument, htmlOf from "std/markdown"
 use highlightedCode, escapedHtml from "./highlight"
+use isCheckMarker from "../documentation/comments"
 
 /**
  * The HTML of one doc comment. `links` maps every link target of the comment to the URL it goes to from the page the
@@ -127,7 +128,7 @@ fn withoutMarkers(text: String): String {
     }
     const isBlank = trimmed.isEmpty()
     const isCode = isFenced || (!isBlank && (line.startsWith("    ") || line.startsWith("\t")))
-    const isMarker = trimmed == "// fragment" || trimmed == "// check" || trimmed.startsWith("// skip")
+    const isMarker = trimmed == "// fragment" || isCheckMarker(trimmed) || trimmed.startsWith("// skip")
     if isCode && !isInCode && isMarker {
       isInCode = true
       continue
@@ -141,13 +142,13 @@ fn withoutMarkers(text: String): String {
 }
 
 /**
- * The first line of an example says how it is checked - `// fragment`, `// skip <reason>`, `// check` - which is for
- * the tools and not for the reader.
+ * The first line of an example says how it is checked - `// fragment`, `// skip <reason>`, `// check [reason]` - which
+ * is for the tools and not for the reader.
  */
 fn withoutMarker(code: String): String {
   const lines = code.split "\n"
   const first = (lines.first() ?? "").trim()
-  const isMarker = first == "// fragment" || first == "// check" || first.startsWith("// skip")
+  const isMarker = first == "// fragment" || isCheckMarker(first) || first.startsWith("// skip")
   if !isMarker {
     return code
   }

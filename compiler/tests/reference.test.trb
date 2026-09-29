@@ -12,6 +12,7 @@ use Reference, DocumentedItem, DocumentedModule, ItemKind, referenceOf from "../
 use siteFiles, writeSite, searchEntries, referenceJson, urlFrom from "../src/reference/site"
 use highlightedCode from "../src/reference/highlight"
 use markdownHtml from "../src/reference/render"
+use CommentLine, DocumentationSection, ExampleKind, examplesOf from "../src/documentation/comments"
 use workspaceWith from "./harness"
 
 /** The entry module of the fixture: it exports the constructs of `shapes.trb`, and its comment links two of them. */
@@ -301,5 +302,20 @@ group "rendering" {
     const html = markdownHtml "    // check\n    print 1\n", [:]
     assert(!html.contains("check"))
     assert html.contains("print")
+  }
+
+  /** `Sandbox.load` loads a script, which links the script host, and says so where a reader never sees it. */
+  test "a `// check` with the reason it is not run is the same marker, and the reason is kept" {
+    const html = markdownHtml "    // check it loads a script\n    print 1\n", [:]
+    assert(!html.contains("loads a script"))
+    const lines = [CommentLine(1, "    // check it loads a script"), CommentLine(2, "    print 1")]
+    const found = examplesOf(DocumentationSection("Examples", 1, 0, lines)).examples
+    assert(found.length() == 1)
+    assert(found[0].kind == ExampleKind.Checked)
+    assert(found[0].reason == "it loads a script")
+    assert(
+      examplesOf(DocumentationSection("Examples", 1, 0, [CommentLine(1, "    // checked")])).examples[0].kind
+        == ExampleKind.Program,
+    )
   }
 }

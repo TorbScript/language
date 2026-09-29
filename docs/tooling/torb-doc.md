@@ -85,7 +85,7 @@ Plain files that can be opened from disk or served by any static host, and no re
 The Markdown of a comment is rendered by [`std/markdown`](../standard-library/markdown.md), and every TorbScript code
 block is coloured at generation time by the lexer and the resolver behind [`torb highlight`](the-torb-command.md), so a
 page colours a field and a case the way the editor does. The first line of an example that says how it is checked
-(`// fragment`, `// skip <reason>`, `// check`) is for the tools and is not shown.
+(`// fragment`, `// skip <reason>`, `// check [reason]`) is for the tools and is not shown.
 
 ### The JSON
 
@@ -104,7 +104,7 @@ spaces - as tests of the package, which is what CONCEPT's "examples are tests" a
 | First line of the example | What `--check` does with it |
 |---|---|
 | (none) | Parses it, holds it to the formatter canon, type checks it, builds it natively and runs it |
-| `// check` | Everything but running it: for an example that reads standard input, starts a process, ends the program or panics on purpose, or that the native back end cannot build yet |
+| `// check`, `// check <reason>` | Everything but running it: for an example that reads standard input, starts a process, ends the program or panics on purpose, loads a script (a native program that does links the script host, which a doc test does not build), or that the native back end cannot build yet; the reason, where one is given, says which |
 | `// fragment` | Only lexes it: a signature or a shape that is not a program |
 | `// skip <reason>` | Nothing; the reason is listed |
 

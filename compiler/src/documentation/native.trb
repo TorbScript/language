@@ -27,7 +27,7 @@ use joinPath, parentPath from "../project/path"
 use threadArguments from "../project/toolchain"
 use hostTarget from "../project/target"
 use runtimeSourcesOf, tlsArgumentsOf, argumentsThroughFile from "../cli/build"
-use tlsSymbolPrefix from "../backend/c/natives"
+use tlsSymbolPrefix, scriptHostSymbolPrefix from "../backend/c/natives"
 use Checked from "../semantics/check"
 use ModuleId from "../semantics/module"
 use Lowering from "../ir/lower/context"
@@ -237,9 +237,12 @@ public fn runSnippets(
     const note = "Every `trb run` block builds on its own, and together they do not: {said}"
     return [DocumentationProblem(runnable[0].path, runnable[0].line, note)]
   }
+  const text = emittedText emission
+  if text.contains(scriptHostSymbolPrefix) {
+    return withoutScriptHost checked, paths, runnable, modules, options
+  }
   File.createDirectory(options.directory)?
   const source = joinPath options.directory, "program.c"
-  const text = emittedText emission
   File.writeText(source, text)?
   const binary = joinPath options.directory, "snippets"
   const failure = compileProgram(source, binary, options.runtime, text.contains(tlsSymbolPrefix))?
@@ -249,6 +252,54 @@ public fn runSnippets(
   const executable = if File.exists(binary) { binary } else { "{binary}.exe" }
   const ran = Process.runBlocking(executable, [])?
   outputProblems runnable, ran.standardOutput, ran.exitCode
+}
+
+/**
+ * The blocks when one of them loads a script at run time: a native program that does links the script host - the front
+ * end and the VM, the size of the compiler, which `torb build` compiles once per toolchain - and the one program of the
+ * blocks does not, so it would not link, and the error would name whichever block came first. Each block is asked on
+ * its own whether it reaches the host, only here, and the ones that do are named; the others still run.
+ */
+fn withoutScriptHost(
+  checked: Checked,
+  paths: List<String>,
+  runnable: List<Snippet>,
+  modules: List<ModuleId>,
+  options: NativeOptions,
+): Result<List<DocumentationProblem>, IoError> {
+  var problems: List<DocumentationProblem> = []
+  var kept: List<Snippet> = []
+  var keptModules: List<ModuleId> = []
+  for index in 0..runnable.length() {
+    const snippet = runnable[index]
+    if reachesScriptHost(checked, paths, modules[index]) {
+      const note = "This `trb run` block loads a script, and a native program that does links the script host, which is"
+        + " not built to run it: check it without running it (`trb check`, or `// check` in a doc comment)"
+      problems.append DocumentationProblem(snippet.path, snippet.line, note)
+      continue
+    }
+    kept.append snippet
+    keptModules.append modules[index]
+  }
+  // Only the blocks together reached the host: nothing can be said about one of them, so the first one says it
+  if problems.isEmpty() {
+    const note = "Together the `trb run` blocks link the script host, which is not built to run them, and none does alone"
+    return [DocumentationProblem(runnable[0].path, runnable[0].line, note)]
+  }
+  if !kept.isEmpty() {
+    problems.appendAll(runSnippets(checked, paths, kept, keptModules, options)?)
+  }
+  problems
+}
+
+/** Whether one block, lowered on its own, calls into the script host. */
+fn reachesScriptHost(checked: Checked, paths: List<String>, module: ModuleId): Bool {
+  var lowering = lowerWorkspace checked.checker, paths, [module], seedsEverything: false, target: hostTarget()
+  insertOwnership lowering.program
+  const name = entryNameOf lowering, module
+  const entries = if hasFunction(lowering, name) { [ProgramEntry(name)] } else { [] }
+  const text = emittedText emitProgram(lowering.program, entries)
+  text.contains scriptHostSymbolPrefix
 }
 
 /**
