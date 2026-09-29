@@ -57,8 +57,9 @@ The body ends in `port`, not `Ok(port)`: the value is wrapped for you.
 
 ## Pass a failure on with ?
 
-`?` after a call takes the value out of an `Ok`. On a `Fail` it returns that `Fail` from the function at once.
-The first `readPort` uses it twice. When the error types differ, `?` converts the error, provided the target type says how:
+`?` after a call takes the value out of an `Ok`. On a `Fail` it returns that `Fail` from the function at once. The
+first `readPort` uses it twice. When the error types differ, `?` converts the error, provided the target type says
+how:
 
 ```trb run
 type ConfigError {
