@@ -5,7 +5,7 @@
  */
 
 use test, group from "std/test"
-use base64Decoded, base64UrlEncoded from "../src/base64"
+use Base64Alphabet, base64Decoded from "std/encoding"
 use RsaPublicKey, verifiesSha256 from "../src/rsa"
 use JsonWebKey, JsonWebKeySet, TrustedPublisher, TrustedIssuer, IdentityClaims, githubIssuer, issuerOf, verifiedClaims, publisherMatches, publisherName, refMatches from "../src/oidc"
 use forgejoIssuersOf from "../src/config"
@@ -21,27 +21,6 @@ fn withSegment(index: Int, replacement: String): String {
 /** The bytes of a text. */
 fn bytesOf(text: String): List<UInt8> {
   text.bytes()
-}
-
-group "Base64" {
-  test "reads both alphabets, with and without padding" {
-    assert(base64Decoded("aGVsbG8=") == Ok(bytesOf("hello")))
-    assert(base64Decoded("aGVsbG8") == Ok(bytesOf("hello")))
-    assert(base64Decoded("-_8") == Ok([UInt8.tryFrom(251).ok() ?? 0, UInt8.tryFrom(255).ok() ?? 0]))
-    assert(base64Decoded("+/8=") == base64Decoded("-_8"))
-  }
-
-  test "refuses what no encoder writes" {
-    assert base64Decoded("a").isError()
-    assert base64Decoded("aGV*").isError()
-    assert base64Decoded("aG=Vs").isError()
-  }
-
-  test "writes the URL-safe alphabet without padding, and reads it back" {
-    assert(base64UrlEncoded(bytesOf("hello")) == "aGVsbG8")
-    const bytes = bytesOf "any carnal pleas?>"
-    assert(base64Decoded(base64UrlEncoded(bytes)) == Ok(bytes))
-  }
 }
 
 group "RSASSA-PKCS1-v1_5 with SHA-256" {
@@ -104,7 +83,8 @@ group "a GitHub Actions token" {
   }
 
   test "is refused with claims it was not signed with" {
-    const forged = base64UrlEncoded bytesOf("\{\"iss\":\"https://token.actions.githubusercontent.com\",\"aud\":\"packages.torb.dev\",\"exp\":1790000900,\"repository\":\"evil/http\"\}")
+    const claims = bytesOf "\{\"iss\":\"https://token.actions.githubusercontent.com\",\"aud\":\"packages.torb.dev\",\"exp\":1790000900,\"repository\":\"evil/http\"\}"
+    const forged = Base64Alphabet.UrlSafe.encoded claims, padded: false
     match verifiedClaims(withSegment(1, forged), keySet(), githubIssuer, audience, issued) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("does not verify")
@@ -114,7 +94,7 @@ group "a GitHub Actions token" {
   test "is refused without a key of its kid, and with another algorithm" {
     const otherKeys = JsonWebKeySet([JsonWebKey("RSA", kid: "another", n: modulus, e: "AQAB")])
     assert verifiedClaims(token, otherKeys, githubIssuer, audience, issued).isError()
-    const none = base64UrlEncoded bytesOf("\{\"alg\":\"none\",\"kid\":\"test-key-1\"\}")
+    const none = Base64Alphabet.UrlSafe.encoded bytesOf("\{\"alg\":\"none\",\"kid\":\"test-key-1\"\}"), padded: false
     match verifiedClaims(withSegment(0, none), keySet(), githubIssuer, audience, issued) {
       Ok(_) => assert false
       Fail(problem) => assert problem.contains("`none`")

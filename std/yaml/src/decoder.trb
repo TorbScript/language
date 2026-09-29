@@ -6,9 +6,9 @@
  * of the core schema (`!!int "5"`) is honoured.
  */
 
-use Decoder, DecodeError, Naming from "std/encoding"
+use Decoder, DecodeError, Naming, base64Decoded from "std/encoding"
 use YamlNode, YamlContent, YamlEntry, ScalarStyle from "./node"
-use YamlSchema, ResolvedScalar, boolOf, wholeOf, floatOf, isNullText, base64Decoded from "./schema"
+use YamlSchema, ResolvedScalar, boolOf, wholeOf, floatOf, isNullText from "./schema"
 use YamlTag, coreTag, isUntagged, isLocalTag, kindOf from "./resolve"
 
 /**
@@ -140,8 +140,8 @@ public type YamlDecoder with Decoder {
     match node.content {
       .Scalar(text, _) => {
         match base64Decoded(text) {
-          Some(bytes) => bytes
-          None => Fail DecodeError("bytes are needed, and {shown(node)} is not base64")
+          Ok(bytes) => bytes
+          Fail(_) => Fail DecodeError("bytes are needed, and {shown(node)} is not base64")
         }
       }
       .Sequence(items, _) => {
@@ -173,8 +173,8 @@ public type YamlDecoder with Decoder {
     const node = take()?
     if node.tag == coreTag("binary") {
       const bytes = match base64Decoded(node.text() ?? "") {
-        Some(found) => found
-        None => {
+        Ok(found) => found
+        Fail(_) => {
           return Fail DecodeError("the `!!binary` scalar is not base64")
         }
       }

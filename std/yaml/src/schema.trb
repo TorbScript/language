@@ -1,6 +1,7 @@
 /**
  * What a scalar is: the schemas of the specification, which say what a plain scalar without a tag resolves to, and
- * the readers of the texts every schema shares - null, truth values, whole numbers, floating point numbers, base64.
+ * the readers of the texts every schema shares - null, truth values, whole numbers, floating point numbers. `!!binary`
+ * reads and writes with `std/encoding`'s own Base64 (`Base64Alphabet`), not a copy kept here.
  *
  * A typed decode does not need a schema: the field's type says what it wants, and the text is read as that. The schema
  * is for a document read without a type.
@@ -405,86 +406,4 @@ public fn isAmbiguousText(text: String): Bool {
     return true
   }
   text == "<<" || text == "=" || isTimestamp(text)
-}
-
-// --- Base64, for `!!binary` -----------------------------------------------------------------------------------------
-
-/** The bytes of a base64 text; whitespace and line breaks inside it are skipped. */
-public fn base64Decoded(text: String): List<UInt8>? {
-  var bytes: List<UInt8> = []
-  var buffer = 0
-  var bits = 0
-  var padding = 0
-  for character in text.chars() {
-    if character == ' ' || character == '\n' || character == '\r' || character == '\t' {
-      continue
-    }
-    if character == '=' {
-      padding = padding + 1
-      continue
-    }
-    if padding > 0 {
-      return None
-    }
-    const value = base64Value character
-    if value < 0 {
-      return None
-    }
-    buffer = buffer * 64 + value
-    bits = bits + 6
-    if bits >= 8 {
-      bits = bits - 8
-      const byte = buffer / (1 << bits)
-      buffer = buffer % (1 << bits)
-      bytes.append(UInt8.tryFrom(byte) ?? 0)
-    }
-  }
-  bytes
-}
-
-/** The bytes as base64 text, with padding. */
-public fn base64Encoded(bytes: List<UInt8>): String {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-  var pieces: List<String> = []
-  var index = 0
-  while index < bytes.length() {
-    const first = Int64.from bytes[index]
-    const second = if index + 1 < bytes.length() { Int64.from bytes[index + 1] } else { 0 }
-    const third = if index + 2 < bytes.length() { Int64.from bytes[index + 2] } else { 0 }
-    const combined = first * 65536 + second * 256 + third
-    pieces.append alphabet.sliceBytes(combined / 262144, combined / 262144 + 1)
-    pieces.append alphabet.sliceBytes(combined / 4096 % 64, combined / 4096 % 64 + 1)
-    if index + 1 < bytes.length() {
-      pieces.append alphabet.sliceBytes(combined / 64 % 64, combined / 64 % 64 + 1)
-    } else {
-      pieces.append "="
-    }
-    if index + 2 < bytes.length() {
-      pieces.append alphabet.sliceBytes(combined % 64, combined % 64 + 1)
-    } else {
-      pieces.append "="
-    }
-    index = index + 3
-  }
-  pieces.joined separator: ""
-}
-
-fn base64Value(character: Char): Int {
-  const code = Int64.from character
-  if code >= 65 && code <= 90 {
-    return code - 65
-  }
-  if code >= 97 && code <= 122 {
-    return code - 71
-  }
-  if code >= 48 && code <= 57 {
-    return code + 4
-  }
-  if character == '+' {
-    return 62
-  }
-  if character == '/' {
-    return 63
-  }
-  -1
 }

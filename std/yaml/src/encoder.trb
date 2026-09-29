@@ -6,9 +6,9 @@
  * something else (`no`, `on`, `0777`, `1_000`, `12:30`, `~`), and as a literal block where it has several lines.
  */
 
-use Encoder, Naming from "std/encoding"
+use Encoder, Naming, Base64Alphabet from "std/encoding"
 use YamlNode, YamlContent, YamlEntry, ScalarStyle, CollectionStyle from "./node"
-use isAmbiguousText, base64Encoded from "./schema"
+use isAmbiguousText from "./schema"
 use YamlTag, tagFor, coreTag from "./resolve"
 
 /** An `Encoder` that builds a [YamlNode]. A record is a mapping, and a record that announces no field its one value. */
@@ -53,7 +53,8 @@ public type YamlEncoder with Encoder {
 
   /** Bytes are a `!!binary` scalar of base64. */
   var fn bytes(value: List<UInt8>) {
-    complete YamlNode(YamlContent.Scalar(base64Encoded(value), ScalarStyle.Plain), tag: coreTag("binary"))
+    const scalar = YamlContent.Scalar Base64Alphabet.Standard.encoded(value), ScalarStyle.Plain
+    complete YamlNode(scalar, tag: coreTag("binary"))
   }
 
   var fn sequence(length: Int?) {

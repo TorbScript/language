@@ -4,6 +4,7 @@
  */
 
 use Ipv4Address, Ipv6Address, IpAddress from "std/ip"
+use Base64Alphabet, hexEncoded from "std/encoding"
 use RecordClass, RecordType from "./codes"
 use DomainName from "./name"
 
@@ -115,7 +116,7 @@ public type RecordData with Show, Equals, Hash {
       .Caa(flags, tag, value) => "{flags} {tag} {quoted(value)}"
       .Svcb(priority, target, parameters) => binding priority, target, parameters
       .Https(priority, target, parameters) => binding priority, target, parameters
-      .Unknown(_, data) => "\\# {data.length()} {hexadecimal(data)}"
+      .Unknown(_, data) => "\\# {data.length()} {hexEncoded(data)}"
     }
   }
 }
@@ -167,7 +168,7 @@ public type ServiceParameter with Show, Equals, Hash {
       .NoDefaultAlpn => "no-default-alpn"
       .Port(port) => "port={port}"
       .Ipv4Hint(addresses) => "ipv4hint={addresses.map({ _.show() }).joined(separator: ",")}"
-      .EncryptedClientHello(configurations) => "ech={base64(configurations)}"
+      .EncryptedClientHello(configurations) => "ech={Base64Alphabet.Standard.encoded(configurations)}"
       .Ipv6Hint(addresses) => "ipv6hint={addresses.map({ _.show() }).joined(separator: ",")}"
       .Other(key, value) => "{keyName(key)}={quoted(value)}"
     }
@@ -248,37 +249,6 @@ fn quoted(bytes: Bytes): String {
   }
   pieces.append "\""
   pieces.joined separator: ""
-}
-
-/** Bytes as lower-case hexadecimal, two digits each. */
-fn hexadecimal(bytes: Bytes): String {
-  const digits = "0123456789abcdef".chars().toList()
-  var characters: List<Char> = []
-  for byte in bytes {
-    const code = Int.from byte
-    characters.append digits[code >> 4]
-    characters.append digits[code & 15]
-  }
-  String.from characters
-}
-
-/** Bytes as Base64 with padding (RFC 4648 section 4), the form RFC 9460 writes an `ech` value in. */
-fn base64(bytes: Bytes): String {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".chars().toList()
-  var characters: List<Char> = []
-  var index = 0
-  while index < bytes.length() {
-    const first = Int.from bytes[index]
-    const second = if index + 1 < bytes.length() { Int.from bytes[index + 1] } else { 0 }
-    const third = if index + 2 < bytes.length() { Int.from bytes[index + 2] } else { 0 }
-    const group = first << 16 | second << 8 | third
-    characters.append alphabet[group >> 18 & 63]
-    characters.append alphabet[group >> 12 & 63]
-    characters.append(if index + 1 < bytes.length() { alphabet[group >> 6 & 63] } else { '=' })
-    characters.append(if index + 2 < bytes.length() { alphabet[group & 63] } else { '=' })
-    index = index + 3
-  }
-  String.from characters
 }
 
 /** The character of a code point that is known to be one. */

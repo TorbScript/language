@@ -5,9 +5,9 @@
 
 use YamlNode, YamlContent, YamlEntry, YamlDocument, ScalarStyle, CollectionStyle from "./node"
 use YamlError from "./error"
-use YamlSchema, ResolvedScalar, resolvedPlain, boolOf, wholeOf, floatOf, isNullText, base64Decoded from "./schema"
+use YamlSchema, ResolvedScalar, resolvedPlain, boolOf, wholeOf, floatOf, isNullText from "./schema"
 use coreTagPrefix from "./parser"
-use EncodedField from "std/encoding"
+use EncodedField, base64Decoded from "std/encoding"
 
 /**
  * A local tag and the type it stands for. A typed decode checks a node's tag against the type it reads, and a typed
@@ -351,8 +351,8 @@ fn scalarValue(
   }
   if tag == coreTag("binary") {
     return match base64Decoded(text) {
-      Some(bytes) => EncodedValue.Bytes bytes
-      None => Fail YamlError.content(node.line, "the `!!binary` scalar is not base64")
+      Ok(bytes) => EncodedValue.Bytes bytes
+      Fail(_) => Fail YamlError.content(node.line, "the `!!binary` scalar is not base64")
     }
   }
   Fail YamlError.content(node.line, "the tag `{tag}` does not fit a scalar")
