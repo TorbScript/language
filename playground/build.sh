@@ -7,6 +7,9 @@
 #
 #   sh playground/build.sh              # build/release/torb emits the C, emcc or the pinned image compiles it
 #   sh playground/build.sh --c <dir>    # compiles C emitted before into <dir> (program.h and program-*.c)
+#   sh playground/build.sh --compiled <dir>   # takes torb.js and torb.wasm compiled before from <dir>, and writes
+#                                             # the rest: the site image of main, whose workflow keeps them in the
+#                                             # forge's cache while compiler/src, std/ and runtime/ stay the same
 #   TORB=/opt/torb/bin/torb sh playground/build.sh    # another torb emits the C: a release's, in the site image
 #   TORB_EMSDK_IMAGE=emscripten/emsdk:6.0.10 sh playground/build.sh
 #   TORB_EMCC=/path/to/emcc sh playground/build.sh
@@ -140,51 +143,71 @@ if [ "${1-}" = "--inside" ]; then
 fi
 
 c_directory=""
-if [ "${1-}" = "--c" ]; then
-  [ $# -ge 2 ] || fail "--c needs the directory of the C"
-  c_directory=$2
-fi
+compiled=""
+case "${1-}" in
+  --c)
+    [ $# -ge 2 ] || fail "--c needs the directory of the C"
+    c_directory=$2
+    ;;
+  --compiled)
+    [ $# -ge 2 ] || fail "--compiled needs the directory of torb.js and torb.wasm"
+    compiled=$2
+    ;;
+esac
 
-if [ -z "$c_directory" ]; then
-  torb=${TORB-}
-  for candidate in build/release/torb build/release/torb.exe; do
-    if [ -z "${TORB-}" ] && [ -f "$candidate" ]; then
-      torb=$candidate
-    fi
+if [ -n "$compiled" ]; then
+  # Compiled before from the same compiler/src, std/ and runtime/ - the one thing that makes this script slow - so
+  # nothing is emitted or compiled, and the page's files below are written beside them as always
+  for file in torb.js torb.wasm; do
+    [ -f "$compiled/$file" ] || fail "there is no $file in $compiled"
   done
-  [ -n "$torb" ] || fail "there is no build/release/torb: sh tools/bootstrap.sh builds it, or \$TORB names a torb"
-  c_directory=$output/c
-  rm -rf "$c_directory"
-  mkdir -p "$c_directory"
-  say "emitting the compiler's C for browser-wasm64"
-  "$torb" build ./compiler --emit-c --target browser-wasm64 --output "$c_directory/torb" >&2
-fi
-
-[ -f "$c_directory/program.h" ] || fail "there is no program.h in $c_directory"
-
-emcc_found=""
-if [ -n "${TORB_EMCC-}" ]; then
-  emcc_found=$TORB_EMCC
-elif command -v emcc >/dev/null 2>&1 && emcc --version 2>/dev/null | head -n 1 | grep -q " $emsdk_version "; then
-  emcc_found=emcc
-fi
-
-if [ -n "$emcc_found" ]; then
-  TORB_EMCC=$emcc_found compile_inside "$c_directory"
+  mkdir -p "$output"
+  if [ "$(CDPATH= cd -- "$compiled" && pwd)" != "$(CDPATH= cd -- "$output" && pwd)" ]; then
+    cp "$compiled/torb.js" "$compiled/torb.wasm" "$output/"
+  fi
+  say "took torb.js and torb.wasm from $compiled"
 else
-  command -v docker >/dev/null 2>&1 || fail "neither emcc $emsdk_version nor docker is there to compile the C"
-  say "compiling in $image"
-  # The files belong to whoever runs this, and emscripten's cache of system libraries (the wasm64 ones are built on
-  # first use) lives in build/, where that user can write it and the next build finds it
-  user=""
-  case "$(uname -s 2>/dev/null)" in
-    Linux | Darwin | FreeBSD) user="--user $(id -u):$(id -g)" ;;
-  esac
-  # Git Bash rewrites an argument that starts with a slash into a Windows path; the container wants it as it is
-  # shellcheck disable=SC2086
-  MSYS_NO_PATHCONV=1 docker run --rm $user -v "$root:/src" -w /src -e EM_CACHE=/src/build/playground-cache \
-    -e "TORB_BUILD_JOBS=${TORB_BUILD_JOBS-}" -e "TORB_LINK_FLAGS=${TORB_LINK_FLAGS-}" \
-    "$image" sh playground/build.sh --inside "$c_directory"
+  if [ -z "$c_directory" ]; then
+    torb=${TORB-}
+    for candidate in build/release/torb build/release/torb.exe; do
+      if [ -z "${TORB-}" ] && [ -f "$candidate" ]; then
+        torb=$candidate
+      fi
+    done
+    [ -n "$torb" ] || fail "there is no build/release/torb: sh tools/bootstrap.sh builds it, or \$TORB names a torb"
+    c_directory=$output/c
+    rm -rf "$c_directory"
+    mkdir -p "$c_directory"
+    say "emitting the compiler's C for browser-wasm64"
+    "$torb" build ./compiler --emit-c --target browser-wasm64 --output "$c_directory/torb" >&2
+  fi
+
+  [ -f "$c_directory/program.h" ] || fail "there is no program.h in $c_directory"
+
+  emcc_found=""
+  if [ -n "${TORB_EMCC-}" ]; then
+    emcc_found=$TORB_EMCC
+  elif command -v emcc >/dev/null 2>&1 && emcc --version 2>/dev/null | head -n 1 | grep -q " $emsdk_version "; then
+    emcc_found=emcc
+  fi
+
+  if [ -n "$emcc_found" ]; then
+    TORB_EMCC=$emcc_found compile_inside "$c_directory"
+  else
+    command -v docker >/dev/null 2>&1 || fail "neither emcc $emsdk_version nor docker is there to compile the C"
+    say "compiling in $image"
+    # The files belong to whoever runs this, and emscripten's cache of system libraries (the wasm64 ones are built on
+    # first use) lives in build/, where that user can write it and the next build finds it
+    user=""
+    case "$(uname -s 2>/dev/null)" in
+      Linux | Darwin | FreeBSD) user="--user $(id -u):$(id -g)" ;;
+    esac
+    # Git Bash rewrites an argument that starts with a slash into a Windows path; the container wants it as it is
+    # shellcheck disable=SC2086
+    MSYS_NO_PATHCONV=1 docker run --rm $user -v "$root:/src" -w /src -e EM_CACHE=/src/build/playground-cache \
+      -e "TORB_BUILD_JOBS=${TORB_BUILD_JOBS-}" -e "TORB_LINK_FLAGS=${TORB_LINK_FLAGS-}" \
+      "$image" sh playground/build.sh --inside "$c_directory"
+  fi
 fi
 
 for file in playground.js playground-worker.js playground-editor.js playground.css; do

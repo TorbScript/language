@@ -20,11 +20,24 @@
 # (playground/build.sh), because the playground is compiled here from the release's source: its `torb` emits the
 # compiler's C for browser-wasm64, and that emscripten compiles it - the same inputs give the same wasm, and nothing
 # but the release is downloaded for it.
+#
+# The site of main (images.yml, the tags `edge` and `main-<commit>-<time>`) is built by this same file from a context
+# of the same shape, which the workflow makes from the pushed commit: `torb-main-source.tar.gz` (git archive),
+# `torb-main-linux-x64.tar.gz` (tools/package.sh, around the `torb` of that commit) and VERSION=main. Its context may
+# also hold `playground-compiled/` - torb.js and torb.wasm from the forge's cache, compiled before from the same
+# compiler/src, std/ and runtime/ - which the build then takes instead of compiling them again (`playground/build.sh
+# --compiled`); a release's context never has it. Where it had to compile them, the workflow takes them out of the
+# builder's cache for the next run with the target `playground`:
+#
+#   docker buildx build -f tools/deploy/Dockerfile.site --build-arg VERSION=main --target playground \
+#     --output type=local,dest=build/playground build/site-dist/
 
 FROM --platform=$BUILDPLATFORM emscripten/emsdk:6.0.10 AS build
 ARG VERSION
 ARG BUILDARCH
 COPY torb-${VERSION}-source.tar.gz torb-${VERSION}-linux-*.tar.gz /dist/
+# A pattern that matches nothing copies nothing: the directory is there only where the context has it
+COPY playground-compile[d] /dist/playground-compiled/
 RUN set -eu; \
     case "$BUILDARCH" in \
       amd64) target=linux-x64 ;; \
@@ -35,13 +48,21 @@ RUN set -eu; \
     tar -xzf "/dist/torb-$VERSION-$target.tar.gz" -C /opt/torb --strip-components=1; \
     tar -xzf "/dist/torb-$VERSION-source.tar.gz" -C /src --strip-components=1
 WORKDIR /src
-RUN TORB=/opt/torb/bin/torb TORB_EMCC=emcc sh playground/build.sh
+RUN if [ -f /dist/playground-compiled/torb.wasm ]; then \
+      sh playground/build.sh --compiled /dist/playground-compiled; \
+    else \
+      TORB=/opt/torb/bin/torb TORB_EMCC=emcc sh playground/build.sh; \
+    fi
 RUN set -eu; \
     /opt/torb/bin/torb docs site docs --output /site --version "$VERSION" --playground build/playground; \
     /opt/torb/bin/torb doc std --output "/site/docs/$VERSION/reference"; \
     cp tools/install.sh tools/install.ps1 /site/; \
     if [ -f tools/deploy/cosign.pub ]; then cp tools/deploy/cosign.pub /site/; else : >/site/cosign.pub; fi; \
     cp tools/deploy/nginx.conf /nginx.conf
+
+# torb.js and torb.wasm alone, for the forge's cache of the workflow that builds the site of main (above)
+FROM scratch AS playground
+COPY --from=build /src/build/playground/torb.js /src/build/playground/torb.wasm /
 
 FROM nginx:1.27-alpine
 ARG VERSION
