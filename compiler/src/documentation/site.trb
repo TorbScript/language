@@ -9,6 +9,7 @@
  *   of the same name in `site/`, each only where that page exists; `404.html` for a path that is not there.
  * - `docs/<version>/`, every page and design document of the documentation as HTML, with the navigation of the index
  *   tree, and `docs/<version>/search-index.json`, the index the search reads.
+ * - `docs/versions.json` ([SiteVersions]), once at the root for every language: what the version switcher offers.
  * - `assets/site.css` and `assets/site.js`, one stylesheet and one script; `assets/fonts/`, Chivo and Geist Mono.
  * - The icons, the web manifest and the preview card, copied from `brand/`.
  * - The playground in `assets/` - its script, worker and stylesheet, and `torb` as WebAssembly - where
@@ -27,6 +28,7 @@
 
 use File, IoError from "std/fs"
 use Sha256 from "std/digest"
+use Json from "std/json"
 use normalizePath from "../project/path"
 use DocumentationProblem, ReadPage, readPage from "./markdown"
 use Page, Documentation, Translation, folderOf, fileName, joinDocumentationPath from "./tree"
@@ -65,6 +67,18 @@ public type BuiltSite {
   pages: Int
   /** How many languages the site is written in */
   languages: Int = 1
+}
+
+/**
+ * `docs/versions.json`, at the root of the site and the same for every language: what the version switcher of
+ * `site-style.trb` offers. Today `versions` is always the one version this build is of - the site image bakes in
+ * exactly one version per deploy (`tools/deploy/Dockerfile.site`) and nothing yet accumulates a running site's
+ * history (docs/design/RELEASE.md section 6, "Not built yet") - so the file exists instead of 404ing on every page,
+ * and the switcher, seeing nothing to switch to, hides itself (`names.length < 2`).
+ */
+public type SiteVersions {
+  latest: String
+  versions: List<String>
 }
 
 /**
@@ -335,6 +349,7 @@ public fn buildSite(documentation: Documentation, settings: SiteSettings): Built
   texts.set "assets/site.css", css
   texts.set "assets/site.js", script
   texts.set "manifest.webmanifest", manifestOf(documentation)
+  texts.set "docs/versions.json", Json().encode(SiteVersions(version, [version]))
   var problems: List<DocumentationProblem> = []
   if documentation.pageAt("{siteFolder}/home.md").isNone() {
     problems.append(DocumentationProblem(

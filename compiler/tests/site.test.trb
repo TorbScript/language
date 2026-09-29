@@ -14,7 +14,8 @@ use SiteLinks, renderedBody, linkUrl, relativeUrl, codeBlockHtml, localized from
 use Level, navigationOf, readingOrder, levelOf from "../src/documentation/site-navigation"
 use englishWords from "../src/documentation/site-strings"
 use SearchPage, IndexedPage, searchIndexOf, termsOf from "../src/documentation/site-search"
-use SiteSettings, buildSite, targetOf, brokenLinks from "../src/documentation/site"
+use SiteSettings, buildSite, targetOf, brokenLinks, SiteVersions from "../src/documentation/site"
+use Json from "std/json"
 use brandTokens from "../src/documentation/site-tokens"
 
 const forge = "https://git.torb.dev/torbscript/language/src/branch/main"
@@ -190,8 +191,18 @@ group "the site" {
     assert site.texts.containsKey("assets/site.css")
     assert site.texts.containsKey("manifest.webmanifest")
     assert site.texts.containsKey("404.html")
+    assert site.texts.containsKey("docs/versions.json")
     const problems = site.problems.map({ _.show() }).toList()
     assert(problems == [])
+  }
+
+  test "docs/versions.json names this build's version, once, at the root of the site" {
+    const site = buildSite documentationOf("docs", tree()), settings()
+    const versions = site.texts.get("docs/versions.json") ?? ""
+    assert(versions == Json().encode(SiteVersions("latest", ["latest"])))
+    // Not per language: every language shares the one file at the root, which is where site-style.trb's version
+    // switcher fetches it from (`siteBase`, not the language-prefixed `siteRoot`)
+    assert(!site.texts.containsKey("de/docs/versions.json"))
   }
 
   test "the front page leads with the line, the install commands and the tour of site/home.md" {
