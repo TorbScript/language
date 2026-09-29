@@ -1,0 +1,33 @@
+use Entropy from "std/os/entropy"
+
+/**
+ * `Entropy` hands out the bytes of the operating system's source of randomness: exactly as many as asked for, across the
+ * pieces the runtime reads them in (600 bytes are more than one `getentropy` call answers), different ones on every
+ * request, and eight of them as an `Int64` that takes every bit, so that some of 64 draws are negative and some are not.
+ * Randomness cannot be printed, only its absence: every line below is `false` for a source that answers zeros, the same
+ * bytes twice or too few, with certainty rather than by bad luck, and `true` for one that works.
+ */
+
+print Entropy.bytes(0).length()
+print Entropy.bytes(16).length()
+const long = Entropy.bytes 600
+print long.length()
+
+var set = 0
+for index in 512..600 {
+  if long[index] != 0 {
+    set = set + 1
+  }
+}
+print(set > 0)
+
+print(Entropy.bytes(32) != Entropy.bytes(32))
+
+var negative = 0
+for _ in 0..64 {
+  if Entropy.int64() < 0 {
+    negative = negative + 1
+  }
+}
+print(negative > 0 && negative < 64)
+print(Entropy.int64() != Entropy.int64())

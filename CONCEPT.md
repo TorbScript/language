@@ -2253,8 +2253,8 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
   the prelude of the host plus the receiver.
 - **The prelude is the pure part of the standard library, and capabilities are not in it.** Values, text, numbers,
-  collections, pipelines, encoding, quotations, tasks, printing, `std/json` and the time *values*
-  (`Duration`, `Instant`) are in scope everywhere, because unused names cost nothing and these are needed everywhere.
+  collections, pipelines, encoding, quotations, tasks, printing, `std/json` and the time *values* (`Duration`,
+  `Instant`, `Timestamp`) are in scope everywhere, because unused names cost nothing and these are needed everywhere.
   `std/fs`, `std/os`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` are **not**, and that is
   not about size: (1) `use File from "std/fs"` at the top of a file is the statement "this file touches files", for a
   reviewer and for `torb add`; (2) a receiver script and a sandbox are defined as "the prelude and the receiver, and

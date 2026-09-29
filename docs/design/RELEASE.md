@@ -796,9 +796,11 @@ acme/http 1.2.5
 
 - **The table of capabilities lives in `std`**: one list that says which package is which capability — files
   (`std/fs`), network (`std/http`, later `std/net`), processes (`std/process`), environment (`std/environment`), clock
-  (`Clock` of `std/time`), the operating system (`std/os`), loading scripts (`std/sandbox`), foreign functions
-  (`foreign`). A `std` package that is not on the list is pure, and a test asserts that every `std` package with a
-  native that reaches the machine is on it.
+  (`Clock` of `std/time`), entropy (`Entropy` of `std/os/entropy`), the operating system (`std/os`), loading scripts
+  (`std/sandbox`), foreign functions (`foreign`). A `std` package that is not on the list is pure, and a test asserts
+  that every `std` package with a native that reaches the machine is on it. **A capability is a reading, not a type**:
+  the values a capability package answers in (`Timestamp` of `std/time`, `OsError` of `std/os`) are pure, so the
+  summary decides by each imported name, and a package with a `Timestamp` in a signature touches no clock.
 - **Direct and transitive are shown apart.** What a package's own modules import is a fact of the archive; what it
   reaches through its dependencies depends on the resolution, so the page shows it for the graph the package was
   published with and says so.
@@ -1068,7 +1070,7 @@ PROJECT.md section 6a's PubGrub; everything is TorbScript, with no new native. W
 | Reading and writing an archive | `File.readBytes` reads it and `File.writeBytesAtomically` replaces it whole, both synchronous (2026-09-27). Every other file of a package is text and goes through `File.readText` and `File.writeText`, so a package file that is not UTF-8 is refused | the same reason: `torb` cannot wait for a task at its top level. Until the two natives existed, an archive went through `od -t x1` and `printf` on POSIX and PowerShell's Base64 on Windows - a branch on the system in code the compiler reaches, so its C differed per target - and they came in the two commits and the seed refresh of CLAUDE.md |
 | The archive | the deterministic `tar` of `std/archive` inside the gzip of `std/compression` (one block of fixed Huffman codes); at most 10 MiB compressed, 64 MiB unpacked and 10 000 files; a link, an absolute path, a `..` or a `\` refused before anything is written | 7.2 and 7.10; the unpacked limit is what stops an archive of zeros |
 | The hash | the tree hash of 7.2 with `std/digest`'s SHA-256, checked on every install | 7.2 |
-| The capability table | in the toolchain for now (`capabilityOf`, `compiler/src/package/archive.trb`): `files` for `std/fs` and `std/archive/extract`, `network` for `std/network`, `std/http` and `std/tls`, `processes`, `environment` for `std/os/environment`, `the operating system` for the rest of `std/os`, `clock` for `std/time`, `scripts` for `std/sandbox`, `foreign functions` for a `foreign` block | 7.8 wants it in `std`; until then one function is the one place |
+| The capability table | in the toolchain for now (`capabilityOf` and `capabilityOfImport`, `compiler/src/package/archive.trb`): `files` for `std/fs` and `std/archive/extract`, `network` for `std/network`, `std/http` and `std/tls`, `processes`, `environment` for `std/os/environment`, `entropy` for `std/os/entropy`, `the operating system` for the rest of `std/os`, `clock` for `std/time`, `scripts` for `std/sandbox`, `foreign functions` for a `foreign` block. **Every imported name decides** (2026-09-29): the values of a capability package reach nothing - `Duration`, `Instant` and `Timestamp` of `std/time`, `OsError`, `SystemVersion`, `EnvironmentVariables` and the target constants of `std/os` - and a name `std/os` re-exports (`Environment`, `Entropy`) reaches its own module's capability; `use *` reaches the package's | 7.8 wants it in `std`; until then one function is the one place |
 | An update that gains a capability | refused, printing the gain, unless `--accept-capabilities` | CONCEPT: "needs an explicit confirmation"; a flag is the confirmation a script can give |
 | `language` of a release | compared with the toolchain's language version (`languageVersion`, 0.1.0); a newer one is not chosen, and the explanation says so | 7.4 |
 | Signatures and `config.trb` | a `signature` line is read and kept, and **not verified**: there is no Ed25519 in `std` yet, and a `file:` registry signs nothing. `config.trb` is not fetched. **Verified since 2026-09-27: section 7.14** | verification belongs with the key of the registry, which the write service's round creates |

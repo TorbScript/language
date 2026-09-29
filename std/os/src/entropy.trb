@@ -1,0 +1,78 @@
+/**
+ * [Entropy]: bytes of the operating system's source of randomness, which is fit for cryptography - what a key, a nonce,
+ * a token and the seed of a generator are made from (docs/design/RANDOM.md).
+ *
+ * It is a module of its own and a capability of its own, `entropy`, because it reads nothing about the machine: its
+ * import says "this file makes values nobody can predict", so a package that makes a nonce is reported as touching
+ * `entropy` and not the whole operating system, and a sandboxed script is granted it with `modules "std/os/entropy"`.
+ */
+
+/**
+ * The operating system's source of randomness: `BCryptGenRandom` on Windows, `getrandom` on Linux and FreeBSD,
+ * `getentropy` on macOS, and `crypto.getRandomValues` in the browser. Every byte is as unpredictable as the system can
+ * make it, so what it answers may be a key; nothing seeds it and nothing repeats it.
+ *
+ * A seeded generator - the same numbers from the same seed, for a test or a simulation - is a different thing and a
+ * value of its own, so that one is never mistaken for the other: this is where its seed comes from
+ * ([Entropy.int64]), and never what it is.
+ *
+ * # Examples
+ *
+ *     const nonce = Entropy.bytes 18
+ *     print nonce.length()
+ *
+ * # Panics
+ *
+ * Where the operating system does not answer, which none of the systems above does once it has started: there is no
+ * safe way on without randomness, and a failure a caller could handle would invite a weaker source in its place. Go
+ * decided the same for `crypto/rand` (1.24).
+ *
+ * # Related
+ *
+ * - [Entropy.bytes] - the bytes.
+ * - [Entropy.int64] - eight of them as a number, the seed of a generator.
+ */
+public type Entropy {
+  /**
+   * `count` bytes of the system's source of randomness: `Entropy.bytes 16` for a nonce, `32` for a key of 256 bits.
+   *
+   * # Examples
+   *
+   *     const key = Entropy.bytes 32
+   *     print(key.length() == 32)
+   *
+   * # Panics
+   *
+   * Where `count` is negative, and where the operating system does not answer.
+   */
+  static fn bytes(count: Int): List<UInt8> {
+    if count < 0 {
+      panic "Entropy.bytes takes a count of at least 0, not {count}"
+    }
+    var into: ArrayList<UInt8> = ArrayList.withCapacity count
+    if !fillWithEntropy(into, count) {
+      panic "the operating system's source of randomness did not answer"
+    }
+    into
+  }
+
+  /**
+   * Eight bytes of the system's source of randomness as one `Int64`, every one of its 64 bits random, negative as often
+   * as not: the unpredictable seed of a generator.
+   *
+   * # Examples
+   *
+   *     const seed = Entropy.int64()
+   *     print "seeded with {seed}"
+   */
+  static fn int64(): Int64 {
+    var value: Int64 = 0
+    for byte in Self.bytes(8) {
+      value = (value << 8) | Int64.from(byte)
+    }
+    value
+  }
+}
+
+/** Appends `count` bytes of the system's source of randomness to `into`: false where the system did not answer. */
+native fn fillWithEntropy(var into: ArrayList<UInt8>, count: Int): Bool

@@ -97,8 +97,17 @@ own lock - never by evaluating a `project.trb` - and derives the capabilities ag
 refusal `--dry-run` shows locally. It does not *check* the package: its toolchain may be another patch release.
 
 **The capability summary is what the package's own imports reach**: `files` for `std/fs`, `network` for `std/http`,
-`std/network` and `std/tls`, `processes`, `environment`, `the operating system`, `clock`, `scripts`, and `foreign
-functions` for a `foreign` block. What its dependencies reach is theirs.
+`std/network` and `std/tls`, `processes`, `environment`, `entropy` for `Entropy`, `the operating system` for the rest
+of `std/os`, `clock` for `Clock` and `sleep`, `scripts`, and `foreign functions` for a `foreign` block. What its
+dependencies reach is theirs.
+
+**Every imported name decides, not its package.** A capability is reading something, and a type is no reading:
+`use Timestamp from "std/time"` puts a point in time into a signature and reaches nothing, while
+`use Clock from "std/time"` reaches `clock`. The values a capability package answers in are pure - `Duration`,
+`Instant` and `Timestamp` of `std/time`; `OsError`, `SystemVersion`, `EnvironmentVariables` and the target constants
+of `std/os` - and a name `std/os` re-exports reaches what its own module does, so `Entropy` is `entropy` from `std/os`
+as from `std/os/entropy`. A `use * as time from "std/time"` can reach every name, so it reaches the package's
+capability.
 
 ## Examples
 

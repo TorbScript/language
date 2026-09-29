@@ -1,11 +1,14 @@
 /*
- * clock.c - `std/time`: the monotonic clock `Clock.now` and `Clock.milliseconds` read.
+ * clock.c - `std/time`: the monotonic clock `Clock.now` and `Clock.milliseconds` read, and the wall clock
+ * `Clock.timestamp` reads.
  *
- * `Instant` and `Duration` are records of the program over an `Int64` of nanoseconds, and their arithmetic is
- * TorbScript in `std/time`; what is native is the reading, `torb_clock_now`, in nanoseconds from an unspecified
- * per-process origin. `Clock.milliseconds()` is the same reading, counted from the first one of the process.
+ * `Instant`, `Duration` and `Timestamp` are records of the program over an `Int64` of nanoseconds, and their arithmetic
+ * is TorbScript in `std/time`; what is native is the reading: `torb_clock_now` in nanoseconds from an unspecified
+ * per-process origin, `torb_clock_wall_nanoseconds` in nanoseconds since 1970-01-01 00:00:00 UTC.
+ * `Clock.milliseconds()` is the monotonic reading, counted from the first one of the process.
  *
- * The monotonic read itself is the one platform difference (`torb_platform_monotonic_nanoseconds`, in platform.c).
+ * The reads themselves are the platform differences (`torb_platform_monotonic_nanoseconds` and
+ * `torb_platform_wall_nanoseconds`, in platform.c).
  */
 
 #include "torb.h"
@@ -13,6 +16,10 @@
 
 int64_t torb_clock_now(void) {
   return torb_platform_monotonic_nanoseconds();
+}
+
+int64_t torb_clock_wall_nanoseconds(void) {
+  return torb_platform_wall_nanoseconds();
 }
 
 static torb_mutex torb_clock_mutex = TORB_MUTEX_INITIALIZER;

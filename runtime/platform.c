@@ -4,10 +4,11 @@
  * What kind of thing a path is, the working directory, the entries of a directory, creating one directory and
  * everything above it, opening a file, removing, renaming and copying one, what a path is (its metadata) and its
  * permissions, symbolic links, the directory for temporary files and an entry created where nothing was, reading and
- * writing a whole file and flushing one to the disk, running a child process to its end, a monotonic clock reading,
- * sleeping until a timer is due, the program's own arguments, reading and setting an environment variable, and the
- * memory limit the operating system holds the process to (with the physical memory and the size of a block that go with
- * it). Everything above this file is portable, and what it hands out and takes in is always UTF-8.
+ * writing a whole file and flushing one to the disk, running a child process to its end, a monotonic and a wall clock
+ * reading, bytes of the system's source of randomness, sleeping until a timer is due, the program's own arguments,
+ * reading and setting an environment variable, and the memory limit the operating system holds the process to (with the
+ * physical memory and the size of a block that go with it). Everything above this file is portable, and what it hands
+ * out and takes in is always UTF-8.
  *
  * On Windows that last sentence is the whole point of the file. A `String` of the language is UTF-8, every call of the
  * operating system comes in a narrow and a wide form, and the narrow one reads the **code page of the machine** (1252 on
@@ -68,6 +69,8 @@
 #  include <sys/resource.h>
 #  include <sys/stat.h>
 #  include <signal.h>
+#  include <sys/types.h>
+#  include <sys/random.h> /* getrandom on Linux and FreeBSD, getentropy on macOS and in emscripten */
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
@@ -984,6 +987,87 @@ int64_t torb_platform_monotonic_nanoseconds(void) {
   return seconds * 1000000000LL + remainder_nanoseconds;
 }
 
+typedef VOID(WINAPI *torb_platform_precise_time_function)(LPFILETIME);
+typedef LONG(WINAPI *torb_platform_generate_random_function)(PVOID, PUCHAR, ULONG, ULONG);
+
+static INIT_ONCE torb_platform_precise_time_once = INIT_ONCE_STATIC_INIT;
+static torb_platform_precise_time_function torb_platform_precise_time = NULL;
+static INIT_ONCE torb_platform_generate_random_once = INIT_ONCE_STATIC_INIT;
+static torb_platform_generate_random_function torb_platform_generate_random = NULL;
+
+/*
+ * A function of a system library, looked up by name, as the generic function pointer a cast starts from - the one cast
+ * C lets pass unwarned. A library that is not in the process yet is loaded, so a program links nothing beyond what
+ * every Windows C compiler links by default. NULL where the library or the function is missing.
+ */
+static void (*torb_platform_system_function(const wchar_t *library, const char *name))(void) {
+  HMODULE module = GetModuleHandleW(library);
+  if (module == NULL) {
+    module = LoadLibraryW(library);
+  }
+  if (module == NULL) {
+    return NULL;
+  }
+  return (void (*)(void))GetProcAddress(module, name);
+}
+
+/* `GetSystemTimePreciseAsFileTime` of Windows 8, which some headers hide behind a `_WIN32_WINNT` they do not set. */
+static BOOL CALLBACK torb_platform_find_precise_time(PINIT_ONCE once, PVOID parameter, PVOID *context) {
+  (void)once;
+  (void)parameter;
+  (void)context;
+  torb_platform_precise_time = (torb_platform_precise_time_function)torb_platform_system_function(
+      L"kernel32.dll", "GetSystemTimePreciseAsFileTime");
+  return TRUE;
+}
+
+/* `BCryptGenRandom` of `bcrypt.dll`, loaded the first time randomness is asked for. */
+static BOOL CALLBACK torb_platform_find_generate_random(PINIT_ONCE once, PVOID parameter, PVOID *context) {
+  (void)once;
+  (void)parameter;
+  (void)context;
+  torb_platform_generate_random =
+      (torb_platform_generate_random_function)torb_platform_system_function(L"bcrypt.dll", "BCryptGenRandom");
+  return TRUE;
+}
+
+/*
+ * The wall clock to the precision of the system's own time - a tenth of a microsecond - where `GetSystemTimeAsFileTime`
+ * answers the last tick of the scheduler, up to 16 milliseconds old. Both count 100-nanosecond ticks from 1601-01-01
+ * 00:00:00 UTC, and 1970-01-01 is 11 644 473 600 seconds after it.
+ */
+int64_t torb_platform_wall_nanoseconds(void) {
+  FILETIME now;
+  ULARGE_INTEGER ticks;
+  (void)InitOnceExecuteOnce(&torb_platform_precise_time_once, torb_platform_find_precise_time, NULL, NULL);
+  if (torb_platform_precise_time != NULL) {
+    torb_platform_precise_time(&now);
+  } else {
+    GetSystemTimeAsFileTime(&now);
+  }
+  ticks.LowPart = now.dwLowDateTime;
+  ticks.HighPart = now.dwHighDateTime;
+  return ((int64_t)ticks.QuadPart - 116444736000000000LL) * 100LL;
+}
+
+/* The system's preferred generator (`BCRYPT_USE_SYSTEM_PREFERRED_RNG`), without an algorithm handle to open first. */
+bool torb_platform_random_bytes(uint8_t *out, size_t size) {
+  const ULONG preferred = 0x00000002u;
+  (void)InitOnceExecuteOnce(&torb_platform_generate_random_once, torb_platform_find_generate_random, NULL, NULL);
+  if (torb_platform_generate_random == NULL) {
+    return false;
+  }
+  while (size > 0u) {
+    const ULONG chunk = size > (size_t)0x40000000u ? 0x40000000u : (ULONG)size;
+    if (torb_platform_generate_random(NULL, (PUCHAR)out, chunk, preferred) != 0) {
+      return false;
+    }
+    out += chunk;
+    size -= (size_t)chunk;
+  }
+  return true;
+}
+
 /* `Sleep` counts milliseconds, so the span is rounded up: the scheduler reads the clock afterwards either way. */
 void torb_platform_sleep(int64_t nanoseconds) {
   int64_t milliseconds;
@@ -1632,6 +1716,54 @@ int64_t torb_platform_monotonic_nanoseconds(void) {
   clock_gettime(CLOCK_MONOTONIC, &now);
   return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
 }
+
+int64_t torb_platform_wall_nanoseconds(void) {
+  struct timespec now;
+  (void)clock_gettime(CLOCK_REALTIME, &now);
+  return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
+}
+
+#if defined(__linux__) || defined(__FreeBSD__)
+
+/*
+ * `getrandom(2)` without flags: the kernel's generator, which blocks only until it was seeded once after boot and never
+ * again, and needs no file - so neither a full table of descriptors nor a chroot without `/dev` takes it away. A call
+ * answers at most 32 MiB and a signal can cut it short, so it is repeated until everything is written.
+ */
+bool torb_platform_random_bytes(uint8_t *out, size_t size) {
+  while (size > 0u) {
+    const ssize_t written = getrandom(out, size, 0u);
+    if (written < 0 && errno == EINTR) {
+      continue;
+    }
+    if (written <= 0) {
+      return false;
+    }
+    out += (size_t)written;
+    size -= (size_t)written;
+  }
+  return true;
+}
+
+#else
+
+/*
+ * `getentropy`, at most 256 bytes a call: the kernel's generator on macOS, and in the browser emscripten's, which is
+ * `crypto.getRandomValues` of the page or the worker.
+ */
+bool torb_platform_random_bytes(uint8_t *out, size_t size) {
+  while (size > 0u) {
+    const size_t chunk = size > 256u ? 256u : size;
+    if (getentropy(out, chunk) != 0) {
+      return false;
+    }
+    out += chunk;
+    size -= chunk;
+  }
+  return true;
+}
+
+#endif
 
 void torb_platform_sleep(int64_t nanoseconds) {
   struct timespec span;

@@ -49,9 +49,10 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `process.c`           | `Process.arguments`, `Process.exit`, `Process.executablePath`, running a child process      |
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`create`/`readAll`/`close`) |
 | `stream.c`            | The byte streams of a file, of the three standard streams and of a child process (docs/design/STREAMS.md section 14): every read, write, flush and wait a task of the runtime that makes its one call of the operating system on the blocking pool, the buffers a read fills until its reader takes them, and the table of the children `Process.start` started |
-| `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
+| `clock.c`             | `std/time`: the readings of `Clock.now`, `Clock.milliseconds` and `Clock.timestamp`         |
 | `environment.c`       | `Environment` of `std/os`: `Environment.get` and `Environment.entries`                     |
-| `platform.c`          | **The runtime's own portability layer, and the only file with an `#ifdef _WIN32` between its functions**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic clock reading, sleeping until a timer is due, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only), the memory limit of the process (a job object, `RLIMIT_DATA`, `RLIMIT_AS`), the physical memory and the size of a `malloc`ed block. Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
+| `entropy.c`           | `Entropy` of `std/os`: bytes of the system's source of randomness appended to a list        |
+| `platform.c`          | **The runtime's own portability layer, and the only file with an `#ifdef _WIN32` between its functions**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic and a wall clock reading, the system's source of randomness (`BCryptGenRandom`, `getrandom`, `getentropy`), sleeping until a timer is due, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only), the memory limit of the process (a job object, `RLIMIT_DATA`, `RLIMIT_AS`), the physical memory and the size of a `malloc`ed block. Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
 | `include/torb_os.h`   | The prototypes of every native of `runtime/os/`, declared on every machine so a signature is compared with the manifest's everywhere |
 | `os/<family>.c`       | The natives of `std/os` one family of systems has: `windows.c`, `linux.c`, `macos.c`, `freebsd.c`, `posix.c` for what Linux, macOS and FreeBSD share, and `bsd.c` for the `sysctl` interface of macOS and FreeBSD. **Each file is one `#if` from its first line after the includes to its last**, so every file is compiled on every machine and is empty where it does not belong, and no function has an `#ifdef` inside it. A row of the manifest names the systems its native exists on (`availableOn`), which is what keeps a call of one out of another system's build (docs/design/OS.md section 7) |
 | `os/<poller>.c`       | The pollers of the IO core, one `#if` each like the family files: `iocp.c` (IOCP and Winsock, loaded on first use), `epoll.c`, `kqueue.c` (macOS and FreeBSD), `posix_io.c` for the socket calls and the readiness logic the last two share, and `browser.c`, the poller of the playground's WebAssembly (emscripten), which never opens because a page has no sockets |
@@ -271,10 +272,12 @@ storage of capacity zero. Shrinking that away would mean a fourth word in every 
 **A text and a list are at most 4 GiB and 2^32 elements.** `offset` and `length` are `uint32_t`, which keeps
 `torb_text` at 16 bytes. Both limits panic rather than wrap.
 
-**`Instant` and `Duration` are nanoseconds in an `Int64`, and records of the program.** `std/time` declares them as
-ordinary types over one private `Int64` field, so comparing, subtracting and showing them is TorbScript and the runtime
-only reads the clock: `torb_clock_now` answers one monotonic reading in nanoseconds from an unspecified per-process
-origin (only a difference of two is ever meaningful). About 292 years fit before an `int64_t` nanosecond count
+**`Instant`, `Duration` and `Timestamp` are nanoseconds in an `Int64`, and records of the program.** `std/time`
+declares them as ordinary types over one private `Int64` field, so comparing, subtracting and showing them is
+TorbScript and the runtime only reads the clocks: `torb_clock_now` answers one monotonic reading in nanoseconds from an
+unspecified per-process origin (only a difference of two is ever meaningful), `torb_clock_wall_nanoseconds` one
+reading of the wall clock in nanoseconds since 1970 (`GetSystemTimePreciseAsFileTime`, looked up on first use, or
+`clock_gettime(CLOCK_REALTIME)`). About 292 years fit before an `int64_t` nanosecond count
 overflows, which a monotonic clock within one process never approaches, and the checked `Int64` arithmetic panics
 rather than wraps in that never-reached case. `torb_instant` and `torb_duration` stay the runtime's names for the
 deadlines and limits of `task.c`, and a `Duration` crosses into it as its number of nanoseconds.

@@ -433,6 +433,7 @@ std/os/
     environment.trb          Environment, EnvironmentVariables
     user.trb                 User
     directories.trb          Directories
+    entropy.trb              Entropy: the system's source of randomness (built 2026-09-29, RANDOM.md section 4)
     process.trb              CurrentProcess, ProcessResources
 
     windows/                 native.trb (type Windows), registry.trb, system.trb, processor.trb, memory.trb,
@@ -1437,6 +1438,7 @@ system on every machine.
 | `Environment.entries(var names: ArrayList<String>, var values: ArrayList<String>)` | `platform.c`, new | `GetEnvironmentStringsW` / `environ`, filtered by the sandbox's patterns |
 | `CurrentProcess.workingDirectory` | `platform.c`, exists as `torb_platform_working_directory` | a manifest row over it |
 | `CurrentProcess.startedNanoseconds(): Int64` | `process.c`, new | the monotonic reading the runtime takes before `main` |
+| `fillWithEntropy(var into: ArrayList<UInt8>, count: Int): Bool` | `entropy.c` over `torb_platform_random_bytes` of `platform.c`, built | `BCryptGenRandom` / `getrandom` / `getentropy`, which emscripten answers with `crypto.getRandomValues`; the IO core's DNS identifiers read the same function |
 
 ### Windows — `runtime/os/windows.c`, `native type Windows`
 
@@ -1566,6 +1568,7 @@ module path, which the `modules` capability already takes, because `use X from "
 | `modules "std/os/processor"`, `"std/os/memory"` | counts, load, memory | harmless alone, and a fingerprint together |
 | `modules "std/os/volumes"`, `"std/os/network"` | mount points, device names, addresses | the network grant reveals where the machine is |
 | `modules "std/os/user"`, `"std/os/process"` | the account, the executable's path, the process's resources | the host process's details |
+| `modules "std/os/entropy"` | nothing about the machine: bytes nobody can predict | it makes the script unrepeatable, as the clock does, and it is the capability `entropy` of a package's summary, not "the operating system" |
 | `modules "std/os"` | all of the above, with the environment still filtered by its patterns | the explicit "trust this script with the machine" |
 
 **The per-system directories are never grantable.** A grant of `std/os/windows/registry` or `std/os/linux/native`

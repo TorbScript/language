@@ -1057,7 +1057,7 @@ int64_t torb_network_name_servers(torb_list *parts) {
 
 int64_t torb_network_random(void) {
   uint64_t value = 0u;
-  if (!torb_io_system_random((uint8_t *)&value, sizeof value)) {
+  if (!torb_platform_random_bytes((uint8_t *)&value, sizeof value)) {
     torb_panic_text("the system's source of randomness did not answer", torb_location_unknown);
   }
   return (int64_t)value;

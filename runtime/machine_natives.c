@@ -272,8 +272,17 @@ static void torb_machine_native_24(int64_t *words, int64_t base, const int64_t *
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 
-/* torb_compare_f64 */
+/* torb_clock_wall_nanoseconds */
 static void torb_machine_native_25(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  int64_t r = torb_clock_wall_nanoseconds();
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+
+/* torb_compare_f64 */
+static void torb_machine_native_26(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -284,7 +293,7 @@ static void torb_machine_native_25(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_f64_i64_checked */
-static void torb_machine_native_26(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_27(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -296,7 +305,7 @@ static void torb_machine_native_26(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_i16_checked */
-static void torb_machine_native_27(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_28(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -310,7 +319,7 @@ static void torb_machine_native_27(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_i32_checked */
-static void torb_machine_native_28(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_29(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -324,7 +333,7 @@ static void torb_machine_native_28(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_i8_checked */
-static void torb_machine_native_29(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_30(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -338,7 +347,7 @@ static void torb_machine_native_29(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_u16_checked */
-static void torb_machine_native_30(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_31(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -352,7 +361,7 @@ static void torb_machine_native_30(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_u32_checked */
-static void torb_machine_native_31(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_32(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -366,7 +375,7 @@ static void torb_machine_native_31(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_u64_checked */
-static void torb_machine_native_32(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_33(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -378,7 +387,7 @@ static void torb_machine_native_32(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_i64_u8_checked */
-static void torb_machine_native_33(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_34(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -392,7 +401,7 @@ static void torb_machine_native_33(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_convert_u64_i64_checked */
-static void torb_machine_native_34(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_35(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -404,7 +413,7 @@ static void torb_machine_native_34(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_cosine_f64 */
-static void torb_machine_native_35(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_36(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -413,8 +422,19 @@ static void torb_machine_native_35(int64_t *words, int64_t base, const int64_t *
   if (operands[0] >= 0) words[base + operands[0]] = torb_machine_word_of_double(r);
 }
 
+/* torb_entropy_fill */
+static void torb_machine_native_37(int64_t *words, int64_t base, const int64_t *operands) {
+  (void)words;
+  (void)base;
+  (void)operands;
+  torb_list *a0 = (torb_list *)torb_machine_address(words, words[base + operands[1]]);
+  int64_t a1 = (int64_t)words[base + operands[2]];
+  bool r = torb_entropy_fill(a0, a1);
+  if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
+}
+
 /* torb_environment_entries */
-static void torb_machine_native_36(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_38(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -424,7 +444,7 @@ static void torb_machine_native_36(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_environment_get */
-static void torb_machine_native_37(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_39(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -436,7 +456,7 @@ static void torb_machine_native_37(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_exponential_f64 */
-static void torb_machine_native_38(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_40(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -446,7 +466,7 @@ static void torb_machine_native_38(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_absolute_path */
-static void torb_machine_native_39(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_41(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -459,7 +479,7 @@ static void torb_machine_native_39(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_close */
-static void torb_machine_native_40(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_42(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -468,7 +488,7 @@ static void torb_machine_native_40(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_copy */
-static void torb_machine_native_41(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_43(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -482,7 +502,7 @@ static void torb_machine_native_41(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_create */
-static void torb_machine_native_42(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_44(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -495,7 +515,7 @@ static void torb_machine_native_42(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_create_directory */
-static void torb_machine_native_43(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_45(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -507,7 +527,7 @@ static void torb_machine_native_43(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_create_symbolic_link */
-static void torb_machine_native_44(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_46(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -521,7 +541,7 @@ static void torb_machine_native_44(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_create_temporary */
-static void torb_machine_native_45(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_47(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -537,7 +557,7 @@ static void torb_machine_native_45(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_exists */
-static void torb_machine_native_46(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_48(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -548,7 +568,7 @@ static void torb_machine_native_46(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_flush */
-static void torb_machine_native_47(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_49(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -558,7 +578,7 @@ static void torb_machine_native_47(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_is_directory */
-static void torb_machine_native_48(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_50(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -569,7 +589,7 @@ static void torb_machine_native_48(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_list */
-static void torb_machine_native_49(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_51(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -582,7 +602,7 @@ static void torb_machine_native_49(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_metadata */
-static void torb_machine_native_50(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_52(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -599,7 +619,7 @@ static void torb_machine_native_50(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_open */
-static void torb_machine_native_51(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_53(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -612,7 +632,7 @@ static void torb_machine_native_51(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_path */
-static void torb_machine_native_52(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_54(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -622,7 +642,7 @@ static void torb_machine_native_52(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_read */
-static void torb_machine_native_53(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_55(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -633,7 +653,7 @@ static void torb_machine_native_53(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_read_all */
-static void torb_machine_native_54(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_56(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -646,7 +666,7 @@ static void torb_machine_native_54(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_read_bytes */
-static void torb_machine_native_55(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_57(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -659,7 +679,7 @@ static void torb_machine_native_55(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_read_text */
-static void torb_machine_native_56(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_58(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -672,7 +692,7 @@ static void torb_machine_native_56(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_remove */
-static void torb_machine_native_57(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_59(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -684,7 +704,7 @@ static void torb_machine_native_57(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_rename */
-static void torb_machine_native_58(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_60(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -698,7 +718,7 @@ static void torb_machine_native_58(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_replace */
-static void torb_machine_native_59(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_61(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -712,7 +732,7 @@ static void torb_machine_native_59(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_set_mode */
-static void torb_machine_native_60(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_62(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -725,7 +745,7 @@ static void torb_machine_native_60(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_symbolic_link_target */
-static void torb_machine_native_61(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_63(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -738,7 +758,7 @@ static void torb_machine_native_61(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_take_read */
-static void torb_machine_native_62(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_64(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -748,7 +768,7 @@ static void torb_machine_native_62(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_write */
-static void torb_machine_native_63(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_65(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -761,7 +781,7 @@ static void torb_machine_native_63(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_write_bytes */
-static void torb_machine_native_64(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_66(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -775,7 +795,7 @@ static void torb_machine_native_64(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_file_write_text */
-static void torb_machine_native_65(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_67(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -789,7 +809,7 @@ static void torb_machine_native_65(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_floor_f64 */
-static void torb_machine_native_66(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_68(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -799,7 +819,7 @@ static void torb_machine_native_66(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_hash_bool */
-static void torb_machine_native_67(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_69(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -809,7 +829,7 @@ static void torb_machine_native_67(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_hash_char */
-static void torb_machine_native_68(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_70(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -819,7 +839,7 @@ static void torb_machine_native_68(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_hash_combine */
-static void torb_machine_native_69(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_71(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -830,7 +850,7 @@ static void torb_machine_native_69(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_hash_i64 */
-static void torb_machine_native_70(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_72(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -840,7 +860,7 @@ static void torb_machine_native_70(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_hash_u64 */
-static void torb_machine_native_71(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_73(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -850,7 +870,7 @@ static void torb_machine_native_71(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_install_interrupt_handler */
-static void torb_machine_native_72(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_74(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -858,7 +878,7 @@ static void torb_machine_native_72(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_is_error_terminal */
-static void torb_machine_native_73(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_75(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -867,7 +887,7 @@ static void torb_machine_native_73(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_is_nan_f64 */
-static void torb_machine_native_74(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_76(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -877,7 +897,7 @@ static void torb_machine_native_74(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_is_terminal */
-static void torb_machine_native_75(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_77(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -886,7 +906,7 @@ static void torb_machine_native_75(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_add */
-static void torb_machine_native_76(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_78(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -896,7 +916,7 @@ static void torb_machine_native_76(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_clear */
-static void torb_machine_native_77(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_79(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -905,7 +925,7 @@ static void torb_machine_native_77(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_compact */
-static void torb_machine_native_78(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_80(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -914,7 +934,7 @@ static void torb_machine_native_78(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_get */
-static void torb_machine_native_79(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_81(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -928,7 +948,7 @@ static void torb_machine_native_79(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_insert */
-static void torb_machine_native_80(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_82(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -939,7 +959,7 @@ static void torb_machine_native_80(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_length */
-static void torb_machine_native_81(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_83(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -950,7 +970,7 @@ static void torb_machine_native_81(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_remove_at */
-static void torb_machine_native_82(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_84(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -963,7 +983,7 @@ static void torb_machine_native_82(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_replace */
-static void torb_machine_native_83(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_85(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -976,7 +996,7 @@ static void torb_machine_native_83(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_reverse */
-static void torb_machine_native_84(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_86(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -985,7 +1005,7 @@ static void torb_machine_native_84(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_set */
-static void torb_machine_native_85(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_87(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -996,7 +1016,7 @@ static void torb_machine_native_85(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_list_slice */
-static void torb_machine_native_86(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_88(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1009,7 +1029,7 @@ static void torb_machine_native_86(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_install */
-static void torb_machine_native_87(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_89(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1017,7 +1037,7 @@ static void torb_machine_native_87(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_load */
-static void torb_machine_native_88(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_90(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1027,7 +1047,7 @@ static void torb_machine_native_88(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_operate */
-static void torb_machine_native_89(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_91(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1041,7 +1061,7 @@ static void torb_machine_native_89(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_place_float */
-static void torb_machine_native_90(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_92(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1052,7 +1072,7 @@ static void torb_machine_native_90(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_place_text */
-static void torb_machine_native_91(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_93(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1064,7 +1084,7 @@ static void torb_machine_native_91(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_machine_store */
-static void torb_machine_native_92(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_94(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1074,7 +1094,7 @@ static void torb_machine_native_92(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_clear */
-static void torb_machine_native_93(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_95(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1083,7 +1103,7 @@ static void torb_machine_native_93(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_entry_after */
-static void torb_machine_native_94(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_96(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1099,7 +1119,7 @@ static void torb_machine_native_94(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_get */
-static void torb_machine_native_95(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_97(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1113,7 +1133,7 @@ static void torb_machine_native_95(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_length */
-static void torb_machine_native_96(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_98(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1124,7 +1144,7 @@ static void torb_machine_native_96(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_remove */
-static void torb_machine_native_97(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_99(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1137,7 +1157,7 @@ static void torb_machine_native_97(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_map_set */
-static void torb_machine_native_98(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_100(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1148,7 +1168,7 @@ static void torb_machine_native_98(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_multiplied_wrapping_u64 */
-static void torb_machine_native_99(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_101(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1159,7 +1179,7 @@ static void torb_machine_native_99(int64_t *words, int64_t base, const int64_t *
 }
 
 /* torb_natural_logarithm_f64 */
-static void torb_machine_native_100(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_102(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1169,7 +1189,7 @@ static void torb_machine_native_100(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_accept */
-static void torb_machine_native_101(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_103(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1179,7 +1199,7 @@ static void torb_machine_native_101(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_address */
-static void torb_machine_native_102(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_104(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1191,7 +1211,7 @@ static void torb_machine_native_102(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_bind */
-static void torb_machine_native_103(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_105(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1204,7 +1224,7 @@ static void torb_machine_native_103(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_close */
-static void torb_machine_native_104(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_106(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1213,7 +1233,7 @@ static void torb_machine_native_104(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_connect */
-static void torb_machine_native_105(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_107(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1226,7 +1246,7 @@ static void torb_machine_native_105(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_connect_datagram */
-static void torb_machine_native_106(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_108(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1240,7 +1260,7 @@ static void torb_machine_native_106(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_error_text */
-static void torb_machine_native_107(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_109(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1250,7 +1270,7 @@ static void torb_machine_native_107(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_listen */
-static void torb_machine_native_108(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_110(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1264,7 +1284,7 @@ static void torb_machine_native_108(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_name_servers */
-static void torb_machine_native_109(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_111(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1274,7 +1294,7 @@ static void torb_machine_native_109(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_random */
-static void torb_machine_native_110(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_112(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1283,7 +1303,7 @@ static void torb_machine_native_110(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_receive */
-static void torb_machine_native_111(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_113(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1294,7 +1314,7 @@ static void torb_machine_native_111(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_receive_datagram */
-static void torb_machine_native_112(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_114(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1304,7 +1324,7 @@ static void torb_machine_native_112(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_resolve */
-static void torb_machine_native_113(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_115(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1315,7 +1335,7 @@ static void torb_machine_native_113(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_send */
-static void torb_machine_native_114(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_116(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1328,7 +1348,7 @@ static void torb_machine_native_114(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_send_datagram */
-static void torb_machine_native_115(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_117(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1344,7 +1364,7 @@ static void torb_machine_native_115(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_shutdown */
-static void torb_machine_native_116(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_118(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1354,7 +1374,7 @@ static void torb_machine_native_116(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_take_datagram */
-static void torb_machine_native_117(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_119(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1366,7 +1386,7 @@ static void torb_machine_native_117(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_take_received */
-static void torb_machine_native_118(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_120(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1376,7 +1396,7 @@ static void torb_machine_native_118(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_network_take_resolved */
-static void torb_machine_native_119(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_121(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1387,7 +1407,7 @@ static void torb_machine_native_119(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_bsd_sysctl_integer */
 #if defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_120(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1399,7 +1419,7 @@ static void torb_machine_native_120(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_120(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1409,7 +1429,7 @@ static void torb_machine_native_120(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_bsd_sysctl_text */
 #if defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_121(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1421,7 +1441,7 @@ static void torb_machine_native_121(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_121(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1431,7 +1451,7 @@ static void torb_machine_native_121(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_bsd_uptime */
 #if defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1441,7 +1461,7 @@ static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1451,7 +1471,7 @@ static void torb_machine_native_122(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_linux_read_system_file */
 #if defined(__linux__)
-static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1463,7 +1483,7 @@ static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1473,7 +1493,7 @@ static void torb_machine_native_123(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_macos_user_temporary_directory */
 #if defined(__APPLE__)
-static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1483,7 +1503,7 @@ static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1493,7 +1513,7 @@ static void torb_machine_native_124(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_posix_account */
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1506,7 +1526,7 @@ static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1516,7 +1536,7 @@ static void torb_machine_native_125(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_posix_configuration */
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1526,7 +1546,7 @@ static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1536,7 +1556,7 @@ static void torb_machine_native_126(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_posix_effective_user_identifier */
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1544,7 +1564,7 @@ static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1554,7 +1574,7 @@ static void torb_machine_native_127(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_posix_host_name */
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1564,7 +1584,7 @@ static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1574,7 +1594,7 @@ static void torb_machine_native_128(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_posix_system_names */
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
-static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1588,7 +1608,7 @@ static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1598,7 +1618,7 @@ static void torb_machine_native_129(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_computer_name */
 #if defined(_WIN32)
-static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1608,7 +1628,7 @@ static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1618,7 +1638,7 @@ static void torb_machine_native_130(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_known_folder */
 #if defined(_WIN32)
-static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1630,7 +1650,7 @@ static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1640,7 +1660,7 @@ static void torb_machine_native_131(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_registry_integer */
 #if defined(_WIN32)
-static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1654,7 +1674,7 @@ static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1664,7 +1684,7 @@ static void torb_machine_native_132(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_registry_text */
 #if defined(_WIN32)
-static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1678,7 +1698,7 @@ static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1688,7 +1708,7 @@ static void torb_machine_native_133(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_system_information */
 #if defined(_WIN32)
-static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1700,7 +1720,7 @@ static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1710,7 +1730,7 @@ static void torb_machine_native_134(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_temporary_directory */
 #if defined(_WIN32)
-static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1720,7 +1740,7 @@ static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1730,7 +1750,7 @@ static void torb_machine_native_135(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_tick_count */
 #if defined(_WIN32)
-static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_138(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1738,7 +1758,7 @@ static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_138(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1748,7 +1768,7 @@ static void torb_machine_native_136(int64_t *words, int64_t base, const int64_t 
 
 /* torb_os_windows_version */
 #if defined(_WIN32)
-static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_139(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1760,7 +1780,7 @@ static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_139(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1769,7 +1789,7 @@ static void torb_machine_native_137(int64_t *words, int64_t base, const int64_t 
 #endif
 
 /* torb_panic */
-static void torb_machine_native_138(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_140(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1779,7 +1799,7 @@ static void torb_machine_native_138(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_f64 */
-static void torb_machine_native_139(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_141(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1791,7 +1811,7 @@ static void torb_machine_native_139(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_i16 */
-static void torb_machine_native_140(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_142(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1805,7 +1825,7 @@ static void torb_machine_native_140(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_i32 */
-static void torb_machine_native_141(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_143(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1819,7 +1839,7 @@ static void torb_machine_native_141(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_i64 */
-static void torb_machine_native_142(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_144(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1831,7 +1851,7 @@ static void torb_machine_native_142(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_i64_digits */
-static void torb_machine_native_143(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_145(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1844,7 +1864,7 @@ static void torb_machine_native_143(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_i8 */
-static void torb_machine_native_144(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_146(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1858,7 +1878,7 @@ static void torb_machine_native_144(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_u16 */
-static void torb_machine_native_145(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_147(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1872,7 +1892,7 @@ static void torb_machine_native_145(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_u32 */
-static void torb_machine_native_146(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_148(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1886,7 +1906,7 @@ static void torb_machine_native_146(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_u64 */
-static void torb_machine_native_147(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_149(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1898,7 +1918,7 @@ static void torb_machine_native_147(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_parse_u8 */
-static void torb_machine_native_148(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_150(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1912,7 +1932,7 @@ static void torb_machine_native_148(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_pause */
-static void torb_machine_native_149(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_151(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1921,7 +1941,7 @@ static void torb_machine_native_149(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_f64 */
-static void torb_machine_native_150(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_152(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1932,7 +1952,7 @@ static void torb_machine_native_150(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_i16 */
-static void torb_machine_native_151(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_153(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1943,7 +1963,7 @@ static void torb_machine_native_151(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_i32 */
-static void torb_machine_native_152(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_154(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1954,7 +1974,7 @@ static void torb_machine_native_152(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_i64 */
-static void torb_machine_native_153(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_155(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1965,7 +1985,7 @@ static void torb_machine_native_153(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_i8 */
-static void torb_machine_native_154(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_156(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1976,7 +1996,7 @@ static void torb_machine_native_154(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_u16 */
-static void torb_machine_native_155(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_157(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1987,7 +2007,7 @@ static void torb_machine_native_155(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_u32 */
-static void torb_machine_native_156(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_158(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -1998,7 +2018,7 @@ static void torb_machine_native_156(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_u64 */
-static void torb_machine_native_157(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_159(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2009,7 +2029,7 @@ static void torb_machine_native_157(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_power_u8 */
-static void torb_machine_native_158(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_160(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2020,7 +2040,7 @@ static void torb_machine_native_158(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_print_error_parts */
-static void torb_machine_native_159(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_161(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2030,7 +2050,7 @@ static void torb_machine_native_159(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_print_error_raw */
-static void torb_machine_native_160(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_162(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2040,7 +2060,7 @@ static void torb_machine_native_160(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_print_parts */
-static void torb_machine_native_161(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2050,7 +2070,7 @@ static void torb_machine_native_161(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_arguments */
-static void torb_machine_native_162(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2059,7 +2079,7 @@ static void torb_machine_native_162(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_executable_path */
-static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_165(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2069,7 +2089,7 @@ static void torb_machine_native_163(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_exit */
-static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_166(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2078,7 +2098,7 @@ static void torb_machine_native_164(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_run */
-static void torb_machine_native_165(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_167(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2093,7 +2113,7 @@ static void torb_machine_native_165(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_run_feeding */
-static void torb_machine_native_166(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_168(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2110,7 +2130,7 @@ static void torb_machine_native_166(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_process_run_inheriting */
-static void torb_machine_native_167(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_169(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2124,7 +2144,7 @@ static void torb_machine_native_167(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_read_line_or_end */
-static void torb_machine_native_168(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_170(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2137,7 +2157,7 @@ static void torb_machine_native_168(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_round_f64 */
-static void torb_machine_native_169(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_171(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2147,7 +2167,7 @@ static void torb_machine_native_169(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_add */
-static void torb_machine_native_170(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2157,7 +2177,7 @@ static void torb_machine_native_170(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_clear */
-static void torb_machine_native_171(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2166,7 +2186,7 @@ static void torb_machine_native_171(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_contains */
-static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_174(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2178,7 +2198,7 @@ static void torb_machine_native_172(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_item_after */
-static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2192,7 +2212,7 @@ static void torb_machine_native_173(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_length */
-static void torb_machine_native_174(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_176(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2203,7 +2223,7 @@ static void torb_machine_native_174(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_set_remove */
-static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_177(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2214,7 +2234,7 @@ static void torb_machine_native_175(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_bool */
-static void torb_machine_native_176(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_178(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2224,7 +2244,7 @@ static void torb_machine_native_176(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_char */
-static void torb_machine_native_177(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_179(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2234,7 +2254,7 @@ static void torb_machine_native_177(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_char_nested */
-static void torb_machine_native_178(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_180(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2244,7 +2264,7 @@ static void torb_machine_native_178(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_f64 */
-static void torb_machine_native_179(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_181(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2254,7 +2274,7 @@ static void torb_machine_native_179(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_i64 */
-static void torb_machine_native_180(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_182(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2264,7 +2284,7 @@ static void torb_machine_native_180(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_u64 */
-static void torb_machine_native_181(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_183(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2274,7 +2294,7 @@ static void torb_machine_native_181(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_show_void */
-static void torb_machine_native_182(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_184(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2284,7 +2304,7 @@ static void torb_machine_native_182(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_sine_f64 */
-static void torb_machine_native_183(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_185(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2294,7 +2314,7 @@ static void torb_machine_native_183(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_sleep */
-static void torb_machine_native_184(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_186(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2304,7 +2324,7 @@ static void torb_machine_native_184(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_square_root_f64 */
-static void torb_machine_native_185(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_187(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2314,7 +2334,7 @@ static void torb_machine_native_185(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_standard_read */
-static void torb_machine_native_186(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_188(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2324,7 +2344,7 @@ static void torb_machine_native_186(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_standard_take_read */
-static void torb_machine_native_187(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_189(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2333,7 +2353,7 @@ static void torb_machine_native_187(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_standard_write */
-static void torb_machine_native_188(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_190(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2346,7 +2366,7 @@ static void torb_machine_native_188(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_stream_failure_text */
-static void torb_machine_native_189(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_191(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2356,7 +2376,7 @@ static void torb_machine_native_189(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_take_interrupt */
-static void torb_machine_native_190(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_192(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2365,7 +2385,7 @@ static void torb_machine_native_190(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_tangent_f64 */
-static void torb_machine_native_191(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_193(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2375,7 +2395,7 @@ static void torb_machine_native_191(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_task_cancel */
-static void torb_machine_native_192(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_194(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2384,7 +2404,7 @@ static void torb_machine_native_192(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_task_completed_within */
-static void torb_machine_native_193(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_195(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2395,7 +2415,7 @@ static void torb_machine_native_193(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_task_result */
-static void torb_machine_native_194(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_196(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2407,7 +2427,7 @@ static void torb_machine_native_194(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_test_case */
-static void torb_machine_native_195(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_197(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2418,7 +2438,7 @@ static void torb_machine_native_195(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_test_group */
-static void torb_machine_native_196(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_198(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2429,7 +2449,7 @@ static void torb_machine_native_196(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_byte_at */
-static void torb_machine_native_197(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_199(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2444,7 +2464,7 @@ static void torb_machine_native_197(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_char_at_located */
-static void torb_machine_native_198(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_200(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2459,7 +2479,7 @@ static void torb_machine_native_198(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_contains */
-static void torb_machine_native_199(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_201(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2472,7 +2492,7 @@ static void torb_machine_native_199(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_copy_bytes */
-static void torb_machine_native_200(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_202(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2483,7 +2503,7 @@ static void torb_machine_native_200(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_ends_with */
-static void torb_machine_native_201(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_203(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2496,7 +2516,7 @@ static void torb_machine_native_201(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_hash */
-static void torb_machine_native_202(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_204(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2507,7 +2527,7 @@ static void torb_machine_native_202(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_index_of */
-static void torb_machine_native_203(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_205(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2521,7 +2541,7 @@ static void torb_machine_native_203(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_is_empty */
-static void torb_machine_native_204(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_206(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2532,7 +2552,7 @@ static void torb_machine_native_204(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_last_index_of */
-static void torb_machine_native_205(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_207(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2546,7 +2566,7 @@ static void torb_machine_native_205(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_repeat */
-static void torb_machine_native_206(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_208(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2558,7 +2578,7 @@ static void torb_machine_native_206(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_replace */
-static void torb_machine_native_207(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_209(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2573,7 +2593,7 @@ static void torb_machine_native_207(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_show_nested */
-static void torb_machine_native_208(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_210(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2584,7 +2604,7 @@ static void torb_machine_native_208(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_slice */
-static void torb_machine_native_209(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_211(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2597,7 +2617,7 @@ static void torb_machine_native_209(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_split */
-static void torb_machine_native_210(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_212(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2610,7 +2630,7 @@ static void torb_machine_native_210(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_starts_with */
-static void torb_machine_native_211(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_213(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2623,7 +2643,7 @@ static void torb_machine_native_211(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_to_lower_case */
-static void torb_machine_native_212(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_214(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2634,7 +2654,7 @@ static void torb_machine_native_212(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_to_upper_case */
-static void torb_machine_native_213(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_215(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2645,7 +2665,7 @@ static void torb_machine_native_213(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_text_trim */
-static void torb_machine_native_214(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_216(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2657,7 +2677,7 @@ static void torb_machine_native_214(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_client */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_215(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2669,7 +2689,7 @@ static void torb_machine_native_215(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_215(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2679,7 +2699,7 @@ static void torb_machine_native_215(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_close */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_216(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2687,7 +2707,7 @@ static void torb_machine_native_216(int64_t *words, int64_t base, const int64_t 
   torb_tls_close(a0);
 }
 #else
-static void torb_machine_native_216(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2697,7 +2717,7 @@ static void torb_machine_native_216(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_error_text */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2706,7 +2726,7 @@ static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);
 }
 #else
-static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2716,7 +2736,7 @@ static void torb_machine_native_217(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_feed */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2726,7 +2746,7 @@ static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t 
   torb_tls_feed(a0, a1);
 }
 #else
-static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2736,7 +2756,7 @@ static void torb_machine_native_218(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_handshake */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2745,7 +2765,7 @@ static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2755,7 +2775,7 @@ static void torb_machine_native_219(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_identity */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2767,7 +2787,7 @@ static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2777,7 +2797,7 @@ static void torb_machine_native_220(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_notify_close */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2785,7 +2805,7 @@ static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t 
   torb_tls_notify_close(a0);
 }
 #else
-static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2795,7 +2815,7 @@ static void torb_machine_native_221(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_protocol */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2804,7 +2824,7 @@ static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) memcpy(words + base + operands[0], &r, sizeof r);
 }
 #else
-static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2814,7 +2834,7 @@ static void torb_machine_native_222(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_read */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2825,7 +2845,7 @@ static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2835,7 +2855,7 @@ static void torb_machine_native_223(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_server */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2844,7 +2864,7 @@ static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2854,7 +2874,7 @@ static void torb_machine_native_224(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_take_outgoing */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_227(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2863,7 +2883,7 @@ static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t 
   torb_tls_take_outgoing(a0, a1);
 }
 #else
-static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_227(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2873,7 +2893,7 @@ static void torb_machine_native_225(int64_t *words, int64_t base, const int64_t 
 
 /* torb_tls_write */
 #if defined(TORB_WITH_TLS)
-static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_228(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2885,7 +2905,7 @@ static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t 
   if (operands[0] >= 0) words[base + operands[0]] = (int64_t)r;
 }
 #else
-static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_228(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2894,7 +2914,7 @@ static void torb_machine_native_226(int64_t *words, int64_t base, const int64_t 
 #endif
 
 /* torb_workers_blocking */
-static void torb_machine_native_227(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_229(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -2903,7 +2923,7 @@ static void torb_machine_native_227(int64_t *words, int64_t base, const int64_t 
 }
 
 /* torb_workers_count */
-static void torb_machine_native_228(int64_t *words, int64_t base, const int64_t *operands) {
+static void torb_machine_native_230(int64_t *words, int64_t base, const int64_t *operands) {
   (void)words;
   (void)base;
   (void)operands;
@@ -3141,6 +3161,8 @@ const torb_machine_native torb_machine_natives[] = {
   torb_machine_native_226,
   torb_machine_native_227,
   torb_machine_native_228,
+  torb_machine_native_229,
+  torb_machine_native_230,
 };
 
-const size_t torb_machine_native_count = 229;
+const size_t torb_machine_native_count = 231;

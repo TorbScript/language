@@ -84,10 +84,10 @@ const start = Clock.now()
 // error: Cannot find `Clock` here
 ```
 
-`Instant` and `Duration` need no import - they are values, and every numeric field of a program can hold one. `Clock`
-reads the wall clock, which is a capability, and only an explicit `use` brings it into scope. `Path` is the same
-split: a path is a value that names a file and needs no import, and `File`, which opens what it names, comes from
-`std/fs`.
+`Instant`, `Duration` and `Timestamp` need no import - they are values, and every field of a program can hold one.
+`Clock` reads the clocks of the machine, which is a capability, and only an explicit `use` brings it into scope.
+`Path` is the same split: a path is a value that names a file and needs no import, and `File`, which opens what it
+names, comes from `std/fs`.
 
 ```trb check
 const config = Path.from "project.trb"

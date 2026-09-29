@@ -61,6 +61,8 @@ torb_task *torb_child_write(int64_t child, torb_list bytes, int64_t from);
 int64_t torb_clock_milliseconds(void);
 /* monotonicNanoseconds */
 int64_t torb_clock_now(void);
+/* wallClockNanoseconds */
+int64_t torb_clock_wall_nanoseconds(void);
 /* Float64.compare */
 int32_t torb_compare_f64(double first, double second);
 /* Int64.tryFrom(Float64) */
@@ -83,6 +85,8 @@ bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message
 bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
 /* Float64.cosine */
 double torb_cosine_f64(double value);
+/* fillWithEntropy */
+bool torb_entropy_fill(torb_list *into, int64_t count);
 /* Environment.entries */
 void torb_environment_entries(torb_list *names, torb_list *values);
 /* Environment.get */

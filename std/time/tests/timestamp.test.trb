@@ -1,10 +1,10 @@
 /**
  * `Timestamp`: RFC 3339 in UTC for dates on both sides of 1970 and of a leap day, the fraction of a second as long as it
- * has to be, and the arithmetic with a `Duration`.
+ * has to be, the arithmetic with a `Duration`, and the current one from the wall clock.
  */
 
 use test, group from "std/test"
-use Timestamp from "../src/lib"
+use Timestamp, Clock from "../src/lib"
 
 fn at(seconds: Int64, nanoseconds: Int64 = 0): Timestamp {
   Timestamp.fromUnixNanoseconds(seconds * 1_000_000_000 + nanoseconds)
@@ -49,5 +49,24 @@ group "arithmetic" {
     assert(at(1) < at(2))
     assert(at(2).compare(at(1)) == Ordering.Greater)
     assert(at(5).unixNanoseconds() == 5_000_000_000)
+  }
+}
+
+group "the wall clock" {
+  test "the current timestamp is a date of this century, counted from 1970 in nanoseconds" {
+    const now = Clock.timestamp()
+    assert(now > at(1_704_067_200))
+    assert(now < at(4_102_444_800))
+    assert now.show().endsWith("Z")
+  }
+
+  test "two readings are as far apart as the monotonic clock measured, to within a second" {
+    const started = Clock.now()
+    const first = Clock.timestamp()
+    const second = Clock.timestamp()
+    const measured = Clock.now() - started
+    const walked = second - first
+    assert((walked - measured).seconds() < 1.0)
+    assert((measured - walked).seconds() < 1.0)
   }
 }

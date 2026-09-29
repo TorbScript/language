@@ -176,6 +176,7 @@ int main(void) {
   torb_register_file_tests();
   torb_register_clock_tests();
   torb_register_environment_tests();
+  torb_register_entropy_tests();
   torb_register_process_tests();
   torb_register_platform_tests();
   torb_register_console_tests();

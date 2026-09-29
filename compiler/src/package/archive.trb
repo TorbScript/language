@@ -12,6 +12,7 @@ use TarEntry, tarred, untarred from "std/archive"
 use gzipped, gunzipped from "std/compression"
 use textOf from "std/stream"
 use SourceText from "../syntax/source"
+use UseItems from "../syntax/ast"
 use parse from "../syntax/parser/parser"
 
 /** The largest archive the registry takes, compressed (RELEASE.md section 7.10), and what a client unpacks at most. */
@@ -126,8 +127,9 @@ public fn pathProblem(path: String): String? {
 }
 
 /**
- * Which capability each `std` package is (RELEASE.md section 7.8). A package that is not here is pure. The table lives
- * in the toolchain until `std` carries it itself.
+ * Which capability each `std` package is (RELEASE.md section 7.8), or a module of one that is a capability of its own.
+ * A package that is not here is pure. The table lives in the toolchain until `std` carries it itself; what one imported
+ * name reaches is [capabilityOfImport], which starts from here.
  */
 public fn capabilityOf(package: String): String? {
   match package {
@@ -135,10 +137,46 @@ public fn capabilityOf(package: String): String? {
     "std/network" | "std/http" | "std/tls" => "network"
     "std/process" => "processes"
     "std/os/environment" => "environment"
+    "std/os/entropy" => "entropy"
     "std/os" => "the operating system"
     "std/time" => "clock"
     "std/sandbox" => "scripts"
     _ => None
+  }
+}
+
+/**
+ * The capability an import of `name` from `module` reaches, or `None` where it reaches nothing. **A capability is
+ * reading something, not a type**: `use Timestamp from "std/time"` puts a point in time into a signature and reads no
+ * clock, `use Clock from "std/time"` reads it. So the values a capability package answers in and fails with are pure,
+ * and a name `std/os` re-exports reaches the capability of the module it comes from. Every other name reaches its
+ * module's capability, or its package's - a new export is a capability until it is listed here as a value.
+ *
+ * `name` is the path of the item as it is written: `Timestamp`, `Int64.seconds`.
+ *
+ * # Examples
+ *
+ *     print(capabilityOfImport("std/time", "Timestamp") == None)
+ *     print(capabilityOfImport("std/time", "Clock") == "clock")
+ *     print(capabilityOfImport("std/os", "Entropy") == "entropy")
+ */
+public fn capabilityOfImport(module: String, name: String): String? {
+  const package = packageOf module
+  match (package, name) {
+    // The three values of `std/time` and the two members that write a `Duration`: `Clock` and `sleep` are the clock
+    ("std/time", "Duration" | "Instant" | "Timestamp" | "Int64.seconds" | "Int64.milliseconds") => None
+    // What `std/os` answers in and fails with, and the target constants it re-exports from `std/core`
+    ("std/os", "OsError" | "SystemVersion" | "EnvironmentVariables") => None
+    ("std/os", "OperatingSystem" | "Architecture" | "ByteOrder") => None
+    // A name `std/os` re-exports reaches the capability of its own module
+    ("std/os", "Environment") => "environment"
+    ("std/os", "Entropy") => "entropy"
+    _ => {
+      match capabilityOf(module) {
+        Some(found) => found
+        None => capabilityOf package
+      }
+    }
   }
 }
 
@@ -150,7 +188,8 @@ public type Reach {
 
 /**
  * The capabilities a package's own modules reach by their imports, and a `foreign` declaration as "foreign functions":
- * every `.trb` file that is not a test and not the manifest or the lock. What its dependencies reach is theirs.
+ * every `.trb` file that is not a test and not the manifest or the lock. An import reaches what its names reach
+ * ([capabilityOfImport]), so a `Timestamp` in a signature is no clock. What its dependencies reach is theirs.
  */
 public fn capabilitiesOf(entries: List<TarEntry>): List<Reach> {
   var byCapability: Map<String, List<String>> = [:]
@@ -169,22 +208,19 @@ public fn capabilitiesOf(entries: List<TarEntry>): List<Reach> {
     }
     for statement in parse(SourceText.of(text)).file.statements {
       if const .Declare(declaration) = statement.kind {
-        var reached: String? = None
+        var reached: List<String> = []
         match declaration.kind {
           .Use(usage) => {
             if const .Module(written) = usage.source {
-              reached = match capabilityOf(written) {
-                Some(found) => found
-                None => capabilityOf packageOf(written)
-              }
+              reached = capabilitiesOfUse written, usage.items
             }
           }
           .Foreign(_) => {
-            reached = "foreign functions"
+            reached = ["foreign functions"]
           }
           _ => {}
         }
-        if const Some(capability) = reached {
+        for capability in reached {
           var files = byCapability.get(capability) ?? []
           if !files.contains(entry.path) {
             files.append entry.path
@@ -202,6 +238,33 @@ public fn capabilitiesOf(entries: List<TarEntry>): List<Reach> {
   }
   reaches.sort by: { _.capability }
   reaches
+}
+
+/**
+ * The capabilities one `use` of `module` reaches: each of its names' ([capabilityOfImport]), once each. `use * as time`
+ * can reach every name of the module, so it reaches the module's capability, or its package's.
+ */
+fn capabilitiesOfUse(module: String, items: UseItems): List<String> {
+  match items {
+    .All(_) => {
+      match capabilityOf(module) {
+        Some(found) => [found]
+        None => capabilityOf(packageOf(module)).toList()
+      }
+    }
+    .Names(names) => {
+      var reached: List<String> = []
+      for item in names {
+        const name = item.path.map({ _.text }).joined(separator: ".")
+        if const Some(capability) = capabilityOfImport(module, name) {
+          if !reached.contains(capability) {
+            reached.append capability
+          }
+        }
+      }
+      reached
+    }
+  }
 }
 
 /** `std/os` of `std/os/environment`: the package of a specifier, its first two segments. */

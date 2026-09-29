@@ -735,20 +735,15 @@ int64_t torb_io_system_address(torb_io_socket *socket, bool peer, torb_io_addres
   return 0;
 }
 
-/* ------------------------------------------------------------------------- the name servers, and randomness --- */
+/* ----------------------------------------------------------------------------------------- the name servers --- */
 
 typedef ULONG(WINAPI *torb_adapters_function)(ULONG, ULONG, PVOID, PIP_ADAPTER_ADDRESSES, PULONG);
-typedef LONG(WINAPI *torb_random_function)(PVOID, PUCHAR, ULONG, ULONG);
 
-/* `GetAdaptersAddresses` of iphlpapi and `BCryptGenRandom` of bcrypt, loaded on first use like Winsock. */
+/* `GetAdaptersAddresses` of iphlpapi, loaded on first use like Winsock. The randomness a query's identifier is drawn
+   from is the platform layer's (`torb_platform_random_bytes`). */
 static SRWLOCK torb_helpers_lock = SRWLOCK_INIT;
 static torb_adapters_function torb_adapters = NULL;
-static torb_random_function torb_random = NULL;
 static bool torb_adapters_tried = false;
-static bool torb_random_tried = false;
-
-/* The flag of `BCryptGenRandom` that takes the system's generator without an algorithm handle. */
-#define TORB_BCRYPT_SYSTEM_PREFERRED 0x00000002u
 
 /* Whether `address` is one of the three site-local placeholders Windows lists for an adapter without IPv6 servers. */
 static bool torb_ws_placeholder_server(const torb_io_address *address) {
@@ -821,21 +816,6 @@ int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity) {
   }
   free(list);
   return (int64_t)count;
-}
-
-bool torb_io_system_random(uint8_t *out, size_t size) {
-  torb_random_function random;
-  AcquireSRWLockExclusive(&torb_helpers_lock);
-  if (!torb_random_tried) {
-    HMODULE library = LoadLibraryW(L"bcrypt.dll");
-    torb_random_tried = true;
-    if (library != NULL) {
-      torb_random = (torb_random_function)torb_ws_symbol(library, "BCryptGenRandom");
-    }
-  }
-  random = torb_random;
-  ReleaseSRWLockExclusive(&torb_helpers_lock);
-  return random != NULL && random(NULL, (PUCHAR)out, (ULONG)size, TORB_BCRYPT_SYSTEM_PREFERRED) == 0;
 }
 
 int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {

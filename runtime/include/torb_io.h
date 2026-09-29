@@ -294,10 +294,5 @@ torb_io_failure torb_io_system_failure_kind(uint32_t code);
  * where the file names none, as resolv.conf(5) says. Blocking, but short. The count, or a packed failure.
  */
 int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity);
-/**
- * `size` bytes from the system's source of randomness: `BCryptGenRandom`, loaded on first use, on Windows;
- * `/dev/urandom` elsewhere. False where it did not answer.
- */
-bool torb_io_system_random(uint8_t *out, size_t size);
 
 #endif /* TORB_IO_H */

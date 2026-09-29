@@ -1,0 +1,44 @@
+/**
+ * `Entropy` against the machine the test runs on: as many bytes as asked for, different ones on every request, and eight
+ * of them as one `Int64` that takes every bit.
+ *
+ * Randomness cannot be asserted, only its absence: a source that answers zeros, the same bytes twice or too few fails
+ * every test here with certainty, and one that works fails none of them except with a chance below 2^-60.
+ */
+
+use test, group from "std/test"
+use Entropy from "../src/entropy"
+
+group "the system's source of randomness" {
+  test "answers exactly as many bytes as asked for" {
+    assert Entropy.bytes(0).isEmpty()
+    assert(Entropy.bytes(1).length() == 1)
+    assert(Entropy.bytes(600).length() == 600)
+  }
+
+  test "answers different bytes to two requests" {
+    assert(Entropy.bytes(32) != Entropy.bytes(32))
+  }
+
+  test "fills the last of the pieces it reads in" {
+    const bytes = Entropy.bytes 600
+    var set = 0
+    for index in 512..600 {
+      if bytes[index] != 0 {
+        set = set + 1
+      }
+    }
+    assert(set > 0)
+  }
+
+  test "makes numbers of every sign, and two of them differ" {
+    var negative = 0
+    for _ in 0..64 {
+      if Entropy.int64() < 0 {
+        negative = negative + 1
+      }
+    }
+    assert(negative > 0 && negative < 64)
+    assert(Entropy.int64() != Entropy.int64())
+  }
+}

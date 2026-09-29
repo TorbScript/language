@@ -1,6 +1,6 @@
 ---
 title: std/os
-summary: Environment, System and Directories - the environment a program was started with, which system and version it runs on, and where the user's files belong - with OsError and the three target constants.
+summary: Environment, System, Directories and Entropy - the environment a program was started with, which system and version it runs on, where the user's files belong, and the system's randomness - with OsError and the target constants.
 kind: package
 status: draft
 order: 158
@@ -11,6 +11,8 @@ keywords:
   - System
   - SystemVersion
   - Directories
+  - Entropy
+  - random bytes
   - OsError
   - environment variable
   - host name
@@ -27,8 +29,9 @@ source:
 
 `std/os` answers what a program asks about the machine it runs on: the environment it was started with, which
 operating system and version it is, the host name and how long the machine has been running, and where the user's
-configuration, data, cache and temporary files belong. It re-exports `OperatingSystem`, `Architecture` and `ByteOrder`
-of `std/core`, so a file that branches on the system writes one import. It is deliberately not in the prelude:
+configuration, data, cache and temporary files belong - and it hands out the system's source of randomness. It
+re-exports `OperatingSystem`, `Architecture` and `ByteOrder` of `std/core`, so a file that branches on the system
+writes one import. It is deliberately not in the prelude:
 `use System from "std/os"` at the top of a file is the statement "this file asks the operating system".
 
 Every question is a `match OperatingSystem.current` in TorbScript whose arm hands it to the directory of one system.
@@ -39,6 +42,7 @@ Only the arm of the build's target is compiled, and every arm is type checked on
 
 ```trb fragment
 use Environment, EnvironmentVariables, System, SystemVersion, Directories, OsError from "std/os"
+use Entropy from "std/os/entropy"
 ```
 
 ```trb check
@@ -181,6 +185,44 @@ name to it: one join, the same on every system.
 An XDG variable that holds a relative path is ignored, as the XDG specification requires. `temporary()` always
 answers, because every system has a temporary directory and `/tmp` is the last resort. In the browser, whose file
 system is in memory and belongs to no user, every directory but `temporary()` (`/tmp`) is `Unsupported`.
+
+### Entropy
+
+```trb fragment
+public type Entropy {
+  static fn bytes(count: Int): List<UInt8>
+  static fn int64(): Int64
+}
+```
+
+Bytes of the operating system's source of randomness, which is fit for cryptography: what a key, a nonce, a token and
+the seed of a generator are made from. `bytes(count)` answers that many, `int64()` eight of them as one number whose 64
+bits are all random - the unpredictable seed of a generator. Nothing seeds it and nothing repeats it; a generator that
+makes the same numbers from the same seed, for a test or a simulation, is a different thing (docs/design/RANDOM.md),
+and this is where its seed comes from, never what it is.
+
+| System | Source |
+|---|---|
+| Windows | `BCryptGenRandom`, the system's preferred generator |
+| Linux, FreeBSD | `getrandom(2)`, which needs no file and so works in a chroot without `/dev` |
+| macOS | `getentropy` |
+| the browser | `crypto.getRandomValues` of the page, through emscripten's `getentropy` |
+
+```trb check
+use Entropy from "std/os/entropy"
+
+const nonce = Entropy.bytes 18
+print nonce.length()
+```
+
+It lives in its own module, `std/os/entropy`, and is a capability of its own, `entropy`: it reads nothing about the
+machine, so a package that makes a nonce is reported as touching `entropy` rather than the operating system (see
+[torb publish](../tooling/torb-publish.md)), whether it imports `Entropy` from `std/os/entropy` or from `std/os`. A
+sandboxed script needs the module `std/os/entropy` granted, and that is the import to write where a script uses it.
+
+**It panics where the system does not answer**, and `bytes` where `count` is negative. None of the systems above
+fails once it has started, there is no safe way on without randomness, and a failure a caller could handle would
+invite a weaker source in its place - which is why Go's `crypto/rand` decided the same.
 
 ### OsError
 

@@ -3,6 +3,10 @@
  * (`missingCapabilitiesOf` of `compiler/src/vm/run.trb`): a machine has every package, and in the browser - the
  * playground's target - the processes and the network are missing, the file system is simulated, and an import of a
  * missing package in a file of the program is an error at the import.
+ *
+ * And what a published package touches (`capabilitiesOf` of `compiler/src/package/archive.trb`, RELEASE.md section
+ * 7.8): every name of an import decides, so a `Timestamp` in a signature is no clock and `Entropy` is `entropy` by
+ * either path.
  */
 
 use test, group from "std/test"
@@ -10,6 +14,8 @@ use check from "../src/semantics/check"
 use Capability, capabilityOf, standardPackageOf from "../src/project/capability"
 use BuildTarget, TargetSystem, TargetArchitecture, everyTarget, targetNamed from "../src/project/target"
 use missingCapabilitiesOf from "../src/vm/run"
+use capabilitiesOf, capabilityOfImport from "../src/package/archive"
+use TarEntry from "std/archive"
 use workspaceWith from "./harness"
 
 const browser = BuildTarget TargetSystem.Browser, TargetArchitecture.Wasm64
@@ -23,6 +29,16 @@ fn kindOf(capability: Capability): String {
     .Simulated(_) => "simulated"
     .Missing(_) => "missing"
   }
+}
+
+/** What `torb publish` says a package of one file touches: one `<capability>: <files>` per capability. */
+fn touches(source: String): List<String> {
+  const entries = [TarEntry("project.trb", "name = \"acme/rows\"\n".bytes()), TarEntry("src/lib.trb", source.bytes())]
+  var lines: List<String> = []
+  for reach in capabilitiesOf(entries) {
+    lines.append "{reach.capability}: {reach.files.joined(separator: ", ")}"
+  }
+  lines
 }
 
 /** The messages of what the VM refuses in a program of one file, built for `target`. */
@@ -94,5 +110,48 @@ group "An import the target does not have" {
       print 1
       """
     assert(refusedIn(source, browser).length() == 2)
+  }
+}
+
+group "What a published package touches" {
+  test "a timestamp in a signature reads no clock" {
+    const source = raw"""
+      use Timestamp, Duration, Int64.seconds from "std/time"
+
+      public type Row {
+        written: Timestamp
+        kept: Duration = 30.seconds()
+      }
+      """
+    assert touches(source).isEmpty()
+  }
+
+  test "reading the clock does, and so does sleeping" {
+    const reads = raw"""
+      use Clock, Timestamp from "std/time"
+
+      public fn now(): Timestamp {
+        Clock.timestamp()
+      }
+      """
+    assert(touches(reads) == ["clock: src/lib.trb"])
+    assert(capabilityOfImport("std/time", "sleep") == "clock")
+  }
+
+  test "an import of every name reaches the capability of the package" {
+    assert(touches("use * as time from \"std/time\"\n") == ["clock: src/lib.trb"])
+    assert(touches("use * as os from \"std/os/entropy\"\n") == ["entropy: src/lib.trb"])
+  }
+
+  test "entropy is a capability of its own, whichever module it is imported from" {
+    assert(touches("use Entropy from \"std/os/entropy\"\n") == ["entropy: src/lib.trb"])
+    assert(touches("use Entropy from \"std/os\"\n") == ["entropy: src/lib.trb"])
+    assert(touches("use System from \"std/os\"\n") == ["the operating system: src/lib.trb"])
+  }
+
+  test "the values of std/os reach nothing, and one import reaches what each of its names does" {
+    assert touches("use OsError, OperatingSystem from \"std/os\"\n").isEmpty()
+    const several = "use Environment, Entropy, OsError from \"std/os\"\n"
+    assert(touches(several) == ["entropy: src/lib.trb", "environment: src/lib.trb"])
   }
 }

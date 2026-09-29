@@ -1246,12 +1246,19 @@ fn fileEntries(var entries: List<NativeEntry>) {
 }
 
 /**
- * `std/time`: `Instant` and `Duration` are records of the program holding an `Int64` of nanoseconds, and everything they
- * do is TorbScript over it. What is native is reading the monotonic clock (`torb_clock_now`, which answers the
- * nanoseconds as an `int64_t`) and waiting.
+ * `std/time`: `Instant`, `Duration` and `Timestamp` are records of the program holding an `Int64` of nanoseconds, and
+ * everything they do is TorbScript over it. What is native is reading the two clocks - the monotonic one
+ * (`torb_clock_now`) and the wall clock (`torb_clock_wall_nanoseconds`), each answering the nanoseconds as an `int64_t`
+ * - and waiting.
  */
 fn timeEntries(var entries: List<NativeEntry>) {
   entries.append runtimeOf("monotonicNanoseconds", "torb_clock_now", "int64_t torb_clock_now(void);")
+  // Nanoseconds since 1970-01-01 00:00:00 UTC, which `Clock.timestamp()` makes a `Timestamp` of
+  entries.append(runtimeOf(
+    "wallClockNanoseconds",
+    "torb_clock_wall_nanoseconds",
+    "int64_t torb_clock_wall_nanoseconds(void);",
+  ))
   // Monotonic milliseconds from the first reading: the form a tool that measures its own work wants, and two numbers
   // (an `Instant` and a `Duration`) where one does
   entries.append runtimeOf("Clock.milliseconds", "torb_clock_milliseconds", "int64_t torb_clock_milliseconds(void);")
@@ -1318,6 +1325,18 @@ fn environmentEntries(var entries: List<NativeEntry>) {
     "Environment.entries",
     "torb_environment_entries",
     "void torb_environment_entries(torb_list *names, torb_list *values);",
+  ))
+}
+
+/**
+ * `Entropy` of `std/os` (`runtime/entropy.c`): bytes of the system's source of randomness, appended to the list that
+ * `Entropy.bytes` hands over. It answers whether the system did, and the TorbScript around it panics where it did not.
+ */
+fn entropyEntries(var entries: List<NativeEntry>) {
+  entries.append(runtimeOf(
+    "fillWithEntropy",
+    "torb_entropy_fill",
+    "bool torb_entropy_fill(torb_list *into, int64_t count);",
   ))
 }
 
@@ -1670,6 +1689,7 @@ public fn nativeEntries(): List<NativeEntry> {
   fileEntries entries
   timeEntries entries
   environmentEntries entries
+  entropyEntries entries
   targetEntries entries
   systemEntries entries
   taskEntries entries

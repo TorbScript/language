@@ -344,7 +344,7 @@ int64_t torb_io_system_resolve(const char *host, torb_io_address **out) {
   return (int64_t)count;
 }
 
-/* ------------------------------------------------------------------------- the name servers, and randomness --- */
+/* ----------------------------------------------------------------------------------------- the name servers --- */
 
 /* One address of a `nameserver` line, without a `%scope`: false where it is none. */
 static bool torb_posix_name_server(const char *text, torb_io_address *out) {
@@ -401,26 +401,6 @@ int64_t torb_io_system_name_servers(torb_io_address *out, size_t capacity) {
     count = 1u;
   }
   return (int64_t)count;
-}
-
-bool torb_io_system_random(uint8_t *out, size_t size) {
-  int descriptor = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-  size_t done = 0u;
-  if (descriptor < 0) {
-    return false;
-  }
-  while (done < size) {
-    ssize_t read_now = read(descriptor, out + done, size - done);
-    if (read_now < 0 && errno == EINTR) {
-      continue;
-    }
-    if (read_now <= 0) {
-      break;
-    }
-    done += (size_t)read_now;
-  }
-  (void)close(descriptor);
-  return done == size;
 }
 
 /* ---------------------------------------------------------------------------------------- the calls themselves --- */

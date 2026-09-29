@@ -1842,6 +1842,17 @@ void torb_file_forget_pending(torb_file *file);
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
 int64_t torb_platform_monotonic_nanoseconds(void);
 /**
+ * A wall clock reading: nanoseconds since 1970-01-01 00:00:00 UTC, negative before it. It jumps where the machine's
+ * clock is set, both ways, so it is for dates and never for measuring.
+ */
+int64_t torb_platform_wall_nanoseconds(void);
+/**
+ * `size` bytes of the system's source of randomness, which is fit for keys and nonces: `BCryptGenRandom` on Windows,
+ * `getrandom` on Linux and FreeBSD, `getentropy` on macOS and in the browser, where emscripten answers it with
+ * `crypto.getRandomValues`. False where the system did not answer, and then `out` holds nothing to use.
+ */
+bool torb_platform_random_bytes(uint8_t *out, size_t size);
+/**
  * Blocks the calling thread for at least this many nanoseconds, and for none at zero or less. What the scheduler does
  * when its run queue is empty and a timer is pending; it reads the clock again afterwards, so waking early is harmless.
  */
@@ -1942,6 +1953,12 @@ int64_t torb_clock_now(void);
  */
 int64_t torb_clock_milliseconds(void);
 
+/**
+ * The wall clock in nanoseconds since 1970-01-01 00:00:00 UTC: what `Clock.timestamp()` wraps into a `Timestamp`. Needs
+ * the `std/time` capability inside a sandboxed script (7.4), as `torb_clock_now` does.
+ */
+int64_t torb_clock_wall_nanoseconds(void);
+
 /* ---------------------------------------------------------------------------------------------- environment --- */
 
 /**
@@ -1955,6 +1972,15 @@ bool torb_environment_get(torb_text name, torb_text *out);
  * sandbox, appended to `*names` and `*values` as two parallel lists of texts.
  */
 void torb_environment_entries(torb_list *names, torb_list *values);
+
+/* -------------------------------------------------------------------------------------------------- entropy --- */
+
+/**
+ * `Entropy` of `std/os`: `count` bytes of the system's source of randomness (`torb_platform_random_bytes`) appended to
+ * `*into`, an `ArrayList<UInt8>`. False where the system did not answer, and then the list is not to be used: `std/os`
+ * panics.
+ */
+bool torb_entropy_fill(torb_list *into, int64_t count);
 
 /* ---------------------------------------------------------------------------------------------------- hashing --- */
 

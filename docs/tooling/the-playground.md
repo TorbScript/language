@@ -64,7 +64,7 @@ an error at the import.
 |---|---|
 | printing, `std/time` | real: the output appears under the editor, the clock is the machine's |
 | `std/fs` | simulated: a file system in memory, empty when the program starts, gone when it ends |
-| `std/os` | an empty environment; the system questions answer `Unsupported`, and `Directories.temporary()` is `/tmp` |
+| `std/os` | an empty environment; the system questions answer `Unsupported`, `Directories.temporary()` is `/tmp`, and `Entropy` is real: `crypto.getRandomValues` of the page |
 | standard input | at its end: `readLine()` answers `Ok(None)` |
 | `std/task` | tasks take turns on one thread, in the order `TORB_WORKERS=1` gives everywhere |
 | `std/process` | an error at the import: a program in the browser starts no processes |

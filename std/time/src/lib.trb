@@ -1,8 +1,11 @@
 /**
- * Wall-clock time: points in time (`Instant`) and the spans between them (`Duration`).
+ * Time: points in time (`Instant`), the spans between them (`Duration`), points on the wall clock (`Timestamp`), and
+ * `Clock`, which reads both clocks of the machine.
  *
- * Both are a count of nanoseconds in an `Int64` and nothing else, so they cost what the number costs: comparing and
- * subtracting them is integer arithmetic, and only reading the clock goes to the operating system.
+ * The three values are a count of nanoseconds in an `Int64` and nothing else, so they cost what the number costs:
+ * comparing and subtracting them is integer arithmetic, and only reading a clock goes to the operating system. They are
+ * in the prelude and reach nothing; `Clock` and `sleep` are the capability, and an import of them is what says a file
+ * reads the time.
  */
 
 /**
@@ -95,6 +98,9 @@ public type Duration with Compare, Show, Add, Subtract {
  * was last written - where an [Instant] only means something against another reading; and it can jump, because the
  * clock of a machine is set.
  *
+ * It is a value and reads nothing, so a signature may carry one without the file reading the clock: it is in the
+ * prelude, and [Clock.timestamp] is where the current one comes from.
+ *
  * # Examples
  *
  *     const written = Timestamp.fromUnixNanoseconds 1_790_000_000_500_000_000
@@ -105,6 +111,7 @@ public type Duration with Compare, Show, Add, Subtract {
  *
  * # Related
  *
+ * - [Clock.timestamp] - the current one.
  * - [Instant] - the monotonic reading, for measuring.
  * - [Duration] - what the difference of two of them is.
  */
@@ -226,11 +233,39 @@ extend Int64 {
   }
 }
 
-/** The wall clock. Needs the `std/time` capability inside a sandboxed script. */
+/**
+ * The two clocks of the machine: the monotonic one [Clock.now] measures with, and the wall clock [Clock.timestamp]
+ * tells the date by. Reading either is the capability `clock`, which is why `Clock` is an import and not in the
+ * prelude, and why a sandboxed script needs the module `std/time` granted.
+ *
+ * # Examples
+ *
+ *     const start = Clock.now()
+ *     print "started at {Clock.timestamp()}"
+ *     print(Clock.now() - start)
+ *
+ * # Related
+ *
+ * - [Instant] and [Timestamp] - what the two readings are.
+ */
 public native type Clock {
-  /** The current point in time. */
+  /** The current point in time on the monotonic clock, which never goes backwards: for measuring and for deadlines. */
   static fn now(): Instant {
     Instant monotonicNanoseconds()
+  }
+
+  /**
+   * The current point on the wall clock: the date a signature, an expiry or a log line is written with. It jumps where
+   * the clock of the machine is set, both ways, so the difference of two is no measurement - that is [Clock.now]'s.
+   *
+   * # Examples
+   *
+   *     const issued = Clock.timestamp()
+   *     const expires = issued + 3600.seconds()
+   *     print "valid from {issued} until {expires}"
+   */
+  static fn timestamp(): Timestamp {
+    Timestamp wallClockNanoseconds()
   }
 
   /**
@@ -246,6 +281,12 @@ public native type Clock {
  * [Clock.now] cannot write in TorbScript.
  */
 native fn monotonicNanoseconds(): Int64
+
+/**
+ * The wall clock of the operating system in nanoseconds since 1970-01-01 00:00:00 UTC. The one reading
+ * [Clock.timestamp] cannot write in TorbScript.
+ */
+native fn wallClockNanoseconds(): Int64
 
 /** Suspends the running task for this many seconds. Needs `.await()`, like every `Task`. */
 public native fn sleep(seconds: Float64): Task<Void>

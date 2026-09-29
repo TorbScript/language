@@ -1,0 +1,25 @@
+use Clock from "std/time"
+
+/**
+ * `Clock.timestamp()` reads the wall clock: a `Timestamp` of nanoseconds since 1970-01-01 00:00:00 UTC, shown as RFC
+ * 3339 in UTC. The clock of a machine can be set at any time, so the program prints what a reading promises and never
+ * the reading itself: a date of this century, in the shape of RFC 3339, and two readings as far apart as the monotonic
+ * clock measured between them, to within a second. `Timestamp` is in the prelude - a value reads no clock - so the
+ * program names it without importing it; `Clock` is the import.
+ */
+
+const started = Clock.now()
+const first = Clock.timestamp()
+const second = Clock.timestamp()
+const measured = Clock.now() - started
+
+// 2024-01-01 and 2100-01-01, in nanoseconds since 1970
+print(first > Timestamp.fromUnixNanoseconds(1_704_067_200_000_000_000))
+print(first < Timestamp.fromUnixNanoseconds(4_102_444_800_000_000_000))
+
+const text = first.show()
+print(text.byteLength() >= 20 && text.endsWith("Z"))
+print(text.sliceBytes(4, 5) == "-" && text.sliceBytes(7, 8) == "-" && text.sliceBytes(10, 11) == "T")
+
+const walked = second - first
+print((walked - measured).seconds() < 1.0 && (measured - walked).seconds() < 1.0)
