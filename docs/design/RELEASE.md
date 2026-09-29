@@ -115,7 +115,7 @@ says it is temporary), `Decimal`, the REPL, milestones 9 and 10.
 | The language server and a published editor extension (milestone 8) | a 1.0 without an editor story is not taken seriously, and the LSP is the compiler (`docs/ROADMAP.md`: incremental `check`, the checker's tables for hover, definition and completion) |
 | `torb format` and `torb lint` (milestone 8), `torb lint --fix` as the migration tool | section 3: every breaking change before 1.0 needs a migration, and after 1.0 a deprecation needs a fix |
 | `deprecated` and `since` (CONCEPT "Open Questions") | there is no way to deprecate a `std` member today, and a promise without a deprecation mechanism can only freeze |
-| **A way for a public enum to grow**: fact 18 says a new case of `OperatingSystem` breaks every `match` on it; the same holds for `IoError`, `HttpError` and every error enum of `std` | the stability promise cannot hold for any `std` enum without one: either a marker that makes `_` mandatory outside the declaring package (Rust's `#[non_exhaustive]`, Swift's `@unknown default`), or a policy that such an enum never grows. A language question, and not decided here |
+| **A way for a public enum to grow** - **resolved** (the owner, 2026-09-29; CLOSED-TRAITS.md decision 7.3): a policy that such an enum never grows; the newtype pattern where growth is needed. A public type with cases gains no case within 1.x, and a type that must grow wraps a private type with cases and answers questions (`HttpError` is the model). Fact 18 stands: `OperatingSystem` and `Architecture` stay types with cases, so the targets of 1.x are the targets 1.0 ships | what is left is work: `IoError`, `OsError`, `DnsError`, `UriError` and the `ReadError` of `std/binary` become newtypes before 1.0, each a breaking change of its package with its `match`es rewritten to questions |
 | **Whether a new prelude name can break a program**: if an imported name and a prelude name collide, adding to the prelude breaks programs | the answer decides whether the prelude may grow in a minor release |
 | `Decimal` and `Float32` (milestone 8), the full Unicode tables (milestone 8) | names in `std` that a 1.0 declares have to work; a declaration that answers "not implemented yet" cannot be promised |
 | CONCEPT's open questions that would change existing programs | `yield`, `for` over a `Source` and `_` as a type argument are *additions* and may stay open; anything that changes what an existing program means has to be settled |
@@ -143,7 +143,7 @@ and the command that migrates it.
 | Surface | The promise within 1.x |
 |---|---|
 | **Syntax and semantics** | a program that checks under 1.x checks under every later 1.y and does the same thing. Exceptions, named in advance: a security fix, and a program the checker accepted although the documented rules reject it (a false negative of the checker is a bug and is fixed) |
-| **`std`** | additions only: a new package, type, member or trait implementation. A removal or a change of a signature waits for 2.0; a member is deprecated with `deprecated` and a `torb lint --fix` rewrite instead. The two open mechanisms of section 2 (growing enums, the prelude) decide how far "additions only" reaches |
+| **`std`** | additions only: a new package, type, member or trait implementation. A removal or a change of a signature waits for 2.0; a member is deprecated with `deprecated` and a `torb lint --fix` rewrite instead. A new case of a public type with cases is not an addition: such a type never grows within 1.x, and a type that must grow is a newtype (section 2). The prelude rule of section 2 decides how far "additions only" reaches for the prelude |
 | **The command line** | commands, flags and exit codes of `torb` stay; the *text* of a diagnostic does not, because diagnostics get better |
 | **Project files** | `project.trb` and `project.lock.trb` written by 1.x are read by every later 1.y; a newer lock format is gated by the `language` line |
 | **ABI** | **none is promised, and none is needed.** Packages are source (section 7.2); every program is compiled from source by one toolchain, so there is no binary interface between packages. The only binary interface is C's, at `foreign`. The bytecode, the IR, the generated C and the runtime's C API are internal and change in any release |
@@ -1138,7 +1138,7 @@ beside the work on milestones 7 and 8, without touching a file that work touches
 | 12 | **The write service**: accounts, owners, tokens, 2FA, publish, yank, trusted publishing, the documentation worker | the HTTP server of milestone 10, or question 2 | registry |
 | 13 | **The registry's site**: package pages, capabilities, documentation, search | 2, 12 | registry |
 | **—** | **The registry**: packages.torb.dev live, the policies of 7.10 | 11-13 | |
-| 14 | **The 1.0 list of section 2**: the language server and the published extension, `torb format`, `torb lint`, `deprecated`, growing enums, the prelude rule, `Decimal`, Unicode, the stability document | milestone 8 | 1.0 |
+| 14 | **The 1.0 list of section 2**: the language server and the published extension, `torb format`, `torb lint`, `deprecated`, the newtypes of the growing `std` types, the prelude rule, `Decimal`, Unicode, the stability document | milestone 8 | 1.0 |
 
 ## 11. What this is not
 

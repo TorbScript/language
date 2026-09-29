@@ -1,9 +1,9 @@
 # Closed Traits: Every Case Is a Type
 
-**Status: draft** — decisions pending the owner's answers to section 10. Two decisions are the owner's own
-(2026-09-28): there is no new keyword, because a `type` with `case` members *is* the closed trait (section 1.1), and a
-case is written bare wherever the expected type names it, so the leading dot goes (section 6). Nothing of this record is
-implemented.
+**Status: accepted** — phases 1a, 1b and 2 to build; 3 deferred. The owner decided on 2026-09-28 that there is no new
+keyword, because a `type` with `case` members *is* the closed trait (section 1.1), and that a case is written bare
+wherever the expected type names it, so the leading dot goes (section 6); on 2026-09-29 the owner answered the
+questions of section 10, and every one of them is a decision now. Nothing of this record is implemented yet.
 
 The owner asked why a case cannot be bare and why it needs its leading dot, and then: "Why not treat cases like types,
 basically, and the type above them like a trait? Like a **closed** trait, of course." This record works that out: what
@@ -30,10 +30,11 @@ without costing anything, how a case is named and matched, and what it takes to 
 - **[4. Matching](#4-matching)** — `as` binds the whole case, exhaustiveness over the cases, narrowing later
 - **[5. Methods](#5-methods)** — one answer whichever type a value is seen through
 - **[6. The leading dot](#6-the-leading-dot)** — contextual cases, and the rule that keeps a meaning from changing silently
-- **[7. The prelude and std](#7-the-prelude-and-std)** — `Option`, `Result`, the error types, encoding, growth
+- **[7. The prelude and std](#7-the-prelude-and-std)** — `Option`, `Result`, the error types, encoding, and why a
+  public type with cases never grows
 - **[8. Tooling](#8-tooling)** — checker, IR, both back ends, the VM, the language server, `torb doc`, formatter, linter
 - **[9. Migration and phases](#9-migration-and-phases)** — what changes meaning, the two commits, the sizes
-- **[10. Risks and open questions for the owner](#10-risks-and-open-questions-for-the-owner)**
+- **[10. Risks and the answers of the owner](#10-risks-and-the-answers-of-the-owner)**
 
 The examples below already use the bare form of section 6 (`Circle 1.0`, `Empty =>`), because that is what the
 language will read like. What today's compiler does was probed with the `build/release/torb` of 2026-09-28; where the
@@ -67,6 +68,7 @@ replaces these entries of CONCEPT and the pages that repeat them:
 | "Conversions" and "Traits" (the five coercions) | a value becomes a trait value where one is expected | the same coercion, now also into a closed trait (section 3.1) |
 | `docs/language/pattern-matching/cases-and-match.md` rules 1, 2, 5 and 10, "A case with fields is not a class" | the dot, the arm rule, no methods per case | sections 4, 5 and 6 |
 | TYPECHECKER 2.1 and 2.7, the rows of `.Case` | the dot needs an expected type | the bare name does (section 6.2) |
+| RELEASE.md section 2, "A way for a public enum to grow" | open for 1.0 | resolved: a policy that such a type never grows, the newtype pattern where growth is needed (decision 7.3); RELEASE.md says so since this record was accepted |
 
 ### 0.2 Where the others are
 
@@ -211,8 +213,10 @@ discussion ([priority and compatibility](https://github.com/Kotlin/KEEP/issues/3
 
 **Chosen: none (owner, 2026-09-28).** `type Shape { case Circle(radius: Float) }` declares the closed trait `Shape`
 and the case type `Shape.Circle`. A reader tells a closed trait from a record the way it is told today: by the `case`
-lines. The documentation keeps the words it has - "a type with cases" - and uses "closed trait" for the model (question
-10.1).
+lines. **The reference and every diagnostic keep the words they have - "a type with cases"** ("`Shape` is a type with
+cases: take a `Shape`"), and "closed trait" is the word for the model, used where it is explained: here, in
+`explanation/` and on the page about case types (the owner, 2026-09-29). A `trait` declaration is open by definition,
+so a message that called `Shape` a trait would send a reader looking for a `trait Shape` that does not exist.
 
 ### Decision 1.2 — a case declares a nested type
 
@@ -258,7 +262,7 @@ phase that would have added it (phase 2 of the owner's sketch) is replaced by ca
   no cost. Should that turn out to be common, a free-standing form can be added later without breaking anything; the
   reverse would not be true.
 
-### Decision 1.4 — a case may have a body (phase 2)
+### Decision 1.4 — a case may have a body (phase 2; accepted by the owner)
 
 A case's fields stay in its parentheses; what it has besides them goes into a body, which holds what the body of a
 `type` holds except fields:
@@ -283,7 +287,7 @@ type Shape {
 - **Until phase 2, `extend Shape.Circle { ... }` does the same** (phase 1b), in the package that declares `Shape`. The
   body is the declaration form of what that `extend` can already do, not a new capability.
 
-### Decision 1.5 — a case may hold cases (phase 2)
+### Decision 1.5 — a case may hold cases (phase 2; accepted by the owner)
 
 ```trb
 type Shape {
@@ -541,7 +545,9 @@ fn grown(shape: Shape): Shape {
 - **`if var` binds into the place**, as it does today: in `if var Circle(...) as circle = shape`, `circle` is the
   circle inside `shape`, and `circle.radius = 2.0` changes `shape` - the `var` path through a variant step every
   `if var` binding already uses. (Case fields stay `const`, so this matters once a case type has `var fn`s in phase 2.)
-- Whether `Circle as circle` should be accepted as a short form of `Circle(...) as circle` is question 10.3.
+- **`Circle as circle` is not accepted** as a short form of `Circle(...) as circle` (the owner, 2026-09-29).
+  `Circle(...)` says that fields are left out, which is why a bare case name with fields is an error today; the short
+  form can be added later without breaking anything, and taking it back could not.
 
 ### 4.3 Exhaustiveness
 
@@ -564,8 +570,11 @@ fn grown(shape: Shape): Shape {
 | `is` as a `Bool` test only | `shapes.filter { _ is Circle }` | a reserved word (`is` is an identifier today), a tag test; the value keeps its type |
 | `is` plus flow typing (Kotlin's smart casts) | `if shape is Circle { shape.radius }` | the checker learns flow typing, which it has nowhere else; a `var` or a place narrowed across a change is the classic source of unsoundness |
 
-**Chosen: none in phases 1 and 2.** `as` in `if const`, `while const` and `match` gives every narrowing a name,
-statically and without a rule about flow. Phase 3 is the place for `is`, and whether it comes at all is question 10.4.
+**Chosen: none, and phase 3 is deferred (the owner, 2026-09-29).** `as` in `if const`, `while const` and `match` gives
+every narrowing a name, statically and without a rule about flow. Whether `is` comes at all is decided after phase 2,
+from evidence: the places in the compiler and in `std` where `if const ... as` reads badly, collected while phase 2 is
+used. If something comes then, the first candidate is `is` as a `Bool` test without flow typing, because flow typing
+would be the only flow-sensitive typing rule of the checker.
 
 ---
 
@@ -624,9 +633,10 @@ requirement** (`Self` in it meaning `Shape`). A call on a `Shape` is the generat
 `Shape.Circle` is the case's function. A missing one is reported at the case: "`Empty` does not write `area`, which
 `Shape` requires of every case".
 
-This reverses one clause of the Decision Log ("methods per case are a second spelling of `match self`"). Whether the
-owner wants it is question 10.2; the recommendation is yes, because it is what "the type above them like a trait"
-means, and because once a case is a type it has members anyway (`extend Shape.Circle`).
+This reverses one clause of the Decision Log ("methods per case are a second spelling of `match self`"), and the
+owner accepted it for phase 2 (2026-09-29): it is what "the type above them like a trait" means, a case that is a
+type has members anyway (`extend Shape.Circle`), and the final rule of decision 5.1 keeps it from becoming
+overriding.
 
 ### Decision 5.3 — members of a case type, and the order they are looked up in
 
@@ -875,7 +885,10 @@ starting with a name, that exception has nothing left to do:
 - **The prelude's `Some`, `None`, `Ok` and `Fail`** stay imported, because `const found = Some(3)` and an arm whose
   result nothing expects have no expected type to resolve them by.
 - **`Shape.Circle` where the bare name would do** is not an error. `torb lint` reports it as the rule
-  `qualified-case`, with a fix, and `torb lint` is not a gate.
+  `qualified-case`, with a fix, and `torb lint` is not a gate (the owner, 2026-09-29). Only the checker knows whether
+  the bare name would resolve to the same case, so the formatter, which works on the syntax tree and cannot change
+  what a program means, cannot enforce it; and an error would make every change to an import or an expected type
+  ripple into unrelated lines.
 
 ### 6.8 The messages
 
@@ -906,28 +919,103 @@ in `std` needs yet.
 
 ### 7.2 The error types of std
 
-`IoError`, `HttpError`, `DnsError`, `ReadError`-shaped types and the rest are types with cases and keep their
-declarations. What they gain is decision 5.5: a function of `std` may promise the one case it fails with (a
-`Result<Bytes, IoError.NotFound>`), and a caller that wants the whole error converts with `?`. Whether and where `std`
-narrows its signatures is a decision of each package's own round, not of this record.
+A public error type of `std` is one of two kinds after this record, and decision 7.3 says which is which. **A type with
+cases that is complete** gains what decision 5.5 gives: a function may promise the one case it fails with (a
+`Result<Path, PathError.Outside>`), and a caller that wants the whole error converts with `?`. **A newtype** exposes no
+cases, so its callers ask it questions instead. Whether and where `std` narrows its signatures to one case is a decision
+of each package's own round, not of this record.
 
-### 7.3 A way for a public type with cases to grow
+### Decision 7.3 — a public type with cases never grows; what must grow is a newtype (the owner's)
 
-RELEASE.md section 2 lists for 1.0: "a new case of `OperatingSystem` breaks every `match` on it; the same holds for
+RELEASE.md section 2 listed for 1.0: "a new case of `OperatingSystem` breaks every `match` on it; the same holds for
 `IoError`, `HttpError` and every error enum of `std`", with "a marker that makes `_` mandatory outside the declaring
-package, or a policy that such an enum never grows" as the two ways. Closed traits do not change the premise - a case
-is still a promise, and the decision "No `open type`" stands - but they add a third way, and it needs no keyword:
+package, or a policy that such an enum never grows" as the two ways. Closed traits do not change the premise: a case
+is a promise, and the decision "No `open type`" stands.
 
 | Option | How | For | Against |
 |---|---|---|---|
-| A policy: a public type with cases never grows | the wrapper of CONCEPT: a capsule over a private type with cases, with predicates | no rule | every growing `std` enum becomes a capsule with `isTimeout()`-style predicates, and callers lose `match` |
-| A marker (`#[non_exhaustive]`, `@unknown default`) | a modifier on the type | explicit | a new modifier |
-| **A `private case`** | `public type IoError { case NotFound \n case Denied \n private case Unknown(code: Int) }` | outside the file nobody can name `Unknown`, so every `match` there needs `_` - and then a new public case breaks no `match` anywhere | the intent is indirect: a reader has to know what a private case implies |
+| A marker (`#[non_exhaustive]`, `@unknown default`, SE-0487's `@nonexhaustive`) | a modifier on the type; `_` mandatory outside the package | explicit; `match` stays for callers | a modifier the language would otherwise not need, and a `match` whose `_` arm hides every case added later |
+| A `private case` | a case that code outside cannot name, so every `match` there needs `_` | no new word | growth as a side effect of visibility, which a reader has to know; the files of the declaring package need the `_` too |
+| **A policy, and the newtype pattern where growth is needed** | a public type with cases never gains a case in 1.x; a type that must grow keeps its kinds in a private type behind a private field and answers questions | no mechanism at all; the pattern exists in `std` already (`HttpError`) and is what CONCEPT recommends | callers of a growing type ask questions instead of matching |
 
-`private case` parses and checks today, and no rule of CONCEPT says what it means. Giving it the meaning "this case is
-the file's own" makes growth a consequence of visibility rather than a keyword. The price is that the files of the
-declaring package other than the declaring one need a `_` too, because `private` reaches as far as the file. Whether to
-take it is question 10.5.
+**Chosen: the policy, and the newtype pattern (the owner, 2026-09-29: "rather the newtype pattern, so not at all").**
+The language gets no growth mechanism. The rules:
+
+1. **A public type with cases never gains a case within 1.x.** A new case is a 2.0 change, like a removed member.
+2. **A type that must be able to grow is a newtype**: a public type whose kinds are a private type with cases held in a
+   private field, and which offers questions (`isNotFound()`, `isTimeout()`), accessors for the data every value has
+   (`path`, `statusCode()`), and `static` factories to build one. Nobody outside can match its kinds, so a new kind is a
+   new private case and perhaps a new question: an addition, which 1.x allows. CONCEPT shows the shape already
+   ("A library that wants to stay free to add cases does not expose the ADT. It wraps it").
+3. **An accessor never hands out the kinds.** A `kind()` that answered a public type with cases would hand out the
+   growth problem with it. The questions are the interface; `show()` and `cause()` carry the rest.
+4. **The newtype keeps everything else a type with cases had**: `Show`, `Error`, the `From` conversions that make `?`
+   work (`HttpError` has them from `Utf8Error`, `JsonError` and `NetworkError`). Its private kinds get case types like
+   every type with cases (section 1.2); they are as private as the type that declares them.
+5. **`private case` is refused.** It parses and checks today and means nothing, and a modifier that means nothing is an
+   error in this language, as `protected case` already is ("`protected` is only a modifier of a field"). The message:
+   "`private` on a case means nothing: a case has the visibility of its type. A type that keeps its kinds to itself
+   wraps a private type with cases". Nothing in the repository writes it; the check lands with phase 1b.
+
+`IoError` in the newtype form - `path` and `message` stay fields, and the private kind has a default, so
+`IoError(path, message)` still builds one from outside (a private field with a default is no parameter from outside).
+Written with today's `.Other` and `.NotFound`, it type checks and runs:
+
+```trb
+public type IoError with Show, Error {
+  path: String
+  message: String
+  private kind: IoErrorKind = Other
+
+  fn isNotFound(): Bool {
+    kind == NotFound
+  }
+
+  fn isCrossDevice(): Bool {
+    kind == CrossDevice
+  }
+
+  fn show(): String {
+    "{path}: {message}"
+  }
+}
+
+type IoErrorKind {
+  case NotFound
+  case PermissionDenied
+  case AlreadyExists
+  case NotEmpty
+  case CrossDevice
+  case InvalidText
+  case Other
+}
+```
+
+**What it means for `std`**, type by type - the classification each package's round confirms before 1.0:
+
+| Type | Today | In 1.x | Questions and accessors |
+|---|---|---|---|
+| `HttpError` (`std/http`) | a newtype: `private kind: HttpErrorKind`, `static` factories | unchanged: the model | `isTimeout()`, `isRetryable()`, `statusCode()`, `answerStatus()`, and a question for each new kind a caller has to tell apart |
+| `JsonError`, `NetworkError`, `YamlError` | newtypes | unchanged | as they are |
+| `IoError` (`std/fs`) | a record of `path` and `message`; `isCrossDevice()` reads the message text | a newtype, as above | `isNotFound()`, `isPermissionDenied()`, `isAlreadyExists()`, `isNotEmpty()`, `isCrossDevice()`, `isInvalidText()`; `path` and `message` stay fields. The kind comes from the error number the runtime already turns into the message (`fileFailureText`), classified once for `errno` and `GetLastError` |
+| `OsError` (`std/os`) | a public type with five cases | a newtype: the questions of `std/os` grow with every topic | `isUnsupported()`, `isDenied()`, `isMissing()`, `isMalformed()`, and `question(): String?` for the question that failed |
+| `DnsError` (`std/dns`), `UriError` (`std/uri`), `ReadError` (`std/binary`) | public types with 8, 11 and 7 cases | newtypes: a protocol, the URI features and the binary formats all grow | a question per kind a caller branches on (`isTruncated()`, `isInvalidName()`), `offset(): Int?` where the failures have one |
+| `PathError`, `SignatureError`, `ExtractError` | public types with 2, 4 and 2 cases | stay types with cases: the cases are complete for what the package does | - |
+| `OperatingSystem`, `Architecture` (`std/core`) | public types with cases, the subject of every compile-time branch (OS.md) | **stay types with cases and never grow within 1.x**: the targets 1.0 ships are the targets of every 1.y, the WebAssembly target of the playground included (RELEASE.md section 6), and a new operating system or architecture is a 2.0 change | `isPosix()`, and `_`, for code that must not care |
+| `Ordering`, `ByteOrder`, `Option`, `Result` | complete by nature | stay | - |
+
+**Why `OperatingSystem` stays a type with cases.** OS.md chose "a `match` on a compile-time constant" because
+exhaustiveness is the point: every arm is checked on every machine, and the compile errors a new case causes are the
+work list of adding a system. A newtype with questions would lose that - a new system would silently take the `else`
+of every `if OperatingSystem.current.isWindows()` - and the constant evaluator would have to fold method calls, which
+OS.md section 2 does not do. Turning it into a newtype later would itself break every `match` on it, so the choice is
+final at 1.0.
+
+**What it resolves.** The 1.0 item of RELEASE.md section 2 is answered as "a policy that such an enum never grows; the
+newtype pattern where growth is needed", and RELEASE.md says so. What is left of it for 1.0 is work, not a question:
+the conversions of `IoError`, `OsError`, `DnsError`, `UriError` and the `ReadError` of `std/binary`, each a breaking
+change of its package and therefore before 1.0, with the `match`es on them in the repository rewritten to questions in
+the same round.
 
 ### 7.4 Reflection, encoding and JSON
 
@@ -962,7 +1050,7 @@ changes.
 
 | Component | Phase 1a (bare cases) | Phase 1b (case types) | Phase 2 (case bodies, groups) |
 |---|---|---|---|
-| **Checker** | `name.trb` and `pattern.trb`: the rule of 6.2 for a bare uppercase name with an expected type, reusing `implicitMemberTarget`; the left side of `==` (6.1); the messages of 6.8 | case symbols as types in type positions; the widening of 3.4; `Adaptation.ToClosedTrait`; member lookup step 5; `as` patterns; `From<Case>`; derivation per 5.4; `extend Shape.Circle` | bodyless members as requirements; final members; nested groups, their tag ranges and their exhaustiveness |
+| **Checker** | `name.trb` and `pattern.trb`: the rule of 6.2 for a bare uppercase name with an expected type, reusing `implicitMemberTarget`; the left side of `==` (6.1); the messages of 6.8 | case symbols as types in type positions; the widening of 3.4; `Adaptation.ToClosedTrait`; member lookup step 5; `as` patterns; `From<Case>`; derivation per 5.4; `extend Shape.Circle`; `private case` refused (7.3) | bodyless members as requirements; final members; nested groups, their tag ranges and their exhaustiveness |
 | **Parser** | nothing new; the `.Case` error and fix in commit 2 | `as` behind a pattern | case bodies; `case` lines inside a case |
 | **IR and lowering** | nothing: a bare case records the resolution `.Case` records today | case types lower to their closed trait's layout; field reads through the variant step; no new instruction | the generated dispatch functions; contiguous tag ranges for groups |
 | **C back end** | nothing | nothing | nothing beyond what the IR emits |
@@ -975,7 +1063,10 @@ changes.
 | **Canon** | the rule `imported-case-patterns` (`canon/patterns.trb`) is obsolete and goes | - | - |
 | **Docs** | every `.Case` in `docs/`, CONCEPT and the generated skill; `cases-and-match.md`, `importing-cases.md`, `pattern-forms.md`, the cheat sheet, `mistakes-models-make.md` and the "coming from" pages rewritten | a new page `pattern-matching/case-types.md` | case bodies in `types/` |
 
-The debugger and the REPL show values through their names and the generated `Show`, which do not change.
+The debugger and the REPL show values through their names and the generated `Show`, which do not change. The policy
+of decision 7.3 needs no tool: rule 2 of `docs/language/pattern-matching/exhaustiveness.md`, which already sends a
+library that wants to add cases to the wrapper, states it for 1.x, and the page on case types shows `IoError` as the
+example of a newtype.
 
 ---
 
@@ -986,9 +1077,9 @@ The debugger and the REPL show values through their names and the generated `Sho
 | Phase | Breaking? | What changes meaning |
 |---|---|---|
 | 1a, bare cases | **yes, syntax**: `.Case` and `.member` are refused once commit 2 lands | nothing silently. A program that compiled before can only turn into an error, never into another program: a bare uppercase name that resolved before still does, unless the file also imports a name that the expected type has as a case - the renamed-case exception of 6.3 - which is now reported. A leading `.` line in a `match` body was the start of an arm or an error; a lowercase one now continues the arm, which no program that compiled before contained. |
-| 1b, case types | no | nothing: a construction keeps the type it has (decision 3.4), `Shape.Circle` in a type position and `extend Shape.Circle` were errors, `as` is new syntax, `From<Case>` and a case type's `copy` are new members nobody could have written |
+| 1b, case types | no | nothing: a construction keeps the type it has (decision 3.4), `Shape.Circle` in a type position and `extend Shape.Circle` were errors, `as` is new syntax, `From<Case>` and a case type's `copy` are new members nobody could have written. `private case` becomes an error, and nothing in the repository writes it |
 | 2, bodies and groups | no | a bodyless `fn` in a type with cases and a `case` inside a case were errors |
-| 3, narrowing, if taken | yes, if `is` becomes a reserved word | a name `is` somewhere; the checker lists them |
+| 3, narrowing: **deferred** | yes, if it ever reserves `is` | a name `is` somewhere; the checker lists them |
 
 ### 9.2 Phase 1a in two commits, with the seed between
 
@@ -1022,7 +1113,12 @@ a leading `.` in a `match` body as an arm. The first use of it waits for the nex
   own, for example `fn lowerBinary(node: Expression.Binary)`).
 - **Phase 2** adds syntax (case bodies, nested cases) and lands the same way: one commit, then a seed before `std` or
   the compiler adopts it.
-- **Phase 3**, if the owner takes it, reserves `is`, which is two commits as a new reserved word always is.
+- **Phase 3 is deferred** (the owner, 2026-09-29). The evidence for it is collected while phase 2 is used: every place
+  in the compiler and in `std` where `if const ... as` reads badly. Should it come, it reserves `is`, which is two
+  commits as a new reserved word always is.
+- **Beside the phases, before 1.0:** the newtype conversions of decision 7.3 (`IoError`, `OsError`, `DnsError`,
+  `UriError`, the `ReadError` of `std/binary`), one package round each. They need no language feature of this record
+  and may land before it.
 
 ### 9.4 Sizes
 
@@ -1035,14 +1131,15 @@ Estimated against the modules they touch (`checker/pattern.trb` 614 lines, `chec
 | 1a commit 2 | ~300 lines removed (implicit members, the canon rule, the format mark) | the expectations of existing tests | ~8,000 sites in ~340 `.trb` files, ~530 in ~120 Markdown files (the generated skill included), ~15 language pages rewritten | 1, after the seed |
 | 1b | 1,800-2,500 lines: checker ~1,500 (types, widening, conversion, lookup, `as`, `From<Case>`, derivation), lowering ~400 | ~800 lines, ~10 conformance programs | a new language page, six updated | 2-3 |
 | 2 | 1,800-2,800 lines: parser ~300, checker ~1,200 (requirements, final members, groups), lowering ~500 | ~800 lines | case bodies documented | 2-3 |
-| 3 | `is` alone ~300 lines; with flow typing 1,000-1,500 | ~400 | - | 1-2 |
+| 3, deferred | `is` alone ~300 lines; with flow typing 1,000-1,500 | ~400 | - | 1-2, if ever |
+| The newtypes of 7.3 | per type 100-300 lines in its package, plus the runtime's classification of an error number for `IoError` | the package's tests | the `match`es on the five types, rewritten to questions | one per package |
 
 The record representation of decision 2.2 is not a phase: it is a measured change of `ir/layout.trb` and the lowering
 of the two conversions, taken when a benchmark asks for it.
 
 ---
 
-## 10. Risks and open questions for the owner
+## 10. Risks and the answers of the owner
 
 ### Risks
 
@@ -1059,50 +1156,24 @@ of the two conversions, taken when a benchmark asks for it.
   a type whose every case writes the same member as a single `match` in the closed trait, and the other way round.
 - **Phase 1a is the largest mechanical change the repository has made since the `Iterable` rename**, and it touches
   every open branch; it should land when few are open.
+- **The targets of 1.x are fixed at 1.0.** `OperatingSystem` and `Architecture` stay types with cases (decision 7.3),
+  so a new operating system or architecture - RISC-V is the likely one - waits for 2.0. Should a target have to come
+  within 1.x after all, the two would have to become newtypes before 1.0, because that change breaks every `match`
+  on them.
+- **The newtype conversions are breaking changes of five `std` packages** and belong before 1.0, each with the
+  `match`es on its type rewritten to questions. A caller who matched a kind now asks a question, and loses the
+  exhaustiveness check the `match` gave - which is the point of a type that may grow.
 
-### Questions
+### The answers of the owner
 
-The keyword and the leading dot are decided (sections 1.1 and 6), and so is everything technical above, with its
-reasons. Six questions of taste and direction are left.
+The keyword and the leading dot were decided on 2026-09-28 (sections 1.1 and 6). The six questions this section held
+were answered on 2026-09-29 and are decisions of the record now; nothing is open.
 
-**10.1 What the documentation calls it.** There is no `closed` keyword, so the word appears only in prose and in
-messages. Should the reference and the diagnostics keep "a type with cases" ("`Shape` is a type with cases: take a
-`Shape`") and use "closed trait" only where the model is explained, or say "closed trait" throughout?
-**Recommendation:** keep "a type with cases" in the reference and in every message, and explain the closed trait once,
-in `explanation/` and in the page on case types. A `trait` declaration is open by definition, so a message that calls
-`Shape` a trait would send a reader looking for a `trait Shape` that does not exist.
-
-**10.2 Requirements and case bodies (phase 2).** Decision 5.2 lets a type with cases declare a member without a body
-that every case writes, and decision 1.4 gives a case a body to write it in. That reverses the clause of the Decision
-Log that "methods per case are a second spelling of `match self`". Do you want per-case bodies and requirements, or
-should a type with cases keep one spelling (`match self` in a final member) and cases get members only through
-`extend Shape.Circle`?
-**Recommendation:** yes to both, in phase 2 - it is what "the type above them like a trait" means, a case that is a
-type has members anyway, and the final rule of decision 5.1 keeps it from becoming overriding.
-
-**10.3 The pattern that binds a whole case.** `Circle(...) as circle` is decided. Should `Circle as circle` also be
-accepted - a bare case name in a pattern meaning "any `Circle`", which is an error today on purpose ("`Circle` has 1
-field and this pattern names 0")?
-**Recommendation:** not now. `Circle(...)` says that fields are left out, which is why the error exists; the short form
-can be added later without breaking anything, the other way round could not.
-
-**10.4 Narrowing (phase 3).** After phases 1 and 2, `if const Circle(...) as circle = shape` narrows with a name. Do you
-want `is` as well - a `Bool` test (`shapes.filter { _ is Circle }`), and possibly flow typing (`if shape is Circle {
-shape.radius }`, Kotlin's smart casts)? Either reserves the word `is`.
-**Recommendation:** no phase 3 for now. Decide after phase 2 has been used in the compiler and in `std`, with the
-places where `if const ... as` read badly collected; if something comes then, `is` as a `Bool` test without flow
-typing, because flow typing would be the only flow-sensitive typing rule of the checker.
-
-**10.5 How a public type with cases grows (RELEASE.md section 2, a 1.0 item).** Should `private case` be the mechanism
-(section 7.3): a type with a private case must be matched with `_` outside the declaring file, so every public case
-added later breaks no `match`?
-**Recommendation:** yes. It needs no keyword and no marker, it reuses a modifier with its usual reach, and `std`'s
-growing error types (`IoError`, `HttpError`, `OperatingSystem`) each get one private case - typically the
-"something the platform reported that this version does not know" case they need anyway.
-
-**10.6 One spelling per case.** Where `Circle` resolves by context, `Shape.Circle` means the same thing. The language
-usually keeps one spelling per meaning (`public` on a member is refused, a redundant `Some(...)` is a lint). Should the
-qualified form stay a lint (`qualified-case`, section 6.7), or become an error?
-**Recommendation:** a lint. Only the checker knows whether the bare name would resolve to the same case, so the
-formatter - which works on the syntax tree and cannot change what a program means - cannot enforce it, and an error
-would make every change to an import or an expected type ripple into unrelated lines.
+| Question | Answer | Recorded in |
+|---|---|---|
+| What the documentation calls it | "a type with cases" in the reference and in every message; "closed trait" where the model is explained | decision 1.1 |
+| Requirements and case bodies | yes, in phase 2 | decisions 1.4, 1.5 and 5.2 |
+| `Circle as circle` beside `Circle(...) as circle` | not now | decision 4.2 |
+| Narrowing and `is` | not now: phase 3 is deferred, and the evidence is collected after phase 2 | decision 4.4, section 9.3 |
+| How a public type with cases grows | not at all: it never grows within 1.x, and a type that must grow is a newtype; `private case` is refused | decision 7.3 |
+| One spelling per case | `qualified-case` is a lint, not an error | section 6.7 |
