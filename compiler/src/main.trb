@@ -31,6 +31,7 @@ use TestOptions, TestShard, TestReport, testShardNamed, runTests, defaultTestPat
 use NewOptions, runNew from "./cli/new"
 use InitOptions, runInit from "./cli/init"
 use scaffoldChoicesOf from "./cli/template"
+use commandUsages, usageOf, colorUsageLines, helpAskedOf from "./cli/usage"
 use runManifest from "./cli/manifest"
 use runRepl from "./cli/repl"
 use insertOwnership from "./ir/ownership"
@@ -42,9 +43,9 @@ use verifyOwnedProgram from "./ir/ownership-verify"
 use nativeEntries, renderNativesHeader from "./backend/c/natives"
 use runHighlight from "./highlight/command"
 use documentationOptionsOf, printDocumentationUsage from "./documentation/command"
-use runCheck, runIndex, runSkill, runBundle, runSite from "./documentation/command"
+use runCheck, runIndex, runSkill, runBundle, runSite, documentationUsageLines from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
-use docOptionsOf, runDoc, printDocUsage from "./reference/command"
+use docOptionsOf, runDoc, printDocUsage, docUsageLines from "./reference/command"
 use formatUsage, formatOptionsOf, formatOptionsOfCanon, runFormat from "./format/command"
 use lintUsage, lintOptionsOf, runLint from "./lint/command"
 use renameUsage, renameOptionsOf, runRename from "./lint/rename-command"
@@ -84,82 +85,45 @@ fn printUsage() {
   printError "torb - the TorbScript toolchain (self-hosted)"
   printError ""
   printError "Usage:"
-  printError "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)"
-  printError "                         --statistics: how many expressions of every file have a type"
-  printError "                         --timings: the wall time of every pass, in the order they ran"
-  printError "                         --every-target: lower every program and test once per target, without C"
-  printError "                         --partial: every operation that can panic and that the compiler did not prove"
-  printError "  torb build [path|name] Compile every program below the path, or the one named, through C"
-  printError "                         --profile dev|release: how hard the C compiler optimizes (default: release)"
-  printError "                         --release: the same as --profile release"
-  printError "                         --emit-c: write the C and stop, which needs no C compiler"
-  printError "                         --output <file>: where the binary goes (the C is written next to it)"
-  printError "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)"
-  printError "                         --embed-vm: a native binary of the VM that runs the program's bytecode"
-  printError "                         --timings: the wall time of every step, the passes of the checker first"
-  printError "  torb run [path|name] [...]  Run a file, the only program below a directory, or the one named, in the VM"
-  printError "                         everything behind the path is the program's own Process.arguments()"
-  printError "                         --native: in front of the path, build it into build/run/ and run the binary"
-  printError "                         --profile dev|release, --release: build it natively with that profile"
-  printError "                         --timings: what every step up to the first instruction took (the VM)"
-  printError "  torb test [path]...    Run every *.test.trb below the paths as one program in the bytecode VM"
-  printError "                         --native: build them into one binary and run it instead"
-  printError "                         --profile dev|release, --release: build them natively with that profile"
-  printError "                         --shard k/n: only the k-th of every n files, so n processes run one suite"
-  printError "                         --shards n: with --native, build once and run all n shards at the same time"
-  printError "                         --filter <name>: a test's full name (`Group > test`) or a group's; repeatable"
-  printError "                         --report json: JSON Lines instead of the report a person reads, for an editor"
-  printError "                         --jobs N: accepted and ignored - one program is one process"
-  printError "  torb new <path>        A new package, from a template (default: package) or the built-in scaffold"
-  printError "                         refuses if <path> already exists; --template <name|url>: package, app,"
-  printError "                         owner/repo, github:owner/repo or a URL; without one, and on a terminal, asks"
-  printError "                         --name, --owner, --ci github|forgejo|both|none, --license mit|apache-2.0|none,"
-  printError "                         --git|--no-git, --yes (every default), --offline (the built-in scaffold only)"
-  printError "  torb init [--template ...]  The same, into the current, empty-enough directory; refuses to overwrite"
-  printError "  torb upgrade [version]  Installs another version beside this one, and makes it the one in use"
-  printError "                         --channel stable|nightly: switches the channel, then upgrades within it"
-  printError "                         --list: what is installed and what is available, installs nothing"
-  printError "                         only for a toolchain tools/install.sh or tools/install.ps1 installed"
-  printError "  torb add <package>[@<requirement>]...  Add a dependency to project.trb, resolve, lock and install it"
-  printError "                         --development: a development dependency; --offline: no network"
-  printError "  torb remove <package>...  Remove a dependency from project.trb and the lock"
-  printError "  torb update [package]...  Resolve every package, or the named ones, to the highest version allowed"
-  printError "                         --accept-capabilities: take versions that touch more than the locked ones"
-  printError "  torb install           Fetch and verify every package project.lock.trb pins into the cache"
-  printError "  torb publish           Build, check and publish the archive of a package (`--dry-run`: build only)"
-  printError "  torb lock              Write the settings of every member into project.lock.trb, from its evaluation"
-  printError "                         --check: write nothing, fail where the file is not what torb lock writes"
-  printError "                         every package command: --project <directory>, --offline"
-  printError "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings"
-  printError "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory"
-  printError "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings"
-  printError "                         --check: compare them with the static reader instead, fail where they differ"
-  printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
-  printError "                         --statistics: only the counts, without the IR itself"
-  printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
-  printError "                         --bytecode: the bytecode of the VM instead, disassembled"
-  printError "                         --debug: lowered for the debugger, with a marker in front of every statement"
-  printError "  torb natives --header   Write torb_natives.h and machine_natives.c from the manifest of natives"
-  printError "                         [path]: the runtime directory (default: ../runtime beside the compiler)"
-  printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
-  printError "  torb tokens <file>     Print the tokens of a file"
-  printError "  torb ast <file>        Print the syntax tree of a file"
-  printError "  torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor"
-  printError "                         --stdin: read the source from standard input instead of a file"
-
-  printError "  torb format [path]...  Write sources in the layout of the language (`torb format --help`)"
-  printError "                         --check: write nothing, list the files that would change, fail if one would"
-  printError "  torb lint [path]...    The style rules the checker leaves alone (`torb lint --help`)"
-  printError "                         --fix: write the fixes, then lint again"
-  printError "  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"
-  printError "  torb lsp               The language server, over standard input and output, for an editor"
-  printError "  torb debug             The debugger, over standard input and output (`torb debug --help`)"
+  for usage in commandUsages() {
+    for line in usage.lines {
+      printError line
+    }
+  }
   printError "  torb --version         `torb <version>`: the one number of the toolchain, the language and std"
   printDocUsage()
   printDocumentationUsage()
   printError ""
-  printError "Every command: --color auto|always|never - colour where the output is a terminal (auto, the default, which"
-  printError "  NO_COLOR, FORCE_COLOR and CLICOLOR_FORCE override), always, or never"
+  for line in colorUsageLines() {
+    printError line
+  }
+}
+
+/**
+ * What `torb <command> --help` prints: the usage of that command alone, on standard output, where the command has one
+ * - a page of its own, or its block of `torb --help`. `None` for a word that is no command.
+ */
+fn commandUsageText(command: String): String? {
+  match command {
+    "test" => testUsage()
+    "format" | "canon" => formatUsage()
+    "lint" => lintUsage()
+    "rename" => renameUsage()
+    "lsp" => languageServerUsage()
+    "debug" => debugAdapterUsage()
+    "doc" => usageText docUsageLines()
+    "docs" => usageText documentationUsageLines()
+    _ => usageText((usageOf(command)?).lines)
+  }
+}
+
+/** A block of `torb --help` as the usage of its command, with the flag every command takes. */
+fn usageText(lines: List<String>): String {
+  var shown = ["Usage:"]
+  shown.appendAll lines
+  shown.append ""
+  shown.appendAll colorUsageLines()
+  shown.joined separator: "\n"
 }
 
 fn printTokens(path: String): Result<Void, IoError> {
@@ -830,6 +794,7 @@ fn initOptionsOf(arguments: List<String>): InitOptions? {
  * is the last argument and names nothing.
  */
 fn upgradeOptionsOf(arguments: List<String>): UpgradeOptions? {
+  refuseUnknownFlag arguments, ["--channel", "--list"]
   var version: String? = None
   var channel: String? = None
   var list = false
@@ -902,6 +867,15 @@ const arguments = match colorArguments(Process.arguments()) {
   }
 }
 
+// `--help` and `-h` belong to every subcommand: its usage, and nothing runs - `torb new --help` made a package called
+// `--help`. A path that starts with `-` is written `./-h`
+if const Some(command) = helpAskedOf(arguments) {
+  if const Some(usage) = commandUsageText(command) {
+    print usage
+    Process.exit 0
+  }
+}
+
 match arguments {
   // docs/design/RELEASE.md section 3: one number for the toolchain, the language and the standard library
   ["--version"] => print "{paletteFor(Stream.Output).paint(Role.Emphasis, "torb")} {languageVersion}"
@@ -941,7 +915,7 @@ match arguments {
       Process.exit code
     }
   }
-  ["test", "--help"] | ["test", "help"] => print testUsage()
+  ["test", "help"] => print testUsage()
   ["test", ...more] => {
     const options = match testOptionsOf(more) {
       Some(found) => found
@@ -1002,6 +976,7 @@ match arguments {
     }
   }
   ["repl", ...more] => {
+    refuseUnknownFlag more, ["--sandbox"]
     const code = runRepl(more.contains("--sandbox"))?
     if code != 0 {
       Process.exit code
@@ -1087,7 +1062,7 @@ match arguments {
   ["highlight", "--stdin"] => runHighlight None
   ["highlight", path] => runHighlight path
 
-  ["format", "--help"] | ["format", "help"] => print formatUsage()
+  ["format", "help"] => print formatUsage()
   ["format", ...more] => {
     match formatOptionsOf(more) {
       Some(options) => exitWith(runFormat(options)?)
@@ -1108,7 +1083,7 @@ match arguments {
       }
     }
   }
-  ["debug", "--help"] | ["debug", "help"] => print debugAdapterUsage()
+  ["debug", "help"] => print debugAdapterUsage()
   // The program's own process, which the adapter starts: `--filter` and `--report` are read by the test runner
   ["debug", "--debuggee", ...more] => {
     if !isDebuggeeArguments(more) {
@@ -1126,7 +1101,7 @@ match arguments {
     }
     startDebugAdapter()
   }
-  ["lsp", "--help"] | ["lsp", "help"] => print languageServerUsage()
+  ["lsp", "help"] => print languageServerUsage()
   // The server runs as a task once this top level is done, and ends the process itself (`./language-server/command`)
   ["lsp", ...more] => {
     if !isLanguageServerArguments(more) {
@@ -1135,7 +1110,7 @@ match arguments {
     }
     startLanguageServer()
   }
-  ["lint", "--help"] | ["lint", "help"] => print lintUsage()
+  ["lint", "help"] => print lintUsage()
   ["lint", ...more] => {
     match lintOptionsOf(more) {
       Some(options) => exitWith(runLint(options)?)
@@ -1145,7 +1120,7 @@ match arguments {
       }
     }
   }
-  ["rename", "--help"] | ["rename", "help"] => print renameUsage()
+  ["rename", "help"] => print renameUsage()
   ["rename", ...more] => {
     match renameOptionsOf(more) {
       Some(options) => exitWith(runRename(options)?)
@@ -1155,7 +1130,7 @@ match arguments {
       }
     }
   }
-  ["--help"] | ["help"] => printUsage()
+  ["--help"] | ["-h"] | ["help"] => printUsage()
   _ => {
     printUsage()
     Process.exit 2

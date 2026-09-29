@@ -1,0 +1,214 @@
+/**
+ * What `torb --help` says about every subcommand, one block per command: the whole usage prints the blocks one after
+ * the other, and `torb <command> --help` or `-h` prints the one block of that command - so the two never disagree. A
+ * command whose usage is a page of its own (`test`, `format`, `lint`, `rename`, `lsp`, `debug`, `doc`, `docs`) has a
+ * short block here, and its help is that page.
+ */
+
+/** The lines `torb --help` shows for some subcommands, and which subcommands they are. */
+public type CommandUsage {
+  /** Every subcommand the block is the usage of: one, or the six package commands */
+  commands: List<String>
+  lines: List<String>
+}
+
+/** Every block, in the order `torb --help` prints them. */
+public fn commandUsages(): List<CommandUsage> {
+  [
+    CommandUsage(
+      ["check"],
+      [
+        "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)",
+        "                         --statistics: how many expressions of every file have a type",
+        "                         --timings: the wall time of every pass, in the order they ran",
+        "                         --every-target: lower every program and test once per target, without C",
+        "                         --partial: every operation that can panic and that the compiler did not prove",
+      ],
+    ),
+    CommandUsage(
+      ["build"],
+      [
+        "  torb build [path|name] Compile every program below the path, or the one named, through C",
+        "                         --profile dev|release: how hard the C compiler optimizes (default: release)",
+        "                         --release: the same as --profile release",
+        "                         --emit-c: write the C and stop, which needs no C compiler",
+        "                         --output <file>: where the binary goes (the C is written next to it)",
+        "                         --target <os>-<arch>: what OperatingSystem.current answers (default: this machine)",
+        "                         --embed-vm: a native binary of the VM that runs the program's bytecode",
+        "                         --timings: the wall time of every step, the passes of the checker first",
+      ],
+    ),
+    CommandUsage(
+      ["run"],
+      [
+        "  torb run [path|name] [...]  Run a file, the only program below a directory, or the one named, in the VM",
+        "                         everything behind the path is the program's own Process.arguments()",
+        "                         --native: in front of the path, build it into build/run/ and run the binary",
+        "                         --profile dev|release, --release: build it natively with that profile",
+        "                         --timings: what every step up to the first instruction took (the VM)",
+      ],
+    ),
+    CommandUsage(
+      ["test"],
+      [
+        "  torb test [path]...    Run every *.test.trb below the paths as one program in the bytecode VM",
+        "                         --native: build them into one binary and run it instead",
+        "                         --profile dev|release, --release: build them natively with that profile",
+        "                         --shard k/n: only the k-th of every n files, so n processes run one suite",
+        "                         --shards n: with --native, build once and run all n shards at the same time",
+        "                         --filter <name>: a test's full name (`Group > test`) or a group's; repeatable",
+        "                         --report json: JSON Lines instead of the report a person reads, for an editor",
+        "                         --jobs N: accepted and ignored - one program is one process",
+      ],
+    ),
+    CommandUsage(
+      ["new"],
+      [
+        "  torb new <path>        A new package, from a template (default: package) or the built-in scaffold",
+        "                         refuses if <path> already exists; --template <name|url>: package, app,",
+        "                         owner/repo, github:owner/repo or a URL; without one, and on a terminal, asks",
+        "                         --name, --owner, --ci github|forgejo|both|none, --license mit|apache-2.0|none,",
+        "                         --git|--no-git, --yes (every default), --offline (the built-in scaffold only)",
+      ],
+    ),
+    CommandUsage(
+      ["init"],
+      ["  torb init [--template ...]  The same, into the current, empty-enough directory; refuses to overwrite"],
+    ),
+    CommandUsage(
+      ["upgrade"],
+      [
+        "  torb upgrade [version]  Installs another version beside this one, and makes it the one in use",
+        "                         --channel stable|nightly: switches the channel, then upgrades within it",
+        "                         --list: what is installed and what is available, installs nothing",
+        "                         only for a toolchain tools/install.sh or tools/install.ps1 installed",
+      ],
+    ),
+    CommandUsage(
+      ["add", "remove", "update", "install", "publish", "lock"],
+      [
+        "  torb add <package>[@<requirement>]...  Add a dependency to project.trb, resolve, lock and install it",
+        "                         --development: a development dependency; --offline: no network",
+        "  torb remove <package>...  Remove a dependency from project.trb and the lock",
+        "  torb update [package]...  Resolve every package, or the named ones, to the highest version allowed",
+        "                         --accept-capabilities: take versions that touch more than the locked ones",
+        "  torb install           Fetch and verify every package project.lock.trb pins into the cache",
+        "  torb publish           Build, check and publish the archive of a package (`--dry-run`: build only)",
+        "  torb lock              Write the settings of every member into project.lock.trb, from its evaluation",
+        "                         --check: write nothing, fail where the file is not what torb lock writes",
+        "                         every package command: --project <directory>, --offline",
+      ],
+    ),
+    CommandUsage(
+      ["repl"],
+      [
+        "  torb repl              Read entries from standard input and run each in the VM, keeping their bindings",
+        "                         --sandbox: every entry under SCRIPTS.md's grant of the working directory",
+      ],
+    ),
+    CommandUsage(
+      ["manifest"],
+      [
+        "  torb manifest [path]...  Evaluate every project.trb the paths reach in the sandboxed VM, print its settings",
+        "                         --check: compare them with the static reader instead, fail where they differ",
+      ],
+    ),
+    CommandUsage(
+      ["ir"],
+      [
+        "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet",
+        "                         --statistics: only the counts, without the IR itself",
+        "                         --no-ownership: the IR the lowering writes, before the ownership pass",
+        "                         --bytecode: the bytecode of the VM instead, disassembled",
+        "                         --debug: lowered for the debugger, with a marker in front of every statement",
+      ],
+    ),
+    CommandUsage(
+      ["natives"],
+      [
+        "  torb natives --header   Write torb_natives.h and machine_natives.c from the manifest of natives",
+        "                         [path]: the runtime directory (default: ../runtime beside the compiler)",
+      ],
+    ),
+    CommandUsage(["parse"], ["  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"]),
+    CommandUsage(["tokens"], ["  torb tokens <file>     Print the tokens of a file"]),
+    CommandUsage(["ast"], ["  torb ast <file>        Print the syntax tree of a file"]),
+    CommandUsage(
+      ["highlight"],
+      [
+        "  torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor",
+        "                         --stdin: read the source from standard input instead of a file",
+      ],
+    ),
+    CommandUsage(
+      ["format", "canon"],
+      [
+        "  torb format [path]...  Write sources in the layout of the language (`torb format --help`)",
+        "                         --check: write nothing, list the files that would change, fail if one would",
+      ],
+    ),
+    CommandUsage(
+      ["lint"],
+      [
+        "  torb lint [path]...    The style rules the checker leaves alone (`torb lint --help`)",
+        "                         --fix: write the fixes, then lint again",
+      ],
+    ),
+    CommandUsage(
+      ["rename"],
+      ["  torb rename <Type>.<field>=<name>... [path]...  Rename fields everywhere the checker resolves them"],
+    ),
+    CommandUsage(
+      ["lsp"],
+      ["  torb lsp               The language server, over standard input and output, for an editor"],
+    ),
+    CommandUsage(
+      ["debug"],
+      ["  torb debug             The debugger, over standard input and output (`torb debug --help`)"],
+    ),
+  ]
+}
+
+/** The block of one subcommand, or `None` for a word that is none. */
+public fn usageOf(command: String): CommandUsage? {
+  commandUsages().find({ _.commands.contains command })
+}
+
+/** The line every usage ends with: the one flag that belongs to every command. */
+public fn colorUsageLines(): List<String> {
+  [
+    "Every command: --color auto|always|never - colour where the output is a terminal (auto, the default, which",
+    "  NO_COLOR, FORCE_COLOR and CLICOLOR_FORCE override), always, or never",
+  ]
+}
+
+/**
+ * The subcommand whose usage the arguments ask for: `--help` or `-h` among the flags of a subcommand, where that
+ * subcommand's own usage answers instead of the command running. `torb run` passes everything behind its path to the
+ * program, so only a flag in front of the path is `torb`'s. `None` where nothing asks, and for `torb --help` itself.
+ */
+public fn helpAskedOf(arguments: List<String>): String? {
+  const command = arguments.first()?
+  if command.startsWith("-") {
+    return None
+  }
+  var index = 1
+  while index < arguments.length() {
+    const argument = arguments[index]
+    if argument == "--help" || argument == "-h" {
+      return command
+    }
+    if command == "run" {
+      // `--profile` takes a value; the first argument that is no flag is the path, and the program's from there on
+      if argument == "--profile" {
+        index = index + 2
+        continue
+      }
+      if !argument.startsWith("-") {
+        return None
+      }
+    }
+    index = index + 1
+  }
+  None
+}
