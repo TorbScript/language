@@ -97,6 +97,12 @@ whose number is how Codex tells a new plugin from the one it has cached.
 
 ### The release candidate: the Tuesday before
 
+Before the very first candidate, once: the root server has to run a release-sync that knows the preview channel, and
+serve the installers that do - the images of a nightly made after the channel was built (2026-09-29), with
+`TORB_VERSION=nightly` and `docker compose pull && docker compose up -d` (Actions -> `nightly` -> Run workflow makes
+one at once). An older release-sync lists `0.1.0-rc.1` as a stable release, points `latest` at it and sorts it above
+`0.1.0`, and older installers never offer it.
+
 1. **Write the release notes** in `docs/releases/0.2.0.md`: every breaking change, and the command that migrates it
    (`torb format`, `torb lint --fix`). A candidate carries the notes of its number, and a file
    `docs/releases/0.2.0-rc.1.md` of its own where it needs one. Without either the release says one line, its targets
