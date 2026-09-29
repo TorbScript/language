@@ -36,7 +36,7 @@ use describeIrType from "../print"
 use isReferenceParameter, isClosedType from "../instances"
 use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf, locationOf from "./context"
 use substituted, SlotAlias from "./context"
-use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
+use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf, topLevelVarAdvice from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
 use Dispatched, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
@@ -404,7 +404,13 @@ fn rootReferenceOf(
             readEntryCell lowering, builder, symbol, accesses, object, at
             return PlacePath Reference(object, []), accesses.held
           }
-          reportUnsupported lowering, "{what} through a top-level `var` read from a function", at
+          reportUnsupported(
+            lowering,
+            "{what} through a top-level `var` read from a function",
+            at,
+            topLevelVarAdvice(),
+            anywhere: true,
+          )
           None
         }
       }

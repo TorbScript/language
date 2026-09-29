@@ -499,6 +499,7 @@ group "The top level of a file" {
     assert(!text.contains("static s_acme_x2f_app_main_Defaults_port"))
   }
 
+  /** The VM interprets this IR too, so the sentence names no back end, and says what to write instead. */
   test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
     const source = raw"""
       var counter = 0
@@ -509,9 +510,11 @@ group "The top level of a file" {
 
       counter = counter + 1
       """
-    assert(
-      unsupportedIn(source) == ["a top-level `var` read from a function is not supported by the native back end yet"],
-    )
+    const found = unsupportedIn source
+    assert(found.length() == 1)
+    assert found[0].startsWith("a top-level `var` read from a function is not supported yet, in the VM or natively: ")
+    assert found[0].contains("pass the value as a parameter")
+    assert(!found[0].contains("native back end"))
   }
 }
 

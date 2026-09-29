@@ -26,7 +26,7 @@ use FunctionId, Intrinsic, RuntimeKind from "../ir"
 use substitute from "../../semantics/checker/unify"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
-use unsupportedMessage from "../unsupported"
+use unsupportedMessage, unsupportedAnywhereMessage from "../unsupported"
 use FunctionBuilder, terminate, seal, switchTo from "../build"
 
 /**
@@ -534,14 +534,21 @@ public fn newLowering(checker: Checker, paths: List<String>, target: BuildTarget
  * root cause gets one message - the same rule the checker's diagnostics follow.
  *
  * `what` names the construct as a noun phrase and never a plan number: the sentence a user reads is
- * [unsupportedMessage]'s, and the C emitter's findings go through the same one.
+ * [unsupportedMessage]'s, and the C emitter's findings go through the same one. `anywhere` is a construct neither
+ * back end runs, whose sentence names none ([unsupportedAnywhereMessage]).
  */
-public fn reportUnsupported(var lowering: Lowering, what: String, at: Span, because: String = "") {
+public fn reportUnsupported(
+  var lowering: Lowering,
+  what: String,
+  at: Span,
+  because: String = "",
+  anywhere: Bool = false,
+) {
   if lowering.silent || !lowering.supported {
     return
   }
   lowering.supported = false
-  const message = unsupportedMessage what, because
+  const message = if anywhere { unsupportedAnywhereMessage what, because } else { unsupportedMessage what, because }
   if const Some(index) = lowering.unsupportedIndex.get(message) {
     const entry = lowering.unsupported[index]
     lowering.unsupported.set index, entry.copy(count: entry.count + 1)

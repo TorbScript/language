@@ -824,9 +824,11 @@ fn lowerConstantReference(
     readEntryCell lowering, builder, symbol, accesses, target, at
     return target
   }
+  // The language lets a function read a top-level `var` (CONCEPT, "Top-level declarations"); neither back end has a
+  // cell for one yet, and the static would be what its initializer made and none of what the file assigned to it
   if isVarBinding(lowering, symbol) {
-    const what = "a top-level `var` read from a function"
-    return unsupportedSlot lowering, builder, destination, what, at
+    reportUnsupported lowering, "a top-level `var` read from a function", at, topLevelVarAdvice(), anywhere: true
+    return abandonedSlot lowering, builder, destination
   }
   const identifier = match staticOfConstant(lowering, symbol, owner) {
     Some(found) => found
@@ -1075,6 +1077,12 @@ fn constantTypeOf(var lowering: Lowering, symbol: SymbolId, instance: ConstantIn
   }
   const applied = substitute lowering.checker.types, declared, instance.mapping
   irTypeOfClosed lowering, applied
+}
+
+/** What a function that reads a top-level `var` does instead, until it can: a test's body is a closure, too. */
+public fn topLevelVarAdvice(): String {
+  "a function or a closure - a test's body is one - sees none of what the file assigns to it yet; pass the value as a "
+    + "parameter, or copy it into a top-level `const` and read that"
 }
 
 /**

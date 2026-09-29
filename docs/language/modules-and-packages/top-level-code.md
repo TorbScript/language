@@ -107,6 +107,11 @@ const <name> = <compile-time expression>    a module's only top-level statement
     `var` access to the declaration is open ([Exclusivity](../types/exclusivity.md)), and so may a closure that is kept:
     both read a top-level `var`, and neither changes one. What a function has to change, it takes as a `var` parameter.
 
+    Reading is the language's rule and not built yet: `torb check` accepts a function, a closure or a test's body
+    that reads a top-level `var`, and neither the VM nor the native back end runs one: `torb run` and `torb test` say
+    that such a read is not supported yet, in the VM or natively. Until they do, hand the value over as a parameter,
+    or copy it into a top-level `const` and read that.
+
     ```trb check
     fn addTo(var sum: Int, amount: Int) {
       sum = sum + amount
