@@ -1,6 +1,6 @@
 ---
 title: Idiomatic TorbScript
-summary: The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
+summary: The habits that make code read like the standard library - whole-word names, values before shared types, a checked door for every rule a value must keep, using for resources, and the formatter's layout.
 kind: guide
 status: stable
 order: 130
@@ -11,259 +11,42 @@ keywords:
   - style
   - conventions
   - best practices
-  - canon
 source:
   - CONCEPT.md#design-principles
   - CONCEPT.md#lexical-structure
   - CONCEPT.md#formatter-canon
-  - CONCEPT.md#decision-log
 ---
 
-**A program can compile and still not read like TorbScript.** This page collects the habits the standard library and
-the compiler follow, one rule per section: the rule in bold, the smallest program that shows it, and one sentence of
-why. The first half is what you reach for daily; the rest is folded into `<details>` and worth skimming once. Every
-rule links the reference page that has it in full.
-
-The mistakes a programmer brings from Rust, Swift, Kotlin or TypeScript are not repeated here - they are on
-[What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md), each with the wrong line
-and the diagnostic. This page is the other half: what to write once the program compiles.
+Code can compile and still not read like TorbScript. These are the habits the standard library follows that the guide
+has not shown yet. Each is one rule and one example; the link after it has the details.
 
 ## Goal
 
-At the end of this page you write TorbScript that a reader of the standard library recognizes as their own: the names,
-the calls, the types and the error handling all in the one form the language picked for them.
+At the end of this page your code reads like the standard library: the names, the types and the resources in the one
+form the language picked for them.
 
-## Contents
+## Names are whole words {#names}
 
-- [Names are written out](#names)
-- [A single-method trait is named like its method](#traits)
-- [A field never starts with `is`](#bool-fields)
-- [A verb changes in place, a participle answers a copy](#verbs-and-participles)
-- [Each collection has its own words](#collection-words)
-- [A statement call is a command](#command-calls)
-- [One statement per line](#one-statement-per-line)
-- [A member does not list `self`](#members)
-- [A type is a value unless it needs an identity](#values)
-- [An invariant lives in a capsule](#capsules)
-- [A capsule's field is named `value`](#capsule-field-naming) (folded)
-- [A field default is a constant](#field-defaults) (folded)
-- [An expected failure is a `Result`](#errors)
-- [The success is the value](#wrapping) (folded)
-- [A type with cases is taken apart with `match`](#match)
-- [A closure is short, and trails its call](#closures)
-- [A closure over a `var` does not escape](#closures-over-var) (folded)
-- [A closure parameter names its shape](#closure-types) (folded)
-- [A resource is bound with `using`](#resources)
-- [`await()` answers the value, and a cancellation stops the waiter](#tasks) (folded)
-- [`Into` comes from `From`](#conversions) (folded)
-- [An operating system branch is a `match`](#operating-system) (folded)
-- [A collection is walked with `for` or a pipeline](#loops-and-pipelines)
-- [`torb format` decides the layout](#format)
-- [Habits from other languages](#habits)
-
-## Names are written out {#names}
-
-**A name is a whole word: `Expression`, `absolute`, `squareRoot`, `Item` - never `Expr`, `abs`, `sqrt`, `T`.** The
-exceptions are the abbreviations that already are the name (`Html`, `Json`, `Http`, `Int64`, `min`, `max`).
+**Write `Expression`, `squareRoot` and `Item`, never `Expr`, `sqrt` or `T`.** A name is `camelCase`, and only a
+type, a trait or a case starts with an uppercase letter: `maxSize`, never `MAX_SIZE`. Abbreviations that are the
+name already stay: `Json`, `Http`, `min`, `max`.
 
 ```trb run
-fn squareRoot(value: Float): Float {
-  value.squareRoot()
-}
-
 fn firstOrDefault<Item>(items: List<Item>, fallback: Item): Item {
   items.first() ?? fallback
 }
 
-print squareRoot(16.0)             // prints 4.0
-print firstOrDefault([3, 4], 0)    // prints 3
+print firstOrDefault([3, 4], 0)
+// prints 3
 ```
 
-Why: a name is read far more often than it is typed, and one spelling per word means a search finds every use. See
-Naming (skill `torbscript-language`: `references/language/syntax/naming.md`).
-
-## A single-method trait is named like its method {#traits}
-
-**A trait with one required method takes that method's name: `Hash`, `Show`, `Close`, `Iterate`, `Equals`, `From`.
-Nothing ends in `-able`.** A trait that is mainly used as a type is a noun instead: `Iterator`, `Source`, `Sink`.
-
-```trb run
-trait Describe {
-  fn describe(): String
-}
-
-type Planet with Describe, Equals {
-  name: String
-
-  fn describe(): String {
-    "the planet {name}"
-  }
-
-  fn equals(other: Planet): Bool {
-    name == other.name
-  }
-}
-
-print Planet("Mars").describe()    // prints the planet Mars
-```
-
-Why: `type Planet with Describe` reads as a sentence, and the trait and the call it stands for can never drift apart.
-See Traits (skill `torbscript-language`: `references/language/traits/traits.md`).
-
-## A field never starts with `is` {#bool-fields}
-
-**A `Bool` field is an adjective or a participle: `enabled: Bool`, not `isEnabled: Bool`.** A method that answers a
-`Bool` may start with `is` or `has` (`isEmpty()`), and need not - `enabled()` is fine where the type has no field of
-that name, because a field and a method share one namespace.
-
-```trb run
-type Feature {
-  name: String
-  enabled: Bool = false
-  var tags: List<String> = []
-
-  fn isTagged(): Bool {
-    !tags.isEmpty()
-  }
-}
-
-const search = Feature "search"
-print "{search.enabled} {search.isTagged()}"    // prints false false
-```
-
-Why: a field is data and `is` reads as a question, so the prefix tells a reader where the work is. See
-Naming (skill `torbscript-language`: `references/language/syntax/naming.md`), rule 11.
-
-## A verb changes in place, a participle answers a copy {#verbs-and-participles}
-
-**A method that changes its receiver is a verb and a `var fn`; its twin that answers a changed copy is the participle
-and an ordinary `fn`.** `append`/`appended`, `sort`/`sorted`, `translate`/`translated`.
-
-```trb run
-type Counter {
-  var value: Int = 0
-
-  var fn increment() {
-    value = value + 1
-  }
-
-  fn incremented(): Counter {
-    copy(value: value + 1)
-  }
-}
-
-var counter = Counter()
-counter.increment()
-const next = counter.incremented()
-print "{counter.value} {next.value}"    // prints 1 2
-```
-
-Why: the name alone says whether the receiver changes, and calling the verb through a `const` makes the compiler
-suggest the participle. See Verbs and participles (skill `torbscript-language`: `references/language/types/verbs-and-participles.md`).
-
-## Each collection has its own words {#collection-words}
-
-**A list appends, a set inserts, a map sets, a stack pushes and pops, a queue enqueues and dequeues, and all of them
-remove.** An empty collection is the literal `[]` - for a list, a set, a stack or a queue - and `[:]` for a map, with
-the type on the binding.
-
-```trb run
-var names: List<String> = []
-names.append "Ada"
-
-var seen: Set<String> = []
-seen.insert "Ada"
-
-var scores: Map<String, Int> = [:]
-scores.set "Ada", 3
-scores["Grace"] = 5
-
-var undo: Stack<String> = []
-undo.push "typed"
-
-var pending: Queue<Int> = []
-pending.enqueue 1
-
-print "{names} {seen.length()} {scores.length()}"    // prints ["Ada"] 1 2
-print "{undo.pop()} {pending.dequeue()}"             // prints Some("typed") Some(1)
-```
-
-Why: there is no shared `add`, so a call says what it does without a look at the receiver's type, and `add` only ever
-means `+`. See Lists (skill `torbscript-language`: `references/language/collections-and-iteration/lists.md`),
-Maps and sets (skill `torbscript-language`: `references/language/collections-and-iteration/maps-and-sets.md`) and
-Stacks and queues (skill `torbscript-language`: `references/language/collections-and-iteration/stacks-and-queues.md`).
-
-## A statement call is a command {#command-calls}
-
-**A call at the start of a statement, after `=`, after `return` or after `=>` is written without parentheses.**
-Parentheses stay where the call is nested, has no arguments, has an operator at the top level of an argument, or
-stands in the head of an `if`, `for`, `while` or `match`.
-
-```trb run
-fn route(path: String, to: String) {
-  print "{path} -> {to}"
-}
-
-route "/health", to: "health"    // prints /health -> health
-const doubled = [1, 2].map { _ * 2 }
-print(doubled.toList().length() + 1)    // prints 3
-print Some(doubled.toList())            // prints Some([2, 4])
-```
-
-Why: a statement then reads like a built-in one, so `unless`, `test` and a DSL of your own look like the language
-itself. See Command calls (skill `torbscript-language`: `references/language/syntax/command-calls.md`).
-
-## One statement per line {#one-statement-per-line}
-
-**A statement ends at the end of its line. There are no semicolons, and a body of two statements is two lines.**
-
-```trb run
-fn greeting(name: String): String {
-  const loud = name.toUpperCase()
-  "Hello, {loud}"
-}
-
-print greeting("Ada")    // prints Hello, ADA
-```
-
-```trb error
-const answer = 42;
-// error: There are no semicolons. A statement ends at the end of its line
-```
-
-Why: a line is the unit a reader, a diff and an error message all point at. See
-Lexical structure (skill `torbscript-language`: `references/language/syntax/lexical-structure.md`).
-
-## A member does not list `self` {#members}
-
-**A method is `fn area(): Int`, a changing method is `var fn grow(by: Int)`, and a member of the type itself is
-`static fn square(size: Int): Self`.** The receiver is never in the parameter list; `self` is still an expression in
-the body.
-
-```trb run
-type Rectangle {
-  width: Int
-  height: Int
-
-  fn area(): Int {
-    width * height
-  }
-
-  static fn square(size: Int): Self {
-    Self size, size
-  }
-}
-
-print Rectangle.square(3).area()    // prints 9
-```
-
-Why: the parameter list is exactly what a caller writes, and the two words in front of `fn` say what kind of member it
-is. See Methods and `static fn`s (skill `torbscript-language`: `references/language/types/methods.md`).
+A trait with one method is named after the method, `Hash` or `Show`: nothing ends in `-able`. A `Bool` field is an
+adjective, `enabled`, not `isEnabled`; a method may ask, `isEmpty()`. See Naming (skill `torbscript-language`: `references/language/syntax/naming.md`).
 
 ## A type is a value unless it needs an identity {#values}
 
-**Write `type` by default. Write `shared type` only for a thing that has an identity - a connection, a file, a
-window - where everybody holding it has to see the same object.**
+**Write `type` by default. Write `shared type` only for a thing that everybody holding it must see as the same one: a
+connection, a file, a window.**
 
 ```trb run
 type Point {
@@ -274,16 +57,17 @@ type Point {
 var start = Point 0, 0
 var moved = start
 moved.x = 5
-print "{start.x} {moved.x}"    // prints 0 5
+print "{start.x} {moved.x}"
+// prints 0 5
 ```
 
-Why: a value is never aliased, so a change happens exactly where it is written and nowhere else. See
-Copies (skill `torbscript-language`: `references/language/execution/copies.md`) and Shared types (skill `torbscript-language`: `references/language/types/shared-types.md`).
+A value is never shared by accident, so a change happens only where it is written. See
+Shared types (skill `torbscript-language`: `references/language/types/shared-types.md`).
 
-## An invariant lives in a capsule {#capsules}
+## A rule a value must keep has one door {#capsules}
 
-**A type whose values must satisfy a rule has a `private` field without a default and a `static fn` factory that
-checks the rule.** The private field closes the constructor, so the factory is the only way in.
+**When every value of a type must keep a rule, make the field `private` and give the type a `static fn` that checks
+the rule.** The private field closes the constructor, so the check cannot be walked around.
 
 ```trb run
 type Percent {
@@ -301,104 +85,18 @@ type Percent {
   }
 }
 
-print Percent.tryFrom(120)                        // prints Fail("120 is not between 0 and 100")
-print Percent.tryFrom(40).map({ _.percent() })    // prints Ok(40)
+print Percent.tryFrom(120)
+print Percent.tryFrom(40).map({ _.percent() })
+// prints Fail("120 is not between 0 and 100")
+// prints Ok(40)
 ```
 
-Why: a constructor never contains logic, so a check that runs on every value needs one door that cannot be walked
-around. See Data or capsule (skill `torbscript-language`: `references/language/types/data-or-capsule.md`).
-
-## A capsule's field is named `value` {#capsule-field-naming}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A capsule's one stored field is named `value`; several are named for the method each answers, plus `Value`, or
-`Values` for a plural.** A field and a method never share a name, so the field never borrows the accessor's word.
-
-```trb run
-type Distance {
-  private value: Int
-
-  fn meters(): Int {
-    value
-  }
-}
-
-print Distance(5).meters()    // prints 5
-```
-
-Why: `value` cannot collide with any accessor, and `rootValue` next to `fn root()` or `componentValues` next to
-`fn components()` reads at a glance which of the two is the storage. See
-Naming (skill `torbscript-language`: `references/language/syntax/naming.md`) and Data or capsule (skill `torbscript-language`: `references/language/types/data-or-capsule.md`).
-
-</details>
-
-## A field default is a constant {#field-defaults}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A field default is a literal, a constant, a constructor of constants or an empty collection literal. Anything that
-has to be computed goes into a `static fn`.**
-
-```trb run
-type Buffer {
-  var slots: List<Int> = []
-  capacity: Int = 16
-
-  static fn filled(capacity: Int): Self {
-    Self List.filled(capacity, 0), capacity
-  }
-}
-
-print Buffer().capacity                   // prints 16
-print Buffer.filled(3).slots.length()     // prints 3
-```
-
-```trb error
-type Buffer {
-  var slots: List<Int> = List.filled 16, 0
-}
-// error: A field default is a constant: `List.filled` is a call - compute it in a `static fn`, or start from `[]`
-```
-
-Why: the generated constructor has no body to run code in, and building a value never fails. See
-Construction (skill `torbscript-language`: `references/language/types/construction.md`), rule 4.
-
-</details>
-
-## An expected failure is a `Result` {#errors}
-
-**A function that can fail answers `Result<Value, Failure>`. A caller hands the failure on with `?`, replaces it with
-`??`, or takes it apart with `match`.** `panic` is for a state the program considers impossible, never for bad input.
-
-```trb run
-fn port(text: String): Result<Int, String> {
-  const number = Int.tryFrom(text).mapError({ _ => "{text} is not a number" })?
-  if number < 1 || number > 65535 {
-    return Fail "{number} is not a port"
-  }
-  number
-}
-
-print port("8080")             // prints Ok(8080)
-print(port("http") ?? 80)      // prints 80
-```
-
-Why: a failure in the signature cannot be forgotten, and one `?` is all the ceremony handing it on costs. See
-Result (skill `torbscript-language`: `references/language/errors/result.md`), The question mark operator (skill `torbscript-language`: `references/language/errors/question-mark.md`) and
-panic (skill `torbscript-language`: `references/language/errors/panic.md`).
+The reference calls such a type a capsule: Data or capsule (skill `torbscript-language`: `references/language/types/data-or-capsule.md`).
 
 ## The success is the value {#wrapping}
 
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A body that answers an `Option` or a `Result` ends in its value, never in `Some(value)` or `Ok(value)`: a value where
-one of the two is expected wraps itself. `None` and `Fail` are written; `Some` and `Ok` only where the value is an
-`Option` inside an `Option`, or where its type is not decided yet.** `torb lint --rule redundant-wrap` finds the rest,
-and `--fix` removes them.
+**A function that returns an `Option` or a `Result` ends in the plain value, not in `Some(value)` or `Ok(value)`.**
+Write `None` and `Fail`; the value is wrapped for you.
 
 ```trb run
 fn find(names: List<String>, wanted: String): Int? {
@@ -410,132 +108,17 @@ fn find(names: List<String>, wanted: String): Int? {
   None
 }
 
-const fallback: Int? = 0
-print find(["ada", "alan"], "alan")    // prints Some(1)
-print fallback                         // prints Some(0)
+print find(["ada", "alan"], "alan")
+// prints Some(1)
 ```
 
-Why: one spelling per meaning - the type already says that the value is the success, so the `Some` said it twice. See
-Conversions (skill `torbscript-language`: `references/language/types/conversions.md`), rule 8.
+`torb lint --rule redundant-wrap` finds the rest, and `--fix` removes them. See
+Conversions (skill `torbscript-language`: `references/language/types/conversions.md`).
 
-</details>
+## A resource is bound with using {#resources}
 
-## A type with cases is taken apart with `match` {#match}
-
-**A `match` covers every case, and a case is written with its type or a leading dot - bare only when the file imports
-it.** `Some`, `None`, `Ok` and `Fail` are bare because the prelude imports them.
-
-```trb run
-type Shape {
-  case Circle(radius: Float)
-  case Rectangle(width: Float, height: Float)
-}
-
-fn area(shape: Shape): Float {
-  match shape {
-    .Circle(radius) => 3.0 * radius * radius
-    .Rectangle(width, height) => width * height
-  }
-}
-
-print area(Shape.Rectangle(2.0, 3.0))    // prints 6.0
-```
-
-Why: an exhaustive `match` turns a new case into a list of compile errors at every place that has to learn about it.
-See Cases and match (skill `torbscript-language`: `references/language/pattern-matching/cases-and-match.md`) and
-Why cases are never bare (skill `torbscript-language`: `references/explanation/why-cases-are-never-bare.md`).
-
-## A closure is short, and trails its call {#closures}
-
-**A one-line closure uses the implicit parameters `_`, `_2`, `_3`, and a closure that is the last argument follows the
-call.** There is no currying: a function takes all its arguments at once, and a function with some of them fixed is a
-closure with a placeholder.
-
-```trb run
-fn scaled(value: Int, by: Int): Int {
-  value * by
-}
-
-const numbers = [1, 2, 3]
-const total = numbers.fold 0 { _ + _2 }
-const doubled = numbers.map({ scaled _, by: 2 })
-print total                  // prints 6
-print doubled.toList()       // prints [2, 4, 6]
-```
-
-Why: one closure form and one call form cover what currying, method references and lambdas cover elsewhere. See
-Closures (skill `torbscript-language`: `references/language/functions/closures.md`) and Trailing closures (skill `torbscript-language`: `references/language/functions/trailing-closures.md`).
-
-## A closure over a `var` does not escape {#closures-over-var}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A closure that reads or writes a `var` binding is handed straight to a call that only runs it - `forEach`, `unless`,
-a DSL block - and is never stored or returned.** To carry a value out, return it.
-
-```trb run
-fn total(numbers: List<Int>): Int {
-  var sum = 0
-  numbers.forEach { sum = sum + _ }
-  sum
-}
-
-print total([1, 2, 3])    // prints 6
-```
-
-```trb error
-fn counter(): () => Int {
-  var count = 0
-  {
-    count = count + 1
-    count
-  }
-}
-// error: This closure captures the `var` binding `count` and may outlive it
-```
-
-Why: a `var` is the one variable the language shares, and a closure that outlived it would share it with nobody's
-knowledge. See Closures (skill `torbscript-language`: `references/language/functions/closures.md`), rule 8.
-
-</details>
-
-## A closure parameter names its shape {#closure-types}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A parameter that takes a question about one value is a `Predicate<Item>`, one called for its effect is an
-`Action<Item>`, and one that turns a value into another is a `Transform<Item, Output>`.** The three are aliases in
-the prelude, so any closure of the shape fits, and the signature says what the closure is for before it says what it
-looks like.
-
-```trb run
-fn countWhere(numbers: List<Int>, predicate: Predicate<Int>): Int {
-  numbers.filter(predicate).count()
-}
-
-fn labels(numbers: List<Int>, transform: Transform<Int, String>): List<String> {
-  numbers.map(transform).toList()
-}
-
-const numbers = [3, 8, 5]
-const large = countWhere numbers { _ > 4 }
-const shown = labels numbers { "#{_}" }
-print large    // prints 2
-print shown    // prints ["#3", "#8", "#5"]
-```
-
-Why: `filter`, `forEach` and `map` of the standard library are written this way, and a signature that reads like
-theirs needs no second look. A closure without parameters stays `() => Value`, which is already as short as a name.
-See Predicate, Action and Transform (skill `torbscript-standard-library`: `references/standard-library/function-types.md`).
-
-</details>
-
-## A resource is bound with `using` {#resources}
-
-**A resource is a `shared type` with `Close`, bound with `using`. Nothing calls `close()`: it runs once, when the
-last holder goes away at the end of its block.**
+**A file, a socket or a lock is a `shared type` with `Close`, bound with `using`.** Nothing calls `close()` by hand:
+it runs once, at the end of the block that holds the last reference.
 
 ```trb run
 shared type Log with Close {
@@ -560,146 +143,40 @@ work()
 // prints audit closed
 ```
 
-Why: the line where a resource is released is the end of the block, so no path through the function forgets it. See
-Destructors (skill `torbscript-language`: `references/language/execution/destructors.md`).
+See Destructors (skill `torbscript-language`: `references/language/execution/destructors.md`).
 
-## `await()` answers the value, and a cancellation stops the waiter {#tasks}
+## The formatter decides the layout {#format}
 
-<details>
-<summary>The rule, an example, and why</summary>
-
-**A function that waits returns `Task<Value>`. `await()` answers the value, so a task whose value is a `Result` is one
-`.await()?` per line - the `?` is the work's own failure. A cancellation is passed on, never answered: `cancel()` asks a
-task to stop, and whoever awaits it stops at that `await()` too. `result()` is for the code that has to observe one.**
-
-```trb run
-fn doubled(value: Int): Task<Result<Int, String>> {
-  value * 2
-}
-
-fn sum(): Task<Result<Int, String>> {
-  const first = doubled(1).await()?
-  const second = doubled(2).await()?
-  first + second
-}
-
-print sum().await()    // prints Ok(6)
-```
-
-Why: a call that waits is never cancelled on its own - only the task that waits is, and then it has no use for an
-answer: it stops where it waits, its `using`s are closed, and whoever waits for it stops in turn. Answering the
-cancellation as a value nested a second `Result` into every line of IO for nothing. A supervisor that has to know writes
-`task.result()`, which answers `Fail(Cancelled)`. See Tasks (skill `torbscript-concurrency`: `references/language/concurrency-and-streams/tasks.md`) and
-std/task (skill `torbscript-concurrency`: `references/standard-library/task.md`).
-
-</details>
-
-## `Into` comes from `From` {#conversions}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**Implement `From<Source>` on the target and `into()` exists for free. `Into` is never implemented by hand, and there
-are no casts.**
-
-```trb run
-type Celsius {
-  degrees: Float
-}
-
-type Fahrenheit {
-  degrees: Float
-}
-
-extend Celsius with From<Fahrenheit> {
-  static fn from(value: Fahrenheit): Celsius {
-    Celsius((value.degrees - 32.0) * 5.0 / 9.0)
-  }
-}
-
-const boiling: Celsius = Fahrenheit(212.0).into()
-print boiling.degrees    // prints 100.0
-```
-
-Why: one direction written by hand means one place to change, and `?` finds the same `From` when it converts a
-failure. See Conversions (skill `torbscript-language`: `references/language/types/conversions.md`).
-
-</details>
-
-## An operating system branch is a `match` {#operating-system}
-
-<details>
-<summary>The rule, an example, and why</summary>
-
-**Code that differs per operating system is a `match OperatingSystem.current` in the function where it differs.** The
-compiler checks every arm on every machine and builds only the one the target takes.
-
-> **Planned.** `OperatingSystem.current` does not exist yet; The Operating System is the decided
-> design. The block below parses and is not type checked.
-
-```trb
-fn searchPathSeparator(): String {
-  match OperatingSystem.current {
-    .Windows => ";"
-    .Linux | .MacOs | .FreeBsd | .Browser => ":"
-  }
-}
-```
-
-Why: a new operating system then becomes a compile error at every place that has to learn about it, instead of a
-branch hidden in C or a build file.
-
-</details>
-
-## A collection is walked with `for` or a pipeline {#loops-and-pipelines}
-
-**A loop that does something per item is a `for`. A computation from one collection to another is a pipeline: lazy
-stages, one per line, and one terminal operation at the end.** There is no index loop and no `iter()` step.
-
-```trb run
-const words = ["pipeline", "for", "stage", "match"]
-
-for word in words {
-  if word.byteLength() == 3 {
-    print word    // prints for
-  }
-}
-
-const long = words
-  .filter { _.byteLength() > 4 }
-  .map { _.toUpperCase() }
-  .toList()
-print long    // prints ["PIPELINE", "STAGE", "MATCH"]
-```
-
-Why: nothing in a pipeline runs until the terminal operation pulls, so stages compose without intermediate
-collections. See Iterating (skill `torbscript-language`: `references/language/collections-and-iteration/iterating.md`) and
-Pipelines (skill `torbscript-language`: `references/language/collections-and-iteration/pipelines.md`).
-
-## `torb format` decides the layout {#format}
-
-**Where the language allows two spellings, `torb format` picks one, and its layout is what a file is written in.** Run it
-before committing, and let `--check` fail a build that is not in it.
+**Where the language allows two spellings, `torb format` picks one.** Run it before you commit, and let `--check`
+fail a build that is not in the layout.
 
 ```console
-torb format src
-torb format --check src
+$ torb format src
+$ torb format --check src
 ```
 
-Why: a style that is decided once is never discussed again. See [torb format](../tooling/torb-format.md) and
-[Verify your work](../tooling/verifying-your-work.md).
+See [torb format](../tooling/torb-format.md).
 
-## Habits from other languages {#habits}
+## More habits {#more-habits}
 
-`let`, `Err`, a bare case, `print("x")`, `Hashable`, `MAX_SIZE`, `list.add(x)`, `fn area(self)` and the rest of what
-Rust, Swift, Kotlin and TypeScript teach are listed, each with the right line and the diagnostic, on
-[What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md). The contrast pages go
-through one language each: Rust (skill `torbscript-language`: `references/explanation/coming-from-rust.md`), Swift (skill `torbscript-language`: `references/explanation/coming-from-swift.md`),
-Kotlin (skill `torbscript-language`: `references/explanation/coming-from-kotlin.md`) and TypeScript (skill `torbscript-language`: `references/explanation/coming-from-typescript.md`).
+Each of these is a rule of the reference page it links:
+
+- A field default is a constant; compute anything else in a `static fn` -
+  Construction (skill `torbscript-language`: `references/language/types/construction.md`).
+- A closure that reads or writes a `var` is handed to a call that runs it, never stored or returned -
+  Closures (skill `torbscript-language`: `references/language/functions/closures.md`).
+- A parameter that takes a closure says what it is for: `Predicate<Item>`, `Action<Item>`, `Transform<Item, Output>` -
+  Predicate, Action and Transform (skill `torbscript-standard-library`: `references/standard-library/function-types.md`).
+- `From` is written by hand, `Into` comes with it, and there are no casts -
+  Conversions (skill `torbscript-language`: `references/language/types/conversions.md`).
+- `await()` returns the value, and a cancelled task stops whoever waits for it -
+  Tasks (skill `torbscript-concurrency`: `references/language/concurrency-and-streams/tasks.md`).
+- The habits from Rust, Swift, Kotlin and TypeScript that do not compile, with the message for each -
+  [What a model trained on other languages gets wrong](../explanation/mistakes-models-make.md).
 
 ## Next
 
-- The language reference (skill `torbscript-language`: `references/language/index.md`) - the exact rule behind every section above.
+- The language reference (skill `torbscript-language`: `references/language/index.md`) - the exact rule behind every habit here.
 - [Syntax cheat sheet](../language/syntax/cheat-sheet.md) - every form of the language on one page.
-- Why the language is like this (skill `torbscript-language`: `references/explanation/index.md`) - the arguments behind these habits.
+- Why the language is like this (skill `torbscript-language`: `references/explanation/index.md`) - the reasons behind these habits.
 

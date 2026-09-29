@@ -39,7 +39,7 @@ language reference (skill `torbscript-language`: `references/language/index.md`)
 - **[Control flow and your own constructs](control-flow-and-dsls.md)** - Ifs and loops work as you expect, and a new control structure or a configuration block is an ordinary function you can write yourself.
 - **[Modules and packages](modules-and-packages.md)** - Split a program into files with public and use, import from the standard library, and lay out a project so that its tests reach its code.
 - **[Put it together](a-small-program.md)** - One small program - a type with cases, a type with fields, a function that can fail and a pipeline - that uses what the guide taught.
-- **[Idiomatic TorbScript](idiomatic-torbscript.md)** - The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
+- **[Idiomatic TorbScript](idiomatic-torbscript.md)** - The habits that make code read like the standard library - whole-word names, values before shared types, a checked door for every rule a value must keep, using for resources, and the formatter's layout.
 
 <!-- torb:index:end -->
 

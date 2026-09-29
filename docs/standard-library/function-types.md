@@ -124,4 +124,4 @@ parameter, a field or a binding that holds one.
 - [Trailing closures](../language/functions/trailing-closures.md) - which parameter a trailing closure fills.
 - [std/core](core.md) - the package that declares the three aliases.
 - [std/prelude](prelude.md) - the re-exports that put them in scope everywhere.
-- [Idiomatic TorbScript](../guide/idiomatic-torbscript.md#closure-types) - the habit of writing the alias.
+- [Idiomatic TorbScript](../guide/idiomatic-torbscript.md#more-habits) - the habit of writing the alias.
