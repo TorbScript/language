@@ -1308,12 +1308,12 @@
     target.appendChild(verdict);
 
     // The toolchain is fetched as soon as a reader shows the intent to run or to write, not on every page with a mount;
-    // writing brings the editor with the language server
+    // writing - the focus in the code, not on a button - brings the editor with the language server
     function prepare() {
       compiledToolchain().catch(function () {});
     }
-    target.addEventListener("focusin", function () {
-      prepare();
+    target.addEventListener("focusin", prepare, { once: true });
+    editor.input.addEventListener("focus", function () {
       editor.upgrade();
     }, { once: true });
     runButton.addEventListener("pointerenter", prepare, { once: true });
