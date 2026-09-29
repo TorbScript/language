@@ -33,7 +33,7 @@ documents as they are typed, and for every other file of the workspace in the ba
 `torb doc` (skill `torbscript-projects`: `references/tooling/torb-doc.md`) says about a declaration, the references and a rename are what the checker resolved, the
 formatting is [`torb format`](torb-format.md)'s, and the quick fixes are what [`torb lint --fix`](torb-lint.md) writes.
 Nobody runs it by hand; the VS Code extension of this repository starts it, and so can any editor with a client of the
-protocol ([Set up your editor](../how-to/set-up-your-editor.md)). The editor of [the playground](the-playground.md)
+protocol ([Set up your editor](../how-to/set-up-your-editor.md)). The editor of the playground
 talks to the same server, running as WebAssembly in the page.
 
 ## Synopsis
