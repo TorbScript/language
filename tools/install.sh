@@ -10,7 +10,8 @@
 #
 # Overridable for testing, never needed otherwise:
 #   TORB_INSTALL_BASE_URL   default https://torb.dev/download
-#   TORB_INSTALL_CHANNEL    default stable ("nightly" for the nightly channel)
+#   TORB_INSTALL_CHANNEL    default stable; "preview" for the newest release candidate, beta or alpha (or the newest
+#                           stable release where that is newer), "nightly" for the nightly channel
 #   TORB_INSTALL_VERSION    an exact version, instead of the newest of the channel
 #
 # POSIX sh, curl or wget, tar, and sha256sum or shasum. Linux, macOS and FreeBSD; Windows uses install.ps1.
@@ -67,20 +68,50 @@ fi
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
+# The newest release of a channel: its first line in versions.txt, which release-sync writes newest first
+first_of() {
+  awk -v c="$1" '$2 == c { print $1; exit }' "$scratch/versions.txt"
+}
+
+# Whether the numbers of release $1 are above those of release $2 - all SemVer's precedence needs to set a pre-release
+# against a stable release, since a release is newer than every pre-release of its numbers: 0.2.0-rc.1 is newer than
+# 0.1.0, and 0.1.0 than 0.1.0-rc.1
+numbers_above() {
+  awk -v a="${1%%-*}" -v b="${2%%-*}" 'BEGIN {
+    split(a, x, ".")
+    split(b, y, ".")
+    for (i = 1; i <= 3; i++) {
+      if (x[i] + 0 > y[i] + 0) exit 0
+      if (x[i] + 0 < y[i] + 0) exit 1
+    }
+    exit 1
+  }'
+}
+
 version=${TORB_INSTALL_VERSION:-}
 if [ -z "$version" ]; then
   fetch "$base_url/versions.txt" "$scratch/versions.txt" || fail "could not reach $base_url/versions.txt"
-  version=$(awk -v c="$channel" '$2 == c { print $1; exit }' "$scratch/versions.txt")
-  if [ -z "$version" ] && [ -z "$channel_requested" ] && [ "$channel" = "stable" ]; then
-    # No stable release yet (docs/design/RELEASE.md section 3): the default channel falls back to the newest
-    # nightly, and the toolchain follows the nightly channel (torb upgrade reads install.trb below) until a
-    # stable release exists. An explicitly requested channel or version never falls back.
-    fallback_version=$(awk -v c="nightly" '$2 == c { print $1; exit }' "$scratch/versions.txt")
-    if [ -n "$fallback_version" ]; then
-      say "no stable release yet: installing the nightly $fallback_version"
-      channel="nightly"
-      version="$fallback_version"
+  version=$(first_of "$channel")
+  if [ "$channel" = "preview" ]; then
+    # The preview channel is never behind stable: once 0.1.0 is out it is 0.1.0, not 0.1.0-rc.1, until 0.2.0-rc.1
+    stable_version=$(first_of stable)
+    if [ -n "$stable_version" ] && { [ -z "$version" ] || ! numbers_above "$version" "$stable_version"; }; then
+      version="$stable_version"
     fi
+  fi
+  if [ -z "$version" ] && [ -z "$channel_requested" ] && [ "$channel" = "stable" ]; then
+    # No stable release yet (docs/design/RELEASE.md section 5): the default channel falls back to the newest
+    # preview, and without one to the newest nightly, and the toolchain follows that channel (torb upgrade reads
+    # install.trb below). An explicitly requested channel or version never falls back.
+    for fallback in preview nightly; do
+      fallback_version=$(first_of "$fallback")
+      if [ -n "$fallback_version" ]; then
+        say "no stable release yet: installing the $fallback $fallback_version"
+        channel="$fallback"
+        version="$fallback_version"
+        break
+      fi
+    done
   fi
   [ -n "$version" ] || fail "no version of the \"$channel\" channel is listed at $base_url/versions.txt"
 fi

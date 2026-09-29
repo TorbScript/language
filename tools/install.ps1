@@ -8,7 +8,8 @@
 #
 # Overridable for testing, never needed otherwise:
 #   $env:TORB_INSTALL_BASE_URL   default https://torb.dev/download
-#   $env:TORB_INSTALL_CHANNEL    default stable ("nightly" for the nightly channel)
+#   $env:TORB_INSTALL_CHANNEL    default stable; "preview" for the newest release candidate, beta or alpha (or the
+#                                newest stable release where that is newer), "nightly" for the nightly channel
 #   $env:TORB_INSTALL_VERSION    an exact version, instead of the newest of the channel
 #   $env:TORB_INSTALL_TARGET     skips architecture detection, e.g. windows-arm64
 #
@@ -22,6 +23,13 @@
     # Thrown, not written: caught once below and printed as one clean line, without the stack trace and the red
     # "+ CategoryInfo ..." noise `Write-Error` adds under $ErrorActionPreference = "Stop".
     throw $message
+  }
+
+  function Test-NumbersAbove($first, $second) {
+    # Whether the numbers of release $first are above those of release $second - all SemVer's precedence needs to set
+    # a pre-release against a stable release, since a release is newer than every pre-release of its numbers:
+    # 0.2.0-rc.1 is newer than 0.1.0, and 0.1.0 than 0.1.0-rc.1
+    [version](($first -split "-")[0]) -gt [version](($second -split "-")[0])
   }
 
   function Install-Torb {
@@ -57,24 +65,39 @@
         } catch {
           Fail "could not reach $baseUrl/versions.txt"
         }
-        $lines = Get-Content $listingPath
-        $line = $lines | Where-Object { ($_ -split "\s+")[1] -eq $channel } | Select-Object -First 1
-        if (-not $line -and -not $requestedChannel -and $channel -eq "stable") {
-          # No stable release yet (docs/design/RELEASE.md section 3): the default channel falls back to the
-          # newest nightly, and the toolchain follows the nightly channel (torb upgrade reads install.trb below)
-          # until a stable release exists. An explicitly requested channel or version never falls back.
-          $fallbackLine = $lines | Where-Object { ($_ -split "\s+")[1] -eq "nightly" } | Select-Object -First 1
-          if ($fallbackLine) {
-            $fallbackVersion = ($fallbackLine -split "\s+")[0]
-            Write-Host "no stable release yet: installing the nightly $fallbackVersion"
-            $channel = "nightly"
-            $line = $fallbackLine
+        $lines = @(Get-Content $listingPath)
+        # The newest release of a channel: its first line in versions.txt, which release-sync writes newest first
+        $firstOf = {
+          param($name)
+          $found = $lines | Where-Object { ($_ -split "\s+")[1] -eq $name } | Select-Object -First 1
+          if ($found) { ($found -split "\s+")[0] } else { $null }
+        }
+        $version = & $firstOf $channel
+        if ($channel -eq "preview") {
+          # The preview channel is never behind stable: once 0.1.0 is out it is 0.1.0, not 0.1.0-rc.1, until
+          # 0.2.0-rc.1
+          $stableVersion = & $firstOf "stable"
+          if ($stableVersion -and (-not $version -or -not (Test-NumbersAbove $version $stableVersion))) {
+            $version = $stableVersion
           }
         }
-        if (-not $line) {
+        if (-not $version -and -not $requestedChannel -and $channel -eq "stable") {
+          # No stable release yet (docs/design/RELEASE.md section 5): the default channel falls back to the newest
+          # preview, and without one to the newest nightly, and the toolchain follows that channel (torb upgrade
+          # reads install.trb below). An explicitly requested channel or version never falls back.
+          foreach ($fallback in @("preview", "nightly")) {
+            $fallbackVersion = & $firstOf $fallback
+            if ($fallbackVersion) {
+              Write-Host "no stable release yet: installing the $fallback $fallbackVersion"
+              $channel = $fallback
+              $version = $fallbackVersion
+              break
+            }
+          }
+        }
+        if (-not $version) {
           Fail "no version of the `"$channel`" channel is listed at $baseUrl/versions.txt"
         }
-        $version = ($line -split "\s+")[0]
       }
 
       $archive = "torb-$version-$target.zip"
