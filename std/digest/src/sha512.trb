@@ -9,7 +9,7 @@
 
 use ByteWriter from "std/binary"
 use Bytes from "std/stream"
-use Digest from "./lib"
+use Digest, Hasher from "./lib"
 
 /**
  * SHA-512, fed in pieces: [Sha512.add] takes the next bytes and [Sha512.finished] answers the digest of everything added
@@ -19,7 +19,7 @@ use Digest from "./lib"
  *
  *     print Sha512.of("abc".bytes()).hex()
  */
-public type Sha512 {
+public type Sha512 with Hasher {
   /** The eight words of the state; empty until the first block, which starts it from [startingState]. */
   private var state: List<UInt64> = []
   /** The bytes of a block that is not full yet: fewer than 128. */
@@ -27,11 +27,24 @@ public type Sha512 {
   /** Every byte added so far. */
   private var length: Int = 0
 
+  static fn empty(): Self {
+    Self()
+  }
+
   /** The digest of `bytes` in one call. */
   static fn of(bytes: Bytes): Digest {
     var hasher = Self()
     hasher.add bytes
     hasher.finished()
+  }
+
+  /** SHA-512 works in 128-byte blocks, twice [Sha256]'s: its words are 64 bits wide, sixteen of them to a block. */
+  static fn blockSize(): Int {
+    128
+  }
+
+  static fn digestLength(): Int {
+    64
   }
 
   /** Feeds the next bytes. */

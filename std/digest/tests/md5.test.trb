@@ -1,0 +1,63 @@
+/**
+ * MD5 against RFC 1321's own test suite (appendix A.5), fed at once and in pieces that cross the 64-byte blocks at
+ * every boundary that matters. [Md5] is legacy: these tests exist because Postgres and S3 still speak it, not because
+ * anything here should choose it for anything new.
+ */
+
+use test, group from "std/test"
+use Md5 from "../src/lib"
+
+fn hexOf(text: String): String {
+  Md5.of(text.bytes()).hex()
+}
+
+group "MD5" {
+  test "RFC 1321's own test suite" {
+    assert(hexOf("") == "d41d8cd98f00b204e9800998ecf8427e")
+    assert(hexOf("a") == "0cc175b9c0f1b6a831c399e269772661")
+    assert(hexOf("abc") == "900150983cd24fb0d6963f7d28e17f72")
+    assert(hexOf("message digest") == "f96b697d7cb7938d525a2f31aaf161d0")
+    assert(hexOf("abcdefghijklmnopqrstuvwxyz") == "c3fcd3d76192e4007dfb496cca67e13b")
+    const upperAndDigits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    assert(hexOf(upperAndDigits) == "d174ab98d277d9f5a5611c2c9f419d9f")
+    const digits = "12345678901234567890123456789012345678901234567890123456789012345678901234567890"
+    assert(hexOf(digits) == "57edf4a22be3c955ac49da2e2107b67a")
+  }
+
+  test "the lengths on either side of a second block of padding" {
+    assert(hexOf("a".repeat(55)) == "ef1772b6dff9a122358552954ad0df65")
+    assert(hexOf("a".repeat(56)) == "3b0c8ac703f828b04c6c197006d17218")
+  }
+
+  test "a thousand bytes" {
+    assert(hexOf("a".repeat(1000)) == "cabe45dcc9ae5b66ba86600cca6b8ba8")
+  }
+
+  test "fed in pieces, it answers what it answers at once" {
+    const bytes = "The quick brown fox jumps over the lazy dog, again and again and again.".repeat(5).bytes()
+    const whole = Md5.of(bytes).hex()
+    for size in [1, 3, 55, 56, 63, 64, 65, 128] {
+      var hasher = Md5()
+      var at = 0
+      while at < bytes.length() {
+        const end = if at + size < bytes.length() { at + size } else { bytes.length() }
+        hasher.add bytes[at..end]
+        at = end
+      }
+      assert(hasher.finished().hex() == whole)
+    }
+  }
+
+  test "finishing does not change the hasher" {
+    var hasher = Md5()
+    hasher.add "ab".bytes()
+    const early = hasher.finished()
+    hasher.add "c".bytes()
+    assert(early.hex() == hexOf("ab"))
+    assert(hasher.finished() == Md5.of("abc".bytes()))
+  }
+
+  test "a digest is 16 bytes" {
+    assert(Md5.of([]).bytes.length() == 16)
+  }
+}

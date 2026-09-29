@@ -1,0 +1,82 @@
+/**
+ * [Hmac], HMAC (RFC 2104) over any [Hasher]: SCRAM (postgres, mongodb), S3's Signature Version 4, JWT's `HS256`, SMTP's
+ * `CRAM-MD5`. [HmacSha256], [HmacSha1] and [HmacMd5] name the three combinations the packages after `std` need.
+ *
+ * **The key is folded into the hasher once, not once a round.** [Hmac.keyed] pads the key to a block, hashes the two
+ * pads into a fresh inner and outer hasher, and keeps only those two - never the key itself. From there, [Hmac] is a
+ * hasher itself: [Hmac.add] feeds the message into the (already-keyed) inner hasher, and [Hmac.finished] closes it and
+ * folds the result into a copy of the outer one. A round of [Hmac.pbkdf2] copies the keyed [Hmac] - copying a value
+ * costs its size, not its history - so 4 096 rounds hash the key's two blocks once between them, not 8 192 times.
+ */
+
+use Bytes from "std/stream"
+use Digest, Hasher, Sha256, Sha1, Md5 from "./lib"
+
+/**
+ * HMAC over `H`, keyed once and reused: the shape of [Sha256] and the rest, so it is fed the same way.
+ *
+ * # Examples
+ *
+ *     print HmacSha256.of("key".bytes(), "message".bytes()).hex()
+ */
+public type Hmac<H: Hasher> {
+  /** `H`, already fed the key's block XORed with `0x36`: what the message is added to. */
+  private var inner: H
+  /** `H`, already fed the key's block XORed with `0x5c`: what the inner digest is added to, in [Hmac.finished]. */
+  private var outer: H
+
+  /** A fresh `Hmac` keyed with `key`: the key alone, folded into an inner and an outer hasher and then forgotten. */
+  static fn keyed(key: Bytes): Self {
+    const blockSize = H.blockSize()
+    // RFC 2104: a key longer than a block is shortened to its own hash first; a shorter one is padded with zeros
+    var padded = if key.length() > blockSize { H.of(key).bytes } else { key }
+    while padded.length() < blockSize {
+      padded.append 0
+    }
+    var innerPad: List<UInt8> = []
+    var outerPad: List<UInt8> = []
+    for byte in padded {
+      const value = Int.from byte
+      innerPad.append(UInt8.tryFrom(value ^ 0x36).ok() ?? 0)
+      outerPad.append(UInt8.tryFrom(value ^ 0x5c).ok() ?? 0)
+    }
+    var inner = H.empty()
+    inner.add innerPad
+    var outer = H.empty()
+    outer.add outerPad
+    Self inner, outer
+  }
+
+  /** Feeds the next bytes of the message. */
+  var fn add(bytes: Bytes) {
+    inner.add bytes
+  }
+
+  /**
+   * The MAC of everything added so far. `self` is unchanged - the inner and outer hashers are copied first - so an
+   * `Hmac` keeps being fed after this, exactly as [Sha256.finished] leaves its hasher open.
+   */
+  fn finished(): Digest {
+    var innerCopy = inner
+    const innerDigest = innerCopy.finished()
+    var outerCopy = outer
+    outerCopy.add innerDigest.bytes
+    outerCopy.finished()
+  }
+
+  /** The MAC of `message` under `key`, in one call. */
+  static fn of(key: Bytes, message: Bytes): Digest {
+    var hmac = Self.keyed key
+    hmac.add message
+    hmac.finished()
+  }
+}
+
+/** HMAC-SHA-256: SCRAM-SHA-256, AWS Signature Version 4, JWT's `HS256`. */
+public type HmacSha256 = Hmac<Sha256>
+
+/** HMAC-SHA-1: SCRAM-SHA-1 (mongodb), and the older signature schemes that have not moved to SHA-256. */
+public type HmacSha1 = Hmac<Sha1>
+
+/** HMAC-MD5: SMTP's `CRAM-MD5`, the one place HMAC still meets [Md5]. */
+public type HmacMd5 = Hmac<Md5>

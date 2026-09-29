@@ -1,10 +1,15 @@
 /**
- * Message digests: [Sha256] and [Sha512], the SHA-256 and SHA-512 of FIPS 180-4, and the [Digest] both answer.
- * SHA-256 is what the package manager pins a package by (docs/design/RELEASE.md section 7.2) and what a download is
- * checked against; SHA-512 is what Ed25519 hashes with (`std/signature`).
+ * Message digests: [Sha256] and [Sha512] (FIPS 180-4), [Sha1] (FIPS 180-4 / RFC 3174) and [Md5] (RFC 1321, legacy -
+ * see its own doc comment), and the [Digest] all four answer. SHA-256 is what the package manager pins a package by
+ * (docs/design/RELEASE.md section 7.2) and what a download is checked against; SHA-512 is what Ed25519 hashes with
+ * (`std/signature`).
  *
- * Ordinary TorbScript with no native. SHA-256 works over `Int`, every word kept below 2^32 by a mask, so nothing
- * overflows; SHA-512 over `UInt64` and its wrapping sum. The same bytes give the same digest in both back ends.
+ * [Hmac] (RFC 2104) is written once, over the [Hasher] trait every one of the four implements, and [Hmac.pbkdf2] is
+ * PBKDF2 (RFC 8018) over it: SCRAM's password hash, and everything else that stretches a password or a key.
+ *
+ * Ordinary TorbScript with no native. SHA-256, SHA-1 and MD5 work over `Int`, every word kept below 2^32 by a mask, so
+ * nothing overflows; SHA-512 over `UInt64` and its wrapping sum. The same bytes give the same digest in both back
+ * ends.
  *
  * # Examples
  *
@@ -22,6 +27,9 @@ use ByteWriter from "std/binary"
 use Bytes from "std/stream"
 
 public use Sha512 from "./sha512"
+public use Sha1 from "./sha1"
+public use Md5 from "./md5"
+public use Hmac, HmacSha256, HmacSha1, HmacMd5 from "./hmac"
 
 /** What a hash function answers: its bytes, most significant first, shown as lowercase hexadecimal. */
 public type Digest with Show {
@@ -44,10 +52,34 @@ public type Digest with Show {
 }
 
 /**
+ * A hash function fed in pieces, the shape [Sha256], [Sha512], [Sha1] and [Md5] share: a fresh value starts empty,
+ * [Hasher.add] feeds the next bytes, and [Hasher.finished] answers the [Digest] of everything fed so far without
+ * changing the hasher itself; [Hasher.of] is the one-call shortcut. [Hasher.blockSize] and [Hasher.digestLength] are
+ * what [Hmac] needs to pad a key and to size a PBKDF2 block, and never anything a caller reads for its own sake.
+ *
+ * A hash function's own equality-hashing (`with Hash`, `std/core`) is a different trait entirely - this one is named
+ * after the cryptographic sense of the word, the one HMAC and PBKDF2 are generic over.
+ */
+public trait Hasher {
+  /** A hasher with nothing fed yet, equivalent to `Self()`: what a generic caller starts from without naming the type. */
+  static fn empty(): Self
+  /** The digest of `bytes` in one call. */
+  static fn of(bytes: Bytes): Digest
+  /** Feeds the next bytes. */
+  var fn add(bytes: Bytes)
+  /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
+  fn finished(): Digest
+  /** The block size HMAC pads a key to and splits a key longer than it by hashing: 64 for every hash here but SHA-512. */
+  static fn blockSize(): Int
+  /** How many bytes a digest of this hash is. */
+  static fn digestLength(): Int
+}
+
+/**
  * SHA-256, fed in pieces: [Sha256.add] takes the next bytes and [Sha256.finished] answers the digest of everything added
  * so far without changing the hasher, so a hasher can be read, fed more, and read again.
  */
-public type Sha256 {
+public type Sha256 with Hasher {
   /** The eight words of the state, each below 2^32. */
   private var state: Array<Int, 8> = initialState
   /** The bytes of a block that is not full yet: fewer than 64. */
@@ -55,11 +87,23 @@ public type Sha256 {
   /** Every byte added so far. */
   private var length: Int = 0
 
+  static fn empty(): Self {
+    Self()
+  }
+
   /** The digest of `bytes` in one call. */
   static fn of(bytes: Bytes): Digest {
     var hasher = Self()
     hasher.add bytes
     hasher.finished()
+  }
+
+  static fn blockSize(): Int {
+    64
+  }
+
+  static fn digestLength(): Int {
+    32
   }
 
   /** Feeds the next bytes. */

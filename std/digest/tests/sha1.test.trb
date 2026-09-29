@@ -1,0 +1,57 @@
+/**
+ * SHA-1 against the examples of FIPS 180-4 and RFC 3174, fed at once and in pieces that cross the 64-byte blocks at
+ * every boundary that matters.
+ */
+
+use test, group from "std/test"
+use Sha1 from "../src/lib"
+
+fn hexOf(text: String): String {
+  Sha1.of(text.bytes()).hex()
+}
+
+group "SHA-1" {
+  test "the examples of FIPS 180-4 and RFC 3174" {
+    assert(hexOf("") == "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+    assert(hexOf("abc") == "a9993e364706816aba3e25717850c26c9cd0d89d")
+    const long = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+    assert(hexOf(long) == "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
+  }
+
+  test "the lengths on either side of a second block of padding" {
+    assert(hexOf("a".repeat(55)) == "c1c8bbdc22796e28c0e15163d20899b65621d65a")
+    assert(hexOf("a".repeat(56)) == "c2db330f6083854c99d4b5bfb6e8f29f201be699")
+  }
+
+  test "a thousand bytes" {
+    assert(hexOf("a".repeat(1000)) == "291e9a6c66994949b57ba5e650361e98fc36b1ba")
+  }
+
+  test "fed in pieces, it answers what it answers at once" {
+    const bytes = "The quick brown fox jumps over the lazy dog, again and again and again.".repeat(5).bytes()
+    const whole = Sha1.of(bytes).hex()
+    for size in [1, 3, 55, 56, 63, 64, 65, 128] {
+      var hasher = Sha1()
+      var at = 0
+      while at < bytes.length() {
+        const end = if at + size < bytes.length() { at + size } else { bytes.length() }
+        hasher.add bytes[at..end]
+        at = end
+      }
+      assert(hasher.finished().hex() == whole)
+    }
+  }
+
+  test "finishing does not change the hasher" {
+    var hasher = Sha1()
+    hasher.add "ab".bytes()
+    const early = hasher.finished()
+    hasher.add "c".bytes()
+    assert(early.hex() == hexOf("ab"))
+    assert(hasher.finished() == Sha1.of("abc".bytes()))
+  }
+
+  test "a digest is 20 bytes" {
+    assert(Sha1.of([]).bytes.length() == 20)
+  }
+}

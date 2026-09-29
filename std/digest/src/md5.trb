@@ -1,0 +1,163 @@
+/**
+ * [Md5], the MD5 of RFC 1321. **Legacy: never for security.** Collisions are cheap to produce (2004) and a chosen-
+ * prefix collision is practical (2008) - nothing here signs with it, and nothing new should either. It survives only
+ * where a protocol demands its exact bytes: Postgres's `md5` authentication, S3's `Content-MD5` header.
+ *
+ * Ordinary TorbScript with no native, the same shape as [Sha256] but little endian throughout: the words a block reads
+ * and the length the padding ends with are least significant byte first, and so is the digest.
+ */
+
+use ByteWriter from "std/binary"
+use Bytes from "std/stream"
+use Digest, Hasher from "./lib"
+
+/**
+ * MD5, fed in pieces: [Md5.add] takes the next bytes and [Md5.finished] answers the digest of everything added so far
+ * without changing the hasher, so a hasher can be read, fed more, and read again.
+ *
+ * # Examples
+ *
+ *     print Md5.of("abc".bytes()).hex()
+ *     // prints 900150983cd24fb0d6963f7d28e17f72
+ */
+public type Md5 with Hasher {
+  /** The four words of the state, each below 2^32. */
+  private var state: Array<Int, 4> = initialState
+  /** The bytes of a block that is not full yet: fewer than 64. */
+  private var pending: List<UInt8> = []
+  /** Every byte added so far. */
+  private var length: Int = 0
+
+  static fn empty(): Self {
+    Self()
+  }
+
+  /** The digest of `bytes` in one call. */
+  static fn of(bytes: Bytes): Digest {
+    var hasher = Self()
+    hasher.add bytes
+    hasher.finished()
+  }
+
+  static fn blockSize(): Int {
+    64
+  }
+
+  static fn digestLength(): Int {
+    16
+  }
+
+  /** Feeds the next bytes. */
+  var fn add(bytes: Bytes) {
+    length = length + bytes.length()
+    var at = 0
+    if !pending.isEmpty() {
+      while at < bytes.length() && pending.length() < 64 {
+        pending.append bytes[at]
+        at = at + 1
+      }
+      if pending.length() < 64 {
+        return
+      }
+      const block = pending
+      compress block, 0
+      pending = []
+    }
+    while at + 64 <= bytes.length() {
+      compress bytes, at
+      at = at + 64
+    }
+    while at < bytes.length() {
+      pending.append bytes[at]
+      at = at + 1
+    }
+  }
+
+  /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
+  fn finished(): Digest {
+    var last = self
+    var padding = ByteWriter()
+    padding.uint8 0x80
+    // The length in bits goes into the last eight bytes of a block, so the padding ends 56 bytes into one
+    while (pending.length() + padding.length()) % 64 != 56 {
+      padding.uint8 0
+    }
+    // MD5's length, unlike SHA's, is little endian
+    padding.uint64(UInt64.tryFrom(length * 8).ok() ?? 0, order: Some(.LittleEndian))
+    last.add padding.bytes()
+    var digest = ByteWriter()
+    for word in last.state {
+      digest.uint32(UInt32.tryFrom(word).ok() ?? 0, order: Some(.LittleEndian))
+    }
+    Digest digest.bytes()
+  }
+
+  /** One 64-byte block of `bytes`, starting at `offset`, folded into the state. */
+  private var fn compress(bytes: Bytes, offset: Int) {
+    var schedule: Array<Int, 16> = Array.filled 0
+    // The sixteen words are read straight from the list, little endian, whose 64 bytes `add` checked once
+    // (docs/design/BINARY.md section 7 says why: a `ByteReader` read per word is a sixth slower)
+    for index in 0..16 {
+      const at = offset + index * 4
+      const low = Int.from(bytes[at]) | (Int.from(bytes[at + 1]) << 8)
+      schedule[index] = low | (Int.from(bytes[at + 2]) << 16) | (Int.from(bytes[at + 3]) << 24)
+    }
+    var [a, b, c, d] = state
+    for index in 0..64 {
+      const group = index / 16
+      const mixed = match group {
+        0 => (b & c) | ((~b & wordMask) & d)
+        1 => (d & b) | ((~d & wordMask) & c)
+        2 => b ^ c ^ d
+        _ => c ^ (b | (~d & wordMask))
+      }
+      const source = match group {
+        0 => index
+        1 => (5 * index + 1) % 16
+        2 => (3 * index + 5) % 16
+        _ => (7 * index) % 16
+      }
+      const sum = (a + mixed + roundConstants[index] + schedule[source]) & wordMask
+      const rotated = rotatedLeft sum, shiftAmounts[index]
+      const nextB = (b + rotated) & wordMask
+      a = d
+      d = c
+      c = b
+      b = nextB
+    }
+    state[0] = (state[0] + a) & wordMask
+    state[1] = (state[1] + b) & wordMask
+    state[2] = (state[2] + c) & wordMask
+    state[3] = (state[3] + d) & wordMask
+  }
+}
+
+/** A 32-bit word rotated left by `count` bits. */
+fn rotatedLeft(word: Int, count: Int): Int {
+  ((word << count) | (word >> (32 - count))) & wordMask
+}
+
+const wordMask = 0xFFFFFFFF
+
+/** The state MD5 starts from (RFC 1321 section 3.3). */
+const initialState: Array<Int, 4> = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476]
+
+/** The per-round left-rotate amount of RFC 1321 section 3.4, four groups of sixteen rounds. */
+const shiftAmounts: Array<Int, 64> = [
+  7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+  5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+  4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+  6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
+]
+
+/** The integer part of `4294967296 * abs(sin(i + 1))`, one per round (RFC 1321 section 3.4). */
+const roundConstants: Array<Int, 64> = [
+  0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+  0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+  0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+  0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+  0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+  0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+  0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+  0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+]

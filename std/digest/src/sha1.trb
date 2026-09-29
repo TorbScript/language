@@ -1,0 +1,147 @@
+/**
+ * [Sha1], the SHA-1 of FIPS 180-4 (RFC 3174): `mysql_native_password`, MongoDB's SCRAM-SHA-1 and the WebSocket
+ * handshake's accept key still ask for it, but nothing new should choose it over [Sha256] - collisions are practical
+ * (SHAttered, 2017), which is why nothing here signs with it.
+ *
+ * Ordinary TorbScript with no native, the same shape as [Sha256]: fed at once or in pieces, every word kept below
+ * 2^32 by a mask, the same bytes in both back ends.
+ */
+
+use ByteWriter from "std/binary"
+use Bytes from "std/stream"
+use Digest, Hasher from "./lib"
+
+/**
+ * SHA-1, fed in pieces: [Sha1.add] takes the next bytes and [Sha1.finished] answers the digest of everything added so
+ * far without changing the hasher, so a hasher can be read, fed more, and read again.
+ *
+ * # Examples
+ *
+ *     print Sha1.of("abc".bytes()).hex()
+ *     // prints a9993e364706816aba3e25717850c26c9cd0d89
+ */
+public type Sha1 with Hasher {
+  /** The five words of the state, each below 2^32. */
+  private var state: Array<Int, 5> = initialState
+  /** The bytes of a block that is not full yet: fewer than 64. */
+  private var pending: List<UInt8> = []
+  /** Every byte added so far. */
+  private var length: Int = 0
+
+  static fn empty(): Self {
+    Self()
+  }
+
+  /** The digest of `bytes` in one call. */
+  static fn of(bytes: Bytes): Digest {
+    var hasher = Self()
+    hasher.add bytes
+    hasher.finished()
+  }
+
+  static fn blockSize(): Int {
+    64
+  }
+
+  static fn digestLength(): Int {
+    20
+  }
+
+  /** Feeds the next bytes. */
+  var fn add(bytes: Bytes) {
+    length = length + bytes.length()
+    var at = 0
+    if !pending.isEmpty() {
+      while at < bytes.length() && pending.length() < 64 {
+        pending.append bytes[at]
+        at = at + 1
+      }
+      if pending.length() < 64 {
+        return
+      }
+      const block = pending
+      compress block, 0
+      pending = []
+    }
+    while at + 64 <= bytes.length() {
+      compress bytes, at
+      at = at + 64
+    }
+    while at < bytes.length() {
+      pending.append bytes[at]
+      at = at + 1
+    }
+  }
+
+  /** The digest of everything added so far. The hasher itself is unchanged and may be fed more. */
+  fn finished(): Digest {
+    var last = self
+    var padding = ByteWriter()
+    padding.uint8 0x80
+    // The length in bits goes into the last eight bytes of a block, so the padding ends 56 bytes into one
+    while (pending.length() + padding.length()) % 64 != 56 {
+      padding.uint8 0
+    }
+    padding.uint64(UInt64.tryFrom(length * 8).ok() ?? 0)
+    last.add padding.bytes()
+    // Every word is below 2^32, so every one is a `UInt32`, written big endian
+    var digest = ByteWriter()
+    for word in last.state {
+      digest.uint32(UInt32.tryFrom(word).ok() ?? 0)
+    }
+    Digest digest.bytes()
+  }
+
+  /** One 64-byte block of `bytes`, starting at `offset`, folded into the state. */
+  private var fn compress(bytes: Bytes, offset: Int) {
+    var schedule: Array<Int, 80> = Array.filled 0
+    // The sixteen words are read straight from the list, whose 64 bytes `add` checked once (docs/design/BINARY.md
+    // section 7 says why: a `ByteReader` read per word is a sixth slower)
+    for index in 0..16 {
+      const at = offset + index * 4
+      const high = (Int.from(bytes[at]) << 24) | (Int.from(bytes[at + 1]) << 16)
+      schedule[index] = high | (Int.from(bytes[at + 2]) << 8) | Int.from(bytes[at + 3])
+    }
+    for index in 16..80 {
+      const value = schedule[index - 3] ^ schedule[index - 8] ^ schedule[index - 14] ^ schedule[index - 16]
+      schedule[index] = rotatedLeft value, 1
+    }
+    var [a, b, c, d, e] = state
+    for index in 0..80 {
+      const group = index / 20
+      const mixed = match group {
+        0 => (b & c) | ((~b & wordMask) & d)
+        1 => b ^ c ^ d
+        2 => (b & c) | (b & d) | (c & d)
+        _ => b ^ c ^ d
+      }
+      const constant = match group {
+        0 => 0x5A827999
+        1 => 0x6ED9EBA1
+        2 => 0x8F1BBCDC
+        _ => 0xCA62C1D6
+      }
+      const temp = (rotatedLeft(a, 5) + mixed + e + constant + schedule[index]) & wordMask
+      e = d
+      d = c
+      c = rotatedLeft b, 30
+      b = a
+      a = temp
+    }
+    state[0] = (state[0] + a) & wordMask
+    state[1] = (state[1] + b) & wordMask
+    state[2] = (state[2] + c) & wordMask
+    state[3] = (state[3] + d) & wordMask
+    state[4] = (state[4] + e) & wordMask
+  }
+}
+
+/** A 32-bit word rotated left by `count` bits. */
+fn rotatedLeft(word: Int, count: Int): Int {
+  ((word << count) | (word >> (32 - count))) & wordMask
+}
+
+const wordMask = 0xFFFFFFFF
+
+/** `h0` through `h4` of FIPS 180-4 section 5.3.1: where a SHA-1 starts. */
+const initialState: Array<Int, 5> = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0]
