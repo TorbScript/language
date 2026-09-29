@@ -219,7 +219,9 @@ public shared type TcpStream with Close {
 
   /**
    * At most `maximum` bytes, as soon as any arrived: `Some(bytes)`, or `None` once the peer ended its half. One receive at
-   * a time; bytes that arrive while nobody receives wait in the operating system.
+   * a time; bytes that arrive while nobody receives wait in the operating system. `Some` always holds at least one
+   * byte: a receive whose stream was closed under it fails with [NetworkError.closed] rather than answer an empty
+   * chunk, which would be neither bytes nor the end of the stream.
    */
   fn receive(maximum: Int = 65536): Task<Result<Bytes?, NetworkError>> {
     match receiveBuffer(maximum).await()? {
@@ -239,6 +241,10 @@ public shared type TcpStream with Close {
     }
     var bytes: ArrayList<UInt8> = ArrayList.withCapacity count
     networkTakeReceived handle, bytes
+    // The bytes wait in the socket until they are taken, so a socket closed between the two took them along
+    if bytes.length() == 0 {
+      return Fail NetworkError.closed()
+    }
     Ok Some(bytes)
   }
 
