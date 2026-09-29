@@ -27,7 +27,7 @@ use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn, savedFrame, restoreFrame, enterBody from "./closure"
 use staticOfConstant from "../constant"
 use taskValueOf as declaredTaskValueOf from "../../semantics/checker/statement"
-use openScope, closeScope, startVisible, keepBodyAlive, markStatement from "./scope"
+use openScope, closeScope, openParameterScope, endEveryScope, startVisible, keepBodyAlive, markStatement from "./scope"
 use writeEntryCell from "./cell"
 
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
@@ -91,6 +91,7 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
     return
   }
   declareParameterSlots lowering, symbol, declaration
+  openParameterScope lowering, builder
   lowerBody lowering, builder, body, signature.result
   if !lowering.supported {
     lowering.stubbed = lowering.stubbed + 1
@@ -144,6 +145,7 @@ fn lowerTaskInstance(
   setFunctionKind resume, FunctionKind.TaskResume
   setBlockLocation resume, BlockId(0), location
   declareParameterSlots lowering, symbol, declaration
+  openParameterScope lowering, resume
   lowering.suspendable = true
   lowerBody lowering, resume, body, value
   numberSuspensions resume
@@ -199,6 +201,8 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
   if isVoidType(lowering, result) {
     lowerBlockInto lowering, builder, body, destination: None
     if !lowering.diverged {
+      // The scope around the body - its parameters - ends with it
+      endEveryScope lowering, builder
       keepBodyAlive lowering, builder
       finishBlock lowering, builder, Terminator.Return(None)
     }
@@ -231,6 +235,7 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
   }
   match found {
     Some(target) => {
+      endEveryScope lowering, builder
       keepBodyAlive lowering, builder
       finishBlock lowering, builder, Terminator.Return(borrowed(target))
     }

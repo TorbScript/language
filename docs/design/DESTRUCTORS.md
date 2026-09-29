@@ -219,6 +219,11 @@ on an earlier value is taken down before it — Rust's order for locals, for the
 - **Every other slot keeps last-use release.** A `List<Int>`, a `String`, a `Point` and every value with no `Close`
   inside are released where the liveness pass puts them now, so the optimisation stays for everything a destructor
   cannot observe — which is almost every slot of almost every program, and every slot of the compiler.
+- **A parameter is a binding of the body's outermost scope.** One the caller keeps is borrowed and the body releases
+  nothing; one the frame owns — every parameter of a task, and one the body stores on some path — is released where
+  the body ends, at its end, a `return`, a `?` or the `stop` of the task. Until 2026-09-29 an owned parameter kept
+  last-use release, and `TcpStream.receiveBuffer` closed the socket of a caller that had let go of it between the
+  receive and the taking of its bytes (`tests/conformance/destructor-task-parameter.trb`).
 - **A move leaves nothing behind.** A slot whose value was moved out — returned, stored into a field or a collection,
   handed to a callee that keeps it — is cleared by the move, and the release at the end of the scope finds nothing to
   release. The slot is its own drop flag; there is no second one.

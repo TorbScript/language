@@ -1,0 +1,48 @@
+/**
+ * A parameter the frame owns is released where the body ends, not at its last use: every parameter of a task is one,
+ * because the task outlives the call that made it. The caller lets go of the object when it starts the task, so the
+ * task's frame holds the last reference, and `close()` runs once the task's body is done - after the line that reads
+ * the object for the last time and after everything behind it.
+ *
+ * Before 2026-09-29 the frame released `self` of `TcpStream.receiveBuffer` right after it read `handle`, which closed
+ * the socket between the receive and the taking of its bytes: the receive answered `Some([])`, and a TLS handshake that
+ * the top level started failed, because the listener it was given closed during its `accept`.
+ */
+
+use sleep from "std/time"
+
+shared type Probe with Close {
+  name: String
+
+  /** The task holds `self`: the last line of the body runs before the object closes. */
+  fn knock(): Task<String> {
+    const known = name
+    sleep(0.01).await()
+    print "knocked on {known}"
+    "{known} answered"
+  }
+
+  var fn close() {
+    print "close {name}"
+  }
+}
+
+/** A parameter of a task, which its frame owns: read on the first line, and still open on the last one. */
+fn visit(probe: Probe): Task<Void> {
+  print "visiting {probe.name}"
+  sleep(0.01).await()
+  print "leaving"
+}
+
+/** A parameter handed on to another task: the frame moved it, so nothing is left for the end of this body. */
+fn forward(probe: Probe): Task<String> {
+  const answer = probe.knock().await()
+  print "forwarded"
+  answer
+}
+
+visit(Probe("door")).await()
+print "---"
+print Probe("window").knock().await()
+print "---"
+print forward(Probe("gate")).await()

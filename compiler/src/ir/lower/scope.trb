@@ -54,6 +54,28 @@ public fn closeScope(var lowering: Lowering, var builder: FunctionBuilder) {
   closeVisible lowering, builder, closing
 }
 
+/**
+ * The parameters of a body, as the bindings of one scope around it: a parameter the function receives by value and
+ * whose value may hold a `Close` object ends where the body does - at its end, a `return`, a `?` or the `stop` of a
+ * task - and not at its last use (docs/design/DESTRUCTORS.md 2a). Where the caller keeps the value, the parameter is
+ * borrowed and its end is nothing; where the frame owns it - every parameter of a task - the end is the release.
+ * Without it `self` of `TcpStream.receiveBuffer` was released right after the frame read `handle`, which closed the
+ * socket of a caller that had let go of it before the bytes the receive answered were taken.
+ */
+public fn openParameterScope(var lowering: Lowering, var builder: FunctionBuilder) {
+  var slots: List<Slot> = []
+  const parameters = builder.function.signature.parameters
+  for index in 0..builder.function.slots.length() {
+    if const .Parameter(position) = builder.function.slots[index].role {
+      const isValue = !(parameters.get(position)?.byReference ?? true)
+      if isValue && mayHoldClose(lowering, builder.typeOfSlot(Slot(index))) {
+        slots.append Slot(index)
+      }
+    }
+  }
+  lowering.scopes.append slots
+}
+
 /** A binding of the innermost block, if its value may hold a `Close` object; in a debugged program, a binding it shows. */
 public fn declareScoped(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot) {
   declareVisible lowering, builder, slot

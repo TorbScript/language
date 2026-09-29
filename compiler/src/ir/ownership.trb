@@ -1286,6 +1286,17 @@ fn scopeStatesOf(function: IrFunction, moves: List<List<List<Slot>>>): List<List
     const initial = if index == 0 { stateUndefined } else { stateUnreached }
     entering.append filledStates(slotCount, initial)
   }
+  // A parameter arrives with its value: owned where the frame counts it (`ir/lower/scope.trb`, `openParameterScope`),
+  // and a borrowed one has no end left by the time this is asked
+  if blockCount > 0 {
+    var entry = entering[0]
+    for index in 0..slotCount {
+      if const .Parameter(_) = function.slots[index].role {
+        entry.set index, stateOwned
+      }
+    }
+    entering.set 0, entry
+  }
   var isQueued = filledFlags blockCount, value: false
   var queue: List<Int> = []
   if blockCount > 0 {

@@ -1,0 +1,76 @@
+use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError from "std/network"
+use TlsStream, TlsSettings, ServerIdentity from "std/tls"
+
+/**
+ * The first TLS handshake of a process, with the server's task held by a top-level `const`: the server proves itself with
+ * the test root's certificate for `localhost`, and the client reads what it wrote. The top level hands the listener and
+ * the identity to the task and lets go of them, so the task's frame holds the last reference to the listener - and
+ * until 2026-09-29 the frame released it right after starting `accept`, which closed the listener under the waiting
+ * accept: the server failed with "TLS failed" and the client with an aborted connection. The same lines inside a
+ * function worked, because there the caller's binding kept the listener open.
+ */
+
+/** The test root: nothing but these programs trusts it. */
+const testRoot = """
+  -----BEGIN CERTIFICATE-----
+  MIIBpjCCAUugAwIBAgIUX0ocJiSTMF4EyI948Ywl9dBFuIgwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA2
+  WhgPMjEyNjA4MzExODAwMDZaMB8xHTAbBgNVBAMMFFRvcmJTY3JpcHQgVGVzdCBS
+  b290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnoU8ZlkjCCHuMztPRGCb7EKo
+  y7KLXmMddFh+kw1uKQKo18Dtx4zsURLEMCqklHgEARKvsbTVjXtzvfqkxXUWzKNj
+  MGEwHQYDVR0OBBYEFBz/+wIsZils42wBpvVRftEGr2wwMB8GA1UdIwQYMBaAFBz/
+  +wIsZils42wBpvVRftEGr2wwMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQD
+  AgEGMAoGCCqGSM49BAMCA0kAMEYCIQCYnzkVoRbZZ3bCLbuSRf+yC46iVY+2ACKV
+  ttODjyX9TgIhAPq6TrV57XFD683pgB37633cYgqQOLTlf0+5FJ3Dgu1W
+  -----END CERTIFICATE-----
+  """
+
+/** A certificate for `localhost` and `127.0.0.1`, signed by the test root. */
+const serverCertificate = """
+  -----BEGIN CERTIFICATE-----
+  MIIByDCCAW2gAwIBAgIUWW3sNf3SaLIOaLhiA3l8ZCE7EugwCgYIKoZIzj0EAwIw
+  HzEdMBsGA1UEAwwUVG9yYlNjcmlwdCBUZXN0IFJvb3QwIBcNMjYwOTI0MTgwMDA3
+  WhgPMjEyNjA4MzExODAwMDdaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDBZMBMGByqG
+  SM49AgEGCCqGSM49AwEHA0IABEXvBfnFsZ5jZuUd75E2cE7UrRYne0C63+Fxn5Dr
+  LvdEOFnewKfyQ1fSkK3wTe8HZswifmx1YYrX2LX/uB7QD8ijgY8wgYwwCQYDVR0T
+  BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0R
+  BBMwEYIJbG9jYWxob3N0hwR/AAABMB0GA1UdDgQWBBR5X0QnapZcnsquwu+THlWj
+  wWAAMzAfBgNVHSMEGDAWgBQc//sCLGYpbONsAab1UX7RBq9sMDAKBggqhkjOPQQD
+  AgNJADBGAiEAuFtnGP9Pd3gKzfzkSNvnYnCy0fJzaXiBlIiLmbs+P7MCIQClGtvD
+  ds8yyzK7J9iXnKnTwH4dd92UaqZcruOde6Ozgg==
+  -----END CERTIFICATE-----
+  """
+
+/** The private key of `serverCertificate`. */
+const serverKey = """
+  -----BEGIN PRIVATE KEY-----
+  MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5JAlAbPbwYok2Sif
+  prLNFLAwadIBxYtUO1YQRe2Awp6hRANCAARF7wX5xbGeY2blHe+RNnBO1K0WJ3tA
+  ut/hcZ+Q6y73RDhZ3sCn8kNX0pCt8E3vB2bMIn5sdWGK19i1/7ge0A/I
+  -----END PRIVATE KEY-----
+  """
+
+/** Accepts one connection, proves the identity over it, and writes five bytes. */
+fn serve(listener: TcpListener, identity: ServerIdentity): Task<Result<String, NetworkError>> {
+  const tcp = listener.accept().await()?
+  var session = TlsStream.accept(tcp, identity).await()?
+  session.send("hello".bytes()).await()?
+  session.shutdown().await()?
+  "served"
+}
+
+/** Connects, trusting the test root, and reads what the server wrote. */
+fn visit(address: SocketAddress): Task<Result<String, NetworkError>> {
+  const tcp = TcpStream.connect(address).await()?
+  var session = TlsStream.connect(tcp, "localhost", TlsSettings(trusted: [testRoot])).await()?
+  const got = session.receive().await()?
+  "read {got.map({ _.length() }) ?? 0} bytes"
+}
+
+const identity = ServerIdentity.of(serverCertificate, serverKey).ok() ?? panic("no identity")
+const listener = TcpListener.listen(SocketAddress(IpAddress.loopback, 0)).ok() ?? panic("no listener")
+const address = listener.localAddress()
+
+const server = serve listener, identity
+const outcome = visit(address).await()
+print "at the top level: client {outcome}, server {server.await()}"

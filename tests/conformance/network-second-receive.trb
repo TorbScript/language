@@ -1,0 +1,39 @@
+use TcpListener, TcpStream, SocketAddress, IpAddress, NetworkError from "std/network"
+
+/**
+ * A receive never answers an empty chunk: `Some` holds at least one byte, and the end of the stream is `None`. The
+ * server's second receive is the last thing it does with its stream, so the task of that receive holds the last
+ * reference to it - and until 2026-09-29 the task released it right after reading its handle, which closed the socket
+ * before the five bytes that arrived were taken: the receive answered `Some([])`. The client asks for one byte and for
+ * all of them, which the answer does not depend on.
+ */
+
+fn serve(listener: TcpListener): Task<Result<String, NetworkError>> {
+  const tcp = listener.accept().await()?
+  const first = tcp.receive().await()?
+  tcp.send([83]).await()?
+  const second = tcp.receive().await()?
+  "first {first.map({ _.length() }) ?? -1}, second {second.map({ _.length() }) ?? -1}"
+}
+
+fn visit(address: SocketAddress, maximum: Int): Task<Result<String, NetworkError>> {
+  const tcp = TcpStream.connect(address).await()?
+  tcp.send([1, 2, 3, 4, 5, 6, 7, 8]).await()?
+  const answer = tcp.receive(maximum).await()?
+  tcp.send([9, 9, 9, 9, 9]).await()?
+  // The server closes its end once it has read: the end of the stream, and never an empty chunk before it
+  const end = tcp.receive().await()?
+  "answer {answer.map({ _.length() }) ?? -1}, then {end.map({ _.length() }) ?? -1}"
+}
+
+match TcpListener.listen(SocketAddress(IpAddress.loopback, 0)) {
+  Ok(listener) => {
+    const address = listener.localAddress()
+    for maximum in [65536, 1] {
+      const server = serve listener
+      const client = visit address, maximum
+      print "asking for {maximum}: server {server.await()}, client {client.await()}"
+    }
+  }
+  Fail(problem) => print "could not listen: {problem}"
+}

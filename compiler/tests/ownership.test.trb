@@ -736,6 +736,15 @@ const probeSource = raw"""
   fn conditional(isMaking: Bool) {
     print(if isMaking { Probe("arm").name } else { "none" })
   }
+
+  fn keptOnOnePath(probe: Probe, isKeeping: Bool): Probe? {
+    probe.touch()
+    if isKeeping {
+      return Some(probe)
+    }
+    print "dropped"
+    None
+  }
   """
 
 /** A `File` as `std/fs` declares it, as far as the test below needs it: a `native shared type` that implements `Close`. */
@@ -961,6 +970,40 @@ group "The ends of scope: a binding with a destructor is released where its bloc
           %2 = intrinsic textByteLength %0 at acme/app/src/main.trb:44:3
           release %0
           return %2 borrowed
+        }""",
+    )
+  }
+
+  /**
+   * A parameter the function owns - here because one path keeps it - ends where the body does, like a binding of its
+   * outermost block: the path that drops it releases it after the `print`, not right after its last use. Every
+   * parameter of a task is owned, which is what made a `TcpStream` close in the middle of its own receive.
+   */
+  test "an owned parameter is released where the body ends, not at its last use" {
+    assert(
+      ownedIrOf(probeSource, "t_acme_x2f_app_main_keptOnOnePath") == raw"""
+        fn t_acme_x2f_app_main_keptOnOnePath(probe: Shared(T_acme_x2f_app_main_Probe) owned, isKeeping: Bool borrowed) -> Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe) {
+          slot %0 parameter probe: Shared(T_acme_x2f_app_main_Probe)
+          slot %1 parameter isKeeping: Bool
+          slot %2 temporary: Void
+          slot %3 temporary: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe)
+          slot %4 temporary: String
+          slot %5 temporary: String
+          slot %6 temporary: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe)
+        b0: # acme/app/src/main.trb:51 body
+          call t_acme_x2f_app_main_Probe_touch(%0 borrowed) at acme/app/src/main.trb:52:3
+          branch %1 then b1 else b2
+        b1: # acme/app/src/main.trb:53 then
+          %3 = construct T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe.Some (%0 owned last)
+          return %3 owned last
+        b2: # acme/app/src/main.trb:53 join
+          %4 = constant s_literal__String_dropped
+          %5 = call t_std_x2f_prelude_types_Show_show__String(%4 owned) at acme/app/src/main.trb:56:9
+          intrinsic printParts %5 at acme/app/src/main.trb:56:3
+          release %5
+          %6 = construct T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_Probe.None ()
+          release %0
+          return %6 owned last
         }""",
     )
   }

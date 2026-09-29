@@ -307,6 +307,7 @@ checks of the C do not. There is no list of what the VM runs: it runs everything
 | Program | What it pins |
 |---------|--------------|
 | `destructor-scope-end.trb` | Two bindings close at the end of the block in reverse declaration order, not at their last use; a nested block ends its own; a returned object is closed by its new holder |
+| `destructor-task-parameter.trb` | A parameter a task owns closes where the task's body ends, not at its last use: the object a caller handed over and let go of is still open on the last line of the task |
 | `destructor-early-exits.trb` | `return`, a failing `?`, `break` and `continue` close what they leave, innermost block first |
 | `destructor-fields-and-lists.trb` | An object closes itself and then its fields, the last declared first; a list closes its elements from the last to the first; a plain value releases a closeable field |
 | `destructor-using.trb` | `using` closes at the end of its block, and an unused binding lives to the end of its block too |
