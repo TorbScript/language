@@ -1,0 +1,39 @@
+/** Hexadecimal against RFC 4648 section 10's test vectors, upper and lower case, and decoding's error cases. */
+
+use test, group from "std/test"
+use hexEncoded, hexDecoded from "../src/hexadecimal"
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes()
+}
+
+group "Hexadecimal (RFC 4648 section 10)" {
+  test "lower case by default" {
+    assert(hexEncoded(bytesOf("")) == "")
+    assert(hexEncoded(bytesOf("f")) == "66")
+    assert(hexEncoded(bytesOf("fo")) == "666f")
+    assert(hexEncoded(bytesOf("foo")) == "666f6f")
+    assert(hexEncoded(bytesOf("foob")) == "666f6f62")
+    assert(hexEncoded(bytesOf("fooba")) == "666f6f6261")
+    assert(hexEncoded(bytesOf("foobar")) == "666f6f626172")
+  }
+
+  test "upper case on request" {
+    assert(hexEncoded(bytesOf("foobar"), uppercase: true) == "666F6F626172")
+  }
+
+  test "decodes either case, mixed or not" {
+    assert(hexDecoded("666f6f626172") == Ok(bytesOf("foobar")))
+    assert(hexDecoded("666F6F626172") == Ok(bytesOf("foobar")))
+    assert(hexDecoded("666F6f626172") == Ok(bytesOf("foobar")))
+  }
+
+  test "skips whitespace" {
+    assert(hexDecoded(" 66 6f\n6f 62 61 72") == Ok(bytesOf("foobar")))
+  }
+
+  test "refuses a character that is not a hexadecimal digit, and an odd number of digits" {
+    assert hexDecoded("66g6").isError()
+    assert hexDecoded("666").isError()
+  }
+}

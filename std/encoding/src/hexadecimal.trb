@@ -1,0 +1,75 @@
+/**
+ * Hexadecimal (RFC 4648 section 8, "base16"): two digits a byte, most significant nibble first. [hexEncoded] writes
+ * lower case unless told otherwise; [hexDecoded] reads either case, mixed or not.
+ *
+ * `Digest.hex()` (`std/digest`) is this in one direction only, fixed to lower case, for a hash's own printing; this is
+ * the general form, for everything else that is bytes in hexadecimal - a MAC address, a fingerprint, a byte string a
+ * protocol writes as text.
+ */
+
+use Bytes from "std/stream"
+use EncodingError from "./base64"
+
+/** `bytes` as hexadecimal, two digits each, most significant nibble first: lower case unless `uppercase` is true. */
+public fn hexEncoded(bytes: Bytes, uppercase: Bool = false): String {
+  const digits = if uppercase { "0123456789ABCDEF".chars().toList() } else { "0123456789abcdef".chars().toList() }
+  var characters: List<Char> = []
+  for byte in bytes {
+    const value = Int.from byte
+    characters.append digits[value >> 4]
+    characters.append digits[value & 15]
+  }
+  String.from characters
+}
+
+/**
+ * The bytes a hexadecimal text stands for, upper and lower case digits both read, mixed or not, with whitespace inside
+ * it skipped.
+ *
+ * # Errors
+ *
+ * - [EncodingError] for a character that is not a hexadecimal digit, or an odd number of them.
+ */
+public fn hexDecoded(text: String): Result<List<UInt8>, EncodingError> {
+  var bytes: List<UInt8> = []
+  var high: Int? = None
+  var offset = 0
+  for character in text.chars() {
+    offset = offset + 1
+    if character == ' ' || character == '\t' || character == '\r' || character == '\n' {
+      continue
+    }
+    const value = hexValueOf character
+    if value < 0 {
+      return Fail EncodingError("{character.showNested()} is not a hexadecimal digit", offset)
+    }
+    match high {
+      None => {
+        high = Some value
+      }
+      Some(first) => {
+        bytes.append(UInt8.tryFrom(first * 16 + value).ok() ?? 0)
+        high = None
+      }
+    }
+  }
+  if high.isSome() {
+    return Fail EncodingError("hexadecimal text has an odd number of digits", offset)
+  }
+  Ok bytes
+}
+
+/** The value of one hexadecimal digit, either case, or -1. */
+fn hexValueOf(character: Char): Int {
+  const code = Int.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 97 && code <= 102 {
+    return code - 87
+  }
+  if code >= 65 && code <= 70 {
+    return code - 55
+  }
+  0 - 1
+}

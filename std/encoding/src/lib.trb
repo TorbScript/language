@@ -30,6 +30,11 @@
  * `var` path and reads the result out of it afterwards, and the derived code is a direct call chain with no table.
  * [EncodedValue] is what a program holds where it has left the type behind, and [Structure] is a type's description as
  * a value. `docs/design/ENCODING.md` is the design.
+ *
+ * This package also has the plainer kind of encoding: bytes as text and back. [Base64Alphabet], [Base32Alphabet] and
+ * [hexEncoded]/[hexDecoded] are RFC 4648, unrelated to `Encode`/`Decode` above - a value's own `Encoder.bytes` writes
+ * raw bytes, and a format reaches for one of these only where the wire itself is text (a JWT, a `!!binary` YAML
+ * scalar, a TOTP secret).
  */
 
 use Hash, Show, Error from "std/core"
@@ -39,6 +44,10 @@ use Bytes from "std/stream"
 public use EncodedValue, EncodedField, Values, ValueDecoder, rendered from "./values"
 public use FieldDescription, FieldDefault, Structure, StructureField, StructureCase, Structures, structureOf from "./structure"
 public use Naming from "./naming"
+// Bytes as text and back: RFC 4648's Base64, Base32 and hexadecimal, unrelated to the `Encode`/`Decode` machinery above
+public use EncodingError, Base64Alphabet, base64Decoded from "./base64"
+public use Base32Alphabet from "./base32"
+public use hexEncoded, hexDecoded from "./hexadecimal"
 // The steps a derived `encode`, `decode` and `describe` are made of. The compiler finds them here by name
 public use encodeRecord, encodeVariant, encodeSequence, encodeFinish, encodeField, encodeItem from "./derived"
 public use encodeThrough, encodePrivateField from "./derived"

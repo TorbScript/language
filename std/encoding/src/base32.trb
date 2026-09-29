@@ -1,0 +1,112 @@
+/**
+ * Base32 (RFC 4648 sections 6 and 7): [Base32Alphabet.Standard] (`A`-`Z`, `2`-`7`), what NATS NKeys and a TOTP secret
+ * are written in, and [Base32Alphabet.Extended] (`0`-`9`, `A`-`V`), which sorts the same as the bytes it stands for.
+ *
+ * Unlike Base64's two alphabets, these two are not read together: `A` means 0 in one and 10 in the other, so
+ * [Base32Alphabet.decoded] takes the alphabet the text was written in.
+ */
+
+use Bytes from "std/stream"
+use EncodingError from "./base64"
+
+/** Which of RFC 4648's two Base32 alphabets a text is written in. */
+public type Base32Alphabet with Show, Equals, Hash {
+  /** RFC 4648 section 6: `A`-`Z` and `2`-`7`. */
+  case Standard
+  /** RFC 4648 section 7 ("base32hex"): `0`-`9` and `A`-`V`. */
+  case Extended
+
+  /** `bytes` written in this alphabet, padded with `=` to a multiple of eight characters unless `padded` is false. */
+  fn encoded(bytes: Bytes, padded: Bool = true): String {
+    const alphabet = match self {
+      .Standard => "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".chars().toList()
+      .Extended => "0123456789ABCDEFGHIJKLMNOPQRSTUV".chars().toList()
+    }
+    var characters: List<Char> = []
+    var buffer = 0
+    var bits = 0
+    for byte in bytes {
+      buffer = (buffer << 8) | Int.from(byte)
+      bits = bits + 8
+      while bits >= 5 {
+        bits = bits - 5
+        characters.append alphabet[(buffer >> bits) & 31]
+      }
+    }
+    if bits > 0 {
+      characters.append alphabet[(buffer << (5 - bits)) & 31]
+    }
+    if padded {
+      while characters.length() % 8 != 0 {
+        characters.append '='
+      }
+    }
+    String.from characters
+  }
+
+  /**
+   * The bytes a Base32 text in this alphabet stands for, padded or not, with whitespace inside it skipped.
+   *
+   * # Errors
+   *
+   * - [EncodingError] for a character outside this alphabet, or padding before the end.
+   */
+  fn decoded(text: String): Result<List<UInt8>, EncodingError> {
+    var bytes: List<UInt8> = []
+    var buffer = 0
+    var bits = 0
+    var padding = 0
+    var offset = 0
+    for character in text.chars() {
+      offset = offset + 1
+      if character == ' ' || character == '\t' || character == '\r' || character == '\n' {
+        continue
+      }
+      if character == '=' {
+        padding = padding + 1
+        continue
+      }
+      if padding > 0 {
+        return Fail EncodingError("Base32 has padding before its end", offset)
+      }
+      const value = match self {
+        .Standard => standardValueOf character
+        .Extended => extendedValueOf character
+      }
+      if value < 0 {
+        return Fail EncodingError("{character.showNested()} is outside this Base32 alphabet", offset)
+      }
+      buffer = (buffer << 5) | value
+      bits = bits + 5
+      if bits >= 8 {
+        bits = bits - 8
+        bytes.append(UInt8.tryFrom((buffer >> bits) & 255).ok() ?? 0)
+      }
+    }
+    Ok bytes
+  }
+}
+
+/** The value of a character of the standard alphabet (`A`-`Z`, `2`-`7`), or -1. */
+fn standardValueOf(character: Char): Int {
+  const code = Int.from character
+  if code >= 65 && code <= 90 {
+    return code - 65
+  }
+  if code >= 50 && code <= 55 {
+    return code - 24
+  }
+  0 - 1
+}
+
+/** The value of a character of the extended, "hex" alphabet (`0`-`9`, `A`-`V`), or -1. */
+fn extendedValueOf(character: Char): Int {
+  const code = Int.from character
+  if code >= 48 && code <= 57 {
+    return code - 48
+  }
+  if code >= 65 && code <= 86 {
+    return code - 55
+  }
+  0 - 1
+}

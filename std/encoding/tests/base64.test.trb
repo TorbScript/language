@@ -1,0 +1,55 @@
+/** Base64 against RFC 4648 section 10's test vectors, both alphabets, and decoding's error cases. */
+
+use test, group from "std/test"
+use Base64Alphabet, base64Decoded from "../src/base64"
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes()
+}
+
+group "Base64 (RFC 4648 section 10)" {
+  test "the standard alphabet, padded" {
+    assert(Base64Alphabet.Standard.encoded(bytesOf("")) == "")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("f")) == "Zg==")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("fo")) == "Zm8=")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("foo")) == "Zm9v")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("foob")) == "Zm9vYg==")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("fooba")) == "Zm9vYmE=")
+    assert(Base64Alphabet.Standard.encoded(bytesOf("foobar")) == "Zm9vYmFy")
+  }
+
+  test "decodes the standard alphabet back to the same bytes" {
+    for text in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+      assert(base64Decoded(Base64Alphabet.Standard.encoded(bytesOf(text))) == Ok(bytesOf(text)))
+    }
+  }
+
+  test "without padding" {
+    assert(Base64Alphabet.Standard.encoded(bytesOf("foob"), padded: false) == "Zm9vYg")
+    assert(base64Decoded("Zm9vYg") == Ok(bytesOf("foob")))
+  }
+
+  test "the URL-safe alphabet uses `-` and `_` where the standard one uses `+` and `/`" {
+    const bytes: List<UInt8> = [251, 255]
+    assert(Base64Alphabet.Standard.encoded(bytes) == "+/8=")
+    assert(Base64Alphabet.UrlSafe.encoded(bytes) == "-_8=")
+    assert(Base64Alphabet.UrlSafe.encoded(bytes, padded: false) == "-_8")
+  }
+
+  test "reads either alphabet, padded or not, in the same call" {
+    const bytes: List<UInt8> = [251, 255]
+    assert(base64Decoded("+/8=") == Ok(bytes))
+    assert(base64Decoded("-_8") == Ok(bytes))
+    assert(base64Decoded("+/8=") == base64Decoded("-_8"))
+  }
+
+  test "skips whitespace, the shape of a wrapped MIME block" {
+    assert(base64Decoded(" Zm9v\n YmFy \t") == Ok(bytesOf("foobar")))
+  }
+
+  test "refuses what no encoder writes" {
+    assert base64Decoded("a").isError()
+    assert base64Decoded("aGV*").isError()
+    assert base64Decoded("aG=Vs").isError()
+  }
+}

@@ -1,0 +1,59 @@
+/** Base32 against RFC 4648 section 10's test vectors, both the standard and the extended ("hex") alphabet. */
+
+use test, group from "std/test"
+use Base32Alphabet from "../src/base32"
+
+fn bytesOf(text: String): List<UInt8> {
+  text.bytes()
+}
+
+group "Base32 (RFC 4648 section 10)" {
+  test "the standard alphabet, padded" {
+    assert(Base32Alphabet.Standard.encoded(bytesOf("")) == "")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("f")) == "MY======")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("fo")) == "MZXQ====")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("foo")) == "MZXW6===")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("foob")) == "MZXW6YQ=")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("fooba")) == "MZXW6YTB")
+    assert(Base32Alphabet.Standard.encoded(bytesOf("foobar")) == "MZXW6YTBOI======")
+  }
+
+  test "the extended alphabet, padded" {
+    assert(Base32Alphabet.Extended.encoded(bytesOf("")) == "")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("f")) == "CO======")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("fo")) == "CPNG====")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("foo")) == "CPNMU===")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("foob")) == "CPNMUOG=")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("fooba")) == "CPNMUOJ1")
+    assert(Base32Alphabet.Extended.encoded(bytesOf("foobar")) == "CPNMUOJ1E8======")
+  }
+
+  test "decodes the standard alphabet back to the same bytes" {
+    for text in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+      const encoded = Base32Alphabet.Standard.encoded bytesOf(text)
+      assert(Base32Alphabet.Standard.decoded(encoded) == Ok(bytesOf(text)))
+    }
+  }
+
+  test "decodes the extended alphabet back to the same bytes" {
+    for text in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+      const encoded = Base32Alphabet.Extended.encoded bytesOf(text)
+      assert(Base32Alphabet.Extended.decoded(encoded) == Ok(bytesOf(text)))
+    }
+  }
+
+  test "without padding" {
+    assert(Base32Alphabet.Standard.encoded(bytesOf("foob"), padded: false) == "MZXW6YQ")
+    assert(Base32Alphabet.Standard.decoded("MZXW6YQ") == Ok(bytesOf("foob")))
+  }
+
+  test "the two alphabets are not read together: `A` means 0 in one and 10 in the other" {
+    assert(Base32Alphabet.Standard.decoded("AA======") == Ok([0]))
+    assert(Base32Alphabet.Extended.decoded("AA======") == Ok([82]))
+  }
+
+  test "refuses a character outside the alphabet, and padding before the end" {
+    assert Base32Alphabet.Standard.decoded("MZXW6YQ1").isError()
+    assert Base32Alphabet.Standard.decoded("MZ=W6YQ=").isError()
+  }
+}

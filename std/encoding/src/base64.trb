@@ -1,0 +1,138 @@
+/**
+ * Base64 (RFC 4648 sections 4 and 5): [Base64Alphabet.Standard] (`+`, `/`, everywhere nothing says otherwise) and
+ * [Base64Alphabet.UrlSafe] (`-`, `_`, which need no escaping in a URL or a file name - a JSON Web Token's segments, a
+ * JSON Web Key's modulus), each with or without the `=` padding.
+ *
+ * [base64Decoded] reads either alphabet, padded or not, in the same call: the two agree on 62 of their 64 characters,
+ * so nothing is lost by not asking which one a text was written in, and a caller with a JWT or an S3 signature never
+ * has to.
+ */
+
+use Bytes from "std/stream"
+
+/** Bytes or text that do not fit the encoding being read: what was wrong, and the character it was found at. */
+public type EncodingError with Show, Error {
+  /** What was wrong. */
+  reason: String
+  /** The character of the text this was read from, counted from its start. */
+  offset: Int
+
+  fn show(): String {
+    "{reason} (at character {offset})"
+  }
+}
+
+/** Which of RFC 4648's two Base64 alphabets a text is written in. */
+public type Base64Alphabet with Show, Equals, Hash {
+  /** RFC 4648 section 4: `A`-`Z`, `a`-`z`, `0`-`9`, `+` and `/`. */
+  case Standard
+  /** RFC 4648 section 5: `+` and `/` replaced by `-` and `_`. */
+  case UrlSafe
+
+  /** `bytes` written in this alphabet, padded with `=` to a multiple of four characters unless `padded` is false. */
+  fn encoded(bytes: Bytes, padded: Bool = true): String {
+    const alphabet = match self {
+      .Standard => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".chars().toList()
+      .UrlSafe => "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".chars().toList()
+    }
+    var characters: List<Char> = []
+    var at = 0
+    while at < bytes.length() {
+      const first = Int.from bytes[at]
+      const second = if at + 1 < bytes.length() { Int.from bytes[at + 1] } else { 0 }
+      const third = if at + 2 < bytes.length() { Int.from bytes[at + 2] } else { 0 }
+      const word = (first << 16) | (second << 8) | third
+      characters.append alphabet[(word >> 18) & 63]
+      characters.append alphabet[(word >> 12) & 63]
+      if at + 1 < bytes.length() {
+        characters.append alphabet[(word >> 6) & 63]
+      } else if padded {
+        characters.append '='
+      }
+      if at + 2 < bytes.length() {
+        characters.append alphabet[word & 63]
+      } else if padded {
+        characters.append '='
+      }
+      at = at + 3
+    }
+    String.from characters
+  }
+}
+
+/**
+ * The bytes a Base64 text stands for, in either alphabet, padded or not, with whitespace inside it skipped - what a
+ * wrapped MIME block and a bare token both need read back.
+ *
+ * # Errors
+ *
+ * - [EncodingError] for a character outside both alphabets, padding before the end, or a length no encoder writes.
+ */
+public fn base64Decoded(text: String): Result<List<UInt8>, EncodingError> {
+  var bytes: List<UInt8> = []
+  var word = 0
+  var count = 0
+  var padding = 0
+  var offset = 0
+  for character in text.chars() {
+    offset = offset + 1
+    if character == ' ' || character == '\t' || character == '\r' || character == '\n' {
+      continue
+    }
+    if character == '=' {
+      padding = padding + 1
+      continue
+    }
+    if padding > 0 {
+      return Fail EncodingError("Base64 has padding before its end", offset)
+    }
+    const value = base64ValueOf character
+    if value < 0 {
+      return Fail EncodingError("{character.showNested()} is outside both Base64 alphabets", offset)
+    }
+    word = (word << 6) | value
+    count = count + 1
+    if count == 4 {
+      bytes.append byteOf(word >> 16)
+      bytes.append byteOf(word >> 8)
+      bytes.append byteOf(word)
+      word = 0
+      count = 0
+    }
+  }
+  match count {
+    0 => void
+    2 => bytes.append byteOf(word >> 4)
+    3 => {
+      bytes.append byteOf(word >> 10)
+      bytes.append byteOf(word >> 2)
+    }
+    _ => {
+      return Fail EncodingError("Base64 of a length no encoder writes", offset)
+    }
+  }
+  Ok bytes
+}
+
+/** The six bits a character of either Base64 alphabet stands for, or -1. */
+fn base64ValueOf(character: Char): Int {
+  const code = Int.from character
+  if code >= 65 && code <= 90 {
+    return code - 65
+  }
+  if code >= 97 && code <= 122 {
+    return code - 71
+  }
+  if code >= 48 && code <= 57 {
+    return code + 4
+  }
+  match code {
+    43 | 45 => 62
+    47 | 95 => 63
+    _ => 0 - 1
+  }
+}
+
+fn byteOf(value: Int): UInt8 {
+  UInt8.tryFrom(value & 255).ok() ?? 0
+}
