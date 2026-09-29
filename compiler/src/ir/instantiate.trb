@@ -582,16 +582,14 @@ fn extensionOf(checker: Checker, symbol: SymbolId): Int? {
 }
 
 /**
- * The target of the `extend` a member is written in, where that target is a **trait** and the `extend` implements
- * nothing: `Iterate<Item>` for the `parallel` of `extend<Item> Iterate<Item>`. Such a member takes its receiver as a
- * value of that trait, which is what a call on any implementer of it has to hand over.
+ * The target of the `extend` a member is written in, where that target is a **trait**: `Iterate<Item>` for the
+ * `parallel` of `extend<Item> Iterate<Item>`, and `List<Item>` for the `show` of `extend<Item: Show> List<Item> with
+ * Show`. Such a member takes its receiver as a value of that trait, which is what a call on any implementer of it has
+ * to hand over.
  */
 public fn traitExtensionTargetOf(checker: Checker, symbol: SymbolId): TypeId? {
   const index = extensionOf(checker, symbol)?
   const implementation = checker.implementations.all[index]
-  if implementation.trait.isSome() {
-    return None
-  }
   if const .Traits(_) = checker.types.form(implementation.target) {
     return implementation.target
   }

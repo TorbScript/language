@@ -1,0 +1,65 @@
+use ArrayList from "std/collections"
+
+/**
+ * A type whose `Show` comes from an `extend` of a trait it implements: `extend<Item: Show> List<Item> with Show` is
+ * the `Show` of an `ArrayList<UInt8>`, with `Item` read off the `List<UInt8>` the type implements. It prints directly,
+ * inside an `Option` - what `TcpStream.receiveBuffer` answers - and inside a list, through the trait's default
+ * `showNested`, in the VM as natively. So do a `Describe` and a `Report` a type gets through `extend Area with ...`,
+ * called directly and through a table. Until 2026-09-29 the back end matched the trait `List<Item>` against the type
+ * `ArrayList<UInt8>` itself and found no `Item`, and it handed the member the concrete value where it takes the value of
+ * the trait.
+ */
+
+trait Area {
+  fn area(): Float
+}
+
+trait Describe {
+  fn describe(): String
+}
+
+extend Area with Describe {
+  fn describe(): String {
+    "an area of {area()}"
+  }
+}
+
+/** A member that answers nothing, which the wrapper of a table calls for nothing as well. */
+trait Report {
+  fn report()
+}
+
+extend Area with Report {
+  fn report() {
+    print "reporting an area of {area()}"
+  }
+}
+
+type Square with Area {
+  side: Float
+
+  fn area(): Float {
+    side * side
+  }
+}
+
+fn described(value: Describe): String {
+  value.describe()
+}
+
+fn reported(value: Report) {
+  value.report()
+}
+
+const buffer: ArrayList<UInt8> = ArrayList.from([1, 2, 3])
+print "{buffer}"
+print buffer.showNested()
+const held: ArrayList<UInt8>? = Some buffer
+print "{held}"
+const nested: List<ArrayList<UInt8>> = [buffer, ArrayList.withCapacity(0)]
+print "{nested}"
+const square = Square 2.0
+print square.describe()
+print described(square)
+square.report()
+reported square

@@ -636,35 +636,73 @@ fn matchTarget(
     if !reachesImplementers(checker, implementation.trait) {
       return false
     }
-    const pattern = match checker.types.form(target) {
-      .Traits(bounds) => bounds[0]
-      _ => {
-        return false
-      }
-    }
-    const actual = match traitArgumentsOf(checker, annotation, head) {
-      Some(found) => found
-      None => {
-        return false
-      }
-    }
-    const wanted = match checker.types.form(pattern) {
-      .Nominal(_, arguments) => arguments
-      _ => {
-        return false
-      }
-    }
-    if wanted.length() != actual.length() {
-      return false
-    }
-    for position in 0..wanted.length() {
-      if !matchPattern(checker, wanted[position], actual[position], implementation.generics, mapping) {
-        return false
-      }
-    }
-    return true
+    return matchImplementer checker, target, head, annotation, implementation.generics, mapping
   }
   matchPattern checker, target, annotation, implementation.generics, mapping
+}
+
+/**
+ * A trait target (`List<Item>` of `extend<Item: Show> List<Item> with Show`) against a type that implements the trait:
+ * the target's arguments are matched against the arguments the type implements the trait with, so an `ArrayList<UInt8>`
+ * binds `Item` to `UInt8`. False where the type does not implement it.
+ */
+fn matchImplementer(
+  var checker: Checker,
+  target: TypeId,
+  head: SymbolId,
+  annotation: TypeId,
+  generics: List<ParameterId>,
+  var mapping: Map<ParameterId, TypeId>,
+): Bool {
+  const pattern = match checker.types.form(target) {
+    .Traits(bounds) => bounds[0]
+    _ => {
+      return false
+    }
+  }
+  const actual = match traitArgumentsOf(checker, annotation, head) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const wanted = match checker.types.form(pattern) {
+    .Nominal(_, arguments) => arguments
+    _ => {
+      return false
+    }
+  }
+  if wanted.length() != actual.length() {
+    return false
+  }
+  for position in 0..wanted.length() {
+    if !matchPattern(checker, wanted[position], actual[position], generics, mapping) {
+      return false
+    }
+  }
+  true
+}
+
+/**
+ * [matchTypePattern] for the target of an implementation, which may be a trait: a member of
+ * `extend<Item: Show> List<Item> with Show` asked for an `ArrayList<UInt8>` finds `Item` through the `List<UInt8>`
+ * the type implements, where the structural match finds nothing - which is what the back end instantiates the member
+ * with.
+ */
+public fn matchTargetPattern(
+  var checker: Checker,
+  target: TypeId,
+  concrete: TypeId,
+  generics: List<ParameterId>,
+  var mapping: Map<ParameterId, TypeId>,
+): Bool {
+  if matchPattern(checker, target, concrete, generics, mapping) {
+    return true
+  }
+  if const .Bounded(head) = targetShapeOf(checker, target) {
+    return matchImplementer checker, target, head, concrete, generics, mapping
+  }
+  false
 }
 
 /**

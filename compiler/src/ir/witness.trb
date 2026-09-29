@@ -20,22 +20,23 @@ use Span from "../syntax/source"
 use SymbolId from "../semantics/symbols"
 use TypeId, TypeForm, ParameterId, Signature, ImplementationId from "../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../semantics/checker/signature"
-use sameType from "../semantics/checker/unify"
+use sameType, substitute from "../semantics/checker/unify"
 use witnessFor, supertraitsOfBound, memberOfImplementation, matchTypePattern from "../semantics/checker/implementation"
+use matchTargetPattern from "../semantics/checker/implementation"
 use traitArgumentsOf, defaultInClosureOf from "../semantics/checker/implementation"
 use DerivedKind from "../backend/c/natives"
 use TraitId, FunctionId, Slot, Reference, WitnessTable, WitnessTableId from "./ir"
 use WitnessSource, WitnessRoot, IrSignature, Instruction, Terminator, Argument, BlockId from "./ir"
 use borrowed, referenced from "./ir"
-use witnessTableName, selfAnswerName from "./mangle"
+use witnessTableName, selfAnswerName, boxedReceiverName, canonicalType from "./mangle"
 use instantiateTrait from "./instantiate"
 use instanceFor, isClosedType from "./instances"
 use newFunction, addTemporary, emit, terminate, finishFunction, setBlockLocation from "./build"
-use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
+use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed, isVoidType from "./lower/context"
 use GenericSlot, TableSource, TableMember from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
 use nativeFunctionOf, needsNativeWrapper, declarationLocationOf from "./lower/native"
-use lowerTraitValue from "./lower/generic"
+use lowerTraitValue, isTraitValueType, boundsOfTraitValue, objectTypeOf from "./lower/generic"
 
 /**
  * The static table of one concrete type and one trait, built once. Both types have to be closed: a table is named after
@@ -252,11 +253,14 @@ public fn memberFunctionOf(
   const identifier = signatureOf lowering.checker, provider
   const signature = lowering.checker.signature identifier
   if signature.hasBody {
-    const built = instanceFor lowering, provider, mapping
-    if built.isNone() {
-      reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+    const built = match instanceFor(lowering, provider, mapping) {
+      Some(found) => found
+      None => {
+        reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+        return None
+      }
     }
-    return built
+    return boxedReceiverOf lowering, built, provider, mapping, subject, at
   }
   // No body anywhere: the manifest says what the runtime provides, everything else is generated from the layout
   const owner = manifestOwnerOf lowering, subject, implementation, provider
@@ -612,7 +616,9 @@ public fn memberMappingOf(
     return mapping
   }
   const generics = signature.generics
-  const _ = matchTypePattern lowering.checker, owner, subject, generics, mapping
+  // The owner of a member of `extend<Item: Show> List<Item> with Show` is a trait, and `Item` comes out of the
+  // `List<UInt8>` an `ArrayList<UInt8>` implements, never out of the `ArrayList` itself
+  const _ = matchTargetPattern lowering.checker, owner, subject, generics, mapping
   mapping
 }
 
@@ -1244,10 +1250,88 @@ fn genericMemberFunctionOf(
   for index in 0..slot.arguments.length() {
     mapping.set signature.generics[first + index], slot.arguments[index]
   }
-  const built = instanceFor lowering, provider, mapping
-  if built.isNone() {
-    reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+  const built = match instanceFor(lowering, provider, mapping) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{name}`", at, "no instance of that member can be built"
+      return None
+    }
   }
+  boxedReceiverOf lowering, built, provider, mapping, subject, at
+}
+
+/**
+ * A member of an implementation whose target is a trait - `show` of `extend<Item: Show> List<Item> with Show` - takes
+ * its receiver as a value of that trait, and a table of a concrete type, or an interpolation of one, hands it the
+ * concrete value. For an `ArrayList<UInt8>` the function they call is a wrapper that boxes its receiver with the tables
+ * of the trait and calls the member; a receiver that already is that trait-typed value, and every other member, is
+ * called as it is. A `var` receiver is a reference into the caller's place, which no box can stand for.
+ */
+fn boxedReceiverOf(
+  var lowering: Lowering,
+  member: FunctionId,
+  provider: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  subject: TypeId,
+  at: Span,
+): FunctionId? {
+  const signature = lowering.checker.signature signatureOf(lowering.checker, provider)
+  const owner = match signature.owner {
+    Some(found) => found
+    None => {
+      return member
+    }
+  }
+  const isTraitTarget = match lowering.checker.types.form(owner) {
+    .Traits(_) => true
+    _ => false
+  }
+  if !isTraitTarget || !signature.takesSelf || isTraitValueType(lowering, subject) {
+    return member
+  }
+  const wanted = substitute lowering.checker.types, owner, mapping
+  const bounds = boundsOfTraitValue lowering, wanted
+  const wrapped = lowering.program.functionAt member
+  var parameters = wrapped.signature.parameters
+  if bounds.isEmpty() || parameters.isEmpty() || parameters[0].byReference {
+    return member
+  }
+  const receiver = irTypeOfClosed lowering, subject
+  const key = "{member.value}:{receiver.value}"
+  if const Some(found) = lowering.boxedReceivers.get(key) {
+    return found
+  }
+  parameters.set 0, parameters[0].copy(type: receiver)
+  const wrapper = IrSignature parameters, wrapped.signature.result
+  const name = boxedReceiverName wrapped.name, canonicalType(lowering.program, receiver)
+  const origin = wrapped.origin ?? provider
+  var builder = newFunction name, wrapper, "boxes its receiver", origin: origin
+  const location = declarationLocationOf lowering, origin
+  setBlockLocation builder, BlockId(0), location
+  const boxed = addTemporary builder, objectTypeOf(lowering, bounds)
+  if !lowerTraitValue(lowering, builder, boxed, Slot(0), bounds, subject, at) {
+    return None
+  }
+  var given: List<Argument> = [borrowed(boxed)]
+  for index in 1..parameters.length() {
+    if parameters[index].byReference {
+      given.append referenced(Reference(Slot(index), []))
+      continue
+    }
+    given.append borrowed(Slot(index))
+  }
+  const empty: List<WitnessSource> = []
+  // A member that answers nothing is called for nothing, and so is the wrapper
+  if isVoidType(lowering, wrapped.signature.result) {
+    emit builder, Instruction.Call(None, member, given, empty, location)
+    terminate builder, Terminator.Return(None)
+  } else {
+    const answered = addTemporary builder, wrapped.signature.result
+    emit builder, Instruction.Call(answered, member, given, empty, location)
+    terminate builder, Terminator.Return(borrowed(answered))
+  }
+  const built = finishFunction lowering.program, builder
+  lowering.boxedReceivers.set key, built
   built
 }
 
