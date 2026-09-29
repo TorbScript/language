@@ -12,15 +12,20 @@
 #   windows-x64   bootstrap, `check .`, the conformance suite, the runtime's tests (.forgejo/actions/portable)
 #   linux-arm64   the same
 #   macos-arm64   the same
+#   cross-*       with `package`, for each of those three that has no runner: its release binary cross-compiled on
+#                 linux-x64 by the pinned zig cc (.forgejo/actions/cross), checked, and smoke-tested under wine
+#                 (windows-x64) or qemu-user (linux-arm64); macos-arm64 is checked and not run
 #   extension     the VS Code extension of editors/vscode packed into a .vsix (tools/package-extension.sh), which a
 #                 release and a nightly carry among their assets
 #   playground    the compiler built for browser-wasm64 by the pinned emscripten (playground/build.sh), and its
 #                 smoke test under node (playground/smoke-test.mjs)
 #
-# The forge has one runner today (labels ubuntu-latest and ubuntu-24.04), so the last three run only for the targets
-# the repository variable TORB_RUNNERS names - `windows-x64 linux-arm64 macos-arm64`, or any of them - once a runner
-# with that label is registered. A job whose label no runner has would wait forever; these are skipped instead, on the
-# server, because their `if:` reads only `needs`. Until then the GitHub mirror runs them (.github/workflows/portable.yml).
+# The forge has one runner today (labels ubuntu-latest and ubuntu-24.04), so windows-x64, linux-arm64 and macos-arm64
+# run only for the targets the repository variable TORB_RUNNERS names - `windows-x64 linux-arm64 macos-arm64`, or any
+# of them - once a runner with that label is registered. A job whose label no runner has would wait forever; these are
+# skipped instead, on the server, because their `if:` reads only `needs`. Until then the GitHub mirror runs them
+# (.github/workflows/portable.yml), and a nightly or a release carries the cross-compiled binaries of those targets -
+# smoke-tested at most, never gated on their machine: a target's own runner, once it exists, replaces its cross job.
 name: gates
 
 on:
@@ -318,6 +323,83 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
+  # The release binaries of the tier 1 targets that have no runner (docs/design/RELEASE.md section 13, "Cross-compiled
+  # archives"): only when this run packages, and only for a target TORB_RUNNERS does not name - where a runner exists,
+  # the job above builds that target's binary natively and gates it, and that one is released. The C is what the
+  # linux-x64 compiler of this run emits for the target - the C the `agree` job compares across every host
+  cross-windows-x64:
+    name: cross-compiled on linux-x64 (windows-x64)
+    needs: [plan, linux-x64]
+    if: inputs.package && needs.plan.outputs.windows-x64 == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - uses: ./.forgejo/actions/cross
+        with:
+          target: windows-x64
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: cross-windows-x64
+          path: build/cross/windows-x64/torb.exe
+          retention-days: 3
+          if-no-files-found: error
+
+  cross-linux-arm64:
+    name: cross-compiled on linux-x64 (linux-arm64)
+    needs: [plan, linux-x64]
+    if: inputs.package && needs.plan.outputs.linux-arm64 == ''
+    runs-on: ubuntu-latest
+    # The smoke test runs under qemu-user: two and a half minutes, where wine takes half of one
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - uses: ./.forgejo/actions/cross
+        with:
+          target: linux-arm64
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: cross-linux-arm64
+          path: build/cross/linux-arm64/torb
+          retention-days: 3
+          if-no-files-found: error
+
+  cross-macos-arm64:
+    name: cross-compiled on linux-x64 (macos-arm64)
+    needs: [plan, linux-x64]
+    if: inputs.package && needs.plan.outputs.macos-arm64 == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: compiler-linux-x64
+          path: build/release
+      - uses: ./.forgejo/actions/cross
+        with:
+          target: macos-arm64
+      - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: cross-macos-arm64
+          path: build/cross/macos-arm64/torb
+          retention-days: 3
+          if-no-files-found: error
+
   agree:
     name: every host emits the same C
     if: always() && needs.linux-x64.result == 'success'
@@ -441,7 +523,20 @@ jobs:
     if: >-
       always() && inputs.package && needs.seed.result == 'success'
       && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
-    needs: [linux-x64, tier-a, tier-b, tools, windows-x64, linux-arm64, macos-arm64, agree, seed, extension]
+    needs:
+      - linux-x64
+      - tier-a
+      - tier-b
+      - tools
+      - windows-x64
+      - linux-arm64
+      - macos-arm64
+      - cross-windows-x64
+      - cross-linux-arm64
+      - cross-macos-arm64
+      - agree
+      - seed
+      - extension
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -456,6 +551,12 @@ jobs:
         with:
           pattern: binary-*
           path: binaries
+      # None when every target has a runner of its own
+      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        continue-on-error: true
+        with:
+          pattern: cross-*
+          path: cross
       - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
         with:
           name: seed
@@ -465,22 +566,41 @@ jobs:
         with:
           name: extension
           path: dist
-      - name: One archive per target that ran, the source, SHA256SUMS
+      # A target's native binary wins over its cross-compiled one; the gates never build both in one run, and this
+      # makes sure that a stray artifact cannot change which one a release carries
+      - name: One archive per target, the source, SHA256SUMS
         env:
           VERSION: ${{ inputs.version }}
         run: |
           [ -n "$VERSION" ] || { echo "::error::package needs a version"; exit 1; }
-          for directory in binaries/binary-*; do
-            target=${directory#binaries/binary-}
+          : >targets.txt
+          for directory in binaries/binary-* cross/cross-*; do
+            [ -d "$directory" ] || continue
+            case "$directory" in
+              binaries/*)
+                target=${directory#binaries/binary-}
+                how="native"
+                ;;
+              *)
+                target=${directory#cross/cross-}
+                if [ -d "binaries/binary-$target" ]; then
+                  echo "$target: the native binary is released, not the cross-compiled one"
+                  continue
+                fi
+                how="cross-compiled on linux-x64"
+                ;;
+            esac
             binary="$directory/torb"
             [ -f "$binary" ] || binary="$directory/torb.exe"
             sh tools/package.sh archive "$VERSION" "$target" "$binary" dist
+            printf '  %s (%s)\n' "$target" "$how" >>targets.txt
           done
           git archive --format=tar.gz --prefix="torb-$VERSION-source/" -o "dist/torb-$VERSION-source.tar.gz" HEAD
           (cd dist && sha256sum -- *) | LC_ALL=C sort -k 2 >SHA256SUMS
           mv SHA256SUMS dist/SHA256SUMS
           cat dist/SHA256SUMS
-          echo "targets in this release: $(ls binaries | sed 's/^binary-//' | tr '\n' ' ')"
+          echo "targets in this release:"
+          cat targets.txt
       - uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
         with:
           name: dist

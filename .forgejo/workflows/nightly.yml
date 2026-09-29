@@ -2,9 +2,11 @@
 #
 #   - the seed of main, published to the release `seeds`, once linux-x64 passes tier A and tier B (the seed does not
 #     wait for the other targets: it is C, and the `agree` job shows the C is the same on every host)
-#   - a prerelease `nightly-YYYYMMDD` with the archives of every target that ran, the source, the seed, SHA256SUMS and
-#     its cosign signature SHA256SUMS.sig, once every gate is green - and the VS Code extension of main as
-#     `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, which no store gets (only a release publishes it)
+#   - a prerelease `nightly-YYYYMMDD` with the archives of every tier 1 target - built on the target's runner where
+#     TORB_RUNNERS names one, cross-compiled on linux-x64 where not (gates.yml, the cross-* jobs) - the source, the
+#     seed, SHA256SUMS and its cosign signature SHA256SUMS.sig, once every gate is green - and the VS Code extension
+#     of main as `torbscript-nightly-YYYYMMDD.vsix`, marked as a pre-release, which no store gets (only a release
+#     publishes it)
 #   - the nightlies older than 30 days are deleted, with their tags
 #   - the root server's container images, built from the nightly's assets and pushed to cr.torb.dev as `nightly`
 #     (images.yml)
@@ -137,14 +139,33 @@ jobs:
           COMMIT: ${{ forgejo.sha }}
           SERVER: ${{ forgejo.server_url }}
           REPOSITORY: ${{ forgejo.repository }}
+          RUNNERS: ${{ vars.TORB_RUNNERS }}
         run: |
           # A second run on the same day replaces that day's nightly
           if sh tools/forge.sh release "$VERSION" >/dev/null 2>&1; then
             sh tools/forge.sh delete "$VERSION"
           fi
+          # The archives of the targets without a runner were cross-compiled (gates.yml, the cross-* jobs)
+          cross=""
+          for target in windows-x64 linux-arm64 macos-arm64; do
+            [ -f "dist/torb-$VERSION-$target.tar.gz" ] || continue
+            case " $(printf '%s' "$RUNNERS" | tr ',' ' ') " in
+              *" $target "*) ;;
+              *) cross="$cross $target" ;;
+            esac
+          done
+          if [ -n "$cross" ]; then
+            crossed="Cross-compiled on linux-x64, for want of a runner of their own:$cross. Before publishing, a
+          windows-x64 binary ran only under wine, a linux-arm64 one only under qemu-user, and a macos-arm64 one not at
+          all; the GitHub mirror installs the nightly on each of those machines afterwards."
+          else
+            crossed="Every archive was built on its own machine."
+          fi
           cat >notes.md <<EOF
           The nightly of main at $COMMIT: tier A and tier B green on linux-x64, bootstrap and conformance green on every
           other target that has a runner. Not a release: nothing about it is promised, and it is deleted after 30 days.
+
+          $crossed
 
           Verify a download:
 

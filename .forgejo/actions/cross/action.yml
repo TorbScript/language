@@ -1,0 +1,93 @@
+# The release binary of a target that has no runner of its own, cross-compiled on the forge's linux-x64 runner
+# (docs/design/RELEASE.md section 13, "Cross-compiled archives"): the compiler's C for that target, emitted by the
+# linux-x64 compiler of this run, compiled with its runtime by the pinned `zig cc` (tools/cross.sh, tools/fetch-zig.sh)
+# into build/cross/<target>/, checked, and smoke-tested as a download wherever this machine can start it:
+#
+#   windows-x64   under wine: `torb --version`, then tools/smoke-test.sh - check, run in the VM, the registry's C
+#   linux-arm64   under qemu-user (qemu-aarch64, the static binary needs nothing else): the same
+#   macos-arm64   nothing on Linux starts a Mach-O, so it is checked - an arm64 executable, signed, loading only the
+#                 system's libraries - and not run
+#
+# A cross-compiled binary is smoke-tested, not gated: nothing here runs the conformance suite or the runtime's tests on
+# the target. Those run on a native runner of the target (.forgejo/actions/portable, once TORB_RUNNERS names it, and
+# then the gates build that target natively and cross-compile nothing for it) and on the GitHub mirror
+# (.github/workflows/portable.yml), which also installs the newest nightly on each of these machines and runs it.
+#
+# The calling job checks out and downloads the artifact compiler-linux-x64 into build/release first, and uploads
+# build/cross/<target>/torb(.exe) afterwards. Linux x64 only - the one runner of the forge.
+name: Cross-compiled target
+description: Cross-compiles the release binary of one target with the pinned zig cc, checks it, and smoke-tests it.
+inputs:
+  target:
+    description: windows-x64, linux-arm64 or macos-arm64
+    required: true
+runs:
+  using: composite
+  steps:
+    # file for the checks, xz-utils for Zig's archive; the emulator of the target
+    - uses: ./.forgejo/actions/c-compiler
+      with:
+        target: linux-x64
+        packages: >-
+          file xz-utils
+          ${{ inputs.target == 'windows-x64' && 'wine wine64' || '' }}
+          ${{ inputs.target == 'linux-arm64' && 'qemu-user' || '' }}
+
+    # The archive of the pinned Zig, never a build of it: tools/fetch-zig.sh checks it against the pinned SHA-256 on
+    # every run, so the cache saves the download from Zig's mirrors and cannot slip in anything else. Written from any
+    # run that missed it, since only the nightly and the release package, and a changed pin is a new key
+    - name: The pinned Zig, from the cache
+      id: zig-cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: build/zig/zig-x86_64-linux-*.tar.xz
+        key: zig-x86_64-linux-${{ hashFiles('tools/fetch-zig.sh') }}
+
+    - name: The pinned Zig (tools/fetch-zig.sh)
+      shell: bash
+      run: sh tools/fetch-zig.sh
+
+    - name: Save the pinned Zig
+      if: steps.zig-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: build/zig/zig-x86_64-linux-*.tar.xz
+        key: ${{ steps.zig-cache.outputs.cache-primary-key }}
+
+    - name: sh tools/cross.sh
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        chmod +x build/release/torb
+        sh tools/cross.sh build/release/torb "$TARGET" "build/cross/$TARGET/torb"
+
+    # No display and no Mono or Gecko: torb.exe is a console program. The first start creates the prefix in $HOME
+    - name: Smoke test under wine (windows-x64)
+      if: inputs.target == 'windows-x64'
+      shell: bash
+      env:
+        WINEDEBUG: "-all"
+        WINEDLLOVERRIDES: "mscoree,mshtml="
+      run: |
+        # Debian's `wine` is the launcher on the PATH, `wine64` the loader it starts
+        wine=$(command -v wine || true)
+        [ -n "$wine" ] || { echo "::error::no wine on the PATH"; exit 1; }
+        "$wine" --version
+        "$wine" build/cross/windows-x64/torb.exe --version
+        TORB_SMOKE_RUNNER=$wine sh tools/smoke-test.sh build/cross/windows-x64/torb.exe
+
+    - name: Smoke test under qemu-user (linux-arm64)
+      if: inputs.target == 'linux-arm64'
+      shell: bash
+      run: |
+        qemu-aarch64 --version | head -n 1
+        qemu-aarch64 build/cross/linux-arm64/torb --version
+        TORB_SMOKE_RUNNER=qemu-aarch64 sh tools/smoke-test.sh build/cross/linux-arm64/torb
+
+    - name: Not run (macos-arm64)
+      if: inputs.target == 'macos-arm64'
+      shell: bash
+      run: |
+        echo "::notice::nothing on a Linux runner starts a macOS binary: macos-arm64 is checked (above), not run." \
+          "The GitHub mirror installs the published nightly on a Mac and runs it (.github/workflows/portable.yml)"

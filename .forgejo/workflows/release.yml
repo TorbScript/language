@@ -3,7 +3,8 @@
 #
 #   1. check      the tag is a version, it equals the `version` of project.trb and compiler/project.trb, its commit is
 #                 on main, and there is a LICENSE
-#   2. gates      every gate (gates.yml), the release binaries of every target that has a runner, the archives, the seed
+#   2. gates      every gate (gates.yml), the release binaries - of a target that has a runner built there, of the
+#                 other tier 1 targets cross-compiled on linux-x64 - the archives, the seed
 #   3. publish    SHA256SUMS signed with the project's cosign key (SHA256SUMS.sig), the release on the forge with every
 #                 archive, the source, the seed and the signature - a draft until every asset is uploaded, so the
 #                 webhook "published" reaches release-sync with all of them there - and the seed added to `seeds.txt`
@@ -131,8 +132,18 @@ jobs:
           COMMIT: ${{ forgejo.sha }}
           SERVER: ${{ forgejo.server_url }}
           REPOSITORY: ${{ forgejo.repository }}
+          RUNNERS: ${{ vars.TORB_RUNNERS }}
         run: |
           notes="docs/releases/$VERSION.md"
+          # The archives of the targets without a runner were cross-compiled (gates.yml, the cross-* jobs)
+          cross=""
+          for target in windows-x64 linux-arm64 macos-arm64; do
+            [ -f "dist/torb-$VERSION-$target.tar.gz" ] || continue
+            case " $(printf '%s' "$RUNNERS" | tr ',' ' ') " in
+              *" $target "*) ;;
+              *) cross="$cross $target" ;;
+            esac
+          done
           {
             if [ -f "$notes" ]; then
               cat "$notes"
@@ -142,6 +153,12 @@ jobs:
             echo ""
             echo "Targets: $(ls dist | sed -n "s/^torb-$VERSION-\(.*\)\.tar\.gz$/\1/p" | grep -v '^source$' | tr '\n' ' ')"
             echo ""
+            if [ -n "$cross" ]; then
+              echo "Cross-compiled on linux-x64, for want of a runner of their own:$cross. Before publishing, a"
+              echo "windows-x64 binary ran only under wine, a linux-arm64 one only under qemu-user, and a macos-arm64"
+              echo "one not at all; the conformance suite runs on each target's own build on the GitHub mirror."
+              echo ""
+            fi
             echo "## Verifying a download"
             echo ""
             echo '```sh'

@@ -10,10 +10,12 @@
 # -> Run workflow) with `source: release`, which downloads the assets of the published release from the forge instead:
 # the way to rebuild the images of a release, or to build them once cr.torb.dev is set up.
 #
-# Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well when the release has a linux-arm64
-# toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) and QEMU can be registered in
-# the runner's Docker; a release without one - every release until the forge has a linux-arm64 runner - gets amd64
-# images only, and the log says why.
+# Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well for a stable release that has a
+# linux-arm64 toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) when QEMU can be
+# registered in the runner's Docker; otherwise amd64 images only, and the log says why. A nightly gets amd64 images
+# only: since its linux-arm64 toolchain is cross-compiled (gates.yml) every nightly has one, and an arm64 build stage
+# under QEMU for each image would add hours to every night of the one runner, for images the root server (x64) never
+# pulls.
 #
 # The push logs in to cr.torb.dev with a token of the Authorized Integration whose audience is TORB_IMAGES_AUDIENCE
 # (`docker login` takes it as the password), asked for after the build so an hour-long arm64 build cannot outlive it.
@@ -121,7 +123,11 @@ jobs:
           esac
           ls "dist/torb-$VERSION-source.tar.gz" "dist/torb-$VERSION-linux-x64.tar.gz"
           platforms=linux/amd64
-          if [ -f "dist/torb-$VERSION-linux-arm64.tar.gz" ]; then
+          if [ "$CHANNEL" = "nightly" ]; then
+            # Every nightly has a linux-arm64 toolchain since it is cross-compiled; its arm64 build stages under QEMU
+            # would take hours of the one runner every night, for images only a release needs
+            echo "a nightly's $IMAGE is built for linux/amd64 only, the machine of the root server"
+          elif [ -f "dist/torb-$VERSION-linux-arm64.tar.gz" ]; then
             # QEMU for the arm64 build stage, registered in the runner's Docker (Docker-in-Docker needs it privileged)
             if docker run --privileged --rm tonistiigi/binfmt:qemu-v10.2.3 --install arm64; then
               platforms="linux/amd64,linux/arm64"
