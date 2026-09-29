@@ -531,7 +531,7 @@ playground can reach.
 
 | | |
 |---|---|
-| `torb.wasm` | 12.41 MB raw, 3.76 MB gzip -9 (what nginx sends, `torb.wasm.gz` beside it), 2.63 MB brotli -11 |
+| `torb.wasm` | 13.21 MB raw, 4.02 MB gzip -9 (what nginx sends, `torb.wasm.gz` beside it), 2.79 MB brotli -11, on the main of 2026-09-29 (12.41 MB and 3.76 MB the day before: it grows with the compiler) |
 | `torb.js`, `playground.js` | 98 KB and 33 KB, 26 KB and 10 KB gzipped |
 | hello world, headless Chrome, local server | first output 0.50 to 0.65 s cold (fetch, compile, instantiate, check, lower, run), 0.26 to 0.34 s warm, 0.50 to 0.56 s on a second visit from the browser's cache |
 | the same over 50 and 10 Mbit/s | 1.3 to 1.5 s and 4.0 s cold, 0.8 s on a second visit over 10 Mbit/s |

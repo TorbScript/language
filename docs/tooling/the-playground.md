@@ -85,7 +85,7 @@ the output is the expected one.
 ### What the browser needs
 
 WebAssembly with exception handling - Chrome and Edge 95, Firefox 100, Safari 15.2 or newer - and JavaScript. The
-toolchain is about 12 MB, 4 MB as the server sends it compressed, fetched once when you first focus an editor or press
+toolchain is about 13 MB, 4 MB as the server sends it compressed, fetched once when you first focus an editor or press
 Run and then kept by the browser. The page makes no request to another host and stores nothing on the device.
 
 ### How it is built
@@ -135,7 +135,7 @@ $ sh playground/build.sh
 emitting the compiler's C for browser-wasm64
 compiling in emscripten/emsdk:6.0.10
 linking build/playground/torb.js and build/playground/torb.wasm
-wrote build/playground/: torb.wasm 12408932 bytes, 3762261 gzipped
+wrote build/playground/: torb.wasm 13212198 bytes, 4020117 gzipped
 $ node playground/smoke-test.mjs
 ok    hello world (860 ms)
 ```
