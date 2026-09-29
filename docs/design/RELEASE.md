@@ -247,7 +247,13 @@ compiler. FreeBSD has no hosted runner on the common CI services and runs in a v
 
 - **Both scripts are short, readable and served from torb.dev**, never from a vendor's URL (section 6, "Hosting").
   They detect the target, download the archive and `SHA256SUMS`, verify the hash, unpack, and write
-  `~/.torb/install.trb` (`channel "stable"`, `method "script"`), which `torb upgrade` reads.
+  `~/.torb/install.trb` (`channel "stable"` by default, `method "script"`), which `torb upgrade` reads.
+- **No stable release yet, the default channel**: both installers, and `torb upgrade` left on `stable`, fall back to
+  the newest nightly, print one line saying so, and write `channel "nightly"` instead - the toolchain then follows
+  the nightly channel until a stable release exists, with nothing more to type. An explicitly requested channel or
+  version is never substituted: it stays the error it already was ("no version of the ... channel is listed").
+- **A target missing from a version's archives** is decided from that version's `SHA256SUMS` (downloaded first),
+  never guessed from a failed download: "`<version>` has no `<target>` archive yet", naming both.
 - **A download with `curl` or PowerShell gets no quarantine attribute** on macOS and no Mark of the Web on Windows, so
   the script path works without notarization or Authenticode. A binary downloaded *in a browser* is where section 5's
   signing matters.
@@ -378,8 +384,13 @@ call this job. What the owner sets up once for these three is
 [docs/contributing/releasing.md](../contributing/releasing.md).
 
 **Tested**: `sh -n tools/install.sh` (shellcheck where the machine has it), a full run of `install.sh` against a
-locally packed archive through `TORB_INSTALL_BASE_URL=file://...` and `TORB_INSTALL_TARGET`, the PowerShell parser
-over `install.ps1`, and a run of it against a local HTTP server for the same fake channel. `compiler/tests/upgrade.
+locally packed archive through `TORB_INSTALL_BASE_URL=file://...` and `TORB_INSTALL_TARGET` - the fallback to nightly
+(no `stable` line), the missing-archive error (a target `SHA256SUMS` does not list) and success - and the same three
+against the live `torb.dev` while there is no stable release. `install.ps1` was run both piped into `iex` and as a
+file, against a local fixture through `TORB_INSTALL_BASE_URL=file:///...` (`Invoke-WebRequest` reads `file://` in
+Windows PowerShell 5.1, so no HTTP server is needed): the fallback, the missing archive, a hash that does not match,
+and success, each confirmed to leave the caller's `$ErrorActionPreference` and scope exactly as they were - the point
+of running the whole script inside its own `& { ... }`. `compiler/tests/upgrade.
 test.trb` covers the pure parts of `torb upgrade` (parsing `install.trb` and `versions.txt`, comparing versions,
 reading `SHA256SUMS`) and, each in a temporary directory, hashing a file, unpacking with `std/archive` - a path of
 more than 100 bytes, the executable bit, an entry outside refused - and placing the toolchain, switching the link, and
@@ -459,9 +470,19 @@ link to the forge, `search-index.json` (the term index above), and one styleshee
 coloured by the lexer and the resolver at generation time; every internal link of the output is checked. The Markdown
 is `std/markdown`'s tree with a renderer of the site's own (anchors, callouts, the rewritten links), not its HTML step.
 `site/` pages have the kind `site` and stay out of the skill and the bundle. The site image runs it from the release's
-source (`tools/deploy/Dockerfile.site`), and nginx serves it with clean URLs. `/play` is `site/play.md` with the
-playground (below). Not built yet: `/learn`, `/download`, `/releases/<version>`, and a version's link to the same page
-in the newest one - the version switcher reads a `docs/versions.json` that nothing writes yet.
+source (`tools/deploy/Dockerfile.site`), and nginx serves it with clean URLs - a flat page's own trailing slash
+(`/play/`, `/de/play/`) redirects to the page without it, which is the one the site writes. `/play` is `site/play.md`
+with the playground (below).
+
+`docs/versions.json` ([SiteVersions] of `site.trb`) is written once, at the root, the same for every language: today
+it names only the one version this build is of, because the site image bakes in exactly one version per deploy and
+nothing yet accumulates a running site's history across deploys (below) - so the switcher, seeing nothing to switch
+to, hides itself instead of the 404 it was reading before. `docs/latest/` is a symbolic link `Dockerfile.site` makes
+after copying the built site in, one per language directory the site was written in (`find ... -name "$VERSION"`), so
+`/de/docs/latest/` resolves exactly as `/docs/latest/` does.
+
+Not built yet: `/learn`, `/download`, `/releases/<version>`, a site that accumulates more than the one version of its
+own deploy (which is what a real `docs/versions.json` needs), and a version's link to the same page in the newest one.
 
 ### The playground
 
