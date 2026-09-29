@@ -1,9 +1,9 @@
 ---
 title: Values and bindings
-summary: Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
+summary: A binding is const or var, a second name is always a copy, and a change goes through the path where the value lives.
 kind: guide
 status: stable
-order: 20
+order: 30
 prerequisites:
   - installing-and-running.md
 keywords:
@@ -11,56 +11,35 @@ keywords:
   - var
   - copy
   - value semantics
+  - var path
 source:
   - CONCEPT.md#bindings
   - CONCEPT.md#values
   - examples/tour/src/01-bindings-and-values.trb
 ---
 
-Most languages need two answers about a value: is the *binding* changeable, and is the *thing* changeable. TorbScript
-has one. The binding decides, and it decides everything below it.
+In most languages you ask two questions: can this name change, and can the thing behind it change? In TorbScript there
+is one answer, and the name gives it.
 
 ## Goal
 
-At the end of this page you can predict, for any line, whether it compiles and what changes.
+At the end of this page you can tell for any line whether it compiles and what it changes.
 
-## Two words
+## Two kinds of binding
 
-```trb
+```trb run
 const answer = 42
 var counter = 0
 counter = counter + 1
-print "{answer} {counter}"
-```
-
-`const` is a binding that never changes. `var` is a binding that can. A binding always has an initializer: `var x` and
-`var x: Int` are both errors, because there is no implied default value anywhere in the language.
-
-A type annotation is optional and goes after the name. A literal adapts to the type that is expected of it:
-
-```trb
 const ratio: Float = 1
-const byte: UInt8 = 0xFF
-const million = 1_000_000
+print "{answer} {counter} {ratio}"
+// prints 42 1 1.0
 ```
 
-`1` became a `Float64` because that is what was expected. Without an annotation an integer literal is `Int64` and a
-decimal literal is `Float64`.
+`const` never changes, `var` can. A binding always gets a value when it is declared: there is no empty `var x`. A type
+after the name is optional, and a number takes the type that is expected, so `1` became a `Float` here.
 
-## The binding decides about the value too
-
-This is the part that is different from nearly every other language:
-
-```trb
-var list = [1, 2]
-list.append 3
-const fixed = list
-print "{list} {fixed}"
-```
-
-`list.append 3` works because `list` is a `var`. `fixed.append 3` would not compile, and not because the *binding* cannot be
-reassigned - because `const` is **deep**. Through a `const` binding you cannot reassign, cannot assign a field, and
-cannot call a method that is a `var fn`.
+## A const goes all the way down
 
 ```trb error
 const fixed = [1, 2]
@@ -68,13 +47,20 @@ fixed.append 3
 // error: `append` needs a `var`
 ```
 
-The diagnostic names the other half of the rule. A method that changes its receiver in place is a **verb** and declares
-a `var fn`; the method that returns a changed copy instead is its **participle**. So `list.sort { _ }` sorts in place and
-`list.sorted { _ }` answers a new list, `append` and `appended`, `remove` and `removed`.
+Through a `const` nothing changes: no new value, no field, and no method that changes the value. So a `const` list is
+a list that never changes, and there is no separate `ImmutableList`.
 
-There is no `MutableList`, no `ImmutableList` and no read-only view. A `const` binding *is* the immutable list.
+A method that changes a value in place is a verb, such as `append` or `sort`. Its twin that returns a changed copy is a
+participle, such as `appended` or `sorted`, and it works on a `const`:
 
-## Assigning is copying
+```trb run
+const fixed = [1, 2]
+const longer = fixed.appended 3
+print "{fixed} {longer}"
+// prints [1, 2] [1, 2, 3]
+```
+
+## A second name is a copy
 
 ```trb run
 type Point {
@@ -89,19 +75,14 @@ print "{first} {second}"
 // prints Point(x: 99, y: 2) Point(x: 1, y: 2)
 ```
 
-That prints `Point(x: 99, y: 2) Point(x: 1, y: 2)`. `second` is a copy, so nothing that happens through `first` can be
-seen through it. The same holds for passing a value to a function and for capturing one in a closure.
+`second` is a copy, so a change through `first` never shows up in it. The same is true when you pass a value to a
+function or store it in a list. Copies are cheap: a list or a string shares its storage until one side writes to it.
 
-What a copy *costs* is the implementation's business and is never observable. A small value like a `Point` is really
-copied; a `List` or a `String` shares its storage until somebody writes to it, and then the writer copies. So the model
-is "always a copy" and the cost is "only when it matters".
+## Change a value where it lives
 
-## The copy trap
+This is the one mistake everybody makes once:
 
-This is the one mistake everybody makes once, and it is the price of
-[value semantics](../glossary.md#value-semantics):
-
-```trb run
+```trb error
 type Counter {
   var count: Int = 0
 
@@ -113,17 +94,13 @@ type Counter {
 var counters = [Counter(), Counter()]
 var first = counters[0]
 first.increment()
-print "{first.count} {counters[0].count}"
-// prints 1 0
+// error: This change has no effect: `first` is never read again
 ```
 
-That prints `1 0`. `var first = counters[0]` took a **copy** out of the list, so incrementing it left the list
-untouched. A change that is never read afterwards is a compile error (`This change has no effect: `first` is never
-read again`, with the note that `first` is a copy and the path it came from). This program reads `first.count` in the
-last line, so the compiler has nothing to report: the copy is used, it is only not what was meant. Reach through the
-path instead:
+`var first = counters[0]` takes a copy out of the list, so the list never sees the change. The compiler notices when a
+change is lost like this. Change the value where it lives instead:
 
-```trb check
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -135,41 +112,16 @@ type Counter {
 var counters = [Counter(), Counter()]
 counters[0].increment()
 print counters[0].count
+// prints 1
 ```
 
-`counters[0]` is a **`var` path**: the value is taken out, changed and put back, without a copy. A path may go through
-fields and indices as deep as you like (`world.entities[id].health = 5`), and every step of it has to be `var`.
-
-## Mutation needs a var path, from the binding down
-
-Three things have to line up for a change to be legal:
-
-1. the **binding** is a `var`, or you are inside a `var` parameter or a `var fn` method,
-2. every **field** on the way is declared `var`,
-3. the value you reach is reached through that path and not through a copy of it.
-
-```trb
-type Engine {
-  var running: Bool = false
-}
-
-type Car {
-  var engine: Engine = Engine()
-  wheels: Int = 4
-}
-
-var car = Car()
-car.engine.running = true
-print car.engine.running
-```
-
-`wheels` has no `var`, so it never changes after construction - not even through a `var` binding. That is how a value
-says "this part of me is fixed".
+`counters[0]` is a path to the value, not a copy of it. A path can go as deep as you like,
+`world.players[id].health = 5`, and every step on it has to be changeable: the binding is a `var`, and every field on
+the way is a `var` field. A field without `var` never changes after the value is built.
 
 ## Next
 
-- [Bindings](../language/values-and-types/bindings.md) - the exact rules, including shadowing and dead changes.
-- [Declaring a type](../language/types/declaring-a-type.md) - fields, methods and what is generated.
-- [Why values instead of references](../explanation/why-values-instead-of-references.md) - the argument, and what it
-  costs.
-- [Coming from Rust](../explanation/coming-from-rust.md) - if `&mut` is what you reach for.
+- [Functions and closures](functions-and-closures.md) - declaring a function and passing code as a value.
+- [Bindings](../language/values-and-types/bindings.md) - the exact rules, including shadowing.
+- [Why values instead of references](../explanation/why-values-instead-of-references.md) - why the language works this
+  way.

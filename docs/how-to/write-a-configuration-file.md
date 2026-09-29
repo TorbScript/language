@@ -150,4 +150,4 @@ print "{config.host}:{config.port} {config.database.url} {config.routes.length()
 - [Command calls](../language/syntax/command-calls.md) - why `route "/health", to: "health"` is written without parentheses.
 - [Declaring a type](../language/types/declaring-a-type.md) - `var` fields, `protected var` and methods.
 - [Read a file](read-a-file.md) - the plain way to read text when no receiver is involved.
-- [Run your first program](../guide/installing-and-running.md) - the `project.trb` of a new project.
+- [Install and run](../guide/installing-and-running.md) - the `project.trb` of a new project.

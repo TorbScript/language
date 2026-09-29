@@ -204,5 +204,5 @@ $ torb new greet --template app --yes
 - RELEASE.md, "torb upgrade" - the other command that downloads with `curl` or
   `wget` and unpacks with `std/archive`.
 - std/test (skill `torbscript-testing`: `references/standard-library/test.md`) - `test` and `group`, the two calls a `.test.trb` file makes.
-- [Installing and running TorbScript](../guide/installing-and-running.md) - where `torb new` fits in the first steps.
+- [Install and run](../guide/installing-and-running.md) - where `torb new` fits in the first steps.
 

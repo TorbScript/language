@@ -66,18 +66,19 @@ public use Iterate.parallel, Cut.parallel, List.parallel from "std/parallel"
 public use Source, Sink, Bytes from "std/stream"
 public use print, printError from "std/console"
 public use Json, JsonValue, JsonError from "std/json"
-public use Duration, Instant from "std/time"
+public use Duration, Instant, Timestamp from "std/time"
 public use Int64.seconds, Int64.milliseconds from "std/time"
 public use Path, PathError from "std/path"
 public use Uri, UriReference, UriError from "std/uri"
 ```
 
-`Path` is in because it is a value like `Duration`: it names a file and reads nothing, so a signature can say it
-without an import, while `File` and `Directory` - which touch what a path names - stay behind `use ... from "std/fs"`.
-`Uri`, `UriReference` and `UriError` are in for the same reason: a URI names a resource and opens nothing, and what
-reaches it - std/http (skill `torbscript-networking`: `references/standard-library/http.md`), std/network (skill `torbscript-networking`: `references/standard-library/network.md`) - stays an import, as do `Urn`, `UriTemplate` and the rest
-of std/uri (skill `torbscript-networking`: `references/standard-library/uri.md`). `std/linear` stays out: a program that computes with vectors
-imports it.
+`Timestamp` is in beside `Duration` and `Instant` because it is a value too: a point on the wall clock in a field or a
+signature reads no clock, and only `Clock` - an import - does (see [std/time](time.md)). `Path` is in because it is a
+value like `Duration`: it names a file and reads nothing, so a signature can say it without an import, while `File`
+and `Directory` - which touch what a path names - stay behind `use ... from "std/fs"`. `Uri`, `UriReference` and
+`UriError` are in for the same reason: a URI names a resource and opens nothing, and what reaches it -
+std/http (skill `torbscript-networking`: `references/standard-library/http.md`), std/network (skill `torbscript-networking`: `references/standard-library/network.md`) - stays an import, as do `Urn`, `UriTemplate` and the rest of
+std/uri (skill `torbscript-networking`: `references/standard-library/uri.md`). `std/linear` stays out: a program that computes with vectors imports it.
 
 Every re-export keeps its original name, so `use Option from "std/prelude"` and `use Option from "std/core"` name the
 same type. There is no `math` namespace: the power is `**`, and the constants and functions are `Real`'s members

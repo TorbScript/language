@@ -82,7 +82,9 @@ torb format --check .
 An argument that starts with `--` and is none of the flags of its subcommand is refused before anything runs, with
 `error: unknown flag <argument>`, a pointer to `torb --help` and exit code 2, rather than looked for as a file or a
 program of that name; a path that starts with `--` is written `./--name`. Behind the path of `run` every argument is
-the program's own. `torb --help` prints the usage.
+the program's own. `torb --help` prints the usage, and `--help` or `-h` among the flags of a subcommand prints that
+command's usage on standard output, leaves with 0 and runs nothing - `torb new --help` makes no package called
+`--help`, and `torb run --help` asks `torb`, while `torb run tool.trb --help` asks the program.
 
 ## What it does
 
@@ -362,7 +364,7 @@ wrote ../build/dev/scratch.exe
 ## Related
 
 - [Verify your work](verifying-your-work.md) - the commands to run before you are done.
-- [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
+- [Install and run](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
   torb test (skill `torbscript-testing`: `references/tooling/torb-test.md`), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb lsp](torb-lsp.md),
   [torb debug](torb-debug.md), torb doc (skill `torbscript-projects`: `references/tooling/torb-doc.md`), [torb new](torb-new.md), [torb init](torb-init.md) - one page

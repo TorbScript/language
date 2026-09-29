@@ -14,21 +14,19 @@ answers the question. A page marked planned describes a feature that does not co
 
 ## guide
 
-- `guide/index.md` - **Learn TorbScript** (index): A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
-- `guide/the-language-in-sixty-seconds.md` - **The language in sixty seconds** (guide): The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
-- `guide/torbscript-in-15-minutes.md` - **TorbScript in 15 minutes** (guide): The fastest honest tour of TorbScript for a working programmer, one short example and a few sentences per idea.
-- `guide/installing-and-running.md` - **Run your first program** (guide): Install the toolchain, run a single file, and create a project with a manifest, a source file and a test.
-- `guide/values-and-bindings.md` - **Values and bindings** (guide): Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
-- `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
-- `guide/types-and-methods.md` - **Types and methods** (guide): How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
-- `guide/cases-and-matching.md` - **Cases and matching** (guide): How to declare a type with more than one shape, and take it apart with a match that has to cover every case.
-- `guide/traits.md` - **Traits** (guide): How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
-- `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
-- `guide/collections-and-pipelines.md` - **Collections and pipelines** (guide): How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
-- `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
-- `guide/modules-and-packages.md` - **Modules and packages** (guide): How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
-- `guide/tests-and-tooling.md` - **Tests and the toolchain** (guide): How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
-- `guide/a-small-program.md` - **Put it together** (guide): One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
+- `guide/index.md` - **Learn TorbScript** (index): For people who already program - a fifteen-minute tour, then one short page per idea, all of it done in an evening.
+- `guide/tour.md` - **A tour of TorbScript** (guide): The whole language in fifteen minutes for somebody who already programs - bindings, calls, functions, types, cases, errors, traits and pipelines, one short example each.
+- `guide/installing-and-running.md` - **Install and run** (guide): Install TorbScript with one command, run a file, and make a project with a test - the five commands you will use every day.
+- `guide/values-and-bindings.md` - **Values and bindings** (guide): A binding is const or var, a second name is always a copy, and a change goes through the path where the value lives.
+- `guide/functions-and-closures.md` - **Functions and closures** (guide): Declare a function with typed parameters, defaults and labels, write a closure, and pass it as the last argument of a call.
+- `guide/types-and-methods.md` - **Types and methods** (guide): Declare a type with fields, give it methods, and tell a method that changes the value from one that returns a changed copy.
+- `guide/cases-and-matching.md` - **Cases and matching** (guide): Declare a type whose value is one of several cases, and take it apart with a match that has to handle every case.
+- `guide/traits.md` - **Traits** (guide): Declare what a type can do as a trait, give it to a type now or later, and use the trait as a type that holds any of them.
+- `guide/errors.md` - **Errors** (guide): A function that can fail returns a Result, a value that can be missing is an Option, and the caller handles both with match, the question mark or a fallback.
+- `guide/collections-and-pipelines.md` - **Collections and pipelines** (guide): Build a list, a map and a set, change one in place or get a changed copy, and run values through a pipeline of steps.
+- `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): Ifs and loops work as you expect, and a new control structure or a configuration block is an ordinary function you can write yourself.
+- `guide/modules-and-packages.md` - **Modules and packages** (guide): Split a program into files with public and use, import from the standard library, and lay out a project so that its tests reach its code.
+- `guide/a-small-program.md` - **Put it together** (guide): One small program - a type with cases, a type with fields, a function that can fail and a pipeline - that uses what the guide taught.
 - `guide/idiomatic-torbscript.md` - **Idiomatic TorbScript** (guide): The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
 
 ## guide/coming-from

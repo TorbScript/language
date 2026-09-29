@@ -78,7 +78,7 @@ impossible, not a condition to handle. `Channel` and a full `Stream` are designe
 
 ## Related
 
-- [TorbScript in 15 minutes](../torbscript-in-15-minutes.md) - the rest of the language, just as quickly.
+- [A tour of TorbScript](../tour.md) - the rest of the language in fifteen minutes.
 - Result (skill `torbscript-language`: `references/language/errors/result.md`) - `Ok`, `Fail` and `?`.
 - Traits (skill `torbscript-language`: `references/language/traits/traits.md`) - `with`, `extend` and the trait names.
 - [Syntax cheat sheet](../../language/syntax/cheat-sheet.md) - every form of the language, at a glance.

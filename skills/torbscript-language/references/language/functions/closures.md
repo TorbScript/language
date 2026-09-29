@@ -62,6 +62,20 @@ print add(2, 3)
    print pairs.map({ _.0 }).toList()
    ```
 
+   An implicit parameter is what a named one would be: where the expected function type takes the parameter as `var`,
+   `_` is a `var` and changes the caller's value, exactly as `{ items => items.append 2 }` does.
+
+   ```trb run
+   fn filled(body: (var items: List<Int>) => Void): List<Int> {
+     var items: List<Int> = [1]
+     body items
+     items
+   }
+
+   print filled({ _.append 2 })
+   // prints [1, 2]
+   ```
+
 4. **The result type is always inferred, never annotated.** A closure that needs a written result type is a local
    `fn` instead, because `fn` is a declaration and can carry a return type (see
    [Declaring a function](declaring-a-function.md)); a `fn` declared by name can be passed exactly where a closure is

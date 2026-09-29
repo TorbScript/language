@@ -61,7 +61,8 @@ which Diátaxis has no slot for.
 **One artifact, one job, and the non-goals written down.** Rust's reference lists five things it is not; TypeScript's
 handbook has a goals-and-non-goals page. Without that, every folder slowly becomes a tutorial. Here the mechanism is
 the `## What belongs here` section that every folder index must have - the checker requires it, so the non-goals of a
-folder cannot be left implicit.
+folder cannot be left implicit. The indexes a learner reads, those of `start/` and `guide/`, have `## Who this is for`
+instead: they talk to the reader, and their scope is written down here, in [The learning path](#the-learning-path).
 
 **The reference mirrors the language, not the reader.** `language/` is grouped by area (`values-and-types`, `functions`,
 `types`, `traits`, `generics`, `pattern-matching`, `errors`, `collections-and-iteration`, `concurrency-and-streams`,
@@ -83,7 +84,7 @@ a new page appears in its index without a second edit, and `docs index --check` 
 
 | Kind | For | Required sections, in order |
 |------|-----|----------------------------|
-| `index` | The `index.md` of a folder | `What belongs here` (except the root) |
+| `index` | The `index.md` of a folder | `What belongs here`, or `Who this is for` in `start/` and `guide/` (not the root) |
 | `guide` | A step of the learning path | `Goal` first, `Next` last |
 | `reference` | One construct of the language | `Example`, `Syntax`, `Rules`, `What this is not`, `Related` |
 | `how-to` | One task | `Steps`, `Full example`, `Related` |
@@ -97,6 +98,25 @@ a new page appears in its index without a second edit, and `docs index --check` 
 
 Other `##` sections may stand between the required ones. A reference page is free to add `## More examples` or
 `## Coming from other languages`; it may not leave out `## What this is not`.
+
+### The learning path
+
+Two folders teach, and neither says so to its reader in the words below; their indexes say who they are for.
+
+- **`start/`** is a course for somebody who has never programmed: one lesson per idea, three to five minutes each,
+  with the shape [Three levels, plain words](levels-and-plain-words.md) gives a lesson.
+- **`guide/`** is for somebody who programs already. It opens with one tour of about fifteen minutes (`tour.md`, which
+  the entry Agent Skill inlines), then one page per idea in the order they can be learned, each with a
+  `## Goal`, one runnable example, the few rules that matter and a `## Next`. The whole path is finishable in an
+  evening, so a new page replaces or shortens another one rather than lengthening the path.
+- **`guide/coming-from/`** holds one dense, table-first comparison per language a reader arrives from: what maps, what
+  surprises, what is missing on purpose. The long argument for a decision is in `explanation/`, and each page links its
+  own essay there where one exists.
+
+What does not belong in either: the exact rules of a construct (`language/`), one task in isolation (`how-to/`), the
+argument for a design decision (`explanation/`), and anything about building the toolchain itself, which is in
+[Build the toolchain from source](building-from-source.md). A guide page may state a rule in one sentence and link the
+page that has it in full.
 
 ### Which source wins
 

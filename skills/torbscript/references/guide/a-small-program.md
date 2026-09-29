@@ -1,28 +1,26 @@
 ---
 title: Put it together
-summary: One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
+summary: One small program - a type with cases, a type with fields, a function that can fail and a pipeline - that uses what the guide taught.
 kind: guide
 status: stable
 order: 120
 prerequisites:
-  - tests-and-tooling.md
+  - modules-and-packages.md
 keywords:
   - example program
 source:
   - examples/tour
 ---
 
-Every idea on this path shows up in one program below: a `type` with fields and cases, a function that answers a
-`Result`, `match`, and a pipeline that ends in a collector. Nothing here is new: this page only wires it together.
+This page adds nothing new. It puts the pieces of the guide into one program you can run and change.
 
 ## Goal
 
-At the end of this page you have run one program that declares a type, validates input into a `Result`, and reports on
-a collection through a pipeline.
+At the end of this page you have run a program that models tasks, checks its input and reports on a list.
 
-## Modeling a task
+## The program
 
-```trb check
+```trb run
 type Priority {
   case Low
   case Medium
@@ -39,35 +37,6 @@ type Task {
   }
 }
 
-fn priorityLabel(priority: Priority): String {
-  match priority {
-    .Low => "low"
-    .Medium => "medium"
-    .High => "high"
-  }
-}
-```
-
-`Priority` is a type with three cases and no fields; `Task` is a type with fields, one of them defaulted. `completed`
-is a participle: it answers a changed copy rather than changing `self`, using the generated `copy`.
-
-## Validating input
-
-A task with an empty title is a mistake the caller has to see, so creating one answers a `Result`:
-
-```trb check
-type Priority {
-  case Low
-  case Medium
-  case High
-}
-
-type Task {
-  title: String
-  priority: Priority
-  done: Bool = false
-}
-
 type TaskError {
   case EmptyTitle
 }
@@ -79,44 +48,7 @@ fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
   Task title, priority
 }
 
-match newTask("", Priority.Low) {
-  Ok(task) => print "created {task.title}"
-  Fail(error) => print "rejected: {error}"
-}
-```
-
-`Fail TaskError.EmptyTitle` and `Ok Task(title, priority)` are both command calls: the first argument is a value, the
-second a nested call, and neither needs its own parentheses to be unambiguous.
-
-## Running the pipeline
-
-Put the two pieces together over a list of attempts, keep only the ones that succeeded, and report on them:
-
-```trb check
-type Priority {
-  case Low
-  case Medium
-  case High
-}
-
-type Task {
-  title: String
-  priority: Priority
-  done: Bool = false
-}
-
-type TaskError {
-  case EmptyTitle
-}
-
-fn newTask(title: String, priority: Priority): Result<Task, TaskError> {
-  if title.isEmpty() {
-    return Fail TaskError.EmptyTitle
-  }
-  Task title, priority
-}
-
-fn priorityLabel(priority: Priority): String {
+fn label(priority: Priority): String {
   match priority {
     .Low => "low"
     .Medium => "medium"
@@ -127,31 +59,36 @@ fn priorityLabel(priority: Priority): String {
 const attempts = [
   newTask("Write the guide", Priority.High),
   newTask("", Priority.Low),
-  newTask("Review the PR", Priority.Medium),
+  newTask("Review the change", Priority.Medium),
 ]
 
-const tasks = attempts.filterMap { _.ok() }.toList()
+var tasks = attempts.filterMap({ _.ok() }).toList()
+tasks[0] = tasks[0].completed()
 
 for task in tasks {
-  print "{task.title} ({priorityLabel(task.priority)})"
+  const mark = if task.done { "x" } else { " " }
+  print "[{mark}] {task.title} ({label(task.priority)})"
 }
 
-const highPriority = tasks.filter { _.priority == Priority.High }.count()
-print "High priority: {highPriority}"
+const open = tasks.filter({ !_.done }).count()
+print "{open} open"
+// prints [x] Write the guide (high)
+// prints [ ] Review the change (medium)
+// prints 1 open
 ```
 
-`filterMap` drops every `Fail` and unwraps every `Ok`, so the empty title never reaches the loop. This prints:
+## What each part does
 
-```text
-Write the guide (high)
-Review the PR (medium)
-High priority: 1
-```
+- `Priority` is a type with three cases and no fields, `Task` a type with fields, one of them with a default.
+- `completed` is a participle: it returns a changed copy, made with `copy`, and leaves the task alone.
+- `newTask` can fail, so it returns a `Result`. The empty title becomes a `Fail` the caller has to handle.
+- `label` is a `match` that handles every case of `Priority`.
+- `filterMap({ _.ok() })` keeps the `Ok` values and drops every `Fail`, so the empty title never reaches the loop.
+- `tasks[0] = tasks[0].completed()` changes the list where the value lives, which is why `tasks` is a `var`.
 
 ## Next
 
-- The language reference (skill `torbscript-language`: `references/language/index.md`) - one page per construct, for the exact rule behind anything above.
-- [Task recipes](../how-to/index.md) - a recipe for one task at a time, once you know the language.
-- Why the language is like this (skill `torbscript-language`: `references/explanation/index.md`) - the arguments behind the decisions this path only showed
-  you the surface of.
+- [Idiomatic TorbScript](idiomatic-torbscript.md) - the habits that make code read like the standard library.
+- [Task recipes](../how-to/index.md) - one page per task, once you know the language.
+- The language reference (skill `torbscript-language`: `references/language/index.md`) - the exact rule behind anything on the way here.
 

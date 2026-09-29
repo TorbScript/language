@@ -75,7 +75,7 @@ decorators, no monkey-patching a built-in type, and no dynamic `eval` of code bu
 
 ## Related
 
-- [TorbScript in 15 minutes](../torbscript-in-15-minutes.md) - the rest of the language, just as quickly.
+- [A tour of TorbScript](../tour.md) - the rest of the language in fifteen minutes.
 - Cases and match (skill `torbscript-language`: `references/language/pattern-matching/cases-and-match.md`) - how a case is spelled and matched.
 - Result (skill `torbscript-language`: `references/language/errors/result.md`) - `Ok`, `Fail` and `?`.
 - [Syntax cheat sheet](../../language/syntax/cheat-sheet.md) - every form of the language, at a glance.

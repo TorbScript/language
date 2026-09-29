@@ -80,7 +80,7 @@ boundary - every boundary is checked.
 
 - Coming from TypeScript (skill `torbscript-language`: `references/explanation/coming-from-typescript.md`) - the full essay, with every difference and
   its reason.
-- [TorbScript in 15 minutes](../torbscript-in-15-minutes.md) - the rest of the language, just as quickly.
+- [A tour of TorbScript](../tour.md) - the rest of the language in fifteen minutes.
 - Option (skill `torbscript-language`: `references/language/values-and-types/option.md`) - `Some`/`None`, the one representation of absence.
 - [Syntax cheat sheet](../../language/syntax/cheat-sheet.md) - every form of the language, at a glance.
 

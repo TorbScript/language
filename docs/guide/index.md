@@ -1,30 +1,23 @@
 ---
 title: Learn TorbScript
-summary: A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
+summary: For people who already program - a fifteen-minute tour, then one short page per idea, all of it done in an evening.
 kind: index
 status: stable
 order: 10
 ---
 
-If you already write code for a living, start with
-[TorbScript in 15 minutes](torbscript-in-15-minutes.md) or your language in
-[Coming from another language](coming-from/index.md) - either gets you writing real programs today. The numbered pages
-below go the same ground again, slower and one idea per page, for when fifteen minutes was not enough on some point.
-Each has a `## Goal` that says what works at the end of it and ends with the next page. If you want the exact rule
-behind something instead of a walkthrough, go straight to [the language reference](../language/index.md).
+Start with [the tour](tour.md): fifteen minutes, and every example runs in the page. Then
+[install TorbScript](installing-and-running.md) and go through the pages below in order. Each one says what you will
+be able to do, shows one example, and names the next page. Together they take an evening.
 
-The twelve files of [`examples/tour`](../../examples/tour) are the same material as running code; the path below links
-into them where they help.
+If you know Rust, TypeScript, Python, Go, Kotlin or Swift, [Coming from another language](coming-from/index.md) maps
+what you know onto TorbScript in one table.
 
-## What belongs here
+## Who this is for
 
-Learning material for somebody who has never written TorbScript: a fast tour, a table per language people arrive from,
-and a slower path of one page per idea, in order. A page here assumes programming experience, not TorbScript
-experience, and shows what to type and what comes out. Responsibility for the outcome is the page's, not the reader's.
-
-What does not belong here: the exact rules of a construct, which are in [`language/`](../language/index.md); one task in
-isolation, which is a [how-to](../how-to/index.md); and the argument for a design decision, which is an
-[explanation](../explanation/index.md). A page may state a rule in one sentence and link the page that has it in full.
+For people who can already program in another language. If you have never programmed, the
+[course](../start/index.md) starts from zero. If you want the exact rule behind something, the
+[language reference](../language/index.md) has one page per construct.
 
 <!-- torb:index:begin -->
 
@@ -34,20 +27,18 @@ isolation, which is a [how-to](../how-to/index.md); and the argument for a desig
 
 ## Pages
 
-- **[The language in sixty seconds](the-language-in-sixty-seconds.md)** - The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
-- **[TorbScript in 15 minutes](torbscript-in-15-minutes.md)** - The fastest honest tour of TorbScript for a working programmer, one short example and a few sentences per idea.
-- **[Run your first program](installing-and-running.md)** - Install the toolchain, run a single file, and create a project with a manifest, a source file and a test.
-- **[Values and bindings](values-and-bindings.md)** - Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
-- **[Functions and closures](functions-and-closures.md)** - How to declare a function, when it must spell out its return type, and the one closure form the language has.
-- **[Types and methods](types-and-methods.md)** - How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
-- **[Cases and matching](cases-and-matching.md)** - How to declare a type with more than one shape, and take it apart with a match that has to cover every case.
-- **[Traits](traits.md)** - How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
-- **[Errors](errors.md)** - How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
-- **[Collections and pipelines](collections-and-pipelines.md)** - How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
-- **[Control flow and your own constructs](control-flow-and-dsls.md)** - if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
-- **[Modules and packages](modules-and-packages.md)** - How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
-- **[Tests and the toolchain](tests-and-tooling.md)** - How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
-- **[Put it together](a-small-program.md)** - One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
+- **[A tour of TorbScript](tour.md)** - The whole language in fifteen minutes for somebody who already programs - bindings, calls, functions, types, cases, errors, traits and pipelines, one short example each.
+- **[Install and run](installing-and-running.md)** - Install TorbScript with one command, run a file, and make a project with a test - the five commands you will use every day.
+- **[Values and bindings](values-and-bindings.md)** - A binding is const or var, a second name is always a copy, and a change goes through the path where the value lives.
+- **[Functions and closures](functions-and-closures.md)** - Declare a function with typed parameters, defaults and labels, write a closure, and pass it as the last argument of a call.
+- **[Types and methods](types-and-methods.md)** - Declare a type with fields, give it methods, and tell a method that changes the value from one that returns a changed copy.
+- **[Cases and matching](cases-and-matching.md)** - Declare a type whose value is one of several cases, and take it apart with a match that has to handle every case.
+- **[Traits](traits.md)** - Declare what a type can do as a trait, give it to a type now or later, and use the trait as a type that holds any of them.
+- **[Errors](errors.md)** - A function that can fail returns a Result, a value that can be missing is an Option, and the caller handles both with match, the question mark or a fallback.
+- **[Collections and pipelines](collections-and-pipelines.md)** - Build a list, a map and a set, change one in place or get a changed copy, and run values through a pipeline of steps.
+- **[Control flow and your own constructs](control-flow-and-dsls.md)** - Ifs and loops work as you expect, and a new control structure or a configuration block is an ordinary function you can write yourself.
+- **[Modules and packages](modules-and-packages.md)** - Split a program into files with public and use, import from the standard library, and lay out a project so that its tests reach its code.
+- **[Put it together](a-small-program.md)** - One small program - a type with cases, a type with fields, a function that can fail and a pipeline - that uses what the guide taught.
 - **[Idiomatic TorbScript](idiomatic-torbscript.md)** - The habits that make TorbScript read like TorbScript - names, mutation, calls, types, errors, closures, resources and tasks - each as one rule, one runnable example and the reason behind it.
 
 <!-- torb:index:end -->

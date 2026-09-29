@@ -222,6 +222,6 @@ top-level declaration's visibility is a different question, spelled `public`.
 - [Bindings](../values-and-types/bindings.md) - what `const` and `var` decide about a value.
 - [Cases and match](../pattern-matching/cases-and-match.md) - a type with cases, and how to take one apart.
 - [Traits](../traits/traits.md) - how a type comes `with` a capability.
-- Types and methods (skill `torbscript`: `references/guide/values-and-bindings.md`) - the same material as a learning step.
+- Types and methods (skill `torbscript`: `references/guide/types-and-methods.md`) - the same material as a learning step.
 - [Why there are no properties](../../explanation/why-values-instead-of-references.md) - the argument behind rule 11.
 

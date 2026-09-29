@@ -1,9 +1,9 @@
 ---
 title: Errors
-summary: How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
+summary: A function that can fail returns a Result, a value that can be missing is an Option, and the caller handles both with match, the question mark or a fallback.
 kind: guide
 status: stable
-order: 70
+order: 80
 prerequisites:
   - traits.md
 keywords:
@@ -11,22 +11,24 @@ keywords:
   - Option
   - question mark operator
   - panic
+  - exception
+  - null
 source:
   - CONCEPT.md#error-handling
   - examples/tour/src/06-errors.trb
 ---
 
-There is no `null` and there are no exceptions. Absence is a value, `Option<Value>`, and failure is a value too,
-`Result<Value, Failure>`. This page writes a function that can fail and two ways to handle what comes back.
+There is no `null` and there are no exceptions. A value that can be missing and a call that can fail both say so in
+their type, and the compiler makes the caller handle it.
 
 ## Goal
 
-At the end of this page you can write a function that returns `Result`, handle it with `match`, and shorten that with
-the question mark operator.
+At the end of this page you can write a function that can fail, handle what it returns, and pass a failure on with
+`?`.
 
 ## A function that can fail
 
-```trb
+```trb run
 type ConfigError {
   case Missing(key: String)
   case Invalid(key: String, reason: String)
@@ -34,7 +36,7 @@ type ConfigError {
 
 fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
   const raw = settings.get("port").okOr(ConfigError.Missing("port"))?
-  const port = Int.tryFrom(raw).mapError { ConfigError.Invalid "port", "not a number" }?
+  const port = Int.tryFrom(raw).mapError({ _ => ConfigError.Invalid "port", "not a number" })?
   if port < 1 || port > 65535 {
     return Fail ConfigError.Invalid("port", "out of range")
   }
@@ -42,70 +44,71 @@ fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
 }
 
 match readPort(["port": "80a"]) {
-  Ok(port) => print "Port {port}"
+  Ok(port) => print "port {port}"
   Fail(.Missing(key)) => print "{key} is missing"
   Fail(.Invalid(key, reason)) => print "{key} is invalid: {reason}"
 }
+// prints port is invalid: not a number
 ```
 
-`Result` (skill `torbscript-language`: `references/language/errors/result.md`)'s two cases are `Ok` and `Fail`, and the prelude imports them bare, so a
-pattern writes `Ok(port)` rather than `Result.Ok(port)`. `match` has to cover both, exactly as it has to cover every
-case of any other type with cases.
+`Result<Int, ConfigError>` is either `Ok` with an `Int` or `Fail` with a `ConfigError`. A `match` handles both, as it
+handles the cases of any type. `settings.get` returns a `String?`, and `okOr` turns a missing value into a `Fail`.
+The body ends in `port`, not `Ok(port)`: the value is wrapped for you.
 
-## The question mark operator
+## Pass a failure on with ?
 
-`?` on a line by itself unwraps an `Ok` and returns the `Fail` from the surrounding function immediately - that is
-what `readPort` above already uses twice, once on an `Option` turned into a `Result` with `okOr`, once on the
-`Result` that `Int.tryFrom` answers.
+`?` after a call takes the value out of an `Ok`. On a `Fail` it returns that `Fail` from the function at once.
+The first `readPort` uses it twice. When the error types differ, `?` converts the error, provided the target type says how:
 
-```trb
+```trb run
+type ConfigError {
+  case Missing(key: String)
+}
+
 type AppError {
   case Config(cause: ConfigError)
   case Startup(message: String)
 }
 
+fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
+  if settings.isEmpty() {
+    return Fail ConfigError.Missing("port")
+  }
+  8080
+}
+
 fn start(settings: Map<String, String>): Result<Void, AppError> {
   const port = readPort(settings)?
-  print "Listening on {port}"
+  print "listening on {port}"
   Ok void
 }
 
-match start(["port": "8080"]) {
+match start([:]) {
   Ok(_) => print "started"
-  Fail(error) => print "failed to start: {error}"
+  Fail(error) => print "failed: {error}"
 }
+// prints failed: Config(cause: Missing(key: "port"))
 ```
 
-`readPort` answers a `ConfigError`, but `start` answers an `AppError` - `?` converts one into the other through a
-generated `From`, because `AppError.Config` is the one case that wraps a `ConfigError` and no other case does. See
-The question mark operator (skill `torbscript-language`: `references/language/errors/question-mark.md`) for the exact rule.
+`AppError.Config` is the one case that holds a `ConfigError`, so `?` wraps a `ConfigError` into it by itself.
 
-## Absence: Option
+## A value that can be missing
 
-Absence is modelled the same way, with `Option<Value>` written `Value?`:
-
-```trb
-type User {
-  id: Int
-  name: String
-}
-
-const users = [User(1, "Ada"), User(2, "Grace")]
-
-fn findUser(id: Int): User? {
-  users.find { _.id == id }
-}
-
-const name = findUser(2)?.name ?? "nobody"
-print name
+```trb run
+const ages = ["Ada": 36]
+const age = ages.get("Grace") ?? 0
+print age
+print ages.get("Ada")
+// prints 0
+// prints Some(36)
 ```
 
-`?.` maps over the `Option` instead of unwrapping it, and `??` gives the fallback when it is `None`. See
-Optional chaining (skill `torbscript-language`: `references/language/errors/option-chaining.md`).
+`Int?` is short for `Option<Int>`: either `Some` with a value or `None`. `??` gives a fallback for `None`, and `?.`
+reaches into the value if there is one: `findUser(2)?.name`.
 
-## Panic is for bugs, not for expected failures
+## A panic is for bugs
 
-```trb
+```trb run
 fn percentageOf(part: Int, total: Int): Int {
   if total == 0 {
     panic "total must not be zero"
@@ -114,16 +117,15 @@ fn percentageOf(part: Int, total: Int): Int {
 }
 
 print percentageOf(1, 4)
+// prints 25
 ```
 
-A `panic` prints `panic: <message>` and the call site to standard error, exits with code 101, and nothing else runs on
-the way out. It is not catchable, because it says the program reached a state its author considered impossible - an
-expected failure is a `Fail`, not a `panic`. See panic (skill `torbscript-language`: `references/language/errors/panic.md`).
+`panic` stops the program with exit code 101, and nothing can catch it. Use it for a state that should be impossible.
+Bad input is an expected failure, and an expected failure is a `Fail`.
 
 ## Next
 
-- [Collections and pipelines](collections-and-pipelines.md) - building, reading and transforming a collection.
-- Result (skill `torbscript-language`: `references/language/errors/result.md`) - the exact vocabulary on `Ok` and `Fail`.
-- Declaring an error type (skill `torbscript-language`: `references/language/errors/error-types.md`) - a type with cases, and when `From` is generated for
-  it.
+- [Collections and pipelines](collections-and-pipelines.md) - lists, maps and sets, and working through them.
+- Result (skill `torbscript-language`: `references/language/errors/result.md`) - everything you can do with `Ok` and `Fail`.
+- The question mark operator (skill `torbscript-language`: `references/language/errors/question-mark.md`) - the exact rule, and when it converts.
 

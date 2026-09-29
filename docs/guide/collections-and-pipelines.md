@@ -1,9 +1,9 @@
 ---
 title: Collections and pipelines
-summary: How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
+summary: Build a list, a map and a set, change one in place or get a changed copy, and run values through a pipeline of steps.
 kind: guide
 status: stable
-order: 80
+order: 90
 prerequisites:
   - errors.md
 keywords:
@@ -11,80 +11,69 @@ keywords:
   - Map
   - Set
   - pipeline
-  - collector
+  - map
+  - filter
 source:
   - CONCEPT.md#collections-and-iteration
   - examples/tour/src/07-collections.trb
 ---
 
-`List`, `Map` and `Set` are values, so the binding rule from
-[Values and bindings](values-and-bindings.md) applies to them exactly as it does to a `Point`. This page builds one of
-each, changes one in place, and reads a pipeline through to a result.
+`List`, `Map` and `Set` are values like any other, so a second name is a copy and a change needs a `var`.
 
 ## Goal
 
-At the end of this page you can build a `List`, a `Map` and a `Set`, tell a verb from its participle on a collection,
-and write a pipeline that ends in a collector.
+At the end of this page you can build and change a collection, loop over it, and turn it into another one with a
+pipeline.
 
-## Building a collection
+## Build and change
 
-```trb
-const numbers = [1, 2, 3]
+```trb run
+var numbers = [1, 2, 3]
 var ages = ["Ada": 36, "Grace": 45]
-const primes = Set.of 2, 3, 5, 7
+var seen: Set<String> = []
+
+numbers.append 4
+numbers[0] = 10
+ages["Alan"] = 41
+seen.insert "Ada"
 
 print numbers
 print ages
-print primes
+print seen
+// prints [10, 2, 3, 4]
+// prints ["Ada": 36, "Grace": 45, "Alan": 41]
+// prints {"Ada"}
 ```
 
-`[1, 2, 3]` is a `List<Int>`, `["Ada": 36, "Grace": 45]` is a `Map<String, Int>`, and a `Set` is built with a factory
-because it has no literal of its own. See [Lists](../language/collections-and-iteration/lists.md) and
-[Maps and sets](../language/collections-and-iteration/maps-and-sets.md).
+`[1, 2, 3]` is a `List<Int>` and `["Ada": 36]` is a `Map<String, Int>`. An empty collection is `[]`, or `[:]` for a
+map, with the type on the binding. Each collection has its own word for adding: a list appends, a set inserts, a map
+sets. All of them remove.
 
-## A verb changes it, its participle does not
+Every change has a twin that returns a changed copy and works on a `const`:
 
-```trb
-var buffer = numbers
-buffer.append 4
-buffer[0] = 10
-print numbers
-print buffer
+```trb run
+const numbers = [1, 2, 3]
+const more = numbers.appended(4).removed(1)
+print "{numbers} {more}"
+// prints [1, 2, 3] [2, 3, 4]
 ```
 
-`buffer` is a copy of `numbers`, so growing and writing into `buffer` never touches `numbers` -
-[Assigning is copying](values-and-bindings.md) holds for a `List` exactly as it does for a `Point`. Every change has a
-verb and a participle:
+## Loop over it
 
-```trb
-const more = numbers.appended(4).appended(5).removed(2)
-print more
-print numbers
-```
-
-`appended` and `removed` answer a changed copy and leave `numbers` untouched, so they work through a `const` binding.
-`append` and `remove` need a `var`. Each kind has the words everybody knows for it - a list appends, a set inserts, a
-map sets, a stack pushes and pops, a queue enqueues and dequeues. See
-[The collection traits](../language/collections-and-iteration/collection-traits.md) for all of them.
-
-## Reading with for
-
-```trb
-for number in numbers {
-  print number
-}
-
+```trb run
+const ages = ["Ada": 36, "Grace": 45]
 for (name, age) in ages {
   print "{name} is {age}"
 }
+// prints Ada is 36
+// prints Grace is 45
 ```
 
-A `Map` iterates as `(key, value)` tuples. See [Iterating](../language/collections-and-iteration/iterating.md) for
-what evaluates once and what does not.
+`for` goes through a list value by value, and through a map as `(key, value)` pairs.
 
-## A pipeline: lazy stages, one terminal operation
+## Pipelines
 
-```trb
+```trb run
 type Employee {
   name: String
   department: String
@@ -97,34 +86,21 @@ const employees = [
   Employee("Linus", "Operations", 28),
 ]
 
-const seniorEngineers = employees
-  .filter { _.department == "Engineering" && _.age >= 40 }
-  .map { _.name }
-
-print seniorEngineers.toList()
+const seniors = employees.filter({ _.age >= 40 }).map({ _.name })
+print seniors.toList()
+print employees.filter({ _.department == "Engineering" }).count()
+// prints ["Grace"]
+// prints 2
 ```
 
-`filter` and `map` are lazy [stages](../glossary.md#stage): nothing has run yet after the assignment to
-`seniorEngineers`, because a pipeline only runs when a terminal operation pulls the values through - here `toList()`.
-See [Pipelines](../language/collections-and-iteration/pipelines.md).
-
-A [collector](../glossary.md#collector) is a reusable description of what to do with the values instead of one more
-terminal operation written by hand:
-
-```trb
-const headcount = employees.collect counting()
-const byDepartment = employees.collect(groupingBy { _.department })
-
-print headcount
-print byDepartment
-```
-
-See [Collectors](../language/collections-and-iteration/collectors.md) for the collectors the standard library ships
-and how to write your own.
+`filter` and `map` are steps of a pipeline. They are lazy: nothing runs until a last step such as `toList()` or
+`count()` pulls the values through, and no list is built in between. `sorted`, `take` and `flatMap` are steps as well;
+`fold`, `find` and `count` end a pipeline.
 
 ## Next
 
-- [Control flow and your own constructs](control-flow-and-dsls.md) - why `unless` is a function, not a keyword.
-- [Slices](../language/collections-and-iteration/slices.md) - `list[from..to]` as a value and as a `var` path.
+- [Control flow and your own constructs](control-flow-and-dsls.md) - `if`, loops, and control structures you write
+  yourself.
+- [Pipelines](../language/collections-and-iteration/pipelines.md) - every step, and how to end a pipeline.
 - [The collection traits](../language/collections-and-iteration/collection-traits.md) - `List`, `Map`, `Set`, `Stack`
   and `Queue` in full.

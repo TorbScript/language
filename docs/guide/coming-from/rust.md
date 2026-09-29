@@ -81,7 +81,7 @@ enums - a public type with cases is a promise. Integer overflow panics except on
 ## Related
 
 - [Coming from Rust](../../explanation/coming-from-rust.md) - the full essay, with every difference and its reason.
-- [TorbScript in 15 minutes](../torbscript-in-15-minutes.md) - the rest of the language, just as quickly.
+- [A tour of TorbScript](../tour.md) - the rest of the language in fifteen minutes.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - the argument behind the
   ownership difference.
 - [Syntax cheat sheet](../../language/syntax/cheat-sheet.md) - every form of the language, at a glance.

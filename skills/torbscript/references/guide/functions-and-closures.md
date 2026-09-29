@@ -1,33 +1,31 @@
 ---
 title: Functions and closures
-summary: How to declare a function, when it must spell out its return type, and the one closure form the language has.
+summary: Declare a function with typed parameters, defaults and labels, write a closure, and pass it as the last argument of a call.
 kind: guide
 status: stable
-order: 30
+order: 40
 prerequisites:
   - values-and-bindings.md
 keywords:
   - fn
   - closure
   - default value
-  - variadic
+  - label
   - trailing closure
 source:
   - CONCEPT.md#functions
   - examples/tour/src/02-functions.trb
 ---
 
-A function is declared with `fn`, and a closure is the one place a value is a piece of code instead of data. This page
-gets you from a first `fn` to passing a closure the way the rest of this language expects.
+A function is declared with `fn`. A closure is a piece of code you can store in a binding or hand to another function.
 
 ## Goal
 
-At the end of this page you can declare a function with defaults and labels, write a closure, and hand one to another
-function as a trailing closure.
+At the end of this page you can declare a function with defaults and labels, write a closure, and pass one to a call.
 
-## Declaring a function
+## Declare a function
 
-```trb
+```trb run
 fn distance(x: Int, y: Int): Int {
   const dx = x * x
   const dy = y * y
@@ -35,108 +33,66 @@ fn distance(x: Int, y: Int): Int {
 }
 
 print distance(3, 4)
+// prints 25
 ```
 
-Every parameter needs a type; the return type does not, and the compiler infers it from the last expression of the
-body. A `fn` is hoisted (skill `torbscript-language`: `references/language/functions/declaring-a-function.md`): it can be called above the line it is
-declared on, which is what lets two functions call each other.
-
-```trb
-fn isEven(n: Int): Bool {
-  if n == 0 { true } else { isOdd(n - 1) }
-}
-
-fn isOdd(n: Int): Bool {
-  if n == 0 { false } else { isEven(n - 1) }
-}
-
-print isEven(10)
-```
-
-A `public` function is the one case where the return type has to be written even when it could be inferred: a caller
-outside the file must not have to read the body to know what comes back.
+Every parameter has a type. The result is the last line of the body, and its type can be left out: the compiler
+works it out. A `public` function writes it, so a caller in another file sees it without reading the body. A function
+can be called above the line it is declared on.
 
 ## Defaults and labels
 
-```trb
+```trb run
 fn connect(host: String, port: Int = 5432, timeout: Int = 30): String {
-  "{host}:{port} (timeout {timeout}s)"
+  "{host}:{port}, timeout {timeout}s"
 }
 
 print connect("localhost")
 print connect("localhost", 3306)
 print connect("localhost", timeout: 10)
+// prints localhost:5432, timeout 30s
+// prints localhost:3306, timeout 30s
+// prints localhost:5432, timeout 10s
 ```
 
-`port` and `timeout` are filled from their defaults when the call omits them, and a call can name any later parameter
-by its label (skill `torbscript-language`: `references/language/functions/arguments.md`) instead of its position. A default is evaluated at every call that
-needs it, so `limits(memory: Int = 64.megabytes())` runs `64.megabytes()` again each time. See
-Default values (skill `torbscript-language`: `references/language/functions/default-values.md`) for the exact scope it runs in.
+A parameter with a default can be left out. A call can name a parameter, `timeout: 10`, to skip the ones before it.
 
-A trailing `...name: Type` parameter is a variadic parameter (skill `torbscript-language`: `references/language/functions/variadics.md`): it collects every
-remaining positional argument into a `List`.
+## Closures
 
-```trb
-fn sumAll(...numbers: Int): Int {
-  numbers.fold 0 { a, b => a + b }
-}
-
-print sumAll(1, 2, 3)
-```
-
-A collection is never unpacked into it by itself; spreading it with `...` is what does that (`sumAll(1, ...someList)`).
-
-## The one closure form
-
-A `{` in expression position is always a closure, never a block. It captures the scope it is written in.
-
-```trb
+```trb run
 const double = { x: Int => x * 2 }
 const triple: (Int) => Int = { _ * 3 }
 
 print double(21)
 print triple(7)
+// prints 42
+// prints 21
 ```
 
-`double` writes out the parameter's type; `triple` leaves it out because the binding's own type annotation already says
-what a value passed to the closure has to be, and then `_` is the implicit first parameter. Both forms are the same
-closure (skill `torbscript-language`: `references/language/functions/closures.md`). `return` inside a closure returns from the closure, never from the
-function around it.
+A closure is always written `{ parameters => body }`. When the type is clear from where the closure goes, you can leave
+the parameters out and write `_` for the first one. A `{` where a value is expected is always a closure, never a
+block. `return` inside a closure leaves the closure, not the function around it.
 
-Where a return type has to be spelled out, or the closure must call itself, a local `fn` is the tool instead - it is
-the same declaration a top-level `fn` is, so it can be passed by name:
+## The last argument can follow the call
 
-```trb
-fn fib(n: Int): Int {
-  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
-}
-
-print([1, 2, 3, 4, 5].map(fib).toList())
-```
-
-## Passing a closure as the last argument
-
-When the last parameter of a call is a function, the closure can follow the call instead of sitting inside its
-parentheses - a trailing closure (skill `torbscript-language`: `references/language/functions/trailing-closures.md`).
-
-```trb
+```trb run
 const numbers = [1, 2, 3, 4]
 const doubled = numbers.map { _ * 2 }
 const total = numbers.fold 0 { sum, number => sum + number }
 
 print doubled.toList()
 print total
+// prints [2, 4, 6, 8]
+// prints 10
 ```
 
-`map` names its implicit closure parameter after the parameter of its own signature, so `numbers.map { value * 2 }`
-also compiles. A call with no arguments still needs `()`: a bare name such as `distance` refers to the function itself
-rather than calling it.
+When the last parameter is a function, the closure can stand after the call instead of inside the parentheses. This is
+how `test "name" { ... }` and your own control structures read like built-in syntax. A call without arguments still
+needs `()`: `distance` alone is the function itself, not a call.
 
 ## Next
 
-- [Types and methods](types-and-methods.md) - declaring a type and giving it behaviour.
-- Declaring a function (skill `torbscript-language`: `references/language/functions/declaring-a-function.md`) - the exact rules, including hoisting and
-  inference.
-- Parameter modes (skill `torbscript-language`: `references/language/functions/parameter-modes.md`) - `var`, `lazy`, receiver closures and
-  `Expression<Value>` parameters.
+- [Types and methods](types-and-methods.md) - your own types, and functions that belong to them.
+- Declaring a function (skill `torbscript-language`: `references/language/functions/declaring-a-function.md`) - the exact rules.
+- Closures (skill `torbscript-language`: `references/language/functions/closures.md`) - what a closure captures, and when.
 

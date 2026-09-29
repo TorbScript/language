@@ -1,59 +1,43 @@
 ---
-title: Run your first program
-summary: Install the toolchain, run a single file, and create a project with a manifest, a source file and a test.
+title: Install and run
+summary: Install TorbScript with one command, run a file, and make a project with a test - the five commands you will use every day.
 kind: guide
 status: stable
-order: 10
+order: 20
 keywords:
   - install
   - torb run
   - torb new
+  - torb test
   - project.trb
   - hello world
 source:
-  - README.md
-  - tools/install.sh
-  - tools/install.ps1
-  - CONCEPT.md#project-layout
   - compiler/src/cli/new.trb
 ---
 
-The toolchain is one binary called `torb`. `torb run` checks a file and runs it at once in the VM inside `torb`, which
-needs no C compiler, and `torb build` compiles it to a native executable instead - `torb run --native` does both in one
-step. The two run the same program with the same output.
+TorbScript is one program, `torb`. It runs your code, tests it, checks it and formats it.
 
 ## Goal
 
-At the end of this page you have run a `.trb` file, created a project with a manifest and a test, and seen the two
-commands you will use most.
+At the end of this page TorbScript is installed, you have run a file, and you have a project with a passing test.
 
-## Install the toolchain
+## Install
 
-One command installs `torb` for the current user. On Linux, macOS and FreeBSD:
-
-```console
-$ curl -fsSL https://torb.dev/install.sh | sh
-```
-
-In PowerShell on Windows:
+Run the one command for your system from the [install page](../site/install.md), then open a new terminal and check:
 
 ```console
-> irm https://torb.dev/install.ps1 | iex
+$ torb --version
+torb 0.1.0
 ```
 
-The script checks the download against the release's hashes and unpacks the toolchain into your home directory. On
-Linux, macOS and FreeBSD it prints the line that puts `~/.torb/bin` on the `PATH` for you to add to your shell's
-profile; on Windows it adds its directory to your `PATH` itself. A new shell then answers `torb --version`.
-[Install TorbScript](../site/install.md) has the details, and `torb upgrade` keeps the toolchain current. `torb run`
-needs nothing else; `torb build` also needs a C compiler on the `PATH` (`$TORB_CC`, or `clang`, `gcc`, `cc`).
+## Run a file
 
-## Run a single file
+Save this as `hello.trb`:
 
-Put this in `hello.trb`:
-
-```trb
+```trb run
 const name = "World"
 print "Hello, {name}!"
+// prints Hello, World!
 ```
 
 And run it:
@@ -63,128 +47,82 @@ $ torb run hello.trb
 Hello, World!
 ```
 
-Two things happened that are worth naming. `print` is an ordinary function from the prelude, called as a **command**:
-`print "..."` instead of `print("...")`, because a call is written without parentheses wherever the grammar allows it.
-And `{name}` inside the string is interpolation, which works with any expression.
+`{name}` puts a value into the text. A file like this one may hold code at the top level; it needs no `main`.
 
-A file that nothing imports may hold top-level code like this. A file that is imported holds declarations only, which is
-why there is no module initialization order in the language.
-
-## Create a project
-
-`torb new <name>` is the start: it writes a project for you, in the shape [`torb run`](../tooling/torb-run.md) and
-[`torb test`](../tooling/torb-test.md) already know how to build. Without `--offline` it starts from a template of
-[git.torb.dev](https://git.torb.dev) and asks a few questions first - see [`torb new`](../tooling/torb-new.md) for all
-of that. This page uses the plain, built-in scaffold `--offline` writes at once, because it is what the rest of the
-page builds on line by line:
+## Make a project
 
 ```console
 $ torb new hello --offline
 wrote hello/project.trb, hello/src/main.trb, hello/tests/main.test.trb
-```
-
-```text
-hello/
-├ src/
-├─ main.trb          print "Hello, hello"
-├ tests/
-├─ main.test.trb      use test from "std/test", one passing test
-└ project.trb          name = "hello", version = "0.1.0"
-```
-
-Run it from its directory:
-
-```console
 $ cd hello
 $ torb run
 Hello, hello
 ```
 
-`project.trb` is a TorbScript file, not a configuration language. It runs against a built-in `Project` value in a
-sandbox that may read files below its own directory and nothing outside it, so a tool can read it safely:
+`--offline` writes a small starter at once. Without it, `torb new` asks a few questions and starts from a template
+([torb new](../tooling/torb-new.md)). The project is three files:
 
-```trb fragment
-name = "hello"
-version = "0.1.0"
+```text
+hello/
+├ src/
+├─ main.trb           the program that torb run starts
+├ tests/
+├─ main.test.trb      a test, because its name ends in .test.trb
+└ project.trb         the manifest: name = "hello", version = "0.1.0"
 ```
 
-`name = "hello"` writes the field `name` of that `Project`, and that is the whole manifest: `src/main.trb` is the
-program because of its name and `tests/main.test.trb` is a test because of its name, so neither needs a line.
-`torb new` writes the bare name it was given; a package meant to be published uses `owner/name` instead, because an
-owner is a verified namespace of a registry. See [torb new](../tooling/torb-new.md) for the rest of what it writes and
-why.
+`project.trb` is TorbScript too. File names decide the rest, so the manifest needs no more lines.
 
-## Extend it
+## Test it
 
-`src/main.trb` is what runs, and a program is never imported - a file that may hold top-level code cannot be - so the
-function the test below calls goes into a module of its own, `src/greeting.trb`:
+`tests/main.test.trb` holds one test:
 
-```trb
-public fn greeting(name: String): String {
-  "Hello, {name}!"
-}
-```
-
-`public` is what lets another file import `greeting`: a declaration is private to its file unless it says otherwise.
-Replace the one line `torb new` wrote in `src/main.trb` with a call of it:
-
-```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
-use greeting from "./greeting"
-
-print greeting("World")
-```
-
-```console
-$ torb run
-Hello, World!
-```
-
-## Write a test
-
-A test file is a script made of `test` and `group` calls, and the only assertion is `assert`. Replace the placeholder
-test `torb new` wrote in `tests/main.test.trb` with one that calls `greeting`:
-
-```trb skip it imports the 'src/greeting.trb' of the project this page creates, which one snippet of this documentation cannot provide
+```trb check
 use test from "std/test"
-use greeting from "../src/greeting"
 
-test "greets by name" {
-  assert(greeting("World") == "Hello, World!")
+test "hello runs" {
+  assert(1 + 1 == 2)
 }
 ```
-
-`torb test` runs every file of the package whose name ends in `.test.trb`:
 
 ```console
 $ torb test
 tests/main.test.trb
-  ok      greets by name
+  ok      hello runs
 
 1 passed, 0 failed (1 file)
 ```
 
-`test` is an ordinary function of `std/test` whose last parameter is a closure, which is why the block can follow the
-string. `assert` takes an `Expression<Bool>`: it receives the condition **and its source text**, so a failure prints
-the expression and the values in it without a matcher vocabulary to learn. Note the parentheses around `sum == 3`-style
-conditions: an operator at the top level of an argument is one of the places where the canon requires them.
+`test` takes a name and a block. `assert` takes a condition, and when it fails it prints the condition and the values
+in it, so there is nothing else to learn.
 
 ## Check and format
 
-The two commands you will run most often:
-
 ```console
 $ torb check .
-4 files, no problems
+3 files, no problems
 $ torb format --check .
-0 of 4 files would change
+0 of 3 files would change
 ```
 
-`check` type checks everything and answers `no problems` or points at a line. `format` writes the one layout of the
-language over the syntax tree, and `--check` reports the files that are not in it. See
-[Verify your work](../tooling/verifying-your-work.md) for the full list.
+`torb check` finds mistakes without running anything and points at the line. `torb format` writes your files in the one
+layout of the language; `--check` only reports. Run both before you call something done.
+
+## Ship it
+
+`torb run` starts at once. When you want a program file that runs without TorbScript, build one:
+
+```console
+$ torb build --output hello
+wrote hello
+$ ./hello
+Hello, hello
+```
+
+`torb build` needs a C compiler on your computer; the [install page](../site/install.md) says which.
 
 ## Next
 
-- [Values and bindings](values-and-bindings.md) - `const`, `var`, and why that is the whole mutation story.
-- [The torb command](../tooling/the-torb-command.md) - every subcommand.
-- [The language reference](../language/index.md) - one page per construct.
+- [Values and bindings](values-and-bindings.md) - `const`, `var`, and what a copy means.
+- [Modules and packages](modules-and-packages.md) - more than one file, and how a test reaches your code.
+- [The torb command](../tooling/the-torb-command.md) - every command and flag.

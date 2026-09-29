@@ -364,7 +364,7 @@ wrote ../build/dev/scratch.exe
 ## Related
 
 - [Verify your work](verifying-your-work.md) - the commands to run before you are done.
-- [Run your first program](../guide/installing-and-running.md) - the first use of `run` and `check`.
+- [Install and run](../guide/installing-and-running.md) - the first use of `run` and `check`.
 - [torb check](torb-check.md), [torb run](torb-run.md), [torb repl](torb-repl.md), [torb build](torb-build.md),
   [torb test](torb-test.md), [torb format](torb-format.md), [torb lint](torb-lint.md), [torb lsp](torb-lsp.md),
   [torb debug](torb-debug.md), [torb doc](torb-doc.md), [torb new](torb-new.md), [torb init](torb-init.md) - one page

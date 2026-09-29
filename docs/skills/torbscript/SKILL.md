@@ -72,9 +72,9 @@ a project inside an existing repository wants. A `.trb` file that nothing import
 runs it without a project and without a `fn main`. [The torb command](references/tooling/the-torb-command.md) lists
 every subcommand and flag.
 
-## The language in sixty seconds
+## A tour of TorbScript
 
-<!-- inline: guide/the-language-in-sixty-seconds.md -->
+<!-- inline: guide/tour.md -->
 
 ## Two files to look things up in
 

@@ -1,6 +1,6 @@
 ---
 title: std/time
-summary: Instant and Duration, the two time values, Timestamp, a point on the wall clock, plus Clock and sleep, which read and wait on the clock.
+summary: Instant, Duration and Timestamp, the three time values, plus Clock and sleep, which read the two clocks and wait on them.
 kind: package
 status: stable
 order: 120
@@ -16,15 +16,14 @@ source:
 ---
 
 `std/time` is time: points in time (`Instant`) and the spans between them (`Duration`), and a point on the wall clock
-(`Timestamp`). All three are a count of nanoseconds in an `Int64` and cost what the number costs. `Instant` and
-`Duration` are values and are in the prelude; `Timestamp` is an import, and so is `Clock`, which reads the current time
-and is a capability.
+(`Timestamp`). All three are a count of nanoseconds in an `Int64` and cost what the number costs. They are values,
+read nothing, and are in the prelude. `Clock`, which reads the two clocks of the machine, and `sleep`, which waits on
+one, are an import: reading the time is a capability, and the import is what says a file does it.
 
 ## Import
 
 ```trb fragment
-use Instant, Duration, Timestamp from "std/time"
-use Clock from "std/time"
+use Clock, sleep from "std/time"
 ```
 
 ```trb check
@@ -83,11 +82,14 @@ A point on the wall clock: nanoseconds since 1970-01-01 00:00:00 UTC. It means s
 last written, which is what `File.metadata` answers it for ([std/fs](fs.md)) - where an `Instant` only means something
 against another reading, and it can jump, because the clock of a machine is set. It shows as RFC 3339 in UTC, with as
 many digits of the second's fraction as it has: `2026-09-21T14:13:20.5Z`. The difference of two is a `Duration`, and a
-`Duration` added to one is another.
+`Duration` added to one is another. The current one is `Clock.timestamp()`.
+
+A `Timestamp` is in the prelude, like `Duration` and `Instant`, because it reads nothing: a type with a timestamp in a
+field - a row of a database, a token that expires - carries one without its file reading the clock, and `torb publish`
+reports no `clock` for a package that only names the type (see torb publish (skill `torbscript-projects`: `references/tooling/torb-publish.md`)). There is
+no `Timestamp.now()` for the same reason: the value type would read the clock without an import saying so.
 
 ```trb check
-use Timestamp from "std/time"
-
 const written = Timestamp.fromUnixNanoseconds 1_790_000_000_500_000_000
 print written
 print(written + 2.seconds())
@@ -98,14 +100,28 @@ print(written + 2.seconds())
 ```trb fragment
 public native type Clock {
   static fn now(): Instant
+  static fn timestamp(): Timestamp
   native static fn milliseconds(): Int64
 }
 ```
 
-The wall clock; needs the `std/time` capability inside a sandboxed script. `milliseconds()` is monotonic milliseconds
-counted from the first reading - only differences between two readings are meaningful, as for an `Instant` - and is the
-form a tool that measures its own work wants (`torb check --timings`), where an `Instant` and a `Duration` would be two
-allocations per measurement.
+The two clocks of the machine; reading either is the capability `clock`, and a sandboxed script needs the module
+`std/time` granted. `now()` is the monotonic clock, which never goes backwards: for measuring and for deadlines.
+`timestamp()` is the wall clock, the date a signature, an expiry or a log line is written with; it jumps where the
+clock of the machine is set, both ways, so the difference of two timestamps is no measurement. `milliseconds()` is
+monotonic milliseconds counted from the first reading - only differences between two readings are meaningful, as for
+an `Instant` - and is the form a tool that measures its own work wants (`torb check --timings`), where an `Instant` and
+a `Duration` would be two allocations per measurement.
+
+```trb check
+use Clock from "std/time"
+
+const issued = Clock.timestamp()
+const expires = issued + 3600.seconds()
+print "valid from {issued} until {expires}"
+```
+
+In the browser - the playground - the wall clock is the one of the page, `Date.now()` of JavaScript.
 
 ### `sleep`
 

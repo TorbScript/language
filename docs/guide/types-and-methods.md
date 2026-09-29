@@ -1,9 +1,9 @@
 ---
 title: Types and methods
-summary: How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
+summary: Declare a type with fields, give it methods, and tell a method that changes the value from one that returns a changed copy.
 kind: guide
 status: stable
-order: 40
+order: 50
 prerequisites:
   - functions-and-closures.md
 keywords:
@@ -11,23 +11,22 @@ keywords:
   - method
   - var fn
   - static fn
-  - receiver
+  - copy
 source:
   - CONCEPT.md#types
   - examples/tour/src/03-types.trb
 ---
 
-`type` is the one keyword that declares a data type: what other languages split into `struct`, `class` and a record is
-one declaration here. This page takes you from a first `type` to a method that changes it in place.
+`type` is the one keyword for your own data. What other languages split into struct, class and record is one
+declaration here.
 
 ## Goal
 
-At the end of this page you can declare a type with fields and methods, and know which method is a `var fn` and which
-is not.
+At the end of this page you can declare a type with fields and methods, and you know when a method is a `var fn`.
 
-## Declaring a type
+## Declare a type
 
-```trb
+```trb run
 type Point {
   var x: Int
   var y: Int
@@ -36,42 +35,22 @@ type Point {
 const origin = Point 0, 0
 const somewhere = Point x: 3, y: 4
 print "{origin} {somewhere}"
+print(origin == somewhere)
+// prints Point(x: 0, y: 0) Point(x: 3, y: 4)
+// prints false
 ```
 
-A field is public unless marked `private`, and `const` unless marked `var`. The
-[constructor](../glossary.md#constructor) is generated from the fields in declaration order, so `Point(0, 0)` and
-`Point(x: 3, y: 4)` both work without a line of code written for them. `Equals`, `Hash` and `Show` are generated too, which is why `print` above needs nothing extra to show a
-`Point`. See [Declaring a type](../language/types/declaring-a-type.md) for the full list of what is generated.
+A field is `const` unless it says `var`, and public unless it says `private`. You write no constructor: it takes the
+fields in order, by position or by name. Comparing with `==`, hashing, printing and `copy` come for free as well.
 
-## Adding a method
+## Add methods
 
-A method is a function declared inside the type. It does not list its receiver: the parameter list is what the caller
-writes.
-
-```trb
-type Rectangle {
-  width: Int
-  height: Int
-
-  fn area(): Int {
-    width * height
-  }
-}
-
-const rectangle = Rectangle 3, 4
-print rectangle.area()
-```
-
-Inside `area`, `width` and `height` resolve against the receiver without writing `self.width`. A member marked
-[`static`](../language/types/methods.md) belongs to the type instead, and is called through the type rather than
-through a value:
-
-```trb
+```trb run
 type Circle {
   radius: Float
 
   fn area(): Float {
-    3.14159 * radius * radius
+    3.0 * radius * radius
   }
 
   static fn unit(): Circle {
@@ -79,14 +58,18 @@ type Circle {
   }
 }
 
-print Circle.unit().area()
+print Circle(2.0).area()
+print Circle.unit().radius
+// prints 12.0
+// prints 1.0
 ```
 
-## Changing a value in place: `var fn`
+A method is a function inside the type. It does not list `self`: inside it, `radius` is the field of the value it was
+called on. A `static fn` belongs to the type, not to a value, and is called on the type: `Circle.unit()`.
 
-A method that changes its receiver is a `var fn`, and is called a **verb**.
+## A method that changes the value
 
-```trb
+```trb run
 type Counter {
   var count: Int = 0
 
@@ -101,13 +84,14 @@ type Counter {
 
 var counter = Counter()
 counter.increment()
-print counter.count
+const next = counter.incremented()
+print "{counter.count} {next.count}"
+// prints 1 2
 ```
 
-`increment` needs `counter` to be a `var` binding, because a change always needs a
-[`var` path](../language/types/var-paths.md) from the binding down. Its **participle**, `incremented`, is an ordinary
-`fn` and answers a changed copy instead, using `copy`, which every type gets for free. Calling `increment` through a
-`const` binding is a compile error:
+A method that changes the value is a `var fn`, and it can only be called on a `var`. Its twin `incremented` returns a
+changed copy made with `copy`, and works on anything. The name tells them apart: a verb changes in place, a participle
+returns a copy.
 
 ```trb error
 type Counter {
@@ -123,10 +107,8 @@ frozen.increment()
 // error: `increment` needs a `var`
 ```
 
-See [Verbs and participles](../language/types/verbs-and-participles.md) for how a new pair is named.
-
 ## Next
 
-- [Cases and matching](cases-and-matching.md) - a type with more than one shape, and taking it apart.
-- [Declaring a type](../language/types/declaring-a-type.md) - fields, visibility and what is generated, in full.
-- [Mutation and var paths](../language/types/var-paths.md) - what has to be `var` from the binding down.
+- [Cases and matching](cases-and-matching.md) - a type that is one of several shapes.
+- [Declaring a type](../language/types/declaring-a-type.md) - fields, defaults and what comes for free, in full.
+- [Verbs and participles](../language/types/verbs-and-participles.md) - how a pair of method names is chosen.

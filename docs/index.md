@@ -21,7 +21,7 @@ they are enough to find the one page that answers a question. Every page is writ
 ## Sections
 
 - **[Learn to program](start/index.md)** - A course for people who have never written a program, in thirteen short lessons you do in the browser, each with one idea and one small exercise.
-- **[Learn TorbScript](guide/index.md)** - A guide for a programmer who already knows another language - a 15-minute tour, then one idea per page, finishable in an evening.
+- **[Learn TorbScript](guide/index.md)** - For people who already program - a fifteen-minute tour, then one short page per idea, all of it done in an evening.
 - **[The language reference](language/index.md)** - One page per construct of TorbScript, grouped by area, with the exact rules and the mistakes each construct invites.
 - **[The standard library](standard-library/index.md)** - One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - **[Task recipes](how-to/index.md)** - One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.

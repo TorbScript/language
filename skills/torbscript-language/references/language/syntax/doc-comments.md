@@ -113,7 +113,7 @@ print double(4)
 Two commands read the text. `torb docs source` decides the headings, the links,
 the examples and the module comment over a whole tree of sources, and `torb doc` (skill `torbscript-projects`: `references/tooling/torb-doc.md`) renders
 the comments of a package's public API into a reference and runs the code under `# Examples` as its doc tests: an
-example whose first line is `// check` is type checked and not run.
+example whose first line is `// check`, or `// check` and the reason, is type checked and not run.
 
 ## Related
 

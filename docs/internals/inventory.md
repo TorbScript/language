@@ -67,12 +67,15 @@ it carries. `done` in the last column means the page exists and passes the gate.
 
 ### Package 1: guide
 
-The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has `order` and `prerequisites`.
+The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has `order` and `prerequisites`. Since
+2026-09-29 the guide opens with one tour, `guide/tour.md`, which replaced the sixty-second page below and a later
+15-minute tour; `guide/tests-and-tooling.md` went into `guide/installing-and-running.md` and
+`guide/modules-and-packages.md`, and building the toolchain moved to `contributing/building-from-source.md`.
 
 | Path | Title | Kind | Answers | Source |
 |------|-------|------|---------|--------|
-| `guide/the-language-in-sixty-seconds.md` | The language in sixty seconds | guide | What kind of language this is, in one screen | done |
-| `guide/installing-and-running.md` | Run your first program | guide | How to get from nothing to output | done |
+| `guide/tour.md` | A tour of TorbScript | guide | What kind of language this is, in fifteen minutes | done |
+| `guide/installing-and-running.md` | Install and run | guide | How to get from nothing to output | done |
 | `guide/values-and-bindings.md` | Values and bindings | guide | Why `const` and `var` are the whole mutation story | done |
 | `guide/functions-and-closures.md` | Functions and closures | guide | How to declare one, and the one closure form | `CONCEPT.md#functions`, tour 02 |
 | `guide/types-and-methods.md` | Types and methods | guide | How to declare a type and give it behaviour | `CONCEPT.md#types`, tour 03 |
@@ -82,7 +85,6 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `guide/collections-and-pipelines.md` | Collections and pipelines | guide | How to build, read and transform a collection | `CONCEPT.md#collections-and-iteration`, tour 07 |
 | `guide/control-flow-and-dsls.md` | Control flow and your own constructs | guide | Why `unless` is a function and how to write one | `CONCEPT.md#blocks-and-control-flow`, tour 08, tour 09 |
 | `guide/modules-and-packages.md` | Modules and packages | guide | How a program is split into files and a project | `CONCEPT.md#modules-and-packages` |
-| `guide/tests-and-tooling.md` | Tests and the toolchain | guide | How to write a test and run the checks | `CONCEPT.md#toolchain`, `std/test` |
 | `guide/a-small-program.md` | Put it together | guide | One small program that uses everything learned | The examples |
 
 ### Package 2: syntax, values and types

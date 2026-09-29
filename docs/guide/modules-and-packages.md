@@ -1,31 +1,34 @@
 ---
 title: Modules and packages
-summary: How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
+summary: Split a program into files with public and use, import from the standard library, and lay out a project so that its tests reach its code.
 kind: guide
 status: stable
-order: 100
+order: 110
 prerequisites:
   - control-flow-and-dsls.md
 keywords:
   - use
   - public
+  - import
   - package
   - project.trb
+  - test
 source:
   - CONCEPT.md#modules-and-packages
+  - std/test/src/lib.trb
 ---
 
-A program grows past one file quickly. This page splits one into two, brings a name across with `use`, and names the
-package the standard library lives in.
+Every file is a module. A name is private to its file until it says `public`, and another file brings it in with
+`use`.
 
 ## Goal
 
-At the end of this page you can split code across files with `use` and `public`, and read an import from the standard
-library for what it names.
+At the end of this page you can split a project into files, import from the standard library, and test a function of
+your own.
 
-## Public declarations and use
+## Share a name between files
 
-A top-level declaration is private to its file unless marked `public`. Given `src/greeting.trb`:
+`src/greeting.trb`:
 
 ```trb
 public fn greeting(name: String): String {
@@ -33,7 +36,7 @@ public fn greeting(name: String): String {
 }
 ```
 
-Another file of the same project reaches it with `use`, naming the file by a relative path with no extension:
+`src/main.trb`:
 
 ```trb
 use greeting from "./greeting"
@@ -41,67 +44,64 @@ use greeting from "./greeting"
 print greeting("World")
 ```
 
-A name that is not `public` cannot be imported at all - not hidden by convention, but a compile error at the `use`
-line that names it. See [Visibility](../language/modules-and-packages/visibility.md) and
-[use](../language/modules-and-packages/use.md).
+`use` names a file by its path relative to the importing file, without `.trb`. A name without `public` cannot be
+imported: the `use` line is an error.
 
-## Importing from the standard library
+## The standard library
 
-The standard library is a set of packages named `std/<name>`, and they need no entry in a project's dependencies -
-they come with the toolchain.
+```trb check
+use File, IoError from "std/fs"
 
-```trb
-use File from "std/fs"
-
-fn readConfiguration(path: String): Result<String, IoError> {
+fn readSettings(path: String): Result<String, IoError> {
   File.readText path
 }
 ```
 
-`use File from "std/fs"` at the top of a file is also the statement "this file touches files": `std/fs` is not part of
-the [prelude](../language/modules-and-packages/the-prelude.md), the package whose public names - `Option`, `Result`,
-`List`, `print` and the rest of what every file already has - are in scope everywhere without an import.
+The standard library is a set of packages named `std/...`, and they come with TorbScript. The basics, such as `print`,
+`List`, `Option` and `Result`, are in every file without a `use`. Anything that reaches outside the program, like files
+or the network, needs one - so the top of a file shows what it touches.
 
-## A case comes in through its type
-
-A case of a type with cases is imported through that type, and only a case can be:
-
-```trb
-use Option, Option.Some, Option.None from "./option"
-```
-
-After that, `Some` and `None` are bare in a pattern and in an expression, exactly as the prelude's own `Some` and
-`None` already are - see [Importing cases](../language/pattern-matching/importing-cases.md).
-
-## A package is a directory
+## A project
 
 ```text
 hello/
 ├ src/
-├─ main.trb
-├─ lib.trb
-├─ greeting.trb
+├─ main.trb             the program that torb run starts
+├─ greeting.trb         a module
 ├ tests/
-├─ greeting.test.trb
-└ project.trb
+├─ greeting.test.trb    a test
+└ project.trb           the manifest
 ```
 
-The names of the files say what each one is. `src/main.trb` is the program `torb run` executes, `src/lib.trb` is what
-another package imports, `src/greeting.trb` is a module, and a file whose name ends in `.test.trb` is a test that
-`torb test` runs wherever it lies. `project.trb` names the package `owner/name` and needs no line for any of them.
+The names decide what each file is. `src/main.trb` is the program, and nothing imports it. So the code that the
+program and the tests share lives in a module such as `src/greeting.trb`, and both import it.
 
-The program is never imported - a file that may hold top-level code cannot be - so what the program and a test share
-lives in a module like `src/greeting.trb`, and both import it. Only a package listed as a dependency can be reached
-from another one, by its name and never by a relative path - see
-[Packages](../language/modules-and-packages/packages.md).
+## Test your code
 
-A layout like this one - `src/main.trb` beside a testable `src/greeting.trb` - is exactly what
-[`torb new --template app`](../tooling/torb-new.md) starts from; a library with a `src/lib.trb` and nothing to run
-is `torb new`'s own default template, `package`.
+`tests/greeting.test.trb`:
+
+```trb
+use test from "std/test"
+use greeting from "../src/greeting"
+
+test "greets by name" {
+  assert(greeting("World") == "Hello, World!")
+}
+```
+
+```console
+$ torb test
+tests/greeting.test.trb
+  ok      greets by name
+
+1 passed, 0 failed (1 file)
+```
+
+`torb test` runs every file whose name ends in `.test.trb`. `group "name" { ... }` bundles several tests under one
+name. The parentheses in `assert(...)` are needed because the argument has an operator at its top level.
 
 ## Next
 
-- [Tests and the toolchain](tests-and-tooling.md) - writing a test and running the checks.
-- [use](../language/modules-and-packages/use.md) - every import form, including renaming and namespace imports.
-- [The prelude](../language/modules-and-packages/the-prelude.md) - what is in scope everywhere, and why capabilities
-  are not in it.
+- [Put it together](a-small-program.md) - one program that uses everything so far.
+- [use](../language/modules-and-packages/use.md) - every form of an import, including renaming.
+- [Packages](../language/modules-and-packages/packages.md) - what a package is, and how another project depends on it.

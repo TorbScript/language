@@ -85,7 +85,7 @@ between.
 
 - Coming from Kotlin (skill `torbscript-language`: `references/explanation/coming-from-kotlin.md`) and
   Coming from Swift (skill `torbscript-language`: `references/explanation/coming-from-swift.md`) - the full essays, with every difference and its reason.
-- [TorbScript in 15 minutes](../torbscript-in-15-minutes.md) - the rest of the language, just as quickly.
+- [A tour of TorbScript](../tour.md) - the rest of the language in fifteen minutes.
 - Receiver closures (skill `torbscript-language`: `references/language/configuration/receiver-closures.md`) - the one implicit-receiver rule in full.
 - [Syntax cheat sheet](../../language/syntax/cheat-sheet.md) - every form of the language, at a glance.
 
