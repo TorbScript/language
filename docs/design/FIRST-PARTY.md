@@ -258,14 +258,14 @@ needs it and what is done in its place until then.
 
 | # | Gap | Where it belongs | Needed by | Until then |
 |---|---|---|---|---|
-| 1 | **HMAC** (over SHA-256, SHA-1, MD5) | `std/digest` | SCRAM (postgres, mongodb), S3's Signature Version 4, JWT `HS256`, SMTP `CRAM-MD5` | `torb/postgres` has `HmacSha256` in `src/hmac.trb` |
-| 2 | **PBKDF2**, fast in the VM | `std/digest`, a native or a word-level implementation | SCRAM (postgres, mongodb) | `torb/postgres/src/hmac.trb`: 3.2 s in the VM for Postgres's 4 096 rounds, 0.05 s natively |
-| 3 | **SHA-1** | `std/digest` | `mysql_native_password`, SCRAM-SHA-1 of MongoDB, WebSocket's accept key | nothing: `torb/mysql` and `torb/mongodb` wait |
-| 4 | **MD5**, marked as legacy | `std/digest` | Postgres's `md5` authentication, S3's `Content-MD5` | `torb/postgres/src/md5.trb` |
+| 1 | **HMAC** (over SHA-256, SHA-1, MD5) | `std/digest` | SCRAM (postgres, mongodb), S3's Signature Version 4, JWT `HS256`, SMTP `CRAM-MD5` | done: `Hmac<H: Hasher>`, `HmacSha256`, `HmacSha1`, `HmacMd5` in `src/hmac.trb`, keyed once and copied per message |
+| 2 | **PBKDF2**, fast in the VM | `std/digest`, a native or a word-level implementation | SCRAM (postgres, mongodb) | done: `Hmac.pbkdf2` in `src/pbkdf2.trb`, keyed once and copied per round - roughly 7-11 s in the VM for 4 096 rounds on a shared, contended machine (half the time of the same rounds re-keyed naively, measured back to back), 0.2-0.3 s natively; `torb/postgres/src/hmac.trb`'s naive version: 3.2 s / 0.05 s on its own machine |
+| 3 | **SHA-1** | `std/digest` | `mysql_native_password`, SCRAM-SHA-1 of MongoDB, WebSocket's accept key | done: `Sha1` in `src/sha1.trb`; `torb/mysql` and `torb/mongodb` still wait on the drivers themselves |
+| 4 | **MD5**, marked as legacy | `std/digest` | Postgres's `md5` authentication, S3's `Content-MD5` | done: `Md5` in `src/md5.trb`, its doc comment marking it legacy - never for security |
 | 5 | **Cryptographic random bytes** | `std/random`'s slice 2 or `std/os` (RANDOM.md) | every nonce: SCRAM, OAuth `state` and PKCE, MongoDB | `randomQueryIdentifier()` of `std/network`, sixteen bits a call |
 | 6 | **RSA and ECDSA**: RSA-OAEP encryption, PKCS #1 v1.5 and PSS verification, ECDSA P-256 | `std/signature` | `caching_sha2_password` without TLS (mysql), JWT `RS256`/`ES256`, OpenID Connect | `tools/registry/src/rsa.trb` verifies RS256 in TorbScript, privately |
-| 7 | **Base64 and hexadecimal** exported, both alphabets of RFC 4648 | `std/encoding` | SCRAM, SMTP `AUTH`, JWT, S3, MIME | private copies in `std/dns`, `std/yaml`, `tools/registry`, and now `torb/postgres/src/base64.trb` |
-| 8 | **Base32** | `std/encoding` | NATS NKeys, TOTP | nothing |
+| 7 | **Base64 and hexadecimal** exported, both alphabets of RFC 4648 | `std/encoding` | SCRAM, SMTP `AUTH`, JWT, S3, MIME | done: `Base64Alphabet`, `base64Decoded` in `src/base64.trb`, `hexEncoded`/`hexDecoded` in `src/hexadecimal.trb`; `std/dns` and `std/yaml` use them now, and so does `tools/registry` - its private copy is gone |
+| 8 | **Base32** | `std/encoding` | NATS NKeys, TOTP | done: `Base32Alphabet` (standard and extended/"hex") in `src/base32.trb` |
 | 9 | **The wall clock**: the current `Timestamp` | `std/time` (`Clock.timestamp()` or `Timestamp.now()`) | JWT `exp` and `nbf`, S3's signing date, OAuth token expiry, SMTP's `Date` | `tools/registry` reads the time from SQLite (`database.now()`); `Clock.now()` is monotonic |
 | 10 | **`Timestamp` without the clock capability**: the value type in the prelude, beside `Duration` and `Instant` | `std/prelude` | every package with a timestamp in a signature | `torb publish` reports `clock` for `torb/sql` because `SqlValue` has a `Timestamp` case |
 | 11 | **Calendar types and parsing**: `Date`, a wall-clock date and time, zones; `Timestamp` from RFC 3339 text | `std/time` | every database driver's `date` and `timestamp`, HTTP's `Date` field, S3 | `torb/sql` has `Date`, `timestampOf`, `dateOf` and Hinnant's two algorithms, which `std/time` keeps private |

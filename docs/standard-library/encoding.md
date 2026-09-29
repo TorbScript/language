@@ -1,6 +1,6 @@
 ---
 title: std/encoding
-summary: Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
+summary: Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value without its type, Format for streaming, and RFC 4648's Base64, Base32 and hexadecimal for bytes as text.
 kind: package
 status: stable
 order: 60
@@ -15,12 +15,20 @@ keywords:
   - EncodedValue
   - Structure
   - Format
+  - Base64Alphabet
+  - Base32Alphabet
+  - hexEncoded
+  - hexDecoded
+  - EncodingError
   - serialization
 source:
   - std/encoding/src/lib.trb
   - std/encoding/src/values.trb
   - std/encoding/src/structure.trb
   - std/encoding/src/derived.trb
+  - std/encoding/src/base64.trb
+  - std/encoding/src/base32.trb
+  - std/encoding/src/hexadecimal.trb
 ---
 
 `std/encoding` is what other languages need reflection for: serialization, configuration mapping, database rows,
@@ -30,11 +38,16 @@ never sees a type, so there is no tree in between. All three are generated for a
 outside, over exactly its parameters; the generated code is a straight line of the steps this package declares, and
 could be written by hand. The traits, `DecodeError`, `EncodedValue` and `rendered` are in scope through the prelude.
 
+This package also has the plainer kind of encoding, unrelated to the three forms above: bytes as text and back, RFC
+4648's Base64, Base32 and hexadecimal - for a format whose wire is itself text (a JWT, a `!!binary` YAML scalar, a
+TOTP secret), not for a value's own `Encoder.bytes`.
+
 ## Import
 
 ```trb fragment
 use Encode, Decode, Describe, DecodeError, Format, rendered from "std/encoding"
 use Encoder, Decoder, Describer, EncodedValue, Structure, structureOf, Naming from "std/encoding"
+use Base64Alphabet, Base32Alphabet, hexEncoded, hexDecoded, EncodingError from "std/encoding"
 ```
 
 ```trb check
@@ -242,9 +255,83 @@ format's default options. `Encode`/`Decode` and `Encoder`/`Decoder` stay synchro
 level up, at the element, through a resumable framer that finds where one element ends while the element itself
 decodes through the ordinary `Decode`.
 
+### Base64Alphabet, base64Decoded
+
+```trb fragment
+public type EncodingError with Show, Error {
+  reason: String
+  offset: Int
+}
+
+public type Base64Alphabet {
+  case Standard
+  case UrlSafe
+
+  fn encoded(bytes: Bytes, padded: Bool = true): String
+}
+
+public fn base64Decoded(text: String): Result<List<UInt8>, EncodingError>
+```
+
+Base64 (RFC 4648 sections 4 and 5): `Base64Alphabet.Standard` (`+`, `/`) for everywhere nothing says otherwise, and
+`Base64Alphabet.UrlSafe` (`-`, `_`) for a JSON Web Token's segments and a JSON Web Key's modulus - each with or without
+the `=` padding. `base64Decoded` reads either alphabet, padded or not, in the same call: the two agree on 62 of their
+64 characters, so nothing is lost by not asking which one a text was written in. Whitespace inside the text is
+skipped, the shape a wrapped MIME block needs.
+
+```trb check
+use Base64Alphabet, base64Decoded from "std/encoding"
+
+const encoded = Base64Alphabet.UrlSafe.encoded "hi".bytes(), padded: false
+print encoded
+print base64Decoded(encoded)
+```
+
+### Base32Alphabet
+
+```trb fragment
+public type Base32Alphabet {
+  case Standard
+  case Extended
+
+  fn encoded(bytes: Bytes, padded: Bool = true): String
+  fn decoded(text: String): Result<List<UInt8>, EncodingError>
+}
+```
+
+Base32 (RFC 4648 sections 6 and 7): `Base32Alphabet.Standard` (`A`-`Z`, `2`-`7`), what NATS NKeys and a TOTP secret are
+written in, and `Base32Alphabet.Extended` (`0`-`9`, `A`-`V`, "base32hex"), which sorts the same as the bytes it stands
+for. Unlike Base64's two alphabets, these are not read together - `A` means 0 in one and 10 in the other - so decoding
+takes the alphabet the text was written in.
+
+```trb check
+use Base32Alphabet from "std/encoding"
+
+print Base32Alphabet.Standard.encoded("foobar".bytes())
+```
+
+### Hexadecimal: hexEncoded, hexDecoded
+
+```trb fragment
+public fn hexEncoded(bytes: Bytes, uppercase: Bool = false): String
+public fn hexDecoded(text: String): Result<List<UInt8>, EncodingError>
+```
+
+Hexadecimal (RFC 4648 section 8): two digits a byte, most significant nibble first. `hexEncoded` writes lower case
+unless told otherwise; `hexDecoded` reads either case, mixed or not. `Digest.hex()` of [std/digest](digest.md) is this
+in one direction only, fixed to lower case, for a hash's own printing.
+
+```trb check
+use hexEncoded, hexDecoded from "std/encoding"
+
+print hexEncoded("hi".bytes())
+print hexDecoded("6869")
+```
+
 ## Related
 
 - [std/json](json.md) - `Json`, the one format the standard library implements.
 - [Encode and Decode](../language/reflection/encode-and-decode.md) - the rule the three forms are derived by.
 - [std/iteration](iteration.md) - `Stage`, which `Format.items` and `Format.encoded` answer.
+- [std/digest](digest.md) - `Digest.hex()`, and `Hmac`/`Hmac.pbkdf2` over SHA-256, SHA-1 and MD5.
 - [The standard library](index.md) - the other packages.

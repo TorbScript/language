@@ -36,7 +36,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/number](number.md)** - Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - **[std/collections](collections.md)** - The collection traits every signature talks about, and the implementations that only show up where one is built.
 - **[std/iteration](iteration.md)** - Iterate and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
-- **[std/encoding](encoding.md)** - Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value or a structure without its type, and Format for the streaming side.
+- **[std/encoding](encoding.md)** - Encode, Decode and Describe, the Encoder, Decoder and Describer a format implements, EncodedValue and Structure for a value without its type, Format for streaming, and RFC 4648's Base64, Base32 and hexadecimal for bytes as text.
 - **[std/expression](expression.md)** - Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - **[std/task](task.md)** - Task and Channel, the two shared types that connect concurrent work, spawn, cancellation with Cancelled and TimedOut, and pause.
 - **[std/parallel](parallel.md)** - parallel() on anything that can be iterated, Parallel, a pipeline whose fused stages run on the workers of the pool with the results in input order, and Cut, the collections that cut themselves.
@@ -63,7 +63,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/tls](tls.md)** - TLS 1.2 and 1.3 over a TcpStream - a client that checks the server's certificate the way the platform does, a server with an identity, a stream like the TCP one, and DNS over TLS.
 - **[std/http](http.md)** - HTTP/1.1 and HTTPS, client and server, over std/network and std/tls - get, post and send answer a Task, a handler answers a Task of a Response, and every body is a stream.
 - **[std/binary](binary.md)** - ByteReader, ByteWriter, BitReader and BitWriter - numbers of every width in either byte order, IEEE 754 floats, LEB128, runs of bytes and text, read with a ReadError instead of a panic and written into a growable buffer.
-- **[std/digest](digest.md)** - Sha256, Sha512 and the Digest they answer - SHA-256 and SHA-512 of FIPS 180-4 in TorbScript, fed at once or in pieces, shown as lowercase hexadecimal.
+- **[std/digest](digest.md)** - Sha256, Sha512, Sha1 and Md5 and the Digest they answer, Hmac (RFC 2104) and PBKDF2 (RFC 8018) over any of them - fed at once or in pieces, shown as lowercase hexadecimal.
 - **[std/compression](compression.md)** - DEFLATE and gzip in TorbScript - inflated and gunzipped read every stream the formats allow, deflated and gzipped write deterministic output, and crc32 is the checksum gzip uses.
 - **[std/archive](archive.md)** - tar archives - untarred reads what GNU tar, bsdtar and pax write, with modes and links; tarred writes ustar and pax; extract of std/archive/extract unpacks safely.
 - **[std/signature](signature.md)** - Ed25519 of RFC 8032 in TorbScript - a private key from a 32-byte seed signs, a public key verifies, and keys and signatures are capsules that read and write themselves as bytes and hexadecimal.
