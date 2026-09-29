@@ -23,7 +23,7 @@ language reference (skill `torbscript-language`: `references/language/index.md`)
 
 ## Sections
 
-- **[Coming from another language](coming-from/index.md)** - One page per language - a table of the 10 to 15 things that map directly, the 5 that will surprise you, and what is deliberately missing.
+- **[Coming from another language](coming-from/index.md)** - One page per language you may know - what maps directly, the habits that will trip you up, and what TorbScript leaves out.
 
 ## Pages
 

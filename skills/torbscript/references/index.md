@@ -31,12 +31,12 @@ answers the question. A page marked planned describes a feature that does not co
 
 ## guide/coming-from
 
-- `guide/coming-from/index.md` - **Coming from another language** (index): One page per language - a table of the 10 to 15 things that map directly, the 5 that will surprise you, and what is deliberately missing.
-- `guide/coming-from/rust.md` - **Coming from Rust** (contrast): The 15 things that map directly from Rust, the 5 that will surprise you, and what Rust has that TorbScript deliberately does not.
-- `guide/coming-from/typescript-javascript.md` - **Coming from TypeScript and JavaScript** (contrast): The 15 things that map directly from TypeScript and JavaScript, the 5 that will surprise you, and the type-level tricks that have no counterpart.
-- `guide/coming-from/python.md` - **Coming from Python** (contrast): The 15 things that map directly from Python, the 5 that will surprise you, and what static, value-typed code gives up on dynamism.
-- `guide/coming-from/go.md` - **Coming from Go** (contrast): The 15 things that map directly from Go, the 5 that will surprise you, and the concurrency primitives that are not built yet.
-- `guide/coming-from/kotlin-swift.md` - **Coming from Kotlin and Swift** (contrast): The 15 things that map directly from Kotlin or Swift, the 5 that will surprise you, and the property and coroutine machinery neither one keeps.
+- `guide/coming-from/index.md` - **Coming from another language** (index): One page per language you may know - what maps directly, the habits that will trip you up, and what TorbScript leaves out.
+- `guide/coming-from/rust.md` - **Coming from Rust** (contrast): What maps directly from Rust, the five habits that will trip you up, and what Rust has that TorbScript leaves out on purpose.
+- `guide/coming-from/typescript-javascript.md` - **Coming from TypeScript and JavaScript** (contrast): What maps directly from TypeScript and JavaScript, the five habits that will trip you up, and the type tricks that have no counterpart.
+- `guide/coming-from/python.md` - **Coming from Python** (contrast): What maps directly from Python, the five habits that will trip you up, and what a language checked before it runs leaves out.
+- `guide/coming-from/go.md` - **Coming from Go** (contrast): What maps directly from Go, the five habits that will trip you up, and the concurrency tools that are not built yet.
+- `guide/coming-from/kotlin-swift.md` - **Coming from Kotlin and Swift** (contrast): What maps directly from Kotlin or Swift, the five habits that will trip you up, and the property and coroutine features TorbScript leaves out.
 
 ## language/syntax
 

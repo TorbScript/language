@@ -482,7 +482,7 @@ Load the one a task needs, when it needs it:
 ## What else this skill holds
 
 - [Learn TorbScript](references/guide/index.md) - For people who already program - a fifteen-minute tour, then one short page per idea, all of it done in an evening.
-- [Coming from another language](references/guide/coming-from/index.md) - One page per language - a table of the 10 to 15 things that map directly, the 5 that will surprise you, and what is deliberately missing.
+- [Coming from another language](references/guide/coming-from/index.md) - One page per language you may know - what maps directly, the habits that will trip you up, and what TorbScript leaves out.
 - [Task recipes](references/how-to/index.md) - One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.
 - [The toolchain](references/tooling/index.md) - The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
 
