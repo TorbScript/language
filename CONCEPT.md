@@ -2584,6 +2584,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **`private constructor` rejected** (2026-09-29, owner; was a candidate in Open Questions). A capsule already covers
+  the case it was for: `private` fields without a default, plus the `static fn` factory and only the accessors it
+  actually needs - two or three lines, not a keyword. A field readable from outside while its constructor, `copy` and
+  assignment stay closed would also be exactly the property that "there are no getters, setters or properties" (Types)
+  rules out: `length()` and every other trait member stay methods, called with `()`, never a field that only looks
+  read-only from outside.
 - **`deprecated("why", replacement: "name", since: "0.4")` marks a declaration or a member** (2026-09-28; answers the
   open question "`deprecated` (and `since`)"; docs/design/DEPRECATION.md, docs/language/modules-and-packages/deprecation.md).
   A clause on the line of its own above the declaration, below the doc comment: a reason, then the replacement - a
@@ -3230,9 +3236,6 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Fields on one line: `type P { x: Int, y: Int }` does not parse, because fields are separated by line ends. Whether
   the comma form is allowed inside the block is a question of layout only; the head form `type P(x: Int, y: Int)` stays
   refused (Decision Log).
-- A type whose fields are readable from outside but whose constructor, `copy` and field assignment are its own: one
-  line (`private constructor`) instead of private fields plus accessors. A candidate, taken up when the accessors of a
-  capsule turn out to hurt in practice.
 - `type fn` and `type const` instead of `static` (Swift's "type methods"). A candidate; the condition is that `const` is
   then mandatory after `type`, because `type origin = Point(0, 0)` beside the alias `type Meters = Float` would differ
   only in the first letter, and the place for nested or associated types would be taken. The keyword stands at one
