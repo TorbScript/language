@@ -4,20 +4,28 @@
  *
  * The contract with the site is `docs/tooling/torb-docs-site.md`, "Runnable blocks and exercises": the site's script
  * loads this file where a page has a mount, and calls `TorbPlayground.mount(element, options)` for each one. Nothing is
- * mounted here by itself. What this file loads besides - the worker, `torb.js` and `torb.wasm` - it loads relative to
- * its own URL and with its own query, so a new version of the site never pairs an old page with a new toolchain.
+ * mounted here by itself. What this file loads besides - the workers, `torb.js`, `torb.wasm`, the editor and the
+ * examples - it loads relative to its own URL and with its own query, so a new version of the site never pairs an old
+ * page with a new toolchain.
  *
  *   TorbPlayground.mount(element, { source, file, expectedOutput, solution, labels, onResult })
  *   TorbPlayground.run(source, file?)  ->  Promise<{ output, errors, exitCode, diagnostics, milliseconds }>
  *   TorbPlayground.stop()               stops the program that runs
  *
- * The patterns are the ones other languages' playgrounds settled on, and nothing more: a textarea under a coloured copy
- * of itself (the Gleam tour's editor), Run and Ctrl or Cmd+Enter (the Rust Playground), the output under the editor
- * with the lines of the checker's errors marked in it (the Go Playground), Reset and Show solution for an exercise
- * (the Svelte tutorial), and the source compressed into the address as the share link (the TypeScript playground).
+ * The patterns are the ones other languages' playgrounds settled on: Run and Ctrl or Cmd+Enter (the Rust Playground),
+ * the output under the editor with the places of the checker's errors as links into the code (the Go Playground), Reset
+ * and Show solution for an exercise (the Svelte tutorial), the source compressed into the address as the share link
+ * (the TypeScript playground), and a gallery of examples on the page `/play` (the playgrounds of Go, Kotlin and Rust).
  * The compiler runs in a worker, so a program that never ends never freezes the page: Run becomes Stop.
  *
- * Plain JavaScript without a build step and without a dependency, loaded as a classic script or as a module.
+ * **Two editors.** A mount starts with a textarea under a coloured copy of itself (the Gleam tour's editor): it is
+ * there at once, costs nothing and needs nothing. Where the reader is about to write - at once on `/play`, at the first
+ * focus elsewhere - it becomes CodeMirror (`playground-editor.js`, built from `editor/`), connected to `torb lsp`,
+ * which runs in a worker of its own for the whole page: completion, the checker's diagnostics while typing, hover,
+ * signature help, definition, formatting and the semantic colours are the language server's. A run never waits for
+ * it, and it never waits for a run.
+ *
+ * Plain JavaScript without a build step, loaded as a classic script or as a module.
  */
 (function () {
   "use strict";
@@ -50,6 +58,10 @@
     tooMuchOutput: "Stopped: the program printed more than a megabyte",
     crashed: "The toolchain stopped unexpectedly",
     unsupported: "This browser cannot run the playground: it needs WebAssembly with exception handling",
+    examples: "Examples",
+    replace: "Replace your code with this example?",
+    format: "Format",
+    source: "TorbScript source",
   };
 
   // --------------------------------------------------------------------------------------------- the highlighting --
@@ -64,46 +76,46 @@
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  /** A token as HTML, one span per line, so that every line of the result stands on its own. */
-  function span(kind, text) {
-    return text.split("\n").map(function (line) {
-      return line === "" ? "" : '<span class="t-' + kind + '">' + escapeHtml(line) + "</span>";
-    }).join("\n");
-  }
-
   /**
-   * TorbScript as HTML, in the token classes of the site (`t-keyword`, `t-type`, `t-string`, ...), which the site's
-   * stylesheet colours as BRAND.md section 9 says. The site colours with the compiler's resolver when it is built; this
-   * is its lexer's half, fast enough for every keystroke: a capitalized name is a type, one behind a dot a case, a
-   * name in front of a parenthesis a function.
+   * TorbScript as tokens `{ from, to, kind }` in the kinds of the site's token classes (`t-keyword`, `t-type`, ...),
+   * which the site's stylesheet colours as BRAND.md section 9 says. The site colours with the compiler's resolver when
+   * it is built, and the editor with the language server once it has checked the text; this is the lexer's half, fast
+   * enough for every keystroke: a capitalized name is a type, one behind a dot a case, a name in front of a
+   * parenthesis or of an argument a function. What lies between two tokens is white space.
    */
-  function highlight(code) {
-    let html = "";
+  function tokenize(code) {
+    const tokens = [];
     let index = 0;
     const length = code.length;
     // What a closing brace ends: an interpolation of a string resumes the string
     const braces = [];
     let previousWord = "";
+
+    function add(kind, from, to) {
+      if (to > from) {
+        tokens.push({ from: from, to: to, kind: kind });
+      }
+    }
+
     while (index < length) {
       const character = code[index];
       const next = code[index + 1];
       if (character === "/" && next === "/") {
         const end = code.indexOf("\n", index);
         const stop = end < 0 ? length : end;
-        html += span("comment", code.slice(index, stop));
+        add("comment", index, stop);
         index = stop;
         continue;
       }
       if (character === "/" && next === "*") {
         const end = code.indexOf("*/", index + 2);
         const stop = end < 0 ? length : end + 2;
-        html += span("comment", code.slice(index, stop));
+        add("comment", index, stop);
         index = stop;
         continue;
       }
       if (character === '"' || (code.startsWith('raw"', index) && !isWordCharacter(code[index - 1]))) {
-        const result = readString(code, index);
-        html += result.html;
+        const result = readString(code, index, add);
         index = result.end;
         if (result.interpolation) {
           braces.push("string:" + result.quotes);
@@ -116,13 +128,13 @@
           end += code[end] === "\\" ? 2 : 1;
         }
         end = Math.min(length, end + 1);
-        html += span("string", code.slice(index, end));
+        add("string", index, end);
         index = end;
         continue;
       }
       if (character === "{") {
         braces.push("block");
-        html += span("punctuation", "{");
+        add("punctuation", index, index + 1);
         index += 1;
         continue;
       }
@@ -130,22 +142,22 @@
         const opened = braces.pop();
         if (opened && opened.startsWith("string:")) {
           const quotes = opened.slice("string:".length);
-          const result = readStringRest(code, index + 1, quotes, false);
-          html += span("string", "}") + result.html;
+          add("string", index, index + 1);
+          const result = readStringRest(code, index + 1, quotes, false, add);
           index = result.end;
           if (result.interpolation) {
             braces.push(opened);
           }
           continue;
         }
-        html += span("punctuation", "}");
+        add("punctuation", index, index + 1);
         index += 1;
         continue;
       }
       if (isDigit(character)) {
-        const match = /^(0x[0-9a-fA-F_]+|0b[01_]+|[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?)/.exec(code.slice(index));
+        const match = /^(0x[0-9a-fA-F_]+|0b[01_]+|[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?)/.exec(code.slice(index, index + 64));
         const text = match ? match[0] : character;
-        html += span("number", text);
+        add("number", index, index + text.length);
         index += text.length;
         continue;
       }
@@ -170,20 +182,36 @@
         } else {
           kind = "variable";
         }
-        html += span(kind, word);
+        add(kind, index, end);
         previousWord = word;
         index = end;
         continue;
       }
       if (character === " " || character === "\n" || character === "\t" || character === "\r") {
-        html += character;
         index += 1;
         continue;
       }
-      html += span("punctuation", character);
+      add("punctuation", index, index + 1);
       index += 1;
     }
-    return html;
+    return tokens;
+  }
+
+  /** TorbScript as HTML: the tokens as spans, one span per line, so that every line of the result stands on its own. */
+  function highlight(code) {
+    let html = "";
+    let at = 0;
+    for (const token of tokenize(code)) {
+      html += escapeHtml(code.slice(at, token.from)) + span(token.kind, code.slice(token.from, token.to));
+      at = token.to;
+    }
+    return html + escapeHtml(code.slice(at));
+  }
+
+  function span(kind, text) {
+    return text.split("\n").map(function (line) {
+      return line === "" ? "" : '<span class="t-' + kind + '">' + escapeHtml(line) + "</span>";
+    }).join("\n");
   }
 
   /** The cases the prelude imports, which a program writes bare. */
@@ -204,7 +232,7 @@
     if (next === undefined || !isWordStart(next)) {
       return false;
     }
-    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(code.slice(end + 1));
+    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(code.slice(end + 1, end + 64));
     return word !== null && !keywords.has(word[0]);
   }
 
@@ -221,7 +249,7 @@
   }
 
   /** A string from its opening quote: `"..."`, `"""..."""`, `raw"..."`, up to its end or its first interpolation. */
-  function readString(code, start) {
+  function readString(code, start, add) {
     let index = start;
     const raw = code.startsWith("raw", index);
     if (raw) {
@@ -229,21 +257,18 @@
     }
     const quotes = code.startsWith('"""', index) ? '"""' : '"';
     index += quotes.length;
-    const rest = readStringRest(code, index, quotes, raw);
-    return {
-      html: span("string", code.slice(start, index)) + rest.html,
-      end: rest.end,
-      interpolation: rest.interpolation,
-      quotes: quotes,
-    };
+    add("string", start, index);
+    const rest = readStringRest(code, index, quotes, raw, add);
+    return { end: rest.end, interpolation: rest.interpolation, quotes: quotes };
   }
 
-  function readStringRest(code, start, quotes, raw) {
+  function readStringRest(code, start, quotes, raw, add) {
     let index = start;
     while (index < code.length) {
       if (code.startsWith(quotes, index)) {
         index += quotes.length;
-        return { html: span("string", code.slice(start, index)), end: index, interpolation: false };
+        add("string", start, index);
+        return { end: index, interpolation: false };
       }
       const character = code[index];
       if (character === "\n" && quotes === '"') {
@@ -254,11 +279,13 @@
         continue;
       }
       if (character === "{" && !raw) {
-        return { html: span("string", code.slice(start, index + 1)), end: index + 1, interpolation: true };
+        add("string", start, index + 1);
+        return { end: index + 1, interpolation: true };
       }
       index += 1;
     }
-    return { html: span("string", code.slice(start, index)), end: index, interpolation: false };
+    add("string", start, index);
+    return { end: index, interpolation: false };
   }
 
   // --------------------------------------------------------------------------------------------- the diagnostics --
@@ -300,8 +327,9 @@
   // ------------------------------------------------------------------------------------------------ the toolchain --
 
   /**
-   * The compiled `torb.wasm`, fetched once per page when the first run asks for it (or a reader is about to), and kept:
-   * the browser's HTTP cache keeps the file between pages, and its engine keeps the compiled code.
+   * The compiled `torb.wasm`, fetched once per page when the first run or the language server asks for it (or a reader
+   * is about to), and kept: the browser's HTTP cache keeps the file between pages, and its engine keeps the compiled
+   * code. Every worker of the page instantiates this one module.
    */
   let compiling = null;
   let compiled = false;
@@ -447,6 +475,108 @@
     }
   }
 
+  // ------------------------------------------------------------------------------------------ the language server --
+
+  /**
+   * The editor, `playground-editor.js`, loaded once per page when the first mount is about to be used. A browser that
+   * cannot load it keeps the light editor, which runs as well.
+   */
+  let loadingEditor = null;
+
+  function editorModule() {
+    if (loadingEditor === null) {
+      loadingEditor = import(fileAddress("playground-editor.js"));
+    }
+    return loadingEditor;
+  }
+
+  /** The client of the page's language server, made by the first editor that connects. */
+  let languageClient = null;
+  /** How often the language worker may end before the page stops starting it again. */
+  let languageRestarts = 3;
+
+  /**
+   * The language server of the page: `torb lsp` in a worker of its own (playground-worker.js, `{ kind: "language" }`),
+   * which lives as long as the page and holds every document of it. The client is lsp-client's, and the transport the
+   * worker's messages. A server that ends - it panicked on something the reader wrote - is started again and told the
+   * open documents anew, a few times.
+   */
+  function languageServer(editor) {
+    if (languageClient !== null) {
+      return languageClient;
+    }
+    const handlers = [];
+    let languageWorker = null;
+    let pending = [];
+    const transport = {
+      send: function (message) {
+        if (languageWorker !== null) {
+          languageWorker.postMessage({ kind: "lsp", message: message });
+        } else {
+          pending.push(message);
+        }
+      },
+      subscribe: function (handler) {
+        handlers.push(handler);
+      },
+      unsubscribe: function (handler) {
+        const index = handlers.indexOf(handler);
+        if (index >= 0) {
+          handlers.splice(index, 1);
+        }
+      },
+    };
+
+    function start() {
+      compiledToolchain().then(function (module) {
+        const started = new Worker(fileAddress("playground-worker.js"));
+        started.onmessage = function (event) {
+          const message = event.data;
+          if (message.kind === "lsp") {
+            for (const handler of handlers.slice()) {
+              handler(message.message);
+            }
+          } else if (message.kind === "exited") {
+            ended(started);
+          }
+        };
+        started.onerror = function (event) {
+          event.preventDefault();
+          ended(started);
+        };
+        started.postMessage({ kind: "language", module: module });
+        languageWorker = started;
+        for (const message of pending) {
+          started.postMessage({ kind: "lsp", message: message });
+        }
+        pending = [];
+      }, function () {
+        // No toolchain in this browser: the editor stays an editor
+      });
+    }
+
+    function ended(which) {
+      which.terminate();
+      if (languageWorker !== which) {
+        return;
+      }
+      languageWorker = null;
+      if (languageRestarts <= 0) {
+        return;
+      }
+      languageRestarts -= 1;
+      // A new server knows nothing: connecting again initializes it and opens every document of the page anew
+      languageClient.disconnect();
+      pending = [];
+      start();
+      languageClient.connect(transport);
+    }
+
+    languageClient = editor.createClient(transport, { tokenize: tokenize });
+    start();
+    return languageClient;
+  }
+
   // -------------------------------------------------------------------------------------------------- the editor --
 
   /**
@@ -454,7 +584,7 @@
    * the keyboard stay the browser's own, and the colours follow on every input. Tab indents by two spaces, as the
    * formatter does; Escape and then Tab leaves the editor, so the keyboard is never trapped in it.
    */
-  function createEditor(container, source, onRun) {
+  function createLightEditor(container, source, onRun, label) {
     const frame = element("div", "playground-editor");
     const shown = element("pre", "code language-trb playground-highlight");
     shown.setAttribute("aria-hidden", "true");
@@ -466,7 +596,7 @@
     input.setAttribute("autocomplete", "off");
     input.setAttribute("autocorrect", "off");
     input.setAttribute("wrap", "off");
-    input.setAttribute("aria-label", "TorbScript source");
+    input.setAttribute("aria-label", label);
     input.value = source;
     frame.appendChild(shown);
     frame.appendChild(input);
@@ -581,6 +711,7 @@
     render();
 
     return {
+      frame: frame,
       input: input,
       get value() {
         return input.value;
@@ -610,6 +741,99 @@
       onChange: function (listener) {
         listeners.push(listener);
       },
+    };
+  }
+
+  /** The documents of the page's language server: one per mount, `/play`'s is `main.trb`. */
+  let documentCount = 0;
+
+  /**
+   * The editor of a mount: the light one at first, CodeMirror connected to the language server once `upgrade` is
+   * called and the editor has loaded. Everything else of the mount talks to this, whichever editor is behind it.
+   */
+  function createEditor(container, source, options) {
+    const light = createLightEditor(container, source, options.onRun, options.label);
+    const listeners = [];
+    let rich = null;
+    let upgrading = null;
+
+    function changed(text) {
+      for (const listener of listeners) {
+        listener(text);
+      }
+    }
+    light.onChange(changed);
+
+    function upgrade() {
+      if (upgrading === null) {
+        upgrading = editorModule().then(function (module) {
+          const client = languageServer(module);
+          documentCount += 1;
+          const uri = options.page ? "file:///torb/work/main.trb"
+            : "file:///torb/work/block-" + documentCount + "/" + (options.file || "main.trb");
+          const hadFocus = document.activeElement === light.input;
+          const holder = element("div", "playground-editor playground-codemirror");
+          rich = module.createEditor(holder, {
+            doc: light.value,
+            selection: light.input.selectionStart,
+            tokenize: tokenize,
+            onRun: options.onRun,
+            onChange: changed,
+            lineNumbers: options.page,
+            label: options.label,
+            client: client,
+            uri: uri,
+          });
+          light.frame.replaceWith(holder);
+          if (hadFocus) {
+            rich.focus();
+          }
+          if (typeof options.onUpgrade === "function") {
+            options.onUpgrade();
+          }
+        }).catch(function () {
+          // The light editor stays
+        });
+      }
+      return upgrading;
+    }
+
+    return {
+      get value() {
+        return rich !== null ? rich.value : light.value;
+      },
+      set value(text) {
+        if (rich !== null) {
+          rich.value = text;
+        } else {
+          light.value = text;
+        }
+      },
+      mark: function (diagnostics) {
+        (rich !== null ? rich : light).mark(diagnostics);
+      },
+      moveTo: function (line, column) {
+        (rich !== null ? rich : light).moveTo(line, column);
+      },
+      focus: function () {
+        if (rich !== null) {
+          rich.focus();
+        } else {
+          light.input.focus();
+        }
+      },
+      onChange: function (listener) {
+        listeners.push(listener);
+      },
+      /** The server's formatting of the text; false where there is no language server yet. */
+      format: function () {
+        return rich !== null ? rich.format() : false;
+      },
+      get hasLanguageServer() {
+        return rich !== null;
+      },
+      upgrade: upgrade,
+      input: light.input,
     };
   }
 
@@ -688,6 +912,12 @@
     }
   }
 
+  /** The example an address names, `#example=<id>`, or `null`. */
+  function exampleOfFragment(fragment) {
+    const found = /^#?example=([A-Za-z0-9_-]+)$/.exec(fragment);
+    return found ? found[1] : null;
+  }
+
   function base64url(bytes) {
     let text = "";
     for (let index = 0; index < bytes.length; index += 0x8000) {
@@ -705,13 +935,290 @@
     return bytes;
   }
 
+  // ------------------------------------------------------------------------------------------------ the examples --
+
+  /**
+   * The gallery of `/play`: `examples/index.json` beside this script, written by `playground/examples/` - every
+   * example with `id`, `file`, `title`, `description`, `category`, `level`, whether it is the `default`, and `de` with
+   * the German title and description. The manifest is a list of them, or an object whose `examples` is that list;
+   * `categories`, where it has them, orders the categories and names them (`{ id, title, de: { title } }`). A site
+   * without the folder has no gallery.
+   */
+  let loadingExamples = null;
+
+  function examples() {
+    if (loadingExamples === null) {
+      loadingExamples = fetch(fileAddress("examples/index.json")).then(function (response) {
+        if (!response.ok) {
+          throw new Error("examples/index.json: " + response.status);
+        }
+        return response.json();
+      }).then(function (manifest) {
+        const list = Array.isArray(manifest) ? manifest : (manifest && manifest.examples) || [];
+        const categories = manifest && Array.isArray(manifest.categories) ? manifest.categories : [];
+        return {
+          examples: list.filter(function (entry) {
+            return entry && typeof entry.id === "string" && typeof entry.file === "string";
+          }),
+          categories: categories,
+        };
+      });
+    }
+    return loadingExamples;
+  }
+
+  /** The source of an example, from the folder of the manifest. */
+  function exampleSource(entry) {
+    return fetch(fileAddress("examples/" + entry.file)).then(function (response) {
+      if (!response.ok) {
+        throw new Error("examples/" + entry.file + ": " + response.status);
+      }
+      return response.text();
+    });
+  }
+
+  /** The page's language, as the site sets it on `<html lang>`: German takes the manifest's `de`. */
+  function isGerman() {
+    return /^de\b/i.test(document.documentElement.lang || "");
+  }
+
+  function localized(entry, field) {
+    if (isGerman() && entry.de && typeof entry.de[field] === "string" && entry.de[field]) {
+      return entry.de[field];
+    }
+    return typeof entry[field] === "string" ? entry[field] : "";
+  }
+
+  /** The categories in the manifest's order, or in the order the examples first name them, each with its examples. */
+  function groupedExamples(manifest) {
+    const groups = [];
+    const byName = new Map();
+    function groupOf(name) {
+      let group = byName.get(name);
+      if (group === undefined) {
+        const declared = manifest.categories.find(function (category) {
+          return category && category.id === name;
+        });
+        group = { name: name, title: declared ? localized(declared, "title") || name : name, examples: [] };
+        byName.set(name, group);
+        groups.push(group);
+      }
+      return group;
+    }
+    for (const category of manifest.categories) {
+      if (category && typeof category.id === "string") {
+        groupOf(category.id);
+      }
+    }
+    for (const entry of manifest.examples) {
+      groupOf(typeof entry.category === "string" && entry.category ? entry.category : "").examples.push(entry);
+    }
+    return groups.filter(function (group) {
+      return group.examples.length > 0;
+    });
+  }
+
+  const levelWords = {
+    en: { beginner: "beginner", intermediate: "intermediate", advanced: "advanced" },
+    de: { beginner: "Einstieg", intermediate: "Fortgeschritten", advanced: "Vertiefung" },
+  };
+
+  function levelOf(entry) {
+    if (typeof entry.level !== "string" || !entry.level) {
+      return "";
+    }
+    const words = levelWords[isGerman() ? "de" : "en"];
+    return words[entry.level] || entry.level;
+  }
+
+  /**
+   * The picker above the editor of `/play`: a button with the title of the example that is open, and under it the
+   * examples by category, each with its title and its line of description. Choosing one replaces the code - after a
+   * question where the reader changed what was there - and the address names the example until the code changes.
+   */
+  function createGallery(bar, editor, labels, state) {
+    const host = element("div", "playground-gallery");
+    const button = element("button", "button button-secondary playground-gallery-button");
+    button.type = "button";
+    button.setAttribute("aria-haspopup", "true");
+    button.setAttribute("aria-expanded", "false");
+    const caption = element("span", "playground-gallery-caption", labels.examples);
+    const current = element("span", "playground-gallery-current");
+    const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevron.setAttribute("viewBox", "0 0 16 16");
+    chevron.setAttribute("aria-hidden", "true");
+    chevron.setAttribute("class", "playground-gallery-chevron");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M4 6l4 4 4-4");
+    chevron.appendChild(path);
+    button.appendChild(caption);
+    button.appendChild(current);
+    button.appendChild(chevron);
+    const panel = element("div", "playground-gallery-panel");
+    panel.hidden = true;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", labels.examples);
+    host.appendChild(button);
+    host.appendChild(panel);
+    bar.appendChild(host);
+    host.hidden = true;
+
+    let manifest = null;
+    const items = [];
+
+    function show(entry) {
+      current.textContent = entry ? localized(entry, "title") : "";
+      current.hidden = !entry;
+      for (const item of items) {
+        item.button.setAttribute("aria-current", item.entry === entry ? "true" : "false");
+      }
+    }
+
+    function open() {
+      panel.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      // One frame hidden-less first, so the panel rises in rather than appearing
+      requestAnimationFrame(function () {
+        panel.classList.add("playground-gallery-open");
+      });
+      const chosen = items.find(function (item) {
+        return item.entry === state.example;
+      }) || items[0];
+      if (chosen) {
+        chosen.button.focus();
+      }
+      document.addEventListener("pointerdown", outside, true);
+    }
+
+    function close(returnFocus) {
+      panel.classList.remove("playground-gallery-open");
+      panel.hidden = true;
+      button.setAttribute("aria-expanded", "false");
+      document.removeEventListener("pointerdown", outside, true);
+      if (returnFocus) {
+        button.focus();
+      }
+    }
+
+    function outside(event) {
+      if (!host.contains(event.target)) {
+        close(false);
+      }
+    }
+
+    button.addEventListener("click", function () {
+      if (panel.hidden) {
+        open();
+      } else {
+        close(true);
+      }
+    });
+    panel.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close(true);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const at = items.findIndex(function (item) {
+          return item.button === document.activeElement;
+        });
+        const next = event.key === "ArrowDown" ? Math.min(items.length - 1, at + 1) : Math.max(0, at - 1);
+        items[next].button.focus();
+      }
+    });
+
+    function choose(entry) {
+      close(false);
+      if (editor.value !== state.pristine && !window.confirm(labels.replace)) {
+        return;
+      }
+      load(entry).then(function () {
+        editor.focus();
+      });
+    }
+
+    function load(entry) {
+      return exampleSource(entry).then(function (source) {
+        state.example = entry;
+        state.pristine = source;
+        editor.value = source;
+        show(entry);
+        history.replaceState(null, "", "#example=" + entry.id);
+      }, function () {});
+    }
+
+    function build() {
+      for (const group of groupedExamples(manifest)) {
+        const section = element("section", "playground-gallery-group");
+        if (group.title) {
+          section.appendChild(element("h3", "playground-gallery-category", group.title));
+        }
+        const list = element("ul", "playground-gallery-list");
+        for (const entry of group.examples) {
+          const row = element("li");
+          const choice = element("button", "playground-gallery-item");
+          choice.type = "button";
+          const heading = element("span", "playground-gallery-title", localized(entry, "title") || entry.id);
+          choice.appendChild(heading);
+          const level = levelOf(entry);
+          if (level) {
+            choice.appendChild(element("span", "playground-gallery-level", level));
+          }
+          const description = localized(entry, "description");
+          if (description) {
+            choice.appendChild(element("span", "playground-gallery-description", description));
+          }
+          choice.addEventListener("click", function () {
+            choose(entry);
+          });
+          row.appendChild(choice);
+          list.appendChild(row);
+          items.push({ entry: entry, button: choice });
+        }
+        section.appendChild(list);
+        panel.appendChild(section);
+      }
+    }
+
+    return {
+      /** Reads the manifest and shows the picker; answers the manifest, or `null` for a site without examples. */
+      prepare: function () {
+        return examples().then(function (found) {
+          if (found.examples.length === 0) {
+            return null;
+          }
+          manifest = found;
+          build();
+          host.hidden = false;
+          return found;
+        }, function () {
+          return null;
+        });
+      },
+      load: load,
+      show: show,
+      find: function (id) {
+        return manifest === null ? null : manifest.examples.find(function (entry) {
+          return entry.id === id;
+        }) || null;
+      },
+      defaultExample: function () {
+        return manifest === null ? null : manifest.examples.find(function (entry) {
+          return entry.default === true;
+        }) || manifest.examples[0] || null;
+      },
+    };
+  }
+
   // --------------------------------------------------------------------------------------------------- the mount --
 
   /**
    * Takes over `element`: its children become the editor with `source`, a Run button and the output. With
    * `expectedOutput` it is an exercise: Reset, Show solution (where there is a `solution`), and a line that says
    * whether the output is the expected one. A mount inside an element with `data-playground-page` - the page `/play`,
-   * `docs/site/play.md` - fills the page, and the address carries its source.
+   * `docs/site/play.md` - fills the page, has the gallery and Format, and the address carries its source.
    */
   function mount(target, options) {
     ensureStylesheet();
@@ -731,12 +1238,39 @@
       target.classList.add("playground-page");
     }
 
-    const editor = createEditor(target, initial, start);
+    // The gallery's bar stands above the editor of the page
+    const top = element("div", "playground-top");
+    if (isPage) {
+      target.appendChild(top);
+    }
+
+    let formatButton = null;
+    const editor = createEditor(target, initial, {
+      onRun: start,
+      page: isPage,
+      file: file,
+      label: labels.source,
+      onUpgrade: function () {
+        if (formatButton !== null) {
+          formatButton.hidden = false;
+        }
+      },
+    });
     const bar = element("div", "playground-bar");
     const runButton = element("button", "button button-primary playground-run", labels.run);
     runButton.type = "button";
     runButton.title = labels.run + " (Ctrl+Enter)";
     bar.appendChild(runButton);
+    if (isPage) {
+      formatButton = element("button", "button button-secondary playground-format", labels.format);
+      formatButton.type = "button";
+      formatButton.title = labels.format + " (Shift+Alt+F)";
+      formatButton.hidden = true;
+      formatButton.addEventListener("click", function () {
+        editor.format();
+      });
+      bar.appendChild(formatButton);
+    }
     if (isExercise) {
       const resetButton = element("button", "button button-secondary", labels.reset);
       resetButton.type = "button";
@@ -773,11 +1307,15 @@
     verdict.hidden = true;
     target.appendChild(verdict);
 
-    // The toolchain is fetched as soon as a reader shows the intent to run, not on every page that has a mount
+    // The toolchain is fetched as soon as a reader shows the intent to run or to write, not on every page with a mount;
+    // writing brings the editor with the language server
     function prepare() {
       compiledToolchain().catch(function () {});
     }
-    editor.input.addEventListener("focus", prepare, { once: true });
+    target.addEventListener("focusin", function () {
+      prepare();
+      editor.upgrade();
+    }, { once: true });
     runButton.addEventListener("pointerenter", prepare, { once: true });
     runButton.addEventListener("click", function () {
       if (active) {
@@ -809,7 +1347,9 @@
       output.textContent = "";
       panel.hidden = false;
       verdict.hidden = true;
-      editor.mark([]);
+      if (!editor.hasLanguageServer) {
+        editor.mark([]);
+      }
       let streamedOutput = "";
       let streamedErrors = "";
       try {
@@ -820,7 +1360,9 @@
           renderOutput(output, streamedOutput, streamedErrors, file, editor);
         }, file, job);
         renderOutput(output, result.output, result.errors, file, editor);
-        editor.mark(result.diagnostics);
+        if (result.diagnostics.length > 0 || !editor.hasLanguageServer) {
+          editor.mark(result.diagnostics);
+        }
         status.textContent = statusOf(result, labels);
         let passed = false;
         if (isExercise) {
@@ -854,7 +1396,10 @@
       target.appendChild(local);
     }
     if (isPage) {
-      sharing(editor);
+      page(editor, top, labels, initial);
+      // The page is for writing: the editor and the language server come at once
+      prepare();
+      editor.upgrade();
     }
     return editor;
   }
@@ -888,21 +1433,48 @@
     return seconds;
   }
 
-  /** The page `/play`: the source comes from the address where it holds one, and every change is written back to it. */
-  function sharing(editor) {
-    sourceOfFragment(location.hash).then(function (found) {
-      if (found !== null) {
-        editor.value = found;
-      }
-    });
+  /**
+   * The page `/play`: what the address holds - a program behind `#code=`, an example behind `#example=` - or else the
+   * default example of the gallery, or else the page's own program; and every change of the code is written back to
+   * the address, which is the link to share.
+   */
+  function page(editor, top, labels, initial) {
+    const state = { example: null, pristine: initial };
+    const gallery = createGallery(top, editor, labels, state);
     let pending = null;
+    let settled = false;
     editor.onChange(function (text) {
+      if (!settled) {
+        return;
+      }
       clearTimeout(pending);
       pending = setTimeout(function () {
+        // An example as it was loaded is named by the address; anything else is carried in it
+        if (state.example !== null && text === state.pristine) {
+          history.replaceState(null, "", "#example=" + state.example.id);
+          return;
+        }
         fragmentOf(text).then(function (fragment) {
           history.replaceState(null, "", "#" + fragment);
         });
       }, 400);
+    });
+    Promise.all([sourceOfFragment(location.hash), gallery.prepare()]).then(function (found) {
+      const shared = found[0];
+      if (shared !== null) {
+        state.pristine = shared;
+        editor.value = shared;
+        return null;
+      }
+      const named = exampleOfFragment(location.hash);
+      const entry = (named !== null ? gallery.find(named) : null) || gallery.defaultExample();
+      // Nothing was written yet: the example replaces the page's program without a question
+      if (entry !== null && editor.value === initial) {
+        return gallery.load(entry);
+      }
+      return null;
+    }).then(function () {
+      settled = true;
     });
   }
 
@@ -915,5 +1487,6 @@
       stop(null);
     },
     highlight: highlight,
+    tokenize: tokenize,
   };
 })();

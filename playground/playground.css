@@ -2,7 +2,8 @@
  * playground.css - the look of the playground, on the tokens of brand/tokens.css and beside the site's stylesheet,
  * which colours the code (`.t-keyword`, ...) and draws the buttons (`.button-primary`, `.button-secondary`). Firm
  * lines and no glow (docs/design/BRAND.md sections 6 and 8): Run is the tool's primary button, in ink, and nothing in
- * the playground is red but a keyword and an error.
+ * the playground is red but a keyword and an error. The light editor, CodeMirror once it is loaded, and the gallery of
+ * /play are drawn here; the colours are the tokens', so both themes follow by themselves.
  */
 
 .playground-mounted {
@@ -192,4 +193,462 @@
 
 .playground-page .playground-output {
   min-height: 4.5em;
+}
+
+/* ---------------------------------------------------------------------------------------------------- CodeMirror --
+
+   The editor once playground-editor.js is loaded: the frame, the type and the colours of the light editor it replaces,
+   so the swap does not move a character. The colours of the code are the site's token classes (`t-keyword`, ...). */
+
+/* A long line scrolls inside the editor and never widens the column of the page */
+.playground-codemirror {
+  contain: inline-size;
+}
+
+.playground-codemirror .cm-editor {
+  font-family: var(--torb-font-mono);
+  font-feature-settings: var(--torb-font-mono-features);
+  font-variant-ligatures: var(--torb-font-mono-ligatures);
+  font-size: var(--torb-type-code-dense-size);
+  line-height: var(--torb-type-code-dense-line-height);
+  color: var(--torb-syntax-variable);
+  background: var(--torb-code);
+  border: 1px solid var(--torb-border);
+  border-radius: var(--torb-radius-small);
+  transition: border-color var(--torb-duration-quick) var(--torb-easing-exact);
+}
+
+.playground-codemirror .cm-editor.cm-focused {
+  outline: none;
+  border-color: var(--torb-border-control);
+}
+
+.playground-codemirror .cm-scroller {
+  min-height: 5.5em;
+  font-family: inherit;
+  line-height: inherit;
+}
+
+.playground-page .playground-codemirror .cm-scroller {
+  min-height: 24em;
+  max-height: 72vh;
+}
+
+.playground-codemirror .cm-content {
+  padding: 14px 0;
+  caret-color: var(--torb-text);
+}
+
+.playground-codemirror .cm-line {
+  padding: 0 18px;
+}
+
+.playground-codemirror .cm-gutters {
+  color: var(--torb-text-subtle);
+  background: var(--torb-code);
+  border-right: 1px solid var(--torb-border);
+  border-radius: var(--torb-radius-small) 0 0 var(--torb-radius-small);
+}
+
+.playground-codemirror .cm-lineNumbers .cm-gutterElement {
+  min-width: 3ch;
+  padding: 0 4px 0 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.playground-codemirror .cm-gutter-lint {
+  width: 14px;
+}
+
+.playground-codemirror .cm-activeLine,
+.playground-codemirror .cm-activeLineGutter {
+  background: transparent;
+}
+
+.playground-codemirror .cm-focused .cm-activeLineGutter {
+  color: var(--torb-text-muted);
+}
+
+.playground-codemirror .cm-cursor,
+.playground-codemirror .cm-dropCursor {
+  border-left: 2px solid var(--torb-text);
+}
+
+.playground-codemirror .cm-selectionBackground,
+.playground-codemirror .cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background: var(--torb-selection);
+}
+
+.playground-codemirror .cm-matchingBracket,
+.playground-codemirror .cm-focused .cm-matchingBracket {
+  background: var(--torb-surface-active);
+  outline: 1px solid var(--torb-border-control);
+  outline-offset: -1px;
+}
+
+.playground-codemirror .cm-nonmatchingBracket,
+.playground-codemirror .cm-focused .cm-nonmatchingBracket {
+  background: transparent;
+  outline: 1px solid var(--torb-error-accent);
+  outline-offset: -1px;
+}
+
+/* An error in code is a wavy underline in the error's colour and a mark in the gutter (BRAND.md section 9); the
+   token keeps its own colour */
+.playground-codemirror .cm-lintRange {
+  padding-bottom: 0;
+  background-image: none;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  text-decoration-skip-ink: none;
+}
+
+.playground-codemirror .cm-lintRange-error {
+  text-decoration-color: var(--torb-error-accent);
+}
+
+.playground-codemirror .cm-lintRange-warning {
+  text-decoration-color: var(--torb-warning-accent);
+}
+
+.playground-codemirror .cm-lintRange-info,
+.playground-codemirror .cm-lintRange-hint {
+  text-decoration-color: var(--torb-info-accent);
+}
+
+.playground-codemirror .cm-lint-marker {
+  content: normal;
+  width: 6px;
+  height: 6px;
+  margin: 0.55em auto 0;
+  border-radius: 1px;
+}
+
+.playground-codemirror .cm-lint-marker-error {
+  background: var(--torb-error-accent);
+}
+
+.playground-codemirror .cm-lint-marker-warning {
+  background: var(--torb-warning-accent);
+}
+
+.playground-codemirror .cm-lint-marker-info {
+  background: var(--torb-info-accent);
+}
+
+/* What floats over the code - completion, hover, signature help, a diagnostic: a raised surface with a hairline and
+   the overlay's shadow, rising 4 px into place */
+.playground-codemirror .cm-tooltip {
+  max-width: min(36em, calc(100vw - 32px));
+  font-family: var(--torb-font-sans);
+  font-size: var(--torb-type-small-size);
+  line-height: var(--torb-type-small-line-height);
+  color: var(--torb-text);
+  background: var(--torb-surface-raised);
+  border: 1px solid var(--torb-border);
+  border-radius: var(--torb-radius-medium);
+  box-shadow: var(--torb-shadow-overlay);
+  animation: playground-rise var(--torb-duration-standard) var(--torb-easing-exact);
+}
+
+@keyframes playground-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.playground-codemirror .cm-tooltip-autocomplete > ul {
+  max-height: 16em;
+  padding: 4px;
+  font-family: var(--torb-font-mono);
+  font-feature-settings: var(--torb-font-mono-features);
+  font-size: var(--torb-type-code-dense-size);
+}
+
+.playground-codemirror .cm-tooltip-autocomplete > ul > li {
+  padding: 2px 8px;
+  border-radius: var(--torb-radius-small);
+}
+
+.playground-codemirror .cm-tooltip-autocomplete > ul > li[aria-selected] {
+  color: var(--torb-text);
+  background: var(--torb-surface-active);
+}
+
+.playground-codemirror .cm-completionIcon {
+  display: none;
+}
+
+.playground-codemirror .cm-completionLabel {
+  color: var(--torb-syntax-variable);
+}
+
+.playground-codemirror .cm-completionMatchedText {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.playground-codemirror .cm-completionDetail {
+  margin-left: 1.5ch;
+  font-style: normal;
+  color: var(--torb-text-muted);
+}
+
+.playground-codemirror .cm-tooltip.cm-completionInfo {
+  padding: 8px 12px;
+}
+
+.playground-codemirror .cm-lsp-documentation {
+  padding: 8px 12px;
+}
+
+.playground-codemirror .cm-completionInfo .cm-lsp-documentation {
+  padding: 0;
+}
+
+.playground-codemirror .cm-lsp-documentation p,
+.playground-codemirror .cm-lsp-documentation ul,
+.playground-codemirror .cm-lsp-documentation ol {
+  margin: 4px 0;
+}
+
+.playground-codemirror .cm-lsp-documentation pre {
+  margin: 4px 0;
+  padding: 0;
+  overflow-x: auto;
+  font-size: var(--torb-type-code-dense-size);
+  background: transparent;
+  border: 0;
+}
+
+.playground-codemirror .cm-lsp-documentation code {
+  font-family: var(--torb-font-mono);
+  font-feature-settings: var(--torb-font-mono-features);
+  font-size: 0.95em;
+  color: var(--torb-syntax-variable);
+  background: transparent;
+}
+
+.playground-codemirror .cm-lsp-documentation a {
+  color: var(--torb-link);
+}
+
+.playground-codemirror .cm-lsp-signature-tooltip {
+  padding: 6px 10px;
+}
+
+.playground-codemirror .cm-lsp-signature-tooltip .cm-lsp-signature {
+  font-family: var(--torb-font-mono);
+  font-feature-settings: var(--torb-font-mono-features);
+}
+
+.playground-codemirror .cm-lsp-signature-tooltip .cm-lsp-active-parameter {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.playground-codemirror .cm-tooltip-lint {
+  padding: 0;
+}
+
+.playground-codemirror .cm-diagnostic {
+  padding: 6px 12px;
+  border-left: var(--torb-border-accent) solid transparent;
+}
+
+.playground-codemirror .cm-diagnostic-error {
+  border-left-color: var(--torb-error-accent);
+}
+
+.playground-codemirror .cm-diagnostic-warning {
+  border-left-color: var(--torb-warning-accent);
+}
+
+.playground-codemirror .cm-panels {
+  color: var(--torb-text);
+  background: var(--torb-surface);
+  border-color: var(--torb-border);
+}
+
+.playground-codemirror .cm-panel input,
+.playground-codemirror .cm-panel button {
+  font: inherit;
+}
+
+/* ----------------------------------------------------------------------------------------------------- the gallery --
+
+   The examples of /play: a button above the editor with the example that is open, and a panel under it with every
+   example by category - its title, its level and its line of description. */
+
+.playground-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.playground-gallery {
+  position: relative;
+  max-width: 100%;
+}
+
+.playground-gallery-button {
+  max-width: 100%;
+  gap: 10px;
+}
+
+.playground-gallery-caption {
+  color: var(--torb-text-muted);
+}
+
+.playground-gallery-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playground-gallery-chevron {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--torb-duration-quick) var(--torb-easing-exact);
+}
+
+.playground-gallery-button[aria-expanded="true"] .playground-gallery-chevron {
+  transform: rotate(180deg);
+}
+
+.playground-gallery .playground-gallery-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  width: min(44rem, calc(100vw - 32px));
+  max-height: min(70vh, 34rem);
+  overflow: auto;
+  padding: 8px;
+  background: var(--torb-surface-raised);
+  border: 1px solid var(--torb-border);
+  border-radius: var(--torb-radius-medium);
+  box-shadow: var(--torb-shadow-overlay);
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity var(--torb-duration-exit) var(--torb-easing-exit),
+    transform var(--torb-duration-exit) var(--torb-easing-exit);
+}
+
+.playground-gallery .playground-gallery-panel.playground-gallery-open {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity var(--torb-duration-standard) var(--torb-easing-exact),
+    transform var(--torb-duration-standard) var(--torb-easing-exact);
+}
+
+.playground-gallery .playground-gallery-group + .playground-gallery-group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--torb-border);
+}
+
+.playground-gallery .playground-gallery-category {
+  margin: 6px 8px 2px;
+  padding: 0;
+  font-family: var(--torb-font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--torb-text-subtle);
+}
+
+.playground-gallery .playground-gallery-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.playground-gallery .playground-gallery-list li {
+  margin: 0;
+  padding: 0;
+}
+
+.playground-gallery .playground-gallery-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  font: inherit;
+  text-align: left;
+  color: var(--torb-text);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-left: var(--torb-border-accent) solid transparent;
+  border-radius: var(--torb-radius-small);
+  transition: background-color var(--torb-duration-quick) var(--torb-easing-exact);
+}
+
+.playground-gallery .playground-gallery-item:hover {
+  background: var(--torb-surface-hover);
+}
+
+.playground-gallery .playground-gallery-item[aria-current="true"] {
+  background: var(--torb-surface-active);
+  border-left-color: var(--torb-border-strong);
+}
+
+.playground-gallery .playground-gallery-item:focus-visible {
+  outline-offset: -2px;
+}
+
+.playground-gallery-title {
+  font-size: var(--torb-type-ui-size);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.playground-gallery-level {
+  font-size: var(--torb-type-small-size);
+  color: var(--torb-text-subtle);
+  white-space: nowrap;
+}
+
+.playground-gallery-description {
+  grid-column: 1 / -1;
+  font-size: var(--torb-type-small-size);
+  line-height: 1.45;
+  color: var(--torb-text-muted);
+}
+
+/* A phone: the panel is a sheet over the lower part of the screen, inside the gutter of the page */
+@media (max-width: 640px) {
+  .playground-gallery .playground-gallery-panel {
+    position: fixed;
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    left: 16px;
+    width: auto;
+    max-height: 70vh;
+  }
 }

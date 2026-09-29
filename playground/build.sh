@@ -15,9 +15,13 @@
 #
 #   torb.wasm, torb.wasm.gz  the toolchain with `std/` inside it, and the same gzipped for a server's gzip_static
 #   torb.js                  emscripten's glue: a script that defines `createTorb`, for the worker and for node
-#   playground.js            the page's half: `TorbPlayground.mount`, the editor, Run, the output, the sharing
-#   playground-worker.js     the worker that runs `torb` off the page's thread
+#   playground.js            the page's half: `TorbPlayground.mount`, the light editor, Run, the output, the sharing,
+#                            the gallery of /play
+#   playground-worker.js     the worker that runs `torb` off the page's thread: a run, or `torb lsp` for the editor
+#   playground-editor.js     CodeMirror and its language server client, loaded when an editor is about to be used;
+#                            built by playground/editor/build.sh and committed, so nothing here needs npm
 #   playground.css           the look of it, on the tokens of brand/tokens.css
+#   examples/                the gallery's examples and their index.json, where playground/examples/ has them
 #
 # The C compiler is emscripten, pinned: `$TORB_EMCC`, or an `emcc` on the PATH of the pinned version, and otherwise
 # the image `$TORB_EMSDK_IMAGE` through docker, which is how CI and the site image build it. Emscripten is chosen over
@@ -183,7 +187,7 @@ else
     "$image" sh playground/build.sh --inside "$c_directory"
 fi
 
-for file in playground.js playground-worker.js playground.css; do
+for file in playground.js playground-worker.js playground-editor.js playground.css; do
   cp "$here/$file" "$output/$file"
 done
 
