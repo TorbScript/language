@@ -653,6 +653,32 @@ group "redundant-wrap" {
     ].joined(separator: "\n")
     assert wrapFindings(source).isEmpty()
   }
+
+  test "a `match` or an `if` is found only where every arm has a type of its own, never where the case decided one" {
+    const source = [
+      "fn nested(failure: String?): Result<Result<Int, String>, String> \{",
+      "  return Ok match failure \{",
+      "    Some(problem) => Fail problem",
+      "    None => 1",
+      "  \}",
+      "\}",
+      "",
+      "fn chosen(flag: Bool, inner: Result<Int, String>): Result<Result<Int, String>, String> \{",
+      "  Ok(if flag \{ Fail(\"refused\") \} else \{ inner \})",
+      "\}",
+      "",
+      "fn kept(choice: Result<Int, String>?, inner: Result<Int, String>): Result<Result<Int, String>, String> \{",
+      "  Ok match choice \{",
+      "    Some(found) => found",
+      "    None => inner",
+      "  \}",
+      "\}",
+      "",
+    ].joined(separator: "\n")
+    const found = wrapTexts source
+    assert(found.length() == 1)
+    assert found[0].startsWith("Ok match choice")
+  }
 }
 
 group "protected-field" {

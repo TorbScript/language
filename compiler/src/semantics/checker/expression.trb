@@ -3597,6 +3597,18 @@ fn isSelfTyped(checker: Checker, value: Expression): Bool {
         && (checker.typeArgumentsAt(checker.module, callee.span) ?? []).isEmpty()
     }
     .Generic(_, _) => false
+    // A `match`, an `if` and a block hand what is expected of them down to every arm: without the written case each
+    // arm is checked against the `Result` or the `Option` itself, so an arm whose type the case decided - `Fail problem`
+    // of the inner `Result` of `Ok match ...` - would become the outer one's. Only arms that have a type of their own
+    // keep their meaning
+    .Match(_, arms) => arms.all({ isSelfTyped checker, _.body })
+    .If(_, then, otherwise) => {
+      match otherwise {
+        Some(branch) => isBlockSelfTyped(checker, then) && isSelfTyped(checker, branch)
+        None => false
+      }
+    }
+    .Block(block) => isBlockSelfTyped checker, block
     // `text.tryInto()?` reads its target from what the `?` is expected to leave, and that is the case's payload
     .Try(inner) => {
       if const .Call(callee, _, _) = inner.kind {
@@ -3607,6 +3619,24 @@ fn isSelfTyped(checker: Checker, value: Expression): Bool {
       true
     }
     _ => true
+  }
+}
+
+/**
+ * [isSelfTyped] for the value of a block: its last expression, and a block that leaves instead of producing one - a
+ * `return`, a `break`, a `continue` - has no value the expectation could change.
+ */
+fn isBlockSelfTyped(checker: Checker, block: Block): Bool {
+  const last = match block.statements.last() {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  match last.kind {
+    .Evaluate(expression) => isSelfTyped checker, expression
+    .Return(_) | .Break | .Continue => true
+    _ => false
   }
 }
 
