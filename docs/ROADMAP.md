@@ -86,8 +86,9 @@ encoded across (SCRIPTS.md slice 8), and the toolchain reads an evaluated manife
   section 7.11). **The forge (2026-09-27)**: the repository, its CI, the seeds, the releases and the images live on the
   project's own Forgejo at git.torb.dev and cr.torb.dev, GitHub is a push mirror whose one workflow tests the targets
   the forge has no runner for yet, and the installers and package manifests download from torb.dev (RELEASE.md
-  section 14). What is left there: runners for windows-x64, linux-arm64 and macos-arm64, without which a release
-  carries the linux-x64 toolchain only. **What is left:** sign-in through GitHub, GitLab, Codeberg or a passkey and a second factor; the
+  section 14). What is left there: runners for windows-x64, linux-arm64 and macos-arm64, without which their archives are
+  cross-compiled on linux-x64 by a pinned `zig cc` and only started under wine and qemu-user before a release
+  (RELEASE.md section 13, "Cross-compiled archives", 2026-09-29). **What is left:** sign-in through GitHub, GitLab, Codeberg or a passkey and a second factor; the
   documentation worker, search, verified domains and "elsewhere" owners; an `s3:` storage driver; the production signing
   key and its line in `torb` (the index is signed and checked since 2026-09-27, `std/signature`, RELEASE.md section
   7.14); `yank`, `owner`, `login`, `audit`, `vendor` and `deprecate` as commands; mirrors in `~/.torb/config.trb`; `git:` and `archive:` sources;

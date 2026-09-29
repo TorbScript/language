@@ -13,6 +13,8 @@ keywords:
   - fetch-seed
   - publish-seed
   - migrate-seeds
+  - cross-compile
+  - zig cc
   - SHA256SUMS
   - cosign
   - Forgejo
@@ -29,11 +31,14 @@ source:
   - .forgejo/workflows/seed.yml
   - .forgejo/workflows/images.yml
   - .forgejo/actions/token/action.yml
+  - .forgejo/actions/cross/action.yml
   - .github/workflows/portable.yml
   - tools/forge.sh
   - tools/fetch-seed.sh
   - tools/publish-seed.sh
   - tools/migrate-seeds.sh
+  - tools/cross.sh
+  - tools/fetch-zig.sh
   - tools/install.sh
   - tools/install.ps1
   - tools/render-package-manifests.sh
@@ -69,8 +74,9 @@ the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-fo
    the same gates again, but a red `ci` is the cheaper place to find out.
 5. **Tag the commit and push the tag to the forge.** Only the tag starts a release, and pushing it is the approval: the
    forge holds no job for a reviewer. The workflow checks that the commit is on `main`.
-6. **Check the release page** on git.torb.dev: one `.tar.gz` per target that has a runner and a `.zip` for Windows, the
-   source, the seed with its `.sha256`, the VS Code extension `torbscript-0.2.0.vsix`, `SHA256SUMS` and
+6. **Check the release page** on git.torb.dev: one `.tar.gz` per tier 1 target - linux-x64, windows-x64, linux-arm64
+   and macos-arm64 - and a `.zip` for Windows, the source, the seed with its `.sha256`, the VS Code extension
+   `torbscript-0.2.0.vsix`, `SHA256SUMS` and
    `SHA256SUMS.sig`. The release is a draft until its last asset is uploaded, so the webhook reaches release-sync once,
    with everything there. The seed is added to `seeds.txt` of the release `seeds`, the job `images` pushes
    `cr.torb.dev/torbscript/release-sync`, `site` and `registry` tagged with the version and `latest`, signed, and
@@ -82,9 +88,15 @@ the GitHub mirror and the tokens are [section 14](../design/RELEASE.md#14-the-fo
    [its page](https://marketplace.visualstudio.com/items?itemName=torbscript.torbscript) shows the version; Open VSX
    shows it at once ([open-vsx.org/extension/torbscript/torbscript](https://open-vsx.org/extension/torbscript/torbscript)).
 
-**Which targets a release carries**: linux-x64 always, and windows-x64, linux-arm64 and macos-arm64 once the forge has
-a runner of that label and the repository variable `TORB_RUNNERS` names it. Until then a release is a linux-x64 release,
-its notes say so, and the Homebrew and Scoop channels skip themselves.
+**Which targets a release carries**: all four tier 1 targets. linux-x64 is built on the forge's runner, and so is each
+of windows-x64, linux-arm64 and macos-arm64 whose runner the repository variable `TORB_RUNNERS` names; the others are
+cross-compiled on the linux-x64 runner by a pinned `zig cc` (the jobs `cross-compiled on linux-x64 (<target>)`,
+[RELEASE.md section 13, "Cross-compiled archives"](../design/RELEASE.md#cross-compiled-archives-2026-09-29)). A
+cross-compiled binary is checked and started under wine (windows-x64) or qemu-user (linux-arm64) before anything is
+published, macos-arm64's is checked and not started, and the release notes name every target that was cross-compiled.
+None of them has passed the conformance suite on its machine: that is what the GitHub mirror does for each target's own
+build after every push, and every morning its job `download` installs the newest nightly on real windows-x64,
+linux-arm64 and macos-arm64 machines and runs it - look there before a release.
 
 **Publishing a seed without a release** is the forge's Actions -> `seed` -> Run workflow on `main`. It bootstraps on
 linux-x64, runs tier A and tier B, and publishes the seed of `main`. That is what the second commit of a breaking change
@@ -113,6 +125,13 @@ $ TORB_FORGE_TOKEN=<forge token> sh tools/publish-seed.sh build/seed-archive/tor
   not admit this run - another workflow file, ref or event than the ones it names.
 - **A job that waits for ever** has a `runs-on` label no online runner has: `TORB_RUNNERS` names a target whose runner
   is gone. Remove the target from the variable, or bring the runner back.
+- **A job `cross-compiled on linux-x64 (<target>)` is red**, and nothing was published. "no source had
+  zig-x86_64-linux-...": neither a mirror of Zig nor ziglang.org answered with the pinned archive - re-run the job. A
+  red check of `tools/cross.sh` (a DLL, a dynamic binary, no signature) is a real finding about the build; a red smoke
+  test under wine or qemu-user is one too until it is shown to be the emulator's - then the same smoke test of that
+  target's native build on the GitHub mirror decides. A new Zig is a new pin in `tools/fetch-zig.sh`: the version and
+  the four SHA-256 of `https://ziglang.org/download/index.json`, with each archive's minisign signature checked against
+  the key on ziglang.org/download.
 - **Forgejo ignores a job that has a `permissions:` key** ("not supported, the job is ignored"). The workflows of
   `.forgejo/` have none; a write goes through an Authorized Integration (`.forgejo/actions/token`).
 - **A release needs a `LICENSE`.** The check refuses a release without one.
@@ -196,7 +215,8 @@ value to enter.
    `v*` and `seeds` so that only the owner - and the integration, which acts as the owner - creates them.
 5. **More runners**, when there are machines for them: a runner registered with the label of its target
    (`windows-x64`, `linux-arm64`, `macos-arm64`), and the target added to `TORB_RUNNERS`. A job for a label no runner has
-   would wait, which is why the workflows run those jobs only for the targets the variable names.
+   would wait, which is why the workflows run those jobs only for the targets the variable names. A target the variable
+   names is no longer cross-compiled: its release binary is built and gated on its runner.
 6. **The package manager channels**: create `torbscript/homebrew-tap` and `torbscript/scoop-bucket` on the forge, each
    with a first commit that holds an empty `Formula/` or `bucket/` directory (a `.gitkeep`), and give each a push mirror
    to `github.com/TorbScript/homebrew-tap` and `github.com/TorbScript/scoop-bucket` (step 7): `brew tap torbscript/tap`

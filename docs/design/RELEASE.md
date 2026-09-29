@@ -218,7 +218,9 @@ outside a developer prompt, which is why `torb build` finds it only when someone
 **The release pipeline uses the managed compiler too.** One pinned `zig cc` building `torb` for every target from one
 kind of runner is what makes section 5's reproducible builds a property of the pipeline and not of whichever runner
 image was current. The native runners of section 5 still run the gates, because a cross-compiled binary is not a tested
-one.
+one. **As built (2026-09-29)**, a pinned `zig cc` builds the release binaries of the tier 1 targets the forge has no
+runner for, on its linux-x64 runner (section 13, "Cross-compiled archives"); linux-x64 and a target with a runner of its
+own ship the binary of their own machine.
 
 ## 5. Installing, upgrading, channels and signing
 
@@ -368,7 +370,8 @@ of `release.yml`, after the release. Since the move to the forge (section 14) ev
 bucket are repositories of the forge (`torbscript/homebrew-tap`, `torbscript/scoop-bucket`), pushed with the token of
 the Authorized Integration that publishes the release and mirrored to GitHub, where `brew tap torbscript/tap` finds the
 tap without a URL. A manifest is rendered only when the release has every archive it names - the formula needs
-macos-arm64, linux-x64 and linux-arm64, the bucket windows-x64 - and a channel whose repository does not exist yet is
+macos-arm64, linux-x64 and linux-arm64, the bucket windows-x64, which every release has since the archives of the
+targets without a runner are cross-compiled (section 13) - and a channel whose repository does not exist yet is
 skipped: a channel must never hold back the release. winget stays a manual step while the forge has no Windows runner
 (`wingetcreate` runs on Windows only); the job prints the command. Nightlies publish nothing here: `nightly.yml` does not
 call this job. What the owner sets up once for these three is
@@ -1304,20 +1307,23 @@ the first runs it reports were GitHub's.
 | `.forgejo/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC`, and the Debian packages a job needs |
 | `.forgejo/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
 | `.forgejo/actions/portable` | what a target other than linux-x64 runs: bootstrap, `check .`, the conformance suite, the runtime's tests, the C of every target, the release binary |
+| `.forgejo/actions/cross` | the release binary of a tier 1 target without a runner, cross-compiled on linux-x64 by the pinned `zig cc`, checked, and smoke-tested under wine or qemu-user ("Cross-compiled archives", below) |
 | `.forgejo/actions/token` | the token of an Authorized Integration for the job (section 14) |
 | `.forgejo/actions/cosign` | the pinned cosign that signs, the release release-sync verifies with |
 | `.forgejo/actions/node` | the pinned Node.js that packs and publishes the VS Code extension, checked against the SHA-256 nodejs.org lists |
-| `.github/workflows/portable.yml` | the GitHub mirror's one workflow: `.forgejo/actions/portable` on windows-x64, linux-arm64 and macos-arm64, and their agreement on the C (section 14) |
+| `.github/workflows/portable.yml` | the GitHub mirror's one workflow: `.forgejo/actions/portable` on windows-x64, linux-arm64 and macos-arm64, and their agreement on the C (section 14); every morning the newest nightly, installed from torb.dev on those three and on linux-x64, and run |
 | `tools/forge.sh` | the releases of the forge over its REST API with curl: create, upload, download, publish, delete, list - Forgejo, or GitHub |
 | `tools/agree.sh` | the compiler's C for every target as one host emits it, and whether the lists of several hosts agree |
 | `tools/build-seed.sh` | compiles a seed's `program.c` with its runtime - the one place that knows that command line |
+| `tools/cross.sh` | the compiler's C for another target, emitted by a `torb` of this machine and compiled by the pinned `zig cc` through `tools/build-seed.sh`; checks what it wrote |
+| `tools/fetch-zig.sh` | downloads the pinned Zig from Zig's community mirrors (ziglang.org last), checks its pinned SHA-256, unpacks it into `build/zig/` |
 | `tools/pack-seed.sh` | packs a seed into `torb-seed-<commit>.tar.gz` and its `.sha256`, reproducibly |
 | `tools/fetch-seed.sh` | downloads a published seed - from the forge, and from GitHub for one the forge lacks - verifies it, compiles it into `build/seed/torb` |
 | `tools/publish-seed.sh` | uploads a packed seed to the `seeds` release of the forge and puts it on top of `seeds.txt` (`tools/forge.sh`) |
 | `tools/migrate-seeds.sh` | copies every seed of GitHub's `seeds` release the forge's lacks, once |
 | `tools/package.sh` | lays out and packs the toolchain of one target (section 4) |
 | `tools/package-extension.sh` | packs the VS Code extension of `editors/vscode` into `torbscript-<version>.vsix` with `@vscode/vsce` (pinned, through `npx`), after checking that its version is the toolchain's |
-| `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables |
+| `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables; under an emulator (`TORB_SMOKE_RUNNER`) for a binary of another machine |
 
 ### The seed, published
 
@@ -1387,6 +1393,7 @@ on first use, and `seeds.txt` is replaced by deleting the asset and uploading th
 | `bootstrap and conformance (windows-x64)` | a runner labelled `windows-x64`, gcc of MSYS2 UCRT64 | bootstrap with the fixpoint, `torb check .`, the conformance suite, the runtime's tests, the C of every target | once the runner exists and `TORB_RUNNERS` names it; until then on the GitHub mirror after the push |
 | `... (linux-arm64)` | a runner labelled `linux-arm64`, gcc | the same | as windows-x64 |
 | `... (macos-arm64)` | a runner labelled `macos-arm64`, clang | the same | as windows-x64 |
+| `cross-compiled on linux-x64 (<target>)` | `ubuntu-latest`, the pinned `zig cc` | `.forgejo/actions/cross`: the release binary of windows-x64, linux-arm64 or macos-arm64 from the C `--target` emits, checked, smoke-tested under wine (windows-x64) or qemu-user (linux-arm64); macos-arm64 is not run | a nightly or a release (`package`), for each of the three that `TORB_RUNNERS` does not name |
 | `every host emits the same C` | `ubuntu-latest` | `tools/agree.sh`: linux-x64 emits the compiler's C for all nine targets (`torb build --emit-c --target`), `--target linux-x64` has to be the bootstrap's C, and every other runner of the run has to emit the same C for every target | always |
 | `the VS Code extension (editors/vscode)` | `ubuntu-latest`, the pinned Node.js | `tools/package-extension.sh`: the `.vsix` packed with `@vscode/vsce`, its version checked against `project.trb` - a manifest the stores would refuse fails here, not in a release | always |
 
@@ -1418,13 +1425,17 @@ passes `-lm`, which MSVC does not have, so the Windows job installs gcc from the
 **Memory and time.** `TORB_BUILD_SLOTS=1` in every job: one `cc1` over the compiler's C takes 1.5 to 2 GB, a test
 suite's C is larger, and the forge's runner runs two jobs at once beside the forge itself - its machine wants 8 GB for
 them. Timeouts: 90 minutes for the Linux bootstrap, 120 for each tier, 60 for the agreement of the C, 150 for a portable
-target (a first seed compile, the whole conformance suite).
+target (a first seed compile, the whole conformance suite), 60 for a cross-compiled one (about ten minutes, most of
+them the emission and the compile of the C).
 
 **Caches** (the runner's own cache server; a runner without one only loses the time), written only by a push to
 `main` so a pull request reads them and never fills the cache:
 `build/release` keyed by the target and the hash of everything `torb` is built from (`compiler/src`, the manifests,
 `std/`, `runtime/`, `tools/bootstrap.sh`) - a hit skips the bootstrap, because those sources were bootstrapped on that
-target before - and `build/seed` keyed by the target and the seed's commit, so an unchanged seed is compiled once.
+target before - and `build/seed` keyed by the target and the seed's commit, so an unchanged seed is compiled once. The
+one exception is the archive of the pinned Zig, keyed by `tools/fetch-zig.sh` and written by any run that missed it: only
+a nightly or a release reaches it, and it is checked against the pinned SHA-256 each time it is used, so an entry can
+save a download and never slip in another file.
 
 **Concurrency and permissions.** `ci` cancels the run a newer push to the same branch or pull request supersedes;
 `nightly`, `release` and `seed` never cancel. On the forge no workflow has a `permissions:` key - Forgejo ignores a job
@@ -1466,18 +1477,107 @@ from a fork runs nothing, and no workflow uses `pull_request_target`.
 | `SHA256SUMS.sig` | the cosign signature of `SHA256SUMS`, made with the project's key (`SHA256SUMS.sigstore.json`, the keyless bundle, while releases were made on GitHub) |
 
 - **The seed is beside the archives, not inside each**: it is the same file for every target and 6 MB.
-- **The targets are the ones that have a runner**: linux-x64 always; windows-x64, linux-arm64 and macos-arm64 once the
-  forge has a runner of that label (section 14). The release notes list the targets, and a package manager channel
-  whose archives are missing renders nothing.
+- **Every tier 1 target** (since 2026-09-29): linux-x64 from its bootstrap; windows-x64, linux-arm64 and macos-arm64
+  from their own runner where the forge has one of that label (section 14), and cross-compiled on linux-x64 where not
+  ("Cross-compiled archives", below). The release notes list the targets and say which were cross-compiled, and a
+  package manager channel whose archives are missing renders nothing.
 - **The binaries**: linux-x64 and linux-arm64 compile the fixpoint's `program.c` with `musl-gcc -static` (section 5 asks
   it for linux-x64; linux-arm64 gets the same so that one Linux binary runs on every distribution of either
   architecture), and the job fails if `ldd` finds it dynamic. windows-x64 and macos-arm64 ship the bootstrapped binary
   itself; the Windows job fails if `torb.exe` imports a DLL a Windows machine does not have, the macOS job runs
-  `codesign --verify` (the linker's ad hoc signature, section 5).
+  `codesign --verify` (the linker's ad hoc signature, section 5). A cross-compiled binary is the same C of the same
+  commit, compiled by the pinned `zig cc` for the same C library - static musl, MinGW-w64 on the UCRT - and put through
+  the same checks by other means (below).
 - **Every release binary is smoke-tested as a download**: laid out by `tools/package.sh layout`, started from a
-  directory outside any checkout with no `TORB_STD` or `TORB_RUNTIME`, it checks, builds and runs a program.
+  directory outside any checkout with no `TORB_STD` or `TORB_RUNTIME`, it checks, builds and runs a program. A
+  cross-compiled one is started under wine or qemu-user, and macos-arm64's not at all (below).
 - **The archives are packed on Linux**, one job for all targets, with GNU tar and zip: sorted entries, owner 0, fixed
   modes, the commit's time. The binaries inside are not yet reproducible across runner images (below).
+
+### Cross-compiled archives (2026-09-29)
+
+Until this, the nightlies on git.torb.dev carried `torb-<version>-linux-x64.tar.gz` and nothing else a machine could
+run: the forge has one runner, linux-x64, and an archive was built only on a runner of its target, so nobody on
+Windows, macOS or an arm64 Linux could install TorbScript - `install.ps1` found no `.zip`, `install.sh` no archive of
+its machine, and the Scoop, Homebrew and winget steps of a release skipped themselves.
+
+**Decision: when a nightly or a release packages, the forge's linux-x64 runner cross-compiles the release binary of
+every tier 1 target that has no runner of its own - windows-x64, linux-arm64, macos-arm64 - with one pinned,
+hash-verified `zig cc`, section 4's managed compiler; each binary is checked, started under an emulator where one
+exists, and packed by `tools/package.sh` exactly like a native one. A target's own runner, once `TORB_RUNNERS` names it,
+replaces its cross job, and its binary is the one released.**
+
+- **The C is the target's own.** The job runs `torb build ./compiler --emit-c --target <target>` with the linux-x64
+  compiler of the run (`tools/cross.sh`) - the path the playground takes to `browser-wasm64` with emscripten. The C a
+  host emits for a target is the C that target's bootstrap emits, which the `agree` job checks on every run, so the
+  binary is the compiler a native bootstrap of the commit builds, compiled by another C compiler. The runtime is
+  compiled for the target in the same command (`tools/build-seed.sh`, with `$TORB_CC` a wrapper of
+  `zig cc -target <triple>` and the TLS of `vendor/` as always), and the archive gets the `std/` and `runtime/` of the
+  commit beside it.
+- **The C libraries are the native builds'**: `x86_64-windows-gnu` is MinGW-w64 on the UCRT, as MSYS2's UCRT64 gcc
+  builds windows-x64 on its runner (the binary imports `api-ms-win-crt-*`, `kernel32`, `advapi32` and `shell32`);
+  `aarch64-linux-musl` is static musl, as `musl-gcc -static` builds linux-arm64; `aarch64-macos.13.0` links
+  `libSystem` and nothing else and runs on macOS 13 and newer, Zig's default, named so a new Zig cannot move it.
+  `tools/build-seed.sh` asks the compiler for the machine it builds for (`-dumpmachine`) before it adds `-pthread`,
+  which a Windows target must not get from a Linux host.
+- **windows-x64 keeps its icon and version**: `zig rc` compiles `tools/windows/torb.rc` into a `.res` that `zig cc`
+  links (`tools/windows/resource.sh` with an output ending in `.res`), with Zig's own preprocessor and `<winver.h>` - no
+  MinGW on the runner at all.
+- **Zig is pinned by version and by the SHA-256 of each host's archive** in `tools/fetch-zig.sh` (0.16.0; the
+  x86_64-linux archive for the runner, x86_64-windows, aarch64-linux and aarch64-macos for people), each archive's
+  minisign signature checked against the Zig Software Foundation's key when it was pinned. It downloads from Zig's
+  community mirrors in a random order and from ziglang.org last, as ziglang.org asks of automated downloads, and keeps
+  nothing whose hash is not the pinned one. The job caches the archive.
+
+| Option | For | Against |
+|---|---|---|
+| Debian's cross compilers (`gcc-mingw-w64`, `gcc-aarch64-linux-gnu`) | the runner's own packages; gcc, as the native builds | no macOS at all; Debian's MinGW links `msvcrt` by default where the native windows-x64 binary uses the UCRT; no aarch64 musl cross compiler in Debian, and a static glibc binary is not what linux-arm64's runner ships; `windres` needs MinGW's gcc as its preprocessor; three toolchains of whatever version the image carries |
+| **One pinned `zig cc`** — the decision | section 4's plan; one 55 MB archive for all three targets, pinned, so the three binaries depend on it and not on the runner's image; the C libraries of the native builds; the only way to macOS from Linux; `zig rc` for the icon | a pre-1.0 dependency; clang rather than gcc for these three - the generated C meets clang on macOS and in tier B already; Zig's headers and linker for macOS, not Apple's |
+| osxcross for macOS | Apple's linker and headers | Apple's SDK may not be redistributed or fetched by CI |
+
+**What is tested before anything is published** (`.forgejo/actions/cross`, a job per target, and `tools/cross.sh`):
+
+| Target | Checked | Started |
+|---|---|---|
+| windows-x64 | a PE32+ x86-64 console executable; imports only DLLs every Windows has (the list of `.forgejo/actions/portable`); carries a resource section | under wine 9 (Ubuntu 24.04's): `torb --version`, then `tools/smoke-test.sh` - check, two programs run in the VM, the registry's C emitted - laid out as a download outside the checkout |
+| linux-arm64 | a static aarch64 ELF | under qemu-user (`qemu-aarch64`, which the static binary needs nothing else for): the same |
+| macos-arm64 | an arm64 Mach-O executable with a code signature (Zig's linker signs ad hoc, and an arm64 Mach-O without one is killed at its start), loading `/usr/lib/libSystem.B.dylib` alone, for macOS 13 and newer - read from its load commands with `od` | never: nothing on a Linux runner starts a Mach-O |
+
+**What is not tested before publishing**, on any of the three: the conformance suite, the runtime's tests, a native
+`torb build` with the machine's C compiler and the archive's `runtime/`, and anything wine or QEMU emulates rather
+than Windows or Linux itself - and for macos-arm64 whether the binary starts at all. A cross-compiled binary is
+smoke-tested, never gated. Two things cover it afterwards: the GitHub mirror runs bootstrap, the conformance suite and
+the runtime's tests of each target's own native build after every push (`portable.yml`), and every morning its job
+`download` installs the published nightly from torb.dev on real windows-x64, linux-arm64 and macos-arm64 machines (and
+linux-x64) with `tools/install.sh` and `tools/install.ps1`, and checks, runs and natively builds a program with it -
+the first time a cross-compiled binary meets its machine, and a report, not a gate. The release notes of a nightly and a
+release name the targets that were cross-compiled. A red cross job stops the nightly or the release like any other red
+gate.
+
+**The nightly's images** stay `linux/amd64`: `images.yml` builds `linux/arm64` images when a release has a linux-arm64
+toolchain, every nightly has one now, and its three arm64 build stages under QEMU would take hours of the one runner
+every night, for images the root server (x64) never pulls. A stable release still gets both.
+
+**Verified when this was built**, 2026-09-29: on the maintainer's Windows machine, `tools/cross.sh` with the Windows
+build of the same Zig built windows-x64's `torb.exe` from the C of the commit in five and a half minutes; that binary
+passed `tools/smoke-test.sh` natively and the conformance suite natively (256 of 256 programs) and in the VM (259 of
+259) - on its own machine, which the forge's runner cannot do. The same C
+compiled by the machine's MinGW gcc 13 (`x86_64-ucrt-posix-seh`) through `tools/build-seed.sh` passed the smoke test
+too, but that `torb.exe` - like every bootstrapped one on that machine - imports `libwinpthread-1.dll`, which a gcc of
+the posix thread model links in although the runtime uses no pthreads on Windows, and which the check of
+`.forgejo/actions/portable` refuses:
+MSYS2's UCRT64 gcc has the same thread model, so a native windows-x64 runner is expected to meet that check red until
+the release step links winpthreads statically. The Zig build imports no such DLL. In the
+forge runner's image (`catthehacker/ubuntu:act-24.04`, under Docker, as root), with the linux-x64 compiler compiled
+from the same commit's C: `tools/fetch-zig.sh` fetched from a different mirror on each of two runs, `tools/cross.sh`
+built each of the three in five to seven minutes - emission included, and every `program.hash` the same as the
+bootstrap's - windows-x64 passed the smoke test under wine in 30 seconds, linux-arm64 under qemu-aarch64 in two and a
+half minutes, macos-arm64 passed its checks, and `tools/package.sh` packed archives of 6.7 to 7.5 MB, as large as
+linux-x64's native one. Installing wine and qemu-user took 40 seconds. `tools/install.sh` installed the linux-arm64
+archive from a `file://` channel of those archives and the installed `torb` checked and ran a program under qemu, and
+`torb.exe` of the unpacked `.zip` did the same under wine. The workflows pass
+`forgejo-runner validate` of runner 12.13.2 (the one Forgejo 16.0.5 builds in) and 13.2.0, and `portable.yml` passes
+`actionlint`. The first nightly on the forge is the first run of the jobs themselves.
 
 ### Signing
 
@@ -1520,11 +1620,14 @@ Attestations were to be added beside the signature once the repository was publi
 
 ### Where this departs from sections 4 and 5, and why
 
-- **Native runners, not one pinned `zig cc`.** Section 4 builds every target with a managed `zig cc` so binaries are
-  reproducible; that toolchain (`torb toolchain add c`, slice 9) does not exist yet. Today each binary is built by the
-  runner image's compiler, so it is reproducible for one image and not across images, and section 5's "built twice on
-  two runners and compared" is not done. The C (`program.c`) is reproducible already, and the `agree` job checks it
-  across four machines on every run.
+- **Native runners, and one pinned `zig cc` only where there is none.** Section 4 builds every target with a managed
+  `zig cc` so binaries are reproducible; that toolchain (`torb toolchain add c`, slice 9) does not exist yet. linux-x64
+  and every target with a runner are built by the runner image's compiler, so their binaries are reproducible for one
+  image and not across images. Since 2026-09-29 the targets without a runner are built by a pinned Zig that
+  `tools/fetch-zig.sh` fetches ("Cross-compiled archives"): the pipeline's half of section 4, whose binaries depend on
+  the pinned archive and not on the runner's image - but section 5's "built twice on two runners and compared" is
+  still not done for any of them. The C (`program.c`) is reproducible already, and the `agree` job checks it across
+  four machines on every run.
 - **`linux-arm64` is static musl too**, above.
 - **FreeBSD** (tier 2) is not in the pipeline; it needs a virtual machine on a Linux runner.
 
@@ -1697,16 +1800,22 @@ label no runner has would wait for ever - "your pipeline will halt", the forge's
 reads the variable through a first job and has an `if:` on its output alone, which the forge evaluates itself and skips
 before any runner is asked. Until those runners exist:
 
-- **A release carries the linux-x64 toolchain only** (section 13, "What a release contains"), the Homebrew formula and
-  the Scoop manifest are not rendered, and winget's update is a command the release job prints. The
-  `linux/arm64` images wait for a linux-arm64 toolchain.
+- **A release carries their cross-compiled toolchains** (section 13, "Cross-compiled archives", since 2026-09-29;
+  until then a release carried the linux-x64 toolchain only): the forge's runner builds them with a pinned `zig cc`,
+  checks them and starts them under wine and qemu-user, so the Homebrew formula and the Scoop manifest are rendered and
+  winget's update is a command the release job prints. A stable release builds `linux/arm64` images from its
+  linux-arm64 toolchain; a nightly builds `linux/amd64` ones only (`images.yml`).
 - **The GitHub mirror runs the three targets after every push** (`.github/workflows/portable.yml`): bootstrap,
   `check .`, the conformance suite, the runtime's tests and the agreement of the C among them - as a report, not a gate,
-  and only while the mirror is public, where GitHub's standard runners cost nothing.
-- **Cross-compiling was considered and left**: windows-x64 with Debian's MinGW-w64 and linux-arm64 with a musl cross
-  compiler would build binaries on the one runner, but nothing could run them there - no smoke test, no conformance
-  suite - and a binary no gate has run is not one to release. QEMU for linux-arm64 in the runner's Docker would run
-  them, at a slowdown that makes the compiler's 100 MB of C a matter of hours.
+  and only while the mirror is public, where GitHub's standard runners cost nothing. Every morning it also installs the
+  newest nightly on the three machines and on linux-x64, with `tools/install.sh` and `tools/install.ps1` from torb.dev,
+  and checks, runs and builds a program with it: the first run of a cross-compiled binary on its own machine.
+- **Cross-compiling was first considered and left** (2026-09-27): windows-x64 with Debian's MinGW-w64 and linux-arm64
+  with a musl cross compiler would build binaries on the one runner, but nothing could run them there, and a binary no
+  gate has run is not one to release; QEMU would make the compiler's 100 MB of C a matter of hours. What changed the
+  decision two days later is section 13's "Cross-compiled archives": the binary is not bootstrapped under QEMU but
+  cross-compiled, and only started there - wine and qemu-user start it in seconds and minutes - and the mirror runs the
+  published nightly on the real machines.
 
 ### GitHub as the mirror
 
@@ -1714,9 +1823,10 @@ before any runner is asked. Until those runners exist:
 workflow, `portable.yml`**; the six workflows that built, published and signed on GitHub are deleted, since two
 pipelines publishing the same release would race. `portable.yml` reuses `.forgejo/actions/portable` (a composite
 action works on both), reads no secret, publishes nothing and fetches the seed from the forge. Recommended over deleting
-`.github/` entirely because it is the only place windows-x64 and macos-arm64 run at all until the forge has runners,
-and it costs nothing once the mirror is public; recommended over keeping more because a job that could publish on the
-mirror would need a secret there, which is what the mirror should never hold. The mirror's setup - a token with
+`.github/` entirely because it is the only place windows-x64 and macos-arm64 run at all until the forge has runners -
+and, since the forge cross-compiles their released binaries, the only place those run on their machines - and it costs
+nothing once the mirror is public; recommended over keeping more because a job that could publish on the mirror would
+need a secret there, which is what the mirror should never hold. The mirror's setup - a token with
 Contents and Workflows write access, the forge's Settings -> Repository -> Mirror settings - is
 `docs/contributing/releasing.md`. Releases are not mirrored; GitHub's old `seeds` release stays as an archive that
 `tools/fetch-seed.sh` falls back to.
