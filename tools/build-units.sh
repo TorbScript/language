@@ -22,8 +22,9 @@
 # compiles it holds `<object>.lock`, a directory taken with `mkdir` as a build slot is (`tools/build-slot.sh`), and a
 # build that finds it taken compiles the rest of its lane first and then waits for the object and uses it - several
 # programs that start at once, the conformance suite's, compile the runtime and mbedTLS once and not once each. A lock
-# whose build is gone (`kill -0` of the process id in it) or that is older than an hour is taken over. At most
-# `$TORB_BUILD_JOBS` compiles run at a time, by default as many as the machine has processors, each lane of them
+# whose build is gone (`kill -0` of the process id in it, or `tasklist` by Windows process id and image name under Git
+# Bash - see `lock_holder_alive` below) or that is older than an hour is taken over. At most `$TORB_BUILD_JOBS`
+# compiles run at a time, by default as many as the machine has processors, each lane of them
 # taking every n-th line of the list: `torb build` lists the largest files first. Then the objects are linked, with
 # `-flto=<jobs>` where `torb build` asks for the program to be optimized across its units - unless the binary of the
 # very same link is in the cache, and then it is copied. A link whose arguments are longer than
@@ -99,19 +100,81 @@ done <"$list"
 
 jobs=$(processors)
 
+# On MSYS/Cygwin (Git Bash) a lock also records the Windows process id and image name of this script (`take_lock`
+# below): `kill -0` of an MSYS process id whose process already exited can fall back to interpreting the number as a
+# raw Windows process id and find a live, unrelated process there, so the lock of a build that is gone looks held for
+# up to an hour - the bug `tools/gate-slot.sh` and `tools/build-slot.sh` work around the same way. `/proc/<pid>/winpid`
+# gives the real Windows process id, and `tasklist` asks Windows about it directly; the image name recorded alongside
+# it rules out a Windows process id that has since been reused by a different program. Elsewhere (Linux, macOS,
+# FreeBSD) there is no such file and `kill -0` is exact, so nothing changes there.
+windows_pid=""
+windows_image=""
+windows_identity_known=0
+
+# Finds that process id and image name, once and only before the first lock is taken: `tasklist` takes a moment, and a
+# build whose objects are all in the cache takes no lock. The lanes are started after it and inherit what it found.
+find_windows_identity() {
+  [ "$windows_identity_known" -eq 0 ] || return 0
+  windows_identity_known=1
+  if [ -r "/proc/$$/winpid" ] && command -v tasklist >/dev/null 2>&1; then
+    read -r windows_pid <"/proc/$$/winpid" 2>/dev/null
+    if [ -n "$windows_pid" ]; then
+      identity_seen=$(tasklist //FI "PID eq $windows_pid" //FO CSV //NH 2>/dev/null)
+      case "$identity_seen" in
+        '"'*)
+          identity_rest=${identity_seen#\"}
+          windows_image=${identity_rest%%\"*}
+          ;;
+      esac
+    fi
+    [ -n "$windows_image" ] || windows_pid=""
+  fi
+}
+
 # The lock of one object: `mkdir` creates it or fails, so exactly one build takes it, and it holds the process id of
 # this script - a lane is a subshell, and `$$` in it is the script's, which lives until every lane has ended.
 take_lock() {
   lock="$1.lock"
   if mkdir "$lock" 2>/dev/null; then
-    printf '%s\n' "$$" >"$lock/pid"
+    record_holder "$lock"
     return 0
   fi
   if lock_is_stale "$lock" && rm -rf "$lock" 2>/dev/null && mkdir "$lock" 2>/dev/null; then
-    printf '%s\n' "$$" >"$lock/pid"
+    record_holder "$lock"
     return 0
   fi
   return 1
+}
+
+# Writes who holds a lock just taken: the process id, and under Git Bash the Windows process id and image name.
+record_holder() {
+  printf '%s\n' "$$" >"$1/pid"
+  if [ -n "$windows_pid" ]; then
+    printf '%s\n%s\n' "$windows_pid" "$windows_image" >"$1/winholder"
+  fi
+}
+
+# Whether the process recorded for a lock is still the one that holds it. Where the lock also recorded a Windows process
+# id and image name, this asks Windows with `tasklist` instead of `kill -0`, and checks the image name too, so a Windows
+# process id since reused by a different program is not mistaken for the same holder.
+lock_holder_alive() {
+  if [ -f "$1/winholder" ]; then
+    alive_pid=""
+    alive_image=""
+    { read -r alive_pid; read -r alive_image; } <"$1/winholder" 2>/dev/null
+    alive_seen=$(tasklist //FI "PID eq $alive_pid" //FO CSV //NH 2>/dev/null)
+    case "$alive_seen" in
+      '"'*)
+        alive_rest=${alive_seen#\"}
+        [ "${alive_rest%%\"*}" = "$alive_image" ]
+        return $?
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+  kill -0 "$2" 2>/dev/null
 }
 
 # A lock is stale when the build that holds it is gone, or when it is older than any compile takes. One without a
@@ -119,7 +182,7 @@ take_lock() {
 lock_is_stale() {
   if [ -f "$1/pid" ]; then
     holder=$(cat "$1/pid" 2>/dev/null)
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    if [ -n "$holder" ] && ! lock_holder_alive "$1" "$holder"; then
       return 0
     fi
     [ -n "$(find "$1" -maxdepth 0 -mmin +60 2>/dev/null)" ]
@@ -185,6 +248,7 @@ compile_lane() {
 
 # One round: the pending lines over as many lanes as there are jobs, and what they put aside gathered in `<deferred>`
 run_lanes() {
+  find_windows_identity
   count=$(wc -l <"$pending" | tr -d ' ')
   lanes=$jobs
   if [ "$count" -lt "$lanes" ]; then
@@ -263,6 +327,7 @@ link_program() {
   fi
   # Another build that links the very same arguments - a shard of the same test suite - holds the lock of the kept
   # binary: it is waited for, and what it keeps is copied
+  find_windows_identity
   while :; do
     if copy_kept; then
       return 0
