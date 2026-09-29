@@ -4,18 +4,19 @@
 # labels that link them to the repository. cr.torb.dev is the forge's own container registry.
 #
 #   stable    <version> and latest        (release.yml calls this once the release is published)
+#   preview   <version> and preview       (release.yml, for a pre-release: 0.2.0-rc.1 - never latest)
 #   nightly   nightly-YYYYMMDD and nightly (nightly.yml, the same)
 #
 # Called by those two with `source: artifact` - the `dist` artifact of their run - and run by hand (Actions -> images
 # -> Run workflow) with `source: release`, which downloads the assets of the published release from the forge instead:
 # the way to rebuild the images of a release, or to build them once cr.torb.dev is set up.
 #
-# Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well for a stable release that has a
-# linux-arm64 toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) when QEMU can be
-# registered in the runner's Docker; otherwise amd64 images only, and the log says why. A nightly gets amd64 images
-# only: since its linux-arm64 toolchain is cross-compiled (gates.yml) every nightly has one, and an arm64 build stage
-# under QEMU for each image would add hours to every night of the one runner, for images the root server (x64) never
-# pulls.
+# Platforms: linux/amd64 always - the forge's runner is x64. linux/arm64 as well for a stable release or a preview
+# that has a linux-arm64 toolchain (the build stage runs the toolchain of the image's architecture, under QEMU) when
+# QEMU can be registered in the runner's Docker; otherwise amd64 images only, and the log says why. A nightly gets
+# amd64 images only: since its linux-arm64 toolchain is cross-compiled (gates.yml) every nightly has one, and an arm64
+# build stage under QEMU for each image would add hours to every night of the one runner, for images the root server
+# (x64) never pulls.
 #
 # The push logs in to cr.torb.dev with a token of the Authorized Integration whose audience is TORB_IMAGES_AUDIENCE
 # (`docker login` takes it as the password), asked for after the build so an hour-long arm64 build cannot outlive it.
@@ -33,7 +34,7 @@ on:
         required: true
         type: string
       channel:
-        description: stable or nightly
+        description: stable, preview or nightly
         required: true
         type: string
       source:
@@ -48,10 +49,10 @@ on:
         required: true
         type: string
       channel:
-        description: stable or nightly
+        description: stable, preview or nightly
         required: true
         type: choice
-        options: [stable, nightly]
+        options: [stable, preview, nightly]
       source:
         description: Where the assets come from
         required: false
@@ -118,8 +119,9 @@ jobs:
           name="$REGISTRY/torbscript/$IMAGE"
           case "$CHANNEL" in
             stable) tags="$name:$VERSION $name:latest" ;;
+            preview) tags="$name:$VERSION $name:preview" ;;
             nightly) tags="$name:$VERSION $name:nightly" ;;
-            *) echo "::error::the channel is stable or nightly, not $CHANNEL"; exit 1 ;;
+            *) echo "::error::the channel is stable, preview or nightly, not $CHANNEL"; exit 1 ;;
           esac
           ls "dist/torb-$VERSION-source.tar.gz" "dist/torb-$VERSION-linux-x64.tar.gz"
           platforms=linux/amd64

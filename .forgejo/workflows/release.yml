@@ -1,17 +1,25 @@
-# The stable channel (docs/design/RELEASE.md sections 3 to 5 and 13): pushing a tag `v0.MINOR.PATCH` - and nothing
-# else - makes a release.
+# The stable and the preview channel (docs/design/RELEASE.md sections 3 to 5 and 13): pushing a tag - and nothing else
+# - makes a release. `v0.MINOR.PATCH` is a stable release; a pre-release carries a suffix, `v0.MINOR.0-rc.N` for the
+# release candidate a minor is cut as a week before its first Tuesday, and before a major `vMAJOR.0.0-alpha.N` and
+# `-beta.N` (and `-rc.N`). A pre-release goes to the preview channel: it is published as a prerelease of the forge,
+# release-sync lists it as `preview`, and it gets neither the stores nor a package manager nor the images' `latest`.
 #
-#   1. check      the tag is a version, it equals the `version` of project.trb and compiler/project.trb, its commit is
-#                 on main, and there is a LICENSE
+#   1. check      the tag is a version; its number without the suffix is the `version` of project.trb,
+#                 compiler/project.trb and editors/vscode/package.json and the `languageVersion` of
+#                 compiler/src/package/version.trb; its commit is on main or on release/MAJOR.MINOR, the branch a
+#                 release candidate and a patch are made from; there is a LICENSE
 #   2. gates      every gate (gates.yml), the release binaries - of a target that has a runner built there, of the
 #                 other tier 1 targets cross-compiled on linux-x64 - the archives, the seed
 #   3. publish    SHA256SUMS signed with the project's cosign key (SHA256SUMS.sig), the release on the forge with every
 #                 archive, the source, the seed and the signature - a draft until every asset is uploaded, so the
-#                 webhook "published" reaches release-sync with all of them there - and the seed added to `seeds.txt`
+#                 webhook "published" reaches release-sync with all of them there - and, for a commit of main, the
+#                 seed added to `seeds.txt`
 #   4. images     the root server's container images from the release's assets, pushed to cr.torb.dev and signed
-#                 (images.yml), the package manager channels (publish-packages), and the VS Code extension of the
-#                 release on the Visual Studio Marketplace and Open VSX (publish-extension) - each store only where
-#                 its token is a secret of the repository (VSCE_PAT, OVSX_PAT)
+#                 (images.yml: `<version>` and `latest`, or `<version>` and `preview` for a pre-release), and for a
+#                 stable release only the package manager channels (publish-packages) and the VS Code extension on
+#                 the Visual Studio Marketplace and Open VSX (publish-extension) - each store only where its token is a
+#                 secret of the repository (VSCE_PAT, OVSX_PAT). A store version cannot carry `-rc.1`, and the
+#                 nightly's .vsix already covers what is ahead of stable
 #
 # A red gate anywhere stops the release before anything is published. Nothing here runs for a pull request: the only
 # trigger is a tag, which only somebody with write access can push, and pushing it is the approval - the forge has no
@@ -23,6 +31,9 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+"
 
 concurrency:
   group: release-${{ forgejo.ref }}
@@ -34,7 +45,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      # 0.2.0 or 0.2.0-rc.1: what the assets are named after
       version: ${{ steps.check.outputs.version }}
+      # 0.2.0 for both: the number of the manifests, which a pre-release does not carry its suffix into
+      number: ${{ steps.check.outputs.number }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      # stable, or preview for a pre-release: the channel of images.yml
+      channel: ${{ steps.check.outputs.channel }}
+      # main, or release/MAJOR.MINOR where the commit is not on main
+      branch: ${{ steps.check.outputs.branch }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -45,35 +64,64 @@ jobs:
           TAG: ${{ forgejo.ref_name }}
         run: |
           version=${TAG#v}
+          # RELEASE.md section 3: before 1.0 a stable release is 0.MINOR.PATCH. A pre-release carries a suffix: a
+          # release candidate -rc.N of a minor or a major (0.2.0-rc.1, 1.0.0-rc.1), and before a major only -alpha.N
+          # and -beta.N (1.0.0-alpha.1) - never of a patch, which is released as it is. No leading zeros anywhere
+          digits='(0|[1-9][0-9]*)'
           case "$version" in
-            0.*) ;;
+            *-*)
+              prerelease=true
+              channel=preview
+              number=${version%%-*}
+              if ! printf '%s\n' "$version" | grep -q -E "^$digits\.$digits\.0-rc\.[1-9][0-9]*\$" &&
+                ! printf '%s\n' "$version" | grep -q -E "^[1-9][0-9]*\.0\.0-(alpha|beta)\.[1-9][0-9]*\$"; then
+                echo "::error::$TAG is no pre-release of docs/design/RELEASE.md section 3: vMAJOR.MINOR.0-rc.N, or vMAJOR.0.0-alpha.N and -beta.N before a major, without leading zeros"
+                exit 1
+              fi
+              ;;
             *)
-              echo "::error::before 1.0 a release is 0.MINOR.PATCH (docs/design/RELEASE.md section 3), not $version"
-              exit 1
+              prerelease=false
+              channel=stable
+              number=$version
+              if ! printf '%s\n' "$version" | grep -q -E "^0\.$digits\.$digits\$"; then
+                echo "::error::before 1.0 a release is v0.MINOR.PATCH without leading zeros (docs/design/RELEASE.md section 3), not $TAG"
+                exit 1
+              fi
               ;;
           esac
-          printf '%s\n' "$version" | grep -q -E '^0\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
-            echo "::error::$TAG is not v0.MINOR.PATCH without leading zeros"
-            exit 1
-          }
           # The download, the manifests, the editor extension and the documentation carry one number (RELEASE.md
-          # section 3). A manifest writes `version = "0.2.0"`; the older `version "0.2.0"` is read as well
+          # section 3), and a pre-release is a build of that number: 0.2.0-rc.1 checks for 0.2.0. A manifest writes
+          # `version = "0.2.0"`; the older `version "0.2.0"` is read as well
           for manifest in project.trb compiler/project.trb; do
             declared=$(tr -d '\r' <"$manifest" | sed -n 's/^version *=\{0,1\} *"\([^"]*\)".*$/\1/p' | head -n 1)
-            if [ "$declared" != "$version" ]; then
-              echo "::error file=$manifest::says version \"$declared\", and the tag is $TAG"
+            if [ "$declared" != "$number" ]; then
+              echo "::error file=$manifest::says version \"$declared\", and the tag $TAG is a release of $number"
               exit 1
             fi
           done
           declared=$(tr -d '\r' <editors/vscode/package.json | sed -n 's/^  "version": "\([^"]*\)",$/\1/p' | head -n 1)
-          if [ "$declared" != "$version" ]; then
-            echo "::error file=editors/vscode/package.json::says version \"$declared\", and the tag is $TAG"
+          if [ "$declared" != "$number" ]; then
+            echo "::error file=editors/vscode/package.json::says version \"$declared\", and the tag $TAG is a release of $number"
             exit 1
           fi
-          # fetch-depth 0 fetched every branch, main among them
+          # What `torb --version` prints and a package's `language` line is compared with
+          source=compiler/src/package/version.trb
+          declared=$(tr -d '\r' <"$source" | sed -n 's/^public const languageVersion = "\([^"]*\)".*$/\1/p' | head -n 1)
+          if [ "$declared" != "$number" ]; then
+            echo "::error file=$source::says languageVersion \"$declared\", and the tag $TAG is a release of $number"
+            exit 1
+          fi
+          # The commit is on main, or on release/MAJOR.MINOR: a minor's release candidate is cut from that branch a
+          # week before the first Tuesday while main moves on, and its fixes and every patch of the minor are made
+          # there (RELEASE.md section 3). fetch-depth 0 fetched every branch
+          line=$(printf '%s\n' "$number" | cut -d . -f 1,2)
           git fetch --no-tags origin main
-          if ! git merge-base --is-ancestor HEAD FETCH_HEAD; then
-            echo "::error::$TAG is not a commit of main"
+          if git merge-base --is-ancestor HEAD FETCH_HEAD; then
+            branch=main
+          elif git fetch --no-tags origin "release/$line" && git merge-base --is-ancestor HEAD FETCH_HEAD; then
+            branch="release/$line"
+          else
+            echo "::error::$TAG is a commit of neither main nor release/$line"
             exit 1
           fi
           # RELEASE.md section 9: without a license nobody may use it, and the repository is public
@@ -81,7 +129,14 @@ jobs:
             echo "::error::a release needs a LICENSE file at the root"
             exit 1
           fi
-          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "$TAG: version $version of $number, channel $channel, from $branch"
+          {
+            echo "version=$version"
+            echo "number=$number"
+            echo "prerelease=$prerelease"
+            echo "channel=$channel"
+            echo "branch=$branch"
+          } >>"$GITHUB_OUTPUT"
 
   gates:
     needs: check
@@ -129,12 +184,22 @@ jobs:
           TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
           TAG: ${{ forgejo.ref_name }}
           VERSION: ${{ needs.check.outputs.version }}
+          NUMBER: ${{ needs.check.outputs.number }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          BRANCH: ${{ needs.check.outputs.branch }}
           COMMIT: ${{ forgejo.sha }}
           SERVER: ${{ forgejo.server_url }}
           REPOSITORY: ${{ forgejo.repository }}
           RUNNERS: ${{ vars.TORB_RUNNERS }}
         run: |
+          # A release candidate carries the notes of the release it is a candidate for, until it has notes of its own
           notes="docs/releases/$VERSION.md"
+          [ -f "$notes" ] || notes="docs/releases/$NUMBER.md"
+          # A pre-release is a prerelease of the forge: never its "latest", and release-sync's preview channel
+          kind=""
+          if [ "$PRERELEASE" = "true" ]; then
+            kind="--prerelease"
+          fi
           # The archives of the targets without a runner were cross-compiled (gates.yml, the cross-* jobs)
           cross=""
           for target in windows-x64 linux-arm64 macos-arm64; do
@@ -151,6 +216,17 @@ jobs:
               echo "TorbScript $VERSION."
             fi
             echo ""
+            if [ "$PRERELEASE" = "true" ]; then
+              echo "A pre-release of $NUMBER, on the preview channel: \`TORB_INSTALL_CHANNEL=preview\` for the installers,"
+              echo "\`torb upgrade --channel preview\` for an installed toolchain. It is not published to the Visual Studio"
+              echo "Marketplace, Open VSX, Homebrew, Scoop or winget. A release candidate becomes $NUMBER unchanged, the"
+              echo "same commit tagged again, unless a blocker is found (docs/design/RELEASE.md section 3)."
+              echo ""
+            fi
+            if [ "$BRANCH" != "main" ]; then
+              echo "Built from $BRANCH."
+              echo ""
+            fi
             echo "Targets: $(ls dist | sed -n "s/^torb-$VERSION-\(.*\)\.tar\.gz$/\1/p" | grep -v '^source$' | tr '\n' ' ')"
             echo ""
             if [ -n "$cross" ]; then
@@ -168,13 +244,21 @@ jobs:
             echo '```'
           } >release-notes.md
           # A draft first: the webhook "published" goes out once every asset is there
-          sh tools/forge.sh create "$TAG" "$COMMIT" "TorbScript $VERSION" release-notes.md --draft
+          # shellcheck disable=SC2086 # $kind is empty or one word
+          sh tools/forge.sh create "$TAG" "$COMMIT" "TorbScript $VERSION" release-notes.md --draft $kind
           sh tools/forge.sh upload "$TAG" dist/*
           sh tools/forge.sh publish "$TAG"
+      # Every clone of main bootstraps from the newest seed of seeds.txt, so a seed goes there only from a commit of
+      # main: release/MAJOR.MINOR stays behind main, and its compiler may not read what main has taught since
       - name: The seed of the release, in the seeds index
         env:
           TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+          BRANCH: ${{ needs.check.outputs.branch }}
         run: |
+          if [ "$BRANCH" != "main" ]; then
+            echo "::notice::built from $BRANCH, not main: the seed is an asset of the release and stays out of seeds.txt"
+            exit 0
+          fi
           for archive in dist/torb-seed-*.tar.gz; do
             sh tools/publish-seed.sh "$archive"
           done
@@ -183,12 +267,12 @@ jobs:
     name: container images (docs/design/RELEASE.md section 7.11)
     needs: [check, publish]
     # The images are built from the release's own assets, so they wait for the release; images.yml pushes them to
-    # cr.torb.dev tagged <version> and latest, and signs them. No `enable-openid-connect` here: the jobs this expands
-    # into take images.yml's own (RELEASE.md section 14)
+    # cr.torb.dev tagged <version> and latest - <version> and preview for a pre-release - and signs them. No
+    # `enable-openid-connect` here: the jobs this expands into take images.yml's own (RELEASE.md section 14)
     uses: ./.forgejo/workflows/images.yml
     with:
       version: ${{ needs.check.outputs.version }}
-      channel: stable
+      channel: ${{ needs.check.outputs.channel }}
       source: artifact
     secrets: inherit
 
@@ -198,19 +282,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # A store version is MAJOR.MINOR.PATCH and nothing else, and every upload needs a new one: 0.2.0-rc.1 would take
+      # 0.2.0 from the release it is a candidate for. The .vsix stays an asset of the pre-release, and what is ahead
+      # of stable reaches an editor through the nightly's .vsix
+      - name: A pre-release stays out of the stores
+        if: needs.check.outputs.prerelease == 'true'
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: echo "::notice::$VERSION is a pre-release, so torbscript-$VERSION.vsix is not published to the Visual Studio Marketplace or Open VSX; it is an asset of the release"
+      - if: needs.check.outputs.prerelease != 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       # The .vsix the release carries - the file SHA256SUMS lists and the forge serves - and no second one packed here
-      - uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+      - if: needs.check.outputs.prerelease != 'true'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
         with:
           name: dist
           path: dist
-      - uses: ./.forgejo/actions/node
+      - if: needs.check.outputs.prerelease != 'true'
+        uses: ./.forgejo/actions/node
       # vsce reads its token from VSCE_PAT and ovsx from OVSX_PAT, so neither is ever on a command line. A store whose
       # secret is missing is skipped, and says so; a store that refuses fails the job, after the release is out. A
       # version the store has already is passed over (--skip-duplicate), so the job can be run again for the other one
       - name: Visual Studio Marketplace
+        if: needs.check.outputs.prerelease != 'true'
         env:
           VERSION: ${{ needs.check.outputs.version }}
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -221,6 +317,7 @@ jobs:
           fi
           npx --yes @vscode/vsce@4.0.0 publish --skip-duplicate --packagePath "dist/torbscript-$VERSION.vsix" </dev/null
       - name: Open VSX
+        if: needs.check.outputs.prerelease != 'true'
         env:
           VERSION: ${{ needs.check.outputs.version }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
@@ -234,6 +331,8 @@ jobs:
   publish-packages:
     name: package manager channels (docs/design/RELEASE.md section 5)
     needs: [check, gates, publish]
+    # Homebrew, Scoop and winget follow stable releases only: none of them has a preview channel of this project
+    if: needs.check.outputs.prerelease != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     enable-openid-connect: true

@@ -9,6 +9,9 @@
 #
 # <version> is what a release or a nightly is called (gates.yml's input `version`), or empty:
 #   0.4.0              a release: package.json has to say 0.4.0 too, and the .vsix is the one the stores get
+#   0.4.0-rc.1         a pre-release (-rc.N, -beta.N, -alpha.N): package.json says 0.4.0, the number it is a candidate
+#                      for; the .vsix is marked as a pre-release and named after the pre-release - an asset of its
+#                      release, never the stores' (a store version is MAJOR.MINOR.PATCH, and 0.4.0 is the release's)
 #   nightly-20260928   a nightly: package.json's version stamped to MAJOR.(MINOR+1).YYYYMMDD for this pack only (0.1.0
 #                      becomes 0.2.20260928 - a store version of its own, always ahead of the cycle's coming release),
 #                      marked as a pre-release (`vsce package --pre-release`) and named after the nightly - an asset
@@ -69,9 +72,17 @@ case "$version" in
     store_minor=$(printf '%s\n' "$declared" | cut -d. -f2)
     store_version="$store_major.$((store_minor + 1)).$stamp"
     ;;
+  *-rc.* | *-beta.* | *-alpha.*)
+    printf '%s\n' "$version" | grep -q -E '^[0-9]+\.[0-9]+\.[0-9]+-(rc|beta|alpha)\.[0-9]+$' ||
+      fail "a pre-release is MAJOR.MINOR.PATCH-rc.N, -beta.N or -alpha.N, not $version"
+    [ "${version%%-*}" = "$declared" ] ||
+      fail "the pre-release is $version, of ${version%%-*}, and $extension/package.json says $declared"
+    name=$version
+    flags="--pre-release"
+    ;;
   *)
     printf '%s\n' "$version" | grep -q -E '^[0-9]+\.[0-9]+\.[0-9]+$' ||
-      fail "a version is MAJOR.MINOR.PATCH or nightly-YYYYMMDD, not $version"
+      fail "a version is MAJOR.MINOR.PATCH, MAJOR.MINOR.PATCH-rc.N (-beta.N, -alpha.N) or nightly-YYYYMMDD, not $version"
     [ "$version" = "$declared" ] || fail "the release is $version, and $extension/package.json says $declared"
     name=$version
     ;;
