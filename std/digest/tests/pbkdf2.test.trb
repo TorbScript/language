@@ -1,0 +1,48 @@
+/**
+ * PBKDF2 against RFC 6070 (over HMAC-SHA-1, the RFC's own PRF) and the SHA-256 vectors of RFC 7914 section 11 (over
+ * HMAC-SHA-256, what SCRAM uses) - both include a text with an embedded NUL, and RFC 6070 reaches 4 096 rounds, the
+ * count SCRAM uses and `docs/design/FIRST-PARTY.md` section 8 measures.
+ */
+
+use test, group from "std/test"
+use hexEncoded from "std/encoding"
+use HmacSha1, HmacSha256 from "../src/lib"
+
+fn hexOf(bytes: List<UInt8>): String {
+  hexEncoded bytes
+}
+
+group "PBKDF2-HMAC-SHA-1 (RFC 6070)" {
+  test "one and two rounds" {
+    const one = HmacSha1.pbkdf2 "password".bytes(), "salt".bytes(), 1, 20
+    assert(hexOf(one) == "0c60c80f961f0e71f3a9b524af6012062fe037a6")
+    const two = HmacSha1.pbkdf2 "password".bytes(), "salt".bytes(), 2, 20
+    assert(hexOf(two) == "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957")
+  }
+
+  test "4 096 rounds, the count SCRAM uses" {
+    const derived = HmacSha1.pbkdf2 "password".bytes(), "salt".bytes(), 4096, 20
+    assert(hexOf(derived) == "4b007901b765489abead49d926f721d065a429c1")
+  }
+
+  test "a derived key longer than one HMAC block, and a password and salt longer than one HMAC block" {
+    const password = "passwordPASSWORDpassword".bytes()
+    const salt = "saltSALTsaltSALTsaltSALTsaltSALTsalt".bytes()
+    const derived = HmacSha1.pbkdf2 password, salt, 4096, 25
+    assert(hexOf(derived) == "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038")
+  }
+
+  test "a password and salt with an embedded NUL" {
+    const derived = HmacSha1.pbkdf2 "pass\0word".bytes(), "sa\0lt".bytes(), 4096, 16
+    assert(hexOf(derived) == "56fa6aa75548099dcc37d7f03425e0c3")
+  }
+}
+
+group "PBKDF2-HMAC-SHA-256 (RFC 7914 section 11)" {
+  test "one round, a derived key longer than one digest" {
+    const derived = HmacSha256.pbkdf2 "passwd".bytes(), "salt".bytes(), 1, 64
+    const expected =
+      "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
+    assert(hexOf(derived) == expected)
+  }
+}

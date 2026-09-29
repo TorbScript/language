@@ -1,0 +1,54 @@
+/**
+ * [Hmac.pbkdf2]: PBKDF2 (RFC 8018) over any [Hasher] through [Hmac] - the password hash SCRAM authenticates with, and
+ * NIST's key derivation function for a password or a passphrase.
+ */
+
+use ByteWriter from "std/binary"
+use Bytes from "std/stream"
+use Hasher from "./lib"
+use Hmac from "./hmac"
+
+extend<H: Hasher> Hmac<H> {
+  /**
+   * `password` stretched into `length` bytes: `iterations` rounds of HMAC, each block salted with `salt` and its own
+   * big-endian index (RFC 8018 section 5.2), the rounds of one block XORed together into it.
+   *
+   * **Fast at the word level.** [Hmac.keyed] runs once, before the rounds - not once a round, which is where a naive
+   * PBKDF2 spends most of its time re-hashing the key's two blocks. A round after the first copies that keyed state
+   * (its size, not its history) and hashes one digest's worth of bytes: `iterations` rounds cost `iterations` hashes
+   * of one small message, never `iterations` hashes of the key.
+   *
+   * # Examples
+   *
+   *     const derived = HmacSha256.pbkdf2("password".bytes(), "salt".bytes(), 4096, 32)
+   */
+  static fn pbkdf2(password: Bytes, salt: Bytes, iterations: Int, length: Int): List<UInt8> {
+    const keyed = Self.keyed password
+    const hashLength = H.digestLength()
+    var derived: List<UInt8> = []
+    var blockIndex = 1
+    while derived.length() < length {
+      var block = ByteWriter()
+      block.append salt
+      block.uint32(UInt32.tryFrom(blockIndex).ok() ?? 0)
+      var first = keyed
+      first.add block.bytes()
+      var accumulator = first.finished().bytes
+      var previous = accumulator
+      var round = 1
+      while round < iterations {
+        var hmac = keyed
+        hmac.add previous
+        const digest = hmac.finished()
+        previous = digest.bytes
+        for index in 0..hashLength {
+          accumulator[index] = UInt8.tryFrom(Int.from(accumulator[index]) ^ Int.from(previous[index])).ok() ?? 0
+        }
+        round = round + 1
+      }
+      derived.appendAll accumulator
+      blockIndex = blockIndex + 1
+    }
+    derived[0..length]
+  }
+}
