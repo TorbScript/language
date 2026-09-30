@@ -384,12 +384,14 @@ Test Explorer lists the tests of `torbscript/tests` and runs them with `torb tes
 (`editors/vscode/CONTRIBUTING.md`). The repository recommends the published extension in `.vscode/extensions.json`,
 and `.vscode/launch.json` runs the working copy in an Extension Development Host.
 
-**The second client is the playground (2026-09-29).** Its editor is CodeMirror with `@codemirror/lsp-client`, and the
-server is this one, `torb lsp` in the playground's WebAssembly, in a worker of the page: the worker frames the editor's
-messages into the server's standard input and cuts what it writes into messages again. Nothing of the server knows it
-runs in a page - the runtime's browser target makes a read of standard input that finds nothing wait for the page, and
-the scheduler return to it, instead of blocking (RELEASE.md section 6, "The editor, the language server and the
-gallery, as built"; [the playground](../tooling/the-playground.md)).
+**The second client is the playground (2026-09-29).** Its editor is Monaco with a bridge of its own - Monaco's
+providers speaking JSON-RPC (`playground/editor/protocol.mjs`), where CodeMirror with `@codemirror/lsp-client` was
+until 2026-09-30 - and the server is this one, `torb lsp` in the playground's WebAssembly, in a worker of the page:
+the worker frames the editor's messages into the server's standard input and cuts what it writes into messages again.
+Nothing of the server knows it runs in a page - the runtime's browser target makes a read of standard input that finds
+nothing wait for the page, and the scheduler return to it, instead of blocking (RELEASE.md section 6, "The editor, the
+language server and the gallery, as built" and "Monaco in every runnable block"; [the
+playground](../tooling/the-playground.md)).
 
 ## 15. What is left
 

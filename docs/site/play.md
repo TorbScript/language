@@ -23,12 +23,13 @@ print "Hello from {name}!"
 </div>
 
 Press **Run**, or Ctrl+Enter (Cmd+Enter on a Mac). Your program is checked, compiled and run by `torb` itself, built as
-WebAssembly and running in this tab: nothing you write is sent anywhere. The page loads the toolchain once, about 4 MB;
-after that everything starts at once.
+WebAssembly and running in this tab: nothing you write is sent anywhere. The page loads the toolchain and the editor
+once, about 5 MB; after that everything starts at once.
 
-The editor has the language server of `torb`: it completes names and members as you type, underlines what the checker
-finds while you write, shows the type of a name under the pointer, and **Format** lays the code out as `torb format`
-does. **Examples** above the editor opens a program of the gallery.
+The editor is the one of VS Code, with the language server of `torb`: it completes names and members as you type and
+shows their documentation, underlines what the checker finds while you write, shows the declaration and the
+documentation of a name under the pointer, renames with F2, and **Format** lays the code out as `torb format` does.
+**Examples** above the editor opens a program of the gallery.
 
 The address of this page holds your code, compressed behind the `#`, and changes as you type. To share a program, copy
 the address: the part behind the `#` never reaches a server.

@@ -573,9 +573,9 @@ no server.**
 ### The playground, as built (2026-09-28)
 
 `playground/` holds it: `build.sh` builds the toolchain, `playground.js`, `playground-worker.js`, `playground.css` and
-the committed editor bundle `playground-editor.js` (built from `editor/`) are the page's side, `examples/` is the
-gallery of `/play`, and `smoke-test.mjs` runs the result under node. The user's page is
-[docs/tooling/the-playground.md](../tooling/the-playground.md); `/play` is `docs/site/play.md`. The editor, the
+the committed editor (`playground-editor.js`, `.css` and `playground-codicon.ttf`, built from `editor/`) are the
+page's side, `examples/` is the gallery of `/play`, and `smoke-test.mjs` runs the result under node. The user's page
+is [docs/tooling/the-playground.md](../tooling/the-playground.md); `/play` is `docs/site/play.md`. The editor, the
 language server and the gallery came a day later, below.
 
 **Measured first, natively** (Windows x64, the `torb.exe` of `dafd3138`), a ten-line program with the prelude:
@@ -646,7 +646,7 @@ beyond a megabyte stops the run. `TorbPlayground.mount` follows the contract of 
 [torb docs site](../tooling/torb-docs-site.md); a mount inside an element with `data-playground-page` is the page
 `/play` - the editor fills it and the address carries the source.
 
-**The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the seven files
+**The site**: `torb docs site --playground <dir>` (default `build/playground` beside `docs/`) copies the nine files
 and the folder `examples/` into `assets/` where they were built; no page names them, so a site without them is still
 whole. Every page then carries a hash of them (`data-playground-version`), the site's script loads
 `assets/playground.js?v=<hash>`, and `playground.js` hands its query on to the workers, `torb.js`, `torb.wasm`, the
@@ -698,7 +698,7 @@ in a thread of node's: initialize, the diagnostics of a document opened and chan
 hover, semantic tokens, a rename, and the exit.
 
 **The editor is CodeMirror 6 with `@codemirror/lsp-client`**, 452 KB minified and 142 KB gzipped, loaded when an
-editor is about to be used.
+editor is about to be used. (A day later it became Monaco, below: "Monaco in every runnable block".)
 
 | Option | For | Against |
 |---|---|---|
@@ -736,6 +736,72 @@ semantic tokens in under 10 ms; the check of the workspace after `initialized` t
 background. On `/play` the editor replaces the light one about 0.1 s after the page loaded, and a typed error is
 underlined within a second (half of it the client's wait for the typing to stop). A run's first output is as fast as
 before: the run worker is untouched.
+
+### Monaco in every runnable block (2026-09-30)
+
+The owner's feedback on the live site a day later: the language server was on `/play` but not in the runnable blocks
+of the documentation, where it belongs as much; the hover and completion documentation of CodeMirror's client was
+badly laid out ("VS Code would do better"); and before its first click a block's text was larger than after it and sat
+on the bottom edge of its frame. The last had a cause of its own: the light editor's coloured copy carried the class
+`code`, so the rule of the front page's panels (`.panel-code pre.code`, 15 px on 24 px) sized it while the textarea over
+it kept 14 px on 21 px; the editor that replaced it had its own.
+
+**The editor is Monaco, the editor of VS Code, on `/play` and in every runnable block, with a bridge of its own to the
+language server.** Its hover, completion and signature widgets render the server's Markdown the way VS Code renders it -
+the declaration a hover opens with coloured by the language's grammar, links, lists, code in a sentence - which is
+what the feedback asked for, and what CodeMirror's client would have had to be taught piece by piece.
+
+| Option | For | Against |
+|---|---|---|
+| **Monaco, and Monaco's providers speaking JSON-RPC** — decided | the widgets of VS Code; the bridge is small (`editor/protocol.mjs` and the providers in `editor.mjs`), knows only the requests the server answers, and its protocol half runs under node, so `smoke-test.mjs` drives the page's own client against the worker | 3.3 MB minified, 0.85 MB gzipped - six times CodeMirror; not made for touch |
+| Monaco with `monaco-languageclient` (`@codingame/monaco-vscode-api`) | VS Code's own client | megabytes of VS Code's services beside the editor |
+| Monaco with `@vscode/monaco-lsp-client`, which monaco-editor 0.57 ships | Microsoft's | it imports every contribution of Monaco - the diff editor, find, folding and the rest the playground leaves out |
+| CodeMirror, its client extended | small | the Markdown of the widgets and the grammar of their code are ours to write; not the editor readers know |
+
+- **The bridge** registers, for the language `torbscript`, completion (an item's signature and documentation resolved
+  when it is shown, snippets, the documentation beside the list from the start), hover, signature help, definition
+  within the document, rename with its check first, formatting, the quick fixes of a diagnostic, and semantic tokens,
+  whose legend puts `mutable` first so the theme finds `variable.mutable`; the server's diagnostics become markers.
+  Monaco renders the Markdown and sanitizes it: no HTML, and no link that runs a command. One language worker per page
+  holds every block as a document, as before; a change is sent a quarter of a second after the last keystroke, or at
+  once when a request needs it, as the whole text.
+- **A Monarch grammar** (`editor/grammar.mjs`) colours the code before the server has checked it and the ` ```trb `
+  blocks of the documentation; it follows the extension's TextMate grammar, and the language configuration - comments,
+  brackets, indentation - is the extension's file itself.
+- **The theme** is read from the site's tokens on the page (`editor/theme.mjs`) whenever the site's theme changes, so
+  the colours have one source; the widgets are raised surfaces with a hairline and the overlay's shadow, their prose in
+  Chivo and their code in Geist Mono without ligatures and with the slashed zero, and the matched letters of
+  completion are weight, not colour. Brackets keep the colour of punctuation, as on the site.
+- **The swap moves nothing.** A block shows the site's highlighted code in a frame of exactly Monaco's metrics - taken
+  from the `pre` the site wrote, so the front page's larger panels keep theirs - and Monaco starts with the site's
+  colours as its first semantic tokens, until the language server's replace them. Measured in headless Chrome: the
+  frame and the first character stay at the same pixel, in both themes, for a block of the documentation, a panel of
+  the front page and `/play` with its line numbers.
+- **When it loads**: the editor when the pointer comes over a block or the focus into it, so the first click already
+  lands in Monaco; the 4 MB language worker at the first focus in the code, as before; on `/play` both at once. A device
+  of touch alone (`(hover: none) and (pointer: coarse)`) keeps the light editor, without the language server, and never
+  fetches the editor; a browser that cannot load it gets the light editor in its place.
+- **Built like the editor before it**: `playground/editor/package.json` and its lock file (monaco-editor 0.57.0 and
+  esbuild), `build.mjs` bundling only the contributions the playground uses into `playground-editor.js`, Monaco's
+  stylesheet into `playground-editor.css` and its icon font as `playground-codicon.ttf`, all committed and rebuilt byte
+  for byte by CI. Three changes to Monaco's sources are made on the way, each checked: the diff editors become empty
+  classes (170 KB less), the warning of the editor worker's code running in the page is left out - the playground ships
+  no editor worker; what it needs of one, the smallest edits of a formatting, is a moment's work in the page - and the
+  font is added by the module with the build's `?v=`, which the stylesheet cannot know. The site copies the two new
+  files and hashes them into `?v=`.
+
+**Measured** in headless Chrome on a local server (gzip), on a machine running other work: the bundle is 3.31 MB, 849
+KB gzipped, its stylesheet 19 KB and the font 75 KB, against CodeMirror's 452 KB and 142 KB; from the pointer entering a
+block to Monaco in its place 0.35 to 0.6 s the first time; the first completion in a block 0.9 s after the first click,
+the language worker's start and first check included; completion after a `.` in 0.2 to 0.3 s; a typed error marked 0.3
+s after the keystroke.
+
+**`/play` is wide.** The site's stylesheet gives the page the width of the screen up to 1840 px, the text around the
+tool keeping its measure; the tool is a toolbar - the gallery, Run, Format - above the editor and the output, which
+stand side by side from 1100 px, 3 to 2 and from 1700 px 7 to 4, as tall as the window. **The gallery** shows the
+categories as columns with a heading each - a marker in the category's colour, taken from the syntax colours in order
+and the brand's accent last, its name and its count - each example's title, its level as a small badge and its line
+of description, the open example marked by its category's colour; the panel has the brand's accent as its top rule.
 
 ### Hosting
 

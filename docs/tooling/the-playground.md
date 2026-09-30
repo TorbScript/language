@@ -15,13 +15,16 @@ keywords:
   - exercise
   - examples
   - completion
-  - CodeMirror
+  - Monaco
   - language server in the browser
 source:
   - playground/playground.js
   - playground/playground-worker.js
   - playground/editor/editor.mjs
-  - playground/editor/build.sh
+  - playground/editor/protocol.mjs
+  - playground/editor/grammar.mjs
+  - playground/editor/theme.mjs
+  - playground/editor/build.mjs
   - playground/build.sh
   - playground/smoke-test.mjs
   - playground/examples/index.json
@@ -50,12 +53,14 @@ Ctrl+Enter, Cmd+Enter         Run
 Ctrl+Space                    Completion; it also opens by itself as you type a name or a `.`
 F12, Ctrl or Cmd and a click  Go to the definition of what is under the cursor
 F2                            Rename it
+Ctrl+.                        The quick fixes of the error under the cursor
 Shift+Alt+F                   Format, as `torb format` does
-Tab, Shift+Tab                Indent and outdent by two spaces; Escape, then Tab, leaves the editor
+Tab, Shift+Tab                Indent and outdent by two spaces; Escape, then Tab, leaves the editor, and Ctrl+M
+                              switches Tab over to moving the focus for good
 
 sh playground/build.sh              Build it: the compiler's C for browser-wasm64, compiled by emscripten
 node playground/smoke-test.mjs      Run hello world in the result under node, and the language server
-sh playground/editor/build.sh       Build the editor bundle from its source and lock file
+sh playground/editor/build.sh       Build the editor from its source and lock file (--check: is it current?)
 ```
 
 ## What it does
@@ -73,24 +78,30 @@ run never sees what the last one left.
 
 ### The editor
 
-The editor is [CodeMirror](https://codemirror.net/) with its language server client, connected to `torb lsp`, which
-runs in a worker of its own in the page. What the language server does on your machine it does here:
+The editor is [Monaco](https://microsoft.github.io/monaco-editor/), the editor of VS Code, connected to `torb lsp`,
+which runs in a worker of its own in the page - on `/play` and in every runnable block of the documentation. What the
+language server does on your machine it does here:
 
-- **Completion** as you type a name, and the members of a value after a `.`, with the signature of each and its
-  documentation beside it.
-- **The checker's errors while you type**: half a second after the last keystroke the text is checked, and every error
-  is a wavy underline with a mark in the gutter; the pointer on it shows the message.
-- **Hover** shows the type of a name and its documentation, and **signature help** the parameters of the call you are
-  in.
+- **Completion** as you type a name, and the members of a value after a `.`, each with its signature, and its
+  documentation beside the list, formatted as it is in VS Code.
+- **The checker's errors while you type**: a quarter of a second after the last keystroke the text is checked, and
+  every error is a wavy underline; the pointer on it shows the message, and Ctrl+. its quick fixes.
+- **Hover** shows the declaration of a name, coloured, and its documentation, and **signature help** the parameters of
+  the call you are in.
 - **Go to definition** and **rename** within the program, and **Format** - the button on `/play`, or Shift+Alt+F - is
   `torb format`.
-- **The colours** are the site's: the lexer's at once, and the checker's as soon as it has seen the text - a parameter
-  in its own colour, and a binding that can change underlined.
+- **The colours** are the site's, in both of its themes: a grammar's at once, and the checker's as soon as it has seen
+  the text - a parameter in its own colour, and a binding that can change underlined.
 
 The language server is one per page and holds every editor of it, and it is independent of the runs: a run never waits
-for a check, and a check never waits for a run. Until you are about to write - at once on `/play`, at the first click
-into a runnable block elsewhere - an editor is a light one that colours and runs without the language server, so a page
-with many runnable blocks loads nothing it does not use.
+for a check, and a check never waits for a run.
+
+A runnable block starts as the code the site highlighted, in a frame of exactly the editor's size, type and spacing.
+When the pointer comes over it, or the keyboard's focus into it, the editor takes its place, and nothing on the page
+moves; the language server starts with your first click into the code. So a page with many runnable blocks loads
+nothing until you reach for one. `/play` has the editor at once, and on a wide screen the editor and the output stand
+side by side. On a phone or a tablet, where Monaco is not made for touch, a block is a plain text field that colours
+and runs, without the language server.
 
 ### The examples
 
@@ -131,8 +142,10 @@ the output is the expected one.
 
 WebAssembly with exception handling - Chrome and Edge 95, Firefox 100, Safari 15.2 or newer - and JavaScript. The
 toolchain is about 13 MB, 4 MB as the server sends it compressed, fetched once when you first click into an editor or
-press Run - at once on `/play` - and then kept by the browser; the editor is 450 KB more, 140 KB compressed. The page
-makes no request to another host and stores nothing on the device.
+press Run - at once on `/play` - and then kept by the browser. The editor is 3.3 MB more, 0.85 MB compressed, fetched
+when the pointer first comes over a runnable block, with its stylesheet (20 KB compressed) and the font of its icons (75
+KB compressed, when an icon is first shown); a phone or a tablet never fetches it. The page makes no request to another
+host and stores nothing on the device.
 
 ### How the language server runs in the page
 
@@ -154,11 +167,14 @@ emscripten, pinned by version in `playground/build.sh`. `std/` is embedded into 
 site](torb-docs-site.md) copies what the script wrote into `assets/` of the site, and the site image builds it from the
 release's own source.
 
-The editor is `playground/playground-editor.js`, a bundle of CodeMirror 6 and `@codemirror/lsp-client` with the
-playground's own part, `playground/editor/editor.mjs`. It is committed, so building the playground needs neither npm nor
-the network: `sh playground/editor/build.sh` rebuilds it with `npm ci` and esbuild at the exact versions of
-`playground/editor/package-lock.json`, where the editor changes, and the result is committed with the change; CI checks
-that the committed bundle is what its source builds.
+The editor is `playground/playground-editor.js`, with `playground-editor.css` and `playground-codicon.ttf` beside it:
+Monaco with the playground's own part, `playground/editor/` - `editor.mjs` registers TorbScript and a provider for
+each thing the language server answers, `protocol.mjs` speaks JSON-RPC to the language worker and translates its
+answers into what Monaco shows, `grammar.mjs` colours the code before the server has checked it (and the code blocks of
+the documentation it shows), and `theme.mjs` makes the site's tokens a Monaco theme. The three files are committed, so
+building the playground needs neither npm nor the network: `sh playground/editor/build.sh` rebuilds them with `npm ci`
+and esbuild at the exact versions of `playground/editor/package-lock.json`, where the editor changes, and the result is
+committed with the change; CI checks that the committed files are what their source builds.
 
 ### The example gallery
 
@@ -221,14 +237,15 @@ compiling in emscripten/emsdk:6.0.10
 linking build/playground/torb.js and build/playground/torb.wasm
 wrote build/playground/: torb.wasm 13510389 bytes, 4093927 gzipped
 $ node playground/smoke-test.mjs
-ok    hello world (570 ms)
+ok    hello world (503 ms)
 ...
-ok    the language server answers initialize (90 ms)
-ok    a document with an error is published with its diagnostic (187 ms): Cannot find `prnt` here
-ok    a change while typing is checked again (33 ms)
-ok    completion at a member access answers its members (105 ms): 69 items
-ok    hover and semantic tokens answer (7 ms)
-ok    shutdown and exit end the server with 0 (14 ms)
+ok    the language server answers initialize (229 ms)
+ok    a document with an error is published with its diagnostic, as a marker (244 ms): Cannot find `prnt` here
+ok    a change while typing is checked again (309 ms)
+ok    completion at a member access answers its members as suggestions (111 ms): 69 suggestions
+...
+ok    shutdown and exit end the server with 0 (605 ms)
+ok    the site's highlighting becomes semantic tokens, one per line of a token (0 ms)
 ```
 
 ## Related
