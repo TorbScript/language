@@ -623,9 +623,9 @@
    * A textarea whose text is transparent over a `<pre>` that shows the same text coloured: typing, selecting, undo and
    * the keyboard stay the browser's own, and the colours follow on every input. Tab indents by two spaces, as the
    * formatter does; Escape and then Tab leaves the editor, so the keyboard is never trapped in it. The editor of a
-   * device of touch alone.
+   * device of touch alone. It is as tall as its text, or - `fills`, on the page /play - as its frame, and scrolls.
    */
-  function createLightEditor(container, source, onRun, label, metrics) {
+  function createLightEditor(container, source, onRun, label, metrics, fills) {
     const frame = element("div", "playground-editor playground-light");
     const shown = element("pre", "playground-highlight");
     shown.setAttribute("aria-hidden", "true");
@@ -667,8 +667,10 @@
     }
 
     function fit() {
-      const count = input.value.split("\n").length;
-      input.style.height = count * metrics.lineHeight + metrics.paddingTop + metrics.paddingBottom + 2 + "px";
+      if (!fills) {
+        const count = input.value.split("\n").length;
+        input.style.height = count * metrics.lineHeight + metrics.paddingTop + metrics.paddingBottom + 2 + "px";
+      }
       shown.scrollTop = input.scrollTop;
       shown.scrollLeft = input.scrollLeft;
     }
@@ -930,7 +932,7 @@
     }
 
     if (touchOnly) {
-      const light = createLightEditor(container, source, options.onRun, options.label, options.metrics);
+      const light = createLightEditor(container, source, options.onRun, options.label, options.metrics, options.page);
       light.onChange(changed);
       return {
         get value() {
@@ -1005,7 +1007,8 @@
             console.warn("playground: the editor did not load", problem);
           }
           if (rich === null && light === null) {
-            light = createLightEditor(document.createElement("div"), text, options.onRun, options.label, options.metrics);
+            const holder = document.createElement("div");
+            light = createLightEditor(holder, text, options.onRun, options.label, options.metrics, options.page);
             light.onChange(function (next) {
               text = next;
               changed(next);
