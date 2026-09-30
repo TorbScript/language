@@ -3,8 +3,11 @@
 // `/torb/work` - on hello world and on the things a page relies on: a diagnostic with its place, the refusal of an
 // import the browser does not have, the file system in memory, the target the VM compiles for and the streams of std/io.
 // Then the language server: playground-worker.js itself in a thread, started as the page's language worker starts it,
-// answers initialize, publishes the diagnostics of a document as it is opened and changed, completes at a member access,
-// answers hover and semantic tokens, and ends with 0 after `shutdown` and `exit`.
+// and spoken to by the editor's own client and translations (editor/protocol.mjs), as the page speaks to it: it answers
+// initialize, publishes the diagnostics of a document as it is opened and changed (as Monaco's markers), completes at a
+// member access and resolves an item's documentation, answers hover, semantic tokens (re-encoded in the editor's
+// legend), signature help, definition, formatting and a rename, drops a cancelled request, and ends with 0 after
+// `shutdown` and `exit`. Last, the site's highlighting of a block as the semantic tokens the editor starts with.
 //
 //   node playground/smoke-test.mjs [build/playground]
 //
@@ -15,6 +18,21 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
+import {
+  LanguageClient,
+  completionsOf,
+  locationsOf,
+  markdownOf,
+  markersOf,
+  resolvedSuggestion,
+  seedTokens,
+  semanticTokensOf,
+  signatureHelpOf,
+  textEditsOf,
+  toPosition,
+  tokenLegend,
+  workspaceEditOf,
+} from "./editor/protocol.mjs";
 
 const directory = resolve(process.argv[2] || "build/playground");
 const require = createRequire(import.meta.url);
@@ -173,59 +191,40 @@ function startWorker() {
   return new Worker(shim, { eval: true, workerData: { worker: join(directory, "playground-worker.js") } });
 }
 
-/** A session with the language server of a worker: requests with their answers, and the notifications it sends. */
-function languageSession(worker) {
-  const listeners = [];
-  let nextId = 0;
-  worker.on("message", (message) => {
-    for (const listener of listeners.slice()) {
-      listener(message);
-    }
-  });
-  function waitFor(accept, what, seconds = 60) {
-    return new Promise((resolveWait, rejectWait) => {
-      const timer = setTimeout(() => {
-        listeners.splice(listeners.indexOf(listener), 1);
-        rejectWait(new Error(`no ${what} within ${seconds} s`));
-      }, seconds * 1000);
-      function listener(message) {
-        const found = accept(message);
-        if (found !== undefined) {
-          clearTimeout(timer);
-          listeners.splice(listeners.indexOf(listener), 1);
-          resolveWait(found);
-        }
-      }
-      listeners.push(listener);
-    });
-  }
-  function parsed(message) {
-    return message.kind === "lsp" ? JSON.parse(message.message) : null;
-  }
+/**
+ * The transport the page gives the editor's client (playground.js, `languageServer`): one JSON-RPC message per call,
+ * over the worker's `{ kind: "lsp" }` messages.
+ */
+function workerTransport(worker) {
   return {
-    notify(method, params) {
-      worker.postMessage({ kind: "lsp", message: JSON.stringify({ jsonrpc: "2.0", method, params }) });
+    send(message) {
+      worker.postMessage({ kind: "lsp", message });
     },
-    request(method, params) {
-      nextId += 1;
-      const id = nextId;
-      const answer = waitFor((message) => {
-        const value = parsed(message);
-        return value !== null && value.id === id && !("method" in value) ? value : undefined;
-      }, `answer to ${method}`);
-      worker.postMessage({ kind: "lsp", message: JSON.stringify({ jsonrpc: "2.0", id, method, params }) });
-      return answer;
-    },
-    notification(method, accept = () => true) {
-      return waitFor((message) => {
-        const value = parsed(message);
-        return value !== null && value.method === method && accept(value.params) ? value.params : undefined;
-      }, method);
-    },
-    exited() {
-      return waitFor((message) => (message.kind === "exited" ? message : undefined), "end of the server");
+    subscribe(handler) {
+      worker.on("message", (message) => {
+        if (message.kind === "lsp") {
+          handler(message.message);
+        }
+      });
     },
   };
+}
+
+/** The next notification of `method` whose parameters `accept` takes, or a failure after `seconds`. */
+function notification(client, method, accept = () => true, seconds = 60) {
+  return new Promise((resolveWait, rejectWait) => {
+    const timer = setTimeout(() => {
+      stop();
+      rejectWait(new Error(`no ${method} within ${seconds} s`));
+    }, seconds * 1000);
+    const stop = client.onNotification(method, (params) => {
+      if (accept(params)) {
+        clearTimeout(timer);
+        stop();
+        resolveWait(params);
+      }
+    });
+  });
 }
 
 async function step(name, body) {
@@ -239,95 +238,188 @@ async function step(name, body) {
   }
 }
 
+// What the page's editor does, in the page's code: the client and the translations of editor/protocol.mjs
 const worker = startWorker();
-const session = languageSession(worker);
+const client = new LanguageClient(workerTransport(worker), { timeout: 60000 });
 const uri = "file:///torb/work/main.trb";
 worker.postMessage({ kind: "language", module });
 
+function diagnosticsOf() {
+  return notification(client, "textDocument/publishDiagnostics", (params) => params.uri === uri);
+}
+
 await step("the language server answers initialize", async () => {
-  const answer = await session.request("initialize", {
-    processId: null,
-    rootUri: "file:///torb/work",
-    capabilities: {},
-  });
-  const capabilities = answer.result && answer.result.capabilities;
-  if (!capabilities || !capabilities.completionProvider || !capabilities.semanticTokensProvider) {
-    throw new Error(`capabilities: ${JSON.stringify(answer)}`);
+  const capabilities = await client.start();
+  if (!capabilities.completionProvider || !capabilities.semanticTokensProvider || !capabilities.renameProvider) {
+    throw new Error(`capabilities: ${JSON.stringify(capabilities)}`);
   }
-  session.notify("initialized", {});
 });
-await step("a document with an error is published with its diagnostic", async () => {
-  const published = session.notification("textDocument/publishDiagnostics", (params) => params.uri === uri);
-  session.notify("textDocument/didOpen", {
-    textDocument: { uri, languageId: "torbscript", version: 1, text: 'prnt "no"\n' },
-  });
+await step("a document with an error is published with its diagnostic, as a marker", async () => {
+  const published = diagnosticsOf();
+  client.open(uri, 'prnt "no"\n');
   const params = await published;
-  const found = params.diagnostics.find((diagnostic) => diagnostic.message.includes("Cannot find `prnt`"));
-  if (!found || found.range.start.line !== 0) {
+  const marker = markersOf(params.diagnostics).find((found) => found.message.includes("Cannot find `prnt`"));
+  // An error is Monaco's MarkerSeverity.Error, 8, and its place counts from 1
+  if (!marker || marker.severity !== 8 || marker.startLineNumber !== 1 || marker.startColumn !== 1) {
     throw new Error(JSON.stringify(params.diagnostics));
   }
-  return found.message;
+  return marker.message;
 });
 await step("a change while typing is checked again", async () => {
-  const published = session.notification("textDocument/publishDiagnostics", (params) => params.uri === uri);
-  session.notify("textDocument/didChange", {
-    textDocument: { uri, version: 2 },
-    contentChanges: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } }, text: "print" }],
-  });
+  const published = diagnosticsOf();
+  client.change(uri, 'print "no"\n');
   const params = await published;
   if (params.diagnostics.length !== 0) {
     throw new Error(JSON.stringify(params.diagnostics));
   }
 });
-await step("completion at a member access answers its members", async () => {
-  session.notify("textDocument/didChange", {
-    textDocument: { uri, version: 3 },
-    contentChanges: [{ text: 'const names = ["Ada", "Alan"]\nprint names.\n' }],
-  });
-  const answer = await session.request("textDocument/completion", {
+let firstMethod = null;
+await step("completion at a member access answers its members as suggestions", async () => {
+  client.change(uri, 'const names = ["Ada", "Alan"]\nprint names.\n');
+  const range = { startLineNumber: 2, startColumn: 13, endLineNumber: 2, endColumn: 13 };
+  const result = await client.request("textDocument/completion", {
     textDocument: { uri },
-    position: { line: 1, character: 12 },
+    position: toPosition({ lineNumber: 2, column: 13 }),
+    context: { triggerKind: 2, triggerCharacter: "." },
   });
-  const items = answer.result && (Array.isArray(answer.result) ? answer.result : answer.result.items);
-  if (!items || !items.some((item) => item.label === "length")) {
-    throw new Error(JSON.stringify(answer).slice(0, 400));
+  const { suggestions } = completionsOf(result, { insert: range, replace: range });
+  const length = suggestions.find((suggestion) => suggestion.label === "length");
+  // A method is Monaco's CompletionItemKind.Method, 0
+  if (!length || length.kind !== 0 || length.insertText !== "length" || length.range.insert !== range) {
+    throw new Error(JSON.stringify(suggestions.slice(0, 3)));
   }
-  return `${items.length} items`;
+  firstMethod = suggestions.find((suggestion) => suggestion.label === "map") || length;
+  return `${suggestions.length} suggestions`;
 });
-await step("hover and semantic tokens answer", async () => {
-  const hover = await session.request("textDocument/hover", { textDocument: { uri }, position: { line: 1, character: 7 } });
-  if (!hover.result || !JSON.stringify(hover.result.contents).includes("List<String>")) {
+await step("a suggestion is resolved with its signature and its documentation as Markdown", async () => {
+  const item = await client.request("completionItem/resolve", firstMethod.item);
+  const resolved = resolvedSuggestion(firstMethod, item);
+  if (!resolved.detail || !resolved.detail.includes("fn ") || !resolved.documentation || resolved.documentation.isTrusted) {
+    throw new Error(JSON.stringify(item));
+  }
+  return resolved.detail;
+});
+await step("hover answers Markdown with a trb block, and semantic tokens re-encode in the editor's legend", async () => {
+  const hover = await client.request("textDocument/hover", { textDocument: { uri }, position: { line: 1, character: 7 } });
+  const contents = markdownOf(hover && hover.contents);
+  if (contents.length === 0 || !contents[0].value.includes("```trb") || !contents[0].value.includes("List<String>")) {
     throw new Error(JSON.stringify(hover));
   }
-  const tokens = await session.request("textDocument/semanticTokens/full", { textDocument: { uri } });
-  if (!tokens.result || tokens.result.data.length === 0 || tokens.result.data.length % 5 !== 0) {
+  client.change(uri, "var count = 1\ncount = count + 1\nprint count\n");
+  const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri } });
+  const data = semanticTokensOf(tokens.data, client.capabilities.semanticTokensProvider.legend);
+  if (data.length === 0 || data.length % 5 !== 0) {
     throw new Error(JSON.stringify(tokens));
   }
+  // `count` is a mutable variable: the editor's legend has `variable` and puts `mutable` first
+  const variable = tokenLegend.tokenTypes.indexOf("variable");
+  let mutable = 0;
+  for (let index = 0; index < data.length; index += 5) {
+    if (data[index + 3] === variable && (data[index + 4] & 1) !== 0) {
+      mutable += 1;
+    }
+  }
+  if (mutable < 3) {
+    throw new Error(`${mutable} mutable variables in ${Array.from(data).join(",")}`);
+  }
+  return `${data.length / 5} tokens, ${mutable} of them a mutable variable`;
 });
-await step("a rename, a request that takes steps, is answered", async () => {
-  session.notify("textDocument/didChange", {
-    textDocument: { uri, version: 4 },
-    contentChanges: [{ text: 'const names = ["Ada", "Alan"]\nprint names.length()\n' }],
-  });
-  const answer = await session.request("textDocument/rename", {
+await step("signature help, definition and formatting answer in the editor's shapes", async () => {
+  client.change(uri, "fn area(width: Int, height: Int): Int {\n  width * height\n}\n\nprint area(3,   4)\n");
+  const help = signatureHelpOf(
+    await client.request("textDocument/signatureHelp", { textDocument: { uri }, position: { line: 4, character: 13 } }),
+  );
+  if (!help || !help.signatures[0].label.includes("width: Int") || help.activeParameter !== 1) {
+    throw new Error(JSON.stringify(help));
+  }
+  const definition = locationsOf(
+    await client.request("textDocument/definition", { textDocument: { uri }, position: { line: 4, character: 7 } }),
+    uri,
+  );
+  if (definition.length !== 1 || definition[0].range.startLineNumber !== 1) {
+    throw new Error(JSON.stringify(definition));
+  }
+  const edits = textEditsOf(
+    await client.request("textDocument/formatting", { textDocument: { uri }, options: { tabSize: 2, insertSpaces: true } }),
+  );
+  if (edits.length === 0 || !edits.some((edit) => edit.text.includes("area(3, 4)"))) {
+    throw new Error(JSON.stringify(edits));
+  }
+  return `${help.signatures[0].label}, ${edits.length} edit(s)`;
+});
+await step("a rename, a request that takes steps, is a workspace edit of the document", async () => {
+  client.change(uri, 'const names = ["Ada", "Alan"]\nprint names.length()\n');
+  const edit = await client.request("textDocument/rename", {
     textDocument: { uri },
     position: { line: 0, character: 7 },
     newName: "people",
   });
-  const edits = answer.result && (answer.result.changes ? answer.result.changes[uri] : null);
-  if (!edits || edits.length !== 2 || !edits.every((edit) => edit.newText === "people")) {
-    throw new Error(JSON.stringify(answer).slice(0, 400));
+  const documents = workspaceEditOf(edit, (target) => target === uri);
+  if (documents.length !== 1 || documents[0].edits.length !== 2 || !documents[0].edits.every((one) => one.text === "people")) {
+    throw new Error(JSON.stringify(edit).slice(0, 400));
+  }
+});
+await step("a request Monaco cancels answers null", async () => {
+  let cancel = null;
+  const token = {
+    isCancellationRequested: false,
+    onCancellationRequested(listener) {
+      cancel = listener;
+    },
+  };
+  const answer = client.request("textDocument/hover", { textDocument: { uri }, position: { line: 1, character: 7 } }, token);
+  // The request is sent once the client has flushed the text: cancel it right behind that
+  await new Promise((resolveSoon) => setTimeout(resolveSoon, 0));
+  token.isCancellationRequested = true;
+  if (cancel !== null) {
+    cancel();
+  }
+  const result = await answer;
+  if (result !== null) {
+    throw new Error(JSON.stringify(result));
   }
 });
 await step("shutdown and exit end the server with 0", async () => {
-  await session.request("shutdown", null);
-  const exited = session.exited();
-  session.notify("exit", null);
+  await client.request("shutdown", null);
+  const exited = new Promise((resolveExit) => {
+    worker.on("message", (message) => {
+      if (message.kind === "exited") {
+        resolveExit(message);
+      }
+    });
+  });
+  client.notify("exit", null);
   const message = await exited;
   if (message.code !== 0) {
     throw new Error(`exit code ${message.code}`);
   }
 });
 await worker.terminate();
+
+// --------------------------------------------------------------------------------- the site's colours as seed tokens --
+
+await step("the site's highlighting becomes semantic tokens, one per line of a token", async () => {
+  const text = 'var x = "a"\n/* two\nlines */ x';
+  const spans = [
+    { from: 0, to: 3, classes: "t-keyword" },
+    { from: 4, to: 5, classes: "t-variable t-mutable" },
+    { from: 8, to: 11, classes: "t-string" },
+    { from: 12, to: 27, classes: "t-comment" },
+    { from: 28, to: 29, classes: "t-variable t-mutable" },
+  ];
+  const data = Array.from(seedTokens(text, spans));
+  const type = (name) => tokenLegend.tokenTypes.indexOf(name);
+  const expected = [
+    [0, 0, 3, type("keyword"), 0],
+    [0, 4, 1, type("variable"), 1],
+    [0, 4, 3, type("string"), 0],
+    [1, 0, 6, type("comment"), 0],
+    [1, 0, 8, type("comment"), 0],
+    [0, 9, 1, type("variable"), 1],
+  ].flat();
+  if (JSON.stringify(data) !== JSON.stringify(expected)) {
+    throw new Error(`${JSON.stringify(data)}, expected ${JSON.stringify(expected)}`);
+  }
+});
 
 process.exit(failures === 0 ? 0 : 1);

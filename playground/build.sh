@@ -18,11 +18,12 @@
 #
 #   torb.wasm, torb.wasm.gz  the toolchain with `std/` inside it, and the same gzipped for a server's gzip_static
 #   torb.js                  emscripten's glue: a script that defines `createTorb`, for the worker and for node
-#   playground.js            the page's half: `TorbPlayground.mount`, the light editor, Run, the output, the sharing,
-#                            the gallery of /play
+#   playground.js            the page's half: `TorbPlayground.mount`, the static view of a block until the editor
+#                            comes, the light editor of a phone, Run, the output, the sharing, the gallery of /play
 #   playground-worker.js     the worker that runs `torb` off the page's thread: a run, or `torb lsp` for the editor
-#   playground-editor.js     CodeMirror and its language server client, loaded when an editor is about to be used;
-#                            built by playground/editor/build.sh and committed, so nothing here needs npm
+#   playground-editor.js     Monaco and its bridge to the language server, loaded when an editor is about to be used,
+#   playground-editor.css    with Monaco's stylesheet and the font of its icons beside it; built by
+#   playground-codicon.ttf   playground/editor/build.sh and committed, so nothing here needs npm
 #   playground.css           the look of it, on the tokens of brand/tokens.css
 #   examples/                the gallery's examples and their index.json, where playground/examples/ has them
 #
@@ -210,7 +211,8 @@ else
   fi
 fi
 
-for file in playground.js playground-worker.js playground-editor.js playground.css; do
+for file in playground.js playground-worker.js playground-editor.js playground-editor.css playground-codicon.ttf \
+  playground.css; do
   cp "$here/$file" "$output/$file"
 done
 

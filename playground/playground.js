@@ -18,12 +18,14 @@
  * (the TypeScript playground), and a gallery of examples on the page `/play` (the playgrounds of Go, Kotlin and Rust).
  * The compiler runs in a worker, so a program that never ends never freezes the page: Run becomes Stop.
  *
- * **Two editors.** A mount starts with a textarea under a coloured copy of itself (the Gleam tour's editor): it is
- * there at once, costs nothing and needs nothing. Where the reader is about to write - at once on `/play`, at the first
- * focus elsewhere - it becomes CodeMirror (`playground-editor.js`, built from `editor/`), connected to `torb lsp`,
- * which runs in a worker of its own for the whole page: completion, the checker's diagnostics while typing, hover,
- * signature help, definition, formatting and the semantic colours are the language server's. A run never waits for
- * it, and it never waits for a run.
+ * **The editor.** A mount starts as a static view of its code: the site's own highlighting in a frame of exactly the
+ * size, type and spacing of the editor that replaces it. Where the reader is about to write - at once on `/play`, when
+ * the pointer comes over a block or the focus into it elsewhere - it becomes Monaco (`playground-editor.js`, built
+ * from `editor/`), and the swap moves nothing. Its first focus connects it to `torb lsp`, which runs in a worker of
+ * its own for the whole page: completion, the checker's diagnostics while typing, hover, signature help, definition,
+ * rename, formatting and the semantic colours are the language server's. A run never waits for it, and it never waits
+ * for a run. A device of touch alone, where Monaco is not supported, keeps a textarea under a coloured copy of itself
+ * (the Gleam tour's editor) instead.
  *
  * Plain JavaScript without a build step, loaded as a classic script or as a module.
  */
@@ -478,30 +480,38 @@
   // ------------------------------------------------------------------------------------------ the language server --
 
   /**
-   * The editor, `playground-editor.js`, loaded once per page when the first mount is about to be used. A browser that
-   * cannot load it keeps the light editor, which runs as well.
+   * The editor, `playground-editor.js` - Monaco and its bridge to the language server - loaded once per page when the
+   * first mount is about to be used: at once on `/play`, when the pointer comes over a block or the focus into it
+   * elsewhere. A browser that cannot load it keeps the static view, which still runs.
    */
   let loadingEditor = null;
 
   function editorModule() {
     if (loadingEditor === null) {
-      loadingEditor = import(fileAddress("playground-editor.js"));
+      loadingEditor = import(fileAddress("playground-editor.js")).then(function (module) {
+        return module.ready.then(function () {
+          return module;
+        });
+      });
+      loadingEditor.catch(function () {
+        loadingEditor = null;
+      });
     }
     return loadingEditor;
   }
 
-  /** The client of the page's language server, made by the first editor that connects. */
+  /** The client of the page's language server, made by the first editor that is used. */
   let languageClient = null;
   /** How often the language worker may end before the page stops starting it again. */
   let languageRestarts = 3;
 
   /**
    * The language server of the page: `torb lsp` in a worker of its own (playground-worker.js, `{ kind: "language" }`),
-   * which lives as long as the page and holds every document of it. The client is lsp-client's, and the transport the
-   * worker's messages. A server that ends - it panicked on something the reader wrote - is started again and told the
-   * open documents anew, a few times.
+   * which lives as long as the page and holds every document of it. The client is the editor's (editor/protocol.mjs),
+   * and the transport the worker's messages. A server that ends - it panicked on something the reader wrote - is
+   * started again and told the open documents anew, a few times.
    */
-  function languageServer(editor) {
+  function languageServer(module) {
     if (languageClient !== null) {
       return languageClient;
     }
@@ -519,16 +529,10 @@
       subscribe: function (handler) {
         handlers.push(handler);
       },
-      unsubscribe: function (handler) {
-        const index = handlers.indexOf(handler);
-        if (index >= 0) {
-          handlers.splice(index, 1);
-        }
-      },
     };
 
     function start() {
-      compiledToolchain().then(function (module) {
+      compiledToolchain().then(function (compiledModule) {
         const started = new Worker(fileAddress("playground-worker.js"));
         started.onmessage = function (event) {
           const message = event.data;
@@ -544,7 +548,7 @@
           event.preventDefault();
           ended(started);
         };
-        started.postMessage({ kind: "language", module: module });
+        started.postMessage({ kind: "language", module: compiledModule });
         languageWorker = started;
         for (const message of pending) {
           started.postMessage({ kind: "lsp", message: message });
@@ -565,28 +569,65 @@
         return;
       }
       languageRestarts -= 1;
-      // A new server knows nothing: connecting again initializes it and opens every document of the page anew
-      languageClient.disconnect();
+      // A new server knows nothing: the client initializes it and opens every document of the page anew
       pending = [];
       start();
-      languageClient.connect(transport);
+      languageClient.restart();
     }
 
-    languageClient = editor.createClient(transport, { tokenize: tokenize });
     start();
+    languageClient = module.createClient(transport);
     return languageClient;
   }
 
   // -------------------------------------------------------------------------------------------------- the editor --
 
   /**
+   * Whether this is a device of touch alone - a phone, a tablet - where Monaco is not supported: its mounts keep the
+   * light editor, which is the browser's own text field, and have no language server.
+   */
+  const touchOnly = Boolean(window.matchMedia && window.matchMedia("(hover: none) and (pointer: coarse)").matches);
+
+  /**
+   * The type and the spacing of the code a mount replaces - the site's `pre.code`, which is larger in the panels of the
+   * front page than in the documentation - so that neither the light editor nor Monaco moves a character of it.
+   */
+  function metricsOf(pre) {
+    const metrics = { fontSize: 14, lineHeight: 21, paddingTop: 14, paddingRight: 18, paddingBottom: 14, paddingLeft: 18 };
+    if (pre === null) {
+      return metrics;
+    }
+    const style = getComputedStyle(pre);
+    const number = function (value, fallback) {
+      const parsed = parseFloat(value);
+      return isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+    metrics.fontSize = number(style.fontSize, metrics.fontSize);
+    metrics.lineHeight = Math.round(number(style.lineHeight, metrics.fontSize * 1.5));
+    metrics.paddingTop = number(style.paddingTop, metrics.paddingTop);
+    metrics.paddingRight = number(style.paddingRight, metrics.paddingRight);
+    metrics.paddingBottom = number(style.paddingBottom, metrics.paddingBottom);
+    metrics.paddingLeft = number(style.paddingLeft, metrics.paddingLeft);
+    return metrics;
+  }
+
+  /** The metrics as the inline style of an element that shows code: nothing of the site's rules can change them. */
+  function applyMetrics(target, metrics) {
+    target.style.fontSize = metrics.fontSize + "px";
+    target.style.lineHeight = metrics.lineHeight + "px";
+    target.style.padding = metrics.paddingTop + "px " + metrics.paddingRight + "px " + metrics.paddingBottom + "px " +
+      metrics.paddingLeft + "px";
+  }
+
+  /**
    * A textarea whose text is transparent over a `<pre>` that shows the same text coloured: typing, selecting, undo and
    * the keyboard stay the browser's own, and the colours follow on every input. Tab indents by two spaces, as the
-   * formatter does; Escape and then Tab leaves the editor, so the keyboard is never trapped in it.
+   * formatter does; Escape and then Tab leaves the editor, so the keyboard is never trapped in it. The editor of a
+   * device of touch alone.
    */
-  function createLightEditor(container, source, onRun, label) {
-    const frame = element("div", "playground-editor");
-    const shown = element("pre", "code language-trb playground-highlight");
+  function createLightEditor(container, source, onRun, label, metrics) {
+    const frame = element("div", "playground-editor playground-light");
+    const shown = element("pre", "playground-highlight");
     shown.setAttribute("aria-hidden", "true");
     const code = element("code");
     shown.appendChild(code);
@@ -598,6 +639,9 @@
     input.setAttribute("wrap", "off");
     input.setAttribute("aria-label", label);
     input.value = source;
+    // Both have the metrics of the code they replace, so the coloured copy stays under the text
+    applyMetrics(shown, metrics);
+    applyMetrics(input, metrics);
     frame.appendChild(shown);
     frame.appendChild(input);
     container.appendChild(frame);
@@ -624,8 +668,7 @@
 
     function fit() {
       const count = input.value.split("\n").length;
-      input.style.height = "";
-      input.rows = Math.max(3, count);
+      input.style.height = count * metrics.lineHeight + metrics.paddingTop + metrics.paddingBottom + 2 + "px";
       shown.scrollTop = input.scrollTop;
       shown.scrollLeft = input.scrollLeft;
     }
@@ -712,7 +755,7 @@
 
     return {
       frame: frame,
-      input: input,
+      target: input,
       get value() {
         return input.value;
       },
@@ -738,94 +781,313 @@
         input.focus();
         input.setSelectionRange(offset, offset);
       },
+      focus: function () {
+        input.focus();
+      },
       onChange: function (listener) {
         listeners.push(listener);
       },
     };
   }
 
+  /**
+   * What the reader sees of a mount until Monaco has replaced it: the code, coloured, in a frame of exactly Monaco's
+   * size, type and spacing, so the swap moves nothing (docs/tooling/the-playground.md, "The editor"). It shows the
+   * site's own highlighting where the page brought it, and the lexer's otherwise, and it is what the keyboard reaches:
+   * its focus brings the editor. `seed` is its colours as spans, which Monaco keeps until the language server's come.
+   */
+  function createStaticView(container, source, options, metrics, highlighted) {
+    const frame = element("div", "playground-editor playground-static");
+    const shown = element("pre", "playground-static-code");
+    const code = element("code");
+    shown.appendChild(code);
+    frame.appendChild(shown);
+    frame.tabIndex = 0;
+    frame.setAttribute("role", "textbox");
+    frame.setAttribute("aria-multiline", "true");
+    frame.setAttribute("aria-label", options.label);
+    applyMetrics(shown, metrics);
+    // The page numbers its lines as Monaco does: right-aligned in the width of three digits, 12 px before the code
+    let gutter = null;
+    let digit = 0;
+    if (options.page) {
+      gutter = element("div", "playground-static-gutter");
+      gutter.setAttribute("aria-hidden", "true");
+      gutter.style.top = metrics.paddingTop + "px";
+      gutter.style.fontSize = metrics.fontSize + "px";
+      gutter.style.lineHeight = metrics.lineHeight + "px";
+      frame.appendChild(gutter);
+      const context = document.createElement("canvas").getContext("2d");
+      if (context) {
+        const family = getComputedStyle(document.documentElement).getPropertyValue("--torb-font-mono");
+        context.font = metrics.fontSize + "px " + (family || "monospace");
+        digit = context.measureText("0").width;
+      }
+    }
+    const view = { frame: frame, code: code, seed: null };
+
+    /** Shows the text, coloured with the given HTML where the page brought it, and by the lexer otherwise. */
+    view.show = function (text, html) {
+      code.innerHTML = html !== undefined ? html : highlight(text);
+      const count = text.split("\n").length;
+      if (gutter !== null) {
+        const width = Math.round(Math.max(3, String(count).length) * digit);
+        gutter.style.width = width + "px";
+        shown.style.paddingLeft = width + 12 + "px";
+        gutter.textContent = Array.from({ length: count }, function (unused, index) {
+          return String(index + 1);
+        }).join("\n");
+      } else {
+        shown.style.height = count * metrics.lineHeight + metrics.paddingTop + metrics.paddingBottom + "px";
+      }
+    };
+
+    if (highlighted !== null && highlighted.textContent === source) {
+      view.show(source, highlighted.innerHTML);
+      view.seed = spansOf(code);
+    } else {
+      view.show(source);
+      view.seed = tokenize(source).map(function (token) {
+        return { from: token.from, to: token.to, classes: "t-" + token.kind };
+      });
+    }
+    container.appendChild(frame);
+    return view;
+  }
+
+  /**
+   * The colours of highlighted code as spans `{ from, to, classes }` in offsets of its text: each `t-` span as it is,
+   * and a name outside of one - one the site's highlighting left plain - as a plain variable.
+   */
+  function spansOf(code) {
+    const spans = [];
+    let offset = 0;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = node.nodeValue;
+      const owner = node.parentElement !== null && node.parentElement !== code ? node.parentElement.closest("[class]") : null;
+      if (owner !== null && code.contains(owner) && /\bt-/.test(owner.className)) {
+        spans.push({ from: offset, to: offset + text.length, classes: owner.className });
+      } else {
+        const names = /[A-Za-z_][A-Za-z0-9_]*/g;
+        let found;
+        while ((found = names.exec(text)) !== null) {
+          spans.push({ from: offset + found.index, to: offset + found.index + found[0].length, classes: "t-variable" });
+        }
+      }
+      offset += text.length;
+    }
+    return spans;
+  }
+
+  /** The offset in the text of `code` under the pointer of `event`, or `null`. */
+  function offsetAt(event, code) {
+    let node = null;
+    let offset = 0;
+    if (document.caretPositionFromPoint) {
+      const position = document.caretPositionFromPoint(event.clientX, event.clientY);
+      if (position) {
+        node = position.offsetNode;
+        offset = position.offset;
+      }
+    } else if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(event.clientX, event.clientY);
+      if (range) {
+        node = range.startContainer;
+        offset = range.startOffset;
+      }
+    }
+    if (node === null || !code.contains(node) || node.nodeType !== 3) {
+      return null;
+    }
+    let total = 0;
+    const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (walker.currentNode === node) {
+        return total + offset;
+      }
+      total += walker.currentNode.nodeValue.length;
+    }
+    return null;
+  }
+
   /** The documents of the page's language server: one per mount, `/play`'s is `main.trb`. */
   let documentCount = 0;
 
   /**
-   * The editor of a mount: the light one at first, CodeMirror connected to the language server once `upgrade` is
-   * called and the editor has loaded. Everything else of the mount talks to this, whichever editor is behind it.
+   * The editor of a mount: Monaco connected to the language server once `upgrade` is called and the editor has loaded,
+   * the static view until then - or, on a device of touch alone, the light editor for good. Everything else of the
+   * mount talks to this, whichever editor is behind it.
    */
   function createEditor(container, source, options) {
-    const light = createLightEditor(container, source, options.onRun, options.label);
     const listeners = [];
-    let rich = null;
-    let upgrading = null;
 
     function changed(text) {
       for (const listener of listeners) {
         listener(text);
       }
     }
-    light.onChange(changed);
+
+    if (touchOnly) {
+      const light = createLightEditor(container, source, options.onRun, options.label, options.metrics);
+      light.onChange(changed);
+      return {
+        get value() {
+          return light.value;
+        },
+        set value(text) {
+          light.value = text;
+        },
+        mark: light.mark,
+        moveTo: light.moveTo,
+        focus: light.focus,
+        onChange: function (listener) {
+          listeners.push(listener);
+        },
+        format: function () {
+          return false;
+        },
+        hasLanguageServer: false,
+        upgrade: function () {
+          return Promise.resolve();
+        },
+        target: light.target,
+      };
+    }
+
+    const view = createStaticView(container, source, options, options.metrics, options.highlighted);
+    let text = source;
+    // Monaco once it is there, or - where it could not load - the light editor; the static view until then
+    let rich = null;
+    let light = null;
+    let upgrading = null;
+    // Where a click into the static view put the cursor, for the editor that replaces it
+    let clickedAt = null;
+    let wantsFocus = false;
 
     function upgrade() {
       if (upgrading === null) {
         upgrading = editorModule().then(function (module) {
-          const client = languageServer(module);
           documentCount += 1;
           const uri = options.page ? "file:///torb/work/main.trb"
             : "file:///torb/work/block-" + documentCount + "/" + (options.file || "main.trb");
-          const hadFocus = document.activeElement === light.input;
-          const holder = element("div", "playground-editor playground-codemirror");
-          rich = module.createEditor(holder, {
-            doc: light.value,
-            selection: light.input.selectionStart,
-            tokenize: tokenize,
+          const hadFocus = wantsFocus || document.activeElement === view.frame;
+          const frame = element("div", "playground-editor playground-monaco");
+          const host = element("div", "playground-monaco-host");
+          frame.appendChild(host);
+          // One step: the frame takes the static view's place, and Monaco lays out in it at the size it will keep
+          view.frame.replaceWith(frame);
+          rich = module.createEditor(host, {
+            doc: text,
+            uri: uri,
+            page: options.page,
+            metrics: options.metrics,
+            seed: text === source ? view.seed : null,
+            selection: clickedAt !== null ? clickedAt : 0,
+            label: options.label,
+            labels: options.labels,
             onRun: options.onRun,
             onChange: changed,
-            lineNumbers: options.page,
-            label: options.label,
-            client: client,
-            uri: uri,
+            languageClient: function () {
+              return languageServer(module);
+            },
           });
-          light.frame.replaceWith(holder);
           if (hadFocus) {
             rich.focus();
           }
           if (typeof options.onUpgrade === "function") {
             options.onUpgrade();
           }
-        }).catch(function () {
-          // The light editor stays
+        }).catch(function (problem) {
+          // A browser that cannot load the editor gets the light one in its place, which edits and runs as well
+          if (typeof console !== "undefined") {
+            console.warn("playground: the editor did not load", problem);
+          }
+          if (rich === null && light === null) {
+            light = createLightEditor(document.createElement("div"), text, options.onRun, options.label, options.metrics);
+            light.onChange(function (next) {
+              text = next;
+              changed(next);
+            });
+            view.frame.replaceWith(light.frame);
+            if (wantsFocus) {
+              light.focus();
+            }
+          }
         });
       }
       return upgrading;
     }
 
+    view.frame.addEventListener("mousedown", function (event) {
+      if (event.button === 0) {
+        clickedAt = offsetAt(event, view.code);
+        wantsFocus = true;
+      }
+    });
+    view.frame.addEventListener("focus", function () {
+      wantsFocus = true;
+      upgrade();
+    });
+    view.frame.addEventListener("keydown", function (event) {
+      // A key pressed before the editor is there would be lost: Ctrl+Enter still runs
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        options.onRun();
+      }
+    });
+
+    /** The editor that edits, where there is one. */
+    function editing() {
+      return rich !== null ? rich : light;
+    }
+
     return {
       get value() {
-        return rich !== null ? rich.value : light.value;
+        return editing() !== null ? editing().value : text;
       },
-      set value(text) {
-        if (rich !== null) {
-          rich.value = text;
-        } else {
-          light.value = text;
+      set value(next) {
+        if (editing() !== null) {
+          editing().value = next;
+          return;
         }
+        text = next;
+        view.show(next);
+        view.seed = null;
+        changed(next);
       },
       mark: function (diagnostics) {
-        (rich !== null ? rich : light).mark(diagnostics);
+        if (editing() !== null) {
+          editing().mark(diagnostics);
+        }
       },
       moveTo: function (line, column) {
-        (rich !== null ? rich : light).moveTo(line, column);
+        if (editing() !== null) {
+          editing().moveTo(line, column);
+          return;
+        }
+        const lines = text.split("\n");
+        let offset = 0;
+        for (let index = 0; index < line - 1 && index < lines.length; index += 1) {
+          offset += lines[index].length + 1;
+        }
+        clickedAt = offset + Math.max(0, column - 1);
+        wantsFocus = true;
+        upgrade();
       },
       focus: function () {
-        if (rich !== null) {
-          rich.focus();
+        if (editing() !== null) {
+          editing().focus();
         } else {
-          light.input.focus();
+          wantsFocus = true;
+          upgrade();
         }
       },
       onChange: function (listener) {
         listeners.push(listener);
       },
-      /** The server's formatting of the text; false where there is no language server yet. */
+      /** The server's formatting of the text; false where there is no Monaco. */
       format: function () {
         return rich !== null ? rich.format() : false;
       },
@@ -833,7 +1095,7 @@
         return rich !== null;
       },
       upgrade: upgrade,
-      input: light.input,
+      target: view.frame,
     };
   }
 
@@ -1231,6 +1493,10 @@
     const isPage = settings.page === true || target.closest("[data-playground-page]") !== null;
     // The line that says how to run it locally, which the site writes under an exercise of Start, stays below it
     const local = target.querySelector(".playground-local");
+    // The code the site highlighted: its colours and its metrics are the editor's first
+    const sitePre = target.querySelector(".code-block pre") || target.querySelector("pre");
+    const metrics = metricsOf(sitePre);
+    const highlighted = sitePre !== null ? sitePre.querySelector("code") : null;
 
     target.textContent = "";
     target.classList.add("playground-mounted");
@@ -1250,6 +1516,9 @@
       page: isPage,
       file: file,
       label: labels.source,
+      labels: labels,
+      metrics: metrics,
+      highlighted: highlighted,
       onUpgrade: function () {
         if (formatButton !== null) {
           formatButton.hidden = false;
@@ -1313,7 +1582,9 @@
       compiledToolchain().catch(function () {});
     }
     target.addEventListener("focusin", prepare, { once: true });
-    editor.input.addEventListener("focus", function () {
+    // The editor comes when the pointer does, so the first click already lands in it; the language server with the
+    // first focus in the code (editor/editor.mjs)
+    target.addEventListener("pointerenter", function () {
       editor.upgrade();
     }, { once: true });
     runButton.addEventListener("pointerenter", prepare, { once: true });
