@@ -5,8 +5,10 @@
  *
  * What it writes, below the output directory:
  *
- * - `index.html`, the front page, from `site/home.md`; `install.html`, `imprint.html` and `privacy.html` from the page
- *   of the same name in `site/`, each only where that page exists; `404.html` for a path that is not there.
+ * - `index.html`, the front page, from `site/home.md`; `install.html`, `benchmarks.html`, `imprint.html` and
+ *   `privacy.html` from the page of the same name in `site/`, each only where that page exists; `404.html` for a path
+ *   that is not there. The placeholders of the benchmarks page are filled from [SiteSettings.benchmarks]
+ *   (`site-benchmarks.trb`).
  * - `docs/<version>/`, every page and design document of the documentation as HTML, with the navigation of the index
  *   tree, and `docs/<version>/search-index.json`, the index the search reads.
  * - `docs/versions.json` ([SiteVersions]), once at the root for every language: what the version switcher offers.
@@ -43,6 +45,7 @@ use isStale from "./translations"
 use indexBegin from "./schema"
 use fontFaces, baseStylesheet, siteStylesheet, themeScript, siteScript from "./site-style"
 use brandTokens from "./site-tokens"
+use BenchmarkReport, withBenchmarks from "./site-benchmarks"
 
 /** What a build of the site is given besides the documentation. */
 public type SiteSettings {
@@ -54,6 +57,11 @@ public type SiteSettings {
   mark: String
   /** A hash of the playground's files where the site serves them ([playgroundVersionOf]), empty where it does not */
   playgroundVersion: String = ""
+  /**
+   * The measurements the benchmarks page shows (`benchmarks/game.sh`'s report, which the nightly publishes as
+   * `benchmarks.json`); `None` where there are none, and the page says that nothing is measured yet
+   */
+  benchmarks: BenchmarkReport? = None
 }
 
 /** The site: every text file it writes, every file of the brand it copies, and the problems found building it. */
@@ -138,10 +146,11 @@ fn playgroundExampleFiles(playground: String): Result<List<String>, IoError> {
 }
 
 /**
- * The pages of `site/` the footer links when they exist, with the key of the word it shows: the legal pages of a
- * German site.
+ * The pages of `site/` the footer links when they exist, with the key of the word it shows: the benchmarks, and the
+ * legal pages of a German site.
  */
 public const footerPageNames: List<(name: String, key: String)> = [
+  (name: "benchmarks", key: "footer.benchmarks"),
   (name: "imprint", key: "footer.imprint"),
   (name: "privacy", key: "footer.privacy"),
 ]
@@ -296,7 +305,8 @@ public fn buildSite(documentation: Documentation, settings: SiteSettings): Built
         if fileName(page.path) == "home.md" {
           texts.set "{language.prefix}{target}", frontPageHtml(site, summary, shownPage.read.body, links, untranslated)
         } else {
-          const html = plainPageHtml site, page.path, target, title, summary, rendered.html, notice, untranslated
+          const body = withBenchmarks rendered.html, settings.benchmarks, site.word, forgeAddress
+          const html = plainPageHtml site, page.path, target, title, summary, body, notice, untranslated
           texts.set "{language.prefix}{target}", html
         }
         continue

@@ -1,0 +1,153 @@
+/**
+ * The tests of the site's benchmarks page (`site-benchmarks.trb`): a `benchmarks.json` read and refused, the
+ * placeholders of the page filled from it - the summary, a chart per program, the tables, the machine - and left out
+ * without it, and the page built into the whole site with a link in the footer.
+ */
+
+use test, group from "std/test"
+use englishWords from "../src/documentation/site-strings"
+use benchmarkReportOf, benchmarkPlaceholder, withBenchmarks from "../src/documentation/site-benchmarks"
+use documentationOf from "../src/documentation/tree"
+use SiteSettings, buildSite from "../src/documentation/site"
+
+const forge = "https://git.torb.dev/torbscript/language"
+
+/** One language's line of a report, with its median; the fastest and the slowest run a little either side. */
+fn result(language: String, median: String): String {
+  "\{\"language\": \"{language}\", \"status\": \"ok\", \"runs\": 5, \"median\": {median}, \"minimum\": {median}, \"maximum\": {median}, \"memory\": 2048, \"note\": \"\"\}"
+}
+
+/** A report of one program, n-body, measured on both inputs, with Node.js missing. */
+fn report(origin: String): String {
+  const large = [
+    result("c", "1.000000"),
+    result("torbscript", "1.250000"),
+    "\{\"language\": \"node\", \"status\": \"missing\", \"runs\": 0, \"median\": 0.000000, \"minimum\": 0.000000, \"maximum\": 0.000000, \"memory\": 0, \"note\": \"not installed\"\}",
+  ]
+  const small = [
+    result("c", "0.010000"),
+    result("torbscript", "0.012000"),
+    result("torbscript-vm", "20.000000"),
+    result("python", "1.000000"),
+  ]
+  const workloads = [
+    "\{\"size\": \"large\", \"input\": \"10000000\", \"results\": [{large.joined(separator: ", ")}]\}",
+    "\{\"size\": \"small\", \"input\": \"60000\", \"results\": [{small.joined(separator: ", ")}]\}",
+  ]
+  const machine = "\{\"system\": \"Linux 6.8.0 x86_64\", \"distribution\": \"Ubuntu 24.04.1 LTS\", \"processor\": \"AMD EPYC\", \"cores\": 4, \"memoryKibibytes\": 16777216\}"
+  const tools = "\{\"torbscript\": \"torb 0.1.0\", \"c\": \"gcc 13.3.0\", \"cFlags\": \"-O2\", \"python\": \"Python 3.12.3\", \"node\": \"\", \"memory\": \"GNU time\"\}"
+  const programs = "[\{\"name\": \"n-body\", \"workloads\": [{workloads.joined(separator: ", ")}]\}]"
+  "\{\"schema\": 1, \"origin\": \"{origin}\", \"measured\": \"2026-09-30T02:41:07Z\", \"commit\": \"0123456789abcdef\", \"release\": \"nightly-20260930\", \"quick\": false, \"runs\": 5, \"vmRuns\": 3, \"machine\": {machine}, \"tools\": {tools}, \"programs\": {programs}\}"
+}
+
+/** The page's placeholders, as `site/benchmarks.md` writes them, one to a line. */
+fn page(): String {
+  ["summary", "n-body", "fasta", "table", "machine"].map({ benchmarkPlaceholder _ }).toList().joined(separator: "\n")
+}
+
+fn word(key: String): String {
+  englishWords().get(key) ?? key
+}
+
+group "the report" {
+  test "a report of benchmarks/game.sh is read, every field of it" {
+    const read = benchmarkReportOf(report("ci")).expect("the report")
+    assert(read.programs.length() == 1)
+    assert(read.programs[0].workloads[1].results[2].language == "torbscript-vm")
+    assert(read.machine.cores == 4)
+  }
+
+  test "a report of another schema, and text that is no report, are refused with the reason" {
+    const other = report("ci").replace("\"schema\": 1", "\"schema\": 2")
+    assert benchmarkReportOf(other).isError()
+    assert benchmarkReportOf("not json").isError()
+  }
+}
+
+group "the page" {
+  test "without a report the summary and the table say nothing is measured yet, and the rest is left out" {
+    const html = withBenchmarks page(), None, word, forge
+    assert html.contains("Nothing is measured yet")
+    assert html.contains("No numbers yet")
+    assert(!html.contains("data-benchmark"))
+    assert(!html.contains("benchmark-chart"))
+  }
+
+  test "the summary leads with TorbScript's binary against C and the VM against Python" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert html.contains("<p class=\"benchmark-tile-value\">1.25×</p>")
+    assert html.contains("<p class=\"benchmark-tile-value\">20.0×</p>")
+    assert(!html.contains("developer's machine"))
+  }
+
+  test "numbers not measured by the forge say so" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("local")).ok(), word, forge
+    assert html.contains("measured on a developer's machine")
+  }
+
+  test "a chart has a bar per language, relative to C on the same input, TorbScript's binary in the brand's colour" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert html.contains("<figure class=\"benchmark-chart\">")
+    assert html.contains("class=\"benchmark-bar benchmark-bar-torbscript\"")
+    assert html.contains("aria-label=\"n-body, torb build: the binary against C: C 1.00×, TorbScript 1.25×\"")
+    // The VM and Python ran the small input, and are compared with C on it: 20 s and 1 s against 10 ms
+    assert html.contains("TorbScript VM 2000×, Python 3 100×")
+    // Node.js was not installed: it has no bar, and the table says why
+    assert(!html.contains("Node.js 0"))
+    assert html.contains("not installed")
+  }
+
+  test "a chart links the four versions of its program at the commit that was measured" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert html.contains("{forge}/src/commit/0123456789abcdef/benchmarks/game/n-body.trb")
+    assert html.contains("{forge}/src/commit/0123456789abcdef/benchmarks/game/c/n-body.c")
+    assert html.contains("{forge}/src/commit/0123456789abcdef/benchmarks/game/python/n-body.py")
+    assert html.contains("{forge}/src/commit/0123456789abcdef/benchmarks/game/node/n-body.js")
+  }
+
+  test "a program the report has nothing of leaves its placeholder out" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert(!html.contains("data-benchmark=\"fasta\""))
+  }
+
+  test "the tables have the median with the fastest and the slowest run, and the peak of memory" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert html.contains("<td class=\"align-right\">1.25 s<span class=\"benchmark-range\">1.25–1.25 s</span></td>")
+    assert html.contains("<td class=\"align-right\">2.0 MiB</td>")
+    assert html.contains("<td class=\"align-right\">10\u{202F}000\u{202F}000</td>")
+  }
+
+  test "the machine, the tools and the commit are named" {
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), word, forge
+    assert html.contains("Measured on 2026-09-30, at commit 0123456789ab (toolchain nightly-20260930).")
+    assert html.contains("AMD EPYC, 4 logical processors, 16.0 GiB of memory, Ubuntu 24.04.1 LTS, Linux 6.8.0 x86_64.")
+    assert html.contains("C: gcc 13.3.0, -O2")
+  }
+
+  test "German writes a decimal comma" {
+    const german = englishWords().updated("benchmarks.decimal", ",")
+    const html = withBenchmarks page(), benchmarkReportOf(report("ci")).ok(), { german.get(_) ?? _ }, forge
+    assert html.contains("<p class=\"benchmark-tile-value\">1,25×</p>")
+  }
+}
+
+group "the site" {
+  test "the benchmarks page is written at the root with its numbers, and the footer links it" {
+    const files = [
+      "index.md": "---\ntitle: The documentation\nsummary: The root.\nkind: index\nstatus: stable\n---\n\nThe root.\n",
+      "site/index.md": "---\ntitle: The website\nsummary: The pages of the site.\nkind: index\nstatus: stable\n---\n\nThe site.\n",
+      "site/home.md": "---\ntitle: TorbScript\nsummary: A language.\nkind: site\nstatus: stable\n---\n\n## Values\n\nText.\n",
+      "site/benchmarks.md": "---\ntitle: How fast\nsummary: The numbers.\nkind: site\nstatus: stable\n---\n\nText.\n\n{benchmarkPlaceholder("summary")}\n\n## n-body\n\n{benchmarkPlaceholder("n-body")}\n",
+    ]
+    const measured = benchmarkReportOf(report("ci")).ok()
+    const settings = SiteSettings "latest", "<svg></svg>", "<svg></svg>", benchmarks: measured
+    const site = buildSite documentationOf("docs", files), settings
+    const html = site.texts.get("benchmarks.html") ?? ""
+    assert html.contains("<figure class=\"benchmark-chart\">")
+    assert(!html.contains("data-benchmark"))
+    const front = site.texts.get("index.html") ?? ""
+    assert front.contains("href=\"benchmarks.html\"")
+    const problems = site.problems.map({ _.show() }).toList()
+    assert(problems == [])
+  }
+}

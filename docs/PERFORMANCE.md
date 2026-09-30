@@ -964,6 +964,11 @@ kernel.
 `benchmarks/` holds one program per pattern and the C a careful C programmer would write for the same work.
 `sh benchmarks/run.sh --allocations` produces this; `benchmarks/README.md` says how to read it.
 
+Whole programs are measured beside the patterns: six of the Computer Language Benchmarks Game in `benchmarks/game/`,
+each against the Benchmarks Game's own C, Python and JavaScript, measured by `sh benchmarks/game.sh` on the forge's
+Linux runner after every nightly and shown on the website's [benchmarks page](site/benchmarks.md). Section 4.3 says what
+they found.
+
 Windows 11, 16 cores, gcc 13.2.0 (MinGW-W64 x86_64-ucrt-posix-seh), `-std=c11 -O2 -g0 -Wall -Wextra`. Both sides are
 built by a `torb` binary directly (`TORB_COMPILER=`), **before** by the compiler of the previous commit and **after** by
 the compiler round P7 produced. Times are the fastest of **nine** runs, in microseconds, net of the process floor that
@@ -1140,6 +1145,63 @@ the same runs), so the input stays as it is. What is left of deflating is that o
 
 ---
 
+### 4.3 The Benchmarks Game
+
+`benchmarks/game/` holds binary-trees, fannkuch-redux, n-body, spectral-norm, mandelbrot and fasta: the Benchmarks
+Game's plain single-threaded C programs (its "naive transliteration" family, #8, and #1 for binary-trees), and
+TorbScript written statement for statement after them. Unlike the patterns above, nobody chose these programs to show a
+cost: they are what everybody compares languages with, and the website shows them ([site/benchmarks.md](site/benchmarks.md),
+[benchmarks/README.md](../benchmarks/README.md)). The numbers the website shows are the forge's; these are the first
+ones, from the machine this document is measured on - loaded by other builds, so the processor time of each process,
+the fastest of three, rather than the wall time:
+
+| Program | Input | C | TorbScript | ratio | Where the time goes |
+|---------|------:|--:|-----------:|------:|---------------------|
+| `mandelbrot` | 4 000 | 1.08 s | 1.20 s | **1.11x** | Nowhere: arithmetic on `Float` in locals, and the same C comes out |
+| `binary-trees` | 18 | 3.11 s | 7.69 s | **2.5x** | A node is a counted block: its count is raised and lowered on the way through `check`, and every call enters and leaves a frame (`TORB_ENTER_FRAME`, `TORB_CHECK_STACK`) |
+| `fasta` | 2 500 000 | 5.00 s | 46.9 s | **9.4x** | Per letter a `line.append` of a `Char` (a runtime call) and `letters[i % length]`; per line a `String.from` of the list |
+| `fannkuch-redux` | 11 | 2.11 s | 39.7 s | **18.8x** | Every `permutation[i] = value` is `ArrayList_set`, a native call gcc cannot inline, after a `torb_list_make_unique` call; `swapAt` is two reads and two such writes |
+| `spectral-norm` | 4 000 | 0.77 s | 14.7 s | **19.1x** | The same store, `product[i] = product[i] + ...`, once per step of the inner loop |
+| `n-body` | 10 000 000 | 0.56 s | 106 s | **190x** | Finding 4's open half, for a record that is not inline - below |
+
+Windows 11, gcc 13.2.0 (MinGW-W64 UCRT), both sides `-O2`, `torb build` in its release profile. The outputs of all
+twelve binaries agree with each other, and with the Python and the JavaScript.
+
+**n-body.** A `Body` is seven `Float`s, 56 bytes, above `inlineSizeLimit` (32, `compiler/src/ir/layout.trb`), so the
+list holds a pointer to a counted block per planet, and the `Element` step of round P7 - which steps into a record
+stored inline - does not apply. What `bodies[i].velocityX = bodies[i].velocityX - dx * pullOfJ` becomes is the round
+trip finding 4 removed for inline records, with a copy in it:
+
+```c
+s36 = t_std_..._ArrayList_at__T_..._Body_x24_site(*s0_bodies, s3_i, &TORB_LOCATION(...));
+s37 = s36->f_velocityX;
+torb_release(s36, NULL);
+...
+s41 = t_std_..._ArrayList_at__T_..._Body_x24_site(s40, s3_i, &TORB_LOCATION(...));
+s41 = (T_..._Body *)torb_make_unique(s41, sizeof(T_..._Body), NULL, NULL);
+s41->f_velocityX = s39;
+torb_list_make_unique(&*s0_bodies);
+n_std_x2f_collections_list_ArrayList_set__T_..._Body_x24_site(s0_bodies, s3_i, s41, &TORB_LOCATION(...));
+```
+
+`at` hands out the element retained, so the block is shared when `torb_make_unique` asks - and it copies all 56 bytes
+into a new block for every one of the six velocity writes and three position writes of a pair, which the `set` then
+stores over the old one. Every read of a field is an `at`, a retain and a release. An `Element` step into a boxed
+record - write through the pointer the list holds once the list and the block are unique - would make this loop what
+the C is; that is the next round this program asks for.
+
+**fannkuch-redux and spectral-norm.** `list[i] = value` on a concrete `List<Int>` or `List<Float>` is the direct call
+of the devirtualization (finding 2), but the callee is the native `ArrayList.set`, which gcc cannot see into: the
+bounds check, the write and the call itself stay in the innermost loop, preceded by a call of `torb_list_make_unique`.
+The read `list[i]` is TorbScript and inlines, with its bounds check (finding 8's open half). A store as inline as the
+read - `set` written over `torb_list_element_reference`, and one `makeUnique` hoisted out of a loop that writes the
+same list - is what these two ask for.
+
+**The VM.** The same programs in the VM, on inputs a tenth to a hundredth of these, took 3 to 30 times as long as
+CPython (`python/`, the Benchmarks Game's programs) - n-body and fannkuch-redux the slowest, for the reason
+[docs/design/VM.md](design/VM.md) section 10 names: a place such as `bodies[i].velocityX` is a record of path steps the
+interpreter reads step by step per `load`. The website shows both, measured by the forge every night.
+
 ## 5. The plan
 
 Each round is one agent's work, in this order. A round names the files it touches and the gate it has to leave green.
@@ -1236,10 +1298,11 @@ the one thing value semantics otherwise hides.
 
 ## 7. What is not measured here
 
-- **The VM.** Everything above is the C back end. The model of section 1 and the instance counts carry over; code size
-  does not, because bytecode has no 139-byte names.
-- **Peak memory.** The suite counts allocations and bytes asked for, which is exact and portable; peak resident set is
-  not obtainable from a POSIX shell on Windows and is left out rather than guessed.
+- **The VM**, but for the six programs of section 4.3. Everything else above is the C back end. The model of section 1
+  and the instance counts carry over; code size does not, because bytecode has no 139-byte names.
+- **Peak memory**, but for the programs of section 4.3 on the forge's Linux runner, where GNU `time` reports it. The
+  suite counts allocations and bytes asked for, which is exact and portable; peak resident set is not obtainable from
+  a POSIX shell on Windows and is left out rather than guessed.
 - **The build time of the compiler itself.** [BACKEND 6.3](BACKEND.md) measures where the C comes from; section 8
   measures what compiling it costs, and section 9 what the front end costs before the C exists.
 - **Threads and tasks.** Milestone 7.3 and 7.7.

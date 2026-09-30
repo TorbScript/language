@@ -47,8 +47,8 @@ match Int.tryFrom("forty-two") {
 
 ## Instant while you write, fast when you ship
 
-`torb run` starts a program at once. `torb build` turns the same program into a program file of its own: fast, and
-runnable without TorbScript. The same one tool also tests, formats and publishes. See
+`torb run` starts a program at once. `torb build` turns the same program into a program file of its own: fast
+([how fast](benchmarks.md)), and runnable without TorbScript. The same one tool also tests, formats and publishes. See
 [the torb command](../tooling/the-torb-command.md).
 
 ```console

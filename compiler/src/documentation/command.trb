@@ -25,6 +25,7 @@ use buildSkills, writeSkills, staleSkillFiles from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
 use SiteSettings, buildSite, writeBuiltSite, brandDrawingsOf from "./site"
 use playgroundFiles, playgroundVersionOf, writePlayground from "./site"
+use BenchmarkReport, benchmarkReportOf from "./site-benchmarks"
 use counted from "../cli/render"
 
 /** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
@@ -46,11 +47,14 @@ public type DocumentationOptions {
   brand: String = ""
   /** `--playground` of `docs site`: what `playground/build.sh` wrote. Empty means `<root>/../build/playground` */
   playground: String = ""
+  /** `--benchmarks` of `docs site`: what the benchmarks page shows. Empty means `<root>/../build/benchmarks.json` */
+  benchmarks: String = ""
 }
 
 /**
- * Parses `torb docs`'s arguments. `--standard-library`, `--output`, `--version`, `--brand` and `--playground` take
- * the argument after them; `--no-snippets`, `--no-native` and `--check` are flags; everything else is a path.
+ * Parses `torb docs`'s arguments. `--standard-library`, `--output`, `--version`, `--brand`, `--playground` and
+ * `--benchmarks` take the argument after them; `--no-snippets`, `--no-native` and `--check` are flags; everything else
+ * is a path.
  */
 public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
   var paths: List<String> = []
@@ -62,6 +66,7 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   var version = ""
   var brand = ""
   var playground = ""
+  var benchmarks = ""
   var wanted = ""
   for argument in arguments {
     match wanted {
@@ -90,9 +95,14 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
         wanted = ""
         continue
       }
+      "--benchmarks" => {
+        benchmarks = argument
+        wanted = ""
+        continue
+      }
       _ => {}
     }
-    if ["--standard-library", "--output", "--version", "--brand", "--playground"].contains(argument) {
+    if ["--standard-library", "--output", "--version", "--brand", "--playground", "--benchmarks"].contains(argument) {
       wanted = argument
       continue
     }
@@ -112,7 +122,18 @@ public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions 
   }
   const root = paths.get(0) ?? "docs"
   const out = if output.isEmpty() { paths.get(1) ?? "" } else { output }
-  DocumentationOptions root, standardLibrary, withoutSnippets, withoutNative, onlyCheck, out, version, brand, playground
+  DocumentationOptions(
+    root,
+    standardLibrary,
+    withoutSnippets,
+    withoutNative,
+    onlyCheck,
+    out,
+    version,
+    brand,
+    playground,
+    benchmarks,
+  )
 }
 
 /** Where the standard library is, for the type check of the snippets. */
@@ -256,12 +277,13 @@ public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
 }
 
 /**
- * `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--check]`. Returns the
- * number of problems. With `--check` nothing is written: the site is built and its links are checked, which is the gate
- * that keeps it from rotting between releases.
+ * `torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--benchmarks <file>]
+ * [--check]`. Returns the number of problems. With `--check` nothing is written: the site is built and its links are
+ * checked, which is the gate that keeps it from rotting between releases.
  *
  * The playground is copied into `assets/` where it was built (`playground/build.sh`), and left out where it was not:
- * a page links none of its files, and a mount without it stays the code it was written as.
+ * a page links none of its files, and a mount without it stays the code it was written as. The benchmarks page shows
+ * the report of [benchmarksOf], and says that nothing is measured yet where there is none.
  */
 public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   if options.out.isEmpty() && !options.onlyCheck {
@@ -283,7 +305,14 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
     return 1
   }
   const playgroundVersion = if hasPlayground { playgroundVersionOf(playground)? } else { "" }
-  const settings = SiteSettings version, drawings.lockup, drawings.mark, playgroundVersion
+  const benchmarks = match benchmarksOf(options) {
+    Ok(report) => report
+    Fail(problem) => {
+      printError "torb docs site: {problem}"
+      return 1
+    }
+  }
+  const settings = SiteSettings version, drawings.lockup, drawings.mark, playgroundVersion, benchmarks
   const site = buildSite documentation, settings
   var count = reportProblems site.problems
   for copy in site.copies {
@@ -307,6 +336,36 @@ public fn runSite(options: DocumentationOptions): Result<Int, IoError> {
   }
   print "{pages}: wrote {counted(written, "file")} to {options.out}"
   0
+}
+
+/**
+ * The report the benchmarks page shows: the file `--benchmarks` names, which has to be there, or else
+ * `<root>/../build/benchmarks.json` where it is (`tools/fetch-benchmarks.sh` writes it). A file that cannot be read as
+ * a report is said on standard error and left out, so a site is still built when a night's measurement went wrong;
+ * only a named file that is missing fails the build.
+ */
+fn benchmarksOf(options: DocumentationOptions): Result<BenchmarkReport?, String> {
+  const path = if options.benchmarks.isEmpty() { "{options.root}/../build/benchmarks.json" } else { options.benchmarks }
+  if !File.exists(path) {
+    if options.benchmarks.isEmpty() {
+      return Ok None
+    }
+    return Fail "`{path}` is not there. `sh tools/fetch-benchmarks.sh` fetches the newest one"
+  }
+  const text = match File.readText(path) {
+    Ok(read) => read
+    Fail(problem) => {
+      printError "torb docs site: `{path}` cannot be read ({problem}), so nothing is shown"
+      return Ok None
+    }
+  }
+  match benchmarkReportOf(text) {
+    Ok(report) => Ok Some(report)
+    Fail(problem) => {
+      printError "torb docs site: `{path}` is no report of benchmarks/game.sh ({problem}), so nothing is shown"
+      Ok None
+    }
+  }
 }
 
 fn titleOf(page: Page?): String {
@@ -351,6 +410,7 @@ public fn documentationUsageLines(): List<String> {
     "                         --version <v>: the version the documentation is of (default: latest)",
     "                         --brand <dir>: where brand/ is (default: <root>/../brand)",
     "                         --playground <dir>: the built playground (default: <root>/../build/playground)",
+    "                         --benchmarks <file>: the measurements (default: <root>/../build/benchmarks.json)",
     "                         --check: build it and check its links, and write nothing",
   ]
 }

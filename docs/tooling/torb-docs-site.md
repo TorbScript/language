@@ -15,6 +15,7 @@ keywords:
   - lessons
   - translations
   - playground
+  - benchmarks
 source:
   - compiler/src/documentation/site.trb
   - compiler/src/documentation/site-strings.trb
@@ -24,6 +25,7 @@ source:
   - compiler/src/documentation/site-search.trb
   - compiler/src/documentation/site-layout.trb
   - compiler/src/documentation/site-style.trb
+  - compiler/src/documentation/site-benchmarks.trb
   - docs/design/RELEASE.md#6-the-website
   - docs/design/BRAND.md#11-applications
 ---
@@ -36,12 +38,14 @@ Reference - and is written in English and in every language below `docs/translat
 ## Synopsis
 
 ```text
-torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--check]
+torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playground <dir>] [--benchmarks <file>]
+               [--check]
 
   --output <dir>   Where the site goes
   --version <v>    The version the documentation is of, and its directory below docs/ (default: latest)
   --brand <dir>    Where the fonts, the icons and the logo are (default: <root>/../brand)
   --playground <dir>  The playground playground/build.sh built (default: <root>/../build/playground)
+  --benchmarks <file> The report the benchmarks page shows (default: <root>/../build/benchmarks.json, where it is)
   --check          Build the site and check its links, and write nothing
 ```
 
@@ -52,7 +56,7 @@ torb docs site <root> --output <dir> [--version <v>] [--brand <dir>] [--playgrou
 | Path | What is in it | From |
 |---|---|---|
 | `index.html` | The front page: the line, the install commands, the three doors, a few examples | `site/home.md` |
-| `install.html`, `imprint.html`, `privacy.html`, `play.html` | A plain page of the site, each only where its source exists | `site/install.md`, `site/imprint.md`, `site/privacy.md`, `site/play.md` |
+| `install.html`, `benchmarks.html`, `imprint.html`, `privacy.html`, `play.html` | A plain page of the site, each only where its source exists | `site/install.md`, `site/benchmarks.md`, `site/imprint.md`, `site/privacy.md`, `site/play.md` |
 | `docs/<version>/...` | Every page and design document, as `.html` at the path of its `.md` | every other `.md` file |
 | `docs/<version>/search-index.json` | The search of this version | every page |
 | `<language>/...` | All of the above but the assets, in another language: `de/index.html`, `de/docs/<version>/...` | `translations/<language>/` |
@@ -208,6 +212,28 @@ URL and with its own `?v=`, which hashes the gallery's files as well. When the s
 happens and the fallback stays. A page `site/play.md` is written as `play.html`, and the header links it as Playground
 where it exists; the site's stylesheet gives that page the width of the screen, up to 1840 px, where the other plain
 pages keep the measure of their text.
+
+### The benchmarks page
+
+`site/benchmarks.md` is written as `benchmarks.html`, and the footer links it as Benchmarks where it exists. Its
+numbers are not in the Markdown: `benchmarks/game.sh` measures six programs of the Computer Language Benchmarks Game in
+TorbScript, C, Python and JavaScript and writes a JSON report, the forge publishes the newest one after every nightly
+(`benchmarks.json` of its release `benchmarks`), and the site's build fetches it into `build/benchmarks.json`
+(`tools/fetch-benchmarks.sh`). The page holds placeholders, each an empty `div` on a line of its own, which the report
+fills:
+
+| Placeholder | What it becomes |
+|---|---|
+| `<div data-benchmark="summary"></div>` | Two numbers, each the geometric mean over the programs: TorbScript's binary against C, the VM against Python |
+| `<div data-benchmark="n-body"></div>` | The chart of one program: horizontal bars of the time relative to C on the same input, TorbScript's binary in carmine, as inline SVG with a text for every bar |
+| `<div data-benchmark="table"></div>` | Every time - the median with the fastest and the slowest run - and every peak of memory |
+| `<div data-benchmark="machine"></div>` | The machine, the tools, the commit and the date |
+
+Without a report the summary says that nothing is measured yet and the other placeholders are left out, so a site
+built without the file - the gate's `--check` - is still whole; a file that cannot be read as a report is said on
+standard error and treated the same. A report that is not the forge's (`"origin": "local"`) is shown with a warning
+that it was measured elsewhere. The words are the interface's (`benchmarks.*` of `site-strings.trb`), so a translation
+of the page gets its numbers in its own language, with its own decimal separator.
 
 ### The front page
 

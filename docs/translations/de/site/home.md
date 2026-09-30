@@ -4,7 +4,7 @@ summary: Eine Programmiersprache für Skripte, Werkzeuge und Server. Sie findet 
 kind: site
 status: stable
 order: 10
-translates: 6b145ab9e15e
+translates: 1138f70fad54
 ---
 
 ## Wo willst du anfangen?
@@ -43,8 +43,8 @@ match Int.tryFrom("zweiundvierzig") {
 
 ## Sofort beim Schreiben, schnell beim Ausliefern
 
-`torb run` startet ein Programm sofort. `torb build` macht aus demselben Programm eine eigene Programmdatei: schnell,
-und sie läuft ohne TorbScript. Dasselbe eine Werkzeug testet, formatiert und veröffentlicht auch. Siehe
+`torb run` startet ein Programm sofort. `torb build` macht aus demselben Programm eine eigene Programmdatei: schnell
+([wie schnell](benchmarks.md)), und sie läuft ohne TorbScript. Dasselbe eine Werkzeug testet, formatiert und veröffentlicht auch. Siehe
 [den Befehl torb](../tooling/the-torb-command.md).
 
 ```console
