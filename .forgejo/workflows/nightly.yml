@@ -70,9 +70,12 @@ jobs:
 
   seed:
     name: publish the seed
-    needs: gates
-    # The seed artifact exists exactly when linux-x64 passed tier A and tier B, whatever the other targets did
-    if: always() && forgejo.ref == 'refs/heads/main' && needs.gates.result != 'skipped' && needs.gates.result != 'cancelled'
+    needs: [plan, gates]
+    # The seed artifact exists exactly when linux-x64 passed tier A and tier B, whatever the other targets did. Every
+    # job after the gates asks the plan as well: Forgejo reports a called workflow its `if` skipped as a success
+    if: >-
+      always() && forgejo.ref == 'refs/heads/main' && needs.plan.outputs.build == 'true' &&
+      needs.gates.result != 'skipped' && needs.gates.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     enable-openid-connect: true
@@ -107,7 +110,9 @@ jobs:
   publish:
     name: publish the nightly
     needs: [plan, gates, seed]
-    if: always() && forgejo.ref == 'refs/heads/main' && needs.gates.result == 'success'
+    if: >-
+      always() && forgejo.ref == 'refs/heads/main' && needs.plan.outputs.build == 'true' &&
+      needs.gates.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     enable-openid-connect: true
@@ -245,7 +250,7 @@ jobs:
   images:
     name: container images, tagged nightly (docs/design/RELEASE.md section 7.11)
     needs: [plan, publish]
-    if: forgejo.ref == 'refs/heads/main'
+    if: forgejo.ref == 'refs/heads/main' && needs.publish.result == 'success'
     # No `enable-openid-connect` here: the jobs this expands into take images.yml's own (RELEASE.md section 14)
     uses: ./.forgejo/workflows/images.yml
     with:
