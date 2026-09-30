@@ -2,7 +2,7 @@
  * playground.css - the look of the playground, on the tokens of brand/tokens.css and beside the site's stylesheet,
  * which colours the code (`.t-keyword`, ...) and draws the buttons (`.button-primary`, `.button-secondary`). Firm
  * lines and no glow (docs/design/BRAND.md sections 6 and 8): Run is the tool's primary button, in ink, and nothing in
- * the playground is red but a keyword and an error. The static view, Monaco once it is
+ * the playground is red but a keyword, an error and the one accent of the gallery. The static view, Monaco once it is
  * loaded (its colours are its theme's, editor/theme.mjs, read from the same tokens), the light editor of a device of
  * touch, the page /play and its gallery are drawn here; the colours are the tokens', so both themes follow by
  * themselves.
@@ -444,8 +444,27 @@
 
 /* ------------------------------------------------------------------------------------------------------ /play --
 
-   The editor, the bar and the output one under the other in the column of the page, the editor tall enough for a
-   program of a screen, the output in view from the start. */
+   The page: a toolbar - the gallery, Run, Format - above the editor and the output, which stand one under the other
+   in a narrow window and side by side in a wide one, as tall as the window. The site's stylesheet gives the page the
+   width of the screen (site-style.trb, `.plain:has([data-playground-page])`). */
+
+.playground-page .playground-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.playground-page .playground-top .playground-bar {
+  margin: 0 0 0 auto;
+}
+
+.playground-page .playground-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
 
 .playground-page .playground-editor {
   height: min(72vh, 44em);
@@ -461,22 +480,61 @@
   height: 100%;
 }
 
+/* The output is a panel of its own beside the editor, its label a header inside it, so both start on one line */
+.playground-page .playground-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  background: var(--torb-surface-raised);
+  border: 1px solid var(--torb-border);
+  border-radius: var(--torb-radius-small);
+}
+
+.playground-page .playground-label {
+  margin: 0;
+  padding: 6px 14px;
+  background: var(--torb-surface);
+  border-bottom: 1px solid var(--torb-border);
+}
+
 .playground-page .playground-output {
-  min-height: 4.5em;
+  min-height: 6em;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+@media (min-width: 1100px) {
+  .playground-page .playground-workspace {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    height: clamp(30em, calc(100vh - 200px), 70em);
+  }
+
+  .playground-page .playground-editor {
+    height: auto;
+    min-height: 0;
+  }
+
+  .playground-page .playground-output {
+    flex: 1 1 auto;
+    max-height: none;
+  }
+}
+
+@media (min-width: 1700px) {
+  .playground-page .playground-workspace {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+  }
 }
 
 /* ----------------------------------------------------------------------------------------------------- the gallery --
 
-   The examples of /play: a button above the editor with the example that is open, and a panel under it with every
-   example by category - its title, its level and its line of description. */
-
-.playground-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
+   The examples of /play: a button with the example that is open, and a panel under it with every example by
+   category. Each category has a colour of its own - a marker before its name and the bar of the example that is open,
+   taken from the syntax colours, which are tuned for both themes - and the panel has the brand's accent as its top
+   rule. The title of an example is the line to read, its description one line under it, its level a small badge. */
 
 .playground-gallery {
   position: relative;
@@ -495,9 +553,13 @@
 .playground-gallery-current {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .playground-gallery-chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5;
@@ -513,14 +575,15 @@
 .playground-gallery .playground-gallery-panel {
   position: absolute;
   z-index: 30;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
-  width: min(44rem, calc(100vw - 32px));
-  max-height: min(70vh, 34rem);
+  width: min(60rem, calc(100vw - 32px));
+  max-height: min(76vh, 44rem);
   overflow: auto;
-  padding: 8px;
+  padding: 18px 20px 20px;
   background: var(--torb-surface-raised);
   border: 1px solid var(--torb-border);
+  border-top: var(--torb-border-top-rule) solid var(--torb-brand);
   border-radius: var(--torb-radius-medium);
   box-shadow: var(--torb-shadow-overlay);
   opacity: 0;
@@ -538,27 +601,52 @@
     transform var(--torb-duration-standard) var(--torb-easing-exact);
 }
 
-.playground-gallery .playground-gallery-group + .playground-gallery-group {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--torb-border);
+.playground-gallery .playground-gallery-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
+  gap: 18px 28px;
+  align-items: start;
+}
+
+.playground-gallery .playground-gallery-group {
+  --playground-category: var(--torb-text-muted);
+  min-width: 0;
 }
 
 .playground-gallery .playground-gallery-category {
-  margin: 6px 8px 2px;
-  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 0 7px;
   font-family: var(--torb-font-sans);
   font-size: 0.75rem;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  color: var(--torb-text);
+  border-bottom: 1px solid var(--torb-border);
+}
+
+.playground-gallery .playground-gallery-marker {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  background: var(--playground-category);
+  border-radius: 1px;
+}
+
+.playground-gallery .playground-gallery-count {
+  margin-left: auto;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--torb-text-subtle);
+  font-variant-numeric: tabular-nums;
 }
 
 .playground-gallery .playground-gallery-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
   gap: 2px;
   margin: 0;
   padding: 0;
@@ -572,12 +660,11 @@
 
 .playground-gallery .playground-gallery-item {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  gap: 2px 12px;
+  gap: 3px 10px;
   width: 100%;
-  height: 100%;
-  padding: 8px;
+  padding: 7px 10px 8px 11px;
   font: inherit;
   text-align: left;
   color: var(--torb-text);
@@ -586,16 +673,22 @@
   border: 0;
   border-left: var(--torb-border-accent) solid transparent;
   border-radius: var(--torb-radius-small);
-  transition: background-color var(--torb-duration-quick) var(--torb-easing-exact);
+  transition:
+    background-color var(--torb-duration-quick) var(--torb-easing-exact),
+    border-color var(--torb-duration-quick) var(--torb-easing-exact);
 }
 
 .playground-gallery .playground-gallery-item:hover {
   background: var(--torb-surface-hover);
+  background: color-mix(in srgb, var(--torb-text) 5%, transparent);
+  border-left-color: var(--torb-border-strong);
 }
 
+/* The example that is open: its category's colour, as its bar and as a tint that reads in both themes */
 .playground-gallery .playground-gallery-item[aria-current="true"] {
-  background: var(--torb-surface-active);
-  border-left-color: var(--torb-border-strong);
+  background: var(--torb-surface-hover);
+  background: color-mix(in srgb, var(--playground-category) 9%, transparent);
+  border-left-color: var(--playground-category);
 }
 
 .playground-gallery .playground-gallery-item:focus-visible {
@@ -604,14 +697,25 @@
 
 .playground-gallery-title {
   font-size: var(--torb-type-ui-size);
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.35;
 }
 
 .playground-gallery-level {
-  font-size: var(--torb-type-small-size);
-  color: var(--torb-text-subtle);
+  padding: 1px 7px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
   white-space: nowrap;
+  color: var(--torb-text-muted);
+  border: 1px solid var(--torb-border-strong);
+  border-radius: 999px;
+}
+
+.playground-gallery-level-intermediate {
+  color: var(--torb-text);
+  border-color: var(--torb-border-control);
 }
 
 .playground-gallery-description {
@@ -631,5 +735,10 @@
     left: 16px;
     width: auto;
     max-height: 70vh;
+    padding: 14px 14px 16px;
+  }
+
+  .playground-page .playground-top .playground-bar {
+    margin-left: 0;
   }
 }

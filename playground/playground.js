@@ -1280,6 +1280,19 @@
     });
   }
 
+  /**
+   * The colour of each category of the gallery, in the order of the manifest: the syntax colours, which are tuned for
+   * both themes, and the brand's accent last. A category beyond them takes them again from the start.
+   */
+  const categoryColours = [
+    "--torb-syntax-function",
+    "--torb-syntax-type",
+    "--torb-syntax-number",
+    "--torb-syntax-string",
+    "--torb-syntax-case",
+    "--torb-brand",
+  ];
+
   const levelWords = {
     en: { beginner: "beginner", intermediate: "intermediate", advanced: "advanced" },
     de: { beginner: "Einstieg", intermediate: "Fortgeschritten", advanced: "Vertiefung" },
@@ -1322,7 +1335,7 @@
     panel.setAttribute("aria-label", labels.examples);
     host.appendChild(button);
     host.appendChild(panel);
-    bar.appendChild(host);
+    bar.insertBefore(host, bar.firstChild);
     host.hidden = true;
 
     let manifest = null;
@@ -1412,10 +1425,16 @@
     }
 
     function build() {
-      for (const group of groupedExamples(manifest)) {
+      const groups = element("div", "playground-gallery-groups");
+      groupedExamples(manifest).forEach(function (group, index) {
         const section = element("section", "playground-gallery-group");
+        section.style.setProperty("--playground-category", "var(" + categoryColours[index % categoryColours.length] + ")");
         if (group.title) {
-          section.appendChild(element("h3", "playground-gallery-category", group.title));
+          const heading = element("h3", "playground-gallery-category");
+          heading.appendChild(element("span", "playground-gallery-marker"));
+          heading.appendChild(element("span", "playground-gallery-category-title", group.title));
+          heading.appendChild(element("span", "playground-gallery-count", String(group.examples.length)));
+          section.appendChild(heading);
         }
         const list = element("ul", "playground-gallery-list");
         for (const entry of group.examples) {
@@ -1426,7 +1445,7 @@
           choice.appendChild(heading);
           const level = levelOf(entry);
           if (level) {
-            choice.appendChild(element("span", "playground-gallery-level", level));
+            choice.appendChild(element("span", "playground-gallery-level playground-gallery-level-" + entry.level, level));
           }
           const description = localized(entry, "description");
           if (description) {
@@ -1440,8 +1459,9 @@
           items.push({ entry: entry, button: choice });
         }
         section.appendChild(list);
-        panel.appendChild(section);
-      }
+        groups.appendChild(section);
+      });
+      panel.appendChild(groups);
     }
 
     return {
@@ -1504,14 +1524,18 @@
       target.classList.add("playground-page");
     }
 
-    // The gallery's bar stands above the editor of the page
+    // The page has a toolbar above the editor - the gallery, Run, Format - and the editor and the output side by side
+    // where the screen is wide enough (playground.css)
     const top = element("div", "playground-top");
+    let workspace = target;
     if (isPage) {
       target.appendChild(top);
+      workspace = element("div", "playground-workspace");
+      target.appendChild(workspace);
     }
 
     let formatButton = null;
-    const editor = createEditor(target, initial, {
+    const editor = createEditor(workspace, initial, {
       onRun: start,
       page: isPage,
       file: file,
@@ -1561,7 +1585,7 @@
     const status = element("span", "playground-status");
     status.setAttribute("aria-live", "polite");
     bar.appendChild(status);
-    target.appendChild(bar);
+    (isPage ? top : target).appendChild(bar);
 
     // The page keeps its output in view from the start, so that nothing moves when the first run prints
     const panel = element("div", "playground-panel");
@@ -1570,7 +1594,7 @@
     const output = element("pre", "playground-output");
     panel.appendChild(outputLabel);
     panel.appendChild(output);
-    target.appendChild(panel);
+    workspace.appendChild(panel);
 
     const verdict = element("div", "playground-verdict");
     verdict.hidden = true;
