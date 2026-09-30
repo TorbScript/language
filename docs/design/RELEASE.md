@@ -803,6 +803,42 @@ categories as columns with a heading each - a marker in the category's colour, t
 and the brand's accent last, its name and its count - each example's title, its level as a small badge and its line
 of description, the open example marked by its category's colour; the panel has the brand's accent as its top rule.
 
+### The benchmarks page, as built (2026-09-30)
+
+**Decided: the site shows how fast TorbScript is, measured by the forge every night**
+([site/benchmarks.md](../site/benchmarks.md)). Six programs of the Computer Language Benchmarks Game are in
+`benchmarks/game/`, each in TorbScript and in the Benchmarks Game's own C, Python and JavaScript; `benchmarks/game.sh`
+builds and runs them all - TorbScript with `torb build` and in the VM - checks every output against the C's and writes
+one JSON report ([benchmarks/README.md](../../benchmarks/README.md), "The Benchmarks Game").
+
+```text
+nightly.yml ── publish ── images ── benchmarks.yml: game.sh with the nightly's torb ──► release `benchmarks`
+                                                                                          benchmarks.json (newest)
+Dockerfile.site: tools/fetch-benchmarks.sh ──► build/benchmarks.json ──► torb docs site   benchmarks-<version>.json
+```
+
+- **Measured on the forge's runner, never on a developer's machine.** The same machine every night, every language in
+  the same run, the languages taking turns. A report from anywhere else can be rendered - `torb docs site` reads
+  `build/benchmarks.json` or the file `--benchmarks` names - and the page then says it was not measured by the forge
+  (`"origin"` is not `ci`).
+- **After the images.** The runner runs two jobs at a time, and the image builds are hours of C compiles; measuring
+  beside them would measure them too. So a nightly's site image, built before the measurement of its night, shows the
+  report of the night before; the site of main (`edge`) fetches the newest when it is built.
+- **A release of its own, `benchmarks`, not an asset of the nightly.** release-sync refuses a release with an asset its
+  signed `SHA256SUMS` does not list (`verifyHashes` of `tools/release-sync`), and the report is written after the sums
+  are signed. A prerelease without a version in its tag is never placed by release-sync, like `seeds`. The report of
+  every night stays beside the newest, as `benchmarks-<version>.json`, for a history the page does not draw yet.
+- **Without a report the site is still whole.** `tools/fetch-benchmarks.sh` exits 0 when there is nothing to fetch,
+  and the page says that nothing is measured yet; a report that cannot be read is left out the same way. A report with
+  fewer than C's and the native binary's times of every program is kept as the workflow's artifact and not published.
+- **What it measures, honestly.** The Benchmarks Game's plain single-threaded programs (its #8 family), not its fastest;
+  `gcc -O2` against `torb build` in its release profile, the same compiler and optimization; the VM and Python on a
+  smaller input than the binaries, each ratio against C on the same input; the VM as it is downloaded, a static musl
+  binary. Where TorbScript is slower, the page says so and why - [PERFORMANCE.md](../PERFORMANCE.md) section 4.3 has the
+  first numbers and the causes.
+- **Go and Rust are left out** for now: the question the page answers is TorbScript against C and the VM against the
+  interpreters people know, and each more toolchain is minutes of every night on the one runner.
+
 ### Hosting
 
 **Decision: every public URL is under torb.dev and packages.torb.dev, and the output is files; the provider behind them
@@ -1611,6 +1647,7 @@ the first runs it reports were GitHub's.
 | `.forgejo/workflows/release.yml` | a pushed tag `v0.MINOR.PATCH`, or a pre-release `v0.MINOR.0-rc.N` (`vMAJOR.0.0-alpha.N`, `-beta.N`): the checks of the tag, the gates, the signed release, the seed, and for a stable release the package manager channels of section 5 (`publish-packages`) and the extension's stores (`publish-extension`) |
 | `.forgejo/workflows/seed.yml` | Actions -> seed -> Run workflow: the seed of `main`, published without a release |
 | `.forgejo/workflows/images.yml` | called by `release` and `nightly` after publishing, or run by hand for a release: the root server's three container images from the release's assets, pushed to cr.torb.dev and signed (section 7.11) |
+| `.forgejo/workflows/benchmarks.yml` | called by `nightly` after its images, or run by hand for a nightly or a release: `benchmarks/game.sh` with that toolchain, and its report published to the release `benchmarks` (section 6, "The benchmarks page, as built") |
 | `.forgejo/actions/c-compiler` | the C compiler of a target on the `PATH` and in `TORB_CC`, and the Debian packages a job needs |
 | `.forgejo/actions/bootstrap` | `build/release/torb` from the cache, or from a published seed with the fixpoint |
 | `.forgejo/actions/portable` | what a target other than linux-x64 runs: bootstrap, `check .`, the conformance suite, the runtime's tests, the C of every target, the release binary |
@@ -1631,6 +1668,7 @@ the first runs it reports were GitHub's.
 | `tools/package.sh` | lays out and packs the toolchain of one target (section 4) |
 | `tools/package-extension.sh` | packs the VS Code extension of `editors/vscode` into `torbscript-<version>.vsix` with `@vscode/vsce` (pinned, through `npx`), after checking that its version is the toolchain's |
 | `tools/smoke-test.sh` | runs a laid-out toolchain from outside any checkout, with no variables; under an emulator (`TORB_SMOKE_RUNNER`) for a binary of another machine |
+| `tools/fetch-benchmarks.sh` | the newest `benchmarks.json` of the release `benchmarks` into `build/`, where `torb docs site` reads it; fetching nothing is no failure |
 
 ### The seed, published
 
@@ -2095,7 +2133,7 @@ creates both in the web interface (`docs/contributing/releasing.md`, "One-time s
 
 | Integration | Workflow file | Git reference | Events | Access | Permissions | Variable |
 |---|---|---|---|---|---|---|
-| `torbscript-publish` | `{release,nightly,seed}.yml` | `{refs/heads/main,refs/tags/v*}` | push, schedule, workflow_dispatch | specific repositories: `torbscript/language`, `torbscript/homebrew-tap`, `torbscript/scoop-bucket` | repository: read and write | `TORB_PUBLISH_AUDIENCE` |
+| `torbscript-publish` | `{release,nightly,seed,benchmarks}.yml` | `{refs/heads/main,refs/tags/v*}` | push, schedule, workflow_dispatch | specific repositories: `torbscript/language`, `torbscript/homebrew-tap`, `torbscript/scoop-bucket` | repository: read and write | `TORB_PUBLISH_AUDIENCE` |
 | `torbscript-images` | `{release,nightly,images}.yml` | `{refs/heads/main,refs/tags/v*}` | push, schedule, workflow_dispatch | public only | package: read and write | `TORB_IMAGES_AUDIENCE` |
 
 - **Two integrations, not one**: an integration limited to specific repositories may only hold the repository and issue

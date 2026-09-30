@@ -327,7 +327,7 @@ value to enter.
    | Field | `torbscript-publish` | `torbscript-images` |
    |---|---|---|
    | Select repository | `torbscript/language` | `torbscript/language` |
-   | Workflow file | `{release,nightly,seed}.yml` | `{release,nightly,images}.yml` |
+   | Workflow file | `{release,nightly,seed,benchmarks}.yml` | `{release,nightly,images}.yml` |
    | Git reference | `{refs/heads/main,refs/tags/v*}` | `{refs/heads/main,refs/tags/v*}` |
    | Event | push, schedule, workflow_dispatch | push, schedule, workflow_dispatch |
    | Repository and organization access | Specific repositories: `torbscript/language`, `torbscript/homebrew-tap`, `torbscript/scoop-bucket` | Public only |
@@ -335,7 +335,9 @@ value to enter.
 
    The forge shows each integration's audience once it is saved (`u:<id>:<uuid>`); it is not a secret. An integration
    limited to specific repositories can only be given the repository and issue permissions, which is why the images
-   need a second one.
+   need a second one. `benchmarks.yml` is in the first rule for a run of it by hand (Actions -> benchmarks -> Run
+   workflow): called by `nightly.yml`, its job carries `nightly.yml`'s name, and an integration saved before the rule
+   named it publishes the nightly's numbers all the same and refuses only the run by hand.
 2. **Repository variables** (`torbscript/language` -> Settings -> Actions -> Variables): `TORB_PUBLISH_AUDIENCE` =
    the audience of `torbscript-publish`, `TORB_IMAGES_AUDIENCE` = the audience of `torbscript-images`, and - once a
    runner of another target exists - `TORB_RUNNERS` = the targets that have one, separated by spaces:

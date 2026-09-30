@@ -53,7 +53,11 @@ RUN if [ -f /dist/playground-compiled/torb.wasm ]; then \
     else \
       TORB=/opt/torb/bin/torb TORB_EMCC=emcc sh playground/build.sh; \
     fi
+# The newest numbers of the benchmarks page (tools/fetch-benchmarks.sh, from the release `benchmarks` of the forge) into
+# build/benchmarks.json, where `torb docs site` reads them; without them the page says that nothing is measured yet. The
+# source of a release older than the script has neither it nor the page
 RUN set -eu; \
+    if [ -f tools/fetch-benchmarks.sh ]; then sh tools/fetch-benchmarks.sh build/benchmarks.json; fi; \
     /opt/torb/bin/torb docs site docs --output /site --version "$VERSION" --playground build/playground; \
     /opt/torb/bin/torb doc std --output "/site/docs/$VERSION/reference"; \
     cp tools/install.sh tools/install.ps1 /site/; \

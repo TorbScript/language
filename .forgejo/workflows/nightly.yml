@@ -13,6 +13,8 @@
 #   - the nightlies older than 30 days are deleted, with their tags
 #   - the root server's container images, built from the nightly's assets and pushed to cr.torb.dev as `nightly`
 #     (images.yml)
+#   - the numbers of the website's benchmarks page, measured with the nightly's toolchain once the images are built,
+#     and published to the release `benchmarks` (benchmarks.yml)
 #
 # Only main is ever published: the schedule runs on the default branch, and a manual run from another branch runs the
 # gates and publishes nothing. The jobs that write ask the forge for a token of the Authorized Integration whose
@@ -251,3 +253,15 @@ jobs:
       channel: nightly
       source: artifact
     secrets: inherit
+
+  benchmarks:
+    name: the numbers of the benchmarks page (benchmarks.yml)
+    # After the images, whatever became of them: the runner runs two jobs at a time, and a measurement beside an image
+    # build would measure the build as well
+    needs: [plan, publish, images]
+    if: always() && forgejo.ref == 'refs/heads/main' && needs.publish.result == 'success'
+    # No `enable-openid-connect` here either: the job this expands into takes benchmarks.yml's own
+    uses: ./.forgejo/workflows/benchmarks.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      source: artifact

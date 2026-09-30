@@ -1,0 +1,191 @@
+# The numbers of the website's benchmarks page (docs/site/benchmarks.md): benchmarks/game.sh on the forge's Linux runner,
+# with the toolchain of a nightly as it is downloaded, and its report published to the release `benchmarks` of the forge
+# as `benchmarks.json` - the newest, which the site's build fetches (tools/fetch-benchmarks.sh) - and as
+# `benchmarks-<version>.json`, one for every night, which nothing reads yet and which is what a history would be drawn
+# from.
+#
+#   nightly.yml   calls this after the nightly is published and its images are built, with the run's `dist` artifact:
+#                 the runner has two jobs at a time, and the images - hours of C compiles - would share its processors
+#                 with the measurement. The site image of that same night is built before this runs, so a nightly's
+#                 site shows the numbers of the night before; the site of main (images.yml, `edge`) shows the newest
+#   by hand       Actions -> benchmarks -> Run workflow: a nightly or a release by its version, the newest nightly
+#                 without one; the toolchain comes from the published release, the programs from its tag
+#
+# Why a release of its own and not an asset of the nightly: release-sync refuses a release with an asset its
+# SHA256SUMS does not list (tools/release-sync, `verifyHashes`), and SHA256SUMS is signed before this runs - so a report
+# added to a nightly afterwards would keep that nightly off torb.dev/download wherever its first placement failed and
+# the periodic check tried again. The release `benchmarks` is a prerelease, like `seeds`, which release-sync never
+# places.
+#
+# Only main publishes: a run from another branch measures and keeps the report as the artifact `benchmarks`, nothing
+# more. Publishing asks for a token of the Authorized Integration whose audience is TORB_PUBLISH_AUDIENCE
+# (.forgejo/actions/token), whose rule names nightly.yml for the call and benchmarks.yml for a run by hand
+# (docs/design/RELEASE.md section 14). A reusable workflow says `enable-openid-connect` at its top level: the key on a
+# job is lost when nightly.yml's call is expanded into its run (the same section).
+name: benchmarks
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The nightly or release whose toolchain is measured (nightly-20260930, 0.2.0)
+        required: true
+        type: string
+      source:
+        description: artifact (the dist artifact of the calling run) or release (the published release's assets)
+        required: false
+        type: string
+        default: artifact
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The nightly or release to measure (nightly-20260930, 0.2.0); empty for the newest nightly
+        required: false
+        type: string
+
+# One measurement at a time: two would share the runner's processors, and the second would race the first to the release
+concurrency:
+  group: benchmarks
+  cancel-in-progress: false
+
+enable-openid-connect: true
+
+jobs:
+  measure:
+    name: six programs of the Benchmarks Game, in five ways (benchmarks/game.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SOURCE: ${{ inputs.source || 'release' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Which toolchain, and the programs of its commit
+        id: plan
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          version=$WANTED
+          if [ -z "$version" ]; then
+            version=$(sh tools/forge.sh releases | awk '$1 ~ /^nightly-[0-9]+$/ && $2 != "draft" { print $1; exit }')
+            [ -n "$version" ] || { echo "::error::the forge has no nightly to measure"; exit 1; }
+          fi
+          case "$version" in
+            nightly-*) tag=$version ;;
+            *) tag="v$version" ;;
+          esac
+          # Called by nightly.yml the checkout is the nightly's commit already; by hand it is the tag's, so that the
+          # programs are the ones of the toolchain that runs them
+          if [ "$SOURCE" != "artifact" ]; then
+            git fetch --no-tags --depth 1 origin "+refs/tags/$tag:refs/tags/$tag"
+            git checkout --detach "$tag"
+          fi
+          echo "measuring $version (tag $tag) at $(git rev-parse HEAD)"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "commit=$(git rev-parse HEAD)"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: The toolchain, from this run
+        if: env.SOURCE == 'artifact'
+        uses: https://code.forgejo.org/forgejo/download-artifact@d8d0a99033603453ad2255e58720b460a0555e1e # v4
+        with:
+          name: dist
+          path: dist
+      - name: The toolchain, from the published release
+        if: env.SOURCE != 'artifact'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          mkdir -p dist
+          sh tools/forge.sh download "$TAG" "torb-$VERSION-linux-x64.tar.gz" "dist/torb-$VERSION-linux-x64.tar.gz"
+
+      - name: Unpack the toolchain
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          directory="${RUNNER_TEMP:-/tmp}/torb"
+          mkdir -p "$directory"
+          tar -xzf "dist/torb-$VERSION-linux-x64.tar.gz" -C "$directory" --strip-components=1
+          "$directory/bin/torb" --version
+          echo "TORB=$directory/bin/torb" >>"$GITHUB_ENV"
+
+      # gcc for C and for `torb build`, GNU time for the peak of memory, and Python 3 - each a no-op where the image
+      # has it already
+      - uses: ./.forgejo/actions/c-compiler
+        with:
+          target: linux-x64
+          packages: time python3
+      - uses: ./.forgejo/actions/node
+
+      - name: The machine
+        run: |
+          uname -a
+          grep -m 1 'model name' /proc/cpuinfo || true
+          nproc
+          grep MemTotal /proc/meminfo || true
+          # What else runs on the runner while this measures: the report says what it can, this log says the rest
+          uptime || true
+
+      - name: sh benchmarks/game.sh
+        env:
+          BENCHMARKS_ORIGIN: ci
+          BENCHMARKS_RELEASE: ${{ steps.plan.outputs.version }}
+          BENCHMARKS_COMMIT: ${{ steps.plan.outputs.commit }}
+          PYTHON: python3
+        # game.sh works in benchmarks/, so the report's path is made absolute here
+        run: BENCHMARKS_JSON="$PWD/benchmarks.json" sh benchmarks/game.sh
+
+      - name: Keep the report
+        if: always()
+        uses: https://code.forgejo.org/forgejo/upload-artifact@16871d9e8cfcf27ff31822cac382bbb5450f1e1e # v4
+        with:
+          name: benchmarks
+          path: |
+            benchmarks.json
+            benchmarks/out/game/*/*.log
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Is it worth publishing
+        id: check
+        run: |
+          # C and the native binary measured on both inputs of every program, at the least: a report with less is
+          # kept as the artifact and not shown on the site, where the night before stays
+          ok=$(grep -c '"language": "\(c\|torbscript\)", "status": "ok"' benchmarks.json || true)
+          echo "C and TorbScript measured $ok times"
+          if [ "$ok" -lt 24 ]; then
+            echo "::warning::the report has too few measurements to publish; the benchmarks page keeps the last one"
+            echo "publish=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - id: token
+        if: forgejo.ref == 'refs/heads/main' && steps.check.outputs.publish == 'true'
+        uses: ./.forgejo/actions/token
+        with:
+          audience: ${{ vars.TORB_PUBLISH_AUDIENCE }}
+          variable: TORB_PUBLISH_AUDIENCE
+      - name: Publish to the release benchmarks
+        if: forgejo.ref == 'refs/heads/main' && steps.check.outputs.publish == 'true'
+        env:
+          TORB_FORGE_TOKEN: ${{ steps.token.outputs.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          if ! sh tools/forge.sh release benchmarks >/dev/null 2>&1; then
+            cat >notes.md <<'EOF'
+          The numbers of the benchmarks page of torb.dev: benchmarks.json is the newest report of benchmarks/game.sh,
+          measured on the forge's Linux runner after a nightly, and benchmarks-<version>.json the report of every night.
+          Not a release: nothing here is a download of TorbScript.
+          EOF
+            # Not a draft: the release is public from the start, and its tag means nothing, as the one of `seeds`
+            sh tools/forge.sh create benchmarks main "Benchmarks" notes.md --prerelease >/dev/null
+          fi
+          cp benchmarks.json "benchmarks-$VERSION.json"
+          sh tools/forge.sh upload benchmarks "benchmarks-$VERSION.json" benchmarks.json
+          echo "published: $(sh tools/forge.sh url benchmarks benchmarks.json)"
