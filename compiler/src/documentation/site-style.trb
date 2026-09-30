@@ -2860,7 +2860,11 @@ public const siteScript = raw"""
     var loading = null;
     var selected = -1;
 
-    function words(text) {
+    // Named termsOf, not words: this closure already has a "words" variable - the translation strings - and a
+    // second "words" declared as a function here would win the hoisting fight and silently replace it with an
+    // object, so every call below would throw "words is not a function" and the search would look like a broken
+    // fetch (the load() promise rejects, and the dialog shows "the search index could not be loaded").
+    function termsOf(text) {
       return text
         .toLowerCase()
         .split(/[^\p{L}\p{N}]+/u)
@@ -2877,7 +2881,7 @@ public const siteScript = raw"""
           })
           .then(function (data) {
             data.pages.forEach(function (entry) {
-              entry.titleWords = words(entry.title);
+              entry.titleWords = termsOf(entry.title);
               entry.keywordWords = entry.keywords.map(function (keyword) {
                 return keyword.toLowerCase();
               });
@@ -2952,7 +2956,7 @@ public const siteScript = raw"""
     }
 
     function search(query) {
-      var terms = words(query);
+      var terms = termsOf(query);
       if (terms.length === 0) {
         return [];
       }

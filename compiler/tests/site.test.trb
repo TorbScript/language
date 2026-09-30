@@ -15,8 +15,10 @@ use Level, navigationOf, readingOrder, levelOf from "../src/documentation/site-n
 use englishWords from "../src/documentation/site-strings"
 use SearchPage, IndexedPage, searchIndexOf, termsOf from "../src/documentation/site-search"
 use SiteSettings, buildSite, targetOf, brokenLinks, SiteVersions from "../src/documentation/site"
+use siteScript from "../src/documentation/site-style"
 use Json from "std/json"
 use brandTokens from "../src/documentation/site-tokens"
+use Regex from "std/regex"
 
 const forge = "https://git.torb.dev/torbscript/language/src/branch/main"
 
@@ -178,6 +180,26 @@ group "the search" {
     assert(index.pages.length() == 5)
     assert(index.terms == ["binding", "orange"])
     assert(index.postings == [[0, 1], [2]])
+  }
+
+  test "no top-level name of the search script is both a var and a function" {
+    // A named function declaration hoists to the top of its scope before any `var` of the same name is assigned, so
+    // if a script has both at its outer scope, the `var` always wins once execution reaches it and the name is an
+    // object from then on - calling it throws "... is not a function". That bug once shadowed the site's word()
+    // translations lookup (`var words = \{\}`) with a same-named tokenizer (`function words(text)`): every search
+    // failed with "the search index could not be loaded", even though the index itself fetched fine. The pattern
+    // below only looks at siteScript's outer scope (its lines indented by exactly two spaces once the raw string is
+    // dedented), so a `var` of the same name inside a nested callback, a different scope, is not a false positive.
+    const declaredVar: Regex = "(?m)^  var ([A-Za-z_$][A-Za-z0-9_$]*) = "
+    const declaredFunction: Regex = "(?m)^  function ([A-Za-z_$][A-Za-z0-9_$]*)\("
+    const varNames = declaredVar.findAll(siteScript).map({ _.group(1) ?? "" }).toList()
+    const functionNames = declaredFunction.findAll(siteScript).map({ _.group(1) ?? "" }).toList()
+    // Sanity checks on the extraction itself, so a change to the script's indentation cannot make this test pass by
+    // matching nothing at all
+    assert varNames.contains("words")
+    assert functionNames.contains("word")
+    const collisions = varNames.filter({ functionNames.contains _ }).toList()
+    assert(collisions == [])
   }
 }
 
