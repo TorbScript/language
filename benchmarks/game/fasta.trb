@@ -1,0 +1,100 @@
+/**
+ * fasta, from the Computer Language Benchmarks Game: three DNA sequences in the FASTA format, sixty letters to a line -
+ * a repeated piece of the human ALU sequence, and two sequences drawn at random from weighted alphabets by a linear
+ * congruential generator.
+ *
+ * It follows `c/fasta.c`, the Benchmarks Game's C program #8, statement for statement: one letter at a time, the
+ * weighted pick by a linear search, and one line handed to the operating system at a time - the C by `setlinebuf`,
+ * TorbScript because that is what `print` does. A `String` has no `text[i]`, so the alphabets are read as lists of
+ * `Char` once, and a line is collected as a list and printed as one `String`. The C computes the random number in a
+ * `float`, and this program, the Python and the JavaScript in a double; the letters come out the same, and
+ * `c/fasta.c`, `python/fasta.py` and `node/fasta.js` print the same text.
+ */
+use Process from "std/process"
+
+const lineLength = 60
+const modulus = 139968
+const multiplier = 3877
+const increment = 29573
+
+const alu = [
+  "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGG",
+  "GAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGA",
+  "CCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAAT",
+  "ACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCA",
+  "GCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGG",
+  "AGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCC",
+  "AGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA",
+].joined(separator: "")
+
+const iub = "acgtBDHKMNRSVWY"
+const iubProbabilities = [0.27, 0.12, 0.12, 0.27, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
+
+const homoSapiens = "acgt"
+const homoSapiensProbabilities = [0.3029549426680, 0.1979883004921, 0.1975473066391, 0.3015094502008]
+
+/** The generator every program of the benchmark shares, so that they all draw the same letters. */
+type Random {
+  var seed: Int = 42
+
+  var fn next(maximum: Float): Float {
+    seed = (seed * multiplier + increment) % modulus
+    maximum * Float.from(seed) / Float.from(modulus)
+  }
+}
+
+fn repeatFasta(sequence: String, count: Int) {
+  const letters = sequence.chars().toList()
+  const length = letters.length()
+  var line: List<Char> = []
+  for i in 0..count {
+    line.append letters[i % length]
+    if i % lineLength == lineLength - 1 {
+      print String.from(line)
+      line.clear()
+    }
+  }
+  if count % lineLength != 0 {
+    print String.from(line)
+  }
+}
+
+fn randomFasta(var random: Random, symbols: String, probabilities: List<Float>, count: Int) {
+  const letters = symbols.chars().toList()
+  const last = letters.length() - 1
+  var line: List<Char> = []
+  for i in 0..count {
+    var value = random.next 1.0
+    var j = 0
+    while j < last {
+      value = value - probabilities[j]
+      if value < 0.0 {
+        break
+      }
+      j = j + 1
+    }
+    line.append letters[j]
+    if i % lineLength == lineLength - 1 {
+      print String.from(line)
+      line.clear()
+    }
+  }
+  if count % lineLength != 0 {
+    print String.from(line)
+  }
+}
+
+/** The two sequences drawn at random, one after the other, from the same generator. */
+const drawn = [
+  (title: ">TWO IUB ambiguity codes", symbols: iub, probabilities: iubProbabilities, factor: 3),
+  (title: ">THREE Homo sapiens frequency", symbols: homoSapiens, probabilities: homoSapiensProbabilities, factor: 5),
+]
+
+const count = Int.tryFrom(Process.arguments().first() ?? "1000") ?? 1000
+print ">ONE Homo sapiens alu"
+repeatFasta(alu, count * 2)
+var random = Random()
+for sequence in drawn {
+  print sequence.title
+  randomFasta(random, sequence.symbols, sequence.probabilities, count * sequence.factor)
+}

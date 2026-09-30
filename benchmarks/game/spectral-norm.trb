@@ -1,0 +1,68 @@
+/**
+ * spectral-norm, from the Computer Language Benchmarks Game: the largest singular value of the infinite matrix
+ * `A(i, j) = 1 / ((i + j) * (i + j + 1) / 2 + i + 1)`, cut to `size` rows and columns, by ten rounds of the power
+ * method.
+ *
+ * It follows `c/spectral-norm.c`, the Benchmarks Game's C program #8, statement for statement: the vectors are
+ * `List<Float>`s, and each product is written into a `var` parameter the caller owns, where the C writes into an array
+ * it was handed. `c/spectral-norm.c`, `python/spectral-norm.py` and `node/spectral-norm.js` print the same line.
+ *
+ * One thing is written by hand: C prints the result with `printf("%0.9f")`, and TorbScript's `print` of a `Float`
+ * writes the shortest digits that read back as the same number, so [nineDecimals] writes the nine places itself.
+ */
+use Process from "std/process"
+
+fn entry(i: Int, j: Int): Float {
+  1.0 / Float.from((i + j) * (i + j + 1) / 2 + i + 1)
+}
+
+/** `product = A u` */
+fn timesA(size: Int, u: List<Float>, var product: List<Float>) {
+  for i in 0..size {
+    product[i] = 0.0
+    for j in 0..size {
+      product[i] = product[i] + entry(i, j) * u[j]
+    }
+  }
+}
+
+/** `product = A^T u` */
+fn timesTransposedA(size: Int, u: List<Float>, var product: List<Float>) {
+  for i in 0..size {
+    product[i] = 0.0
+    for j in 0..size {
+      product[i] = product[i] + entry(j, i) * u[j]
+    }
+  }
+}
+
+/** `product = A^T A u` */
+fn timesTransposedAA(size: Int, u: List<Float>, var product: List<Float>) {
+  var between = List.filled size, 0.0
+  timesA size, u, between
+  timesTransposedA size, between, product
+}
+
+/** `value` with nine digits after the point, rounded, as C's `printf("%.9f")` writes it. */
+fn nineDecimals(value: Float): String {
+  const scaled = Int.tryFrom((value * 1000000000.0).round()) ?? 0
+  const sign = if scaled < 0 { "-" } else { "" }
+  const magnitude = if scaled < 0 { -scaled } else { scaled }
+  const fraction = "{magnitude % 1000000000}"
+  "{sign}{magnitude / 1000000000}.{"0".repeat(9 - fraction.byteLength())}{fraction}"
+}
+
+const size = Int.tryFrom(Process.arguments().first() ?? "100") ?? 100
+var u = List.filled size, 1.0
+var v = List.filled size, 0.0
+for _round in 0..10 {
+  timesTransposedAA size, u, v
+  timesTransposedAA size, v, u
+}
+var uDotV = 0.0
+var vDotV = 0.0
+for i in 0..size {
+  uDotV = uDotV + u[i] * v[i]
+  vDotV = vDotV + v[i] * v[i]
+}
+print nineDecimals((uDotV / vDotV).squareRoot())

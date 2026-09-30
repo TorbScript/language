@@ -1,0 +1,55 @@
+/**
+ * binary-trees, from the Computer Language Benchmarks Game: perfect binary trees built bottom up, walked to count their
+ * nodes, and dropped - millions of small allocations and releases, with one long-lived tree kept all the while.
+ *
+ * It follows `c/binary-trees.c`, the Benchmarks Game's C program #1, which allocates every node with `malloc` and
+ * frees it with `free`. Here a tree is a type with two cases, `Empty` and `Node`, and a `Node` is a reference-counted
+ * block the program never frees by hand: a tree is released when its last use is over. A node at depth zero is a
+ * `Node` with two `Empty` children, so the program allocates exactly as many blocks as the C, which allocates a node
+ * with two null pointers there. `c/binary-trees.c`, `python/binary-trees.py` and `node/binary-trees.js` print the same
+ * lines.
+ */
+use Process from "std/process"
+
+const minimumDepth = 4
+
+type Tree {
+  case Empty
+  case Node(left: Tree, right: Tree)
+
+  /** The number of nodes: the walk every tree of the benchmark gets. */
+  fn check(): Int {
+    match self {
+      .Empty => 0
+      .Node(left, right) => 1 + left.check() + right.check()
+    }
+  }
+}
+
+fn bottomUp(depth: Int): Tree {
+  if depth > 0 {
+    return Tree.Node bottomUp(depth - 1), bottomUp(depth - 1)
+  }
+  Tree.Node(.Empty, .Empty)
+}
+
+const requested = Int.tryFrom(Process.arguments().first() ?? "10") ?? 10
+const maximumDepth = if minimumDepth + 2 > requested { minimumDepth + 2 } else { requested }
+const stretchDepth = maximumDepth + 1
+
+print "stretch tree of depth {stretchDepth}\t check: {bottomUp(stretchDepth).check()}"
+
+const longLived = bottomUp maximumDepth
+
+var depth = minimumDepth
+while depth <= maximumDepth {
+  const iterations = 1 << (maximumDepth - depth + minimumDepth)
+  var check = 0
+  for _iteration in 0..iterations {
+    check = check + bottomUp(depth).check()
+  }
+  print "{iterations}\t trees of depth {depth}\t check: {check}"
+  depth = depth + 2
+}
+
+print "long lived tree of depth {maximumDepth}\t check: {longLived.check()}"

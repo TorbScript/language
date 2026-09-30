@@ -1,0 +1,69 @@
+/**
+ * mandelbrot, from the Computer Language Benchmarks Game: the Mandelbrot set on `[-1.5, 0.5] x [-1, 1]` as a bitmap of
+ * `size` by `size` pixels, in the portable bitmap format (`P4`): one bit per pixel, eight pixels to a byte.
+ *
+ * It follows `c/mandelbrot.c`, the Benchmarks Game's C program #8, statement for statement. The one difference is the
+ * output: the bitmap is bytes, not text, so the program writes it to `standardOutput()` of std/io in one piece, where
+ * the C writes each byte with `putc` into the buffer of its standard output. `c/mandelbrot.c`, `python/mandelbrot.py`
+ * and `node/mandelbrot.js` write the same bytes.
+ */
+use standardOutput from "std/io"
+use IoError from "std/fs"
+use Process from "std/process"
+
+const iterations = 50
+const limit = 2.0
+
+fn bitmap(size: Int): Bytes {
+  var bytes: Bytes = []
+  var accumulator: UInt8 = 0
+  var bits = 0
+  for y in 0..size {
+    for x in 0..size {
+      var zReal = 0.0
+      var zImaginary = 0.0
+      var realSquared = 0.0
+      var imaginarySquared = 0.0
+      const cReal = 2.0 * Float.from(x) / Float.from(size) - 1.5
+      const cImaginary = 2.0 * Float.from(y) / Float.from(size) - 1.0
+
+      var i = 0
+      while i < iterations && realSquared + imaginarySquared <= limit * limit {
+        zImaginary = 2.0 * zReal * zImaginary + cImaginary
+        zReal = realSquared - imaginarySquared + cReal
+        realSquared = zReal * zReal
+        imaginarySquared = zImaginary * zImaginary
+        i = i + 1
+      }
+
+      accumulator = accumulator << 1
+      if realSquared + imaginarySquared <= limit * limit {
+        accumulator = accumulator | 1
+      }
+      bits = bits + 1
+
+      if bits == 8 {
+        bytes.append accumulator
+        accumulator = 0
+        bits = 0
+      } else if x == size - 1 {
+        accumulator = accumulator << (8 - size % 8)
+        bytes.append accumulator
+        accumulator = 0
+        bits = 0
+      }
+    }
+  }
+  bytes
+}
+
+fn written(size: Int): Task<Result<Void, IoError>> {
+  var output = standardOutput()
+  output.addText("P4\n{size} {size}\n").await()?
+  output.add(bitmap(size)).await()?
+}
+
+const size = Int.tryFrom(Process.arguments().first() ?? "200") ?? 200
+if const Fail(problem) = written(size).await() {
+  printError "mandelbrot: {problem}"
+}

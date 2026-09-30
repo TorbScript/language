@@ -1,0 +1,152 @@
+/**
+ * n-body, from the Computer Language Benchmarks Game: the Sun and the four giant planets, moved in steps of a hundredth
+ * of a day, with the energy of the system printed before and after.
+ *
+ * It follows `c/n-body.c`, the Benchmarks Game's C program #8, statement for statement where TorbScript has the same
+ * statement: the bodies are records in a list, and a step writes their fields through the list - `bodies[i].velocityX
+ * = ...` - where the C writes them through a pointer. `c/n-body.c`, `python/n-body.py` and `node/n-body.js` print the
+ * same two lines.
+ *
+ * One thing is written by hand: C prints the energy with `printf("%.9f")`, and TorbScript's `print` of a `Float` writes
+ * the shortest digits that read back as the same number, so [nineDecimals] writes the nine places itself.
+ */
+use Process from "std/process"
+
+const pi = 3.141592653589793
+const solarMass = 4.0 * pi * pi
+const daysPerYear = 365.24
+
+type Body {
+  var x: Float
+  var y: Float
+  var z: Float
+  var velocityX: Float
+  var velocityY: Float
+  var velocityZ: Float
+  mass: Float
+}
+
+/** The Sun at rest in the middle, and Jupiter, Saturn, Uranus and Neptune where they were on the day the data is of. */
+fn jovianSystem(): List<Body> {
+  [
+    Body(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, solarMass),
+    Body(
+      4.84143144246472090e+00,
+      -1.16032004402742839e+00,
+      -1.03622044471123109e-01,
+      1.66007664274403694e-03 * daysPerYear,
+      7.69901118419740425e-03 * daysPerYear,
+      -6.90460016972063023e-05 * daysPerYear,
+      9.54791938424326609e-04 * solarMass,
+    ),
+    Body(
+      8.34336671824457987e+00,
+      4.12479856412430479e+00,
+      -4.03523417114321381e-01,
+      -2.76742510726862411e-03 * daysPerYear,
+      4.99852801234917238e-03 * daysPerYear,
+      2.30417297573763929e-05 * daysPerYear,
+      2.85885980666130812e-04 * solarMass,
+    ),
+    Body(
+      1.28943695621391310e+01,
+      -1.51111514016986312e+01,
+      -2.23307578892655734e-01,
+      2.96460137564761618e-03 * daysPerYear,
+      2.37847173959480950e-03 * daysPerYear,
+      -2.96589568540237556e-05 * daysPerYear,
+      4.36624404335156298e-05 * solarMass,
+    ),
+    Body(
+      1.53796971148509165e+01,
+      -2.59193146099879641e+01,
+      1.79258772950371181e-01,
+      2.68067772490389322e-03 * daysPerYear,
+      1.62824170038242295e-03 * daysPerYear,
+      -9.51592254519715870e-05 * daysPerYear,
+      5.15138902046611451e-05 * solarMass,
+    ),
+  ]
+}
+
+/** Gives the Sun the momentum that makes the whole system's zero. */
+fn offsetMomentum(var bodies: List<Body>) {
+  var momentumX = 0.0
+  var momentumY = 0.0
+  var momentumZ = 0.0
+  for body in bodies {
+    momentumX = momentumX + body.velocityX * body.mass
+    momentumY = momentumY + body.velocityY * body.mass
+    momentumZ = momentumZ + body.velocityZ * body.mass
+  }
+  bodies[0].velocityX = -momentumX / solarMass
+  bodies[0].velocityY = -momentumY / solarMass
+  bodies[0].velocityZ = -momentumZ / solarMass
+}
+
+/** The kinetic energy of every body less the potential energy of every pair. */
+fn energy(bodies: List<Body>): Float {
+  var total = 0.0
+  const count = bodies.length()
+  for i in 0..count {
+    const body = bodies[i]
+    const squared = body.velocityX * body.velocityX + body.velocityY * body.velocityY + body.velocityZ * body.velocityZ
+    total = total + 0.5 * body.mass * squared
+    for j in (i + 1)..count {
+      const other = bodies[j]
+      const dx = body.x - other.x
+      const dy = body.y - other.y
+      const dz = body.z - other.z
+      const distanceSquared = dx * dx + dy * dy + dz * dz
+      total = total - body.mass * other.mass / distanceSquared.squareRoot()
+    }
+  }
+  total
+}
+
+/** One step: every pair pulls on each other, then every body moves along its velocity. */
+fn advance(var bodies: List<Body>, step: Float) {
+  const count = bodies.length()
+  for i in 0..count {
+    for j in (i + 1)..count {
+      const dx = bodies[i].x - bodies[j].x
+      const dy = bodies[i].y - bodies[j].y
+      const dz = bodies[i].z - bodies[j].z
+      const distanceSquared = dx * dx + dy * dy + dz * dz
+      const magnitude = step / (distanceSquared * distanceSquared.squareRoot())
+
+      const pullOfJ = bodies[j].mass * magnitude
+      bodies[i].velocityX = bodies[i].velocityX - dx * pullOfJ
+      bodies[i].velocityY = bodies[i].velocityY - dy * pullOfJ
+      bodies[i].velocityZ = bodies[i].velocityZ - dz * pullOfJ
+
+      const pullOfI = bodies[i].mass * magnitude
+      bodies[j].velocityX = bodies[j].velocityX + dx * pullOfI
+      bodies[j].velocityY = bodies[j].velocityY + dy * pullOfI
+      bodies[j].velocityZ = bodies[j].velocityZ + dz * pullOfI
+    }
+  }
+  for var body in bodies {
+    body.x = body.x + body.velocityX * step
+    body.y = body.y + body.velocityY * step
+    body.z = body.z + body.velocityZ * step
+  }
+}
+
+/** `value` with nine digits after the point, rounded, as C's `printf("%.9f")` writes it. */
+fn nineDecimals(value: Float): String {
+  const scaled = Int.tryFrom((value * 1000000000.0).round()) ?? 0
+  const sign = if scaled < 0 { "-" } else { "" }
+  const magnitude = if scaled < 0 { -scaled } else { scaled }
+  const fraction = "{magnitude % 1000000000}"
+  "{sign}{magnitude / 1000000000}.{"0".repeat(9 - fraction.byteLength())}{fraction}"
+}
+
+const steps = Int.tryFrom(Process.arguments().first() ?? "1000") ?? 1000
+var bodies = jovianSystem()
+offsetMomentum bodies
+print nineDecimals(energy(bodies))
+for _step in 0..steps {
+  advance bodies, 0.01
+}
+print nineDecimals(energy(bodies))

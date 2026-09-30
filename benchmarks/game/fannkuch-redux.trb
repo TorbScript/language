@@ -1,0 +1,77 @@
+/**
+ * fannkuch-redux, from the Computer Language Benchmarks Game: every permutation of `0..size`, and for each the number
+ * of flips - reversing the first `k + 1` elements, where `k` is the first one - until a zero comes first. It prints a
+ * checksum of all the counts and the largest.
+ *
+ * It follows `c/fannkuch-redux.c`, the Benchmarks Game's C program #8, statement for statement: the permutations are
+ * `List<Int>`s changed in place, and the next permutation comes from the counts of each rotation. The one step written
+ * the TorbScript way is the swap, `swapAt`, where the C swaps through a temporary. `c/fannkuch-redux.c`,
+ * `python/fannkuch-redux.py` and `node/fannkuch-redux.js` print the same two lines.
+ */
+use Process from "std/process"
+
+fn fannkuch(size: Int): (checksum: Int, maximumFlips: Int) {
+  var first = List.filled size, 0
+  for i in 0..size {
+    first[i] = i
+  }
+  var permutation = List.filled size, 0
+  var count = List.filled size, 0
+  var maximumFlips = 0
+  var permutations = 0
+  var checksum = 0
+  var rotation = size
+  loop {
+    while rotation != 1 {
+      count[rotation - 1] = rotation
+      rotation = rotation - 1
+    }
+    for i in 0..size {
+      permutation[i] = first[i]
+    }
+
+    // Count the flips, and update the largest count and the checksum
+    var flips = 0
+    var head = permutation[0]
+    while head != 0 {
+      var i = 0
+      while 2 * i < head {
+        permutation.swapAt(i, head - i)
+        i = i + 1
+      }
+      head = permutation[0]
+      flips = flips + 1
+    }
+    if flips > maximumFlips {
+      maximumFlips = flips
+    }
+    if permutations & 1 == 0 {
+      checksum = checksum + flips
+    } else {
+      checksum = checksum - flips
+    }
+
+    // The next permutation, by one incremental change
+    loop {
+      if rotation == size {
+        return (checksum: checksum, maximumFlips: maximumFlips)
+      }
+      const moved = first[0]
+      for i in 0..rotation {
+        first[i] = first[i + 1]
+      }
+      first[rotation] = moved
+      count[rotation] = count[rotation] - 1
+      if count[rotation] > 0 {
+        break
+      }
+      rotation = rotation + 1
+    }
+    permutations = permutations + 1
+  }
+}
+
+const size = Int.tryFrom(Process.arguments().first() ?? "7") ?? 7
+const result = fannkuch size
+print result.checksum
+print "Pfannkuchen({size}) = {result.maximumFlips}"
